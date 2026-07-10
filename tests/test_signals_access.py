@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import datetime
+import decimal
 import importlib
 import logging
+import sys
+import textwrap
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import strawberry
+import strawberry_django
+from django.apps import AppConfig
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.db import connection, models
@@ -16,15 +22,20 @@ from django.db.models.signals import post_save
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import actor_context, anonymous_actor
+from strawberry import auto
+from strawberry_django.fields.types import field_type_map
 
+from angee.addons import AddonContract
 from angee.base.mixins import AuditMixin, TimestampMixin
 from angee.base.serialization import json_safe
 from angee.base.sync import sync_ingestion_context
 from angee.graphql import access, publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
-from angee.graphql.schema import GraphQLSchemas
-from tests.conftest import _clear_model_tables, _create_missing_tables
+from angee.graphql.field_types import register_field_type
+from angee.graphql.schema import DEFAULT_SCHEMA_NAME, GraphQLSchemas
+from angee.graphql.subscriptions import changes
+from tests.conftest import SchemaAddon, _clear_model_tables, _create_missing_tables
 
 
 class AuditStamped(TimestampMixin, AuditMixin, models.Model):
@@ -325,6 +336,128 @@ def test_graphql_ready_connects_publishers_without_schema_build(
 
     assert [payload.model for payload in payloads] == ["auth.ReadyPublished"]
     assert [payload.action for payload in payloads] == ["create"]
+
+
+def test_ready_publisher_discovery_does_not_require_value_field_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ready-time publisher discovery must not depend on late field-type registrations."""
+
+    class LateRegisteredDecimalField(models.DecimalField):
+        """Value field whose GraphQL type is registered after publisher discovery."""
+
+    class LateValuePublished(models.Model):
+        """Change-published model carrying a late-registered value field."""
+
+        name = models.CharField(max_length=40)
+        amount = LateRegisteredDecimalField(max_digits=8, decimal_places=2)
+
+        class Meta:
+            app_label = "auth"
+
+    @strawberry_django.type(LateValuePublished)
+    class LateValuePublishedType:
+        id: auto
+        name: auto
+        amount: auto
+
+    @strawberry.type
+    class LateValueQuery:
+        placeholder: str = "ok"
+
+    schemas = GraphQLSchemas(
+        [
+            SchemaAddon(
+                {
+                    "public": {
+                        "query": (LateValueQuery,),
+                        "subscription": (changes(LateValuePublished, field="lateValuePublishedChanged"),),
+                        "types": (LateValuePublishedType,),
+                    }
+                }
+            )
+        ]
+    )
+    prior = field_type_map.pop(LateRegisteredDecimalField, None)
+    publishing.disconnect_publishers(LateValuePublished)
+    try:
+        monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
+        from angee.graphql.apps import GraphQLConfig
+
+        GraphQLConfig("graphql", importlib.import_module("angee.graphql")).ready()
+
+        assert _receiver_count(post_save, "angee-changes-auth.LateValuePublished-save") == 1
+        assert schemas.change_publisher_models() == (LateValuePublished,)
+
+        register_field_type(LateRegisteredDecimalField, decimal.Decimal)
+        sdl = schemas.build(DEFAULT_SCHEMA_NAME).as_str()
+    finally:
+        publishing.disconnect_publishers(LateValuePublished)
+        if prior is None:
+            field_type_map.pop(LateRegisteredDecimalField, None)
+        else:
+            field_type_map[LateRegisteredDecimalField] = prior
+
+    assert "amount: Decimal!" in sdl
+
+
+def test_alias_imported_changes_declaration_connects_publisher(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """Publisher derivation follows changes() metadata, not source syntax."""
+
+    class AliasPublished(models.Model):
+        """Change-published model declared through an aliased changes import."""
+
+        name = models.CharField(max_length=40)
+
+        class Meta:
+            app_label = "auth"
+
+    module_name = "alias_graphql_app"
+    package_dir = tmp_path / module_name
+    package_dir.mkdir()
+    (package_dir / "__init__.py").write_text("", encoding="utf-8")
+    (package_dir / "schema.py").write_text(
+        textwrap.dedent(
+            """
+            from __future__ import annotations
+
+            from django.apps import apps
+
+            from angee.graphql.subscriptions import changes as publish
+
+            AliasPublished = apps.get_model("auth", "AliasPublished")
+
+            schemas = {
+                "public": {
+                    "subscription": [publish(AliasPublished, field="aliasPublishedChanged")],
+                },
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    module = importlib.import_module(module_name)
+    addon = AppConfig(module_name, module)
+    addon.path = str(package_dir)
+    addon._addon_contract = AddonContract(name=module_name, schemas="schema.schemas")
+    schemas = GraphQLSchemas((addon,))
+    publishing.disconnect_publishers(AliasPublished)
+    try:
+        monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
+        from angee.graphql.apps import GraphQLConfig
+
+        GraphQLConfig("graphql", importlib.import_module("angee.graphql")).ready()
+
+        assert _receiver_count(post_save, "angee-changes-auth.AliasPublished-save") == 1
+        assert schemas.change_publisher_models() == (AliasPublished,)
+    finally:
+        publishing.disconnect_publishers(AliasPublished)
+        sys.modules.pop(f"{module_name}.schema", None)
+        sys.modules.pop(module_name, None)
 
 
 @pytest.mark.django_db

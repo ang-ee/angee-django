@@ -1,13 +1,11 @@
 """Django config for the Angee money addon.
 
-Money uses ``ready()`` for process-local framework seams: one settings check for
-the reference currency and one strawberry-django field-type registration for its
-owned value field.
+Money uses ``ready()`` for the process-local reference-currency settings check.
+Its value field registers its GraphQL scalar at field-module import.
 """
 
 from __future__ import annotations
 
-import decimal
 from collections.abc import Sequence
 
 from django.apps import AppConfig
@@ -28,12 +26,6 @@ class MoneyConfig(AppConfig):
 
         super().ready()
         _register_checks()
-        # Phase-1 ready hook: defer the GraphQL/runtime imports until after app
-        # population, mirroring the sibling base-addon ready() seams.
-        from angee.graphql.field_types import register_field_type
-        from angee.money.fields import MoneyField
-
-        register_field_type(MoneyField, decimal.Decimal)
 
 
 def _register_checks() -> None:
