@@ -23,9 +23,11 @@ _message_after_copy: |
      creates migrations, migrates, syncs permissions, loads resources, writes GraphQL
      schemas, and bootstraps the admin user. Then Caddy serves the built SPA:
        angee dev
-  2. Point an external CLI shell at the tokenized local operator (run from this root):
+  2. Point an external CLI shell at the tokenized local operator (run from this root;
+     `angee secret reveal` reads the stack's secrets backend, so no hand-parsing of
+     .env — its values are quoted):
        export ANGEE_OPERATOR_URL=http://127.0.0.1:{{ operator_port }}
-       export ANGEE_OPERATOR_TOKEN="$(awk -F= '$1=="ANGEE_SECRET_OPERATOR_TOKEN"{print $2}' .env)"
+       export ANGEE_OPERATOR_TOKEN="$(angee secret reveal operator-token)"
 
   App:      http://localhost:{{ ui_port }}
   Login:    admin / the generated admin-password secret in .env
