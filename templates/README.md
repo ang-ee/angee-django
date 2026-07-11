@@ -96,7 +96,9 @@ git clone https://github.com/ang-ee/angee-django ~/.angee/sources/angee-django
 angee stack init https://github.com/ang-ee/angee-django/tree/main/templates/stacks/local ~/.angee
 angee dev --root ~/.angee
 export ANGEE_OPERATOR_URL=http://127.0.0.1:9000
-export ANGEE_OPERATOR_TOKEN="$(awk -F= '$1=="ANGEE_SECRET_OPERATOR_TOKEN"{print $2}' ~/.angee/.env)"
+# `angee secret reveal` reads the stack's secrets backend — never hand-parse .env
+# (its values are quoted, so an awk/cut one-liner captures the quotes).
+export ANGEE_OPERATOR_TOKEN="$(angee secret reveal operator-token --root ~/.angee)"
 ```
 
 ### Update an existing local stack

@@ -410,7 +410,10 @@ def test_local_stack_copier_contract() -> None:
     manifest = yaml.safe_load(LOCAL_COPIER.read_text(encoding="utf-8"))
 
     assert "angee dev" in manifest["_message_after_copy"]
-    assert "ANGEE_SECRET_OPERATOR_TOKEN" in manifest["_message_after_copy"]
+    # The CLI shell recipe reads the token through the secrets backend owner —
+    # never by hand-parsing .env, whose values are quoted.
+    assert "angee secret reveal operator-token" in manifest["_message_after_copy"]
+    assert "awk" not in manifest["_message_after_copy"]
     # frontend_mode / base_image are gone; framework + django_image replace them.
     assert "frontend_mode" not in manifest
     assert "base_image" not in manifest
