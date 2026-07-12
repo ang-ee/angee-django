@@ -53,7 +53,8 @@ export function IntegrationsPage(): React.ReactElement {
         <Column field="display_name" />
         <Column field="kind" header={t("col.type")} />
         <Column field="vendor.display_name" header={t("col.vendor")} />
-        <Column field="status" widget="statusBadge" />
+        <Column field="lifecycle" widget="statusBadge" />
+        <Column field="runtime_status" widget="colorDot" />
         <Column
           field="credential.display_name"
           header={t("col.credential")}
@@ -73,7 +74,7 @@ export function IntegrationsPage(): React.ReactElement {
             prefill={implClassPrefill}
             createOnly
           />
-          <Field name="status" widget="statusbar" editOnly />
+          <Field name="lifecycle" widget="statusbar" readOnly />
         </Group>
         <Group label={t("integrations.authentication")} columns={2}>
           <Field name="credential" editOnly />
@@ -81,6 +82,7 @@ export function IntegrationsPage(): React.ReactElement {
         </Group>
         <Group label={t("integrations.runtime")} columns={2}>
           <Field name="last_used_at" readOnly />
+          <Field name="runtime_status" readOnly />
           <Field name="last_used_status" readOnly />
           <Field name="use_count_24h" readOnly />
           <Field name="error_count_24h" readOnly />

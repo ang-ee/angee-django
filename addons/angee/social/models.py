@@ -30,7 +30,8 @@ from django.apps import apps
 from django.db import models
 from rebac.managers import RebacManager
 
-from angee.base.fields import ImplClassField, StateField
+from angee.base.fields import StateField
+from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.integrate.models import Bridge

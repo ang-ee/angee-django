@@ -5,6 +5,9 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
+import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rebac import actor_context
 
 from tests.conftest import (
@@ -19,6 +22,16 @@ from tests.conftest import (
 )
 
 knowledge_schema = importlib.import_module("angee.knowledge.schema")
+
+
+@pytest.mark.django_db
+def test_importing_knowledge_schema_does_not_query_database() -> None:
+    """Schema import stays declaration-only; revision visibility checks are lazy."""
+
+    with CaptureQueriesContext(connection) as captured:
+        importlib.reload(knowledge_schema)
+
+    assert len(captured) == 0
 
 
 def test_create_vault_and_page_flow(knowledge_tables: None) -> None:

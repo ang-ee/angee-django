@@ -15,6 +15,7 @@ from typing import Any
 from django.apps import apps
 from rebac import system_context
 
+from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.actions import ActionResult, action_target
 from angee.graphql.ids import PublicID
 from angee.operator.daemon import OperatorDaemon, OperatorDaemonNotFound
@@ -64,7 +65,10 @@ def provision_agent(id: PublicID) -> ActionResult:
                 ok=False,
                 message="Connect a usable inference credential to this agent's provider before provisioning.",
             )
-        agent.mark_provisioning()
+        try:
+            agent.mark_provisioning()
+        except TransitionNotAllowed as error:
+            return ActionResult(ok=False, message=f"Provisioning failed: {error}")
     created_workspace: list[str] = []
 
     def record_workspace(workspace: str) -> None:
@@ -86,10 +90,14 @@ def provision_agent(id: PublicID) -> ActionResult:
         )
     except Exception as error:  # noqa: BLE001 - a render/plan failure is the result, not a 500
         with system_context(reason="agents.graphql.provision_agent.failed"):
-            agent.mark_provision_failed(str(error), clear_instances=bool(created_workspace))
+            _record_provision_failure(agent, str(error), clear_instances=bool(created_workspace))
         return ActionResult(ok=False, message=f"Provisioning failed: {error}")
     with system_context(reason="agents.graphql.provision_agent.recorded"):
-        agent.mark_provisioned(workspace=result["workspace"], service=result["service"])
+        try:
+            agent.mark_provisioned(workspace=result["workspace"], service=result["service"])
+        except TransitionNotAllowed as error:
+            _record_provision_failure(agent, str(error))
+            return ActionResult(ok=False, message=f"Provisioning failed: {error}")
     return ActionResult(ok=True, message=f"Provisioned “{result['service'] or result['workspace']}”.")
 
 
@@ -113,7 +121,10 @@ def reprovision_agent(id: PublicID) -> ActionResult:
                 ok=False,
                 message="Connect a usable inference credential to this agent's provider before reprovisioning.",
             )
-        agent.mark_provisioning()
+        try:
+            agent.mark_provisioning()
+        except TransitionNotAllowed as error:
+            return ActionResult(ok=False, message=f"Reprovisioning failed: {error}")
     daemon = OperatorDaemon.from_settings()
     service_destroyed = False
     try:
@@ -131,10 +142,14 @@ def reprovision_agent(id: PublicID) -> ActionResult:
         with system_context(reason="agents.graphql.reprovision_agent.failed"):
             # Once the old service is destroyed its name is stale; clear it so a later
             # deprovision doesn't try to tear down a service the daemon already removed.
-            agent.mark_provision_failed(str(error), clear_service=service_destroyed)
+            _record_provision_failure(agent, str(error), clear_service=service_destroyed)
         return ActionResult(ok=False, message=f"Reprovisioning failed: {error}")
     with system_context(reason="agents.graphql.reprovision_agent.recorded"):
-        agent.mark_provisioned(workspace=workspace, service=new_service)
+        try:
+            agent.mark_provisioned(workspace=workspace, service=new_service)
+        except TransitionNotAllowed as error:
+            _record_provision_failure(agent, str(error), clear_service=service_destroyed)
+            return ActionResult(ok=False, message=f"Reprovisioning failed: {error}")
     return ActionResult(ok=True, message=f"Recreated service “{new_service}”.")
 
 
@@ -143,11 +158,19 @@ def deprovision_agent(id: PublicID) -> ActionResult:
 
     with action_target(_agent_model(), id, reason="agents.graphql.deprovision_agent") as agent:
         if not agent.workspace and not agent.service:
-            agent.mark_deprovisioned()
+            try:
+                if str(agent.lifecycle) == "provisioning":
+                    agent.mark_deprovisioning()
+                agent.mark_deprovisioned()
+            except TransitionNotAllowed as error:
+                return ActionResult(ok=False, message=f"Teardown failed: {error}")
             return ActionResult(ok=True, message="Deprovisioned.")
         workspace = agent.workspace
         service = agent.service
-        agent.mark_deprovisioning()
+        try:
+            agent.mark_deprovisioning()
+        except TransitionNotAllowed as error:
+            return ActionResult(ok=False, message=f"Teardown failed: {error}")
     daemon = OperatorDaemon.from_settings()
     service_destroyed = False
     try:
@@ -166,11 +189,33 @@ def deprovision_agent(id: PublicID) -> ActionResult:
                 pass
     except Exception as error:  # noqa: BLE001 - teardown failure is the result, not a 500
         with system_context(reason="agents.graphql.deprovision_agent.failed"):
-            agent.mark_provision_failed(f"Teardown failed: {error}", clear_service=service_destroyed)
+            _record_provision_failure(agent, f"Teardown failed: {error}", clear_service=service_destroyed)
         return ActionResult(ok=False, message=f"Teardown failed: {error}")
     with system_context(reason="agents.graphql.deprovision_agent.recorded"):
-        agent.mark_deprovisioned()
+        try:
+            agent.mark_deprovisioned()
+        except TransitionNotAllowed as error:
+            return ActionResult(ok=False, message=f"Teardown failed: {error}")
     return ActionResult(ok=True, message="Deprovisioned.")
+
+
+def _record_provision_failure(
+    agent: Any,
+    message: str,
+    *,
+    clear_instances: bool = False,
+    clear_service: bool = False,
+) -> None:
+    """Best-effort failure persistence that never hides the action result."""
+
+    try:
+        agent.mark_provision_failed(
+            message,
+            clear_instances=clear_instances,
+            clear_service=clear_service,
+        )
+    except TransitionNotAllowed:
+        pass
 
 
 def _render_agent(

@@ -19,6 +19,7 @@ from django.contrib.auth.base_user import AbstractBaseUser
 from django.db import models, transaction
 from rebac import system_context
 
+from angee.iam.auth import can_authenticate_user
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
 from angee.integrate.connect import complete_external_account_link
 from angee.integrate.credentials import CredentialKind
@@ -171,7 +172,7 @@ class OidcIdentityResolver:
                 if account.status != AccountStatus.ACTIVE:
                     raise OAuthFlowError(IDENTITY_RESOLUTION_FAILED, 403)
                 owner = Account.objects.owner_for(account)
-                if owner is None or not owner.is_active:
+                if owner is None or not can_authenticate_user(owner):
                     raise OAuthFlowError(IDENTITY_RESOLUTION_FAILED, 403)
                 return cast(AbstractBaseUser, owner)
 
@@ -184,7 +185,7 @@ class OidcIdentityResolver:
                 and self.oauth_client.allows_email_domain(normalized_email)
             ):
                 user = self._find_by_email(normalized_email)
-                if user is not None and user.is_active:
+                if user is not None and can_authenticate_user(user):
                     Account.objects.link(
                         self.oauth_client,
                         sub,
@@ -230,7 +231,8 @@ class OidcIdentityResolver:
         """Return the unique user matching ``email`` case-insensitively."""
 
         manager = cast(Any, get_user_model().objects)
-        matches = list(manager.filter(email__iexact=email).order_by("pk")[:2])
+        queryset = manager.all().people()
+        matches = list(queryset.filter(email__iexact=email).order_by("pk")[:2])
         if len(matches) > 1:
             raise OAuthFlowError(IDENTITY_RESOLUTION_FAILED, 403)
         return cast(AbstractBaseUser | None, matches[0] if matches else None)

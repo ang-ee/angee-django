@@ -806,15 +806,25 @@ def test_revisions_query_surface_exposes_revision_mixin_versions() -> None:
 def test_revisions_rejects_field_gated_revision_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Revision snapshots cannot expose fields hidden by field-level read rules."""
+    """Schema build rejects revision snapshots hidden by field-level read rules."""
 
     monkeypatch.setattr(
         "angee.graphql.access.gated_read_fields",
         lambda model: frozenset({"secret", "visible"}),
     )
 
+    surface = revisions(FieldGatedRevisionEntryType, name="field_gated_revision_entry")
     with pytest.raises(ImproperlyConfigured, match=r"revisioned_fields.*secret"):
-        revisions(FieldGatedRevisionEntryType, name="field_gated_revision_entry")
+        GraphQLSchemas(
+            [
+                addon(
+                    public={
+                        "query": [HelloQuery, surface],
+                        "types": [FieldGatedRevisionEntryType],
+                    }
+                )
+            ]
+        ).build("public")
 
 
 def test_revisions_rejects_relation_revision_fields() -> None:

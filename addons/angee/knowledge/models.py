@@ -21,7 +21,7 @@ from django.db import IntegrityError, models, transaction
 from markdown_it import MarkdownIt
 from rebac import PermissionDenied, system_context, to_subject_ref
 
-from angee.base.fields import ImplClassField
+from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel
 from angee.knowledge.retrieval import RetrievalBackend

@@ -576,7 +576,10 @@ class ThreadAttachmentManager(AngeeManager):
         cascades its attachments, followers, activities, notifications, and
         participants; its messages FK the thread with ``SET_NULL`` (an ingested email
         message outlives a merged thread), so a private record thread's messages are
-        deleted explicitly first.
+        deleted explicitly first. The parent record delete is the authorization
+        boundary; the messaging subtree is private implementation state, so its
+        cleanup runs under the same system-context pattern as other messaging
+        bookkeeping writes.
         """
 
         if record.pk is None:
@@ -590,7 +593,7 @@ class ThreadAttachmentManager(AngeeManager):
             return
         thread_model = self.model._meta.get_field("thread").related_model
         message_model = apps.get_model("messaging", "Message")
-        with transaction.atomic():
+        with system_context(reason="messaging.record_thread.teardown"), transaction.atomic():
             message_model._base_manager.filter(thread_id__in=thread_ids).delete()
             thread_model._base_manager.filter(pk__in=thread_ids).delete()
 
@@ -1225,7 +1228,8 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
         # system_context, the shared bookkeeping-write elevation pattern.
         with system_context(reason="messaging.activity.complete"):
             activity.save(update_fields=("status", "completed_at", "feedback", "updated_at"))
-        if post_message:
+            if not post_message:
+                return activity
             body = activity.completion_message()
             if feedback:
                 body = f"{body}\n\n{feedback}"

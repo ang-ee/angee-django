@@ -17,13 +17,10 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.contrib.contenttypes.models import ContentType
 from rebac import ObjectRef
-from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry.permission import BasePermission
 
-from angee.base.models import public_id_for
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, to_public_id
 from angee.graphql.node import AngeeNode
@@ -75,20 +72,17 @@ class TagAssignmentType(AngeeNode):
     tag: TagType
     created_at: auto
 
-    @strawberry_django.field(only=["content_type_id"])
+    @strawberry_django.field(only=["content_type_id", "object_id"])
     def target_type(self) -> str:
         """Return the target row's REBAC resource type (e.g. ``parties/party``)."""
 
-        model = ContentType.objects.get_for_id(cast(Any, self).content_type_id).model_class()
-        return model_resource_type(model) or ""
+        return cast(Any, self).record_ref.resource_type
 
     @strawberry_django.field(only=["content_type_id", "object_id"])
     def target_id(self) -> PublicID:
         """Return the target row's public id."""
 
-        row = cast(Any, self)
-        model = ContentType.objects.get_for_id(row.content_type_id).model_class()
-        return PublicID(public_id_for(model, row.object_id))
+        return PublicID(cast(Any, self).record_public_id)
 
 
 _TAG_RESOURCE = hasura_model_resource(

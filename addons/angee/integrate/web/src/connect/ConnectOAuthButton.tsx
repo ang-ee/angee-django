@@ -130,7 +130,7 @@ export function ConnectOAuthButton({
 }
 
 export function canConnectRecord(row: Record<string, unknown>): boolean {
-  return row.credential === null || normalizeValue(row.status) === "draft";
+  return row.credential === null || normalizeValue(row.lifecycle) === "draft";
 }
 
 function normalizeValue(value: unknown): string {

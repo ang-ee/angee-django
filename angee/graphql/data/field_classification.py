@@ -6,7 +6,6 @@ from typing import Any
 
 from django.db import models
 
-from angee.base.fields import MoneyField
 from angee.base.mixins import ARCHIVE_FLAG_FIELD
 from angee.graphql.introspection import is_to_many_relation
 
@@ -60,6 +59,9 @@ def resource_field_kind(
 def model_field_scalar(field: models.Field[Any, Any]) -> str | None:
     """Return the GraphQL scalar a Django field's column type maps to, or None."""
 
+    declared = _declared_projection_fact(field, "angee_scalar_hint")
+    if declared is not None:
+        return declared
     if isinstance(field, models.BooleanField):
         return "Boolean"
     if isinstance(field, models.IntegerField):
@@ -94,21 +96,17 @@ def is_archive_field(field: models.Field[Any, Any] | None) -> bool:
 
 
 def money_currency_field(field: models.Field[Any, Any] | None) -> str | None:
-    """Return the currency path a :class:`~angee.base.fields.MoneyField` declares.
+    """Return the currency path a field declares for money metadata, if any."""
 
-    The money vocabulary is type-based — a ``MoneyField`` owns the name of the FK
-    to ``money.Currency`` that denominates its amount (a sibling ``"currency"`` or
-    a one-hop ``"order.currency"``). Emitting it in resource metadata lets the
-    ``"money"`` widget resolve a row's currency without the frontend re-deciding
-    which field owns it. A plain ``DecimalField`` returns ``None``.
-    """
-
-    return field.currency_field if isinstance(field, MoneyField) else None
+    return _declared_projection_fact(field, "angee_currency_field")
 
 
 def resource_field_widget(field: models.Field[Any, Any] | None, kind: str) -> str | None:
     """Return the default rendered widget owned by the field classification."""
 
+    declared = _declared_projection_fact(field, "angee_widget")
+    if declared is not None:
+        return declared
     if kind == "enum":
         return "select"
     if kind == "relation":
@@ -124,8 +122,6 @@ def resource_field_widget(field: models.Field[Any, Any] | None, kind: str) -> st
         # the scalar-id relation widget selects and writes the flat id, never a
         # sub-object (a ``many2one`` selects ``<field>.id``, invalid on an ``ID``).
         return "select"
-    if isinstance(field, MoneyField):
-        return "money"
     if isinstance(field, models.BooleanField):
         return "switch"
     if isinstance(field, models.IntegerField):
@@ -139,3 +135,14 @@ def resource_field_widget(field: models.Field[Any, Any] | None, kind: str) -> st
     if isinstance(field, models.JSONField):
         return "json"
     return None
+
+
+def _declared_projection_fact(field: models.Field[Any, Any] | None, name: str) -> str | None:
+    """Return one field-owned projection declaration, if present."""
+
+    if field is None:
+        return None
+    value = getattr(field, name, None)
+    if value in (None, ""):
+        return None
+    return str(value)

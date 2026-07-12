@@ -45,7 +45,7 @@ from pydantic import BaseModel
 from rebac import current_actor, system_context
 from strawberry.utils.str_converters import to_camel_case, to_snake_case
 
-from angee.base.actors import actor_user_id
+from angee.base.actors import actor_user_id, is_user_actor
 from angee.graphql.schema import GraphQLSchemas
 from mcp.types import ToolAnnotations
 
@@ -175,8 +175,9 @@ class GraphQLTool:
     ``pagination.limit`` for an offset-paginated list, ``args`` passes named root
     arguments straight through as top-level tool inputs (scalars, enums, or lists
     thereof — for operations whose inputs are bare arguments rather than one input
-    object), and ``fixed`` injects constant GraphQL arguments the agent never sees
-    (e.g. ``confirm`` on a delete).
+    object), ``fixed`` injects constant GraphQL arguments the agent never sees
+    (e.g. ``confirm`` on a delete), and ``requires_user_actor`` rejects non-user
+    MCP actors before execution for operations whose write attribution is a user FK.
     """
 
     operation: str
@@ -189,6 +190,7 @@ class GraphQLTool:
     limit_arg: str | None = None
     args: tuple[str, ...] = ()
     fixed: dict[str, Any] = field(default_factory=dict)
+    requires_user_actor: bool = False
 
 
 def register_graphql_tools(server: Any, specs: list[GraphQLTool]) -> None:
@@ -277,17 +279,20 @@ class _CompiledTool(Tool):
     limit_arg: str | None = None
     limit_wire_arg: str | None = None
     fixed: dict[str, Any] = {}
+    requires_user_actor: bool = False
 
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
         """Execute the operation and return the projected payload as structured content."""
 
+        if self.requires_user_actor and not is_user_actor(current_actor()):
+            raise ToolError("This operation requires a user actor.")
         data = await execute_under_actor(self.schema_name, self.document, self._variables(arguments))
         payload = data.get(self.payload_field)
         if self.is_list:
             rows = ((payload or {}).get(self.list_result_field) if self.list_result_field else payload) or []
             return ToolResult(structured_content={"result": [self._project(row) for row in rows]})
         if payload is None:
-            raise ValueError(f"{self.name}: no matching record.")
+            raise ToolError("No matching record.")
         return ToolResult(structured_content=self._project(payload))
 
     def _variables(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -365,6 +370,7 @@ def _compile(spec: GraphQLTool) -> _CompiledTool:
         limit_arg=spec.limit_arg,
         limit_wire_arg=limit_wire_arg,
         fixed=spec.fixed,
+        requires_user_actor=spec.requires_user_actor,
     )
 
 

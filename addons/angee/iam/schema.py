@@ -91,7 +91,7 @@ from angee.iam.roles import (
 User = cast(type[Any], get_user_model())
 Group = DjangoGroup
 Company = apps.get_model("iam", "Company")
-GROUP_PUBLIC_IDENTITY = SqidPublicIdentity(prefix="grp_")
+GROUP_PUBLIC_IDENTITY = SqidPublicIdentity(prefix="grp_", min_length=8)
 """Public data identity for Django auth groups exposed by IAM."""
 
 _ROLE_SUFFIX = "/role"
@@ -118,6 +118,7 @@ class UserType(AngeeNode):
     first_name: auto
     last_name: auto
     email: auto
+    kind: auto
     is_staff: auto
     is_active: auto
 
@@ -148,6 +149,7 @@ class CurrentUserType(AngeeNode):
     first_name: auto
     last_name: auto
     email: auto
+    kind: auto
     is_staff: auto
     is_active: auto
 
@@ -463,7 +465,7 @@ def _admin_user_queryset(info: strawberry.Info) -> QuerySet[Any]:
     """Return the admin-scoped user queryset for console resources."""
 
     require_platform_admin(info)
-    return cast(QuerySet[Any], User.objects.all())
+    return cast(QuerySet[Any], User.objects.people())
 
 
 def _colleagues(actor: Any, *, search: str, limit: int) -> list[Any]:
@@ -483,6 +485,7 @@ def _colleagues(actor: Any, *, search: str, limit: int) -> list[Any]:
     bounded = max(1, min(limit, COLLEAGUES_MAX_LIMIT))
     queryset = (
         User.objects.system_context(reason="iam.colleagues: shared company membership is the authorization")
+        .people()
         .filter(user_subject_filter(User, subject_ids), is_active=True)
         .exclude(pk=actor.pk)
     )

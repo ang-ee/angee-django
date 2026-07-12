@@ -63,9 +63,11 @@ from rebac.backends import backend as rebac_backend
 from rebac.managers import RebacManager
 
 from angee.base.actors import actor_user_id
-from angee.base.fields import ImplClassField, StateField
+from angee.base.fields import StateField
+from angee.base.impl import ImplClassField
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, role_anchor
+from angee.base.refs import RecordRefMixin
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
 from angee.storage.signals import file_finalized
@@ -455,6 +457,8 @@ class MimeType(SqidMixin, AngeeModel):
     """
 
     runtime = True
+    catalogue = True
+    catalogue_tier = "master"
 
     sqid_prefix = "mim_"
     mime_type = models.CharField(max_length=200, unique=True)
@@ -1155,7 +1159,7 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         )
 
 
-class FileAttachment(SqidMixin, AuditMixin, AngeeModel):
+class FileAttachment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     """Polymorphic edge attaching one :class:`File` to any model row.
 
     Consumers attach explicitly (create a row against the concrete model) or

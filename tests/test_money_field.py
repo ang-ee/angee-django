@@ -20,7 +20,9 @@ from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.state import ModelState, ProjectState
 from strawberry import auto
 
-from angee.base.fields import MoneyField
+import angee.base.fields as base_fields
+from angee.base.fields import SqidField
+from angee.graphql.data.field_classification import model_field_scalar, money_currency_field, resource_field_widget
 from angee.graphql.data.metadata import (
     DataResourceRoots,
     DataResourceTypeNames,
@@ -28,8 +30,39 @@ from angee.graphql.data.metadata import (
     serialize_data_resources,
 )
 from angee.graphql.data.resource_fields import model_resource_fields
-from angee.graphql.field_types import register_field_types
+from angee.money.fields import MoneyField
 from tests.money_models import MoneyDocument, MoneyLine, MoneyStatement
+
+
+class DeclaredProjectionField(models.Field):
+    """Synthetic field proving projection facts are declaration-driven."""
+
+    angee_widget = "money"
+    angee_scalar_hint = "Decimal"
+    angee_currency_field = "currency"
+
+
+def test_declared_projection_facts_classify_without_concrete_field_type() -> None:
+    """Field classification reads owner declarations before stock type fallback."""
+
+    field = DeclaredProjectionField()
+
+    assert model_field_scalar(field) == "Decimal"
+    assert resource_field_widget(field, "scalar") == "money"
+    assert money_currency_field(field) == "currency"
+
+
+def test_sqid_field_declares_id_scalar_for_metadata() -> None:
+    """The metadata-JSON path treats SqidField as an ID, matching public-id surfaces."""
+
+    assert model_field_scalar(SqidField()) == "ID"
+
+
+def test_moneyfield_is_owned_by_money_fields_module() -> None:
+    """MoneyField imports from the money fields module and is gone from base fields."""
+
+    assert MoneyField.__module__ == "angee.money.fields"
+    assert not hasattr(base_fields, "MoneyField")
 
 
 def test_check_passes_for_a_sibling_currency_fk() -> None:
@@ -105,7 +138,7 @@ def test_deconstruct_drops_currency_field_and_keeps_the_decimal_column() -> None
 
     _, path, _, kwargs = MoneyField(currency_field="order.currency").deconstruct()
 
-    assert path == "angee.base.fields.MoneyField"
+    assert path == "angee.money.fields.MoneyField"
     assert "currency_field" not in kwargs
     assert kwargs == {"max_digits": 18, "decimal_places": 6}
 
@@ -200,12 +233,11 @@ def test_moneyfield_resolves_under_auto() -> None:
 
     strawberry-django's ``field_type_map`` is an exact-class lookup, so a
     ``DecimalField`` subclass raises ``NotImplemented`` until
-    ``register_field_types`` maps it. After registration the amount resolves like
-    any decimal — no explicit annotation on the projecting type — which is what
-    lets an addon write ``list_price: auto`` instead of ``list_price: Decimal``.
+    the money addon's ``AppConfig.ready()`` maps it. After registration the
+    amount resolves like any decimal — no explicit annotation on the projecting
+    type — which is what lets an addon write ``list_price: auto`` instead of
+    ``list_price: Decimal``.
     """
-
-    register_field_types()
 
     sdl = strawberry.Schema(query=_MoneyAutoQuery).as_str()
 

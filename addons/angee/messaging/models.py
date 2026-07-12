@@ -47,15 +47,18 @@ from rebac import (
     SubjectRef,
     current_actor,
     delete_relationship,
+    system_context,
     to_object_ref,
     to_subject_ref,
     write_relationships,
 )
 
 from angee.base.actors import actor_user_id
-from angee.base.fields import ImplClassField, SqidField, StateField
+from angee.base.fields import SqidField, StateField
+from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, public_id_for
+from angee.base.models import AngeeManager, AngeeModel
+from angee.base.refs import RecordRefMixin
 from angee.integrate.models import Bridge
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
 from angee.messaging.backends import ChannelBackend
@@ -194,6 +197,24 @@ class ThreadedModelMixin(models.Model):
         changes = tracker.changes(tracking_before)
         if changes:
             self.message_track(changes, subtype_key=self.thread_tracking_subtype_key)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        """Delete this row after authorizing the record, then elevate its cascade.
+
+        Composing this mixin means an instance delete checks this record's own
+        ``delete`` permission explicitly, then runs the entire Django delete collector
+        under ``system_context`` so messaging's private chatter graph can be torn down.
+        A host model must not attach independently-authorized ``on_delete=CASCADE``
+        children under the same record; such children must derive their delete
+        permission through the record in their own zed. ``QuerySet.delete()`` does not
+        call this override, so bulk deletion of threaded records is a system-context
+        maintenance path only.
+        """
+
+        if not self.has_access("delete"):
+            raise PermissionDenied(f"Denied: cannot delete {self._meta.label}")
+        with system_context(reason="messaging.threaded_record.delete"):
+            return super().delete(*args, **kwargs)
 
     def message_thread(self, *, create: bool = True) -> models.Model | None:
         """Return this row's chatter thread, optionally creating it."""
@@ -430,24 +451,32 @@ class ThreadedModelMixin(models.Model):
         )
         owner_id = _owner_user_id(self)
         follower_model = apps.get_model("messaging", "ThreadFollower")
+        # Autofollow is messaging-owned bookkeeping reacting to an already-
+        # authorized post (the thread_post_access gate above): it runs under
+        # system_context so a non-user actor species (an agent posting through
+        # its service user) cannot be denied on the private follower rows —
+        # the same elevation rule as the delete cascade. The user-facing
+        # follow verb (message_subscribe, incl. grant_read) stays actor-gated.
         if autofollow_author and owner_id is not None:
-            follower_model.objects.subscribe(
-                self,
-                user_id=owner_id,
-                role=self.thread_attachment_role,
-            )
-            # A first post on an unfollowed record: the write path's own receipt
-            # advance ran before this autofollow existed, so seed the fresh
-            # follower's receipt at the just-posted message — an author never
-            # sees their own post as unread.
-            follower_model.objects.mark_read_up_to(message.thread, user_id=owner_id, message=message)
-        if autofollow_recipients:
-            for user_id in recipient_user_ids:
+            with system_context(reason="messaging.autofollow"):
                 follower_model.objects.subscribe(
                     self,
-                    user_id=user_id,
+                    user_id=owner_id,
                     role=self.thread_attachment_role,
                 )
+                # A first post on an unfollowed record: the write path's own receipt
+                # advance ran before this autofollow existed, so seed the fresh
+                # follower's receipt at the just-posted message — an author never
+                # sees their own post as unread.
+                follower_model.objects.mark_read_up_to(message.thread, user_id=owner_id, message=message)
+        if autofollow_recipients:
+            with system_context(reason="messaging.autofollow"):
+                for user_id in recipient_user_ids:
+                    follower_model.objects.subscribe(
+                        self,
+                        user_id=user_id,
+                        role=self.thread_attachment_role,
+                    )
         return message
 
     def _message_system_post(
@@ -476,6 +505,39 @@ class ThreadedModelMixin(models.Model):
         if attachment is None:
             raise ValueError("Cannot post a message without a thread.")
         message_model = apps.get_model("messaging", "Message")
+        # The framework writes on the record's behalf, so the whole pipeline
+        # (message, parts, tracking rows, fanout, receipt advance) runs under
+        # system_context: a user actor passed the record gate already, and a
+        # non-user actor species (an agent authoring through its service user)
+        # must not be denied on messaging-private bookkeeping rows.
+        with system_context(reason="messaging.system_post"):
+            return self._system_post_pipeline(
+                message_model,
+                attachment,
+                body=body,
+                attachments=attachments,
+                message_type=message_type,
+                subtype_key=subtype_key,
+                parent=parent,
+                tracking_values=tracking_values,
+                recipient_user_ids=recipient_user_ids,
+            )
+
+    def _system_post_pipeline(
+        self,
+        message_model: type[models.Model],
+        attachment: models.Model,
+        *,
+        body: str,
+        attachments: tuple[models.Model, ...],
+        message_type: Message.MessageKind | None,
+        subtype_key: str,
+        parent: models.Model | None,
+        tracking_values: tuple[TrackingChange | dict[str, Any], ...],
+        recipient_user_ids: tuple[Any, ...],
+    ) -> models.Model:
+        """Run the elevated system-post write; split out for readability only."""
+
         return message_model.objects.post_to_thread(
             attachment.thread,
             body=body,
@@ -700,11 +762,14 @@ class ThreadedModelMixin(models.Model):
             return
         follower_model = apps.get_model("messaging", "ThreadFollower")
         if self.thread_create_autofollow_author:
-            follower_model.objects.subscribe(
-                self,
-                user_id=owner_id,
-                role=self.thread_attachment_role,
-            )
+            # System bookkeeping on an already-authorized create; see the
+            # autofollow elevation note in _message_post.
+            with system_context(reason="messaging.autofollow"):
+                follower_model.objects.subscribe(
+                    self,
+                    user_id=owner_id,
+                    role=self.thread_attachment_role,
+                )
         create_changes = self._field_tracker().create_changes()
         message_model = apps.get_model("messaging", "Message")
         if self.thread_create_log:
@@ -1222,7 +1287,7 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
         )
 
 
-class ThreadAttachment(SqidMixin, AuditMixin, AngeeModel):
+class ThreadAttachment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     """Polymorphic edge attaching one chatter thread to one model row."""
 
     runtime = True
@@ -1261,33 +1326,6 @@ class ThreadAttachment(SqidMixin, AuditMixin, AngeeModel):
             ),
         )
         indexes = (models.Index(fields=("content_type", "object_id", "role")),)
-
-    @property
-    def target_model_label(self) -> str:
-        """Return the ``app_label.ModelName`` label of the attached target's model.
-
-        Resolves the model from the process-cached ``ContentType`` by id
-        (``ContentType.objects.get_for_id``), so a list of rows projects the pointer
-        without a per-row ``content_type`` join.
-        """
-
-        model_class = ContentType.objects.get_for_id(self.content_type_id).model_class()
-        return model_class._meta.label if model_class is not None else ""
-
-    @property
-    def target_public_id(self) -> str:
-        """Return the attached target's stable public id (its sqid).
-
-        Encoded from the stored ``content_type``/``object_id`` alone — via the
-        process-cached ``ContentType.objects.get_for_id`` — so the parent pointer
-        resolves without loading (or re-gating, or per-row joining) the target row;
-        navigating the pointer re-gates through the target's own record read.
-        """
-
-        model_class = ContentType.objects.get_for_id(self.content_type_id).model_class()
-        if model_class is None:
-            return ""
-        return public_id_for(model_class, self.object_id)
 
     def __str__(self) -> str:
         """Return a readable attachment label."""

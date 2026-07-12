@@ -58,7 +58,7 @@ def connect_imap_channel(
             backend_class=_IMAP_VENDOR_SLUG,
             display_name=display_name,
             config=config,
-            status="draft",
+            lifecycle="draft",
             created_by_id=user.pk,
         )
         credential = Credential.objects.create_local_credential(
@@ -67,9 +67,7 @@ def connect_imap_channel(
             name=_credential_name(display_name, channel.sqid),
             material={"username": username, "password": password},
         )
-        channel.credential = credential
-        channel.status = "active"
-        channel.save(update_fields=["credential", "status", "updated_at"])
+        channel.activate(credential=credential, account=getattr(credential, "external_account", None))
     return channel
 
 

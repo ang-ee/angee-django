@@ -46,7 +46,9 @@ from angee.integrate.schema import (
     VendorType,
     apply_integration_patch_fields,
     connect_integration_target,
+    impl_default_update_fields,
     integration_create_attrs,
+    save_provided_fields,
 )
 from angee.operator.daemon import OperatorDaemon
 
@@ -74,7 +76,8 @@ class InferenceProviderType(AngeeNode):
     account: ExternalAccountType | None
     owner: UserType
     backend_class: auto
-    status: auto
+    lifecycle: auto
+    runtime_status: auto
     name: auto
     base_url: auto
     config: JSON
@@ -231,7 +234,7 @@ class InferenceProviderInput:
     credential: PublicID | None = None
     account: PublicID | None = strawberry.UNSET
     backend_class: str | None = strawberry.UNSET
-    status: str | None = strawberry.UNSET
+    lifecycle: str | None = strawberry.UNSET
     name: str = ""
     base_url: str = ""
     # UNSET (not None): an omitted field must fall back to the model default, not
@@ -249,7 +252,7 @@ class InferenceProviderPatch:
     credential: PublicID | None = strawberry.UNSET
     account: PublicID | None = strawberry.UNSET
     backend_class: str | None = strawberry.UNSET
-    status: str | None = strawberry.UNSET
+    lifecycle: str | None = strawberry.UNSET
     name: str | None = strawberry.UNSET
     base_url: str | None = strawberry.UNSET
     config: JSON | None = strawberry.UNSET
@@ -362,10 +365,10 @@ _INFERENCE_PROVIDER_RESOURCE = hasura_model_resource(
     InferenceProviderType,
     model=InferenceProvider,
     name="inference_providers",
-    filterable=["id", "vendor", "owner", "backend_class", "status", "name", "updated_at"],
-    sortable=["vendor", "backend_class", "status", "name", "created_at", "updated_at"],
+    filterable=["id", "vendor", "owner", "backend_class", "lifecycle", "runtime_status", "name", "updated_at"],
+    sortable=["vendor", "backend_class", "lifecycle", "runtime_status", "name", "created_at", "updated_at"],
     aggregatable=["id"],
-    groupable=["backend_class", "status", "vendor", "vendor__display_name"],
+    groupable=["backend_class", "lifecycle", "runtime_status", "vendor", "vendor__display_name"],
     insert=False,
     update=False,
     delete=True,
@@ -509,10 +512,11 @@ class InferenceProviderUpdateMutation:
                 provider,
                 data,
                 reason="agents.graphql.inference_provider.update",
-                ignore_null_status=True,
+                ignore_null_lifecycle=True,
             )
             if data.backend_class is not strawberry.UNSET:
                 backend_changed = provider.set_impl_key("backend_class", data.backend_class, default="manual")
+                provided.add("backend_class")
             if data.name is not strawberry.UNSET:
                 provider.name = data.name or ""
                 provided.add("name")
@@ -524,7 +528,8 @@ class InferenceProviderUpdateMutation:
                 provided.add("config")
             if backend_changed:
                 provider.materialize_impl_defaults("backend_class", provided=frozenset(provided))
-            provider.save()
+                provided.update(impl_default_update_fields(provider, "backend_class"))
+            save_provided_fields(provider, provided)
         return cast(InferenceProviderType, provider)
 
 

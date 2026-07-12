@@ -23,7 +23,8 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from rebac.managers import RebacManager
 
-from angee.base.fields import ImplClassField, SqidField, StateField
+from angee.base.fields import SqidField, StateField
+from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel
 from angee.integrate.models import Bridge

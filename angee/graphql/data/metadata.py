@@ -102,7 +102,7 @@ class DataGroupBucketFilterMetadata:
     value_key: str | None = None
     range_key: str | None = None
     lookup: str | None = None
-    null_lookup: str = "isNull"
+    null_lookup: str | None = "isNull"
     value_transform: str | None = None
     value_map: tuple[DataGroupBucketFilterValueMapMetadata, ...] = ()
 

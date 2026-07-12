@@ -15,7 +15,9 @@ from django.db.models.signals import post_delete, post_save
 from django.utils import timezone
 from rebac import system_context
 
-from angee.base.sync import sync_ingestion_active
+from angee.base.models import instance_from_public_id
+from angee.graphql.events import ChangePayload
+from angee.graphql.publishing import change_published
 from angee.workflows import engine
 from angee.workflows.models import TriggerKind
 
@@ -30,7 +32,10 @@ def connect_event_trigger_receiver() -> None:
     """Connect the generic event-trigger receiver exactly once."""
 
     _clear_event_trigger_label_cache()
-    post_save.connect(_on_model_save, dispatch_uid=_EVENT_TRIGGER_DISPATCH_UID)
+    change_published.connect(
+        _on_change_published,
+        dispatch_uid=_EVENT_TRIGGER_DISPATCH_UID,
+    )
     try:
         trigger_model = _model("Trigger")
     except LookupError:
@@ -82,25 +87,27 @@ def run_due_schedule_triggers(*, now: datetime | None = None) -> dict[str, int]:
     return {"triggers": len(trigger_ids), "fired": fired, "skipped": skipped}
 
 
-def _on_model_save(
+def _on_change_published(
     sender: type[models.Model],
-    instance: models.Model,
-    raw: bool = False,
+    payload: ChangePayload,
     **kwargs: Any,
 ) -> None:
-    """Start matching event triggers after a model row is saved."""
+    """Start matching event triggers after an observable model change is published."""
 
     del kwargs
-    if raw or instance.pk is None or sync_ingestion_active():
+    if payload.action == "delete":
+        return
+    if payload.during_ingestion:
         return
 
-    model_label = sender._meta.label_lower
-    # Django records migrations inside the same transaction as migration DDL.
-    if model_label == "migrations.migration":
-        return
+    model_label = payload.model.lower()
     if model_label.startswith("workflows."):
         return
     if model_label not in _enabled_event_model_labels():
+        return
+    with system_context(reason="workflows.event_triggers.subject"):
+        instance = instance_from_public_id(sender, payload.id)
+    if instance is None:
         return
 
     try:

@@ -437,6 +437,34 @@ def test_login_with_wrong_password_fails_and_writes_no_hash_upgrade(
     assert user.password == stale_hash
 
 
+@override_settings(AUTHENTICATION_BACKENDS=("angee.iam.auth.ModelBackend",))
+def test_login_refuses_service_account(
+    iam_connection_tables: None,
+) -> None:
+    """Service users are non-login principals, so password login fails natively."""
+
+    user = User.objects.create_user(
+        username="svc-agent",
+        email="svc-agent@example.com",
+        password="secret",
+        kind="service",
+    )
+
+    data = _data(
+        _execute(
+            _schema("public"),
+            _LOGIN_MUTATION,
+            {"username": "svc-agent", "password": "secret"},
+            request=_request(AnonymousUser()),
+        )
+    )
+
+    assert data["login"] == {"ok": False, "user": None}
+    with system_context(reason="test.iam.login.service_user"):
+        user.refresh_from_db()
+    assert not user.has_usable_password()
+
+
 def test_link_account_complete_returns_account_claims_intent_and_coerced_next(
     iam_connection_tables: None,
     monkeypatch: pytest.MonkeyPatch,

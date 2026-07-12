@@ -1,9 +1,7 @@
 """Django config for the Angee money addon.
 
-Money needs a ``python`` seam only to surface one configuration fact at
-``manage.py check`` time: the reference currency setting. Following the framework
-canon (``angee.integrate`` registers its checks from ``ready()``), this registers
-a single settings check once per process.
+Money uses ``ready()`` for the process-local reference-currency settings check.
+Its value field registers its GraphQL scalar at field-module import.
 """
 
 from __future__ import annotations
@@ -24,7 +22,7 @@ class MoneyConfig(AppConfig):
     name = "angee.money"
 
     def ready(self) -> None:
-        """Register money's configuration checks after app population."""
+        """Register money-owned process hooks after app population."""
 
         super().ready()
         _register_checks()

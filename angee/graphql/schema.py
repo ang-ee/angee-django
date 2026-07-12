@@ -29,20 +29,13 @@ from angee.graphql.data.metadata import (
     merge_data_resources,
     serialize_data_resources,
 )
-from angee.graphql.field_types import register_field_types
 from angee.graphql.ids import assert_unique_sqid_prefixes
 from angee.graphql.introspection import (
     django_model,
     surface_field_names,
     surface_name,
 )
-from angee.graphql.publishing import connect_publishers
 from graphql import GraphQLError, GraphQLSchema
-
-# Teach strawberry-django Angee's custom value fields (e.g. MoneyField) as this
-# module — the one owner of schema construction — loads, so every schema build
-# below resolves those fields under ``auto``. See angee.graphql.field_types.
-register_field_types()
 
 DEFAULT_SCHEMA_NAME = "public"
 """Default GraphQL schema name served by Angee hosts."""
@@ -271,6 +264,42 @@ class GraphQLSchemas:
             ) from error
         return self._data_resources_from_parts(parts)
 
+    def change_publisher_models(self) -> tuple[type[models.Model], ...]:
+        """Return every model declared into the GraphQL change feed.
+
+        Memoized per instance: the published set is fixed for a process, and
+        both ``Trigger.clean()`` and the workflows system check consume it on
+        every trigger save.
+        """
+
+        cached: tuple[type[models.Model], ...] | None = getattr(
+            self, "_change_publisher_models", None
+        )
+        if cached is not None:
+            return cached
+        models_by_label: dict[str, type[models.Model]] = {}
+        for schema_name in self.names():
+            for resource in self.resources(schema_name):
+                if resource.model is None or "changes" not in resource.capabilities:
+                    continue
+                models_by_label[resource.model._meta.label_lower] = resource.model
+        result = tuple(models_by_label[label] for label in sorted(models_by_label))
+        self._change_publisher_models = result
+        return result
+
+    def change_publisher_model_labels(self) -> frozenset[str]:
+        """Return lower-case Django labels for models declared into the change feed."""
+
+        return frozenset(model._meta.label_lower for model in self.change_publisher_models())
+
+    def connect_change_publishers(self) -> None:
+        """Connect save/delete publishers for every declared change-feed model."""
+
+        from angee.graphql.publishing import connect_publishers
+
+        for model in self.change_publisher_models():
+            connect_publishers(model)
+
     def _build(
         self,
         name: str,
@@ -293,7 +322,7 @@ class GraphQLSchemas:
         assert_unique_sqid_prefixes(types)
         self._describe_choice_enums(types)
         resources = self._data_resources_from_parts(parts)
-        self._connect_change_publishers(resources)
+        self._assert_revision_visibility(resources)
         schema = AngeeSchema(
             query=query,
             mutation=self._merge_root(name, "mutation", parts.mutation),
@@ -343,16 +372,18 @@ class GraphQLSchemas:
         extensions["angee"] = angee_extensions
         schema._schema.extensions = extensions
 
-    def _connect_change_publishers(
+    def _assert_revision_visibility(
         self,
         resources: tuple[DataResourceMetadata, ...],
     ) -> None:
-        """Connect model-change publishers for every declared change resource."""
+        """Validate revision resources when a schema is actually built."""
+
+        from angee.graphql.revisions import validate_revision_visibility
 
         for resource in resources:
-            if resource.model is None or "changes" not in resource.capabilities:
+            if resource.model is None or "revisions" not in resource.capabilities:
                 continue
-            connect_publishers(resource.model)
+            validate_revision_visibility(resource.model)
 
     def _schema_types(self, parts: SchemaParts) -> tuple[object, ...]:
         """Return concrete and native extension types registered with Strawberry."""

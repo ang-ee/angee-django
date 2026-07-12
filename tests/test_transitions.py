@@ -196,6 +196,35 @@ def test_save_state_wins_when_the_committed_source_still_holds(transition_task_t
 
 
 @pytest.mark.django_db(transaction=True)
+def test_force_state_bypasses_graph_and_persists_with_save_state_guard(transition_task_table: None) -> None:
+    """The public escape hatch can force a data-dependent target outside the graph."""
+
+    task = TransitionTask.objects.create(state=TransitionTask.State.RUNNING)
+    task.note = "forced"
+    task._transition_fields = {"note"}
+
+    task.state_transitions.force_state(task, TransitionTask.State.ARCHIVED, reason="test force")
+
+    task.refresh_from_db()
+    assert task.state == TransitionTask.State.ARCHIVED
+    assert task.note == "forced"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_force_state_reuses_the_concurrency_guard(transition_task_table: None) -> None:
+    """A force-state write still loses when the committed source changed first."""
+
+    task = TransitionTask.objects.create(state=TransitionTask.State.RUNNING)
+    TransitionTask.objects.filter(pk=task.pk).update(state=TransitionTask.State.DONE)
+    task._transition_fields = set()
+
+    with pytest.raises(TransitionNotAllowed, match="concurrent transition"):
+        task.state_transitions.force_state(task, TransitionTask.State.ARCHIVED, reason="test stale force")
+
+    assert TransitionTask.objects.get(pk=task.pk).state == TransitionTask.State.DONE
+
+
+@pytest.mark.django_db(transaction=True)
 def test_direct_assignment_rejected_on_guarded_fields(transition_task_table: None) -> None:
     """Guarded state columns cannot be changed by assignment."""
 
@@ -220,6 +249,18 @@ def test_transition_not_allowed_message_names_field_source_and_target(transition
     assert "state" in message
     assert "done" in message
     assert "running" in message
+
+
+@pytest.mark.django_db(transaction=True)
+def test_not_allowed_public_helper_raises_the_transition_error(transition_task_table: None) -> None:
+    """Consumers can raise the primitive's standard error without private reaches."""
+
+    task = TransitionTask.objects.create()
+
+    with pytest.raises(TransitionNotAllowed) as error:
+        task.state_transitions.not_allowed(task.state, TransitionTask.State.ARCHIVED)
+
+    assert "state transition from draft to archived" in str(error.value)
 
 
 class PolicyTask(models.Model):
@@ -374,3 +415,36 @@ def test_policy_marker_requires_a_policy_setting() -> None:
             @transition(state, source=State.POSTED, target=State.DRAFT, policy="posted->draft")
             def reopen(self) -> None:
                 """A policy edge with no ``policy_setting`` to govern it."""
+
+
+def test_action_specs_project_declared_transitions_in_method_name_order() -> None:
+    """Action specs are a frozen public view over transition methods."""
+
+    specs = StateTransitions.action_specs(PolicyTask)
+
+    assert tuple(spec.name for spec in specs) == ("cancel", "post", "reopen")
+    assert specs == (
+        specs[0].__class__(
+            name="cancel",
+            field="state",
+            sources=("draft",),
+            target="cancelled",
+            policy=None,
+        ),
+        specs[0].__class__(
+            name="post",
+            field="state",
+            sources=("draft",),
+            target="posted",
+            policy=None,
+        ),
+        specs[0].__class__(
+            name="reopen",
+            field="state",
+            sources=("posted",),
+            target="draft",
+            policy="posted->draft",
+        ),
+    )
+    with pytest.raises(AttributeError):
+        specs[0].name = "mutated"  # type: ignore[misc]

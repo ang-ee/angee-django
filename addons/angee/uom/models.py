@@ -35,6 +35,8 @@ class UomCategory(AngeeDataModel):
     """A family of units that measure the same quantity (weight, volume, time)."""
 
     runtime = True
+    catalogue = True
+    catalogue_tier = "master"
     sqid_prefix = "uoc_"
 
     name = models.CharField(max_length=128)
@@ -70,6 +72,8 @@ class Uom(ArchiveMixin, AngeeDataModel):
     """
 
     runtime = True
+    catalogue = True
+    catalogue_tier = "master"
     sqid_prefix = "uom_"
 
     name = models.CharField(max_length=128)

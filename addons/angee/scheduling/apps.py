@@ -1,11 +1,10 @@
 """Django config for the Angee scheduling addon.
 
-Scheduling owns *time recurrence* for the platform. Its one ``ready()`` seam
-teaches the GraphQL runtime how ``RecurrenceField`` projects under ``auto`` (so a
-consumer writes ``recurrence: auto``, not a hand-annotated wire type); the
-``AppConfig`` also exists so the addon's contract — including the face it declares
-but has not yet built — has one authoritative home (App facts live on
-``AppConfig``). Read :class:`SchedulingConfig` for that contract.
+Scheduling owns *time recurrence* for the platform. Its ``AppConfig`` exists so
+the addon's contract — including the face it declares but has not yet built — has
+one authoritative home (App facts live on ``AppConfig``). Read
+:class:`SchedulingConfig` for that contract. ``RecurrenceField`` registers its
+GraphQL scalar at field-module import.
 """
 
 from __future__ import annotations
@@ -49,23 +48,3 @@ class SchedulingConfig(AppConfig):
 
     default = True
     name = "angee.scheduling"
-
-    def ready(self) -> None:
-        """Register ``RecurrenceField``'s GraphQL wire type before any schema builds.
-
-        strawberry-django resolves a model field to its GraphQL type through an
-        exact-class map (no MRO walk), so a ``CharField`` subclass like
-        ``RecurrenceField`` needs an explicit entry to project as ``String`` under
-        ``auto`` — the same registration ``angee.graphql`` performs for its own value
-        fields. Doing it here, through the ``angee.graphql`` owner seam, is what earns
-        this addon's ``angee.graphql`` dependency and keeps every consumer's
-        ``recurrence`` column annotation-free.
-        """
-
-        super().ready()
-        # Phase-1 ready hook: defer the GraphQL/runtime imports until after app
-        # population, mirroring the sibling base-addon ready() seams.
-        from angee.graphql.field_types import register_field_type
-        from angee.scheduling.fields import RecurrenceField
-
-        register_field_type(RecurrenceField, str)

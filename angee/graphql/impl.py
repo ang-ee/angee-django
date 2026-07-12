@@ -10,8 +10,9 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_snake_case
 
-from angee.base.fields import ImplClassField
 from angee.base.impl import ImplChoice as BaseImplChoice
+from angee.base.impl import ImplClassField
+from angee.base.models import AngeeModel
 
 
 @strawberry.type
@@ -34,12 +35,14 @@ def impl_choices(model: str, field: str) -> list[ImplChoice]:
     """
 
     django_model = _model_for_label(model)
+    field_name = _field_name(field)
     try:
-        model_field = django_model._meta.get_field(_field_name(field))
+        raw_field = django_model._meta.get_field(field_name)
     except FieldDoesNotExist as error:
         raise ImproperlyConfigured(f"{django_model._meta.label} has no field {field!r}.") from error
-    if not isinstance(model_field, ImplClassField):
-        raise ImproperlyConfigured(f"{django_model._meta.label}.{model_field.name} is not an ImplClassField.")
+    if not isinstance(raw_field, ImplClassField) or not issubclass(django_model, AngeeModel):
+        raise ImproperlyConfigured(f"{django_model._meta.label}.{raw_field.name} is not an ImplClassField.")
+    model_field = django_model.impl_field(field_name)
     return [_project_choice(choice) for choice in model_field.impl_choices()]
 
 

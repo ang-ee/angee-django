@@ -26,6 +26,11 @@ SETTINGS = {
     # verifier the base ``angee.mcp`` runtime calls: it matches an inbound bearer to an
     # ``agents.MCPServer.credential`` and resolves the agent actor (see ``mcp_verifier``).
     "ANGEE_MCP_ACTOR_VERIFIER": "angee.agents.mcp_verifier.resolve_actor",
+    # The base audit/revision attribution helper resolves non-user actor subjects through
+    # this settings-keyed registry. Agents contribute only their own subject type.
+    "ANGEE_ACTOR_USER_RESOLVERS": {
+        "agents/agent": "angee.agents.actor_resolvers.agent_user_id",
+    },
     # TTL of the per-actor chat route token minted by ``agentChatEndpoint`` (the
     # daemon caps it at 24h). The TTL policy lives here, not as a literal in the
     # resolver; mirrors ``ANGEE_OPERATOR_TOKEN_TTL`` for the GraphQL token.

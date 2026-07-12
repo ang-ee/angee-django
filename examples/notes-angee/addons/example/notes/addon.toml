@@ -8,14 +8,14 @@ category = "Example"
 depends_on = ["angee.iam", "angee.integrate", "angee.iam_integrate_oidc", "angee.agents", "angee.agents_integrate_anthropic", "angee.mcp", "angee.messaging", "angee.workflows"]
 
 [resources]
-install = [
-  { path = "resources/install/010_integrate.vendor.yaml", adopt = "slug" },
+master = [
+  { path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" },
+  { path = "resources/master/081_integrate.vendor.yaml", adopt = "slug" },
 ]
 demo = [
   { path = "resources/demo/020_notes.note.yaml", depends_on = "iam:resources/demo/010_iam.user.yaml" },
   { path = "resources/demo/080_integrate.credential.yaml", depends_on = "iam:resources/demo/010_iam.user.yaml", adopt = ["user", "name"] },
-  { path = "resources/demo/081_integrate.vendor.yaml", adopt = "slug" },
-  { path = "resources/demo/083_integrate.vcsbridge.yaml", depends_on = ["resources/demo/080_integrate.credential.yaml", "resources/demo/081_integrate.vendor.yaml"] },
+  { path = "resources/demo/083_integrate.vcsbridge.yaml", depends_on = ["resources/demo/080_integrate.credential.yaml", "resources/master/081_integrate.vendor.yaml"] },
   { path = "resources/demo/084_integrate.repository.yaml", depends_on = "resources/demo/083_integrate.vcsbridge.yaml", adopt = ["vcs_bridge", "name"] },
   { path = "resources/demo/085_integrate.source.yaml", depends_on = "resources/demo/084_integrate.repository.yaml" },
   { path = "resources/demo/094_integrate.template.yaml", depends_on = "resources/demo/085_integrate.source.yaml", adopt = ["source", "path"] },

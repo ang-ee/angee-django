@@ -16,17 +16,22 @@ from typing import Any, cast
 
 from django.apps import apps
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.db import models, transaction
+from django.db.models.signals import class_prepared, m2m_changed, post_delete
 from django.utils import timezone
-from rebac import system_context
+from rebac import RelationshipTuple, SubjectRef, system_context, to_object_ref
+from rebac.relationships import delete_relationships, write_relationships
+from rebac.types import RelationshipFilter
 
 from angee.agents.backends import InferenceBackend, InferenceRequest, InferenceResponse
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
-from angee.base.fields import ImplClassField, StateField
-from angee.base.impl import ImplDefaultsMixin
+from angee.base.fields import StateField
+from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel
+from angee.base.transitions import StateTransitions, save_state, transition
 
 
 class InferenceModelUse(models.TextChoices):
@@ -66,6 +71,14 @@ class MCPTransport(models.TextChoices):
 
 BUILTIN_MCP_ANGEE = "angee"
 """``MCPServer.config["builtin"]`` value for this process's built-in Angee MCP server."""
+
+
+def _update_field_names(update_fields: Any) -> set[str]:
+    """Normalize Django's ``update_fields`` save argument to field names."""
+
+    if isinstance(update_fields, str):
+        return {update_fields}
+    return {str(field) for field in update_fields}
 
 
 class AgentLifecycle(models.TextChoices):
@@ -212,6 +225,8 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
     """
 
     runtime = True
+    catalogue = True
+    catalogue_tier = "demo"
 
     sqid_prefix = "imd_"
     provider = models.ForeignKey("agents.InferenceProvider", on_delete=models.CASCADE, related_name="models")
@@ -357,6 +372,8 @@ class MCPServer(SqidMixin, AuditMixin, AngeeModel):
     """
 
     runtime = True
+    catalogue = True
+    catalogue_tier = "demo"
 
     sqid_prefix = "mcp_"
     name = models.CharField(max_length=200, unique=True)
@@ -473,6 +490,59 @@ class MCPTool(SqidMixin, AuditMixin, AngeeModel):
         return self.name
 
 
+class AgentManager(AngeeManager):
+    """Manager owning service-user lifecycle for agent principals."""
+
+    def service_username(self, agent: Any) -> str:
+        """Return the deterministic username for ``agent``'s service user."""
+
+        return f"agent-{agent.sqid}"
+
+    def sync_service_user(self, agent: Any) -> Any:
+        """Create or update ``agent``'s non-login service user.
+
+        The service row is system-owned attribution state, not actor-authored
+        profile data, so it is written elevated and keyed only by the agent's
+        stable sqid-derived username.
+        """
+
+        if agent.pk is None:
+            raise ValueError("Agent must be saved before syncing its service user.")
+        user_model = get_user_model()
+        username = self.service_username(agent)
+        defaults = {
+            "first_name": agent.name,
+            "last_name": "",
+            "email": "",
+            "kind": "service",
+        }
+        with system_context(reason="agents.service_user.sync"), transaction.atomic():
+            if agent.user_id:
+                user = user_model._base_manager.get(pk=agent.user_id)
+                changed: set[str] = set()
+                for field, value in {"username": username, **defaults}.items():
+                    if getattr(user, field) != value:
+                        setattr(user, field, value)
+                        changed.add(field)
+                if changed:
+                    user.save(update_fields=changed)
+                return user
+            user, _created = user_model._base_manager.update_or_create(username=username, defaults=defaults)
+            agent.user_id = user.pk
+            type(agent)._base_manager.filter(pk=agent.pk).update(user_id=user.pk)
+            return user
+
+    def deactivate_service_user(self, agent: Any, *, using: str | None = None) -> None:
+        """Deactivate ``agent``'s linked service user, leaving attribution FKs intact."""
+
+        if not agent.user_id:
+            return
+        user_model = get_user_model()
+        manager = user_model._base_manager.db_manager(using) if using else user_model._base_manager
+        with system_context(reason="agents.service_user.deactivate"):
+            manager.filter(pk=agent.user_id).update(is_active=False)
+
+
 class Agent(SqidMixin, AuditMixin, AngeeModel):
     """An agent definition (or, when ``is_template``, an agent template).
 
@@ -490,6 +560,14 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
     description = models.TextField(blank=True)
     is_template = models.BooleanField(default=False, db_index=True)
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="agents")
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="agent",
+    )
+    """Non-login service user used for audit/revision attribution by this agent."""
     instructions = models.TextField(blank=True)
     """The agent's system instructions, rendered into AGENTS.md/CLAUDE.md."""
     model = models.ForeignKey(
@@ -542,7 +620,36 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
     last_error = models.TextField(blank=True)
     """The reason ``runtime_status`` is ``ERROR`` — the last failed operation."""
 
-    objects = AngeeManager()
+    lifecycle_transitions = StateTransitions(
+        lifecycle,
+        {
+            AgentLifecycle.DRAFT: [
+                AgentLifecycle.PROVISIONING,
+                AgentLifecycle.DEPROVISIONING,
+                AgentLifecycle.DEPROVISIONED,
+            ],
+            AgentLifecycle.PROVISIONING: [
+                AgentLifecycle.PROVISIONING,
+                AgentLifecycle.READY,
+                AgentLifecycle.DEPROVISIONING,
+            ],
+            AgentLifecycle.READY: [
+                AgentLifecycle.PROVISIONING,
+                AgentLifecycle.DEPROVISIONING,
+            ],
+            AgentLifecycle.DEPROVISIONING: [
+                AgentLifecycle.DEPROVISIONING,
+                AgentLifecycle.DEPROVISIONED,
+            ],
+            AgentLifecycle.DEPROVISIONED: [
+                AgentLifecycle.PROVISIONING,
+                AgentLifecycle.DEPROVISIONING,
+                AgentLifecycle.DEPROVISIONED,
+            ],
+        },
+    )
+
+    objects = AgentManager()
 
     class Meta:
         """Django model options for agents."""
@@ -556,6 +663,34 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         """Return the agent's name."""
 
         return self.name
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Persist the agent and sync its service-user label.
+
+        Mirrors ``iam.User.save()``: the row save owns a small derived sync, and
+        the manager performs the system-owned dependent write.
+        """
+
+        creating = self._state.adding
+        update_fields = kwargs.get("update_fields")
+        should_check_name = creating or update_fields is None or "name" in _update_field_names(update_fields)
+        persisted_name = None
+        if not creating and should_check_name:
+            persisted_name = type(self)._base_manager.filter(pk=self.pk).values_list("name", flat=True).first()
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+            if creating or (should_check_name and persisted_name != self.name):
+                type(self).objects.sync_service_user(self)
+
+    def principal_subject(self) -> SubjectRef:
+        """Return this agent's own REBAC subject identity for actions it performs.
+
+        This is distinct from :attr:`owner`: the owner manages the agent definition,
+        while the agent subject represents the running agent as an actor.
+        """
+
+        ref = to_object_ref(self)
+        return SubjectRef.of(ref.resource_type, ref.resource_id)
 
     @property
     def runtime_backend(self) -> AgentRuntime:
@@ -600,30 +735,56 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
             return None
         return "Deprovision this agent before deleting it."
 
+    @transition(
+        lifecycle,
+        source=[
+            AgentLifecycle.DRAFT,
+            AgentLifecycle.PROVISIONING,
+            AgentLifecycle.READY,
+            AgentLifecycle.DEPROVISIONED,
+        ],
+        target=AgentLifecycle.PROVISIONING,
+        on_success=save_state,
+    )
     def mark_provisioning(self) -> None:
         """Enter the provision flow: lifecycle provisioning, run state reset to stopped."""
 
-        self.lifecycle = cast(AgentLifecycle, AgentLifecycle.PROVISIONING)
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.STOPPED)
         self.last_error = ""
-        self.save(update_fields=["lifecycle", "runtime_status", "last_error", "updated_at"])
+        self._transition_fields = {"runtime_status", "last_error"}
 
+    @transition(
+        lifecycle,
+        source=AgentLifecycle.PROVISIONING,
+        target=AgentLifecycle.PROVISIONING,
+        on_success=save_state,
+    )
     def mark_workspace_provisioned(self, *, workspace: str) -> None:
         """Record the workspace as soon as the operator creates it."""
 
         self.workspace = workspace
-        self.lifecycle = cast(AgentLifecycle, AgentLifecycle.PROVISIONING)
         self.last_error = ""
-        self.save(update_fields=["workspace", "lifecycle", "last_error", "updated_at"])
+        self._transition_fields = {"workspace", "last_error"}
 
+    @transition(
+        lifecycle,
+        source=AgentLifecycle.PROVISIONING,
+        target=AgentLifecycle.PROVISIONING,
+        on_success=save_state,
+    )
     def mark_service_provisioned(self, *, service: str) -> None:
         """Record the service as soon as the operator creates it."""
 
         self.service = service
-        self.lifecycle = cast(AgentLifecycle, AgentLifecycle.PROVISIONING)
         self.last_error = ""
-        self.save(update_fields=["service", "lifecycle", "last_error", "updated_at"])
+        self._transition_fields = {"service", "last_error"}
 
+    @transition(
+        lifecycle,
+        source=AgentLifecycle.PROVISIONING,
+        target=AgentLifecycle.READY,
+        on_success=save_state,
+    )
     def mark_provisioned(self, *, workspace: str, service: str = "") -> None:
         """Record the operator instance the provision flow rendered for this agent.
 
@@ -635,27 +796,42 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
 
         self.workspace = workspace
         self.service = service
-        self.lifecycle = cast(AgentLifecycle, AgentLifecycle.READY)
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.RUNNING)
         self.last_error = ""
-        self.save(update_fields=["workspace", "service", "lifecycle", "runtime_status", "last_error", "updated_at"])
+        self._transition_fields = {"workspace", "service", "runtime_status", "last_error"}
 
+    @transition(
+        lifecycle,
+        source=[AgentLifecycle.DRAFT, AgentLifecycle.DEPROVISIONING, AgentLifecycle.DEPROVISIONED],
+        target=AgentLifecycle.DEPROVISIONED,
+        on_success=save_state,
+    )
     def mark_deprovisioned(self) -> None:
         """Clear the operator instance after teardown: lifecycle deprovisioned, run state stopped."""
 
         self.workspace = ""
         self.service = ""
-        self.lifecycle = cast(AgentLifecycle, AgentLifecycle.DEPROVISIONED)
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.STOPPED)
         self.last_error = ""
-        self.save(update_fields=["workspace", "service", "lifecycle", "runtime_status", "last_error", "updated_at"])
+        self._transition_fields = {"workspace", "service", "runtime_status", "last_error"}
 
+    @transition(
+        lifecycle,
+        source=[
+            AgentLifecycle.DRAFT,
+            AgentLifecycle.PROVISIONING,
+            AgentLifecycle.READY,
+            AgentLifecycle.DEPROVISIONING,
+            AgentLifecycle.DEPROVISIONED,
+        ],
+        target=AgentLifecycle.DEPROVISIONING,
+        on_success=save_state,
+    )
     def mark_deprovisioning(self) -> None:
         """Mark the agent as tearing down through the operator teardown flow."""
 
-        self.lifecycle = cast(AgentLifecycle, AgentLifecycle.DEPROVISIONING)
         self.last_error = ""
-        self.save(update_fields=["lifecycle", "last_error", "updated_at"])
+        self._transition_fields = {"last_error"}
 
     def mark_provision_failed(
         self, message: str, *, clear_instances: bool = False, clear_service: bool = False
@@ -669,21 +845,27 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         The lifecycle then follows the workspace, never stranding mid-flow: an agent left
         holding a workspace is still provisioned (``READY``), one rolled back to nothing is
         a clean ``DRAFT`` retry. The red run-state dot carries the failure either way, and
-        the persisted names never point at a torn-down instance.
+        the persisted names never point at a torn-down instance. This deliberately bypasses
+        the declared lifecycle graph because the target is data-dependent recovery state,
+        not a user-visible lifecycle action.
         """
 
-        update_fields = ["lifecycle", "runtime_status", "last_error", "updated_at"]
+        transition_fields = {"runtime_status", "last_error"}
         if clear_instances:
             self.workspace = ""
             self.service = ""
-            update_fields = ["workspace", "service", *update_fields]
+            transition_fields.update({"workspace", "service"})
         elif clear_service:
             self.service = ""
-            update_fields = ["service", *update_fields]
-        self.lifecycle = cast(AgentLifecycle, AgentLifecycle.READY if self.workspace else AgentLifecycle.DRAFT)
+            transition_fields.add("service")
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.ERROR)
         self.last_error = message[:2000]
-        self.save(update_fields=update_fields)
+        self._transition_fields = transition_fields
+        self.lifecycle_transitions.force_state(
+            self,
+            cast(AgentLifecycle, AgentLifecycle.READY if self.workspace else AgentLifecycle.DRAFT),
+            reason="agent provision failure reconciles lifecycle from persisted operator instance names",
+        )
 
     def provision_workspace_inputs(self) -> dict[str, str]:
         """Resolve the ``agent-default`` workspace template inputs from this agent.
@@ -913,3 +1095,155 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
             return override
         model = getattr(self, "model", None)
         return model.credential if model is not None else None
+
+
+_MCP_AGENT_RELATION = "agent"
+
+
+def _write_agent_mcp_relation(resource: models.Model, agent: Agent) -> None:
+    """Grant one selected agent access to one selected MCP resource."""
+
+    write_relationships(
+        [
+            RelationshipTuple(
+                resource=to_object_ref(resource),
+                relation=_MCP_AGENT_RELATION,
+                subject=agent.principal_subject(),
+            )
+        ]
+    )
+
+
+def _delete_agent_mcp_relation(resource: models.Model, agent: Agent) -> None:
+    """Revoke one selected agent's access to one selected MCP resource."""
+
+    resource_ref = to_object_ref(resource)
+    subject = agent.principal_subject()
+    delete_relationships(
+        RelationshipFilter(
+            resource_type=resource_ref.resource_type,
+            resource_id=resource_ref.resource_id,
+            relation=_MCP_AGENT_RELATION,
+            subject_type=subject.subject_type,
+            subject_id=subject.subject_id,
+        )
+    )
+
+
+def _sync_agent_mcp_selection(
+    *,
+    instance: models.Model,
+    action: str,
+    reverse: bool,
+    model: type[models.Model],
+    pk_set: set[Any] | None,
+    field_name: str,
+) -> None:
+    """Mirror one Agent↔MCP M2M edit into the non-field REBAC relation."""
+
+    if action not in {"post_add", "post_remove", "pre_clear"}:
+        return
+    if action == "pre_clear":
+        if reverse:
+            pairs = [(instance, agent) for agent in getattr(instance, "agents").all()]
+        else:
+            pairs = [(resource, instance) for resource in getattr(instance, field_name).all()]
+    elif reverse:
+        pairs = [(instance, agent) for agent in model._base_manager.filter(pk__in=pk_set or ())]
+    else:
+        pairs = [(resource, instance) for resource in model._base_manager.filter(pk__in=pk_set or ())]
+
+    for resource, agent in pairs:
+        if action == "post_add":
+            _write_agent_mcp_relation(resource, cast(Agent, agent))
+        else:
+            _delete_agent_mcp_relation(resource, cast(Agent, agent))
+
+
+def _sync_agent_mcp_servers(
+    sender: type[models.Model],
+    instance: models.Model,
+    action: str,
+    reverse: bool,
+    model: type[models.Model],
+    pk_set: set[Any] | None,
+    **kwargs: Any,
+) -> None:
+    """Mirror Agent.mcp_servers changes into ``agents/mcp_server#agent`` tuples."""
+
+    del sender, kwargs
+    _sync_agent_mcp_selection(
+        instance=instance,
+        action=action,
+        reverse=reverse,
+        model=model,
+        pk_set=pk_set,
+        field_name="mcp_servers",
+    )
+
+
+def _sync_agent_mcp_tools(
+    sender: type[models.Model],
+    instance: models.Model,
+    action: str,
+    reverse: bool,
+    model: type[models.Model],
+    pk_set: set[Any] | None,
+    **kwargs: Any,
+) -> None:
+    """Mirror Agent.mcp_tools changes into ``agents/mcp_tool#agent`` tuples."""
+
+    del sender, kwargs
+    _sync_agent_mcp_selection(
+        instance=instance,
+        action=action,
+        reverse=reverse,
+        model=model,
+        pk_set=pk_set,
+        field_name="mcp_tools",
+    )
+
+
+def _deactivate_agent_service_user(
+    sender: type[models.Model],
+    instance: models.Model,
+    using: str,
+    **kwargs: Any,
+) -> None:
+    """Deactivate an agent service user after every delete path Django supports."""
+
+    del sender, kwargs
+    type(instance).objects.deactivate_service_user(instance, using=using)
+
+
+def _connect_agent_mcp_reconcile(sender: type[models.Model], **kwargs: Any) -> None:
+    """Connect concrete Agent signal handlers."""
+
+    del kwargs
+    try:
+        is_agent = issubclass(sender, Agent)
+    except TypeError:
+        return
+    if not is_agent or sender._meta.abstract:
+        return
+    m2m_changed.connect(
+        _sync_agent_mcp_servers,
+        sender=getattr(sender, "mcp_servers").through,
+        dispatch_uid=f"angee.agents.{sender._meta.label_lower}.mcp_servers.rebac",
+    )
+    m2m_changed.connect(
+        _sync_agent_mcp_tools,
+        sender=getattr(sender, "mcp_tools").through,
+        dispatch_uid=f"angee.agents.{sender._meta.label_lower}.mcp_tools.rebac",
+    )
+    post_delete.connect(
+        _deactivate_agent_service_user,
+        sender=sender,
+        dispatch_uid=f"angee.agents.{sender._meta.label_lower}.service_user.deactivate",
+    )
+
+
+class_prepared.connect(
+    _connect_agent_mcp_reconcile,
+    dispatch_uid="angee.agents.agent_mcp_reconcile.class_prepared",
+)

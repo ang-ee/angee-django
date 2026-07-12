@@ -64,6 +64,7 @@ from angee.base.models import (
     instance_from_public_id,
     role_anchor,
 )
+from angee.base.refs import RecordRefMixin
 
 SHARED_READER_RELATION = "shared"
 """The wildcard-subject relation that opens a shared (null-company) tag to everyone."""
@@ -271,7 +272,7 @@ class TagAssignmentManager(AngeeManager):
         return tag_row
 
 
-class TagAssignment(SqidMixin, AuditMixin, AngeeModel):
+class TagAssignment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     """Polymorphic edge attaching one :class:`Tag` to any model row.
 
     The exact ``storage.FileAttachment`` canon: a ``content_type``/``object_id``

@@ -1,4 +1,10 @@
-"""Declarations consumed by the runtime model emitter."""
+"""Runtime-importable declarations consumed by the model emitter.
+
+Base owns these inert dataclasses because runtime mixins construct them when
+declaring build-time emission seams. Only ``angee.compose`` interprets the
+payloads; moving this vocabulary into compose would make runtime code import the
+build-time composer, inverting Angee's dependency direction.
+"""
 
 from __future__ import annotations
 

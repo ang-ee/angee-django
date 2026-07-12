@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from django.db import models
 
-from angee.base.fields import MoneyField
+from angee.money.fields import MoneyField
 from angee.money.models import Currency as AbstractCurrency
 from angee.money.models import CurrencyRate as AbstractCurrencyRate
 

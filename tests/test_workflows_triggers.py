@@ -11,12 +11,14 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.migrations.recorder import MigrationRecorder
 from django.utils import timezone
-from rebac import app_settings, system_context
+from rebac import actor_context, app_settings, system_context
 from rebac.roles import grant
 
+from angee.base.models import AngeeDataModel
+from angee.graphql.events import ChangePayload
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.subscriptions import changes
 from angee.integrate.models import Bridge
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
@@ -43,7 +45,7 @@ pytest_plugins = ("tests.workflows",)
 
 
 class TriggerSubject(models.Model):
-    """Concrete row saved by tests to drive the generic post-save receiver."""
+    """Concrete row declared into the change feed for event-trigger tests."""
 
     name = models.CharField(max_length=100)
     state = models.CharField(max_length=50, default="draft")
@@ -51,6 +53,30 @@ class TriggerSubject(models.Model):
     class Meta:
         app_label = "tests"
         db_table = "test_workflows_trigger_subject"
+
+
+class SecuredTriggerSubject(AngeeDataModel):
+    """REBAC-backed change-feed row used to pin workflow subject re-fetching."""
+
+    sqid_prefix = "sts_"
+    name = models.CharField(max_length=100)
+    state = models.CharField(max_length=50, default="draft")
+
+    class Meta:
+        app_label = "chatterdemo"
+        db_table = "test_workflows_secured_trigger_subject"
+        rebac_resource_type = "chatterdemo/doc"
+        rebac_id_attr = "sqid"
+
+
+class UnpublishedTriggerSubject(models.Model):
+    """Concrete row intentionally absent from the change feed."""
+
+    name = models.CharField(max_length=100)
+
+    class Meta:
+        app_label = "tests"
+        db_table = "test_workflows_unpublished_trigger_subject"
 
 
 class BackfillBridge(Bridge):
@@ -70,19 +96,39 @@ class BackfillBridge(Bridge):
         """Match the Integration child API Bridge.record_sync calls."""
 
 
-TRIGGER_TEST_MODELS = (TriggerSubject, BackfillBridge)
+TRIGGER_TEST_MODELS = (TriggerSubject, SecuredTriggerSubject, UnpublishedTriggerSubject, BackfillBridge)
 
 
 @pytest.fixture()
-def workflow_trigger_tables(transactional_db: Any) -> Iterator[None]:
+def workflow_trigger_tables(transactional_db: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Create trigger-specific concrete tables and sync workflow REBAC."""
 
     del transactional_db
     models = (*WORKFLOW_RUNTIME_MODELS, *TRIGGER_TEST_MODELS)
     workflow_triggers = importlib.import_module("angee.workflows.triggers")
+    schemas = GraphQLSchemas(
+        [
+            SchemaAddon(
+                {
+                    "public": {
+                        "subscription": (
+                            changes(TriggerSubject, field="triggerSubjectChanged"),
+                            changes(SecuredTriggerSubject, field="securedTriggerSubjectChanged"),
+                        ),
+                    }
+                }
+            )
+        ]
+    )
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
     with workflow_table_setup(models):
+        schemas.connect_change_publishers()
         workflow_triggers.connect_event_trigger_receiver()
-        yield
+        try:
+            yield
+        finally:
+            for model in schemas.change_publisher_models():
+                importlib.import_module("angee.graphql.publishing").disconnect_publishers(model)
 
 
 @pytest.fixture()
@@ -124,27 +170,6 @@ def test_event_trigger_condition_starts_matching_saved_subject(
     assert runs[0].trigger is not None
 
 
-def test_event_trigger_receiver_ignores_django_migration_ledger_saves(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Django's migration recorder rows are not workflow event subjects."""
-
-    workflow_triggers = importlib.import_module("angee.workflows.triggers")
-
-    def fail_model_lookup(name: str) -> object:
-        pytest.fail(f"workflow trigger lookup should be skipped for {name}")
-
-    monkeypatch.setattr(workflow_triggers, "_model", fail_model_lookup)
-    migration = MigrationRecorder.Migration(app="contenttypes", name="0001_initial")
-    migration.pk = 1
-
-    workflow_triggers._on_model_save(
-        sender=MigrationRecorder.Migration,
-        instance=migration,
-        using="default",
-    )
-
-
 def test_event_trigger_receiver_skips_when_workflow_models_are_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -159,11 +184,82 @@ def test_event_trigger_receiver_skips_when_workflow_models_are_absent(
     subject = TriggerSubject(name="standalone", state="ready")
     subject.pk = 1
 
-    workflow_triggers._on_model_save(
+    workflow_triggers._on_change_published(
         sender=TriggerSubject,
-        instance=subject,
+        payload=ChangePayload.from_instance(subject, action="create", update_fields=None),
         using="default",
     )
+
+
+def test_event_trigger_requires_change_published_model(
+    workflow_trigger_tables: None,
+) -> None:
+    """Event triggers fail loudly when their subject model is absent from changes()."""
+
+    del workflow_trigger_tables
+    with pytest.raises(ValidationError, match=r"declare changes\(\) for the model to join the change feed"):
+        _event_trigger(
+            condition={},
+            config={"model": UnpublishedTriggerSubject._meta.label_lower},
+        )
+
+
+def test_event_trigger_check_rejects_persisted_non_published_model(
+    workflow_trigger_tables: None,
+) -> None:
+    """The workflows system check reports persisted event triggers outside the feed."""
+
+    del workflow_trigger_tables
+    with system_context(reason="test invalid event trigger check setup"):
+        draft = Workflow.objects.create(name="Invalid Event")
+        Step.objects.create(workflow=draft, key="start", name="Start", is_entry=True)
+        workflow = draft.publish()
+    trigger = Trigger(
+        workflow=workflow,
+        kind=workflow_models.TriggerKind.EVENT,
+        enabled=True,
+        config={"model": UnpublishedTriggerSubject._meta.label_lower},
+        event_model_label=UnpublishedTriggerSubject._meta.label_lower,
+    )
+    Trigger._base_manager.bulk_create([trigger])
+
+    errors = workflow_models.check_event_trigger_change_publishers()
+
+    assert any(error.id == "angee.workflows.E001" for error in errors)
+    assert "declare changes() for the model to join the change feed" in "\n".join(
+        error.msg for error in errors
+    )
+
+
+def test_event_trigger_subject_refetch_uses_system_context(
+    workflow_trigger_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """An event trigger can resolve an AngeeManager subject without caller read scope."""
+
+    del workflow_trigger_tables, no_workflow_queue
+    workflow_triggers = importlib.import_module("angee.workflows.triggers")
+    _event_trigger(condition={"state": "ready"}, model=SecuredTriggerSubject)
+    with system_context(reason="test secured trigger subject seed"):
+        no_actor_subject = SecuredTriggerSubject.objects.create(name="no actor", state="ready")
+
+    workflow_triggers._on_change_published(
+        sender=SecuredTriggerSubject,
+        payload=ChangePayload.from_instance(no_actor_subject, action="create", update_fields=None),
+    )
+    assert len(_runs_for_subject(no_actor_subject)) == 1
+
+    with system_context(reason="test secured trigger subject denied seed"):
+        stranger = User.objects.create_user(username="trigger-stranger")
+        denied_subject = SecuredTriggerSubject.objects.create(name="denied", state="ready")
+
+    with actor_context(stranger):
+        workflow_triggers._on_change_published(
+            sender=SecuredTriggerSubject,
+            payload=ChangePayload.from_instance(denied_subject, action="create", update_fields=None),
+        )
+
+    assert len(_runs_for_subject(denied_subject)) == 1
 
 
 def test_disabled_event_trigger_does_not_start_run(
@@ -498,11 +594,12 @@ def _event_trigger(
     condition: dict[str, Any],
     enabled: bool = True,
     config: dict[str, Any] | None = None,
+    model: type[models.Model] = TriggerSubject,
 ) -> Trigger:
     """Create an event trigger attached to a publishable workflow lineage."""
 
     trigger_config = {
-        "model": TriggerSubject._meta.label_lower,
+        "model": model._meta.label_lower,
         "condition": condition,
         **(config or {}),
     }
@@ -562,7 +659,7 @@ def _map_workflow(*, policy: dict[str, Any], items: list[str]) -> Workflow:
         return draft.publish()
 
 
-def _runs_for_subject(subject: TriggerSubject) -> list[WorkflowRun]:
+def _runs_for_subject(subject: models.Model) -> list[WorkflowRun]:
     """Return workflow runs started for ``subject``."""
 
     with system_context(reason="test workflows trigger runs"):

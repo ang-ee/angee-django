@@ -16,6 +16,8 @@ from django.core.exceptions import ImproperlyConfigured
 from angee.compose.composer import Composer
 from angee.project import PROJECT_DIR_ENV, find_project_dir, project_dir
 
+GRAPHQL_APP = "angee.graphql.apps.GraphQLConfig"
+
 
 def _installed_paths(installed_apps: list[object]) -> list[str]:
     """Return stable import paths for Django ``INSTALLED_APPS`` entries."""
@@ -89,7 +91,7 @@ def test_resources_root_expands_framework_dependencies(tmp_path: Path) -> None:
     resources_at = installed.index("angee.resources")
 
     assert compose_at < base_at < resources_at
-    assert "angee.graphql" not in installed
+    assert GRAPHQL_APP not in installed
     assert "angee.iam.apps.IAMConfig" not in installed
 
 
@@ -101,7 +103,7 @@ def test_iam_user_is_the_default_auth_model(tmp_path: Path) -> None:
 
     assert "angee.compose.apps.ComposeConfig" in installed
     assert "angee.base" in installed
-    assert "angee.graphql" in installed
+    assert GRAPHQL_APP in installed
     assert "angee.resources" in installed
     assert settings["AUTH_USER_MODEL"] == "iam.User"
     assert "angee.iam.apps.IAMConfig" in installed
@@ -157,7 +159,7 @@ def test_addons_are_sorted_by_declared_dependencies(tmp_path: Path) -> None:
 
     compose_at = installed.index("angee.compose.apps.ComposeConfig")
     base_at = installed.index("angee.base")
-    graphql_at = installed.index("angee.graphql")
+    graphql_at = installed.index(GRAPHQL_APP)
     iam_at = installed.index("angee.iam.apps.IAMConfig")
     resources_at = installed.index("angee.resources")
     notes_at = installed.index("example.notes")
@@ -182,7 +184,7 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "simple_history",
         "angee.base",
         "channels.apps.ChannelsConfig",
-        "angee.graphql",
+        GRAPHQL_APP,
         "angee.resources",
         "axes.apps.AppConfig",
         "django.contrib.auth.apps.AuthConfig",
@@ -199,6 +201,7 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "angee.iam_integrate_oidc.apps.IAMIntegrateOidcConfig",
         "angee.storage.apps.StorageConfig",
         "angee.parties.apps.PartiesConfig",
+        "django.contrib.postgres.apps.PostgresConfig",
         "angee.messaging.apps.MessagingConfig",
         "angee.workflows.apps.WorkflowsConfig",
         "example.notes",
@@ -219,7 +222,7 @@ def test_one_app_set_orders_compose_before_adopters(
 
     assert installed.count("angee.compose.apps.ComposeConfig") == 1
     assert installed.count("angee.base") == 1
-    assert installed.count("angee.graphql") == 1
+    assert installed.count(GRAPHQL_APP) == 1
     assert installed.count("angee.resources") == 1
     compose_at = installed.index("angee.compose.apps.ComposeConfig")
     base_at = installed.index("angee.base")

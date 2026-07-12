@@ -11,6 +11,7 @@ import pytest
 from rebac import system_context
 
 from angee.addons import AddonContract
+from angee.graphql.schema import GraphQLSchemas
 from angee.resources.models import Resource
 from angee.workflows import models as workflow_models
 from tests.workflows import WORKFLOW_DEFINITION_MODELS, Trigger, Workflow, workflow_table_setup
@@ -38,11 +39,19 @@ class Addon:
 
 
 @pytest.fixture()
-def workflow_resource_tables(transactional_db: Any) -> Iterator[None]:
+def workflow_resource_tables(transactional_db: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Create concrete workflow definition and resource ledger tables."""
 
     del transactional_db
+
+    class PublishedLabels:
+        """Schema collection stand-in for the example notes change feed."""
+
+        def change_publisher_model_labels(self) -> frozenset[str]:
+            return frozenset({"notes.note"})
+
     models: tuple[type[Any], ...] = (*WORKFLOW_DEFINITION_MODELS, WorkflowResourceLedger)
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: PublishedLabels()))
     with workflow_table_setup(models):
         yield
 

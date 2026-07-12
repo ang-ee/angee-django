@@ -570,6 +570,27 @@ def test_resolver_blocks_inactive_user(oidc_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_resolver_blocks_existing_external_account_with_service_owner(oidc_tables: None) -> None:
+    """An existing OIDC account cannot authenticate a service principal owner."""
+
+    user = get_user_model().objects.create_user(
+        username="service-owner",
+        email="svc-owner@example.com",
+        kind="service",
+    )
+    oauth_client = _oauth_client()
+    ExternalAccount.objects.link(oauth_client, "sub-service-owner", owner=user, email="svc-owner@example.com")
+
+    with pytest.raises(OAuthFlowError):
+        identity.resolve(
+            oauth_client,
+            sub="sub-service-owner",
+            email="svc-owner@example.com",
+            claims={"sub": "sub-service-owner"},
+        )
+
+
+@pytest.mark.django_db(transaction=True)
 def test_resolver_link_on_email_match_requires_verified_email(
     oidc_tables: None,
 ) -> None:
@@ -630,6 +651,58 @@ def test_resolver_link_on_email_match_creates_external_account(
     with system_context(reason="test oidc assertions"):
         account = ExternalAccount.objects.get(oauth_client=oauth_client, external_id="sub-email")
     assert account.email == "match@example.com"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resolver_link_on_email_match_skips_service_accounts(
+    oidc_tables: None,
+) -> None:
+    """Email-match login must never link a service principal row."""
+
+    get_user_model().objects.create_user(
+        username="svc-email-match",
+        email="match-service@example.com",
+        kind="service",
+    )
+    oauth_client = _oauth_client(link_on_email_match=True, allowed_email_domains=["example.com"])
+
+    with pytest.raises(OAuthFlowError):
+        identity.resolve(
+            oauth_client,
+            sub="sub-service-email",
+            email="match-service@example.com",
+            claims={"sub": "sub-service-email", "email": "match-service@example.com", "email_verified": True},
+        )
+
+    with system_context(reason="test oidc service assertions"):
+        assert not ExternalAccount.objects.filter(oauth_client=oauth_client, external_id="sub-service-email").exists()
+
+
+def test_oidc_email_match_fails_loud_without_people_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The OIDC email-match path must use the user owner's people() scope directly."""
+
+    class QuerySet:
+        def filter(self, **kwargs: object) -> QuerySet:
+            return self
+
+        def order_by(self, *fields: str) -> QuerySet:
+            return self
+
+        def __getitem__(self, key: object) -> list[object]:
+            return []
+
+    class Manager:
+        def all(self) -> QuerySet:
+            return QuerySet()
+
+    class UserModel:
+        objects = Manager()
+
+    monkeypatch.setattr(identity, "get_user_model", lambda: UserModel)
+    resolver = object.__new__(identity.OidcIdentityResolver)
+
+    with pytest.raises(AttributeError, match="people"):
+        resolver._find_by_email("someone@example.com")
 
 
 @pytest.mark.django_db(transaction=True)

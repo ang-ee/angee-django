@@ -78,6 +78,38 @@ def test_permission_hub_queries_are_admin_only(
         assert allowed.errors is None
 
 
+def test_users_resource_lists_people_not_service_accounts(
+    iam_permission_hub_tables: None,
+) -> None:
+    """The console users catalogue is a people picker/list, not an attribution dump."""
+
+    admin = _platform_admin("hub-people-admin")
+    User.objects.create_user(username="hub-person", email="hub-person@example.com")
+    User.objects.create_user(
+        username="hub-service",
+        email="hub-service@example.com",
+        kind="service",
+    )
+
+    data = _data(
+        _execute(
+            _schema("console"),
+            """
+            query {
+              users(limit: 10) {
+                username
+                kind
+              }
+            }
+            """,
+            user=admin,
+        )
+    )
+
+    assert {"username": "hub-person", "kind": "PERSON"} in data["users"]
+    assert all(row["username"] != "hub-service" for row in data["users"])
+
+
 def test_relationships_resource_is_admin_scoped(
     iam_permission_hub_tables: None,
 ) -> None:

@@ -15,7 +15,7 @@ from strawberry.types.base import StrawberryList, StrawberryOptional
 from strawberry.types.enum import StrawberryEnumDefinition
 from strawberry_django_hasura import SnakeNameConverter
 
-from angee.base.fields import ImplClassField
+from angee.base.impl import ImplClassField
 from angee.graphql.data.field_classification import (
     RESOURCE_FIELD_KINDS as _RESOURCE_FIELD_KINDS,
 )

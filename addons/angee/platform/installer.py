@@ -42,7 +42,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 from ruamel.yaml import YAML
 
-from angee.base.registry import resolve_impl_class
+from angee.base.impl import resolve_impl_class
 from angee.fs import write_atomic
 
 _INSTALLED_APPS_KEY = "INSTALLED_APPS"
@@ -282,7 +282,7 @@ def addon_installer() -> AddonInstaller:
 
     Resolves ``settings.ANGEE_ADDON_INSTALLER_BACKEND`` against the
     ``settings.ANGEE_ADDON_INSTALLER_BACKEND_CLASSES`` registry through the shared
-    :func:`~angee.base.registry.resolve_impl_class` owner — the row-less form of
+    :func:`~angee.base.impl.resolve_impl_class` owner — the row-less form of
     ``ImplClassField.resolve_class`` (trusted settings path, never row text, with the
     ``AddonInstallerBackend`` subclass check).
     """

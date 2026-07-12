@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import importlib.util
+
 import pytest
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 
 from angee.base.impl import ImplBase, ImplChoice
-from tests.conftest import OAuthClient
+from tests.conftest import Integration, OAuthClient
 
 
 class _BaseImpl(ImplBase):
@@ -42,6 +44,40 @@ class _ConfigBase(ImplBase):
 class _ConfigRefined(_ConfigBase):
     key = "cfg_refined"
     defaults = {"authorize_params": {"port": 2, "tls": True}}
+
+
+def test_impl_owner_public_import_contract() -> None:
+    """The impl mechanism has one public owner and no split legacy modules."""
+
+    from angee.base.impl import (  # noqa: PLC0415
+        ImplBase,
+        ImplChoice,
+        ImplClassField,
+        ImplDefaultsMixin,
+        impl_registry,
+        resolve_impl_class,
+    )
+
+    assert ImplBase.__name__ == "ImplBase"
+    assert ImplChoice.__name__ == "ImplChoice"
+    assert ImplClassField.__name__ == "ImplClassField"
+    assert ImplDefaultsMixin.__name__ == "ImplDefaultsMixin"
+    assert callable(impl_registry)
+    assert callable(resolve_impl_class)
+    legacy_modules = ("impl" "_types", "registry")
+    for legacy_module in legacy_modules:
+        assert importlib.util.find_spec(f"angee.base.{legacy_module}") is None
+
+
+def test_model_impl_field_is_the_public_declared_accessor() -> None:
+    """Models expose their impl field through the declared public seam."""
+
+    from angee.base.impl import ImplClassField  # noqa: PLC0415
+
+    assert isinstance(Integration.impl_field("impl_class"), ImplClassField)
+    with pytest.raises(FieldDoesNotExist, match="Integration.lifecycle is not an ImplClassField"):
+        Integration.impl_field("lifecycle")
+    assert not hasattr(Integration, "_impl_field")
 
 
 def test_effective_defaults_merges_along_mro() -> None:

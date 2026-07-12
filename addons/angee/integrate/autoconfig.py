@@ -24,7 +24,7 @@ SETTINGS = {
     # behavior. ``none`` is the neutral draft/null-object implementation
     # (``ImplClassField`` requires a non-empty registry). Concrete child models
     # own their domain backend field/registry (e.g. ``VcsBridge.backend_class``).
-    # See ``angee.base.fields.ImplClassField``.
+    # See ``angee.base.impl.ImplClassField``.
     "ANGEE_INTEGRATION_IMPLS": {
         "none": "angee.integrate.impl.NullIntegrationImpl",
     },

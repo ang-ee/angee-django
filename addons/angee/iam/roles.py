@@ -186,7 +186,7 @@ class OverviewInfo:
             privileged_rows = _privileged_grant_rows(grant_rows)
             unassigned_queryset = unassigned_user_queryset()
             return cls(
-                user_count=get_user_model()._default_manager.count(),
+                user_count=_people_queryset(get_user_model()).count(),
                 role_count=len(role_infos),
                 grant_count=grant_rows.count(),
                 relationship_count=relationship_rows(limit=None).count(),
@@ -656,6 +656,7 @@ def unassigned_user_queryset() -> QuerySet[Any]:
     """Return users without direct role grants."""
 
     user_model = get_user_model()
+    user_queryset = _people_queryset(user_model)
     subject_lookup = user_subject_lookup(user_model)
     if subject_lookup == "sqid":
         # Materialized: the sqid field decodes lookup values in Python, so the
@@ -670,7 +671,7 @@ def unassigned_user_queryset() -> QuerySet[Any]:
         assigned_user_pks = user_model._default_manager.filter(sqid__in=subject_ids).values("pk")
         return cast(
             QuerySet[Any],
-            user_model._default_manager.all()
+            user_queryset
             .exclude(pk__in=Subquery(assigned_user_pks))
             .order_by(*user_ordering(user_model)),
         )
@@ -684,11 +685,17 @@ def unassigned_user_queryset() -> QuerySet[Any]:
     )
     return cast(
         QuerySet[Any],
-        user_model._default_manager.all()
+        user_queryset
         .annotate(_iam_has_role=Exists(assigned_exists))
         .filter(_iam_has_role=False)
         .order_by(*user_ordering(user_model)),
     )
+
+
+def _people_queryset(user_model: type[Any]) -> QuerySet[Any]:
+    """Return the user rows intended for people-facing IAM list surfaces."""
+
+    return cast(QuerySet[Any], user_model._default_manager.all().people())
 
 
 def user_subject_filter(user_model: type[Any], subject_ids: Iterable[Any]) -> Q:

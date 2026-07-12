@@ -20,7 +20,6 @@ from django.apps import apps
 from django.http import HttpRequest
 from django.utils.http import url_has_allowed_host_and_scheme
 
-from angee.base.models import instance_from_public_id
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import INVALID_STATE, OAuthFlowError
@@ -139,7 +138,7 @@ def enabled_oauth_client(oauth_client_sqid: str) -> Any:
     """Return one enabled OAuth client addressed by sqid, or raise."""
 
     queryset = _oauth_client_model().objects.system_context(reason="integrate.oauth.flow.oauth_client")
-    oauth_client = instance_from_public_id(queryset.model, oauth_client_sqid, queryset=queryset)
+    oauth_client = queryset.from_public_id(oauth_client_sqid)
     if oauth_client is None or not oauth_client.is_enabled:
         raise ValueError("OAuth client is not enabled.")
     return oauth_client

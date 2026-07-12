@@ -56,7 +56,8 @@ class ChannelType(IntegrationLabelMixin, BridgeSyncStatusMixin, AngeeNode):
     """GraphQL projection of a connected message channel (e.g. an email account)."""
 
     backend_class: auto
-    status: auto
+    lifecycle: auto
+    runtime_status: auto
     config: strawberry.scalars.JSON
     last_sync_status: auto
     last_sync_completed_at: auto
@@ -287,7 +288,7 @@ class ThreadAttachmentType(AngeeNode):
     def model_label(self) -> str:
         """Return the attached target's model label (``app_label.ModelName``)."""
 
-        return cast(Any, self).target_model_label
+        return cast(Any, self).record_model_label
 
     @strawberry.field(name="record_id")
     def record_id(self) -> strawberry.ID:
@@ -298,7 +299,7 @@ class ThreadAttachmentType(AngeeNode):
         target's own record read (an assignee not granted the record may 404).
         """
 
-        return cast(strawberry.ID, cast(Any, self).target_public_id)
+        return cast(strawberry.ID, cast(Any, self).record_public_id)
 
 
 @strawberry_django.type(ThreadFollower)
@@ -402,10 +403,11 @@ class AgendaActivityType(AngeeNode):
         """
 
         attachment = cast(Any, self).attachment
+        record_ref = attachment.record_ref
         return RecordPointerType(
             label=attachment.label,
-            model_label=attachment.target_model_label,
-            record_id=cast(strawberry.ID, attachment.target_public_id),
+            model_label=record_ref.model_label,
+            record_id=cast(strawberry.ID, record_ref.public_id),
         )
 
 
@@ -1261,15 +1263,16 @@ _CHANNEL_RESOURCE = hasura_model_resource(
         "id",
         "display_name",
         "backend_class",
-        "status",
+        "lifecycle",
+        "runtime_status",
         "last_sync_status",
         "sync_stage",
         "last_sync_completed_at",
         "updated_at",
     ],
-    sortable=["display_name", "backend_class", "status", "last_sync_completed_at", "updated_at"],
+    sortable=["display_name", "backend_class", "lifecycle", "runtime_status", "last_sync_completed_at", "updated_at"],
     aggregatable=["id", "last_sync_items"],
-    groupable=["backend_class", "status", "last_sync_status", "sync_stage"],
+    groupable=["backend_class", "lifecycle", "runtime_status", "last_sync_status", "sync_stage"],
     insert=False,
     update=False,
     delete=False,
@@ -1724,7 +1727,7 @@ def _message(message_id: strawberry.ID) -> Any:
     """Return a message by public id."""
 
     try:
-        message = instance_from_public_id(Message, str(message_id))
+        message = Message.from_public_id(str(message_id))
     except ImproperlyConfigured as error:
         raise ValueError(str(error)) from error
     if message is None:
@@ -1737,7 +1740,7 @@ def _storage_files(file_ids: list[strawberry.ID]) -> tuple[Any, ...]:
 
     files = []
     for file_id in file_ids:
-        file = instance_from_public_id(File, str(file_id), queryset=File.objects.all())
+        file = File.objects.all().from_public_id(str(file_id))
         if file is None:
             raise ValueError("attachment not found")
         files.append(file)

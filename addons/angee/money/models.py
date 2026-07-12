@@ -11,12 +11,12 @@ in review. :func:`reference_currency_code` fails fast with
 is unset, and the addon's system check (``apps.py``) surfaces the same at
 ``manage.py check`` time.
 
-**Rounding is never decided here.** :meth:`Currency.round` wraps
-:func:`angee.base.numeric.quantize` to the currency's exponent but takes the
-rounding *mode* from its caller's policy (e.g. a company's configured
-``rounding_mode``); the money owner hardcodes no mode. :meth:`Currency.convert`
-crosses through the reference currency and returns the amount **unrounded** — the
-consumer rounds the converted amount per its own policy.
+Rounding vocabulary lives here too. :meth:`Currency.round` wraps
+:func:`angee.base.numeric.quantize` to the currency's exponent and resolves the
+mode from :class:`angee.money.rounding.RoundingMode`, defaulting to ``half_up``
+unless a caller explicitly overrides it. :meth:`Currency.convert` crosses through
+the reference currency and returns the amount **unrounded** — the consumer rounds
+the converted amount at the point that owns the business policy.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from django.utils import timezone
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.base.numeric import quantize
+from angee.money.rounding import RoundingMode, rounding_constant
 
 REFERENCE_CURRENCY_SETTING = "ANGEE_MONEY_REFERENCE_CURRENCY"
 """The project setting naming the ISO-4217 code every :class:`CurrencyRate` is relative to."""
@@ -69,11 +70,13 @@ class Currency(ArchiveMixin, AngeeDataModel):
     """One ISO-4217 currency: its code, display name, symbol, and minor-unit exponent.
 
     ``decimal_places`` is the currency's minor-unit exponent (2 for most, 0 for
-    JPY/KRW, 3 for the Gulf dinars) and is the only rounding fact money owns —
-    :meth:`round` quantizes to it, but the *mode* always comes from the caller.
+    JPY/KRW, 3 for the Gulf dinars). :meth:`round` quantizes to it with the
+    money-owned default mode unless a caller passes an explicit override.
     """
 
     runtime = True
+    catalogue = True
+    catalogue_tier = "master"
     sqid_prefix = "cur_"
 
     code = models.CharField(max_length=3, unique=True)
@@ -96,17 +99,15 @@ class Currency(ArchiveMixin, AngeeDataModel):
 
         return self.code
 
-    def round(self, amount: Decimal, mode: str) -> Decimal:
-        """Return ``amount`` quantized to this currency's exponent using ``mode``.
+    def round(self, amount: Decimal, mode: RoundingMode | str | None = None) -> Decimal:
+        """Return ``amount`` quantized to this currency's exponent.
 
-        Wraps :func:`angee.base.numeric.quantize` at ``decimal_places``. ``mode``
-        is a :mod:`decimal` rounding constant and is **required**: the money owner
-        hardcodes no rounding policy, so the caller passes its own (e.g. a
-        company's ``half_up`` / ``half_even`` accounting mode). Applied when totals
-        are computed and when GL amounts are posted.
+        ``mode`` may be a :class:`angee.money.rounding.RoundingMode` value or its
+        stored string value. When omitted, the money addon's default rounding
+        vocabulary applies.
         """
 
-        return quantize(amount, self.decimal_places, mode)
+        return quantize(amount, self.decimal_places, rounding_constant(mode))
 
     def convert(self, amount: Decimal, to_currency: Currency, on_date: Any = None) -> Decimal:
         """Return ``amount`` re-expressed in ``to_currency`` at ``on_date`` rates.

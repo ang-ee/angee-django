@@ -25,6 +25,7 @@ from django.core.exceptions import FieldDoesNotExist
 from django.core.management import call_command
 from django.db import IntegrityError, connection, models, transaction
 from django.db.models.signals import post_save
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import (
     PermissionDenied,
@@ -35,6 +36,7 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
+from rebac.actors import current_sudo_reason, is_sudo
 
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
@@ -80,6 +82,8 @@ from tests.conftest import (
 from tests.conftest import (
     File as StorageFile,
 )
+from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent
+from tests.test_integrate_vcs import VCS_TEST_MODELS
 
 
 class Directory(Integration, AbstractDirectory):
@@ -437,6 +441,24 @@ def messaging_tables() -> Iterator[None]:
 
 
 @pytest.fixture
+def messaging_agent_tables(transactional_db: Any) -> Iterator[None]:
+    """Create the messaging tables plus Agent tables for principal attribution tests."""
+
+    del transactional_db
+    models = tuple(dict.fromkeys(MESSAGING_TEST_MODELS + VCS_TEST_MODELS + AGENTS_GRAPHQL_MODELS))
+    created_models = _create_missing_tables(models)
+    call_command("rebac", "sync", verbosity=0)
+    try:
+        yield
+    finally:
+        _clear_model_tables(models)
+        if created_models:
+            with connection.schema_editor() as schema_editor:
+                for model in reversed(created_models):
+                    schema_editor.delete_model(model)
+
+
+@pytest.fixture
 def channel(messaging_tables: None) -> Any:
     """Provide an Integration row to stand in as the ingest channel."""
 
@@ -762,6 +784,85 @@ def test_threaded_record_delete_tears_down_chatter_graph(messaging_tables: None)
 
 
 @pytest.mark.django_db(transaction=True)
+def test_record_authorized_delete_tears_down_private_chatter_graph(messaging_tables: None) -> None:
+    """Deleting a permitted parent record removes its private chatter implementation rows."""
+
+    del messaging_tables
+    user_model = get_user_model()
+    with system_context(reason="test threaded model actor delete setup"):
+        owner = user_model.objects.create_user(username="actor-cascade-owner", email="actor-cascade-owner@example.com")
+        watcher = user_model.objects.create_user(
+            username="actor-cascade-watcher",
+            email="actor-cascade-watcher@example.com",
+        )
+        doc = ChatterDoc.objects.create(title="Actor cascade", status="open")
+        write_relationships(
+            [
+                RelationshipTuple(
+                    resource=to_object_ref(doc),
+                    relation="owner",
+                    subject=to_subject_ref(owner),
+                )
+            ]
+        )
+        doc.message_subscribe(user=watcher)
+        doc.message_post("Body to be collected by owner delete.")
+        doc.activity_schedule(user=watcher, summary="Follow up", due_date=_AT.date())
+
+    thread = doc.message_thread(create=False)
+    assert thread is not None
+    thread_pk = thread.pk
+    assert ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
+    assert ThreadActivity._base_manager.filter(thread_id=thread_pk).exists()
+
+    with actor_context(owner):
+        doc.delete()
+
+    assert not ChatterDoc._base_manager.filter(pk=doc.pk).exists()
+    assert not Thread._base_manager.filter(pk=thread_pk).exists()
+    assert not ThreadAttachment._base_manager.filter(object_id=doc.pk).exists()
+    assert not Message._base_manager.filter(thread_id=thread_pk).exists()
+    assert not ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
+    assert not ThreadActivity._base_manager.filter(thread_id=thread_pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_record_denied_delete_does_not_teardown_private_chatter_graph(messaging_tables: None) -> None:
+    """A record actor without delete permission cannot trigger the elevated chatter cascade."""
+
+    del messaging_tables
+    user_model = get_user_model()
+    with system_context(reason="test threaded model denied delete setup"):
+        writer = user_model.objects.create_user(
+            username="actor-cascade-writer",
+            email="actor-cascade-writer@example.com",
+        )
+        doc = ChatterDoc.objects.create(title="Denied actor cascade", status="open")
+        write_relationships(
+            [
+                RelationshipTuple(
+                    resource=to_object_ref(doc),
+                    relation="writer",
+                    subject=to_subject_ref(writer),
+                )
+            ]
+        )
+        message = doc.message_post("Body that must survive denied delete.")
+
+    thread = doc.message_thread(create=False)
+    assert thread is not None
+    thread_pk = thread.pk
+    message_pk = message.pk
+
+    with actor_context(writer), pytest.raises(PermissionDenied):
+        doc.delete()
+
+    assert ChatterDoc._base_manager.filter(pk=doc.pk).exists()
+    assert Thread._base_manager.filter(pk=thread_pk).exists()
+    assert Message._base_manager.filter(pk=message_pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_threaded_record_bulk_delete_tears_down_chatter_graph(messaging_tables: None) -> None:
     """A bulk ``QuerySet.delete()`` tears down the thread subtree too, not just the row (M1).
 
@@ -846,8 +947,8 @@ def test_activity_agenda_lists_assignee_activities_across_records(messaging_tabl
 
     email_alpha = next(row for row in rows if row.summary == "Email Alpha")
     assert email_alpha.attachment.label == "Alpha"
-    assert email_alpha.attachment.target_model_label == "messaging.ThreadedTicket"
-    assert email_alpha.attachment.target_public_id == alpha.public_id
+    assert email_alpha.attachment.record_model_label == "messaging.ThreadedTicket"
+    assert email_alpha.attachment.record_public_id == alpha.public_id
 
 
 @pytest.mark.django_db(transaction=True)
@@ -918,7 +1019,7 @@ def test_activity_agenda_record_pointer_batches_without_per_row_fanout(messaging
         with system_context(reason="agenda n+1 measure"), CaptureQueriesContext(connection) as captured:
             rows = ThreadActivity.objects.agenda(assignee, window_start, window_end).with_record_pointers()
             for row in rows:
-                _ = (row.attachment.label, row.attachment.target_model_label, row.attachment.target_public_id)
+                _ = (row.attachment.label, row.attachment.record_model_label, row.attachment.record_public_id)
         return len(rows), len(captured.captured_queries)
 
     # Warm the process-cached ContentType so the flat comparison isolates the attachment batch.
@@ -1388,6 +1489,54 @@ def test_threaded_model_activity_completion_notifies_activity_followers(messagin
     assert notification.notification_status == "ready"
     assert notification.message.subtype is not None
     assert notification.message.subtype.key == "activity_done"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_agent_activity_completion_posts_system_message_with_service_user(
+    messaging_agent_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An agent completing an activity posts messaging-private logs as its service user."""
+
+    del messaging_agent_tables
+    user_model = get_user_model()
+    with system_context(reason="test.messaging.agent_activity.setup"):
+        owner = user_model.objects.create_user(
+            username="activity-agent-owner",
+            email="activity-agent-owner@example.com",
+        )
+        agent = Agent.objects.create(name="Activity Agent", owner=owner)
+        service_user_id = agent.user_id
+        ticket = ThreadedTicket.objects.create(title="Agent activity")
+        activity = ticket.activity_schedule(user=owner, summary="Close the loop", due_date=_AT.date())
+
+    post_context: dict[str, Any] = {}
+    original_post_to_thread = Message.objects.post_to_thread
+
+    def spy_post_to_thread(*args: Any, **kwargs: Any) -> Any:
+        post_context["is_sudo"] = is_sudo()
+        post_context["reason"] = current_sudo_reason()
+        return original_post_to_thread(*args, **kwargs)
+
+    monkeypatch.setattr(Message.objects, "post_to_thread", spy_post_to_thread)
+
+    with (
+        override_settings(
+            ANGEE_ACTOR_USER_RESOLVERS={"agents/agent": "angee.agents.actor_resolvers.agent_user_id"}
+        ),
+        actor_context(agent.principal_subject()),
+    ):
+        ticket.activity_feedback(activity, feedback="Handled by agent.")
+
+    message = Message._base_manager.get()
+    assert post_context == {"is_sudo": True, "reason": "messaging.activity.complete"}
+    assert message.created_by_id == service_user_id
+    assert message.message_type == Message.MessageKind.AUTO_COMMENT
+    assert message.subtype is not None
+    assert message.subtype.key == "activity_done"
+    assert Part._base_manager.select_related("fragment").get(message=message).fragment.text == (
+        "Activity done: Close the loop\n\nHandled by agent."
+    )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2012,6 +2161,7 @@ def _collecting_broadcasts(
     sent: list[tuple[Any, dict[str, Any]]] = []
     monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append((model, payload)))
     monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
+    publishing.connect_change_broadcast_receiver()
     already_wired = {model: publishing.disconnect_publishers(model) for model in models}
     for model in models:
         publishing.connect_publishers(model)
@@ -2076,7 +2226,7 @@ def test_post_on_opted_in_host_emits_one_member_gated_thread_changed(
     """A post on an opted-in host emits one ``threadChanged``, gated to thread readers.
 
     F-stream end to end: ``BroadcastRoom`` opts in (``thread_broadcasts_changes = True``),
-    so a post fires ``post_save`` (part B) and ``_publish`` broadcasts one ``threadChanged``
+    so a post fires ``post_save`` (part B) and ``publish_change`` broadcasts one ``threadChanged``
     (part A). The event passes ``ChangeReadGate`` for a member holding ``thread.reader``
     and is dropped for a non-member — no existence or activity leak on the socket.
     """
@@ -2112,7 +2262,7 @@ def test_record_chatter_host_stays_silent_on_a_post(
 
     The F-stream default is ``thread_broadcasts_changes = False``, so a record-chatter
     thread (``ThreadedTicket``) never broadcasts: the bump-save change is inert for a
-    silent thread because ``_publish`` short-circuits on ``broadcasts_changes()``.
+    silent thread because ``publish_change`` short-circuits on ``broadcasts_changes()``.
     """
 
     del messaging_tables

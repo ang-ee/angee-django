@@ -102,6 +102,33 @@ Authorization is structural: reads scope through the model manager, writes check
 the instance. Addons keep the owning `permissions.zed` contract adjacent to the
 addon (discovered by convention); `django-zed-rebac` owns sync.
 
+**Principal** — an identity that acts. The word means different things at
+different layers, deliberately. At the **database layer there is exactly one
+principal record**: a row in the swappable `AUTH_USER_MODEL` table — person or
+service alike — and every fact that answers "who" (audit stamps, history rows,
+revision authors) is an FK to that table. At the **authorization layer** a
+principal is a REBAC subject and keeps its species (`auth/user` for people,
+`agents/agent` for agents); authorization never collapses an agent into its
+user row. The two layers are *linked* (`actor_user_id` + the resolver
+registry), never merged. So `user = service account = actor = principal` is
+true **only at the database layer**, where all four words name the same row.
+
+**Actor** — the REBAC subject bound to the current operation (the
+`django-zed-rebac` actor context). Species-preserving: an agent acts as
+`agents/agent:<sqid>`, a person as `auth/user:<id>`. When attribution needs a
+database FK, the actor resolves to its user row through `actor_user_id`; it is
+never *replaced* by it for permission evaluation.
+
+**User (row)** — the database-layer principal record. Not synonymous with "a
+human" or "a login": `kind` distinguishes `person` from `service`, and only
+person rows authenticate. Real-world faces link to it one way, one shape:
+`parties.Person.user` for humans, `agents.Agent.user` for agents.
+
+**Service account** — a `kind=service` user row: the database-layer principal
+of an agent or automation. Non-login (unusable password, excluded from OIDC
+linking and user pickers); its lifecycle is owned by the thing it represents
+(the agents manager creates, renames, and deactivates it with its `Agent`).
+
 **Resource file** — tabular data owned by an addon and imported idempotently by
 tier (`master`, `install`, `demo`). Addons list resource files in their
 `addon.toml` `[resources]` manifest.

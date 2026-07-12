@@ -16,7 +16,7 @@ from import_export.instance_loaders import BaseInstanceLoader
 from import_export.results import RowResult
 from import_export.utils import get_related_model
 
-from angee.base.models import instance_from_public_id, public_id_of
+from angee.base.models import AngeeModel, instance_from_public_id, public_id_of
 from angee.base.serialization import json_safe
 from angee.resources.entries import RESERVED_ROW_KEYS, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
@@ -87,6 +87,7 @@ class AngeeResource(resources.ModelResource):
         """Validate incoming headers before import-export reads rows."""
 
         del kwargs
+        self._validate_catalogue_tier()
         self._validate_headers(list(dataset.headers or []))
         self._prime_existing_ledgers(dataset)
 
@@ -576,6 +577,23 @@ class AngeeResource(resources.ModelResource):
             raise ResourceLoadError(
                 f"{self.entry.display}: unknown field(s) for {self._meta.model._meta.label}: {names}"
             )
+
+    def _validate_catalogue_tier(self) -> None:
+        """Reject resource manifests whose tier disagrees with a catalogue model."""
+
+        model = self._meta.model
+        if not issubclass(model, AngeeModel):
+            return
+        catalogue_model = cast(type[AngeeModel], model)
+        if not catalogue_model.is_catalogue_model():
+            return
+        declared_tier = str(catalogue_model.get_catalogue_tier())
+        if self.entry.tier == declared_tier:
+            return
+        raise ResourceLoadError(
+            f"{self.entry.display}: catalogue tier mismatch for {model._meta.label}; "
+            f"manifest tier {self.entry.tier!r}, model declares {declared_tier!r}"
+        )
 
     def _restore_auto_fields(
         self,

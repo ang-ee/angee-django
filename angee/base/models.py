@@ -8,23 +8,30 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Self, TypeVar, cast
 
-from django.conf import settings
+from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import connections, models
 from django.db.models.utils import make_model_tuple
-from django_sqids.field import DEFAULT_ALPHABET
 from rebac import RebacMixin, SubjectRef, check_new, current_actor, to_object_ref
 from rebac.actors import is_sudo as ambient_is_sudo
 from rebac.actors import to_subject_ref
 from rebac.errors import MissingActorError, NoActorResolvedError, PermissionDenied
 from rebac.managers import RebacManager, RebacQuerySet
 from rebac.resources import model_resource_type
-from sqids import Sqids
 
-from angee.base.fields import ImplClassField, SqidField, canonical_sqid_prefix, encode_public_id
+from angee.base.fields import SqidField
+from angee.base.impl import ImplClassField
 from angee.base.mixins import SqidMixin, TimestampMixin
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
+
+CATALOGUE_TIERS = ("master", "install", "demo")
+"""Resource tiers a catalogue model may declare.
+
+Mirrors :class:`angee.resources.tiers.ResourceTier`, the authoritative resource
+tier owner. ``angee.base`` cannot import the resources addon without reversing the
+dependency direction, so the resources test suite pins these literals in sync.
+"""
 
 
 class AngeeQuerySet(RebacQuerySet[_ModelT]):
@@ -188,6 +195,16 @@ class AngeeModel(TimestampMixin, RebacMixin):
     guards (see ``angee.compose.runtime``).
     """
 
+    catalogue: bool = False
+    """Whether this class declares itself as catalogue/reference data.
+
+    The read is non-inherited: a subclass must declare ``catalogue = True`` on
+    its own class body to opt in, matching ``runtime``'s structural-marker shape.
+    """
+
+    catalogue_tier: str = CATALOGUE_TIERS[0]
+    """Resource tier the catalogue rows belong to; read non-inherited."""
+
     class Meta:
         """Django model options for Angee's abstract model base."""
 
@@ -197,7 +214,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
     def is_runtime_model(cls) -> bool:
         """Return whether this model class declares itself as a runtime model."""
 
-        return cls.__dict__.get("runtime", False)
+        return bool(cls.__dict__.get("runtime", False))
 
     @classmethod
     def overrides_runtime_parent(cls) -> bool:
@@ -206,10 +223,48 @@ class AngeeModel(TimestampMixin, RebacMixin):
         return bool(cls.__dict__.get("child_overrides_parent", False))
 
     @classmethod
+    def is_catalogue_model(cls) -> bool:
+        """Return whether this class declares itself as catalogue data."""
+
+        return bool(cls.__dict__.get("catalogue", False))
+
+    @classmethod
+    def get_catalogue_tier(cls) -> str:
+        """Return this class's declared catalogue tier, defaulting to master."""
+
+        return str(cls.__dict__.get("catalogue_tier", CATALOGUE_TIERS[0]))
+
+    @classmethod
+    def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
+        """Run Django model checks plus Angee structural declaration checks."""
+
+        errors = super().check(**kwargs)
+        errors.extend(cls._check_catalogue_tier())
+        return errors
+
+    @classmethod
+    def _check_catalogue_tier(cls) -> list[checks.CheckMessage]:
+        """Return system-check errors for an invalid catalogue tier declaration."""
+
+        if not cls.is_catalogue_model():
+            return []
+        tier = cls.get_catalogue_tier()
+        if tier in CATALOGUE_TIERS:
+            return []
+        expected = ", ".join(repr(value) for value in CATALOGUE_TIERS)
+        return [
+            checks.Error(
+                f"{cls._meta.label}.catalogue_tier must be one of {expected}; got {tier!r}.",
+                obj=cls,
+                id="angee.E014",
+            )
+        ]
+
+    @classmethod
     def impl_key_for(cls, field_name: str, value: Any, *, default: str | None = None) -> str:
         """Return the canonical registry key for one ``ImplClassField`` value."""
 
-        field = cls._impl_field(field_name)
+        field = cls.impl_field(field_name)
         if value is None:
             if default is None:
                 raise ValueError(f"{cls.__name__}.{field_name} requires an impl key.")
@@ -224,13 +279,17 @@ class AngeeModel(TimestampMixin, RebacMixin):
     def resolve_impl_class(cls, field_name: str, value: Any, *, default: str | None = None) -> type:
         """Return the impl class bound to one supplied impl-field value."""
 
-        field = cls._impl_field(field_name)
+        field = cls.impl_field(field_name)
         key = cls.impl_key_for(field_name, value, default=default)
         return field.resolve_class(key)
 
     @classmethod
-    def _impl_field(cls, field_name: str) -> Any:
-        """Return the named impl field or raise when the field is not impl-owned."""
+    def impl_field(cls, field_name: str) -> Any:
+        """Return the declared ``ImplClassField`` named by ``field_name``.
+
+        This is the model-owned accessor for callers that need the impl field's
+        declared API without reaching through Django's raw ``_meta`` shape.
+        """
 
         field = cls._meta.get_field(field_name)
         if not isinstance(field, ImplClassField):
@@ -240,7 +299,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
     def resolve_impl(self, field_name: str, *, default: str | None = None) -> type:
         """Return the impl class selected by ``field_name`` on this instance."""
 
-        field = type(self)._impl_field(field_name)
+        field = type(self).impl_field(field_name)
         value = getattr(self, field.attname)
         if not value and default is not None:
             return field.resolve_class(default)
@@ -298,7 +357,10 @@ class AngeeModel(TimestampMixin, RebacMixin):
     def public_id(self) -> str:
         """Return the stable public identifier for this model instance."""
 
-        return public_id_of(self)
+        value = self.public_id_value()
+        if value in (None, ""):
+            return ""
+        return str(value)
 
     @classmethod
     def from_public_id(cls, value: str) -> Self | None:
@@ -429,27 +491,26 @@ def _role_anchor_name(resource_type: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class SqidPublicIdentity:
-    """Sqid public identity for a model Angee does not own with a field."""
+    """Sqid adapter for a model Angee does not own with a ``SqidField``.
+
+    Survives only for third-party Django models such as ``auth.Group`` where
+    Angee exposes a public sqid-shaped surface but cannot add its own field.
+    ``SqidField`` still owns the codec and prefix rules.
+    """
 
     prefix: str
-    min_length: int = 8
+    min_length: int | None = None
     alphabet: str | None = None
 
     def public_id_from_pk(self, value: Any) -> str:
         """Return the public id encoded from a primary-key value."""
 
-        return encode_public_id(self._codec(), self.canonical_prefix, value)
+        return self.sqid_field.public_id_from_value(value)
 
     def public_id_to_pk(self, value: str) -> int | None:
         """Decode one public id to the backing primary-key value."""
 
-        raw_value = value
-        if self.canonical_prefix:
-            if not value.startswith(self.canonical_prefix):
-                return None
-            raw_value = value[len(self.canonical_prefix) :]
-        decoded = self._codec().decode(raw_value)
-        return decoded[0] if len(decoded) == 1 else None
+        return self.sqid_field.public_id_to_value(value)
 
     def public_id_lookup(self, model: type[models.Model], value: str) -> dict[str, Any]:
         """Return a Django lookup for ``value`` against ``model``."""
@@ -458,16 +519,17 @@ class SqidPublicIdentity:
         return {pk.name: self.public_id_to_pk(value)} if pk is not None else {}
 
     @property
-    def canonical_prefix(self) -> str:
-        """Return the canonical Angee sqid prefix."""
+    def sqid_field(self) -> SqidField:
+        """Return the owner field used to encode and decode this adapter's ids."""
 
-        return canonical_sqid_prefix(self.prefix)
-
-    def _codec(self) -> Sqids:
-        """Return the sqids codec for this identity."""
-
-        alphabet = self.alphabet or getattr(settings, "DJANGO_SQIDS_ALPHABET", None) or DEFAULT_ALPHABET
-        return Sqids(min_length=self.min_length, alphabet=alphabet)
+        # Deliberately per-call: this rare third-party path keeps SqidField as
+        # the codec owner without attaching a field to a model Angee does not own.
+        return SqidField(
+            real_field_name="id",
+            prefix=self.prefix,
+            min_length=self.min_length,
+            alphabet=self.alphabet,
+        )
 
 
 def public_data_id_field(model: type[models.Model]) -> SqidField | None:
@@ -490,7 +552,13 @@ def instance_from_public_id(
     queryset: models.QuerySet[_ModelT] | None = None,
     public_identity: SqidPublicIdentity | None = None,
 ) -> _ModelT | None:
-    """Return ``model`` instance addressed by Angee or Django public ID."""
+    """Return ``model`` instance addressed by a public id.
+
+    Thin adapter for generic surfaces that receive a model class/queryset at
+    runtime or a third-party ``public_identity``; Angee-owned callers should use
+    ``Model.from_public_id`` or ``queryset.from_public_id`` when they know the
+    owner statically.
+    """
 
     active_queryset = queryset if queryset is not None else model._default_manager.all()
     return _instance_from_public_id_queryset(
@@ -501,18 +569,19 @@ def instance_from_public_id(
 
 
 def public_id_of(instance: models.Model) -> str:
-    """Return the Angee public id or Django primary key for ``instance``.
+    """Return the public id for a generic model instance.
 
-    The user model is swappable, so ``instance`` may be a plain Django model
-    (e.g. ``django.contrib.auth.User``) that Angee does not own — those carry no
-    ``public_id_value`` and fall back to the primary key.
+    Thin adapter for generic surfaces that may receive a third-party Django
+    model. Angee-owned instances should use their ``public_id`` property.
     """
 
-    resolver = getattr(instance, "public_id_value", None)
-    value = resolver() if callable(resolver) else instance.pk
-    if value in (None, ""):
+    public_id = getattr(instance, "public_id", None)
+    if isinstance(public_id, str):
+        return public_id
+    pk = instance.pk
+    if pk in (None, ""):
         return ""
-    return str(value)
+    return str(pk)
 
 
 def public_id_for(
@@ -521,11 +590,11 @@ def public_id_for(
     *,
     public_identity: SqidPublicIdentity | None = None,
 ) -> str:
-    """Return the public id for ``model`` when only its primary key is known.
+    """Return the public id for a generic model when only its primary key is known.
 
-    ``model`` may be a plain Django model Angee does not own (the swappable user
-    model, or a third-party model reached with a ``public_identity`` decoder);
-    one without the public-id contract falls back to its primary key.
+    Thin adapter for relation/projector code that receives a model class at
+    runtime, including third-party models reached through ``public_identity``.
+    Angee-owned callers should prefer ``Model.public_id_from_pk``.
     """
 
     if pk in (None, ""):
@@ -624,28 +693,19 @@ def _instance_from_public_id_queryset(
         return None
 
     try:
-        lookup = _public_id_lookup(queryset.model, value, public_identity=public_identity)
+        if public_identity is not None:
+            lookup = public_identity.public_id_lookup(queryset.model, value)
+        else:
+            lookup_owner = getattr(queryset.model, "public_id_lookup", None)
+            if callable(lookup_owner):
+                lookup = dict(lookup_owner(value))
+            else:
+                pk = queryset.model._meta.pk
+                lookup = {pk.name: value} if pk is not None else {}
         instance = queryset.filter(**lookup).first()
     except (TypeError, ValueError):
         return None
     return cast(_ModelT | None, instance)
-
-
-def _public_id_lookup(
-    model: type[models.Model],
-    value: str,
-    *,
-    public_identity: SqidPublicIdentity | None = None,
-) -> dict[str, Any]:
-    """Return the model-owned lookup for one public id value."""
-
-    if public_identity is not None:
-        return public_identity.public_id_lookup(model, value)
-    lookup = getattr(model, "public_id_lookup", None)
-    if callable(lookup):
-        return dict(lookup(value))
-    pk = model._meta.pk
-    return {pk.name: value} if pk is not None else {}
 
 
 def requires_angee_rebac_contract(model: type[models.Model]) -> bool:

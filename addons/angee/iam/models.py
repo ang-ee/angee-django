@@ -65,11 +65,28 @@ from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.resources import model_resource_type
 from rebac.roles import grant, revoke
 
+from angee.base.fields import StateField
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, SqidMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeModel, AngeeQuerySet
 
 
-class UserManager(AngeeManager, BaseUserManager):
+class UserKind(models.TextChoices):
+    """Species of IAM principal stored in the swappable user table."""
+
+    PERSON = "person", "Person"
+    SERVICE = "service", "Service"
+
+
+class UserQuerySet(AngeeQuerySet[Any]):
+    """Queryset vocabulary for user-row surfaces."""
+
+    def people(self) -> Any:
+        """Return login-capable human users, excluding service-account rows."""
+
+        return self.filter(kind=UserKind.PERSON)
+
+
+class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  # type: ignore[misc]
     """Manager for Angee's composed user model."""
 
     use_in_migrations = True
@@ -147,7 +164,12 @@ class UserManager(AngeeManager, BaseUserManager):
 
 
 class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
-    """Abstract swappable user model composed into Angee runtimes."""
+    """Abstract swappable user model composed into Angee runtimes.
+
+    ``kind=service`` rows are non-login principals for agents and automation:
+    they exist so audit and revision FKs can point at every actor species without
+    widening password/OIDC login surfaces.
+    """
 
     runtime = True
 
@@ -163,6 +185,7 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
     first_name = models.CharField(max_length=150, blank=True)
     last_name = models.CharField(max_length=150, blank=True)
     email = models.EmailField(blank=True)
+    kind = StateField(choices_enum=UserKind, default=UserKind.PERSON, db_index=True)
     is_staff = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     date_joined = models.DateTimeField(default=timezone.now)
@@ -191,7 +214,15 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
         """Persist the user and mirror superuser status to the admin role."""
 
         update_fields = kwargs.get("update_fields")
-        sync_admin_role = update_fields is None or "is_superuser" in update_fields
+        update_field_names = None
+        if update_fields is not None:
+            update_field_names = {update_fields} if isinstance(update_fields, str) else set(update_fields)
+        if str(self.kind) == str(UserKind.SERVICE) and self.has_usable_password():
+            self.set_unusable_password()
+            if update_field_names is not None:
+                update_field_names.add("password")
+                kwargs["update_fields"] = update_field_names
+        sync_admin_role = update_field_names is None or "is_superuser" in update_field_names
         super().save(*args, **kwargs)
         if not sync_admin_role:
             return

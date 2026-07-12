@@ -465,6 +465,17 @@ class HierarchyMixin(models.Model):
             paths.append(prefix)
         return paths
 
+    def is_within(self, other: HierarchyMixin) -> bool:
+        """Return whether this node is ``other`` or a descendant of ``other``.
+
+        The test is intentionally inclusive and query-free: the maintained,
+        delimiter-terminated ``path`` column is a prefix of exactly its own
+        subtree. Empty/unmaterialized paths match nothing so they cannot become
+        an accidental whole-tree prefix.
+        """
+
+        return bool(self.path and other.path and self.path.startswith(other.path))
+
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the row, maintaining ``path`` on create and reparent."""
 

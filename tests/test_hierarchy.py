@@ -72,6 +72,34 @@ def test_create_under_parent_derives_path_shape() -> None:
 
 
 @pytest.mark.django_db
+def test_is_within_is_inclusive_and_descendant_aware_without_queries() -> None:
+    """``is_within`` is the instance form of the maintained path-prefix test."""
+
+    with system_context(reason="test hierarchy is_within"):
+        nodes = _tree()
+
+    with CaptureQueriesContext(connection) as ctx:
+        assert nodes["B"].is_within(nodes["B"]) is True
+        assert nodes["E"].is_within(nodes["B"]) is True
+        assert nodes["D"].is_within(nodes["C"]) is False
+        assert nodes["A"].is_within(nodes["B"]) is False
+    assert ctx.captured_queries == []
+
+
+def test_is_within_empty_paths_match_nothing() -> None:
+    """Unmaterialized paths never prefix-match the whole hierarchy."""
+
+    materialized = HierNode(name="materialized")
+    materialized.path = "/000000000001/"
+    empty_self = HierNode(name="empty-self")
+    empty_other = HierNode(name="empty-other")
+
+    assert empty_self.is_within(materialized) is False
+    assert materialized.is_within(empty_other) is False
+    assert empty_self.is_within(empty_other) is False
+
+
+@pytest.mark.django_db
 def test_padded_segments_never_false_prefix_match() -> None:
     """A root whose pk digits prefix another's (1 vs 11) shares no subtree.
 

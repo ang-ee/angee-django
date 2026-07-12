@@ -75,8 +75,8 @@ def test_changes_builds_a_named_subscription_field() -> None:
     assert _receiver_count(post_save, "angee-changes-auth.Group-save") == receiver_count
 
 
-def test_schema_build_wires_change_publishers_from_subscription_metadata() -> None:
-    """Building a schema connects publishers for declared ``changes`` resources."""
+def test_schema_build_does_not_wire_change_publishers_from_subscription_metadata() -> None:
+    """Building a schema is not the publisher-connection side effect."""
 
     dispatch_uid = "angee-changes-auth.Group-save"
     was_connected = _receiver_count(post_save, dispatch_uid) > 0
@@ -102,7 +102,7 @@ def test_schema_build_wires_change_publishers_from_subscription_metadata() -> No
                 )
             ]
         ).build("public")
-        assert _receiver_count(post_save, dispatch_uid) == 1
+        assert _receiver_count(post_save, dispatch_uid) == 0
     finally:
         if was_connected:
             publishing.connect_publishers(Group)
@@ -287,7 +287,7 @@ def test_subscription_resolver_denies_without_current_actor(
 
 
 def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
-    """``_publish`` drops a row whose ``broadcasts_changes()`` returns False.
+    """``publish_change`` drops a row whose ``broadcasts_changes()`` returns False.
 
     The emission mirror of a read scope that hides rows: a model isolates some rows
     (record chatter) to a record-scoped surface, so their changes never reach the
@@ -299,12 +299,13 @@ def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
     monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append(payload))
     # Run the on_commit callback inline so the (non-)broadcast is observable now.
     monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
-    stub_payload = SimpleNamespace(as_message=lambda: {"stub": True})
+    stub_payload = ChangePayload(model="tests.Row", id="1", action="update")
     monkeypatch.setattr(
         publishing.ChangePayload,
         "from_instance",
         classmethod(lambda cls, instance, **kwargs: stub_payload),
     )
+    publishing.connect_change_broadcast_receiver()
 
     class Row:
         """Minimal instance carrying only the broadcast opt-out decision."""
@@ -315,15 +316,15 @@ def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
         def broadcasts_changes(self) -> bool:
             return self._broadcasts
 
-    publishing._publish(Row(broadcasts=False), action="update", update_fields=None)
+    publishing.publish_change(Row(broadcasts=False), action="update", update_fields=None)
     assert sent == []
 
-    publishing._publish(Row(broadcasts=True), action="delete", update_fields=None)
-    assert sent == [{"stub": True}]
+    publishing.publish_change(Row(broadcasts=True), action="delete", update_fields=None)
+    assert sent == [stub_payload.as_message()]
 
     # A plain model with no hook keeps the default broadcast behavior.
-    publishing._publish(object(), action="create", update_fields=None)
-    assert sent == [{"stub": True}, {"stub": True}]
+    publishing.publish_change(object(), action="create", update_fields=None)
+    assert sent == [stub_payload.as_message(), stub_payload.as_message()]
 
 
 @override_settings(

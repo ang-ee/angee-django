@@ -152,10 +152,18 @@ Rules that follow from the layering:
   chainable read predicates and reusable scoping. If a resolver, view, or command
   repeats a filter predicate, promote it to a QuerySet; if it mutates row state,
   promote it to a model or manager method.
+- External side effects and DB reflection are separate phases. File edits,
+  daemon calls, network calls, and other non-DB effects never run inside
+  `transaction.atomic`; the following DB mutation path names its transaction
+  owner and `system_context` reason. Platform install, agent provisioning, OAuth
+  flows, and resources loading all follow this two-phase shape.
 - Cross-addon and generated-model references go through Django's app registry
   (`apps.get_model`, `apps.get_app_config`, `apps.get_app_configs`) and `_meta`.
   Never import generated `runtime/` modules or rediscover model/app facts by
   string parsing.
+- A marked catalogue model belongs to exactly one resource tier for all seeders;
+  the resources loader enforces each manifest tier against the model's declared
+  `catalogue_tier`.
 - GraphQL resolvers stay thin. They resolve the runtime model, actor/context, and
   input object, then delegate to the model, manager/queryset, action, or
   aggregate builder that owns the rule. If a resolver branches on field names,
@@ -227,6 +235,14 @@ Rules that follow from the layering:
 - Source models are abstract. Concrete apps are emitted by the composer.
 - Keep Django `Meta` for Django and library-owned options such as
   `rebac_resource_type`; Angee extension facts live on the owning model class.
+- `angee.base` declares model markers, decorators, and field projection facts;
+  `angee.compose` interprets them during emission. If runtime code consumes a
+  source-model structural marker, the composer carries it onto the emitted
+  concrete class instead of callers inheriting or probing the abstract source.
+- Field classes own data-resource classification declarations. Field authors set
+  `angee_widget`, `angee_scalar_hint`, and `angee_currency_field` on the field;
+  `angee.graphql.data.field_classification` reads those declarations and does
+  not special-case addon-owned field classes.
 - `runtime/`, generated schemas, migrations, and codegen stubs are output.
   Change the source, not the artifact.
 - REBAC is structural and owned by `django-zed-rebac`. Addons declare
@@ -253,7 +269,7 @@ Rules that follow from the layering:
     `integrate.OAuthClient` are the canonical shape.
   - *Only behaviour differs, open set (addons contribute impls) while persisted
     fields stay the same* → **one concrete model +
-    `angee.base.fields.ImplClassField`** naming a non-model
+    `angee.base.impl.ImplClassField`** naming a non-model
     strategy/client/backend class. Name the field by the role it plays
     (`backend_class`, `provider_type`), not by a generic "implementation" label.
     One table (unified list/reconcile, no field duplication); the impl is an
@@ -344,6 +360,16 @@ This project runs **fail-closed**: `REBAC_STRICT_MODE=True` and
 `REBAC_SUPERUSER_BYPASS=False`, so every actor — superusers included — reaches
 data through REBAC, never a queryset bypass.
 
+- **One attribution vocabulary (the layered-principal rule).** Any column that
+  answers "who did this" — audit stamps, history users, revision authors — is an
+  FK to `AUTH_USER_MODEL`, never a species-specific FK and never a string
+  subject column. At the database layer, `user = service account = actor =
+  principal`: one table represents every principal, person or service (`kind`
+  lives on the row). Above that layer the words diverge on purpose — the REBAC
+  *actor* keeps its species (`agents/agent` is never collapsed into a user for
+  permission evaluation); attribution converges through `actor_user_id` and the
+  subject-type resolver registry. See the glossary's Principal/Actor/Service
+  account entries.
 - Bracket every server-side read/write in `system_context`/`asystem_context` and
   resolve the actor with `@rebac_subject`; a bare `Model.objects.create()` under
   an actor is denied.
@@ -442,6 +468,12 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   null that overwrites the model default (e.g. `status`/`config`), and
   `full_clean` then rejects the null. Mirror this for any new
   `hasura_model_resource` input.
+- **A `strawberry_django.field(only=[...])` hint must list every column the resolver dereferences.**
+  Include columns read by shared properties the resolver delegates to; otherwise
+  selecting that field alone can defer-load the missing column per row.
+- **A structural marker consumed after runtime emission must be emitted too.**
+  A non-inherited `__dict__` source-model marker stops at the abstract source unless
+  the composer carries it into the concrete runtime class body.
 - **`uv run` tool shebangs are stale** — run Python tools by module:
   `uv run python -m pytest`, `uv run python -m mypy angee addons`,
   `uv run python -m ruff check .`. Bare `uv run pytest`/`mypy` fail to spawn.
@@ -454,6 +486,37 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   returns 200; check `runtime/schemas/` before chasing app/test regressions. (The
   dev server regenerates it for you — see the `runserver` pitfall — but a manual
   `angee build` outside `angee dev` still needs the explicit `schema` step.)
+- **Moving a custom field between modules changes its migration `deconstruct()` path.**
+  Reconcile every on-disk migration in the same change: source migrations get the
+  schema-identical dotted-path edit; generated runtime migrations are regenerated
+  from source, and downstream consumers must regenerate their own runtime output.
+- **Explicit delete preflight plus elevated destructive work must test both branches.**
+  Storage's soft-delete path and messaging's threaded-record delete path check the
+  public `delete` permission themselves, then run the owned destructive work under
+  `system_context`; the library's denial-audit signal is skipped on the explicit
+  deny branch by design, so add a deny-path regression whenever you use this shape.
+  Do not hide independently-authorized `on_delete=CASCADE` children under an elevated
+  parent cascade; dependent rows must derive delete through the parent in their own
+  zed relation, like the workflows Step/Edge pattern.
+- **Instance `save()`/`delete()` overrides do not run on cascade or bulk queryset paths.**
+  Lifecycle side effects that must survive those paths belong on Django signals; Agent's
+  service-user deactivation is a `post_delete` receiver for this reason.
+- **Regenerating the example's runtime migrations orphans existing dev
+  databases.** The example's `runtime/` (migrations included) is deliberately
+  untracked and greenfield: a branch that regenerates its migrations produces a
+  fresh file set whose names/numbering no longer match a live dev DB's applied
+  history, and Django then re-applies schema that already exists (`duplicate
+  column`). The remedy is a dev-DB reset (`.angee/data/db.sqlite3` — back it up
+  first), not surgical `--fake` repair. Production consumers commit their
+  runtime migrations and never hit this.
+- **Data migrations access REBAC-scoped models through `_base_manager`, and
+  backfills need a rows-present proof.** A manager with `use_in_migrations = True`
+  (iam's `UserManager`, inherited from Django's) rides into the historical model,
+  so `objects` inside a `RunPython` is REBAC-scoped and raises `MissingActorError`
+  under strict mode — a migration is a system operation; use
+  `model._base_manager.using(db)`. And a fresh-DB `migrate` never executes a
+  row-dependent backfill body: prove backfills against a database that has rows
+  (the agents service-user backfill failed only on live dev DBs for this reason).
 - **Agent runtime auth is a `(runtime × provider × credential-kind)` fact, not provider-only.**
   The `AgentRuntime` an agent's `runtime_class` selects (`angee.agents.runtimes`) owns how a
   credential becomes container env *and* the synced secret payload (`auth_env` /
@@ -581,12 +644,14 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   Elevated writes may be necessary to create the row, but callers continue under
   the original actor. Capture `current_actor()` before the elevated block and
   rebind the returned instance with `.with_actor(actor)` after save.
-- **Publishers wire during schema build, not schema import.** GraphQL schema
-  modules declare subscription surfaces; `GraphQLSchemas` connects publishers
-  from declared `changes` metadata when a schema is built, so importing a schema
-  for SDL/tests never mutates process-global signal state. Processes that never
-  build a schema do not publish changes; base and consumer addons behave
-  identically because no addon owns its own publisher label list.
+- **Publishers wire during `angee.graphql` app `ready()`, not schema build or
+  schema import.** GraphQL schema modules declare subscription surfaces;
+  `GraphQLSchemas` connects publishers from declared `changes` metadata after
+  app population, so building a schema no longer mutates process-global signal
+  state.
+- **Workflow event triggers consume the declared change feed.** A trigger's
+  target model must declare `changes()`; otherwise validation tells the addon to
+  declare `changes()` for the model to join the change feed.
 - **`AngeeModel` managers/querysets must keep the canon.** If a model customizes
   `objects`, its queryset class must derive from `AngeeQuerySet`; otherwise
   shared methods such as public-id lookup, actor scoping, and elevated reads drift

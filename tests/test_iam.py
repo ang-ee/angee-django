@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from django.contrib.auth import BACKEND_SESSION_KEY, HASH_SESSION_KEY, SESSION_KEY, get_user
+from django.contrib.auth import BACKEND_SESSION_KEY, HASH_SESSION_KEY, SESSION_KEY, authenticate, get_user
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
@@ -28,7 +28,7 @@ def test_user_source_model_owns_auth_identity() -> None:
     assert isinstance(manager, BaseUserManager)
     assert isinstance(manager, RebacManager)
     assert User.USERNAME_FIELD == "username"
-    assert {"username", "email", "sqid", "is_staff", "is_active"} <= (field_names)
+    assert {"username", "email", "sqid", "kind", "is_staff", "is_active"} <= (field_names)
     assert "groups" not in field_names
     assert "user_permissions" not in field_names
 
@@ -67,17 +67,21 @@ def test_iam_model_backend_uses_named_session_lookup(monkeypatch: pytest.MonkeyP
 
     calls: list[object] = []
 
+    class User:
+        is_active = True
+        kind = "person"
+
     class Manager:
         def get_for_session(self, user_id: object) -> object:
             calls.append(user_id)
-            return "user"
+            return User()
 
     class UserModel:
         objects = Manager()
 
     monkeypatch.setattr("angee.iam.auth.get_user_model", lambda: UserModel)
 
-    assert ModelBackend().get_user("usr_123") == "user"
+    assert isinstance(ModelBackend().get_user("usr_123"), User)
     assert calls == ["usr_123"]
 
 
@@ -88,6 +92,27 @@ def test_iam_model_backend_rejects_inactive_session_user(monkeypatch: pytest.Mon
 
     class User:
         is_active = False
+
+    class Manager:
+        def get_for_session(self, user_id: object) -> object:
+            return User()
+
+    class UserModel:
+        objects = Manager()
+
+    monkeypatch.setattr("angee.iam.auth.get_user_model", lambda: UserModel)
+
+    assert ModelBackend().get_user("usr_123") is None
+
+
+def test_iam_model_backend_rejects_non_person_session_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The IAM backend rejects service users through the same session gate."""
+
+    from angee.iam.auth import ModelBackend
+
+    class User:
+        is_active = True
+        kind = "service"
 
     class Manager:
         def get_for_session(self, user_id: object) -> object:
@@ -119,6 +144,62 @@ def test_inactive_session_reload_yields_anonymous_user() -> None:
         user.save(update_fields=["is_active"])
 
     assert isinstance(get_user(request), AnonymousUser)
+
+
+@pytest.mark.django_db
+def test_service_session_reload_yields_anonymous_user() -> None:
+    """A service row cannot remain logged in through an already-issued session."""
+
+    from django.contrib.auth import get_user_model
+
+    user = get_user_model().objects.create_user("session-service", password="secret")
+    request = RequestFactory().get("/")
+    request.session = {
+        SESSION_KEY: str(user.pk),
+        BACKEND_SESSION_KEY: "angee.iam.auth.ModelBackend",
+        HASH_SESSION_KEY: user.get_session_auth_hash(),
+    }
+    user.kind = "service"
+    with system_context(reason="test.service_session.kind_mutation"):
+        user.save(update_fields=["kind"])
+
+    assert isinstance(get_user(request), AnonymousUser)
+
+
+@pytest.mark.django_db
+def test_kind_mutation_to_service_clears_password_and_blocks_auth() -> None:
+    """The User row owns service non-login semantics even after creation."""
+
+    from django.contrib.auth import get_user_model
+
+    user = get_user_model().objects.create_user("mutated-service", password="secret")
+    user.kind = "service"
+    with system_context(reason="test.service_password.kind_mutation"):
+        user.save(update_fields=["kind"])
+
+    assert authenticate(username="mutated-service", password="secret") is None
+    with system_context(reason="test.service_password.reload"):
+        user.refresh_from_db()
+    assert not user.has_usable_password()
+
+
+def test_people_queryset_fails_loud_when_owner_scope_is_missing() -> None:
+    """People-facing IAM query helpers require the owner-declared people() scope."""
+
+    from angee.iam import roles
+
+    class QuerySet:
+        pass
+
+    class Manager:
+        def all(self) -> QuerySet:
+            return QuerySet()
+
+    class UserModel:
+        _default_manager = Manager()
+
+    with pytest.raises(AttributeError, match="people"):
+        roles._people_queryset(UserModel)
 
 
 @pytest.mark.django_db

@@ -137,6 +137,27 @@ def test_inactive_co_members_are_excluded() -> None:
 
 
 @pytest.mark.django_db
+def test_service_co_members_are_excluded_from_colleagues() -> None:
+    """People pickers list human users only; service rows remain attribution-only."""
+
+    call_command("rebac", "sync", verbosity=0)
+    company_model = apps.get_model("iam", "Company")
+    actor = User.objects.create_user(username="people-actor", email="people-actor@example.com")
+    person = User.objects.create_user(username="person-peer", email="person-peer@example.com")
+    service = User.objects.create_user(
+        username="service-peer",
+        email="service-peer@example.com",
+        kind="service",
+    )
+    with system_context(reason="test colleagues service setup"):
+        company = company_model.objects.create(name="Company Service")
+    for member in (actor, person, service):
+        _grant_membership(company, member)
+
+    assert {row["username"] for row in _colleagues(actor)} == {"person-peer"}
+
+
+@pytest.mark.django_db
 def test_search_filters_colleagues() -> None:
     """``search`` narrows the colleague list by username/name/email substring."""
 

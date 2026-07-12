@@ -50,10 +50,11 @@ from rebac import (
 from rebac.models import active_relationship_model
 from strawberry_django.descriptors import model_property
 
-from angee.base.fields import EncryptedField, ImplClassField, StateField
-from angee.base.impl import ImplDefaultsMixin
+from angee.base.fields import EncryptedField, StateField
+from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
+from angee.base.transitions import StateTransitions, save_state, transition
 from angee.integrate import registry
 from angee.integrate.credentials import CredentialKind, handler_for
 from angee.integrate.events import EventKind
@@ -77,6 +78,7 @@ logger = logging.getLogger(__name__)
 # Renew an OAuth access token this far ahead of its expiry, so a consumer about to
 # use it (e.g. provisioning) gets a token with life left rather than one about to lapse.
 _OAUTH_REFRESH_MARGIN = timedelta(minutes=5)
+_UNSET = object()
 
 
 class AccountStatus(models.TextChoices):
@@ -1178,6 +1180,8 @@ class Vendor(SqidMixin, AuditMixin, AngeeModel):
     """
 
     runtime = True
+    catalogue = True
+    catalogue_tier = "master"
 
     sqid_prefix = "vnd_"
     slug = models.SlugField(unique=True)
@@ -1200,27 +1204,69 @@ class Vendor(SqidMixin, AuditMixin, AngeeModel):
         return self.display_name or self.slug
 
 
-class IntegrationStatus(models.TextChoices):
-    """Lifecycle state for one integration implementation."""
+class IntegrationLifecycle(models.TextChoices):
+    """Declared lifecycle state for one integration implementation."""
 
     DRAFT = "draft", "Draft"
     ACTIVE = "active", "Active"
     PAUSED = "paused", "Paused"
     DISABLED = "disabled", "Disabled"
-    ERROR = "error", "Error"
 
     @classmethod
-    def from_value(cls, value: object) -> IntegrationStatus:
-        """Return the member for one string or enum integration-status value."""
+    def from_value(cls, value: object) -> IntegrationLifecycle:
+        """Return the member for one string or enum integration-lifecycle value."""
 
         raw = str(getattr(value, "value", value)).strip()
         member = cls.__members__.get(raw)
         if member is not None:
-            return cast(IntegrationStatus, member)
+            return cast(IntegrationLifecycle, member)
         try:
-            return cast(IntegrationStatus, cls(raw))
+            return cast(IntegrationLifecycle, cls(raw))
         except ValueError as error:
-            raise ValueError(f"Unsupported integration status: {raw}") from error
+            raise ValueError(f"Unsupported integration lifecycle: {raw}") from error
+
+
+class IntegrationRuntimeStatus(models.TextChoices):
+    """Observed runtime health for one integration implementation."""
+
+    OK = "ok", "OK"
+    ERROR = "error", "Error"
+
+    @classmethod
+    def from_value(cls, value: object) -> IntegrationRuntimeStatus:
+        """Return the member for one string or enum runtime-status value."""
+
+        raw = str(getattr(value, "value", value)).strip()
+        member = cls.__members__.get(raw)
+        if member is not None:
+            return cast(IntegrationRuntimeStatus, member)
+        try:
+            return cast(IntegrationRuntimeStatus, cls(raw))
+        except ValueError as error:
+            raise ValueError(f"Unsupported integration runtime status: {raw}") from error
+
+
+def integration_status_axes(status: object) -> tuple[IntegrationLifecycle, IntegrationRuntimeStatus]:
+    """Map one legacy fused integration status onto lifecycle and runtime axes."""
+
+    # Legacy callers and migration tests can still hand the pre-split fused value
+    # to telemetry code; keep that compatibility at the split-axis owner.
+    raw = str(getattr(status, "value", status)).strip()
+    lifecycle_member = IntegrationLifecycle.__members__.get(raw)
+    if lifecycle_member is not None:
+        return cast(IntegrationLifecycle, lifecycle_member), cast(IntegrationRuntimeStatus, IntegrationRuntimeStatus.OK)
+    if raw in {"ERROR", "error"}:
+        return (
+            cast(IntegrationLifecycle, IntegrationLifecycle.ACTIVE),
+            cast(IntegrationRuntimeStatus, IntegrationRuntimeStatus.ERROR),
+        )
+    try:
+        return (
+            cast(IntegrationLifecycle, IntegrationLifecycle(raw)),
+            cast(IntegrationRuntimeStatus, IntegrationRuntimeStatus.OK),
+        )
+    except ValueError as error:
+        raise ValueError(f"Unsupported legacy integration status: {raw}") from error
 
 
 class IntegrationManager(AngeeManager):
@@ -1254,7 +1300,7 @@ class IntegrationManager(AngeeManager):
                         vendor=vendor,
                         impl_class=impl_class,
                         kind=Integration.integration_kind_label,
-                        status=IntegrationStatus.DRAFT,
+                        lifecycle=IntegrationLifecycle.DRAFT,
                     )
             except IntegrityError:
                 return self.get(
@@ -1277,10 +1323,25 @@ class IntegrationManager(AngeeManager):
         integration = self.draft_for(user, vendor=vendor, impl_class=impl_class)
         with system_context(reason="integrate.integration.activate_from_credential"), transaction.atomic():
             integration = self.locked_get(pk=integration.pk)
-            integration.credential = credential
-            integration.account = getattr(credential, "external_account", None)
-            integration.status = IntegrationStatus.ACTIVE
-            integration.save(update_fields=["credential", "account", "status", "updated_at"])
+            account = getattr(credential, "external_account", None)
+            if str(integration.lifecycle) == str(IntegrationLifecycle.ACTIVE):
+                integration.credential = credential
+                integration.account = account
+                integration.runtime_status = cast(IntegrationRuntimeStatus, IntegrationRuntimeStatus.OK)
+                integration.last_error = ""
+                integration.last_error_at = None
+                integration.save(
+                    update_fields=[
+                        "account",
+                        "credential",
+                        "last_error",
+                        "last_error_at",
+                        "runtime_status",
+                        "updated_at",
+                    ]
+                )
+            else:
+                integration.activate(credential=credential, account=account)
         return integration
 
     def sync_kinds(self) -> int:
@@ -1348,13 +1409,43 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         related_name="integrations",
     )
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="integrations")
-    status = StateField(choices_enum=IntegrationStatus, default=IntegrationStatus.DRAFT)
+    lifecycle = StateField(choices_enum=IntegrationLifecycle, default=IntegrationLifecycle.DRAFT)
+    """Declared lifecycle journey for the integration connection itself.
+
+    This is the operator-controlled capability axis: draft setup, active use,
+    paused, or disabled. Runtime health lives separately on ``runtime_status``.
+    """
+    runtime_status = StateField(choices_enum=IntegrationRuntimeStatus, default=IntegrationRuntimeStatus.OK)
+    """Observed health for the integration's last runtime interaction.
+
+    ``OK`` and ``ERROR`` describe the last credential/sync/use outcome; they do
+    not move the lifecycle journey.
+    """
     last_used_at = models.DateTimeField(null=True, blank=True)
     last_used_status = models.CharField(max_length=64, blank=True)
     use_count_24h = models.PositiveIntegerField(default=0)
     error_count_24h = models.PositiveIntegerField(default=0)
     last_error = models.TextField(blank=True)
     last_error_at = models.DateTimeField(null=True, blank=True)
+
+    lifecycle_transitions = StateTransitions(
+        lifecycle,
+        {
+            IntegrationLifecycle.DRAFT: [
+                IntegrationLifecycle.ACTIVE,
+                IntegrationLifecycle.DISABLED,
+            ],
+            IntegrationLifecycle.ACTIVE: [
+                IntegrationLifecycle.PAUSED,
+                IntegrationLifecycle.DISABLED,
+            ],
+            IntegrationLifecycle.PAUSED: [
+                IntegrationLifecycle.ACTIVE,
+                IntegrationLifecycle.DISABLED,
+            ],
+            IntegrationLifecycle.DISABLED: [IntegrationLifecycle.ACTIVE],
+        },
+    )
 
     objects = IntegrationManager()
 
@@ -1411,14 +1502,14 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         """Return the operator label, or a vendor-derived one when none was given.
 
         Headers, lists, and relation pickers read this so a named integration shows
-        its name and an unnamed one still reads as ``Vendor (status)``.
+        its name and an unnamed one still reads as ``Vendor (lifecycle)``.
         """
 
         if self.display_name:
             return str(self.display_name)
         vendor = getattr(self, "vendor", None)
         label = str(getattr(vendor, "display_name", "") or getattr(vendor, "slug", "") or "integration")
-        return f"{label} ({self.status})"
+        return f"{label} ({self.lifecycle})"
 
     @property
     def impl(self) -> IntegrationImpl:
@@ -1427,26 +1518,111 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         impl_class = cast(type[IntegrationImpl], self.resolve_impl("impl_class"))
         return impl_class(self)
 
+    @transition(
+        lifecycle,
+        source=[IntegrationLifecycle.DRAFT, IntegrationLifecycle.PAUSED, IntegrationLifecycle.DISABLED],
+        target=IntegrationLifecycle.ACTIVE,
+        on_success=save_state,
+    )
+    def activate(self, *, credential: Any = _UNSET, account: Any = _UNSET) -> None:
+        """Mark this integration active, optionally attaching connection rows."""
+
+        fields: set[str] = set()
+        if credential is not _UNSET:
+            self.credential = credential
+            fields.add("credential")
+        if account is not _UNSET:
+            self.account = account
+            fields.add("account")
+        self.runtime_status = cast(IntegrationRuntimeStatus, IntegrationRuntimeStatus.OK)
+        self.last_error = ""
+        self.last_error_at = None
+        fields.update({"last_error", "last_error_at", "runtime_status"})
+        self._transition_fields = fields
+
+    @transition(
+        lifecycle,
+        source=IntegrationLifecycle.ACTIVE,
+        target=IntegrationLifecycle.PAUSED,
+        on_success=save_state,
+    )
+    def pause(self) -> None:
+        """Pause this active integration without changing its runtime health."""
+
+    @transition(
+        lifecycle,
+        source=[IntegrationLifecycle.DRAFT, IntegrationLifecycle.ACTIVE, IntegrationLifecycle.PAUSED],
+        target=IntegrationLifecycle.DISABLED,
+        on_success=save_state,
+    )
+    def disable(self) -> None:
+        """Disable this integration without changing its runtime health."""
+
+    def set_lifecycle(self, lifecycle: IntegrationLifecycle | str) -> None:
+        """Move to one declared lifecycle state using this model's transition methods."""
+
+        target = IntegrationLifecycle.from_value(lifecycle)
+        if str(self.lifecycle) == target.value:
+            return
+        if target == IntegrationLifecycle.ACTIVE:
+            self.activate()
+        elif target == IntegrationLifecycle.PAUSED:
+            self.pause()
+        elif target == IntegrationLifecycle.DISABLED:
+            self.disable()
+        else:
+            self.lifecycle_transitions.not_allowed(self.lifecycle, target)
+
     def attach_credential(self, credential: Any) -> None:
         """Attach a live credential and activate this draft integration."""
 
-        self.credential = credential
-        self.account = getattr(credential, "external_account", None)
-        if self.status == IntegrationStatus.DRAFT:
-            self.status = IntegrationStatus.ACTIVE  # type: ignore[assignment]  # StateField descriptor unmodeled by django-stubs
+        account = getattr(credential, "external_account", None)
         if self.pk is None:
+            self.credential = credential
+            self.account = account
+            self.runtime_status = cast(IntegrationRuntimeStatus, IntegrationRuntimeStatus.OK)
+            self.last_error = ""
+            self.last_error_at = None
+            if self.lifecycle == IntegrationLifecycle.DRAFT:
+                self.lifecycle_transitions.force_state(
+                    self,
+                    IntegrationLifecycle.ACTIVE,
+                    reason="unsaved integration attach resolves initial lifecycle before insert",
+                )
             return
+        if self.lifecycle == IntegrationLifecycle.DRAFT:
+            with system_context(reason="integrate.integration.attach_credential"), transaction.atomic():
+                self.activate(credential=credential, account=account)
+            return
+        self.credential = credential
+        self.account = account
+        self.runtime_status = cast(IntegrationRuntimeStatus, IntegrationRuntimeStatus.OK)
+        self.last_error = ""
+        self.last_error_at = None
         with system_context(reason="integrate.integration.attach_credential"), transaction.atomic():
-            self.save(update_fields=["account", "credential", "status", "updated_at"])
+            self.save(
+                update_fields=[
+                    "account",
+                    "credential",
+                    "last_error",
+                    "last_error_at",
+                    "runtime_status",
+                    "updated_at",
+                ]
+            )
 
-    def report_status(self, status: IntegrationStatus | str, error: str = "") -> None:
+    def report_status(self, status: IntegrationRuntimeStatus | IntegrationLifecycle | str, error: str = "") -> None:
         """Record implementation status telemetry and persist this integration."""
 
-        normalized = IntegrationStatus.from_value(status)
+        raw_status = str(getattr(status, "value", status)).strip()
+        try:
+            normalized = IntegrationRuntimeStatus.from_value(status)
+        except ValueError:
+            _lifecycle, normalized = integration_status_axes(status)
         reported_at = timezone.now()
-        self.status = normalized
+        self.runtime_status = normalized
         self.last_used_at = reported_at
-        self.last_used_status = normalized.value
+        self.last_used_status = raw_status or normalized.value
         self.last_error = error
         self.last_error_at = reported_at if error else None
 
@@ -1460,7 +1636,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
                     "last_error_at",
                     "last_used_at",
                     "last_used_status",
-                    "status",
+                    "runtime_status",
                     "updated_at",
                 ]
             )
@@ -1662,7 +1838,7 @@ class Bridge(AngeeModel):
         }
         self.next_sync_at = self._next_sync_at(now=now)
         with transaction.atomic():
-            cast(Any, self).report_status(status=IntegrationStatus.ACTIVE)
+            cast(Any, self).report_status(status=IntegrationRuntimeStatus.OK)
             self.save(
                 update_fields=[
                     "cursor",
@@ -1690,7 +1866,7 @@ class Bridge(AngeeModel):
         self.sync_progress = progress
         self.next_sync_at = self._next_sync_at(now=now)
         with transaction.atomic():
-            cast(Any, self).report_status(status=IntegrationStatus.ERROR, error=error_message)
+            cast(Any, self).report_status(status=IntegrationRuntimeStatus.ERROR, error=error_message)
             self.save(
                 update_fields=[
                     "last_sync_status",

@@ -47,20 +47,24 @@ definition agents/skill {
 }
 
 definition agents/mcp_server {
+    // Non-field relation mirrored from Agent.mcp_servers by agents.models m2m_changed.
+    relation agent: agents/agent
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
-    permission read = admin->member
+    permission read = agent + admin->member
     permission write = admin->member
     permission delete = admin->member
 }
 
 definition agents/mcp_tool {
     relation server: agents/mcp_server // rebac:field=server
+    // Non-field relation mirrored from Agent.mcp_tools by agents.models m2m_changed.
+    relation agent: agents/agent
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
-    permission read = server->read + admin->member
+    permission read = agent + server->read + admin->member
     permission write = server->write + admin->member
     permission delete = server->write + admin->member
 }

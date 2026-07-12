@@ -243,20 +243,23 @@ def test_openai_addon_owns_demo_provider_chain() -> None:
 
 
 def test_notes_demo_only_composes_reusable_agent_seeds() -> None:
-    """The notes example keeps project-specific demo rows and references addon seeds."""
+    """The notes example keeps demo rows separate from master-tier catalogue seeds."""
 
     module = import_module("example.notes")
     config = AppConfig("example.notes", module)
     manifest = resource_manifest_for(config)
-    assert manifest["install"] == ({"path": "resources/install/010_integrate.vendor.yaml", "adopt": "slug"},)
+    assert manifest["install"] == ()
+    master_by_path = {item["path"]: item for item in manifest["master"]}
+    assert master_by_path["resources/master/010_integrate.vendor.yaml"]["adopt"] == "slug"
+    assert master_by_path["resources/master/081_integrate.vendor.yaml"]["adopt"] == "slug"
     demo_by_path = {item["path"]: item for item in manifest["demo"]}
     assert demo_by_path["resources/demo/080_integrate.credential.yaml"]["adopt"] == ("user", "name")
-    assert demo_by_path["resources/demo/081_integrate.vendor.yaml"]["adopt"] == "slug"
     assert demo_by_path["resources/demo/084_integrate.repository.yaml"]["adopt"] == ("vcs_bridge", "name")
     assert demo_by_path["resources/demo/094_integrate.template.yaml"]["adopt"] == ("source", "path")
     demo_paths = {item["path"] for item in manifest["demo"]}
 
     assert "resources/demo/010_iam.user.yaml" not in demo_paths
+    assert "resources/demo/081_integrate.vendor.yaml" not in demo_paths
     assert "resources/demo/091_integrate.integration.yaml" not in demo_paths
     agent_rows = _resource_rows(config, "demo", "resources/demo/095_agents.agent.yaml")
     assert agent_rows["agent_demo"]["owner"] == "iam.user_admin"

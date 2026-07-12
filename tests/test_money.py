@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import date
-from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
 
@@ -21,6 +21,7 @@ from django.db import connection
 from django.test import override_settings
 from rebac import system_context
 
+from angee.money.rounding import RoundingMode
 from tests.conftest import _clear_model_tables, _create_missing_tables
 from tests.money_models import MONEY_TEST_MODELS, Currency, CurrencyRate
 
@@ -67,27 +68,27 @@ def test_round_uses_currency_exponent(money_tables: None) -> None:
     jpy = _make_currency("JPY", decimal_places=0)
     bhd = _make_currency("BHD", decimal_places=3)
     eur = _make_currency("EUR", decimal_places=2)
-    assert jpy.round(Decimal("1234.567"), ROUND_HALF_UP) == Decimal("1235")
-    assert bhd.round(Decimal("1.23449"), ROUND_HALF_UP) == Decimal("1.234")
-    assert eur.round(Decimal("2.128"), ROUND_HALF_UP) == Decimal("2.13")
+    assert jpy.round(Decimal("1234.567")) == Decimal("1235")
+    assert bhd.round(Decimal("1.23449")) == Decimal("1.234")
+    assert eur.round(Decimal("2.128")) == Decimal("2.13")
 
 
-def test_round_mode_is_the_callers_policy_not_the_owners(money_tables: None) -> None:
-    """HALF_UP and HALF_EVEN diverge on a tie — the caller's mode decides, per exponent."""
+def test_round_uses_default_mode_and_explicit_overrides(money_tables: None) -> None:
+    """The money vocabulary supplies a default and allows explicit overrides."""
 
     del money_tables
     eur = _make_currency("EUR", decimal_places=2)
     jpy = _make_currency("JPY", decimal_places=0)
     bhd = _make_currency("BHD", decimal_places=3)
     # 2dp tie at .125
-    assert eur.round(Decimal("2.125"), ROUND_HALF_UP) == Decimal("2.13")
-    assert eur.round(Decimal("2.125"), ROUND_HALF_EVEN) == Decimal("2.12")
+    assert eur.round(Decimal("2.125")) == Decimal("2.13")
+    assert eur.round(Decimal("2.125"), RoundingMode.HALF_EVEN) == Decimal("2.12")
     # 0dp tie at .5
-    assert jpy.round(Decimal("2.5"), ROUND_HALF_UP) == Decimal("3")
-    assert jpy.round(Decimal("2.5"), ROUND_HALF_EVEN) == Decimal("2")
+    assert jpy.round(Decimal("2.5")) == Decimal("3")
+    assert jpy.round(Decimal("2.5"), RoundingMode.HALF_EVEN) == Decimal("2")
     # 3dp tie at .0005
-    assert bhd.round(Decimal("1.2345"), ROUND_HALF_UP) == Decimal("1.235")
-    assert bhd.round(Decimal("1.2345"), ROUND_HALF_EVEN) == Decimal("1.234")
+    assert bhd.round(Decimal("1.2345")) == Decimal("1.235")
+    assert bhd.round(Decimal("1.2345"), RoundingMode.HALF_EVEN) == Decimal("1.234")
 
 
 def test_convert_same_currency_returns_amount_untouched(money_tables: None) -> None:

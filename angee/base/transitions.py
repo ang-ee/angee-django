@@ -50,7 +50,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -66,6 +66,17 @@ TransitionMethod = Callable[..., Any]
 
 class TransitionNotAllowed(Exception):
     """Raised when a guarded transition or direct guarded-field write is illegal."""
+
+
+@dataclass(frozen=True, slots=True)
+class TransitionActionSpec:
+    """Public projection of one declared transition method."""
+
+    name: str
+    field: str
+    sources: tuple[str, ...]
+    target: str
+    policy: str | None
 
 
 @dataclass
@@ -183,6 +194,22 @@ class StateTransitions:
             self._validate_declared_transition(spec)
             method_map[method_name] = spec
 
+    @classmethod
+    def action_specs(cls, model: type[models.Model]) -> tuple[TransitionActionSpec, ...]:
+        """Return frozen action specs declared on ``model``, sorted by method name."""
+
+        specs = cast(dict[str, _TransitionSpec], getattr(model, "_angee_transition_specs", {}))
+        return tuple(
+            TransitionActionSpec(
+                name=name,
+                field=spec.field.name or spec.field.attname,
+                sources=tuple(_state_key(spec.field, source) for source in _as_values(spec.source)),
+                target=_state_key(spec.field, spec.target),
+                policy=spec.policy,
+            )
+            for name, spec in sorted(specs.items(), key=lambda item: item[0])
+        )
+
     def revalidate_for(self, cls: type[models.Model]) -> None:
         """Re-run this declaration's class-build validation against ``cls``'s MRO.
 
@@ -248,6 +275,45 @@ class StateTransitions:
             finally:
                 delattr(instance, "_angee_transition_save_field")
         return result
+
+    def force_state(self, instance: models.Model, target: Any, *, reason: str) -> None:
+        """Force this field to ``target`` while bypassing the declared graph.
+
+        This is the explicit escape hatch for state targets that are data-dependent
+        rather than graph-derived: recovery code may need to reconcile a lifecycle
+        from persisted external resource names, and unsaved instances may need an
+        initial target before the row exists. It still uses the same guarded field
+        write and, for saved rows, the same ``save_state`` concurrency check as a
+        declared transition. Callers must pass a concrete ``reason`` so every graph
+        bypass is greppable and intentional.
+        """
+
+        if not str(reason).strip():
+            raise ValueError("StateTransitions.force_state() requires a reason.")
+        source = self.field.to_python(getattr(instance, self.field.attname))
+        target_value = self.field.to_python(target)
+        self._write_target(instance, target_value)
+        if instance.pk is None:
+            # Unsaved row: the in-memory write is the whole operation, so a
+            # caller-set _transition_fields must not leak into a later
+            # save_state on the same instance (saved-row-only contract).
+            if hasattr(instance, "_transition_fields"):
+                delattr(instance, "_transition_fields")
+            return
+        setattr(instance, "_angee_transition_save_field", self.field.attname)
+        try:
+            save_state(instance, source, target_value)
+        except Exception:
+            self._write_target(instance, source)
+            raise
+        finally:
+            if hasattr(instance, "_angee_transition_save_field"):
+                delattr(instance, "_angee_transition_save_field")
+
+    def not_allowed(self, source: Any, target: Any) -> NoReturn:
+        """Raise the primitive's standard ``TransitionNotAllowed`` for this field."""
+
+        self._raise_not_allowed(source, target, "source-to-target pair is not allowed")
 
     def _normalize_graph(self) -> dict[str, set[str]]:
         declared: dict[str, set[str]] = {}
@@ -377,7 +443,7 @@ class StateTransitions:
             if created:
                 delattr(instance, "_angee_transition_write_fields")
 
-    def _raise_not_allowed(self, source: Any, target: Any, reason: str) -> None:
+    def _raise_not_allowed(self, source: Any, target: Any, reason: str) -> NoReturn:
         raise TransitionNotAllowed(_message(self.field, source, target, reason))
 
 

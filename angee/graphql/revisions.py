@@ -49,7 +49,6 @@ def revisions(
         raise ImproperlyConfigured(f"revisions({surface_name(node)}) needs a RevisionMixin model")
     if not model.revisioned_fields:
         raise ImproperlyConfigured(f"revisions({surface_name(node)}) needs revisioned_fields")
-    _validate_revision_visibility(model)
 
     singular = name or model._meta.model_name
     cache_key = (model, singular)
@@ -152,8 +151,8 @@ def _revision_type(model: type[models.Model], singular: str) -> Any:
     return revision_type
 
 
-def _validate_revision_visibility(model: type[models.Model]) -> None:
-    """Fail before schema build when revision snapshots would bypass redaction."""
+def validate_revision_visibility(model: type[models.Model]) -> None:
+    """Fail during schema build when revision snapshots would bypass redaction."""
 
     assert_no_gated_read_fields(model, model.revisioned_fields, "revisioned_fields", "snapshots leak gated values")
 
