@@ -347,6 +347,26 @@ class EncryptedField(models.TextField):
         return self._angee_fernet
 
 
+# ``ImplClassField`` moved to ``angee.base.impl`` ("one impl owner"); historical
+# migrations (a preserved artifact) still import it from here. A lazy re-export
+# keeps them loadable without a top-level import cycle (``impl`` imports
+# ``enum_member_for`` from this module). New migrations deconstruct through the
+# live class, so they carry the canonical ``angee.base.impl`` path and no drift
+# appears — this alias serves only the frozen files.
+_RELOCATED = {"ImplClassField": "angee.base.impl"}
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve a field class that moved to another base module (PEP 562)."""
+
+    module_path = _RELOCATED.get(name)
+    if module_path is not None:
+        from importlib import import_module
+
+        return getattr(import_module(module_path), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 def enum_member_for(choices_enum: Any, value: Any) -> Any | None:
     """Return the enum member represented by ``value`` or ``None`` when unknown."""
 
