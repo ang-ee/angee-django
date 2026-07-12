@@ -4,7 +4,8 @@ Each tool runs the same actor-scoped GraphQL operation a browser would (the
 Hasura-shaped notes resource on the ``public`` schema bucket), so strawberry's
 ``RebacManager`` scoping and the Angee write backend do the authorization. The
 create tool explicitly requires a user actor before GraphQL execution because the
-note owner relation is the ``created_by`` user FK. The
+product policy still makes note ownership a human-user action. Agent service
+accounts now make relaxing that gate possible as a future product decision. The
 :mod:`angee.mcp.graphql` engine derives each tool's input schema, response projection,
 and operation document from the schema; this module only declares which operations to
 expose and how to project them. ids are the public ``sqid``; fields are snake_case.

@@ -14,6 +14,7 @@ import asyncio
 import json
 from typing import Any
 
+from asgiref.sync import sync_to_async
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
@@ -21,6 +22,7 @@ from django.test import TransactionTestCase, override_settings
 from rebac import SubjectRef, system_context, to_subject_ref
 
 from angee.integrate.credentials import CredentialKind
+from angee.mcp.graphql import GraphQLTool, register_graphql_tools
 from angee.mcp.server import MOUNT_PATH, mcp_app, mcp_server
 
 Agent = apps.get_model("agents", "Agent")
@@ -237,16 +239,57 @@ class AgentNotesMCPServerTests(MCPStreamableHTTPMixin, TransactionTestCase):
             agent.mark_provisioning()
             agent.mark_provisioned(workspace="ws-notes-agent", service="svc-notes-agent")
             agent.mcp_servers.add(server)
+            self.agent_id = agent.pk
+            self.agent_user_id = agent.user_id
             self.note_count = Note.objects.count()
             self.page_sqid = str(Page.objects.get(title="Getting Started").sqid)
 
+    def test_agent_bearer_write_stamps_service_user(self) -> None:
+        """A permitted agent write stamps audit FKs with the agent's service user."""
+
+        asyncio.run(self._agent_write_attribution_scenario())
+
     def test_agent_bearer_reaches_tools_but_notes_create_is_denied(self) -> None:
-        """Agent MCP identity reaches tool bodies but cannot create unattributable notes."""
+        """Agent MCP identity reaches tool bodies but the product create gate stays user-only."""
 
         asyncio.run(self._agent_denial_scenario())
         with system_context(reason="test-agent-mcp-no-orphan"):
             self.assertEqual(Note.objects.count(), self.note_count)
             self.assertFalse(Note.objects.filter(title="Agent orphan").exists())
+
+    async def _agent_write_attribution_scenario(self) -> None:
+        """Run a test-only create tool that proves agent attribution can work."""
+
+        register_graphql_tools(
+            mcp_server(),
+            [
+                GraphQLTool(
+                    operation="insert_notes_one",
+                    name="create_note_as_agent_test",
+                    fields=("sqid", "title", "created_by", "created_by_label"),
+                    flatten="object",
+                    description="Test-only note create without the product user-actor gate.",
+                )
+            ],
+        )
+        app = mcp_app()
+        async with app.router.lifespan_context(app):
+            created = await self._tool(
+                "create_note_as_agent_test",
+                {"title": "Agent attributed", "body": "service owner", "tags": []},
+            )
+        self.assertEqual(created["title"], "Agent attributed")
+        self.assertEqual(created["created_by_label"], "Notes Agent")
+        created_by_id, updated_by_id = await sync_to_async(self._note_audit_user_ids)(created["sqid"])
+        self.assertEqual(created_by_id, self.agent_user_id)
+        self.assertEqual(updated_by_id, self.agent_user_id)
+
+    def _note_audit_user_ids(self, sqid: str) -> tuple[int | None, int | None]:
+        """Return audit FK ids for a note under the system attribution context."""
+
+        with system_context(reason="test-agent-mcp-attribution"):
+            note = Note.objects.get(sqid=sqid)
+        return note.created_by_id, note.updated_by_id
 
     async def _agent_denial_scenario(self) -> None:
         """Run the real transport with the real agents verifier."""
