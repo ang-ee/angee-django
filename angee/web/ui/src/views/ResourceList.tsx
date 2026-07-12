@@ -986,24 +986,30 @@ function ListStateProbe<TRow extends Row>({
     />
   );
   return (
-    <div hidden aria-hidden="true">
-      {navigationScope ? (
-        <ResourceViewProvider
-          key={navigationScopeKey(navigationScope)}
-          scope="local"
-          resource={resource}
-          initialState={{
-            filter: navigationScope.filter ?? {},
-            page: navigationScope.page,
-            pageSize: navigationScope.pageSize,
-          }}
-        >
-          {content}
-        </ResourceViewProvider>
-      ) : (
-        content
-      )}
-    </div>
+    // The probe exists only to keep the list's state callbacks alive off-screen;
+    // clearing the band host keeps its ControlBand from portaling OUT of this
+    // hidden subtree into the page chrome (a portal ignores a hidden ancestor),
+    // which stacked a phantom filter/group bar above every open record.
+    <ControlBandProvider host={undefined}>
+      <div hidden aria-hidden="true">
+        {navigationScope ? (
+          <ResourceViewProvider
+            key={navigationScopeKey(navigationScope)}
+            scope="local"
+            resource={resource}
+            initialState={{
+              filter: navigationScope.filter ?? {},
+              page: navigationScope.page,
+              pageSize: navigationScope.pageSize,
+            }}
+          >
+            {content}
+          </ResourceViewProvider>
+        ) : (
+          content
+        )}
+      </div>
+    </ControlBandProvider>
   );
 }
 

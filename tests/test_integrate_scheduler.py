@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -308,6 +309,64 @@ def test_bridge_is_syncing_uses_live_lock_state(scheduler_tables: None) -> None:
             assert second_acquired is False
 
     assert bridge.is_syncing is False
+
+
+@contextmanager
+def _cross_process_locks() -> Iterator[None]:
+    """Report the lock backend as cross-process for one assertion block.
+
+    The suite's LocalLockBackend is process-local by design; the reconciliation
+    under test only engages against a backend whose locks other processes can
+    observe (Postgres advisory locks in deployment).
+    """
+
+    import angee.integrate.models as integrate_models
+
+    original = integrate_models.task_locks_are_cross_process
+    integrate_models.task_locks_are_cross_process = lambda: True
+    try:
+        yield
+    finally:
+        integrate_models.task_locks_are_cross_process = original
+
+
+@pytest.mark.django_db(transaction=True)
+def test_effective_sync_stage_reconciles_stale_records_against_the_lock(scheduler_tables: None) -> None:
+    """A live-ish persisted stage without the live lock reads as FAILED.
+
+    The persisted ``sync_stage`` is a progress report a crashed worker leaves
+    stale; the effective projection trusts the advisory lock instead, so the UI
+    never shows a phantom "syncing". ``queued`` legitimately holds no lock (the
+    task has not started) and passes through, as do the terminal stages. The
+    reconciliation only applies when the lock backend is cross-process — a
+    process-local backend (this suite's) cannot see a worker's lock, so the
+    column is trusted as-is there.
+    """
+
+    del scheduler_tables
+    with system_context(reason="test integrate scheduler setup"):
+        bridge = make_integration("stale-stage", model=SchedulerBridge)
+
+        # The suite's LocalLockBackend is process-local: no reconciliation.
+        bridge.sync_stage = bridge.SyncStage.SYNCING
+        assert bridge.effective_sync_stage == bridge.SyncStage.SYNCING
+
+    with _cross_process_locks():
+        bridge.sync_stage = bridge.SyncStage.SYNCING
+        assert bridge.effective_sync_stage == bridge.SyncStage.FAILED
+        with bridge_advisory_lock(bridge) as acquired:
+            assert acquired is True
+            assert bridge.effective_sync_stage == bridge.SyncStage.SYNCING
+        bridge.sync_stage = bridge.SyncStage.DISCOVERING
+        assert bridge.effective_sync_stage == bridge.SyncStage.FAILED
+        for stage in (
+            bridge.SyncStage.IDLE,
+            bridge.SyncStage.QUEUED,
+            bridge.SyncStage.COMPLETED,
+            bridge.SyncStage.FAILED,
+        ):
+            bridge.sync_stage = stage
+            assert bridge.effective_sync_stage == stage
 
 
 @pytest.mark.django_db(transaction=True)

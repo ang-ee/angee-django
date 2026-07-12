@@ -32,8 +32,8 @@ from angee.messaging_integrate_imap.parser import (
 )
 from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
 from tests.test_messaging import (
-    Handle,
     MESSAGING_TEST_MODELS,
+    Handle,
     Message,
     Part,
     Participant,
@@ -237,6 +237,27 @@ def test_body_parts_carry_roles_in_the_parsed_tree() -> None:
         ("body", "Reply here."),
         ("quoted", "Quoted line."),
         ("signature", "Sig"),
+    ]
+
+
+def test_signature_without_delimiter_lands_as_signature_part() -> None:
+    """A salutation-tail signature with no RFC 3676 ``--`` line still gets the role."""
+
+    raw = _eml(body="Deal confirmed for Thursday.\n\nBest regards,\nAda Lovelace\n")
+    body = _parse(raw).body
+    assert [(child.role, child.text) for child in body.children] == [
+        ("body", "Deal confirmed for Thursday."),
+        ("signature", "Best regards,\nAda Lovelace"),
+    ]
+
+
+def test_corporate_disclaimer_maps_to_signature_role() -> None:
+    """A trailing corporate disclaimer paragraph lands with the signature role."""
+
+    text = "Numbers attached.\n\nDisclaimer: This email and any attachments are confidential.\n"
+    assert split_plain_text(text) == [
+        ("body", "Numbers attached."),
+        ("signature", "Disclaimer: This email and any attachments are confidential."),
     ]
 
 
@@ -986,6 +1007,52 @@ def _wire_fake(monkeypatch: pytest.MonkeyPatch, account: FakeImapAccount) -> Non
 
 
 @pytest.mark.django_db(transaction=True)
+def test_channel_sync_partitions_mailboxes(
+    imap_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mailboxes are the partition units and a partition drain stays in its lane.
+
+    The threaded fan-out itself is Postgres-only (`Channel._sync_parallelism`
+    pins other vendors serial — SQLite cannot take concurrent writers), so this
+    exercises the partition contract single-threaded: enumeration, the
+    per-partition plan filter, the row-locked cursor-slice merge, and the serial
+    fallback landing every mailbox's mail with a merged cursor.
+    """
+
+    del imap_tables
+    account = FakeImapAccount(
+        {
+            "INBOX": _folder(_eml(message_id="<in-1@x>", subject="One", body="Inbox body\n")),
+            "Archive": _folder(_eml(message_id="<ar-1@x>", subject="Two", body="Archive body\n")),
+        }
+    )
+    _wire_fake(monkeypatch, account)
+    channel = _imap_channel(sync_parallelism=2, own_addresses=["ada@example.com"])
+
+    assert set(channel.backend.sync_partitions()) == {"INBOX", "Archive"}
+
+    with system_context(reason="test imap partition drain"):
+        # One partition drained in isolation touches only its own mailbox and
+        # persists only its own cursor slice.
+        landed_archive = channel._drain_partition("Archive")
+        channel.refresh_from_db()
+        assert landed_archive == 1
+        assert set(channel.cursor["mailboxes"]) == {"Archive"}
+
+        # The full sync (serial on SQLite) still lands the rest and merges the
+        # INBOX watermark beside the already-persisted Archive slice.
+        landed = channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC))
+
+    assert landed == 1
+    assert Message._base_manager.count() == 2
+    channel.refresh_from_db()
+    mailboxes = channel.cursor["mailboxes"]
+    assert set(mailboxes) == {"INBOX", "Archive"}
+    assert all(int(entry["last_uid"]) >= 1 for entry in mailboxes.values())
+
+
+@pytest.mark.django_db(transaction=True)
 def test_channel_sync_preserves_overlong_message_id(
     imap_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -1132,9 +1199,13 @@ def test_channel_sync_lands_threads_parts_and_attachments(
         (part.role, part.fragment.text)
         for part in Part._base_manager.select_related("fragment").filter(message=reply, fragment__isnull=False)
     }
+    # The subject rides a sparse TITLE part beside the body roles.
+    assert (Part.PartRole.TITLE, "Re: Plans") in reply_roles
     assert (Part.PartRole.QUOTED, "Are we still on for Thursday?") in reply_roles
     assert (Part.PartRole.SIGNATURE, "Bob") in reply_roles
-    root_body = Part._base_manager.select_related("fragment").get(message=root, fragment__isnull=False)
+    root_body = Part._base_manager.select_related("fragment").get(
+        message=root, role=Part.PartRole.BODY, fragment__isnull=False
+    )
     # The stripped quoted paragraph re-used the root body's content-addressed fragment.
     quoted = Part._base_manager.select_related("fragment").get(message=reply, role=Part.PartRole.QUOTED)
     assert quoted.fragment_id == root_body.fragment_id
@@ -1161,6 +1232,109 @@ def test_channel_sync_lands_threads_parts_and_attachments(
     assert channel.sync_progress["details"]["batch_size"] == 1
     assert channel.sync_progress["details"]["landed"] == 3
     assert channel.next_sync_at is not None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_attributed_quote_reuses_the_original_body_fragment(
+    imap_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fully library-segmented reply keeps the content-addressed quote link.
+
+    Attribution header, marker-quoted paragraph, and a salutation signature (no
+    ``--`` delimiter): the stripped quoted paragraph must hash to the same
+    Fragment row as the root message's body after one channel sync.
+    """
+
+    del imap_tables
+    reply_body = (
+        "Yes, confirmed!\n"
+        "\n"
+        "On Thu, Jul 2, 2026 Ada wrote:\n"
+        "> Are we still on for Thursday?\n"
+        "\n"
+        "Best regards,\n"
+        "Bob\n"
+    )
+    account = FakeImapAccount(
+        {
+            "INBOX": _folder(
+                _eml(message_id="<root@x>", subject="Plans", body="Are we still on for Thursday?\n"),
+                _eml(
+                    message_id="<reply@x>",
+                    subject="Re: Plans",
+                    sender="Bob <bob@example.com>",
+                    to="ada@example.com",
+                    extra_headers="In-Reply-To: <root@x>\r\nReferences: <root@x>",
+                    body=reply_body,
+                ),
+            )
+        }
+    )
+    _wire_fake(monkeypatch, account)
+    channel = _imap_channel(batch_size=2)
+
+    with system_context(reason="test imap attributed quote"):
+        landed = channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC))
+
+    assert landed == 2
+    root = Message._base_manager.get(external_id="root@x")
+    reply = Message._base_manager.get(external_id="reply@x")
+    reply_parts = {
+        (part.role, part.fragment.text)
+        for part in Part._base_manager.select_related("fragment").filter(message=reply, fragment__isnull=False)
+    }
+    assert (Part.PartRole.BODY, "Yes, confirmed!") in reply_parts
+    assert (Part.PartRole.QUOTED, "On Thu, Jul 2, 2026 Ada wrote:") in reply_parts
+    assert (Part.PartRole.QUOTED, "Are we still on for Thursday?") in reply_parts
+    assert (Part.PartRole.SIGNATURE, "Best regards,\nBob") in reply_parts
+    root_body = Part._base_manager.select_related("fragment").get(
+        message=root, role=Part.PartRole.BODY, fragment__isnull=False
+    )
+    quoted = Part._base_manager.get(
+        message=reply, role=Part.PartRole.QUOTED, fragment__text="Are we still on for Thursday?"
+    )
+    assert quoted.fragment_id == root_body.fragment_id
+
+
+@pytest.mark.django_db(transaction=True)
+def test_channel_sync_dedups_retained_header_fragments(
+    imap_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A List-Id lands as a lowercased HEADER part; the shared value is ONE fragment.
+
+    Retained envelope headers are content-addressed like body text, so a mailing
+    list's ``List-Id`` repeated across the whole list dedups to a single fragment
+    row referenced by each message's HEADER part.
+    """
+
+    del imap_tables
+    list_id = "Dev list <dev.example.com>"
+    account = FakeImapAccount(
+        {
+            "INBOX": _folder(
+                _eml(message_id="<l1@x>", subject="News 1", extra_headers=f"List-Id: {list_id}"),
+                _eml(message_id="<l2@x>", subject="News 2", extra_headers=f"List-Id: {list_id}"),
+            )
+        }
+    )
+    _wire_fake(monkeypatch, account)
+    channel = _imap_channel()
+
+    with system_context(reason="test imap header fragments"):
+        assert channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC)) == 2
+
+    headers = list(
+        Part._base_manager.select_related("fragment")
+        .filter(role=Part.PartRole.HEADER)
+        .order_by("message_id")
+    )
+    assert [part.name for part in headers] == ["list-id", "list-id"]
+    assert headers[0].fragment.text == list_id
+    assert headers[0].fragment.kind == "header"
+    # Both messages point at the same content-addressed fragment row.
+    assert headers[0].fragment_id == headers[1].fragment_id
 
 
 @pytest.mark.django_db(transaction=True)

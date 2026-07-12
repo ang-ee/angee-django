@@ -8,9 +8,13 @@ module only maps its ``EmailMessage`` onto :class:`~angee.messaging.backends
 - ``external_id`` is the RFC 5322 Message-ID; a message without one gets a stable
   ``sha256:`` digest of its raw bytes, so ID-less mail never collapses onto one row
   and never duplicates across re-syncs.
-- ``text/plain`` bodies split into per-paragraph body/quoted/signature parts with
-  quote markers stripped, so a reply's quoted paragraphs content-address to the
-  same ``Fragment`` rows as the original body and the quotation graph links them.
+- ``text/plain`` bodies split into per-paragraph body/quoted/signature parts.
+  The ``mail-parser-reply`` library owns the segmentation — reply boundaries at
+  attribution headers ("On …, X wrote:", Outlook From:-blocks), signatures with
+  or without the RFC 3676 ``--`` delimiter, trailing disclaimers — while quote
+  markers are stripped locally, so a reply's quoted paragraphs content-address
+  to the same ``Fragment`` rows as the original body and the quotation graph
+  links them.
 - an HTML-only message derives a plain body (so previews and search see text) and
   keeps the original HTML verbatim under a ``multipart/alternative`` container.
 - attachments keep disposition and Content-ID, so inline images stay ``inline`` +
@@ -38,6 +42,8 @@ from email.utils import getaddresses, parsedate_to_datetime
 from html.parser import HTMLParser
 from typing import Any, cast
 
+from mailparser_reply import EmailReplyParser
+
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient
 from angee.parties.models import Handle
 
@@ -47,14 +53,33 @@ _EMAIL_PLATFORM = str(Handle.Platform.EMAIL)
 _MESSAGE_ID_RE = re.compile(r"<([^<>]+)>")
 _QUOTE_MARKER_RE = re.compile(r"^\s*(?:>\s?)+")
 _FILENAME_MAX_LENGTH = 512
-# An attribution line introduces the quote that follows it ("On …, X wrote:");
-# it is only treated as quoted when a quote line immediately follows, so an
-# ordinary sentence ending in a colon stays body text.
-_ATTRIBUTION_RE = re.compile(r"^\s*(?:on|le|am|el|il)\b.*:\s*$", re.IGNORECASE)
+# The RFC 3676 "-- " (or Outlook "__…") delimiter line that opens a signature
+# match; dropped from the signature part so only the signature text lands.
+_SIGNATURE_DELIMITER_RE = re.compile(r"[-_]{2,}\s*")
 _UNSAFE_FILENAME_RE = re.compile(r"[/\\\x00]")
+
+# mail-parser-reply owns plain-text segmentation (docs/stack.md): reply
+# boundaries at attribution headers, signature and disclaimer detection. The
+# language set covers what the previous hand-rolled attribution heuristic
+# matched (en/fr/de/es/it) so non-English "On …, X wrote:" headers keep
+# classifying as reply boundaries.
+_REPLY_PARSER = EmailReplyParser(languages=["en", "fr", "de", "es", "it"])
 
 # Envelope roles mapped from the address headers that carry them.
 _RECIPIENT_HEADERS = (("To", "to"), ("Cc", "cc"), ("Bcc", "bcc"))
+
+# Headers retained as standalone, queryable HEADER parts (fragment-backed, so a
+# List-Id shared by a whole mailing list is one row). Everything else either has a
+# better owner (addresses → Participant, Message-ID/References → identity/threading,
+# Subject → the TITLE part, Date → sent_at, Content-* → the part tree) or is
+# transport diagnostics that stay in the lossless ``metadata["headers"]`` envelope.
+_RETAINED_HEADERS = (
+    "list-id",
+    "list-unsubscribe",
+    "reply-to",
+    "auto-submitted",
+    "precedence",
+)
 
 
 def parse_message(
@@ -102,6 +127,7 @@ def parse_message(
         platform=_EMAIL_PLATFORM,
         direction=_direction(sender, recipients, own_addresses),
         subject=str(message.get("Subject", "") or "").strip(),
+        headers=_retained_headers(message),
         sender=sender,
         recipients=recipients,
         sent_at=_sent_at(message, internal_date),
@@ -174,57 +200,36 @@ def synthetic_external_id(raw: bytes) -> str:
 def split_plain_text(text: str) -> list[tuple[str, str]]:
     """Split plain text into ordered ``(role, paragraph)`` segments.
 
-    Roles are the messaging part vocabulary: ``body`` paragraphs, ``quoted``
-    paragraphs (markers stripped to any depth, so the text content-addresses to
-    the original body's fragments), and one trailing ``signature`` block below the
-    RFC 3676 ``-- `` delimiter. An attribution line immediately preceding a quote
-    run joins the quote. Paragraphs are blank-line separated; document order is
-    preserved so the first body paragraph stays the preview.
+    ``mail-parser-reply`` owns the segmentation: it splits the text into replies
+    at the attribution headers it recognizes and detects each reply's signature
+    (the RFC 3676 ``-- `` delimiter or a salutation tail like "Best regards,")
+    and trailing corporate disclaimers. Roles are the messaging part vocabulary:
+    ``body`` paragraphs from the newest reply, ``quoted`` paragraphs for older
+    replies and marker-quoted runs (attribution line included, markers stripped
+    to any depth, so the text content-addresses to the original body's
+    fragments), and ``signature`` for signatures and disclaimers alike.
+    Paragraphs are blank-line separated; document order is preserved so the
+    first body paragraph stays the preview.
     """
 
-    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    body_lines, signature = _split_signature(lines)
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    if not normalized.strip():
+        return []
     segments: list[tuple[str, str]] = []
-    run_role = ""
-    run_lines: list[str] = []
-
-    def flush() -> None:
-        if not run_lines:
-            return
-        content = "\n".join(run_lines)
-        if run_role == "quoted":
-            content = "\n".join(_QUOTE_MARKER_RE.sub("", line) for line in run_lines)
-        segments.extend((run_role, paragraph) for paragraph in _paragraphs(content))
-
-    index = 0
-    while index < len(body_lines):
-        line = body_lines[index]
-        quoted = bool(_QUOTE_MARKER_RE.match(line))
-        if (
-            not quoted
-            and _ATTRIBUTION_RE.match(line)
-            and index + 1 < len(body_lines)
-            and _QUOTE_MARKER_RE.match(body_lines[index + 1])
-        ):
-            # The attribution introduces the quote but stays its own segment —
-            # glued to the first quoted paragraph it would break the
-            # content-addressed match with the original body text.
-            flush()
-            run_role = "quoted"
-            run_lines = []
-            segments.append(("quoted", line.strip()))
-            index += 1
-            continue
-        role = "quoted" if quoted else "body"
-        if role != run_role:
-            flush()
-            run_role = role
-            run_lines = []
-        run_lines.append(line)
-        index += 1
-    flush()
-    if signature:
-        segments.append(("signature", signature))
+    for index, reply in enumerate(_REPLY_PARSER.read(normalized).replies):
+        # The attribution header introduces the quote but stays its own segment —
+        # glued to the first quoted paragraph it would break the
+        # content-addressed match with the original body text.
+        header = _strip_quote_markers(reply.headers or "")
+        if header:
+            segments.append(("quoted", header))
+        segments.extend(_body_segments(reply.body, quoted=index > 0))
+        signature = _signature_text(reply.signatures or "", reply.disclaimers)
+        if signature:
+            segments.append(("signature", signature))
+        segments.extend(
+            ("signature", _strip_quote_markers(disclaimer)) for disclaimer in reply.disclaimers if disclaimer.strip()
+        )
     return segments
 
 
@@ -377,6 +382,26 @@ def _aware(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _retained_headers(message: EmailMessage) -> tuple[tuple[str, str], ...]:
+    """Return the allow-listed headers as ``(name, value)`` pairs, document order.
+
+    A multi-valued header (a forwarded chain's repeated ``Reply-To``) yields one
+    pair per value; an undecodable value is skipped the same way the lossless
+    envelope skips it.
+    """
+
+    pairs: list[tuple[str, str]] = []
+    for name in _RETAINED_HEADERS:
+        for value in message.get_all(name, ()):
+            try:
+                text = str(value).strip()
+            except Exception:  # noqa: BLE001 — one undecodable header must not drop the message.
+                continue
+            if text:
+                pairs.append((name, text))
+    return tuple(pairs)
 
 
 def _metadata(
@@ -597,14 +622,59 @@ def _wrap_first_html(part: ParsedPart) -> tuple[ParsedPart, bool]:
 # --- plain-text segmentation helpers ---
 
 
-def _split_signature(lines: list[str]) -> tuple[list[str], str]:
-    """Split off the RFC 3676 signature block below the last ``-- `` delimiter."""
+def _body_segments(body: str, *, quoted: bool) -> list[tuple[str, str]]:
+    """Classify one reply body's paragraphs as ``body`` or ``quoted``.
 
-    for index in range(len(lines) - 1, -1, -1):
-        if lines[index].strip() == "--":
-            signature = "\n".join(lines[index + 1 :]).strip()
-            return lines[:index], signature
-    return lines, ""
+    The reply parser leaves unattributed ``>`` blocks inline, so runs of
+    marker-quoted lines become ``quoted`` with the markers stripped — that keeps
+    the paragraph text byte-identical to the original message's body. A
+    non-first reply is quoted wholesale: an Outlook-style bottom quote carries
+    no markers at all.
+    """
+
+    segments: list[tuple[str, str]] = []
+    run_role = ""
+    run_lines: list[str] = []
+
+    def flush() -> None:
+        if not run_lines:
+            return
+        content = "\n".join(run_lines)
+        if run_role == "quoted":
+            content = _strip_quote_markers(content)
+        segments.extend((run_role, paragraph) for paragraph in _paragraphs(content))
+
+    for line in body.split("\n"):
+        role = "quoted" if quoted or _QUOTE_MARKER_RE.match(line) else "body"
+        if role != run_role:
+            flush()
+            run_role = role
+            run_lines = []
+        run_lines.append(line)
+    flush()
+    return segments
+
+
+def _strip_quote_markers(text: str) -> str:
+    """Strip leading ``>`` markers, to any depth, from every line of ``text``."""
+
+    return "\n".join(_QUOTE_MARKER_RE.sub("", line) for line in text.split("\n")).strip()
+
+
+def _signature_text(signature: str, disclaimers: list[str]) -> str:
+    """Return the signature block without its delimiter line or embedded disclaimers.
+
+    The library's signature match runs from the delimiter line to the end of the
+    reply, so a disclaimer below the signature rides inside it; it is removed
+    here (mirroring ``EmailReply.body``) because it lands as its own segment.
+    """
+
+    for disclaimer in disclaimers:
+        signature = signature.replace(disclaimer, "")
+    lines = _strip_quote_markers(signature).split("\n")
+    if lines and _SIGNATURE_DELIMITER_RE.fullmatch(lines[0]):
+        lines = lines[1:]
+    return "\n".join(lines).strip()
 
 
 def _paragraphs(text: str) -> list[str]:

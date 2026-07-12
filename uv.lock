@@ -581,6 +581,7 @@ dependencies = [
     { name = "httpcore" },
     { name = "httpx" },
     { name = "imapclient" },
+    { name = "mail-parser-reply" },
     { name = "markdown-it-py" },
     { name = "mcp" },
     { name = "openai" },
@@ -638,6 +639,7 @@ requires-dist = [
     { name = "httpcore", specifier = ">=1.0,<2" },
     { name = "httpx", specifier = ">=0.28.1,<0.29" },
     { name = "imapclient", specifier = ">=3.1.0" },
+    { name = "mail-parser-reply", specifier = ">=1.36" },
     { name = "markdown-it-py", specifier = ">=4.2" },
     { name = "mcp", specifier = ">=1.2" },
     { name = "openai", specifier = ">=2.43.0" },
@@ -1243,6 +1245,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/15/1f/dc6771a52592a4451be6effa200cbfc9cec61e4393d3033d81a9d307961d/librt-0.11.0-cp314-cp314t-win32.whl", hash = "sha256:2b481d846ac894c4e8403c5fd0e87c5d11d6499e404b474602508a224ff531c8", size = 103562, upload-time = "2026-05-10T18:17:03.99Z" },
     { url = "https://files.pythonhosted.org/packages/62/4a/7d1415567027286a75ba1093ec4aca11f073e0f559c530cf3e0a757ad55c/librt-0.11.0-cp314-cp314t-win_amd64.whl", hash = "sha256:28edb433edde181112a908c78907af28f964eabc15f4dd16c9d66c834302677c", size = 124327, upload-time = "2026-05-10T18:17:05.465Z" },
     { url = "https://files.pythonhosted.org/packages/ce/62/b40b382fa0c66fee1478073eb8db352a4a6beda4a1adccf1df911d8c289c/librt-0.11.0-cp314-cp314t-win_arm64.whl", hash = "sha256:dee008f20b542e3cd162ba338a7f9ec0f6d23d395f66fe8aeeec3c9d067ea253", size = 102572, upload-time = "2026-05-10T18:17:06.809Z" },
+]
+
+[[package]]
+name = "mail-parser-reply"
+version = "1.36"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9d/8b/fc0eaa365f9509e3761beb933d5964eec3f133225c3d081290a511395464/mail_parser_reply-1.36.tar.gz", hash = "sha256:7f451c583c6c599bc933531a6f783fe4d1a26447ebd40382678417dbb92e100e", size = 14412, upload-time = "2025-12-01T15:15:40.731Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0f/5d/99bd9fb9556c54a66860ead493b9d9d77cc8d7a2c52aa76d995c50b73373/mail_parser_reply-1.36-py3-none-any.whl", hash = "sha256:81395a4d8a0858509c875e6bbb7b004d53d70c7cd92204fe34a9926c55e4ef03", size = 12279, upload-time = "2025-12-01T15:15:39.542Z" },
 ]
 
 [[package]]

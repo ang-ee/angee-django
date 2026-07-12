@@ -39,7 +39,8 @@ Dependency changes must update this file in the same change.
 | django-zed-rebac | REBAC engine, actor scoping, relationship storage, local and SpiceDB-compatible backends | Per-addon schema merge, reserved roles, actor resolver |
 | django-axes | Login failure throttling at Django's `authenticate()`/auth-backend signal seam | IAM composes the app, standalone backend, and middleware so password GraphQL login stays a thin `authenticate(request=...)` caller |
 | django-sqids | Opaque external IDs | `SqidMixin`, `SqidField` (NULL-safe decode on joins), GraphQL boundary scalar |
-| django-simple-history | Shadow history tables and revert | `HistoryMixin` marker |
+| django-simple-history | Shadow history tables and revert | `HistoryMixin` marker (knowledge Vault/Page; messaging edits are in-row `edit_history` + immutable fragments instead) |
+| django.contrib.postgres | Postgres full-text search (`SearchVectorField`, `GinIndex`, `SearchQuery`) | `messaging.Fragment.search` — stamped once at fragment creation (content-addressed rows are immutable, so no trigger/queue); dedup indexes each unique text exactly once. Postgres-only: the SQLite test backend leaves the vector NULL |
 | django-reversion | Versioned field snapshots and revert | `RevisionMixin` convenience API, composer-emitted model registration |
 | cryptography | Encryption primitives | `EncryptedField` (Fernet at rest, secret-by-type) |
 | django-import-export + tablib | Resource import/export resources, tabular formats, row cleaning, and row results | Tiered manifests, xref ledger, and frozen-tier policy |
@@ -57,6 +58,7 @@ Dependency changes must update this file in the same change.
 | python-magic | MIME detection from file bytes | Storage finalize detection (requires the system libmagic) |
 | vobject | vCard/iCalendar parse + serialise | `parties_integrate_carddav` parses CardDAV vCards into parties/handles/addresses (and serialises for round-trip) |
 | IMAPClient | IMAP4rev1 protocol client — TLS/STARTTLS, LOGIN/XOAUTH2 auth, modified-UTF-7 folder names, SPECIAL-USE flags, typed UID SEARCH/FETCH responses | `messaging_integrate_imap` drives incremental mailbox sync over it (per-mailbox UIDVALIDITY/UIDNEXT cursors on the channel bridge); MIME parsing stays on the stdlib `email` package |
+| mail-parser-reply | Email body segmentation — splits a plain-text body into replies at multi-language attribution headers ("On …, X wrote:", Outlook From:-blocks, "-----Original Message-----") and detects signatures (the RFC 3676 `--` delimiter and salutation tails like "Best regards,") and trailing disclaimers | `messaging_integrate_imap`'s `split_plain_text` drives it (`languages=["en","fr","de","es","it"]`) to role-tag body/quoted/signature parts; quote-marker stripping stays local so a quoted paragraph content-addresses to the original body's `Fragment` rows |
 | markdown-it-py | CommonMark tokenizer with source line spans (block token `.map`) | `knowledge` slices doc sections by heading without re-rendering — the `MarkdownPage` structure methods (`parse_outline`/`outline`, `section_range`, `spliced_section`, `spliced_unique`) shared by the `outline` read field and the section-anchored patch write |
 | uv | Python dependency resolution and workspaces | Workspace layout |
 

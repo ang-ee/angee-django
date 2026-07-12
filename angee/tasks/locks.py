@@ -46,6 +46,14 @@ class LockBackend(Protocol):
     def is_held(self, key: LockKey) -> bool:
         """Return whether ``key`` is currently held."""
 
+    cross_process: bool
+    """Whether another OS process can observe this backend's locks.
+
+    A process-local backend (the SQLite floor) makes ``is_held`` blind to a
+    worker's locks, so callers deriving liveness from a lock must not do so
+    unless this is true.
+    """
+
 
 @dataclass
 class _LocalLockHandle:
@@ -64,6 +72,8 @@ class _LocalLockHandle:
 
 class LocalLockBackend:
     """In-process lock backend for tests and SQLite development."""
+
+    cross_process = False
 
     def __init__(self) -> None:
         """Create an empty local lock table."""
@@ -112,6 +122,8 @@ class _PostgresAdvisoryLockHandle:
 
 class PostgresAdvisoryLockBackend:
     """Postgres session-level advisory lock backend."""
+
+    cross_process = True
 
     def __init__(self, *, alias: str = DEFAULT_DB_ALIAS) -> None:
         """Store the Django database alias used for advisory locks."""
@@ -179,6 +191,16 @@ def task_lock(key: LockKey, *, timeout: timedelta | None = None) -> Iterator[boo
         yield True
     finally:
         handle.release()
+
+
+def task_locks_are_cross_process() -> bool:
+    """Return whether the active lock backend's locks are visible across processes.
+
+    A custom backend that omits the ``cross_process`` marker is treated as
+    process-local — the safe reading for liveness derivation.
+    """
+
+    return bool(getattr(get_lock_backend(), "cross_process", False))
 
 
 def task_lock_is_held(key: LockKey) -> bool:

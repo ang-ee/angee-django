@@ -21,7 +21,7 @@ export const READ_MODELS = [
 export const RecordMessageFields = graphql(`
   fragment RecordMessageFields on MessageType {
     id
-    subject
+    title
     preview
     direction
     status
@@ -91,12 +91,57 @@ export const RecordMessageFields = graphql(`
 `);
 
 // The channel conversation transcript reads the thread's messages straight off
-// the `messages` auto-CRUD resource — a static, server-paginated window ordered
-// newest-first so the transcript always shows the latest turn and pages older
-// messages in by growing `limit`. `messages_aggregate` reports the thread total
-// so the view knows when older messages remain. Only the fields a `ChatBubble`
-// transcript renders (sender, direction, body parts, attachments, reactions) are
-// selected — the record-feed capabilities/tracking/subtype payload is not needed.
+// the `messages` auto-CRUD resource — a fixed-size page ordered newest-first,
+// keyset-paginated on the `(sent_at, created_at)` cursor: "load older" passes the
+// oldest loaded row's timestamps instead of growing a re-fetched window, so a
+// million-message thread pages in constant work per fetch (the Zulip/Synapse
+// anchor-pagination shape, never OFFSET). `messages_aggregate` reports the thread
+// total so the view knows when older messages remain. Only the fields a
+// `ChatBubble` transcript renders are selected.
+export const TranscriptMessageFields = graphql(`
+  fragment TranscriptMessageFields on MessageType {
+    id
+    direction
+    title
+    preview
+    message_type
+    sent_at
+    created_at
+    sender {
+      id
+      display_name
+      value
+    }
+    parts {
+      role
+      fragment {
+        text
+      }
+      file {
+        id
+        filename
+        title
+        size_bytes
+        url
+        mime_type {
+          mime_type
+          label
+        }
+      }
+    }
+    reaction_groups {
+      reaction
+      count
+      self_reacted
+      handles {
+        id
+        display_name
+        value
+      }
+    }
+  }
+`);
+
 export const ThreadTranscriptDocument = graphql(`
   query MessagingThreadTranscript($threadId: String!, $limit: Int!) {
     messages(
@@ -104,50 +149,51 @@ export const ThreadTranscriptDocument = graphql(`
       order_by: [{ sent_at: desc }, { created_at: desc }]
       limit: $limit
     ) {
-      id
-      direction
-      subject
-      preview
-      message_type
-      sent_at
-      created_at
-      sender {
-        id
-        display_name
-        value
-      }
-      parts {
-        role
-        fragment {
-          text
-        }
-        file {
-          id
-          filename
-          title
-          size_bytes
-          url
-          mime_type {
-            mime_type
-            label
-          }
-        }
-      }
-      reaction_groups {
-        reaction
-        count
-        self_reacted
-        handles {
-          id
-          display_name
-          value
-        }
-      }
+      ...TranscriptMessageFields
     }
     messages_aggregate(where: { thread: { _eq: $threadId } }) {
       aggregate {
         count
       }
+    }
+  }
+`);
+
+// "Load older" keyset page: before the oldest loaded row's (sent_at,
+// created_at) cursor, boundary-INCLUSIVE on created_at — rows tying the anchor
+// on both timestamps are refetched and the client's id-keyed archive dedups
+// the overlap, so a tie at the page cut can never be skipped (ids are opaque
+// sqids, so they cannot serve as the third cursor key server-side). Constant
+// work per fetch however deep the history — never OFFSET, never a growing
+// re-fetched window.
+export const ThreadTranscriptOlderDocument = graphql(`
+  query MessagingThreadTranscriptOlder(
+    $threadId: String!
+    $limit: Int!
+    $beforeSentAt: DateTime!
+    $beforeCreatedAt: DateTime!
+  ) {
+    messages(
+      where: {
+        _and: [
+          { thread: { _eq: $threadId } }
+          {
+            _or: [
+              { sent_at: { _lt: $beforeSentAt } }
+              {
+                _and: [
+                  { sent_at: { _eq: $beforeSentAt } }
+                  { created_at: { _lte: $beforeCreatedAt } }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+      order_by: [{ sent_at: desc }, { created_at: desc }]
+      limit: $limit
+    ) {
+      ...TranscriptMessageFields
     }
   }
 `);
@@ -193,7 +239,9 @@ export const RecordThreadDocument = graphql(`
       error_code
       thread {
         id
-        subject
+        title {
+          text
+        }
         message_count
         last_message_at
       }
@@ -238,10 +286,8 @@ export const RecordThreadDocument = graphql(`
       attachment_count
       notifications {
         id
-        is_read
         notification_type
         notification_status
-        read_at
         message {
           id
           preview
@@ -284,7 +330,6 @@ export const PostRecordMessageDocument = graphql(`
     $recordId: ID!
     $body: String!
     $kind: String = "comment"
-    $subject: String = ""
     $parentMessageId: ID = null
     $attachmentIds: [ID!] = []
     $recipientUserIds: [ID!] = []
@@ -296,7 +341,6 @@ export const PostRecordMessageDocument = graphql(`
         record_id: $recordId
         body: $body
         kind: $kind
-        subject: $subject
         parent_message_id: $parentMessageId
         attachment_ids: $attachmentIds
         recipient_user_ids: $recipientUserIds
@@ -318,7 +362,9 @@ export const PostRecordMessageDocument = graphql(`
       }
       thread {
         id
-        subject
+        title {
+          text
+        }
         message_count
         last_message_at
       }
@@ -356,7 +402,9 @@ export const UpdateRecordMessageDocument = graphql(`
       }
       thread {
         id
-        subject
+        title {
+          text
+        }
         message_count
         last_message_at
       }
@@ -391,7 +439,9 @@ export const DeleteRecordMessageDocument = graphql(`
       attachment_count
       thread {
         id
-        subject
+        title {
+          text
+        }
         message_count
         last_message_at
       }
@@ -486,11 +536,6 @@ export const MarkRecordThreadReadDocument = graphql(`
       error_code
       unread_count
       needaction_count
-      notifications {
-        id
-        is_read
-        read_at
-      }
     }
   }
 `);
@@ -516,14 +561,11 @@ export const MarkRecordMessageDoneDocument = graphql(`
         id
         needaction
       }
-      notifications {
-        id
-        is_read
-        read_at
-      }
       thread {
         id
-        subject
+        title {
+          text
+        }
         message_count
         last_message_at
       }

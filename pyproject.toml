@@ -57,6 +57,7 @@ dependencies = [
   "httpcore>=1.0,<2",
   "httpx>=0.28.1,<0.29",
   "imapclient>=3.1.0",
+  "mail-parser-reply>=1.36",
 ]
 
 [project.optional-dependencies]

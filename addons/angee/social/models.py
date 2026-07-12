@@ -182,7 +182,7 @@ class Feed(Bridge):
         # Cross-post edges: pre-key every target from this fetch, then one query resolves
         # any referenced post not in the batch; the MessageEdge owner writes the edge
         # shape once (idempotent on the (src, dst, kind) key) — social only supplies the kind.
-        targets = self._resolve_relation_targets(landed, by_key)
+        targets = self._resolve_relation_targets(landed, by_key, channel_id=self.pk)
         for message, post in landed:
             for relation in post.relations:
                 target = targets.get((post.message.platform, relation.dst_external_id))
@@ -213,12 +213,14 @@ class Feed(Bridge):
         }
 
     @staticmethod
-    def _resolve_relation_targets(landed: list, by_key: dict) -> dict:
+    def _resolve_relation_targets(landed: list, by_key: dict, *, channel_id: Any) -> dict:
         """Key every cross-post target by ``(platform, external_id)``.
 
         Targets already landed in this fetch come from ``by_key``; any post referenced
-        but not in the batch is resolved in one ``external_id__in`` query per platform,
-        replacing the per-relation ``filter().first()`` fallback.
+        but not in the batch is resolved in one indexed ``with_external_ids`` query
+        per platform. Message identity is channel-scoped, so the same external id may
+        exist once per channel — rows from this feed's own channel win the key, and a
+        cross-channel copy is only the fallback.
         """
 
         message_model = apps.get_model("messaging", "Message")
@@ -230,7 +232,11 @@ class Feed(Bridge):
                 if key not in targets:
                     missing.setdefault(post.message.platform, set()).add(relation.dst_external_id)
         for platform, external_ids in missing.items():
-            for row in message_model.objects.filter(platform=platform, external_id__in=external_ids):
+            rows = list(
+                message_model.objects.with_external_ids(sorted(external_ids)).filter(platform=platform)
+            )
+            # Same-channel rows overwrite cross-channel fallbacks (they sort last).
+            for row in sorted(rows, key=lambda row: row.channel_id == channel_id):
                 targets[(platform, row.external_id)] = row
         return targets
 

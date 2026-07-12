@@ -25,7 +25,7 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import request_from_info
 from angee.iam.schema import UserType
-from angee.integrate.schema import BridgeSyncStatusMixin, IntegrationLabelMixin
+from angee.integrate.schema import BridgeSyncStatusMixin, IntegrationLabelMixin, IntegrationType
 from angee.messaging.managers import message_subtype_options
 from angee.messaging.models import ThreadedModelMixin
 from angee.parties.schema import HandleType
@@ -62,7 +62,6 @@ class ChannelType(IntegrationLabelMixin, BridgeSyncStatusMixin, AngeeNode):
     last_sync_completed_at: auto
     last_sync_items: auto
     last_sync_summary: strawberry.scalars.JSON
-    sync_stage: auto
     sync_error: auto
     sync_progress: strawberry.scalars.JSON
     created_at: auto
@@ -77,6 +76,18 @@ class FragmentType(AngeeNode):
     hash: auto
     text: auto
 
+    @strawberry.field(name="part_count")
+    def part_count(self) -> int:
+        """How many parts (across all messages) share this fragment — the dedup fact."""
+
+        return cast(Any, self).part_count()
+
+    @strawberry.field(name="message_count")
+    def message_count(self) -> int:
+        """How many distinct messages reference this fragment through their parts."""
+
+        return cast(Any, self).message_count()
+
 
 @strawberry_django.type(Part)
 class PartType(AngeeNode):
@@ -88,6 +99,7 @@ class PartType(AngeeNode):
     role: auto
     cid: auto
     name: auto
+    parent: "PartType | None"
     fragment: FragmentType | None
     file: FileType | None
     created_at: auto
@@ -151,7 +163,6 @@ class MessageType(AngeeNode):
     status: auto
     message_type: auto
     external_id: auto
-    subject: auto
     preview: auto
     sent_at: auto
     received_at: auto
@@ -159,12 +170,40 @@ class MessageType(AngeeNode):
     parent: "MessageType | None"
     subtype: MessageSubtypeType | None
     thread: "ThreadType | None"
-    channel: ChannelType | None
+    # The FK targets the Integration MTI parent (a messaging Channel or a social
+    # Feed both produce messages), so the projection is the parent type — a
+    # ChannelType declaration would crash resolving a Feed-ingested row.
+    channel: IntegrationType | None
     parts: list[PartType]
     tracking_values: list[TrackingValueType]
     participants: list[ParticipantType]
     created_at: auto
     updated_at: auto
+
+    @strawberry.field
+    def title(self) -> str:
+        """Return the message's title text — its ``TITLE`` part's fragment, or ``""``.
+
+        No optimizer prefetch hint here: a query that also selects ``parts`` makes
+        the optimizer build its own ``Prefetch("parts", …)``, and Django rejects a
+        second queryset for the same lookup. The model method rides an existing
+        parts prefetch when one is loaded and otherwise costs one indexed probe.
+        """
+
+        return cast(Any, self).title()
+
+    @strawberry.field
+    def edges(self) -> list["MessageEdgeType"]:
+        """Return this message's cross-message edges, both directions.
+
+        The fragment-derived quote graph plus social relations — the "how it
+        interconnects" read the content data view renders. Actor-scoped end to
+        end: the owner (``MessageEdgeManager.for_message``) keeps only edges
+        whose far endpoint the actor may read, because quote edges cross
+        channels by construction.
+        """
+
+        return cast(list["MessageEdgeType"], MessageEdge.objects.for_message(cast(Any, self)))
 
     @strawberry.field
     def reaction_groups(self, info: strawberry.Info) -> list[MessageReactionGroupType]:
@@ -180,12 +219,12 @@ class MessageType(AngeeNode):
 
     @strawberry.field
     def needaction(self, info: strawberry.Info) -> bool:
-        """Return whether the current user has unread action on this message."""
+        """Return whether this message sits past the current user's read receipt."""
 
         resolved = getattr(self, "_current_user_needaction", None)
         if resolved is not None:
             return bool(resolved)
-        return bool(ThreadNotification.objects.needaction_for_message(self, user=_request_user(info)))
+        return bool(ThreadFollower.objects.needaction_for_message(self, user=_request_user(info)))
 
     @strawberry_django.field(prefetch_related=["tracking_values"])
     def can_edit(self, info: strawberry.Info) -> bool:
@@ -219,10 +258,14 @@ class ThreadType(AngeeNode):
     platform: auto
     modality: auto
     visibility: auto
-    subject: auto
+    # Deliberate shape fork vs MessageType.title (a String): the thread's title
+    # IS a fragment pointer (grouping keys on it), so the projection exposes the
+    # content-addressed row; a message's title is derived text from its part.
+    title: FragmentType | None
     message_count: auto
     last_message_at: auto
-    channel: ChannelType | None
+    # Integration parent, same reason as MessageType.channel.
+    channel: IntegrationType | None
     messages: list[MessageType]
     participants: list[ParticipantType]
     created_at: auto
@@ -260,13 +303,14 @@ class ThreadAttachmentType(AngeeNode):
 
 @strawberry_django.type(ThreadFollower)
 class ThreadFollowerType(AngeeNode):
-    """GraphQL projection of a user following a record chatter thread."""
+    """GraphQL projection of a user's thread membership — policy plus read receipt."""
 
     thread: ThreadType
-    attachment: ThreadAttachmentType
+    attachment: ThreadAttachmentType | None
     user: UserType
     notification_policy: auto
     subtype_keys: strawberry.scalars.JSON
+    last_read_message: MessageType | None
     metadata: strawberry.scalars.JSON
     created_at: auto
     updated_at: auto
@@ -367,7 +411,7 @@ class AgendaActivityType(AngeeNode):
 
 @strawberry_django.type(ThreadNotification)
 class ThreadNotificationType(AngeeNode):
-    """GraphQL projection of a per-recipient chatter notification."""
+    """GraphQL projection of a per-recipient delivery row (read state lives on receipts)."""
 
     thread: ThreadType
     attachment: ThreadAttachmentType | None
@@ -376,8 +420,6 @@ class ThreadNotificationType(AngeeNode):
     user: UserType
     notification_type: auto
     notification_status: auto
-    is_read: auto
-    read_at: auto
     failure_type: auto
     failure_reason: auto
     metadata: strawberry.scalars.JSON
@@ -387,10 +429,13 @@ class ThreadNotificationType(AngeeNode):
 
 @strawberry_django.type(MessageEdge)
 class MessageEdgeType(AngeeNode):
-    """GraphQL projection of a cross-message edge."""
+    """GraphQL projection of a cross-message edge (quote/mention/crosspost/forward)."""
 
     kind: auto
     confidence: auto
+    src: "MessageType"
+    dst: "MessageType"
+    fragment: FragmentType | None
     created_at: auto
 
 
@@ -459,7 +504,6 @@ class RecordMessagePostInput(RecordReferenceInput):
 
     body: str
     kind: str = "comment"
-    subject: str = ""
     parent_message_id: strawberry.ID | None = strawberry.field(name="parent_message_id", default=None)
     attachment_ids: list[strawberry.ID] = strawberry.field(name="attachment_ids", default_factory=list)
     recipient_user_ids: list[strawberry.ID] = strawberry.field(name="recipient_user_ids", default_factory=list)
@@ -784,14 +828,12 @@ class MessagingMutation:
                     raise ValueError("Internal notes cannot target recipients.")
                 message = cast(Any, record).message_log(
                     input.body,
-                    subject=input.subject,
                     attachments=attachments,
                     parent=parent,
                 )
             else:
                 message = cast(Any, record).message_post(
                     input.body,
-                    subject=input.subject,
                     attachments=attachments,
                     recipient_user_ids=recipient_user_ids,
                     autofollow_recipients=input.autofollow_recipients,
@@ -1150,7 +1192,7 @@ class MessagingMutation:
             return RecordThreadPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
             return RecordThreadPayload(error="record not found", error_code="NOT_FOUND")
-        ThreadNotification.objects.mark_read_for_record(record, user=user, role=input.role)
+        ThreadFollower.objects.mark_read_for_record(record, user=user, role=input.role)
         return _record_thread_payload(record, info, role=input.role)
 
 
@@ -1175,7 +1217,21 @@ def _message_inbox_queryset(info: strawberry.Info) -> Any:
     """
 
     del info
-    return Message.objects.inbox()
+    # The title annotation serves list rows in SQL; Message.title() prefers it,
+    # so a title column on the grid costs no per-row probe.
+    return Message.objects.inbox().with_title_text()
+
+
+def _part_inbox_queryset(info: strawberry.Info) -> Any:
+    """Scope the generic ``parts`` resource to inbox messages' parts.
+
+    The same record-chatter exclusion the ``messages`` resource applies, mirrored
+    onto its parts so the structural data view cannot reach chatter content the
+    generic surface deliberately hides.
+    """
+
+    del info
+    return Part.objects.inbox()
 
 
 class _InboxWriteBackend(AngeeHasuraWriteBackend):
@@ -1224,7 +1280,6 @@ _MESSAGE_RESOURCE = hasura_model_resource(
     name="messages",
     filterable=[
         "id",
-        "subject",
         "status",
         "message_type",
         "subtype",
@@ -1234,12 +1289,14 @@ _MESSAGE_RESOURCE = hasura_model_resource(
         "channel",
         "sender",
         "sent_at",
+        # The transcript's keyset "load older" cursors on (sent_at, created_at).
+        "created_at",
     ],
     sortable=["sent_at", "received_at", "created_at"],
     aggregatable=["id"],
     groupable=[
         "thread",
-        "thread__subject",
+        "thread__title__text",
         "sender",
         "sender__display_name",
         "channel",
@@ -1254,7 +1311,7 @@ _MESSAGE_RESOURCE = hasura_model_resource(
     ],
     json_paths={"metadata.mailbox": "str"},
     insert=False,
-    updatable=["status", "subject"],
+    updatable=["status"],
     field_id_decode={
         "thread": public_pk_decoder(Thread),
         "channel": public_pk_decoder(Integration),
@@ -1268,22 +1325,51 @@ _THREAD_RESOURCE = hasura_model_resource(
     ThreadType,
     model=Thread,
     name="threads",
-    filterable=["id", "subject", "platform", "modality", "visibility", "channel", "last_message_at"],
+    filterable=["id", "platform", "modality", "visibility", "channel", "last_message_at"],
     sortable=["last_message_at", "message_count", "created_at"],
     aggregatable=["id", "message_count"],
     groupable=["channel", "channel__display_name", "modality", "visibility", "last_message_at"],
     insert=False,
-    updatable=["subject", "visibility"],
+    updatable=["visibility"],
     field_id_decode={"channel": public_pk_decoder(Integration)},
     get_queryset=_thread_inbox_queryset,
     write_backend=_InboxWriteBackend(Thread),
 )
 
 
+_PART_RESOURCE = hasura_model_resource(
+    PartType,
+    model=Part,
+    name="parts",
+    filterable=["id", "message", "parent", "role", "type", "disposition", "fragment"],
+    sortable=["position", "created_at"],
+    aggregatable=["id"],
+    groupable=[
+        "role",
+        "type",
+        "disposition",
+        "message",
+        # Grouping by the shared fragment IS the interconnection view: every
+        # group with more than one row is text deduplicated across messages.
+        "fragment",
+        "fragment__hash",
+    ],
+    insert=False,
+    update=False,
+    delete=False,
+    field_id_decode={
+        "message": public_pk_decoder(Message),
+        "parent": public_pk_decoder(Part),
+        "fragment": public_pk_decoder(Fragment),
+    },
+    get_queryset=_part_inbox_queryset,
+)
+
 _RESOURCE_TYPES = [
     *_CHANNEL_RESOURCE.types,
     *_MESSAGE_RESOURCE.types,
     *_THREAD_RESOURCE.types,
+    *_PART_RESOURCE.types,
 ]
 
 
@@ -1293,12 +1379,14 @@ _MESSAGING_SCHEMA_BUCKET = {
         _CHANNEL_RESOURCE.query,
         _MESSAGE_RESOURCE.query,
         _THREAD_RESOURCE.query,
+        _PART_RESOURCE.query,
     ],
     "mutation": [
         MessagingMutation,
         _CHANNEL_RESOURCE.mutation,
         _MESSAGE_RESOURCE.mutation,
         _THREAD_RESOURCE.mutation,
+        _PART_RESOURCE.mutation,
     ],
     "types": [
         ChannelType,
@@ -1503,7 +1591,7 @@ def _record_thread_payload(
         else []
     )
     unread_count = (
-        ThreadNotification.objects.unread_count_for_record(record, user=user, role=role)
+        ThreadFollower.objects.unread_count_for_record(record, user=user, role=role)
         if thread is not None and user is not None
         else 0
     )
@@ -1516,10 +1604,12 @@ def _record_thread_payload(
             cast(Any, record).can_post(user)
         )
     if messages and thread is not None and user is not None:
+        # One receipt-anchored scan primes the page's needaction flags — the same
+        # unread set the badge counts, restricted to the rows on this page.
         needaction_message_ids = set(
-            ThreadNotification.objects.for_record(record, user=user, role=role, unread_only=True)
-            .filter(message_id__in=[message.pk for message in messages])
-            .values_list("message_id", flat=True)
+            ThreadFollower.objects.unread_messages(thread, user=user)
+            .filter(pk__in=[message.pk for message in messages])
+            .values_list("pk", flat=True)
         )
         for message in messages:
             setattr(message, "_current_user_needaction", message.pk in needaction_message_ids)

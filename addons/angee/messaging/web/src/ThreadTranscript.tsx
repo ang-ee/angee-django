@@ -5,14 +5,39 @@ import { formatSize } from "@angee/ui/preview/index";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { useMessagingT } from "./i18n";
-import { ThreadTranscriptDocument, type ThreadTranscriptRow } from "./documents";
+import {
+  ThreadTranscriptDocument,
+  ThreadTranscriptOlderDocument,
+  type ThreadTranscriptRow,
+} from "./documents";
 
 const MESSAGE_MODELS = ["messaging.Message", "messaging.Reaction"] as const;
-// Newest-first window size; "Load older" grows the limit by one page. The read is
-// static and server-paginated — no live runtime, no streaming.
+// Newest-first head window size; "Load older" fetches keyset pages strictly
+// before the oldest loaded row's (sent_at, created_at) cursor — constant work
+// per fetch however deep the history, never a re-fetched growing window.
 const PAGE_SIZE = 50;
 // Estimated bubble height before measurement; the virtualizer remeasures each row.
 const ESTIMATED_ROW_HEIGHT = 96;
+// Placeholder cursor for the disabled older-page query (never executed).
+const EPOCH = "1970-01-01T00:00:00Z";
+
+type TranscriptCursor = { sentAt: string; createdAt: string };
+
+/** Newest-first feed order mirroring the server page order (`sent_at desc,
+ *  created_at desc`): Postgres puts NULLs first on a bare DESC, so a row
+ *  without a send time sorts to the newest end here too. The id tiebreak is
+ *  client-only (ids are opaque sqids) and matters just for stable rendering of
+ *  exact timestamp ties. ISO-8601 strings in one timezone compare as strings. */
+function compareNewestFirst(a: ThreadTranscriptRow, b: ThreadTranscriptRow): number {
+  const aNull = a.sent_at == null;
+  const bNull = b.sent_at == null;
+  if (aNull !== bNull) return aNull ? -1 : 1;
+  const aKey = a.sent_at ?? a.created_at;
+  const bKey = b.sent_at ?? b.created_at;
+  if (aKey !== bKey) return aKey < bKey ? 1 : -1;
+  if (a.created_at !== b.created_at) return a.created_at < b.created_at ? 1 : -1;
+  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+}
 
 type MessagingT = ReturnType<typeof useMessagingT>;
 
@@ -46,20 +71,83 @@ export function ThreadTranscript({
   threadId,
   order = "conversation",
 }: ThreadTranscriptProps): React.ReactElement {
+  // Remount per thread: with the app-wide `placeholderData: keepPreviousData`,
+  // a reused component would merge the PREVIOUS thread's placeholder rows into
+  // the next thread's archive. A fresh mount has fresh queries and fresh state —
+  // React's own "reset state when a prop changes" idiom.
+  return <TranscriptBody key={threadId} threadId={threadId} order={order} />;
+}
+
+function TranscriptBody({
+  threadId,
+  order = "conversation",
+}: ThreadTranscriptProps): React.ReactElement {
   const t = useMessagingT();
-  const [limit, setLimit] = React.useState(PAGE_SIZE);
-  const variables = React.useMemo(() => ({ threadId, limit }), [threadId, limit]);
-  const transcript = useAuthoredQuery(ThreadTranscriptDocument, variables, {
+  const [cursor, setCursor] = React.useState<TranscriptCursor | null>(null);
+  // Keyset pages already fetched vanish from this list when their rows change
+  // upstream — accepted staleness for the read-mostly channel transcript. The
+  // page-accumulation owner should eventually be an @angee/refine infinite
+  // read (react-query's useInfiniteQuery), whose invalidation refetches every
+  // held page; this local archive is the interim composition.
+  // Every row ever loaded for this thread, keyed by id: the live head window and
+  // each keyset page merge in (fresh data overwrites), so a head that slides
+  // forward on new arrivals never opens a hole above the archived pages.
+  const [archive, setArchive] = React.useState<ReadonlyMap<string, ThreadTranscriptRow>>(new Map());
+  const [exhausted, setExhausted] = React.useState(false);
+
+  const headVariables = React.useMemo(() => ({ threadId, limit: PAGE_SIZE }), [threadId]);
+  const transcript = useAuthoredQuery(ThreadTranscriptDocument, headVariables, {
     enabled: Boolean(threadId),
     models: MESSAGE_MODELS,
   });
+  const olderVariables = React.useMemo(
+    () => ({
+      threadId,
+      limit: PAGE_SIZE,
+      beforeSentAt: cursor?.sentAt ?? EPOCH,
+      beforeCreatedAt: cursor?.createdAt ?? EPOCH,
+    }),
+    [threadId, cursor],
+  );
+  const older = useAuthoredQuery(ThreadTranscriptOlderDocument, olderVariables, {
+    enabled: Boolean(threadId) && cursor !== null,
+    models: MESSAGE_MODELS,
+  });
 
-  // The window arrives newest-first (stable pagination against an appending
-  // thread); render it oldest-to-newest so the latest turn sits at the bottom.
-  const windowRows = transcript.data?.messages;
-  const messages = React.useMemo(() => [...(windowRows ?? [])].reverse(), [windowRows]);
+  const headRows = transcript.data?.messages;
+  const olderRows = cursor !== null ? older.data?.messages : undefined;
+  React.useEffect(() => {
+    const fresh = [...(headRows ?? []), ...(olderRows ?? [])];
+    if (fresh.length === 0) return;
+    setArchive((previous) => {
+      const next = new Map(previous);
+      let changed = false;
+      for (const row of fresh) {
+        if (next.get(row.id) !== row) {
+          next.set(row.id, row);
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+    // An older page whose rows are all already archived means the boundary
+    // cursor cannot advance (an over-page tie block, or a shrunken total):
+    // stop offering "Load older" rather than wedge into a no-op button.
+    if (olderRows !== undefined && olderRows.length > 0) {
+      setArchive((current) => {
+        if (olderRows.every((row) => current.has(row.id))) setExhausted(true);
+        return current;
+      });
+    }
+  }, [headRows, olderRows]);
+
+  // Render oldest-to-newest so the latest turn sits at the bottom.
+  const messages = React.useMemo(
+    () => [...archive.values()].sort(compareNewestFirst).reverse(),
+    [archive],
+  );
   const total = transcript.data?.messages_aggregate.aggregate?.count ?? messages.length;
-  const hasOlder = messages.length < total;
+  const hasOlder = !exhausted && messages.length < total;
   const conversation = order === "conversation";
 
   const scrollRef = React.useRef<HTMLDivElement>(null);
@@ -111,13 +199,17 @@ export function ThreadTranscript({
   }, [conversation, threadId, messages.length, totalSize]);
 
   function loadOlder(): void {
+    // Anchor the next keyset page on the oldest loaded row that carries a send
+    // time (rows without one sort to the newest end and cannot anchor a cursor).
+    const oldest = messages.find((row) => row.sent_at);
+    if (oldest === undefined || !oldest.sent_at) return;
     const scroll = scrollRef.current;
     // Capture the pre-prepend distance from the bottom so the anchor effect can restore it.
     if (conversation && scroll !== null) prependAnchorRef.current = scroll.scrollHeight - scroll.scrollTop;
-    setLimit((current) => current + PAGE_SIZE);
+    setCursor({ sentAt: oldest.sent_at, createdAt: oldest.created_at });
   }
 
-  if (transcript.fetching && windowRows === undefined) {
+  if (transcript.fetching && headRows === undefined) {
     return <LoadingPanel message={t("transcript.loading")} />;
   }
   if (transcript.error) {
@@ -152,7 +244,7 @@ export function ThreadTranscript({
             type="button"
             variant="secondary"
             size="sm"
-            disabled={transcript.fetching}
+            disabled={transcript.fetching || older.fetching}
             onClick={loadOlder}
           >
             <Glyph name="chevron-up" />
@@ -215,6 +307,7 @@ function TranscriptMessage({ message, t }: TranscriptMessageProps): React.ReactE
 
   const body = (
     <>
+      {message.title ? <div className="mb-0.5 font-medium">{message.title}</div> : null}
       {text ? <div className="whitespace-pre-wrap leading-relaxed">{text}</div> : null}
       {attachments.length > 0 ? (
         <div className="mt-2 space-y-1">
@@ -275,7 +368,9 @@ function TranscriptMessage({ message, t }: TranscriptMessageProps): React.ReactE
 }
 
 function transcriptText(message: Pick<ThreadTranscriptRow, "parts" | "preview">): string {
-  const part = message.parts.find((item) => item.fragment?.text);
+  // Body prose only: the title/header/quoted/signature roles are envelope or
+  // suppressed content, never the bubble text.
+  const part = message.parts.find((item) => item.role === "BODY" && item.fragment?.text);
   return part?.fragment?.text ?? message.preview ?? "";
 }
 

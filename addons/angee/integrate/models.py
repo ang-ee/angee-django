@@ -25,7 +25,7 @@ import secrets
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
 from functools import cache
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from django.apps import apps
@@ -67,7 +67,7 @@ from angee.integrate.sync import bridge_progress_context, bridge_sync_context
 from angee.integrate.vcs.backend import VCSBackend
 from angee.integrate.vcs.templates import parse_template_meta
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
-from angee.tasks.locks import LockKey, record_lock_key
+from angee.tasks.locks import LockKey, record_lock_key, task_locks_are_cross_process
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1544,6 +1544,37 @@ class Bridge(AngeeModel):
         """Return whether a worker currently holds this bridge's live sync lock."""
 
         return bridge_is_locked(self)
+
+    # The persisted stages that assert a live run. Their whole legitimate lifetime
+    # is spent holding the advisory sync lock, so a row carrying one without the
+    # lock is a stale record — the worker died before writing an outcome.
+    LIVE_SYNC_STAGES: ClassVar[tuple[str, ...]] = (
+        str(SyncStage.DISCOVERING),
+        str(SyncStage.SYNCING),
+    )
+
+    @property
+    def effective_sync_stage(self) -> str:
+        """Return the sync stage reconciled against the live lock, not the record.
+
+        The persisted ``sync_stage`` is a progress report, not the source of truth
+        for "is a run alive" — only the advisory lock is. A crashed worker leaves
+        ``syncing`` behind forever; this projection reports such a row as
+        ``FAILED`` (the run was interrupted) instead of trusting the stale column.
+        ``queued`` is exempt: a queued task legitimately holds no lock until a
+        worker picks it up. When the lock backend is process-local (the SQLite
+        floor), the web process cannot see a worker's lock at all — reconciling
+        there would misreport every healthy run, so the column is trusted as-is.
+        """
+
+        stage = str(self.sync_stage)
+        if (
+            stage in self.LIVE_SYNC_STAGES
+            and task_locks_are_cross_process()
+            and not self.is_syncing
+        ):
+            return str(self.SyncStage.FAILED)
+        return stage
 
     def sync_lock_key(self) -> LockKey:
         """Return the advisory task lock key for this bridge sync."""

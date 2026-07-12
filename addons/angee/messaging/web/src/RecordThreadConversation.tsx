@@ -1036,7 +1036,9 @@ function MessageEditor({
 // ---------------------------------------------------------------------------
 
 function messageText(message: Pick<RecordMessageRow, "parts" | "preview">): string {
-  const part = message.parts.find((item) => item.fragment?.text);
+  // Body prose only: the title/header/quoted/signature roles are envelope or
+  // suppressed content, never the feed row's text.
+  const part = message.parts.find((item) => item.role === "BODY" && item.fragment?.text);
   return part?.fragment?.text ?? message.preview ?? "";
 }
 

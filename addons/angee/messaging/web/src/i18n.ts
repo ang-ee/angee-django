@@ -29,6 +29,14 @@ export const enMessagingMessages: Record<string, string> = {
   "chatter.noMatchHint": "Try a different search.",
   "chatter.editedMeta": "edited",
 
+  // Message content tab — the nested parts data view.
+  "parts.fragment": "Fragment",
+  "parts.shared": "Shared",
+  "parts.sharedBy": "{parts} parts · {messages} messages",
+  "parts.unique": "unique",
+  "parts.text": "Text",
+  "parts.empty": "This message has no parts.",
+
   // Message row affordances.
   "message.author": "Someone",
   "message.reactions": "Reactions",
@@ -109,6 +117,7 @@ export const enMessagingMessages: Record<string, string> = {
 
   // ThreadsPage — the threads list + detail.
   "threads.tabConversation": "Conversation",
+  "threads.title": "Title",
   "threads.channel": "Channel",
   "threads.messageCount": "Messages",
   "threads.groupAbout": "About",
@@ -124,6 +133,8 @@ export const enMessagingMessages: Record<string, string> = {
 
   // MessagesPage — the inbox list + detail.
   "messages.channel": "Channel",
+  "messages.title": "Subject",
+  "messages.tabContent": "Content",
   "messages.sender": "Sender",
   "messages.thread": "Thread",
   "messages.groupEnvelope": "Envelope",

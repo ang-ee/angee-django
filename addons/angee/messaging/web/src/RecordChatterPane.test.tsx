@@ -59,7 +59,7 @@ import { RecordChatterPane } from "./RecordChatterPane";
 function message(overrides: Partial<RecordMessageRow> = {}): RecordMessageRow {
   return {
     id: "msg_1",
-    subject: "",
+    title: "",
     preview: "Hello there",
     direction: "INTERNAL",
     status: "SENT",
@@ -85,7 +85,7 @@ function threadPayload(messages: RecordMessageRow[]): unknown {
     record_thread: {
       error: null,
       error_code: null,
-      thread: { id: "thr_1", subject: "Rec", message_count: messages.length, last_message_at: null },
+      thread: { id: "thr_1", title: { text: "Rec" }, message_count: messages.length, last_message_at: null },
       message_result_count: messages.length,
       messages,
       follower_count: 3,

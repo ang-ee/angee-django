@@ -53,7 +53,7 @@ class ChatterDoc(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel):
         rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
-        """Return the document title for thread subjects."""
+        """Return the document title for the thread's title fragment."""
 
         return self.title
 
@@ -93,7 +93,7 @@ class TrackedRecordParent(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel)
         """Move ``status`` open -> closed and persist it (a ``save_state`` edge)."""
 
     def __str__(self) -> str:
-        """Return the record title for thread subjects."""
+        """Return the record title for the thread's title fragment."""
 
         return self.title
 

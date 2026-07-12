@@ -89,6 +89,7 @@ import {
   hasuraGroupOrderForDimensions,
   hasuraMeasuresFromGroupMeasures,
   isGroupingOnlyColumn,
+  withGroupingOnlyColumnsHidden,
   readPath,
   resourceViewGroupToAggregateDimension,
   tableColumnLabel,
@@ -414,6 +415,13 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   );
   const [columnVisibility, setColumnVisibility] =
     React.useState<VisibilityState>({});
+  // A grouping-only accessor column must never render as a data column: the
+  // pin is derived at render (never mirrored into state), so a new group axis
+  // is hidden from its first paint and removed axes leave no stale entries.
+  const effectiveColumnVisibility = React.useMemo(
+    () => withGroupingOnlyColumnsHidden(tableColumns, columnVisibility),
+    [tableColumns, columnVisibility],
+  );
   const measures = React.useMemo(
     () => groupMeasuresFromColumns(columns),
     [columns],
@@ -526,7 +534,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   const table = useReactTable<TRow>({
     data: leafRows as TRow[],
     columns: tableColumns as ColumnDef<TRow>[],
-    state: { columnVisibility },
+    state: { columnVisibility: effectiveColumnVisibility },
     onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
     getRowId: modelRowId,
@@ -671,6 +679,13 @@ export function useResourceViewSurface<TRow extends Row = Row>({
   );
   const [columnVisibility, setColumnVisibility] =
     React.useState<VisibilityState>({});
+  // A grouping-only accessor column must never render as a data column: the
+  // pin is derived at render (never mirrored into state), so a new group axis
+  // is hidden from its first paint and removed axes leave no stale entries.
+  const effectiveColumnVisibility = React.useMemo(
+    () => withGroupingOnlyColumnsHidden(tableColumns, columnVisibility),
+    [tableColumns, columnVisibility],
+  );
   const [expanded, setExpanded] = React.useState<ExpandedState>({});
   const dataResource = modelMetadata?.resource ?? null;
   const refineFilters = React.useMemo(
@@ -745,7 +760,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
   const tableResult = useRefineTable<RowRecord, HttpError, RowRecord>({
     columns: tableColumns as ColumnDef<RowRecord>[],
     state: {
-      columnVisibility,
+      columnVisibility: effectiveColumnVisibility,
       expanded,
       grouping,
       pagination: paginationState,
@@ -1098,6 +1113,13 @@ function useResourceViewPresentationSurface<TRow extends Row>({
   );
   const [columnVisibility, setColumnVisibility] =
     React.useState<VisibilityState>({});
+  // A grouping-only accessor column must never render as a data column: the
+  // pin is derived at render (never mirrored into state), so a new group axis
+  // is hidden from its first paint and removed axes leave no stale entries.
+  const effectiveColumnVisibility = React.useMemo(
+    () => withGroupingOnlyColumnsHidden(tableColumns, columnVisibility),
+    [tableColumns, columnVisibility],
+  );
   const [expanded, setExpanded] = React.useState<ExpandedState>({});
   const sortingState = React.useMemo(
     () => sortingStateFromResourceSort(resourceView.state.sort),
@@ -1158,7 +1180,7 @@ function useResourceViewPresentationSurface<TRow extends Row>({
     data: rows as TRow[],
     columns: tableColumns as ColumnDef<TRow>[],
     state: {
-      columnVisibility,
+      columnVisibility: effectiveColumnVisibility,
       expanded,
       globalFilter,
       grouping,

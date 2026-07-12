@@ -195,7 +195,6 @@ class DirectoryType(IntegrationLabelMixin, BridgeSyncStatusMixin, AngeeNode):
     last_sync_completed_at: auto
     last_sync_items: auto
     last_sync_summary: strawberry.scalars.JSON
-    sync_stage: auto
     sync_error: auto
     sync_progress: strawberry.scalars.JSON
     created_at: auto

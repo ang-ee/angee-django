@@ -88,7 +88,6 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     assert metadata.roots.delete_name == "delete_messages_by_pk"
     assert metadata.filter_fields == (
         "id",
-        "subject",
         "status",
         "message_type",
         "subtype",
@@ -98,12 +97,14 @@ def test_console_resource_metadata_declares_message_surface() -> None:
         "channel",
         "sender",
         "sent_at",
+        # The transcript's keyset "load older" cursors on (sent_at, created_at).
+        "created_at",
     )
     assert metadata.order_fields == ("sent_at", "received_at", "created_at")
     assert metadata.aggregate_fields == ("id",)
     assert metadata.group_by_fields == (
         "thread",
-        "thread__subject",
+        "thread__title__text",
         "sender",
         "sender__display_name",
         "channel",
@@ -116,13 +117,13 @@ def test_console_resource_metadata_declares_message_surface() -> None:
         "metadata.mailbox",
         "sent_at",
     )
-    assert metadata.update_fields == ("status", "subject")
+    assert metadata.update_fields == ("status",)
     assert metadata.capabilities == ("list", "detail", "aggregate", "groups", "update", "delete", "changes")
     assert {
         axis.field: (axis.model_label, axis.public_id_field, axis.label_axis)
         for axis in metadata.relation_axes
     } == {
-        "thread": ("messaging.Thread", "sqid", "thread__subject"),
+        "thread": ("messaging.Thread", "sqid", "thread__title__text"),
         "sender": ("parties.Handle", "sqid", "sender__display_name"),
         "channel": ("integrate.Integration", "sqid", "channel__display_name"),
         "subtype": ("messaging.MessageSubtype", "sqid", "subtype__key"),
@@ -144,7 +145,7 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     assert message["typeNames"]["order"] == "messages_order_by"
     assert message["groupByFields"] == [
         "thread",
-        "thread__subject",
+        "thread__title__text",
         "sender",
         "sender__display_name",
         "channel",
@@ -171,7 +172,7 @@ def test_console_resource_metadata_declares_message_surface() -> None:
         "valueTransform": "jsonObject:mailbox",
         "valueMap": [],
     }
-    assert message["updateFields"] == ["status", "subject"]
+    assert message["updateFields"] == ["status"]
     status_field = {field["name"]: field for field in message["fields"]}["status"]
     assert status_field["filterable"] is True
     assert status_field["groupable"] is True
@@ -189,7 +190,7 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
     assert thread.roots.update_name == "update_threads_by_pk"
     assert thread.roots.delete_name == "delete_threads_by_pk"
     assert thread.create_fields == ()
-    assert thread.update_fields == ("subject", "visibility")
+    assert thread.update_fields == ("visibility",)
     assert thread.group_by_fields == ("channel", "channel__display_name", "modality", "visibility", "last_message_at")
 
     channel = resources["messaging.Channel"]
@@ -202,6 +203,96 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
     assert channel.capabilities == ("list", "detail", "aggregate", "groups", "changes")
 
 
+def test_message_by_pk_serves_title_beside_a_parts_selection(messaging_graphql_tables: None) -> None:
+    """`title` and a `parts` selection coexist on the optimizer path.
+
+    Regression: a prefetch hint on the `title` field collided with the
+    optimizer's own `Prefetch("parts", ...)` for the selected `parts` block
+    ("'parts' lookup was already seen with a different queryset"); the resolver
+    now rides the optimizer's prefetch instead of declaring its own.
+    """
+
+    admin = _platform_admin("msg-bypk-title-admin")
+    thread, message = _seed_thread_and_message(admin)
+    with system_context(reason="test.messaging.bypk.title"):
+        # The channel FK targets the Integration MTI parent; resolving the object
+        # projection must serve the parent instance (regression: a ChannelType
+        # declaration crashed with "Expected ChannelType but got Integration").
+        channel = make_integration("bypk-title-channel", model=Channel, backend_class="manual")
+        message.channel = channel
+        message.save(update_fields=("channel", "updated_at"))
+        fragment = messaging_models.Fragment.objects.upsert(text="Detail subject")
+        messaging_models.Part.objects.create(
+            message=message, position=0, role="title", fragment=fragment, created_by_id=admin.pk
+        )
+        messaging_models.Part.objects.create(
+            message=message,
+            position=1,
+            role="body",
+            fragment=messaging_models.Fragment.objects.upsert(text="Detail body"),
+            created_by_id=admin.pk,
+        )
+    payload = _data(
+        execute_schema(
+            _schema(),
+            """
+            query Detail($id: String!) {
+              messages_by_pk(id: $id) {
+                title
+                channel { display_name }
+                parts { role name fragment { text } }
+              }
+            }
+            """,
+            {"id": message.sqid},
+            request=_request(admin),
+        )
+    )["messages_by_pk"]
+    assert payload["title"] == "Detail subject"
+    assert payload["channel"]["display_name"].startswith("Bypk-Title-Channel")
+    assert [(part["role"], part["fragment"]["text"]) for part in payload["parts"]] == [
+        ("TITLE", "Detail subject"),
+        ("BODY", "Detail body"),
+    ]
+
+
+def test_parts_resource_lists_a_message_parts_with_fragment_connectivity(
+    messaging_graphql_tables: None,
+) -> None:
+    """The `parts` root serves the structural data view: rows filtered to one
+    message, each carrying its fragment's identity and dedup connectivity."""
+
+    admin = _platform_admin("parts-resource-admin")
+    _thread, message = _seed_thread_and_message(admin)
+    with system_context(reason="test.messaging.parts.resource"):
+        shared = messaging_models.Fragment.objects.upsert(text="Shared paragraph")
+        other_message = messaging_models.Message.objects.create(
+            thread=message.thread, preview="Other", created_by_id=admin.pk
+        )
+        for target, position in ((message, 0), (other_message, 0)):
+            messaging_models.Part.objects.create(
+                message=target, position=position, role="body", fragment=shared, created_by_id=admin.pk
+            )
+    payload = _data(
+        execute_schema(
+            _schema(),
+            """
+            query Parts($messageId: String!) {
+              parts(where: { message: { _eq: $messageId } }, order_by: [{ position: asc }]) {
+                role
+                fragment { hash part_count message_count }
+              }
+            }
+            """,
+            {"messageId": message.sqid},
+            request=_request(admin),
+        )
+    )["parts"]
+    assert [part["role"] for part in payload] == ["BODY"]
+    assert payload[0]["fragment"]["part_count"] == 2
+    assert payload[0]["fragment"]["message_count"] == 2
+
+
 def test_messaging_schema_does_not_expose_optional_imap_connect() -> None:
     """Base messaging stays transport-neutral; IMAP contributes its own mutation."""
 
@@ -209,7 +300,12 @@ def test_messaging_schema_does_not_expose_optional_imap_connect() -> None:
 
 
 def test_message_and_thread_hasura_writes(messaging_graphql_tables: None) -> None:
-    """Message and thread human edits use generated Hasura mutation roots."""
+    """Message and thread human edits use generated Hasura mutation roots.
+
+    The write surfaces narrowed with the fragment-backed titles: a message update
+    can set only ``status`` and a thread update only ``visibility`` — ``subject``
+    is no longer a column, so writing it is a schema error, not a silent no-op.
+    """
 
     admin = _platform_admin("msg-hasura-admin")
     thread, message = _seed_thread_and_message(admin)
@@ -220,9 +316,9 @@ def test_message_and_thread_hasura_writes(messaging_graphql_tables: None) -> Non
             schema,
             """
             mutation Hide($id: String!) {
-              update_messages_by_pk(pk_columns: {id: $id}, _set: {status: "hidden", subject: "Redacted"}) {
+              update_messages_by_pk(pk_columns: {id: $id}, _set: {status: "hidden"}) {
                 status
-                subject
+                title
               }
             }
             """,
@@ -230,16 +326,16 @@ def test_message_and_thread_hasura_writes(messaging_graphql_tables: None) -> Non
             request=_request(admin),
         )
     )["update_messages_by_pk"]
-    assert updated_message == {"status": "HIDDEN", "subject": "Redacted"}
+    assert updated_message == {"status": "HIDDEN", "title": ""}
 
     updated_thread = _data(
         execute_schema(
             schema,
             """
-            mutation Rename($id: String!) {
-              update_threads_by_pk(pk_columns: {id: $id}, _set: {subject: "Inbox", visibility: "public"}) {
-                subject
+            mutation Publish($id: String!) {
+              update_threads_by_pk(pk_columns: {id: $id}, _set: {visibility: "public"}) {
                 visibility
+                title { text }
               }
             }
             """,
@@ -247,21 +343,45 @@ def test_message_and_thread_hasura_writes(messaging_graphql_tables: None) -> Non
             request=_request(admin),
         )
     )["update_threads_by_pk"]
-    assert updated_thread == {"subject": "Inbox", "visibility": "PUBLIC"}
+    assert updated_thread == {"visibility": "PUBLIC", "title": {"text": "Original"}}
+
+    # Subjects left the write surface entirely: the update inputs have no such field.
+    stale_message_write = execute_schema(
+        schema,
+        """
+        mutation Stale($id: String!) {
+          update_messages_by_pk(pk_columns: {id: $id}, _set: {subject: "Redacted"}) { status }
+        }
+        """,
+        {"id": message.sqid},
+        request=_request(admin),
+    )
+    assert stale_message_write.errors is not None
+    stale_thread_write = execute_schema(
+        schema,
+        """
+        mutation Stale($id: String!) {
+          update_threads_by_pk(pk_columns: {id: $id}, _set: {subject: "Inbox"}) { visibility }
+        }
+        """,
+        {"id": thread.sqid},
+        request=_request(admin),
+    )
+    assert stale_thread_write.errors is not None
 
     deleted = _data(
         execute_schema(
             schema,
             """
             mutation Delete($id: String!) {
-              delete_messages_by_pk(id: $id) { id subject }
+              delete_messages_by_pk(id: $id) { id status }
             }
             """,
             {"id": message.sqid},
             request=_request(admin),
         )
     )["delete_messages_by_pk"]
-    assert deleted == {"id": message.sqid, "subject": "Redacted"}
+    assert deleted == {"id": message.sqid, "status": "HIDDEN"}
 
     with system_context(reason="test.messaging.hasura_write.verify"):
         assert messaging_models.Thread.objects.get(sqid=thread.sqid).visibility == "public"
@@ -277,7 +397,7 @@ def test_message_channel_group_key_drills_down_with_public_id(
     channel = make_integration("msg-channel-group", model=Channel, backend_class="imap")
     with system_context(reason="test.messaging.channel_group.seed"):
         thread = messaging_models.Thread.objects.create(
-            subject="Channel thread",
+            title=messaging_models.Fragment.objects.upsert(text="Channel thread"),
             channel=channel,
             visibility="private",
             created_by_id=admin.pk,
@@ -285,7 +405,7 @@ def test_message_channel_group_key_drills_down_with_public_id(
         message = messaging_models.Message.objects.create(
             thread=thread,
             channel=channel,
-            subject="Channel grouped message",
+            preview="Channel grouped message",
             status="synced",
             sent_at=datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc),
             created_by_id=admin.pk,
@@ -321,7 +441,7 @@ def test_message_channel_group_key_drills_down_with_public_id(
             query MessageChannelDrillDown($channel: String!) {
               messages(where: {channel: {_eq: $channel}}) {
                 id
-                subject
+                preview
               }
             }
             """,
@@ -331,7 +451,7 @@ def test_message_channel_group_key_drills_down_with_public_id(
     )["messages"]
 
     assert bucket_channel_id == channel.sqid
-    assert drilled == [{"id": message.sqid, "subject": "Channel grouped message"}]
+    assert drilled == [{"id": message.sqid, "preview": "Channel grouped message"}]
 
 
 def test_record_chatter_query_and_post(messaging_graphql_tables: None) -> None:
@@ -370,12 +490,12 @@ def test_record_chatter_query_and_post(messaging_graphql_tables: None) -> None:
                 is_following
                 followers { user { username } }
                 message {
-                  subject
+                  title
                   preview
                   parts { fragment { text } }
                 }
                 thread {
-                  subject
+                  title { text }
                   message_count
                 }
               }
@@ -390,10 +510,12 @@ def test_record_chatter_query_and_post(messaging_graphql_tables: None) -> None:
         )
     )["post_record_message"]
     assert posted["error_code"] is None
-    assert posted["message"]["subject"] == "Case 101"
+    # A chatter comment carries no title part of its own — the thread's title
+    # fragment (the record label) is the conversation's label.
+    assert posted["message"]["title"] == ""
     assert posted["message"]["preview"] == "Follow up from GraphQL."
     assert posted["message"]["parts"][0]["fragment"]["text"] == "Follow up from GraphQL."
-    assert posted["thread"] == {"subject": "Case 101", "message_count": 1}
+    assert posted["thread"] == {"title": {"text": "Case 101"}, "message_count": 1}
     assert posted["follower_count"] == 1
     assert posted["is_following"] is True
     assert posted["followers"] == [{"user": {"username": "msg-chatter-admin"}}]
@@ -408,7 +530,7 @@ def test_record_chatter_query_and_post(messaging_graphql_tables: None) -> None:
                 follower_count
                 is_following
                 thread {
-                  subject
+                  title { text }
                   message_count
                   messages { preview }
                 }
@@ -420,7 +542,7 @@ def test_record_chatter_query_and_post(messaging_graphql_tables: None) -> None:
         )
     )["record_thread"]
     assert after["error_code"] is None
-    assert after["thread"]["subject"] == "Case 101"
+    assert after["thread"]["title"] == {"text": "Case 101"}
     assert after["thread"]["message_count"] == 1
     assert after["thread"]["messages"] == [{"preview": "Follow up from GraphQL."}]
     assert after["follower_count"] == 1
@@ -1428,13 +1550,21 @@ def test_record_thread_projects_edit_and_delete_capability(messaging_graphql_tab
 
 
 def test_record_chatter_notifications_can_be_marked_read(messaging_graphql_tables: None) -> None:
-    """The record chatter API exposes current-user needaction state."""
+    """The record chatter API exposes current-user receipt-derived unread state.
+
+    Unread counts derive from the follower's positional receipt; an inbox follower
+    gets no delivery rows, so ``notifications`` stays empty while the counts move.
+    ``mark_record_thread_read`` advances the receipt to the latest message.
+    """
 
     poster = _platform_admin("msg-notify-poster")
     watcher = _platform_admin("msg-notify-watcher")
     with system_context(reason="test.messaging.record_notifications.seed"):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case 606")
         ticket.message_subscribe(user=watcher)
+        # The poster follows up front: author auto-read advances an *existing*
+        # follower's receipt (a first post's autofollow lands after the post).
+        ticket.message_subscribe(user=poster)
     schema = _schema()
 
     posted = _data(
@@ -1473,10 +1603,8 @@ def test_record_chatter_notifications_can_be_marked_read(messaging_graphql_table
                 unread_count
                 needaction_count
                 notifications {
-                  is_read
                   notification_type
                   notification_status
-                  message { preview }
                 }
               }
             }
@@ -1489,14 +1617,8 @@ def test_record_chatter_notifications_can_be_marked_read(messaging_graphql_table
         "error_code": None,
         "unread_count": 1,
         "needaction_count": 1,
-        "notifications": [
-            {
-                "is_read": False,
-                "notification_type": "INBOX",
-                "notification_status": "READY",
-                "message": {"preview": "Please review this."},
-            }
-        ],
+        # An inbox follower has no delivery rows — the receipt is the read state.
+        "notifications": [],
     }
 
     read = _data(
@@ -1508,10 +1630,6 @@ def test_record_chatter_notifications_can_be_marked_read(messaging_graphql_table
                 error_code
                 unread_count
                 needaction_count
-                notifications {
-                  is_read
-                  read_at
-                }
               }
             }
             """,
@@ -1522,13 +1640,20 @@ def test_record_chatter_notifications_can_be_marked_read(messaging_graphql_table
     assert read["error_code"] is None
     assert read["unread_count"] == 0
     assert read["needaction_count"] == 0
-    assert len(read["notifications"]) == 1
-    assert read["notifications"][0]["is_read"] is True
-    assert read["notifications"][0]["read_at"] is not None
+    with system_context(reason="test.messaging.record_notifications.verify"):
+        thread = ticket.message_thread(create=False)
+        follower = messaging_models.ThreadFollower._base_manager.get(thread=thread, user=watcher)
+        latest = messaging_models.Message._base_manager.filter(thread=thread).order_by("-pk").first()
+        assert follower.last_read_message_id == latest.pk
 
 
 def test_record_chatter_marks_one_message_done(messaging_graphql_tables: None) -> None:
-    """The record chatter API can clear needaction for one message only."""
+    """The record chatter API clears needaction positionally, up to one message.
+
+    Done advances the follower's receipt to the target message, so the earlier
+    message stops needing action while the later one still does — no per-message
+    flag rows are involved.
+    """
 
     poster = _platform_admin("msg-done-poster")
     watcher = _platform_admin("msg-done-watcher")
@@ -1586,8 +1711,6 @@ def test_record_chatter_marks_one_message_done(messaging_graphql_tables: None) -
                 }
                 notifications {
                   message { id }
-                  is_read
-                  read_at
                 }
               }
             }
@@ -1604,11 +1727,12 @@ def test_record_chatter_marks_one_message_done(messaging_graphql_tables: None) -
     assert done["unread_count"] == 1
     assert done["needaction_count"] == 1
     assert done["message"] == {"id": first.sqid, "needaction": False}
-    notifications = {row["message"]["id"]: row for row in done["notifications"]}
-    assert notifications[first.sqid]["is_read"] is True
-    assert notifications[first.sqid]["read_at"] is not None
-    assert notifications[second.sqid]["is_read"] is False
-    assert notifications[second.sqid]["read_at"] is None
+    # An inbox follower has no delivery rows; done moved the receipt instead.
+    assert done["notifications"] == []
+    with system_context(reason="test.messaging.record_message_done.verify"):
+        thread = ticket.message_thread(create=False)
+        follower = messaging_models.ThreadFollower._base_manager.get(thread=thread, user=watcher)
+        assert follower.last_read_message_id == first.pk
 
     refreshed = _data(
         execute_schema(
@@ -1634,12 +1758,20 @@ def test_record_chatter_marks_one_message_done(messaging_graphql_tables: None) -
 
 
 def test_record_chatter_post_notifies_direct_recipient(messaging_graphql_tables: None) -> None:
-    """The record post mutation accepts explicit user recipients."""
+    """The record post mutation accepts explicit user recipients.
+
+    A direct recipient gets a delivery-ledger row even without following; unread
+    counts stay receipt-derived, so a non-follower reports zero unread while the
+    delivery row still surfaces in ``notifications``.
+    """
 
     poster = _platform_admin("msg-direct-poster")
     recipient = _platform_admin("msg-direct-recipient")
     with system_context(reason="test.messaging.record_direct_recipient.seed"):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case 707")
+        # The poster follows up front: author auto-read advances an *existing*
+        # follower's receipt (a first post's autofollow lands after the post).
+        ticket.message_subscribe(user=poster)
     schema = _schema()
 
     posted = _data(
@@ -1691,7 +1823,7 @@ def test_record_chatter_post_notifies_direct_recipient(messaging_graphql_tables:
                 is_following
                 unread_count
                 notifications {
-                  is_read
+                  notification_type
                   follower { id }
                   message { preview }
                 }
@@ -1705,10 +1837,12 @@ def test_record_chatter_post_notifies_direct_recipient(messaging_graphql_tables:
     assert unread == {
         "error_code": None,
         "is_following": False,
-        "unread_count": 1,
+        # Unread is receipt-derived and the recipient follows nothing, so the
+        # count is zero — the delivery row below is the addressed-recipient fact.
+        "unread_count": 0,
         "notifications": [
             {
-                "is_read": False,
+                "notification_type": "INBOX",
                 "follower": None,
                 "message": {"preview": "Direct heads-up."},
             }
@@ -1936,7 +2070,7 @@ def test_record_chatter_follow_toggle(messaging_graphql_tables: None) -> None:
                   subtype_keys
                   user { username }
                 }
-                thread { subject }
+                thread { title { text } }
               }
             }
             """,
@@ -1948,7 +2082,7 @@ def test_record_chatter_follow_toggle(messaging_graphql_tables: None) -> None:
     assert followed["error_code"] is None
     assert followed["follower_count"] == 1
     assert followed["is_following"] is True
-    assert followed["thread"] == {"subject": "Case 202"}
+    assert followed["thread"] == {"title": {"text": "Case 202"}}
     assert followed["follower"] == {
         "notification_policy": "EMAIL",
         "subtype_keys": ["comment", "activity"],
@@ -2062,7 +2196,7 @@ def test_record_chatter_activity_lifecycle(messaging_graphql_tables: None) -> No
                   summary
                   status
                 }
-                thread { subject }
+                thread { title { text } }
               }
             }
             """,
@@ -2073,7 +2207,7 @@ def test_record_chatter_activity_lifecycle(messaging_graphql_tables: None) -> No
 
     assert scheduled["error_code"] is None
     assert scheduled["activity_count"] == 1
-    assert scheduled["thread"] == {"subject": "Case 303"}
+    assert scheduled["thread"] == {"title": {"text": "Case 303"}}
     assert scheduled["activity"]["summary"] == "Call customer"
     assert scheduled["activity"]["note"] == "Ask about rollout."
     assert scheduled["activity"]["due_date"] == "2026-01-01"
@@ -2253,13 +2387,13 @@ def _seed_thread_and_message(owner: Any) -> tuple[Any, Any]:
 
     with system_context(reason="test.messaging.hasura.seed"):
         thread = messaging_models.Thread.objects.create(
-            subject="Original",
+            title=messaging_models.Fragment.objects.upsert(text="Original"),
             visibility="private",
             created_by_id=owner.pk,
         )
         message = messaging_models.Message.objects.create(
             thread=thread,
-            subject="Original message",
+            preview="Original message",
             status="synced",
             sent_at=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
             created_by_id=owner.pk,
@@ -2497,7 +2631,10 @@ def test_generic_delete_excludes_record_thread_from_its_creator(messaging_graphq
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case D")
     with actor_context(creator):
         record_thread = ticket.message_post("Internal chatter").thread
-        inbox_thread = messaging_models.Thread.objects.create(subject="Owned inbox", created_by_id=creator.pk)
+        inbox_thread = messaging_models.Thread.objects.create(
+            title=messaging_models.Fragment.objects.upsert(text="Owned inbox"),
+            created_by_id=creator.pk,
+        )
     schema = _schema()
 
     delete = """
@@ -2603,7 +2740,7 @@ def test_record_chatter_rows_opt_out_of_change_broadcasts(messaging_graphql_tabl
 
     with system_context(reason="test.messaging.changes.verify"):
         orphan = messaging_models.Message.objects.create(
-            subject="Orphan", status="synced", created_by_id=admin.pk
+            preview="Orphan", status="synced", created_by_id=admin.pk
         )
         # Channel inbox rows broadcast; record-attached chatter does not.
         assert channel_thread.broadcasts_changes() is True

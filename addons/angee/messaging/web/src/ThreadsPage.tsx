@@ -33,13 +33,14 @@ export function ThreadsPage(): React.ReactElement {
     <ResourceList resource={MODEL} placement="inline" routed hideCreate recordTabs={recordTabs}>
       <List resource={MODEL}>
         <Facet field="channel" label={t("threads.channel")} labelField="display_name" />
-        <Column field="subject" />
+        <Column field="title.text" header={t("threads.title")} />
         <Column field="modality" />
         <Column field="message_count" header={t("threads.messageCount")} />
         <Column field="last_message_at" />
       </List>
       <Form resource={MODEL}>
-        <Field name="subject" />
+        {/* The title is a pointer at a shared content-addressed fragment, derived
+            by the ingest (normalized subject / record label) — not directly editable. */}
         <Group label={t("threads.groupAbout")} columns={2}>
           <Field name="platform" readOnly />
           <Field name="modality" readOnly />

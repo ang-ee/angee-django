@@ -140,6 +140,31 @@ class ImapChannelBackend(ChannelBackend):
         self.close()
         return []
 
+    def sync_partitions(self) -> tuple[str, ...]:
+        """Return the channel's selected mailbox names — one drainable partition each.
+
+        Each mailbox owns an independent UID watermark in the cursor, so mailboxes
+        are the natural parallel unit: every partition syncs on its own backend
+        instance and IMAP connection (servers commonly cap per-connection
+        concurrency, not per-account). Connects once to list folders — the same
+        selection :meth:`_discover` uses — and releases the connection; the
+        partition drains reconnect on their own instances.
+        """
+
+        try:
+            client = self._connect()
+            return tuple(self._select_mailboxes(client))
+        finally:
+            self.close()
+
+    def partition_cursor_slice(self, partition: str) -> tuple[tuple[str, ...], Any]:
+        """Return one mailbox's cursor fragment — ``("mailboxes", name) -> watermark``."""
+
+        cursor = self.bridge.cursor if isinstance(self.bridge.cursor, dict) else {}
+        raw_mailboxes = cursor.get("mailboxes")
+        mailboxes: dict[str, Any] = raw_mailboxes if isinstance(raw_mailboxes, dict) else {}
+        return (("mailboxes", partition), mailboxes.get(partition))
+
     def _report_progress(self, stage: str, message: str, **details: Any) -> None:
         """Publish IMAP-specific progress into the generic bridge reporter."""
 
@@ -162,6 +187,10 @@ class ImapChannelBackend(ChannelBackend):
         mailboxes = self.bridge.cursor.setdefault("mailboxes", {})
         plan: deque[_MailboxWork] = deque()
         selected_mailboxes = self._select_mailboxes(client)
+        if self.partition is not None:
+            # A partition drain plans only its own mailbox; the parent already
+            # enumerated the full selection through sync_partitions().
+            selected_mailboxes = [name for name in selected_mailboxes if name == self.partition]
         self._report_progress(
             "discovering",
             "Discovered IMAP mailboxes",

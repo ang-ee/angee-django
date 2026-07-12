@@ -57,7 +57,7 @@ describe("MessagesPage", () => {
       defaultGroups: { list: { field: "channel.display_name" } },
     });
     expect(pageMocks.columnFields).toEqual(
-      expect.arrayContaining(["subject", "sender", "thread.subject", "status", "sent_at"]),
+      expect.arrayContaining(["title", "sender", "thread.title.text", "status", "sent_at"]),
     );
     expect(pageMocks.columnFields).not.toContain("sender.value");
   });

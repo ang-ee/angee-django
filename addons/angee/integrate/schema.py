@@ -1137,6 +1137,17 @@ class BridgeSyncStatusMixin:
 
         return bool(cast(Any, self).is_syncing)
 
+    @strawberry_django.field(name="sync_stage", only=["id", "sync_stage"])
+    def sync_stage(self) -> str:
+        """Return the sync stage reconciled against the live lock.
+
+        The raw column is a progress report a crashed worker leaves stale; the
+        model's ``effective_sync_stage`` trusts the advisory lock instead, so a
+        dead run reads ``failed`` — never a phantom ``syncing``.
+        """
+
+        return str(cast(Any, self).effective_sync_stage)
+
 
 @strawberry_django.type(Integration)
 class IntegrationType(IntegrationLabelMixin, AngeeNode):
@@ -1441,7 +1452,6 @@ class VcsBridgeType(BridgeSyncStatusMixin, AngeeNode):
     last_sync_completed_at: auto
     last_sync_status: auto
     last_sync_summary: JSON
-    sync_stage: auto
     sync_error: auto
     sync_progress: JSON
     created_at: auto

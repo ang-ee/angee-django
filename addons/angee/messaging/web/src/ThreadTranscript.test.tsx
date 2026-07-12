@@ -46,13 +46,13 @@ function message(overrides: Partial<ThreadTranscriptRow> = {}): ThreadTranscript
   return {
     id: "msg_1",
     direction: "INBOUND",
-    subject: "Re: hello",
+    title: "Re: hello",
     preview: "Hi there",
     message_type: "EMAIL",
     sent_at: "2026-07-01T10:00:00Z",
     created_at: "2026-07-01T10:00:00Z",
     sender: { id: "hnd_1", display_name: "Ada Lovelace", value: "ada@example.com" },
-    parts: [{ role: "body", fragment: { text: "Hi there" }, file: null }],
+    parts: [{ role: "BODY", fragment: { text: "Hi there" }, file: null }],
     reaction_groups: [],
     ...overrides,
   } as unknown as ThreadTranscriptRow;
@@ -82,9 +82,9 @@ afterEach(cleanup);
 describe("ThreadTranscript", () => {
   test("renders inbound, outbound, and internal turns with their distinct treatments", () => {
     mocks.transcriptData = transcriptPayload([
-      message({ id: "in", direction: "INBOUND", parts: [{ role: "body", fragment: { text: "Inbound hello" }, file: null }] as never }),
-      message({ id: "out", direction: "OUTBOUND", sender: { id: "hnd_2", display_name: "Support", value: "us@example.com" }, parts: [{ role: "body", fragment: { text: "Outbound reply" }, file: null }] as never }),
-      message({ id: "note", direction: "INTERNAL", parts: [{ role: "body", fragment: { text: "Internal jotting" }, file: null }] as never }),
+      message({ id: "in", direction: "INBOUND", parts: [{ role: "BODY", fragment: { text: "Inbound hello" }, file: null }] as never }),
+      message({ id: "out", direction: "OUTBOUND", sender: { id: "hnd_2", display_name: "Support", value: "us@example.com" }, parts: [{ role: "BODY", fragment: { text: "Outbound reply" }, file: null }] as never }),
+      message({ id: "note", direction: "INTERNAL", parts: [{ role: "BODY", fragment: { text: "Internal jotting" }, file: null }] as never }),
     ]);
 
     render(<ThreadTranscript threadId="thr_1" />);
@@ -110,7 +110,7 @@ describe("ThreadTranscript", () => {
     expect(screen.getByRole("button", { name: "👍 reaction, 2" })).toBeTruthy();
   });
 
-  test("offers Load older only while the window is short of the thread total, growing the limit", () => {
+  test("offers Load older only while loaded rows trail the total, cursoring past the oldest row", () => {
     mocks.transcriptData = {
       messages: [message()],
       messages_aggregate: { aggregate: { count: 120 } },
@@ -120,7 +120,15 @@ describe("ThreadTranscript", () => {
 
     expect(mocks.queryCalls.at(-1)).toMatchObject({ threadId: "thr_1", limit: 50 });
     fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
-    expect(mocks.queryCalls.at(-1)).toMatchObject({ threadId: "thr_1", limit: 100 });
+    // The next page is a keyset fetch strictly before the oldest loaded row's
+    // (sent_at, created_at) cursor — never a re-fetched growing window.
+    expect(
+      mocks.queryCalls.some(
+        (call) =>
+          call.beforeSentAt === "2026-07-01T10:00:00Z" &&
+          call.beforeCreatedAt === "2026-07-01T10:00:00Z",
+      ),
+    ).toBe(true);
   });
 
   test("shows the empty state when the thread has no messages", () => {

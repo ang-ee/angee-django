@@ -5,17 +5,18 @@ A :class:`~angee.messaging.models.Channel` (an ``integrate.Integration`` child +
 per-source *transport* + *parse* — ``fetch_messages`` returns neutral
 :class:`ParsedMessage` rows (a recursive :class:`ParsedPart` body, sender/recipient
 :class:`ParsedHandle`\\s, RFC-5322 threading hints). The *map* onto messaging —
-thread resolution, the idempotent ``(platform, external_id)`` upsert, the Part /
-Fragment tree, and the quotation graph — is owned by ``Message.objects.ingest`` +
-the managers, so every source shares one write path. ``messaging_integrate_imap``
-contributes the ``imap`` backend; the ``manual`` null-object keeps the registry
-non-empty when no source is installed.
+thread resolution, the idempotent channel-scoped external-id upsert, the Part /
+Fragment tree (including the sparse title/header parts), and the quotation graph —
+is owned by ``Message.objects.ingest`` + the managers, so every source shares one
+write path. ``messaging_integrate_imap`` contributes the ``imap`` backend; the
+``manual`` null-object keeps the registry non-empty when no source is installed.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
@@ -62,15 +63,21 @@ class ParsedPart:
 class ParsedMessage:
     """One message parsed from a source, neutral of the wire format.
 
-    ``external_id`` is the per-platform idempotency key (e.g. the RFC-5322
-    Message-ID). ``in_reply_to`` / ``references`` carry the threading hints the map
-    resolves; ``body`` is the recursive part tree.
+    ``external_id`` is the idempotency key, unique *within the producing channel*
+    (e.g. the RFC-5322 Message-ID; a chat adapter embeds its chat scope). The map
+    stores ``subject`` as a ``TITLE`` part and each ``headers`` pair as a ``HEADER``
+    part — sparse, fragment-backed rows only messages that have them pay for.
+    Adapters emit only headers worth keeping standalone (their retained-header
+    allow-list); the lossless envelope stays in ``metadata``. ``in_reply_to`` /
+    ``references`` carry the threading hints the map resolves; ``body`` is the
+    recursive part tree.
     """
 
     external_id: str
     platform: str
     direction: str = "inbound"
     subject: str = ""
+    headers: tuple[tuple[str, str], ...] = ()
     sender: ParsedHandle | None = None
     recipients: tuple[ParsedRecipient, ...] = ()
     sent_at: datetime | None = None
@@ -92,6 +99,33 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     category = "channel"
     label = "Channel"
     icon = "inbox"
+
+    partition: str | None = None
+    """When set, this instance drains only the named partition (see :meth:`sync_partitions`)."""
+
+    def sync_partitions(self) -> tuple[str, ...]:
+        """Return this source's independently drainable partition keys, or ``()``.
+
+        A backend whose source splits into units with *independent cursor state*
+        — IMAP mailboxes, each with its own UID watermark — returns their keys.
+        ``Channel.sync`` then drains each partition on its own backend instance
+        (its own transport connection) in parallel threads, persisting each
+        partition's cursor slice separately so one partition's crash never skips
+        another's mail. The default ``()`` keeps the serial single-drain contract.
+        """
+
+        return ()
+
+    def partition_cursor_slice(self, partition: str) -> tuple[tuple[str, ...], Any]:
+        """Return ``(path, value)`` — one partition's fragment of ``bridge.cursor``.
+
+        ``path`` addresses the nested cursor location this partition owns and
+        ``value`` is its current in-memory state; ``Channel`` merges exactly that
+        slice into the persisted cursor under a row lock, so parallel partitions
+        never clobber each other and never persist a sibling's pre-ingest advance.
+        """
+
+        raise NotImplementedError("Partitioned backends must implement partition_cursor_slice().")
 
     def fetch_messages(self) -> list[ParsedMessage]:
         """Return the next batch of new messages since the bridge cursor.

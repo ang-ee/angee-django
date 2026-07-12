@@ -10,15 +10,23 @@ The shapes mirror JMAP/Gmail/RFC-5322: a :class:`Thread` aggregates :class:`Mess
 rows; a message's body is a recursive :class:`Part` tree whose text nodes reference
 a content-addressed :class:`Fragment` (dedup + quotation + signature isolation) and
 whose byte nodes reference a ``storage.File``; cross-message relations (quote/reply/
-mention) live on :class:`MessageEdge`. Ingestion idempotency rests on
-``(platform, external_id)`` unique constraints; the write path lives on the
-managers.
+mention) live on :class:`MessageEdge`. A subject is not a column: it is a sparse
+``TITLE`` part pointing at a shared fragment, and a thread's display/grouping title
+is a fragment FK — so only messages that *have* a title pay for one, and a re-quoted
+subject exists once. Ingestion idempotency rests on expression unique constraints
+over ``MD5(external_id)`` — channel-scoped for messages (one row per provider event
+per source), platform-scoped for threads (cross-account mail merges into one
+conversation); the digest is an index implementation detail, never a model field.
+The write path lives on the managers.
 """
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from copy import deepcopy
 from dataclasses import dataclass
+from time import monotonic
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -26,8 +34,11 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
+from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.search import SearchVectorField
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
-from django.db import models
+from django.db import close_old_connections, connection, connections, models, transaction
+from django.db.models.functions import MD5, Coalesce
 from django.utils import timezone
 from django.utils.text import capfirst
 from rebac import (
@@ -40,14 +51,13 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
-from rebac.managers import RebacManager
 
 from angee.base.actors import actor_user_id
 from angee.base.fields import ImplClassField, SqidField, StateField
-from angee.base.mixins import AuditMixin, HistoryMixin, SqidMixin
-from angee.base.models import AngeeModel, public_id_for
+from angee.base.mixins import AuditMixin, SqidMixin
+from angee.base.models import AngeeManager, AngeeModel, public_id_for
 from angee.integrate.models import Bridge
-from angee.integrate.sync import current_bridge_progress
+from angee.integrate.sync import bridge_progress_context, current_bridge_progress
 from angee.messaging.backends import ChannelBackend
 from angee.messaging.managers import (
     FragmentManager,
@@ -65,6 +75,11 @@ from angee.messaging.managers import (
 )
 from angee.messaging.tracking import FieldTracker, TrackingChange
 from angee.parties.models import Handle
+from angee.tasks.autoconfig import SETTINGS as _TASK_SETTINGS
+
+# Partitioned channel syncs (IMAP mailboxes) drain up to this many partitions
+# concurrently unless config["sync_parallelism"] says otherwise.
+_DEFAULT_SYNC_PARALLELISM = 4
 
 
 def _owner_user_id(instance: models.Model) -> Any | None:
@@ -194,7 +209,7 @@ class ThreadedModelMixin(models.Model):
             return attachment_model.objects.ensure_for_record(
                 self,
                 role=self.thread_attachment_role,
-                subject=self.message_thread_subject(),
+                title=self.message_thread_title(),
             )
         return attachment_model.objects.for_record(self, role=self.thread_attachment_role)
 
@@ -202,7 +217,6 @@ class ThreadedModelMixin(models.Model):
         self,
         body: str,
         *,
-        subject: str = "",
         attachments: tuple[models.Model, ...] = (),
         recipient_user_ids: tuple[Any, ...] = (),
         autofollow_recipients: bool = False,
@@ -213,12 +227,12 @@ class ThreadedModelMixin(models.Model):
         """Post an internal comment on this row's chatter thread.
 
         ``message_type`` defaults to :attr:`Message.MessageKind.COMMENT` (resolved by
-        the message write path), keeping the enum the single source of truth.
+        the message write path), keeping the enum the single source of truth. A chatter
+        comment carries no title of its own — the thread's title fragment is the label.
         """
 
         return self._message_post(
             body,
-            subject=subject,
             attachments=attachments,
             recipient_user_ids=recipient_user_ids,
             autofollow_recipients=autofollow_recipients,
@@ -233,7 +247,6 @@ class ThreadedModelMixin(models.Model):
         self,
         body: str = "",
         *,
-        subject: str = "",
         subtype_key: str = "note",
         message_type: Message.MessageKind | None = None,
         tracking_values: tuple[TrackingChange | dict[str, Any], ...] = (),
@@ -249,7 +262,6 @@ class ThreadedModelMixin(models.Model):
         message_model = apps.get_model("messaging", "Message")
         return self._message_post(
             body,
-            subject=subject,
             attachments=attachments,
             message_type=message_type or message_model.MessageKind.NOTIFICATION,
             subtype_key=subtype_key,
@@ -265,7 +277,6 @@ class ThreadedModelMixin(models.Model):
         changes: tuple[TrackingChange | dict[str, Any], ...],
         *,
         body: str = "",
-        subject: str = "",
         subtype_key: str = "record_updated",
     ) -> models.Model:
         """Log Odoo-style field tracking values in this row's chatter thread.
@@ -281,7 +292,6 @@ class ThreadedModelMixin(models.Model):
         message_model = apps.get_model("messaging", "Message")
         return self._message_system_post(
             body=body,
-            subject=subject,
             subtype_key=subtype_key,
             message_type=message_model.MessageKind.AUTO_COMMENT,
             tracking_values=changes,
@@ -367,7 +377,12 @@ class ThreadedModelMixin(models.Model):
         return int(star_model.objects.unstar_all(user=user))
 
     def message_set_done(self, message: models.Model, *, user: Any) -> int:
-        """Remove Odoo-style needaction from ``message`` for ``user``."""
+        """Advance ``user``'s read receipt to ``message`` (mark read up to it).
+
+        Read state is positional (a follower's ``last_read_message`` receipt), so
+        "done" means everything at or before ``message`` in feed order counts read —
+        the IM semantics that replaced the per-message notification flags.
+        """
 
         if not self._message_read_allowed():
             raise PermissionDenied(
@@ -376,14 +391,13 @@ class ThreadedModelMixin(models.Model):
         attachment = self.message_thread_attachment(create=False)
         if attachment is None or message.thread_id != attachment.thread_id:
             raise ValueError("Message does not belong to this record thread.")
-        notification_model = apps.get_model("messaging", "ThreadNotification")
-        return int(notification_model.objects.mark_read_for_message(message, user=user))
+        follower_model = apps.get_model("messaging", "ThreadFollower")
+        return int(follower_model.objects.mark_read_up_to(attachment.thread, user=user, message=message))
 
     def _message_post(
         self,
         body: str,
         *,
-        subject: str,
         attachments: tuple[models.Model, ...],
         message_type: Message.MessageKind | None,
         subtype_key: str,
@@ -407,7 +421,6 @@ class ThreadedModelMixin(models.Model):
             )
         message = self._message_system_post(
             body=body,
-            subject=subject,
             attachments=attachments,
             message_type=message_type,
             subtype_key=subtype_key,
@@ -423,6 +436,11 @@ class ThreadedModelMixin(models.Model):
                 user_id=owner_id,
                 role=self.thread_attachment_role,
             )
+            # A first post on an unfollowed record: the write path's own receipt
+            # advance ran before this autofollow existed, so seed the fresh
+            # follower's receipt at the just-posted message — an author never
+            # sees their own post as unread.
+            follower_model.objects.mark_read_up_to(message.thread, user_id=owner_id, message=message)
         if autofollow_recipients:
             for user_id in recipient_user_ids:
                 follower_model.objects.subscribe(
@@ -436,7 +454,6 @@ class ThreadedModelMixin(models.Model):
         self,
         *,
         body: str = "",
-        subject: str = "",
         attachments: tuple[models.Model, ...] = (),
         message_type: Message.MessageKind | None,
         subtype_key: str,
@@ -462,7 +479,6 @@ class ThreadedModelMixin(models.Model):
         return message_model.objects.post_to_thread(
             attachment.thread,
             body=body,
-            subject=subject or self.message_thread_subject(),
             owner_id=_owner_user_id(self),
             attachment=attachment,
             attachments=attachments,
@@ -662,8 +678,12 @@ class ThreadedModelMixin(models.Model):
         activity_model = apps.get_model("messaging", "ThreadActivity")
         return activity_model.objects.cancel(activity)
 
-    def message_thread_subject(self) -> str:
-        """Return the default subject for this row's chatter thread."""
+    def message_thread_title(self) -> str:
+        """Return the default title text for this row's chatter thread.
+
+        Interned as a content-addressed fragment and stamped onto the thread's
+        ``title`` pointer at attachment; override to label the record's room.
+        """
 
         return str(self)
 
@@ -795,7 +815,7 @@ class Channel(Bridge):
     )
     """Registry key for the channel backend bound to this channel."""
 
-    objects = RebacManager()
+    objects = AngeeManager()
 
     class Meta:
         """Django model options for the channel child model."""
@@ -812,18 +832,142 @@ class Channel(Bridge):
         return backend_class(self)
 
     def sync(self) -> int:
-        """Drain the backend batch by batch and ingest each (the Bridge child-sync contract).
+        """Sync the channel's source (the Bridge child-sync contract); report the landed count.
+
+        A backend that partitions its source (:meth:`ChannelBackend.sync_partitions`
+        — IMAP mailboxes) drains each partition on its own backend instance and
+        transport connection, in parallel threads capped by
+        ``config["sync_parallelism"]`` (default ``4``). Every other backend keeps
+        the serial single-drain path. The whole run stays under the bridge's one
+        advisory sync lock either way; parallelism across *channels* rides the
+        worker fleet, parallelism within a channel rides these threads.
+        """
+
+        backend = self.backend
+        deadline = self._sync_deadline()
+        cap = self._sync_parallelism()
+        # Enumerating partitions costs a transport round-trip; skip it entirely
+        # when the drain is pinned serial (SQLite, or an operator cap of 1).
+        partitions = tuple(backend.sync_partitions()) if cap > 1 else ()
+        parallelism = min(len(partitions), cap) if partitions else 0
+        if parallelism > 1:
+            # Partition drains own their own transports; release the discovery
+            # connection this instance opened enumerating them.
+            backend.close()
+            return self._sync_parallel(partitions, parallelism, deadline=deadline)
+        return self._drain(backend, deadline=deadline)
+
+    def _sync_deadline(self) -> float:
+        """Return the monotonic instant this run must stop draining by.
+
+        Celery hard-kills a task at Celery's ``task_time_limit`` with SIGKILL — no
+        exception, no cleanup, a stuck ``syncing`` stage and a dropped lock. A
+        backfill is bigger than any one task budget, so the drain stops cleanly
+        inside the soft limit instead, records the partial run, and the scheduler
+        resumes from the persisted cursor watermarks on the next poll.
+        ``config["sync_time_budget"]`` (seconds) overrides.
+        """
+
+        config = self.config if isinstance(self.config, dict) else {}
+        soft_limit = float(
+            cast(
+                "float | int",
+                getattr(
+                    settings,
+                    "CELERY_TASK_SOFT_TIME_LIMIT",
+                    _TASK_SETTINGS["CELERY_TASK_SOFT_TIME_LIMIT"],
+                ),
+            )
+        )
+        # An unparsable operator value raises into record_sync_error — silently
+        # substituting the default would hide the misconfiguration.
+        budget = float(cast("float | int | str", config.get("sync_time_budget", max(60.0, soft_limit - 60.0))))
+        return monotonic() + max(0.0, budget)
+
+    def _sync_parallelism(self) -> int:
+        """Return the configured per-channel partition thread cap (min 1).
+
+        Parallel partitions need a database that takes concurrent writers with
+        row locks; SQLite (the zero-config dev fallback) cannot, so any other
+        vendor pins the drain serial — same vendor gate as fragment full-text.
+        """
+
+        if connection.vendor != "postgresql":
+            return 1
+        config = self.config if isinstance(self.config, dict) else {}
+        value = int(config.get("sync_parallelism", _DEFAULT_SYNC_PARALLELISM))
+        return max(1, value)
+
+    def _sync_parallel(self, partitions: tuple[str, ...], parallelism: int, *, deadline: float) -> int:
+        """Drain every partition concurrently; fail the run if any partition failed.
+
+        Each worker gets a ``copy_context()`` so the scheduler's ``system_context``
+        elevation and the bridge progress reporter propagate into the thread. A
+        failed partition never hides a healthy one's progress: the healthy slices
+        are already persisted, and the raised error names which partitions broke
+        so ``record_sync_error`` reports something actionable.
+        """
+
+        landed = 0
+        failures: list[tuple[str, Exception]] = []
+        with ThreadPoolExecutor(
+            max_workers=parallelism, thread_name_prefix=f"channel-{self.pk}-sync"
+        ) as pool:
+            futures = {
+                pool.submit(copy_context().run, self._drain_partition, name, deadline): name
+                for name in partitions
+            }
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    landed += int(future.result())
+                except Exception as error:  # noqa: BLE001 — collected, then re-raised below.
+                    failures.append((name, error))
+        # Partition threads persisted their cursor slices onto the row; reload the
+        # merged cursor so the caller's post-run save cannot clobber it with this
+        # instance's stale in-memory copy.
+        self.refresh_from_db(fields=["cursor"])
+        if failures:
+            names = ", ".join(sorted(name for name, _ in failures))
+            raise RuntimeError(f"Channel sync failed for partition(s): {names}") from failures[0][1]
+        return landed
+
+    def _drain_partition(self, partition: str, deadline: float | None = None) -> int:
+        """Drain one partition on this thread — own channel row, own backend, own connection."""
+
+        close_old_connections()
+        try:
+            # A per-thread channel instance keeps the in-memory cursor private to
+            # this partition: a shared instance would let one thread's slice save
+            # persist a sibling's pre-ingest advance (a crash could then skip mail).
+            channel = type(self)._base_manager.get(pk=self.pk)
+            backend = channel.backend
+            backend.partition = partition
+            # Rebind the progress reporter to this thread's own row: the copied
+            # context would otherwise share the parent's reporter — one model
+            # instance mutated and saved from every pool thread concurrently.
+            with bridge_progress_context(channel):
+                return channel._drain(backend, partition=partition, deadline=deadline)
+        finally:
+            # close_all, not close_old: a healthy young connection on a dying
+            # pool thread would otherwise leak to GC under persistent CONN_MAX_AGE.
+            connections.close_all()
+
+    def _drain(
+        self, backend: ChannelBackend, *, partition: str | None = None, deadline: float | None = None
+    ) -> int:
+        """Drain one backend batch by batch and ingest each.
 
         The batch/drain contract lives on :meth:`ChannelBackend.fetch_messages`;
         this loop holds one backend instance across it (that is where the in-run
         paging state and in-memory cursor advance live), releases the backend's
         transport when the run ends either way, and fails loudly when a backend
         stops making progress — a repeated batch with an unmoved cursor would
-        otherwise spin a worker forever. Reports how many messages landed.
+        otherwise spin a worker forever. A partition drain persists only its own
+        cursor slice (under a row lock); the serial drain persists the whole cursor.
         """
 
         message_model = apps.get_model("messaging", "Message")
-        backend = self.backend
         landed = 0
         previous: tuple[tuple[str, ...], Any] | None = None
         reporter = current_bridge_progress()
@@ -831,10 +975,13 @@ class Channel(Bridge):
             reporter.report(
                 str(self.SyncStage.SYNCING),
                 message="Starting channel sync",
-                details={"backend": type(backend).__name__, "landed": landed},
+                details=self._sync_details(backend, partition=partition, landed=landed),
             )
         try:
-            while batch := backend.fetch_messages():
+            while deadline is None or monotonic() < deadline:
+                batch = backend.fetch_messages()
+                if not batch:
+                    break
                 current = (tuple(parsed.external_id for parsed in batch), deepcopy(self.cursor))
                 if current == previous:
                     raise RuntimeError(
@@ -842,26 +989,75 @@ class Channel(Bridge):
                     )
                 previous = current
                 landed += len(message_model.objects.ingest(batch, channel=self))
-                self.save(update_fields=["cursor", "updated_at"])
+                if partition is None:
+                    self.save(update_fields=["cursor", "updated_at"])
+                else:
+                    self._persist_cursor_slice(backend, partition)
                 if reporter is not None:
-                    previous_details = {}
-                    if isinstance(self.sync_progress, dict):
-                        previous_details = dict(self.sync_progress.get("details") or {})
-                    previous_details.update(
-                        {
-                            "backend": type(backend).__name__,
-                            "batch_size": len(batch),
-                            "landed": landed,
-                        }
-                    )
                     reporter.report(
                         str(self.SyncStage.SYNCING),
                         message="Ingested message batch",
-                        details=previous_details,
+                        details=self._sync_details(
+                            backend, partition=partition, landed=landed, batch_size=len(batch)
+                        ),
+                    )
+            else:
+                # Budget reached with the source not yet drained: the cursor is
+                # persisted, so the next scheduled run resumes where this stopped.
+                if reporter is not None:
+                    reporter.report(
+                        str(self.SyncStage.SYNCING),
+                        message="Sync time budget reached; resuming next run",
+                        details=self._sync_details(
+                            backend, partition=partition, landed=landed, budget_exhausted=True
+                        ),
                     )
         finally:
             backend.close()
         return landed
+
+    def _sync_details(
+        self, backend: ChannelBackend, *, partition: str | None, **extra: Any
+    ) -> dict[str, Any]:
+        """Return one progress-report detail payload, merged over the stored details."""
+
+        details: dict[str, Any] = {}
+        if isinstance(self.sync_progress, dict):
+            details = dict(self.sync_progress.get("details") or {})
+        details.update({"backend": type(backend).__name__, **extra})
+        if partition is not None:
+            details["partition"] = partition
+        return details
+
+    def _persist_cursor_slice(self, backend: ChannelBackend, partition: str) -> None:
+        """Merge one partition's cursor fragment into the persisted cursor, row-locked.
+
+        Parallel partitions each write only the nested slice they own, so a save
+        never clobbers a sibling's persisted watermark and never persists a
+        sibling's in-memory advance whose batch has not been ingested yet.
+        """
+
+        path, value = backend.partition_cursor_slice(partition)
+        if not path or value is None:
+            return
+        with transaction.atomic():
+            row = (
+                type(self)
+                .objects.sudo(reason="messaging.channel.cursor_slice")
+                .lock_if_supported()
+                .get(pk=self.pk)
+            )
+            cursor = row.cursor if isinstance(row.cursor, dict) else {}
+            node = cursor
+            for key in path[:-1]:
+                child = node.get(key)
+                if not isinstance(child, dict):
+                    child = {}
+                    node[key] = child
+                node = child
+            node[path[-1]] = value
+            row.cursor = cursor
+            row.save(update_fields=["cursor", "updated_at"])
 
 
 class Thread(SqidMixin, AuditMixin, AngeeModel):
@@ -874,6 +1070,21 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
     this same row through the same-row ``extends`` seam. ``message_count``/
     ``last_message_at`` are denormalised and maintained with ``F()`` deltas by the
     ingest write path.
+
+    ``title`` is a pointer at the content-addressed :class:`Fragment` holding the
+    thread's normalised subject — a denormalisation that duplicates nothing (the row
+    is shared), replaces the old ``subject``/``subject_normalized`` columns, and makes
+    subject-based thread grouping an indexed FK lookup by fragment hash. ``NULL``
+    means untitled (a DM); untitled threads never share a hot empty-string fragment,
+    which would skew the planner's common-value statistics (Zulip works around the
+    same skew with an unprintable DM topic sentinel).
+
+    Identity is the platform-scoped ``MD5(external_id)`` expression constraint: the
+    synthetic keys (``subj:<normalized>``, ``msg:<id>``, ``record:<label>:<pk>:<role>``)
+    may exceed btree's entry limit (a 7,970-char Apple Mail subject is real), so the
+    index carries a fixed digest while the exact value stays in the unbounded column.
+    Threads stay platform-scoped (messages are channel-scoped) so the same
+    conversation reached through two accounts merges into one thread.
     """
 
     runtime = True
@@ -905,9 +1116,14 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
     platform = StateField(choices_enum=Handle.Platform, default=Handle.Platform.EMAIL)
     modality = StateField(choices_enum=Modality, default=Modality.EMAIL_THREAD)
     visibility = StateField(choices_enum=Visibility, default=Visibility.PRIVATE)
-    external_id = models.CharField(max_length=4096, blank=True, default="")
-    subject = models.CharField(max_length=4096, blank=True, default="")
-    subject_normalized = models.CharField(max_length=4096, blank=True, default="", db_index=True)
+    external_id = models.TextField(blank=True, default="")
+    title = models.ForeignKey(
+        "messaging.Fragment",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
     message_count = models.PositiveIntegerField(default=0, db_index=True)
     last_message_at = models.DateTimeField(null=True, blank=True, db_index=True)
     metadata = models.JSONField(blank=True, default=dict)
@@ -926,21 +1142,27 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
         """Django model options for the thread source model."""
 
         abstract = True
-        ordering = ("-last_message_at", "sqid")
+        # NULLs last: a thread that never landed a message must not float above
+        # the live conversations (Postgres puts NULLS FIRST on a bare DESC).
+        ordering = (models.F("last_message_at").desc(nulls_last=True), "sqid")
         rebac_resource_type = "messaging/thread"
         rebac_id_attr = "sqid"
         constraints = (
+            # The digest, not the unbounded value, is what the btree carries; the
+            # planner proves `external_id = '<value>'` implies the partial predicate.
             models.UniqueConstraint(
-                fields=("platform", "external_id"),
+                models.F("platform"),
+                MD5("external_id"),
                 condition=~models.Q(external_id=""),
                 name="uq_thread_platform_external_id",
             ),
         )
 
     def __str__(self) -> str:
-        """Return the thread subject for Django displays."""
+        """Return the thread title for Django displays."""
 
-        return self.subject or f"thread:{self.public_id}"
+        title = self.title.text if self.title_id else ""
+        return title or f"thread:{self.public_id}"
 
     def is_record_attached(self) -> bool:
         """Whether this thread is bound to a model row through a ``ThreadAttachment``.
@@ -1074,7 +1296,16 @@ class ThreadAttachment(SqidMixin, AuditMixin, AngeeModel):
 
 
 class ThreadFollower(SqidMixin, AuditMixin, AngeeModel):
-    """A user's subscription to a model-attached chatter thread."""
+    """A user's per-thread membership row — subscription policy plus read receipt.
+
+    The one row per ``(thread, user)``: it carries how the follower wants updates
+    (``notification_policy``/``subtype_keys``) and *where they have read to*
+    (``last_read_message``) — the Synapse receipts pattern. Unread is a bounded
+    keyset scan from the receipt anchor, never a per-message fan-out row, so read
+    state costs O(members × threads) rows regardless of message volume.
+    ``attachment`` is set for record-chatter follows and ``NULL`` for a bare
+    thread follow (a room membership without a host record).
+    """
 
     runtime = True
 
@@ -1093,6 +1324,8 @@ class ThreadFollower(SqidMixin, AuditMixin, AngeeModel):
     )
     attachment = models.ForeignKey(
         "messaging.ThreadAttachment",
+        null=True,
+        blank=True,
         on_delete=models.CASCADE,
         related_name="followers",
     )
@@ -1103,6 +1336,13 @@ class ThreadFollower(SqidMixin, AuditMixin, AngeeModel):
     )
     notification_policy = StateField(choices_enum=NotificationPolicy, default=NotificationPolicy.INBOX)
     subtype_keys = models.JSONField(blank=True, default=list)
+    last_read_message = models.ForeignKey(
+        "messaging.Message",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
     metadata = models.JSONField(blank=True, default=dict)
 
     objects = ThreadFollowerManager()
@@ -1116,19 +1356,20 @@ class ThreadFollower(SqidMixin, AuditMixin, AngeeModel):
         rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
-                fields=("attachment", "user"),
-                name="uq_thread_follower_attachment_user",
+                fields=("thread", "user"),
+                name="uq_thread_follower_thread_user",
             ),
         )
         indexes = (
-            models.Index(fields=("thread", "user")),
-            models.Index(fields=("attachment", "user")),
+            # (thread, user) rides the unique constraint's btree; back the
+            # "my followed threads" sweep from the user side.
+            models.Index(fields=("user", "thread")),
         )
 
     def __str__(self) -> str:
         """Return a readable follower label."""
 
-        return f"{self.user_id} follows {self.attachment_id}"
+        return f"{self.user_id} follows {self.thread_id}"
 
 
 class ThreadActivity(SqidMixin, AuditMixin, AngeeModel):
@@ -1310,14 +1551,24 @@ class MessageReactionGroup:
     handles: tuple[Any, ...]
 
 
-class Message(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
+class Message(SqidMixin, AuditMixin, AngeeModel):
     """One message — the unit of a thread. The root post is itself a Message.
 
-    Dedup key is ``(platform, external_id)`` (NOT thread-scoped — the same comment
-    can surface under two threads). ``parent`` is the single-parent reply pointer
-    (In-Reply-To); richer cross-message relations live on :class:`MessageEdge`. The
-    body is the :class:`Part` tree; raw envelope recipients are kept in ``metadata``
-    as the lossless source behind :class:`Participant`.
+    Dedup key is ``(channel, external_id)`` — one row per provider event per
+    source, carried by the ``MD5(external_id)`` expression constraint so an
+    unbounded provider id never overflows a btree entry. The same event reached
+    through two channels is two messages (related through :class:`MessageEdge` /
+    a shared thread), matching the "message identity ≠ content identity" rule.
+    ``parent`` is the single-parent reply pointer (In-Reply-To); richer
+    cross-message relations live on :class:`MessageEdge`. The body — including a
+    sparse ``TITLE`` part for the subject and ``HEADER`` parts for retained
+    envelope headers — is the :class:`Part` tree; raw envelope recipients are kept
+    in ``metadata`` as the lossless source behind :class:`Participant`.
+
+    Edits are data, not shadow rows: ``edit_history`` appends newest-first
+    ``{edited_at, edited_by_id, prev_fragment_hashes}`` entries while the replaced
+    text survives as immutable content-addressed fragments — no per-save history
+    table doubling the hot write path.
     """
 
     runtime = True
@@ -1357,6 +1608,9 @@ class Message(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         blank=True,
         on_delete=models.SET_NULL,
         related_name="messages",
+        # Covered: every composite index below leads with thread (the Zulip
+        # covered-FK rule — a redundant single-column index can misprice plans).
+        db_index=False,
     )
     channel = models.ForeignKey(
         "integrate.Integration",
@@ -1390,11 +1644,11 @@ class Message(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         on_delete=models.SET_NULL,
         related_name="messages",
     )
-    external_id = models.CharField(max_length=4096, blank=True, default="")
-    subject = models.CharField(max_length=4096, blank=True, default="")
+    external_id = models.TextField(blank=True, default="")
     preview = models.CharField(max_length=512, blank=True, default="")
     sent_at = models.DateTimeField(null=True, blank=True, db_index=True)
     received_at = models.DateTimeField(null=True, blank=True)
+    edit_history = models.JSONField(blank=True, default=list)
     metadata = models.JSONField(blank=True, default=dict)
 
     objects = MessageManager()
@@ -1407,17 +1661,36 @@ class Message(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         rebac_resource_type = "messaging/message"
         rebac_id_attr = "sqid"
         constraints = (
+            # Channel-scoped idempotency over a fixed digest: the ingest manager
+            # looks rows up through the same MD5 expression so this index serves
+            # both the constraint and the hot resync lookup.
             models.UniqueConstraint(
-                fields=("platform", "external_id"),
-                condition=~models.Q(external_id=""),
-                name="uq_message_platform_external_id",
+                models.F("channel"),
+                MD5("external_id"),
+                condition=~models.Q(external_id="") & models.Q(channel__isnull=False),
+                name="uq_message_channel_external_id",
             ),
         )
         indexes = (
-            # The chatter feed reads a single thread ordered by send time
-            # (``MessageManager.for_record``); back that hot filter+order with a
-            # composite so a large public thread does not scan on ``sent_at`` alone.
-            models.Index(fields=("thread", "sent_at")),
+            # The exact keyset the feed orders and cursors by
+            # (``_MESSAGE_ORDER_ANNOTATION`` + pk tiebreak): one expression index
+            # serves the hot page query verbatim, trailing id for cursor scans.
+            models.Index(
+                models.F("thread"),
+                Coalesce("sent_at", "created_at"),
+                models.F("id"),
+                name="ix_message_thread_order_id",
+            ),
+            # Receipt scans and mark-read walk (thread, id > anchor) directly.
+            models.Index(fields=("thread", "id"), name="ix_message_thread_id"),
+            # In-Reply-To / References resolution is platform-wide (a reply through
+            # account B must find the parent account A ingested), which the
+            # channel-led unique index cannot serve — this digest probe can.
+            models.Index(
+                MD5("external_id"),
+                name="ix_message_external_id_md5",
+                condition=~models.Q(external_id=""),
+            ),
         )
 
     def content_edit_error(self) -> str | None:
@@ -1526,10 +1799,39 @@ class Message(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         target = attachment.target
         return target if isinstance(target, ThreadedModelMixin) else None
 
+    def title(self) -> str:
+        """Return this message's title text — its ``TITLE`` part's fragment, or ``""``.
+
+        The single owner of the title read: prefetch-aware (a page of messages with
+        ``parts__fragment`` prefetched projects titles without per-row queries), so
+        the GraphQL resolver and displays never re-derive which part is the title.
+        """
+
+        annotated = getattr(self, "_title_text", None)
+        if annotated is not None:
+            # A list-scale read annotated the title in SQL (with_title_text) —
+            # Coalesce makes "" the no-title value, so None only means unannotated.
+            return str(annotated)
+        cache = getattr(self, "_prefetched_objects_cache", None)
+        if cache is not None and "parts" in cache:
+            for part in self.parts.all():
+                if part.role == Part.PartRole.TITLE:
+                    return part.fragment.text if part.fragment_id else ""
+            return ""
+        part = (
+            apps.get_model("messaging", "Part")
+            ._base_manager.filter(message=self, role=Part.PartRole.TITLE)
+            .select_related("fragment")
+            .first()
+        )
+        if part is None or part.fragment_id is None:
+            return ""
+        return part.fragment.text
+
     def __str__(self) -> str:
         """Return a readable message label for Django displays."""
 
-        return self.subject or self.preview or f"message:{self.public_id}"
+        return self.preview or f"message:{self.public_id}"
 
     def broadcasts_changes(self) -> bool:
         """Whether this message's changes reach the generic ``changes`` subscription.
@@ -1549,11 +1851,13 @@ class Message(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
 
 
 class ThreadNotification(SqidMixin, AuditMixin, AngeeModel):
-    """One per-recipient notification/read row for a chatter message.
+    """One per-recipient *delivery* row for a chatter message — a ledger, not read state.
 
-    This is the Angee equivalent of Odoo's ``mail.notification`` for
-    model-attached chatter: followers receive notification rows when a message is
-    posted, and the row owns delivery/read state for that recipient.
+    The Angee equivalent of Odoo's ``mail.notification``, narrowed to what only a
+    per-recipient row can own: the delivery lifecycle (ready → sent → bounced) and
+    its failure diagnostics. Read state moved to the follower's positional receipt
+    (:attr:`ThreadFollower.last_read_message`), so a row exists only when a
+    delivery actually needs tracking — an inbox-policy follower generates none.
     """
 
     runtime = True
@@ -1609,10 +1913,8 @@ class ThreadNotification(SqidMixin, AuditMixin, AngeeModel):
     notification_status = StateField(
         choices_enum=NotificationStatus,
         default=NotificationStatus.READY,
-        db_index=True,
+        db_index=False,
     )
-    is_read = models.BooleanField(default=False, db_index=True)
-    read_at = models.DateTimeField(null=True, blank=True)
     failure_type = models.CharField(max_length=64, blank=True, default="")
     failure_reason = models.TextField(blank=True, default="")
     metadata = models.JSONField(blank=True, default=dict)
@@ -1623,7 +1925,7 @@ class ThreadNotification(SqidMixin, AuditMixin, AngeeModel):
         """Django model options for thread notifications."""
 
         abstract = True
-        ordering = ("is_read", "-created_at", "sqid")
+        ordering = ("-created_at", "sqid")
         rebac_resource_type = "messaging/thread_notification"
         rebac_id_attr = "sqid"
         constraints = (
@@ -1633,9 +1935,20 @@ class ThreadNotification(SqidMixin, AuditMixin, AngeeModel):
             ),
         )
         indexes = (
-            models.Index(fields=("thread", "user", "is_read")),
-            models.Index(fields=("attachment", "user", "is_read")),
-            models.Index(fields=("user", "is_read", "notification_status")),
+            models.Index(fields=("thread", "user")),
+            # The delivery worker's queue: only undelivered rows enter the index
+            # (the Zulip scheduled-send pattern), so it stays tiny at any volume.
+            models.Index(
+                fields=("notification_status", "created_at"),
+                condition=models.Q(notification_status__in=("ready", "process")),
+                name="ix_thread_notification_pending",
+            ),
+            # Delivery-error surfacing per user.
+            models.Index(
+                fields=("user", "notification_status"),
+                condition=models.Q(notification_status__in=("bounce", "exception")),
+                name="ix_thread_notification_failed",
+            ),
         )
 
     def __str__(self) -> str:
@@ -1715,6 +2028,15 @@ class Fragment(SqidMixin, AuditMixin, AngeeModel):
     text = models.TextField()
     hash = models.CharField(max_length=64, unique=True)
     kind = StateField(choices_enum=FragmentKind, default=FragmentKind.PARAGRAPH)
+    search = SearchVectorField(null=True)
+    """Full-text vector over ``text``, stamped once at creation by the manager.
+
+    A content-addressed row is immutable, so no trigger or update queue is needed
+    (contrast Zulip's async tsvector worker): each *unique* paragraph is indexed
+    exactly once however many messages share it, which is what keeps the GIN small
+    at millions of messages. ``config="simple"`` — mail is multilingual; stemming
+    one language would skew the rest.
+    """
 
     objects = FragmentManager()
 
@@ -1724,6 +2046,29 @@ class Fragment(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         # No rebac_resource_type: a content-addressed shared row is unscoped
         # substrate, gated through the owning Part/Message (see the class docstring).
+        indexes = (GinIndex(fields=("search",), name="ix_fragment_search"),)
+
+    def part_count(self) -> int:
+        """How many parts (across all messages) share this fragment.
+
+        Deliberately corpus-global: the row is unscoped substrate and the count is
+        the dedup fact itself — an actor-scoped count would falsify it. Row counts
+        only, never content; each probe rides the fragment FK index (sub-ms at the
+        measured million-message scale), bounded by the page size that reads it.
+        """
+
+        return int(apps.get_model("messaging", "Part")._base_manager.filter(fragment=self).count())
+
+    def message_count(self) -> int:
+        """How many distinct messages reference this fragment (see :meth:`part_count`)."""
+
+        return int(
+            apps.get_model("messaging", "Part")
+            ._base_manager.filter(fragment=self)
+            .values("message_id")
+            .distinct()
+            .count()
+        )
 
     def __str__(self) -> str:
         """Return a truncated preview for Django displays."""
@@ -1749,9 +2094,17 @@ class Part(SqidMixin, AuditMixin, AngeeModel):
         ATTACHMENT = "attachment", "Attachment"
 
     class PartRole(models.TextChoices):
-        """The semantic role of a part — the primary quotation/search filter axis."""
+        """The semantic role of a part — the primary quotation/search filter axis.
+
+        ``TITLE`` carries the message's subject (an email Subject, a post title) and
+        ``HEADER`` a retained envelope header (``name`` holds the header name, the
+        fragment its value) — sparse top-level rows only messages that *have* those
+        facts pay for. Role lives on the use, not the content: the same fragment may
+        be a paragraph in one message and a title in another.
+        """
 
         BODY = "body", "Body"
+        TITLE = "title", "Title"
         QUOTED = "quoted", "Quoted"
         SIGNATURE = "signature", "Signature"
         HEADER = "header", "Header"
@@ -1799,6 +2152,13 @@ class Part(SqidMixin, AuditMixin, AngeeModel):
         ordering = ("message", "position", "sqid")
         rebac_resource_type = "messaging/part"
         rebac_id_attr = "sqid"
+        constraints = (
+            models.UniqueConstraint(
+                fields=("message",),
+                condition=models.Q(role="title"),
+                name="uq_part_message_title",
+            ),
+        )
 
     def __str__(self) -> str:
         """Return the part type for Django displays."""
@@ -1934,6 +2294,15 @@ class Participant(SqidMixin, AuditMixin, AngeeModel):
         ordering = ("role", "sqid")
         rebac_resource_type = "messaging/participant"
         rebac_id_attr = "sqid"
+        constraints = (
+            # One row per envelope fact; the write path dedupes a repeated
+            # address, the constraint keeps a concurrent rebuild honest.
+            models.UniqueConstraint(
+                fields=("message", "handle", "role"),
+                condition=models.Q(message__isnull=False),
+                name="uq_participant_message_handle_role",
+            ),
+        )
 
     def __str__(self) -> str:
         """Return a readable participant label for Django displays."""

@@ -4,9 +4,9 @@ A :class:`~angee.social.models.Feed` (an ``integrate.Integration`` child + ``Bri
 selects one ``FeedBackend`` by registry key. The backend does the per-platform
 *transport* + *parse* — ``fetch_posts`` returns neutral :class:`ParsedPost` rows.
 Each post's *core* (thread/message/parts) reuses messaging's neutral
-:class:`~angee.messaging.backends.ParsedMessage`, so the idempotent
-``(platform, external_id)`` upsert, the Part/Fragment tree, and thread resolution
-stay owned by ``Message.objects.ingest`` — social never forks that write path. A
+:class:`~angee.messaging.backends.ParsedMessage`, so the idempotent channel-scoped
+external-id upsert, the Part/Fragment tree, and thread resolution stay owned by
+``Message.objects.ingest`` — social never forks that write path. A
 post adds the social *overlay*: rolled-up :class:`ParsedMetrics`, per-actor
 :class:`ParsedReaction`\\s, and cross-post :class:`ParsedRelation`\\s that the
 :class:`~angee.social.models.Feed` maps onto ``PostMetrics``, the reused
