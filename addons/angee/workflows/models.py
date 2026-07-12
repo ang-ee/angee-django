@@ -577,7 +577,7 @@ class TriggerManager(AngeeManager):
                     continue
                 try:
                     trigger.next_fire_at = trigger.initial_fire_at(now=timestamp)
-                except CroniterBadCronError, ValueError, TypeError:
+                except (CroniterBadCronError, ValueError, TypeError):
                     logger.exception(
                         "Skipping workflow schedule trigger %s after initial fire calculation failed.",
                         trigger.pk,

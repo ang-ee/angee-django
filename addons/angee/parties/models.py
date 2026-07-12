@@ -385,6 +385,72 @@ class Affiliation(SqidMixin, AuditMixin, AngeeModel):
         return self.organization_name or self.title or str(self.organization_id)
 
 
+class Relation(SqidMixin, AuditMixin, AngeeModel):
+    """A person-to-person relationship (kinship, guardianship, partnership).
+
+    Directional from ``party``'s viewpoint: ``kind`` names what the relative
+    is *to the party* (the relative is the party's MOTHER, the party's WARD).
+    The relative is a :class:`Party` when tracked, falling back to a free-text
+    ``relative_name`` — the :class:`Affiliation` idiom for counterparties that
+    are not themselves directory entries (most family-history relatives).
+    Domain facts about the relationship (health history, custody terms) belong
+    to the consumer addon that owns them, not here.
+    """
+
+    runtime = True
+
+    class Kind(models.TextChoices):
+        """What the relative is to the party."""
+
+        MOTHER = "mother", "Mother"
+        FATHER = "father", "Father"
+        PARENT = "parent", "Parent"
+        SIBLING = "sibling", "Sibling"
+        CHILD = "child", "Child"
+        GRANDPARENT = "grandparent", "Grandparent"
+        GRANDCHILD = "grandchild", "Grandchild"
+        AUNT_UNCLE = "aunt_uncle", "Aunt/Uncle"
+        COUSIN = "cousin", "Cousin"
+        SPOUSE = "spouse", "Spouse"
+        PARTNER = "partner", "Partner"
+        GUARDIAN = "guardian", "Guardian"
+        WARD = "ward", "Ward"
+        OTHER = "other", "Other"
+
+    sqid = SqidField(real_field_name="id", prefix="prl_", min_length=8)
+    party = models.ForeignKey(
+        "parties.Party",
+        on_delete=models.CASCADE,
+        related_name="relations",
+    )
+    relative = models.ForeignKey(
+        "parties.Party",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="related_to",
+    )
+    relative_name = models.CharField(max_length=256, blank=True, default="")
+    kind = models.CharField(max_length=32, choices=Kind.choices, default=Kind.OTHER)
+    started_at = models.DateField(null=True, blank=True)
+    ended_at = models.DateField(null=True, blank=True)
+
+    objects = AngeeManager()
+
+    class Meta:
+        """Django model options for the relation source model."""
+
+        abstract = True
+        ordering = ("kind", "relative_name", "sqid")
+        rebac_resource_type = "parties/relation"
+        rebac_id_attr = "sqid"
+
+    def __str__(self) -> str:
+        """Return the relation kind and relative for Django displays."""
+
+        return f"{self.get_kind_display()}: {self.relative_name or self.relative_id}"
+
+
 class Folder(SqidMixin, AuditMixin, AngeeModel):
     """A group of parties — the local mirror of a synced address book.
 

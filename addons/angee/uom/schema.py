@@ -36,6 +36,7 @@ class UomType(AngeeNode):
     category: UomCategoryType
     name: auto
     ratio: auto
+    offset: auto
     rounding: auto
     is_reference: auto
     is_archived: auto
@@ -62,7 +63,7 @@ _UOM_RESOURCE = hasura_model_resource(
     sortable=["name", "ratio", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["category", "is_reference", "is_archived"],
-    writable=["name", "category", "ratio", "rounding", "is_reference", "is_archived"],
+    writable=["name", "category", "ratio", "offset", "rounding", "is_reference", "is_archived"],
     field_id_decode={"category": public_pk_decoder(UomCategory)},
     write_backend=AngeeHasuraWriteBackend(Uom, public_id_fields=("category",)),
     id_column="sqid",

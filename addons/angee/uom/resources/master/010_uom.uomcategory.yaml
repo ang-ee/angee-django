@@ -17,3 +17,6 @@ rows:
   - xref: time
     fields:
       name: Time
+  - xref: temperature
+    fields:
+      name: Temperature

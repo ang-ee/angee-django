@@ -38,6 +38,7 @@ Handle = apps.get_model("parties", "Handle")
 PartyHandle = apps.get_model("parties", "PartyHandle")
 Address = apps.get_model("parties", "Address")
 Affiliation = apps.get_model("parties", "Affiliation")
+Relation = apps.get_model("parties", "Relation")
 Directory = apps.get_model("parties", "Directory")
 Folder = apps.get_model("parties", "Folder")
 
@@ -166,6 +167,18 @@ class AffiliationType(AngeeNode):
     started_at: auto
     ended_at: auto
     is_primary: auto
+
+
+@strawberry_django.type(Relation)
+class RelationType(AngeeNode):
+    """GraphQL projection of a person-to-person relation."""
+
+    party: PartyType | None
+    relative: PartyType | None
+    relative_name: auto
+    kind: auto
+    started_at: auto
+    ended_at: auto
 
 
 @strawberry_django.type(Folder)
@@ -408,6 +421,22 @@ _AFFILIATION_RESOURCE = hasura_model_resource(
     },
     write_backend=AngeeHasuraWriteBackend(Affiliation, public_id_fields=("party", "organization")),
 )
+_RELATION_RESOURCE = hasura_model_resource(
+    RelationType,
+    model=Relation,
+    name="relations",
+    filterable=["id", "party", "relative", "kind", "created_at"],
+    sortable=["party", "kind", "created_at"],
+    aggregatable=["id"],
+    groupable=["kind"],
+    insertable=["party", "relative", "relative_name", "kind", "started_at", "ended_at"],
+    updatable=["relative", "relative_name", "kind", "started_at", "ended_at"],
+    field_id_decode={
+        "party": public_pk_decoder(Party),
+        "relative": public_pk_decoder(Party),
+    },
+    write_backend=AngeeHasuraWriteBackend(Relation, public_id_fields=("party", "relative")),
+)
 _CONTACT_FOLDER_RESOURCE = hasura_model_resource(
     ContactFolderType,
     model=Folder,
@@ -451,6 +480,7 @@ _RESOURCE_TYPES = [
     *_HANDLE_RESOURCE.types,
     *_ADDRESS_RESOURCE.types,
     *_AFFILIATION_RESOURCE.types,
+    *_RELATION_RESOURCE.types,
     *_CONTACT_FOLDER_RESOURCE.types,
     *_DIRECTORY_RESOURCE.types,
 ]
@@ -464,6 +494,7 @@ _PARTIES_SCHEMA_BUCKET = {
         _HANDLE_RESOURCE.query,
         _ADDRESS_RESOURCE.query,
         _AFFILIATION_RESOURCE.query,
+        _RELATION_RESOURCE.query,
         _CONTACT_FOLDER_RESOURCE.query,
         _DIRECTORY_RESOURCE.query,
     ],
@@ -475,6 +506,7 @@ _PARTIES_SCHEMA_BUCKET = {
         _HANDLE_RESOURCE.mutation,
         _ADDRESS_RESOURCE.mutation,
         _AFFILIATION_RESOURCE.mutation,
+        _RELATION_RESOURCE.mutation,
         _CONTACT_FOLDER_RESOURCE.mutation,
         _DIRECTORY_RESOURCE.mutation,
     ],
@@ -486,6 +518,7 @@ _PARTIES_SCHEMA_BUCKET = {
         PartyHandleType,
         AddressType,
         AffiliationType,
+        RelationType,
         DirectoryType,
         ContactFolderType,
         *_RESOURCE_TYPES,

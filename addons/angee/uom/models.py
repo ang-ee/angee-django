@@ -1,18 +1,24 @@
 """Units of measure: a category tree of convertible units.
 
 A :class:`UomCategory` groups the units that measure one physical quantity
-(weight, volume, time, …); a :class:`Uom` is one unit within a category. Each
-unit records its size as ``ratio`` — the number of the category's *reference*
-units contained in one of this unit (``12`` for a dozen when the reference is a
-single unit, ``0.001`` for a gram when the reference is a kilogram). Exactly one
-unit per category is the reference (``is_reference`` with ``ratio == 1``),
-enforced by a partial unique constraint.
+(weight, volume, time, temperature, …); a :class:`Uom` is one unit within a
+category. Each unit records its size as an affine map onto the category's
+*reference* unit: ``value_in_reference = qty * ratio + offset``. ``ratio`` is
+the number of reference units contained in one of this unit (``12`` for a
+dozen when the reference is a single unit, ``0.001`` for a gram when the
+reference is a kilogram); ``offset`` is zero for ordinary multiplicative
+units and carries the zero-point shift for interval scales (``273.15`` for
+Celsius against a Kelvin reference). Exactly one unit per category is the
+reference (``is_reference`` with ``ratio == 1`` and ``offset == 0``),
+enforced by a partial unique constraint plus a check constraint.
 
-Conversion is reference-neutral: ``qty * self.ratio / to_uom.ratio`` re-expresses
-``qty`` of this unit in the other unit of the same category. The result is
-quantized to the destination unit's ``rounding`` step with ``ROUND_HALF_UP`` —
-half rounds away from zero. That mode is **this addon's stated policy** for
-quantity rounding, deliberately fixed here rather than caller-supplied (unlike the
+Conversion is reference-neutral:
+``(qty * self.ratio + self.offset - to_uom.offset) / to_uom.ratio``
+re-expresses ``qty`` of this unit in the other unit of the same category (the
+plain ratio quotient when both offsets are zero). The result is quantized to
+the destination unit's ``rounding`` step with ``ROUND_HALF_UP`` — half rounds
+away from zero. That mode is **this addon's stated policy** for quantity
+rounding, deliberately fixed here rather than caller-supplied (unlike the
 money/tax owners, whose amount rounding takes an explicit mode from company
 policy). ``rounding`` is a decimal step and, because unit steps are powers of ten,
 is read as a number of fractional digits by :func:`angee.base.numeric.quantize`.
@@ -63,11 +69,14 @@ UomManager = AngeeManager.from_queryset(UomQuerySet)
 
 
 class Uom(ArchiveMixin, AngeeDataModel):
-    """One unit within a category, sized against the category's reference unit.
+    """One unit within a category, mapped affinely onto the reference unit.
 
-    ``ratio`` is the number of reference units in one of this unit, so the
-    reference unit itself carries ``ratio == 1`` and ``is_reference == True``. At
-    most one reference exists per category (the partial unique constraint below).
+    ``value_in_reference = qty * ratio + offset``: ``ratio`` is the number of
+    reference units in one of this unit, ``offset`` the zero-point shift for
+    interval scales (temperature) and ``0`` everywhere else. The reference
+    unit itself carries ``ratio == 1``, ``offset == 0`` and
+    ``is_reference == True``; at most one reference exists per category (the
+    partial unique constraint below) and its identity map is check-enforced.
     ``rounding`` is the decimal step conversions *into* this unit are quantized to.
     """
 
@@ -83,6 +92,7 @@ class Uom(ArchiveMixin, AngeeDataModel):
         related_name="units",
     )
     ratio = models.DecimalField(max_digits=20, decimal_places=10, default=Decimal(1))
+    offset = models.DecimalField(max_digits=20, decimal_places=10, default=Decimal(0))
     rounding = models.DecimalField(max_digits=12, decimal_places=6, default=Decimal("0.01"))
     is_reference = models.BooleanField(default=False)
 
@@ -100,6 +110,13 @@ class Uom(ArchiveMixin, AngeeDataModel):
                 fields=("category",),
                 condition=models.Q(is_reference=True),
                 name="%(app_label)s_uom_one_reference_per_category",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(is_reference=False)
+                    | (models.Q(ratio=Decimal(1)) & models.Q(offset=Decimal(0)))
+                ),
+                name="%(app_label)s_uom_reference_is_identity",
             ),
         )
 
@@ -137,10 +154,13 @@ class Uom(ArchiveMixin, AngeeDataModel):
     def convert(self, qty: Decimal, to_uom: Uom) -> Decimal:
         """Return ``qty`` of this unit expressed in ``to_uom`` (same category only).
 
-        Both units measure their category's reference in their own terms, so the
-        conversion is ``qty * self.ratio / to_uom.ratio``. The quotient is
-        quantized to ``to_uom``'s ``rounding`` step via :meth:`quantize` (half away
-        from zero) — quantity rounding is this addon's fixed policy, not a
+        Both units map affinely onto their category's reference
+        (``value_in_reference = qty * ratio + offset``), so the conversion goes
+        through the reference and back:
+        ``(qty * self.ratio + self.offset - to_uom.offset) / to_uom.ratio`` —
+        the plain ratio quotient when both offsets are zero. The result is
+        quantized to ``to_uom``'s ``rounding`` step via :meth:`quantize` (half
+        away from zero) — quantity rounding is this addon's fixed policy, not a
         caller-supplied mode. Raises :class:`ValueError` across categories.
         """
 
@@ -149,7 +169,7 @@ class Uom(ArchiveMixin, AngeeDataModel):
                 f"cannot convert {self.name!r} to {to_uom.name!r}: "
                 "units belong to different categories"
             )
-        return to_uom.quantize(qty * self.ratio / to_uom.ratio)
+        return to_uom.quantize((qty * self.ratio + self.offset - to_uom.offset) / to_uom.ratio)
 
 
 UomRole = role_anchor("uom/role")

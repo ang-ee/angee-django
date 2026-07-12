@@ -18,6 +18,7 @@ from angee.parties.models import Address as AbstractAddress
 from angee.parties.models import Affiliation as AbstractAffiliation
 from angee.parties.models import Organization as AbstractOrganization
 from angee.parties.models import PartyHandle as AbstractPartyHandle
+from angee.parties.models import Relation as AbstractRelation
 from angee.parties.models import Person as AbstractPerson
 from tests import test_messaging as messaging_models
 from tests.conftest import (
@@ -34,6 +35,7 @@ _AffiliationMeta = getattr(AbstractAffiliation, "Meta", object)
 _OrganizationMeta = getattr(AbstractOrganization, "Meta", object)
 _PartyHandleMeta = getattr(AbstractPartyHandle, "Meta", object)
 _PersonMeta = getattr(AbstractPerson, "Meta", object)
+_RelationMeta = getattr(AbstractRelation, "Meta", object)
 
 
 class Address(AbstractAddress):
@@ -91,6 +93,17 @@ class Organization(messaging_models.Party, AbstractOrganization):
         rebac_id_attr = "sqid"
 
 
+class Relation(AbstractRelation):
+    """Concrete relation model used to import the parties schema."""
+
+    class Meta(_RelationMeta):
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_relation"
+        rebac_resource_type = "parties/relation"
+        rebac_id_attr = "sqid"
+
+
 # Import after the concrete test models are registered; the source schema resolves
 # the composer-emitted runtime models through Django's app registry.
 parties_schema = importlib.import_module("angee.parties.schema")
@@ -105,6 +118,7 @@ PARTIES_TEST_MODELS = (
     PartyHandle,
     Address,
     Affiliation,
+    Relation,
 )
 
 
