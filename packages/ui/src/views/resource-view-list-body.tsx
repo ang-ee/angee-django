@@ -598,7 +598,7 @@ export function buildColumns<TRow extends Row>(
       enableHiding: false,
       meta: {
         align: "left",
-        label: group.field,
+        label: groupFieldLabel(group.field),
         field: group.field,
         groupingOnly: true,
       },
@@ -1214,7 +1214,15 @@ export function groupKey(
     : null;
   if (enumLabel) return enumLabel;
   const date = dateFromUnknown(value);
-  if (!date) return typeof value === "string" ? statusLabel(value) : String(value);
+  if (!date) {
+    if (typeof value !== "string") return String(value);
+    // Only an enum-typed field's raw member name gets prettified; free-text
+    // values (mailbox names, relation labels) must render verbatim — title-casing
+    // mangles them ("CATC" -> "Catc", "B.V." -> "B V"). Gate on the field KIND,
+    // not the values list — an enum whose values projected empty still prettifies.
+    const isEnumField = metadata?.fields[group.field]?.kind === "enum";
+    return isEnumField ? statusLabel(value) : value;
+  }
   if (group.granularity === "year") return String(date.getFullYear());
   if (group.granularity === "quarter") {
     const quarter = Math.floor(date.getMonth() / 3) + 1;
@@ -1461,6 +1469,26 @@ export function isGroupingOnlyColumn<TRow extends Row>(
   column: ColumnDef<TRow>,
 ): boolean {
   return columnMeta(column).groupingOnly === true;
+}
+
+/** Merge visibility=false for every grouping-only column into ``previous``.
+
+    A grouping accessor exists only to feed TanStack grouping; without this the
+    axis renders as an empty data column with a raw-path header beside the
+    declared columns. Returns ``previous`` unchanged when nothing new appeared. */
+export function withGroupingOnlyColumnsHidden<TRow extends Row>(
+  columns: readonly ColumnDef<TRow>[],
+  previous: Record<string, boolean>,
+): Record<string, boolean> {
+  let next: Record<string, boolean> | null = null;
+  for (const column of columns) {
+    const id = column.id;
+    if (!id || !isGroupingOnlyColumn(column)) continue;
+    if (previous[id] === false) continue;
+    next = next ?? { ...previous };
+    next[id] = false;
+  }
+  return next ?? previous;
 }
 
 function nextSort(

@@ -53,7 +53,7 @@ import { Spinner } from "../ui/spinner";
 import { Tabs } from "../ui/tabs";
 import { renderGlyph } from "../chrome/Glyph";
 import { textRoleVariants } from "../ui/text";
-import { ControlBand } from "../layouts/ControlBand";
+import { ControlBand, ControlBandProvider } from "../layouts/ControlBand";
 import { cn } from "../lib/cn";
 import { SlotOutlet } from "../lib/slot-outlet";
 import {
@@ -486,6 +486,11 @@ export function FormView({
       }
     }
     for (const extra of returning ?? []) paths.add(extra);
+    // The record heading falls back to the backend-owned display representation
+    // when no declared field carries the title; select it so that fallback has
+    // data to read (it is guaranteed a readable String scalar by the metadata).
+    const representation = modelMetadata?.recordRepresentation;
+    if (representation && modelMetadata.fields[representation]) paths.add(representation);
     return [...paths];
   }, [formFields, isCreate, modelMetadata, relationByField, returning, schemaMetadata]);
 
@@ -1276,7 +1281,13 @@ export function FormView({
                 />
               ) : (
                 <h1 className="truncate text-28 font-semibold leading-9 text-fg">
-                  {t("form.record")}
+                  {/* No declared title field: fall back to the record's
+                      backend-owned display representation before the generic
+                      literal, so a record page always reads as its subject. */}
+                  {titleText(
+                    recordRepresentationValue(displayRecord, modelMetadata),
+                    t("form.record"),
+                  )}
                 </h1>
               )}
               {/* The title field renders in the header (no FieldRoot), so its
@@ -1360,7 +1371,12 @@ export function FormView({
           keepMounted={tab.keepMounted}
           className={cn(FORM_COLUMN_CLASS, "pb-12")}
         >
-          {recordPanelContext ? tab.render(recordPanelContext) : null}
+          {/* A tab panel owns its own chrome: clearing the band host keeps an
+              embedded list's ControlBand inline here instead of portaling into
+              the page-level band, which stacked toolbars above the record. */}
+          <ControlBandProvider host={undefined}>
+            {recordPanelContext ? tab.render(recordPanelContext) : null}
+          </ControlBandProvider>
         </Tabs.Panel>
       ))}
       {recordExtrasPanel}
@@ -1725,6 +1741,15 @@ function isLongTextField(field: FieldDescriptor): boolean {
     id === "markdown.editor" ||
     id === "markdown.preview"
   );
+}
+
+function recordRepresentationValue(
+  record: Row | null | undefined,
+  metadata: ModelMetadata | null,
+): unknown {
+  const field = metadata?.recordRepresentation;
+  if (!record || !field) return undefined;
+  return (record as Record<string, unknown>)[field];
 }
 
 function titleText(value: unknown, fallback: string): string {

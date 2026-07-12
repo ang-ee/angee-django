@@ -116,9 +116,11 @@ describe("useScalarFacets", () => {
         filter: { status: { exact: "ACTIVE" } },
       },
       {
+        // A free-text scalar value renders verbatim — only enum-typed fields
+        // get their member names prettified.
         id: "source:api",
-        label: "Api",
-        chipLabel: "Api",
+        label: "api",
+        chipLabel: "api",
         filter: { source: { exact: "api" } },
       },
     ]);
@@ -138,7 +140,7 @@ describe("useScalarFacets", () => {
         field: "source",
         label: "Source",
         type: "selection",
-        options: [{ value: "api", label: "Api" }],
+        options: [{ value: "api", label: "api" }],
       },
     ]);
   });
