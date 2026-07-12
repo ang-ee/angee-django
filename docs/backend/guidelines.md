@@ -501,6 +501,22 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **Instance `save()`/`delete()` overrides do not run on cascade or bulk queryset paths.**
   Lifecycle side effects that must survive those paths belong on Django signals; Agent's
   service-user deactivation is a `post_delete` receiver for this reason.
+- **Regenerating the example's runtime migrations orphans existing dev
+  databases.** The example's `runtime/` (migrations included) is deliberately
+  untracked and greenfield: a branch that regenerates its migrations produces a
+  fresh file set whose names/numbering no longer match a live dev DB's applied
+  history, and Django then re-applies schema that already exists (`duplicate
+  column`). The remedy is a dev-DB reset (`.angee/data/db.sqlite3` — back it up
+  first), not surgical `--fake` repair. Production consumers commit their
+  runtime migrations and never hit this.
+- **Data migrations access REBAC-scoped models through `_base_manager`, and
+  backfills need a rows-present proof.** A manager with `use_in_migrations = True`
+  (iam's `UserManager`, inherited from Django's) rides into the historical model,
+  so `objects` inside a `RunPython` is REBAC-scoped and raises `MissingActorError`
+  under strict mode — a migration is a system operation; use
+  `model._base_manager.using(db)`. And a fresh-DB `migrate` never executes a
+  row-dependent backfill body: prove backfills against a database that has rows
+  (the agents service-user backfill failed only on live dev DBs for this reason).
 - **Agent runtime auth is a `(runtime × provider × credential-kind)` fact, not provider-only.**
   The `AgentRuntime` an agent's `runtime_class` selects (`angee.agents.runtimes`) owns how a
   credential becomes container env *and* the synced secret payload (`auth_env` /
