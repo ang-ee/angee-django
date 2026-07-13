@@ -347,9 +347,12 @@ Durable project knowledge is checked in, not held in any agent's private memory
   in `docs/guidelines.md`).
 - **Shared agent methodology — reviewer agents, slash commands, skills, and
   workflows — lives in `.agents/`** (committed and public; see `.agents/README.md`).
-- **Agent work-state — plans, working notes, handovers — goes into `.work/`.**
+- **Agent work-state goes into `.work/`:** design specs: `.work/plans/specs/`;
+  plans: `.work/plans/`; notes: `.work/notes/`; handovers: `.work/handovers/`.
   `.work/` is a gitignored symlink to a separate, private work-state repo; it is
-  never mirrored to the public repo, and nothing in it is published.
+  never mirrored to the public repo, and nothing in it is published. Global
+  skill defaults such as `docs/superpowers/**` are overridden and forbidden in
+  this repository.
 - **Durable rules the team must inherit never live only in `.work/`.** A private
   note is invisible to teammates and to the next agent; capture the durable rule
   in the owning `docs/` guideline instead.

@@ -57,10 +57,30 @@ are committed first.
 
 ## Create Workspace
 
-Use the dev workspace template unless the user names another template:
+Resolve and validate the shared work-state repository before choosing the
+workspace parent:
 
 ```sh
-angee ws create <name> --template dev --input base_ref=<parent-ref>
+repo_root=$(git rev-parse --show-toplevel) || exit 1
+test -L "$repo_root/.work" || exit 1
+work_state_path=$(cd "$repo_root/.work" && pwd -P) || exit 1
+work_state_top=$(git -C "$work_state_path" rev-parse --show-toplevel) || exit 1
+test "$work_state_top" = "$work_state_path" || exit 1
+test "$(basename "$work_state_path")" != "$(basename "$repo_root")" || exit 1
+```
+
+These checks require the repository-root `.work` symlink, resolve it to an
+absolute canonical directory, verify that directory is the top level of a valid
+Git repository, and keep the private work-state repository distinct from the
+public source repository. If any check fails, stop; do not fall back to
+`docs/superpowers` or invent another path.
+
+Use the dev workspace template unless the user names another template, and pass
+the validated canonical path through the template's required input:
+
+```sh
+angee ws create <name> --template dev --input base_ref=<parent-ref> \
+  --input work_state_path="$work_state_path"
 ```
 
 Choose `<parent-ref>` in this order:
@@ -76,6 +96,7 @@ After creation, report:
 - Workspace path.
 - Branch name.
 - Parent ref.
+- Resolved work-state path.
 - `angee dev` command from the workspace root.
 - `angee ws status <name>` for follow-up inspection.
 

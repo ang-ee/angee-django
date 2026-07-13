@@ -7,7 +7,8 @@ not what any single effort is doing.
 
 Agent **work-state** — plans, notes, handover prompts, scratch — lives in
 `.work/` instead. `.work/` is a gitignored symlink to a separate, private
-work-state repo; it is never mirrored to the public repo.
+work-state repo; it is never mirrored to the public repo. `AGENTS.md` owns the
+exact artifact routing policy.
 
 ## Layout
 
@@ -28,6 +29,8 @@ work-state repo; it is never mirrored to the public repo.
 ## Conventions
 
 - One file per concern; name files in kebab-case.
+- `.agents/skills/angee-workspace/SKILL.md` owns workspace lifecycle and
+  creation policy; alias skills and command shims delegate to it.
 - No secrets here, and nothing that names a private, unpublished repo — this
   directory is public. Anything provenance-sensitive belongs in `.work/`.
 - `.claude/commands`, `.claude/agents`, and `.claude/workflows` are symlinks into
