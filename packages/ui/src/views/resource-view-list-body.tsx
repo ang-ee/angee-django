@@ -630,11 +630,18 @@ function displayColumns<TRow extends Row>(
         options.emptyValueLabel,
       );
     },
-    header: () => (
-      <SortHeader column={column} sortController={sortController}>
-        {column.header ?? column.field}
-      </SortHeader>
-    ),
+    header: () => {
+      const label = column.header ?? column.field;
+      return (
+        <SortHeader column={column} sortController={sortController}>
+          {column.headerVisuallyHidden ? (
+            <span className="sr-only">{label}</span>
+          ) : (
+            label
+          )}
+        </SortHeader>
+      );
+    },
     cell: ({ row }) => (
       <ListCellContent column={column} row={row.original} />
     ),

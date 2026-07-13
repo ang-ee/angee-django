@@ -63,6 +63,7 @@ describe("page element markers", () => {
           header="Title"
           widget="text"
           sortable
+          headerVisuallyHidden
           aggregate="count"
           align="left"
           render={renderTitle}
@@ -78,6 +79,7 @@ describe("page element markers", () => {
       header: "Title",
       widget: "text",
       sortable: true,
+      headerVisuallyHidden: true,
       aggregate: "count",
       align: "left",
     });

@@ -148,6 +148,9 @@ function columnDescriptor<TRow extends object = Record<string, unknown>>(
   return cachedDescriptor(columnDescriptorCache, props, () => ({
     field: props.field,
     ...(props.header !== undefined ? { header: props.header } : {}),
+    ...(props.headerVisuallyHidden !== undefined
+      ? { headerVisuallyHidden: props.headerVisuallyHidden }
+      : {}),
     ...(props.widget !== undefined ? { widget: props.widget } : {}),
     ...(props.options !== undefined ? { options: props.options } : {}),
     ...(props.sortable !== undefined ? { sortable: props.sortable } : {}),

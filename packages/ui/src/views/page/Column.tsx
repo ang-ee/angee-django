@@ -18,6 +18,8 @@ export interface ColumnProps<
 > {
   field: string;
   header?: ReactNode;
+  /** Keep an accessible table header while visually hiding its label. */
+  headerVisuallyHidden?: boolean;
   widget?: string;
   /** Options passed to enum-like cell widgets; derived from SDL when omitted. */
   options?: readonly WidgetOption[];
@@ -33,6 +35,8 @@ export interface ColumnDescriptor<
 > {
   field: string;
   header?: ReactNode;
+  /** Keep an accessible table header while visually hiding its label. */
+  headerVisuallyHidden?: boolean;
   widget?: string;
   /** Options passed to enum-like cell widgets; derived from SDL when omitted. */
   options?: readonly WidgetOption[];
