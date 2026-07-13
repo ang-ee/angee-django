@@ -103,7 +103,10 @@ works:
 - **Workflows** — orchestration of multi-step, long-running work.
 - **Integrations** — connectors to outside systems and OAuth providers.
 - **Communications** — messaging and notification channels.
-- **CRM / PRM** — customer and partner relationship data models.
+- **Personal relationship management (PRM)** — the current base for parties,
+  relationships, communication, shared spaces, and stay-in-touch intent. CRM
+  composes over that base; partner relationship management is a possible future
+  addon, not a capability built today.
 - **UX with different layouts** — public, app, and operator UI layouts built from
   one component system and themeable by tokens.
 

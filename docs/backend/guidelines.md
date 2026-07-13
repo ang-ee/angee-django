@@ -457,6 +457,28 @@ data through REBAC, never a queryset bypass.
 
 Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 
+- **Run every changed test module standalone.** A full suite's file order can
+  leak concrete test models into the shared registry and mask a missing
+  registration; a broad run does not replace the direct module run.
+- **GraphQL authorization tests include a non-admin reader.** Admin-only tests
+  neither pin deny-hard-fail behavior nor expose a leaked `sudo()` scope.
+- **Foreign write paths defer parties bookkeeping until commit and contain its
+  failures.** Follow the OIDC/ingest precedent: schedule the parties-owned work
+  with `transaction.on_commit`, catch and log callback failures, and let the
+  already-successful foreign write continue.
+- **Polymorphic edges write at the canonical MTI level.** Route their targets
+  through `angee.base.canonical_record_target`; compose `ThreadedModelMixin` and
+  reverse `GenericRelation`s on that same canonical ancestor.
+- **Derived columns have two drift classes and two owners.** Signals own instance
+  saves/deletes, cascades, and queryset deletes; idempotent repair passes own
+  `bulk_create` and queryset `update` paths, where signals do not run.
+- **`ScoredLinkMixin` is the scored-suggestion shape, not a permission owner.**
+  A subclass that needs REBAC side effects overrides the transition; never add
+  REBAC writes to the shared mixin.
+- **Upgrading this refactor is an operator-run reconciliation.** Downstream
+  consumers need repoint/merge data migrations for tags and thread-attachment
+  child-content-type edges, then one `manage.py reconcile_permissions` run for
+  the `social/*` to `posts/*` zed rename; do not hide either step in startup.
 - **State columns are `StateField`; guarded changes go through transition methods, never direct assignment.**
 - **`hasura_model_resource` create `full_clean`s the input, so model + input defaults must agree.**
   The Hasura model-resource create path builds a dummy instance from the input and calls

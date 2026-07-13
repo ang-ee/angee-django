@@ -148,6 +148,30 @@ boundaries instead of importing it, to avoid import cycles.
 `schemas` mapping in an addon's conventional `schema.py`. Each named schema
 contributes to fixed buckets, and Angee builds one Strawberry `Schema` per name.
 
+## Relationship Management
+
+**Party** — the universal supertype for a person, organization, or other actor
+that participates in identity, communication, and relationship facts.
+
+**Handle** — a normalized contact point such as an email address or account.
+The Handle's owner records the **control** fact (who may act through it), while
+**PartyHandle** records the **identity** fact (which Party it reaches); neither
+fact implies the other.
+
+**Circle** — one user's private, Dunbar-sized organizing tree. It never gates
+visibility. A **Group** is the contrasting `spaces` concept: a shared, governed
+roster whose roles participate in access control.
+
+**Relationship** — the single typed Party-to-Party factual edge, including
+employment as one relationship kind rather than a separate identity model.
+
+**Tie** — a derived Party-to-Party interaction edge. **Cadence** is the human,
+per-user stay-in-touch intent; recomputable interaction evidence and personal
+intent remain separate facts.
+
+**posts** — the public-post and engagement overlay, dual to `messaging`'s
+private-message substrate.
+
 ## Frontend
 
 **`defineAddon`** — the frontend entry point an addon uses to contribute routes,
