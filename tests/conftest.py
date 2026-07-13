@@ -44,11 +44,11 @@ from angee.platform.models import Addon as AbstractAddon
 from angee.platform.models import PlatformExplorer as AbstractPlatformExplorer
 from angee.platform_integrate_vcs.models import AddonCatalog as AbstractAddonCatalog
 from angee.platform_integrate_vcs.models import CatalogProvenance as AbstractCatalogProvenance
-from angee.social.backends import FeedBackend, ParsedPost
-from angee.social.models import Feed as AbstractFeed
-from angee.social.models import FeedFollow as AbstractFeedFollow
-from angee.social.models import PostMetrics as AbstractPostMetrics
-from angee.social.models import Quota as AbstractQuota
+from angee.posts.backends import FeedBackend, ParsedPost
+from angee.posts.models import Feed as AbstractFeed
+from angee.posts.models import FeedFollow as AbstractFeedFollow
+from angee.posts.models import PostMetrics as AbstractPostMetrics
+from angee.posts.models import Quota as AbstractQuota
 from angee.storage.models import Backend as AbstractStorageBackend
 from angee.storage.models import Drive as AbstractDrive
 from angee.storage.models import File as AbstractFile
@@ -378,7 +378,7 @@ class StubInferenceBackend(InferenceBackend):
 class StubFeedBackend(FeedBackend):
     """In-memory feed backend for tests; canned posts are queued per feed row.
 
-    Registered as the ``stub`` key in the test ``ANGEE_SOCIAL_FEED_BACKEND_CLASSES`` so
+    Registered as the ``stub`` key in the test ``ANGEE_POSTS_FEED_BACKEND_CLASSES`` so
     a ``Feed(backend_class="stub")`` resolves to it. ``ParsedPost`` carries nested
     dataclasses (not JSON), so a test queues the posts through :meth:`queue` keyed by
     the feed row rather than riding them on the JSON ``config``; ``fetch_posts`` returns
@@ -578,11 +578,11 @@ PLATFORM_TEST_MODELS = (Addon,)
 
 
 class Feed(Integration, AbstractFeed):
-    """Concrete public-content feed used by social tests.
+    """Concrete public-content feed used by posts tests.
 
     An ``integrate.Integration`` child + ``Bridge``, folded the way the composer emits
     ``Feed(Integration, AbstractFeed)``. Lives in conftest (like ``VcsBridge``) because
-    ``angee.social.schema`` binds its console types at import time via ``apps.get_model``.
+    ``angee.posts.schema`` binds its console types at import time via ``apps.get_model``.
     """
 
     class Meta(AbstractFeed.Meta):
@@ -590,56 +590,56 @@ class Feed(Integration, AbstractFeed):
 
         abstract = False
         managed = False
-        app_label = "social"
-        db_table = "test_social_feed"
-        rebac_resource_type = "social/feed"
+        app_label = "posts"
+        db_table = "test_posts_feed"
+        rebac_resource_type = "posts/feed"
         rebac_id_attr = "sqid"
 
 
 class FeedFollow(AbstractFeedFollow):
-    """Concrete following/timeline edge used by social tests."""
+    """Concrete following/timeline edge used by posts tests."""
 
     class Meta(AbstractFeedFollow.Meta):
         """Django model options for the canonical test feed follow."""
 
         abstract = False
         managed = False
-        app_label = "social"
-        db_table = "test_social_feed_follow"
-        rebac_resource_type = "social/feed_follow"
+        app_label = "posts"
+        db_table = "test_posts_feed_follow"
+        rebac_resource_type = "posts/feed_follow"
         rebac_id_attr = "sqid"
 
 
 class PostMetrics(AbstractPostMetrics):
-    """Concrete rolled-up engagement counters used by social tests."""
+    """Concrete rolled-up engagement counters used by posts tests."""
 
     class Meta(AbstractPostMetrics.Meta):
         """Django model options for the canonical test post metrics."""
 
         abstract = False
         managed = False
-        app_label = "social"
-        db_table = "test_social_post_metrics"
-        rebac_resource_type = "social/post_metrics"
+        app_label = "posts"
+        db_table = "test_posts_post_metrics"
+        rebac_resource_type = "posts/post_metrics"
         rebac_id_attr = "sqid"
 
 
 class Quota(AbstractQuota):
-    """Concrete per-handle API-unit ledger used by social tests."""
+    """Concrete per-integration API-unit ledger used by posts tests."""
 
     class Meta(AbstractQuota.Meta):
         """Django model options for the canonical test quota."""
 
         abstract = False
         managed = False
-        app_label = "social"
-        db_table = "test_social_quota"
-        rebac_resource_type = "social/quota"
+        app_label = "posts"
+        db_table = "test_posts_quota"
+        rebac_resource_type = "posts/quota"
         rebac_id_attr = "sqid"
 
 
-SOCIAL_TEST_MODELS = (Feed, FeedFollow, PostMetrics, Quota)
-"""Concrete social models created on demand by social test fixtures."""
+POSTS_TEST_MODELS = (Feed, FeedFollow, PostMetrics, Quota)
+"""Concrete posts models created on demand by posts test fixtures."""
 
 
 def _create_missing_tables(

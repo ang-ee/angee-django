@@ -1,12 +1,12 @@
-"""Managers that own the social write path and its chainable read scopes.
+"""Managers that own the posts write path and its chainable read scopes.
 
 Following the repo's Manager/QuerySet canon (``storage.FileQuerySet``/``FileManager``
 via ``from_queryset``; the very split the messaging ORM review flagged as **H3**):
 read predicates are chainable scopes on a ``*QuerySet``; the managers own the
 writes. The feed-ingest overlay reuses ``messaging.Message.objects.ingest`` for the
 message core, and per-actor reactions reuse the single ``messaging.Reaction`` table,
-so these managers own only the remaining social layer — engagement counts, following,
-and the per-account API quota ledger.
+so these managers own only the remaining posts layer — engagement counts, following,
+and the per-integration API quota ledger.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ class PostMetricsManager(AngeeManager):
     def upsert(self, *, message: Any, metrics: Any, owner_id: Any = None) -> Any:
         """Write the rolled-up engagement counters for ``message`` (idempotent).
 
-        ``metrics`` is a :class:`~angee.social.backends.ParsedMetrics`. Counters are a
+        ``metrics`` is a :class:`~angee.posts.backends.ParsedMetrics`. Counters are a
         platform-reported snapshot, so the latest fetch overwrites the row — no
         ``F()`` delta (unlike thread counters, which the ingest owner increments).
         """
@@ -91,19 +91,19 @@ class PostMetricsManager(AngeeManager):
 
 
 class QuotaQuerySet(AngeeQuerySet[Any]):
-    """REBAC-scoped read scopes for the per-handle, per-platform API budget."""
+    """REBAC-scoped read scopes for the per-integration API budget."""
 
-    def for_handle(self, handle: Any) -> QuotaQuerySet:
-        """Return the quota ledgers of one handle."""
+    def for_integration(self, integration: Any) -> QuotaQuerySet:
+        """Return the quota ledgers of one credentialed integration."""
 
-        return cast(QuotaQuerySet, self.filter(handle=handle))
+        return cast(QuotaQuerySet, self.filter(integration=integration))
 
-    def current(self, *, platform: str, now: datetime) -> QuotaQuerySet:
-        """Return the ledger rows whose period contains ``now`` for ``platform``."""
+    def current(self, *, now: datetime) -> QuotaQuerySet:
+        """Return the ledger rows whose period contains ``now``."""
 
         return cast(
             QuotaQuerySet,
-            self.filter(platform=platform, period_start__lte=now, period_end__gt=now),
+            self.filter(period_start__lte=now, period_end__gt=now),
         )
 
 
@@ -120,32 +120,28 @@ class QuotaManager(RebacManager.from_queryset(QuotaQuerySet)):  # type: ignore[m
     def open_period(
         self,
         *,
-        handle: Any,
-        platform: str,
+        integration: Any,
         limit: int,
         now: datetime | None = None,
         window: timedelta | None = None,
     ) -> Any:
-        """Return the current ledger row for ``(handle, platform)``, opening one if due."""
+        """Return the current ledger row for ``integration``, opening one if due."""
 
         moment = now or timezone.now()
-        existing = self.for_handle(handle).current(platform=platform, now=moment).first()
-        if existing is not None:
-            return existing
         span = window or self._DEFAULT_WINDOW
+        epoch = datetime(1970, 1, 1, tzinfo=moment.tzinfo)
+        period_start = epoch + ((moment - epoch) // span) * span
         row, _created = self.get_or_create(
-            handle=handle,
-            platform=platform,
-            period_start=moment,
-            defaults={"period_end": moment + span, "quota_limit": limit},
+            integration=integration,
+            period_start=period_start,
+            defaults={"period_end": period_start + span, "quota_limit": limit},
         )
         return row
 
     def consume(
         self,
         *,
-        handle: Any,
-        platform: str,
+        integration: Any,
         units: int,
         limit: int,
         now: datetime | None = None,
@@ -158,9 +154,9 @@ class QuotaManager(RebacManager.from_queryset(QuotaQuerySet)):  # type: ignore[m
         """
 
         moment = now or timezone.now()
-        period = self.open_period(handle=handle, platform=platform, limit=limit, now=moment)
         with transaction.atomic():
-            locked = self.select_for_update().get(pk=period.pk)
+            period = self.open_period(integration=integration, limit=limit, now=moment)
+            locked = self.locked_get(pk=period.pk)
             if locked.quota_used + units > locked.quota_limit:
                 return False
             self.filter(pk=locked.pk).update(

@@ -1139,8 +1139,8 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
 
     Two orthogonal axes, both base-owned: ``modality`` (the *shape* — email thread /
     direct / group / public post) and ``visibility`` (*who can see it*). A public
-    thread's post payload (``subject_url``/``body``/``tags``/``parent``) has no producer
-    in this base slice, so the ``social`` addon owns those columns and folds them onto
+    thread's post payload (``subject_url``/``body``/``parent``) has no producer
+    in this base slice, so the ``posts`` addon owns those columns and folds them onto
     this same row through the same-row ``extends`` seam. ``message_count``/
     ``last_message_at`` are denormalised and maintained with ``F()`` deltas by the
     ingest write path.
@@ -2228,7 +2228,7 @@ class MessageEdge(SqidMixin, AuditMixin, AngeeModel):
         """The type of cross-message relation.
 
         ``quote`` is produced by the messaging quotation builder; ``mention``/
-        ``crosspost``/``forward`` are produced by the ``social`` feed overlay onto this
+        ``crosspost``/``forward`` are produced by the ``posts`` feed overlay onto this
         shared graph (through ``MessageEdgeManager.relate``). ``reply`` (carried instead
         by ``Message.parent``) and ``duplicate`` have no producer in the shipped slice.
         """
@@ -2298,11 +2298,11 @@ class Participant(SqidMixin, AuditMixin, AngeeModel):
     class ParticipantRole(models.TextChoices):
         """The RFC-5322 envelope role of a participant.
 
-        Base messaging owns only the mail-envelope roles. The ``social`` addon layers
+        Base messaging owns only the mail-envelope roles. The ``posts`` addon layers
         public-membership semantics (``author``/``owner``/``moderator``/``viewer``) as
         additional documented string values on this same ``role`` field: a same-row
         ``extends`` cannot widen an existing enum, and ``StateField`` stores the raw
-        string, so social writes those values without a schema change here.
+        string, so posts writes those values without a schema change here.
         """
 
         FROM = "from", "From"
@@ -2363,10 +2363,10 @@ class Reaction(SqidMixin, AuditMixin, AngeeModel):
     This is the single per-actor reaction store: ``MessageManager.set_reaction``
     (reached from ``ThreadedModelMixin.message_reaction``) adds/removes/toggles a row
     per ``(message, handle, reaction)``, and ``Message.reaction_groups`` reads the rows
-    back grouped by content for the chatter feed. The ``social`` addon reuses this same
+    back grouped by content for the chatter feed. The ``posts`` addon reuses this same
     table for public reactions (``like``/``repost`` are reaction values on the shared
     ``messaging.Message``), so there is one reaction table, not two; the rolled-up
-    public counts live separately on ``social.PostMetrics``.
+    public counts live separately on ``posts.PostMetrics``.
 
     Dedup — one reaction of a given content per reactor — is enforced only for an
     *attributed* row (``handle`` set): the unique constraint is partial on

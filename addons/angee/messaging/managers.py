@@ -99,6 +99,29 @@ _SEARCH_CONFIG = "simple"
 # The regression fixture was a 1.6 MB text part that failed every sync retry.
 _SEARCH_MAX_BYTES = 512 * 1024
 
+# Parsed metadata is an externally controlled JSON envelope. Bound its canonical
+# UTF-8 representation at the same conservative size as fragment vector input;
+# reject rather than truncate because the envelope is explicitly lossless.
+_MESSAGE_METADATA_MAX_BYTES = 512 * 1024
+
+
+def _bounded_message_metadata(value: dict[str, Any]) -> dict[str, Any]:
+    """Return null-safe metadata or reject an envelope above the 512 KiB bound."""
+
+    metadata = strip_null_bytes(value)
+    encoded = json.dumps(
+        metadata,
+        sort_keys=True,
+        ensure_ascii=False,
+        default=str,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if len(encoded) > _MESSAGE_METADATA_MAX_BYTES:
+        raise ValueError(
+            f"message metadata exceeds {_MESSAGE_METADATA_MAX_BYTES} UTF-8 JSON bytes"
+        )
+    return cast(dict[str, Any], metadata)
+
 
 def _external_id_q(external_id: str) -> models.Q:
     """Return the indexed lookup predicate for one exact ``external_id``.
@@ -265,7 +288,12 @@ def _parsed_part_digest(part: ParsedPart | None) -> Any:
     }
 
 
-def _parsed_sync_hash(parsed: ParsedMessage, *, channel_id: Any) -> str:
+def _parsed_sync_hash(
+    parsed: ParsedMessage,
+    *,
+    channel_id: Any,
+    metadata: dict[str, Any],
+) -> str:
     """Return a stable digest of everything an ingest of ``parsed`` would write.
 
     Covers the message columns, its Part tree, and its participants for the given
@@ -281,7 +309,7 @@ def _parsed_sync_hash(parsed: ParsedMessage, *, channel_id: Any) -> str:
         "headers": [[name, value] for name, value in strip_null_bytes(list(parsed.headers))],
         "sent_at": parsed.sent_at.isoformat() if parsed.sent_at is not None else None,
         "received_at": parsed.received_at.isoformat() if parsed.received_at is not None else None,
-        "metadata": strip_null_bytes(parsed.metadata),
+        "metadata": metadata,
         "sender": (
             None
             if parsed.sender is None
@@ -1554,7 +1582,7 @@ class ReactionManager(AngeeManager):
     """Owns the attributed-reaction write — the row shape for a (message, handle, reaction).
 
     ``MessageManager.set_reaction`` is the user-keyed chatter toggle; this is the
-    distinct attributed write the ``social`` feed overlay lands for each external
+    distinct attributed write the ``posts`` feed overlay lands for each external
     reactor. The row shape (fields + ``created_by`` default) lives here with the table
     owner so a producer batches through this owner instead of hand-rolling its own
     ``get_or_create``.
@@ -2105,6 +2133,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         mislabelled email. ``quote_edges`` runs the RFC-5322 quotation builder — email's
         shared-fragment graph — and defaults on; a non-email producer whose short shared
         text would otherwise mint spurious ``quote`` edges passes ``quote_edges=False``.
+        The externally controlled metadata envelope is rejected above 512 KiB of
+        canonical UTF-8 JSON so the lossless column remains deterministically bounded.
         """
 
         owner_id = owner_id if owner_id is not None else channel.owner_id
@@ -2173,6 +2203,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
     ) -> Any:
         handle_model = apps.get_model("parties", "Handle")
         part_model = apps.get_model("messaging", "Part")
+        envelope_metadata = _bounded_message_metadata(parsed.metadata)
         thread = thread_model.objects.resolve(
             platform=parsed.platform,
             channel=channel,
@@ -2202,7 +2233,11 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             .values("pk", "thread_id", "metadata")
             .first()
         )
-        content_hash = _parsed_sync_hash(parsed, channel_id=channel.pk)
+        content_hash = _parsed_sync_hash(
+            parsed,
+            channel_id=channel.pk,
+            metadata=envelope_metadata,
+        )
         if (
             prior is not None
             and prior["thread_id"] == thread.pk
@@ -2212,7 +2247,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             # to write — skipping the part rebuild avoids churning Part primary keys,
             # re-upserting Fragments, and minting a spurious edit-history entry.
             return self.model._base_manager.get(pk=prior["pk"]), ()
-        metadata = {**strip_null_bytes(parsed.metadata), _SYNC_HASH_KEY: content_hash}
+        metadata = {**envelope_metadata, _SYNC_HASH_KEY: content_hash}
         defaults = {
             "thread": thread,
             "channel": channel,
@@ -2522,7 +2557,7 @@ class MessageEdgeManager(AngeeManager):
     ) -> Any:
         """Write one typed edge from ``src`` to ``dst``, idempotent on the (src, dst, kind) key.
 
-        The single edge-write entry point on the table owner: a social producer relating
+        The single edge-write entry point on the table owner: a posts producer relating
         two messages (mention/crosspost/forward) writes through this one shape instead of
         its own ``get_or_create``, and the batched quotation builder lands the same
         :meth:`_edge_fields` columns. ``src``/``dst``/``fragment`` accept a row or its id;

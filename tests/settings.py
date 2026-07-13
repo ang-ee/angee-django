@@ -30,7 +30,7 @@ INSTALLED_APPS = [
     "angee.messaging",
     "angee.spaces",
     "angee.nexus",
-    "angee.social",
+    "angee.posts",
     "angee.platform",
     "angee.platform_integrate_vcs",
     "tests.linesdemo",
@@ -107,10 +107,10 @@ ANGEE_CHANNEL_BACKEND_CLASSES = {
     "manual": "angee.messaging.backends.ManualChannelBackend",
     "imap": "angee.messaging_integrate_imap.backend.ImapChannelBackend",
 }
-# Feed backends a ``social.Feed`` may select (social's autoconfig normally
-# contributes these). ``stub`` returns canned posts queued by the social tests.
-ANGEE_SOCIAL_FEED_BACKEND_CLASSES = {
-    "manual": "angee.social.backends.ManualFeedBackend",
+# Feed backends a ``posts.Feed`` may select (posts' autoconfig normally
+# contributes these). ``stub`` returns canned posts queued by the posts tests.
+ANGEE_POSTS_FEED_BACKEND_CLASSES = {
+    "manual": "angee.posts.backends.ManualFeedBackend",
     "stub": "tests.conftest.StubFeedBackend",
 }
 # OAuth provider types (normally each addon's autoconfig contributes these); the

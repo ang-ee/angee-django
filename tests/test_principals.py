@@ -14,10 +14,13 @@ from rebac import SubjectRef, app_settings, system_context
 
 from angee.base import actors as actor_module
 from angee.base.actors import actor_user_id
-from tests.conftest import IAM_CONNECTION_TEST_MODELS, INTEGRATE_TEST_MODELS, SOCIAL_TEST_MODELS, _clear_model_tables
+from tests.conftest import IAM_CONNECTION_TEST_MODELS, INTEGRATE_TEST_MODELS, POSTS_TEST_MODELS, _clear_model_tables
 from tests.conftest import _create_missing_tables as _create_tables
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent, User
 from tests.test_integrate_vcs import VCS_TEST_MODELS
+from tests.test_messaging import MESSAGING_TEST_MODELS
+from tests.test_parties_graphql import PARTIES_TEST_MODELS
+from tests.test_spaces import SPACES_TEST_MODELS
 
 
 def _test_actor_user_resolver(subject_id: str) -> str | None:
@@ -31,9 +34,6 @@ def agents_console_tables(transactional_db: Any) -> Iterator[None]:
     """Create the concrete agents tables needed by the principal tests."""
 
     del transactional_db
-    from tests.test_messaging import MESSAGING_TEST_MODELS
-    from tests.test_parties_graphql import PARTIES_TEST_MODELS
-
     models = tuple(dict.fromkeys(
         IAM_CONNECTION_TEST_MODELS
         + INTEGRATE_TEST_MODELS
@@ -41,7 +41,8 @@ def agents_console_tables(transactional_db: Any) -> Iterator[None]:
         + AGENTS_GRAPHQL_MODELS
         + MESSAGING_TEST_MODELS
         + PARTIES_TEST_MODELS
-        + SOCIAL_TEST_MODELS
+        + SPACES_TEST_MODELS
+        + POSTS_TEST_MODELS
     ))
     _create_tables(models)
     call_command("rebac", "sync", verbosity=0)

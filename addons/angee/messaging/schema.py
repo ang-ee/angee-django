@@ -190,7 +190,7 @@ class MessageType(AngeeNode):
     parent: "MessageType | None"
     subtype: MessageSubtypeType | None
     thread: "ThreadType | None"
-    # The FK targets the Integration MTI parent (a messaging Channel or a social
+    # The FK targets the Integration MTI parent (a messaging Channel or a posts
     # Feed both produce messages), so the projection is the parent type — a
     # ChannelType declaration would crash resolving a Feed-ingested row.
     channel: IntegrationType | None
@@ -216,7 +216,7 @@ class MessageType(AngeeNode):
     def edges(self) -> list["MessageEdgeType"]:
         """Return this message's cross-message edges, both directions.
 
-        The fragment-derived quote graph plus social relations — the "how it
+        The fragment-derived quote graph plus post relations — the "how it
         interconnects" read the content data view renders. Actor-scoped end to
         end: the owner (``MessageEdgeManager.for_message``) keeps only edges
         whose far endpoint the actor may read, because quote edges cross

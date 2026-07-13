@@ -23,7 +23,7 @@ INSTALLED_APPS:
   - angee.spaces
   - angee.nexus
   - angee.messaging_integrate_imap
-  - angee.social
+  - angee.posts
   - angee.platform
   - angee.platform_integrate_vcs
   - angee.storage

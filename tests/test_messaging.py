@@ -74,7 +74,7 @@ from angee.parties.models import PartyHandle as AbstractPartyHandle
 from angee.parties.models import Person as AbstractPerson
 from angee.parties.models import Relationship as AbstractRelationship
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
-from angee.social.models import MessagePublic, ThreadPublic
+from angee.posts.models import MessagePublic, ThreadPublic
 from angee.spaces.models import ThreadSpace
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild, TrackedRecordParent
 from tests.conftest import (
@@ -277,7 +277,7 @@ class Fragment(AbstractFragment):
 class Thread(ThreadSpace, ThreadPublic, AbstractThread):
     """Concrete thread used by messaging tests.
 
-    Folds spaces' group pointer and social's public-post payload onto the one table,
+    Folds spaces' group pointer and posts' public-post payload onto the one table,
     mirroring the composer output for the installed base addons.
     """
 
@@ -344,9 +344,9 @@ class MessageSubtype(AbstractMessageSubtype):
 class Message(MessagePublic, AbstractMessage):
     """Concrete message used by messaging tests.
 
-    Folds social's same-row ``MessagePublic`` extension (``is_original_post``) onto
+    Folds posts' same-row ``MessagePublic`` extension (``is_original_post``) onto
     the one table, the way the composer emits ``Message(MessageExtension1,
-    AbstractMessage)`` now that social is a composed base addon.
+    AbstractMessage)`` now that posts is a composed base addon.
     """
 
     class Meta(AbstractMessage.Meta):
@@ -603,6 +603,7 @@ def _parsed(
     text: str = "Body text",
     references: tuple[str, ...] = (),
     in_reply_to: str = "",
+    metadata: dict[str, Any] | None = None,
 ) -> ParsedMessage:
     """Build a neutral ParsedMessage with a single text body part."""
 
@@ -616,6 +617,7 @@ def _parsed(
         in_reply_to=in_reply_to,
         references=references,
         body=ParsedPart(type="text/plain", role="body", text=text),
+        metadata=metadata or {},
     )
 
 
@@ -2546,6 +2548,18 @@ def test_fragment_upsert_survives_oversized_text(channel: Any) -> None:
         again = Fragment.objects.upsert(text=huge)
     assert fragment.pk is not None
     assert again.pk == fragment.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_rejects_oversized_message_metadata(channel: Any) -> None:
+    """Externally controlled metadata over 512 KiB is rejected before a message lands."""
+
+    parsed = _parsed("oversized-metadata", metadata={"tags": ["x" * (512 * 1024)]})
+
+    with pytest.raises(ValueError, match="message metadata exceeds 524288 UTF-8 JSON bytes"):
+        _ingest([parsed], channel=channel)
+
+    assert not Message._base_manager.filter(external_id="oversized-metadata").exists()
 
 
 @pytest.mark.django_db(transaction=True)

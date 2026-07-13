@@ -1,0 +1,9 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.posts"
+description = "Public posts, feeds, engagement metrics, following/timeline, and reactions built on messaging"
+keywords = ["posts", "feeds", "engagement", "timeline"]
+category = "Data"
+# Hashtags stay in message metadata; re-add angee.tags when vocabulary governance lands.
+depends_on = ["angee.messaging", "angee.integrate", "angee.parties", "angee.graphql"]
