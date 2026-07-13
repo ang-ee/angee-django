@@ -26,6 +26,7 @@ from rebac.roles import grant
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.messaging.models import Channel as AbstractChannel
+from angee.parties.mixins import LinkSource
 from tests import test_messaging as messaging_models
 from tests import test_parties_graphql as parties_graphql
 from tests.conftest import (
@@ -254,6 +255,199 @@ def test_message_by_pk_serves_title_beside_a_parts_selection(messaging_graphql_t
         ("TITLE", "Detail subject"),
         ("BODY", "Detail body"),
     ]
+
+
+def test_message_sender_and_participant_expose_resolved_party(messaging_graphql_tables: None) -> None:
+    """Message and participant handles expose the curated party identity."""
+
+    admin = _platform_admin("msg-party-handle-admin")
+    thread, message = _seed_thread_and_message(admin)
+    with system_context(reason="test.messaging.party.handle"):
+        party = messaging_models.Party.objects.create(
+            display_name="Ada Curated",
+            created_by_id=admin.pk,
+        )
+        handle = messaging_models.Handle.objects.create(
+            platform="email",
+            value="ada@example.com",
+            display_name="Ada Envelope",
+            created_by_id=admin.pk,
+        )
+        messaging_models.PartyHandle.objects.link(
+            party,
+            handle,
+            source=LinkSource.MANUAL,
+            is_confirmed=True,
+            created_by_id=admin.pk,
+        )
+        message.sender = handle
+        message.save(update_fields=("sender", "updated_at"))
+        messaging_models.Participant.objects.create(
+            thread=thread,
+            message=message,
+            handle=handle,
+            role=messaging_models.Participant.ParticipantRole.FROM,
+            created_by_id=admin.pk,
+        )
+
+    payload = _data(
+        execute_schema(
+            _schema(),
+            """
+            query MessageIdentity($id: String!) {
+              messages_by_pk(id: $id) {
+                sender { display_name party_link_confirmed party { display_name } }
+                participants { handle { display_name party_link_confirmed party { display_name } } }
+              }
+            }
+            """,
+            {"id": message.sqid},
+            request=_request(admin),
+        )
+    )["messages_by_pk"]
+
+    assert payload == {
+        "sender": {
+            "display_name": "Ada Envelope",
+            "party_link_confirmed": True,
+            "party": {"display_name": "Ada Curated"},
+        },
+        "participants": [
+            {
+                "handle": {
+                    "display_name": "Ada Envelope",
+                    "party_link_confirmed": True,
+                    "party": {"display_name": "Ada Curated"},
+                }
+            }
+        ],
+    }
+
+
+def test_inbox_sender_redacts_party_without_party_read(messaging_graphql_tables: None) -> None:
+    """A message reader sees the envelope handle while its unreadable party is null."""
+
+    owner = User.objects.create_user(username="msg-party-owner", email="msg-party-owner@example.com")
+    reader = User.objects.create_user(username="msg-party-reader", email="msg-party-reader@example.com")
+    _thread, message = _seed_thread_and_message(owner)
+    with system_context(reason="test.messaging.party.redaction.seed"):
+        party = messaging_models.Party.objects.create(
+            display_name="Ada Curated",
+            created_by_id=owner.pk,
+        )
+        handle = messaging_models.Handle.objects.create(
+            platform="email",
+            value="ada@example.com",
+            display_name="Ada Envelope",
+            created_by_id=owner.pk,
+        )
+        messaging_models.PartyHandle.objects.link(
+            party,
+            handle,
+            source=LinkSource.MANUAL,
+            is_confirmed=True,
+            created_by_id=owner.pk,
+        )
+        message.sender = handle
+        message.save(update_fields=("sender", "updated_at"))
+    _grant(message, "reader", reader)
+    _grant(handle, "reader", reader)
+
+    payload = _data(
+        execute_schema(
+            _schema(),
+            """
+            query MessageIdentity($id: String!) {
+              messages_by_pk(id: $id) {
+                sender { display_name party { display_name } }
+              }
+            }
+            """,
+            {"id": message.sqid},
+            request=_request(reader),
+        )
+    )["messages_by_pk"]
+
+    assert payload == {
+        "sender": {
+            "display_name": "Ada Envelope",
+            "party": None,
+        }
+    }
+
+
+def test_record_thread_sender_projection_omits_party_for_non_admin_reader(
+    messaging_graphql_tables: None,
+) -> None:
+    """Record chatter narrows sender identity instead of exposing sudo-loaded parties."""
+
+    owner = User.objects.create_user(username="record-party-owner", email="record-owner@example.com")
+    reader = User.objects.create_user(username="record-party-reader", email="record-reader@example.com")
+    with system_context(reason="test.messaging.record.party.seed"):
+        doc = messaging_models.ChatterDoc.objects.create(title="Party-safe chatter", status="open")
+        message = doc.message_post("Internal update")
+        party = messaging_models.Party.objects.create(
+            display_name="Ada Curated",
+            created_by_id=owner.pk,
+        )
+        handle = messaging_models.Handle.objects.create(
+            platform="email",
+            value="ada-record@example.com",
+            display_name="Ada Envelope",
+            created_by_id=owner.pk,
+        )
+        messaging_models.PartyHandle.objects.link(
+            party,
+            handle,
+            source=LinkSource.MANUAL,
+            is_confirmed=True,
+            created_by_id=owner.pk,
+        )
+        message.sender = handle
+        message.save(update_fields=("sender", "updated_at"))
+    _grant(doc, "reader", reader)
+    _grant(handle, "reader", reader)
+    schema = _schema()
+
+    visible = _data(
+        execute_schema(
+            schema,
+            """
+            query RecordSender($model: String!, $id: ID!) {
+              record_thread(input: {model_label: $model, record_id: $id}) {
+                messages { sender { display_name value } }
+              }
+            }
+            """,
+            {"model": "chatterdemo.ChatterDoc", "id": doc.sqid},
+            request=_request(reader),
+        )
+    )["record_thread"]
+    assert visible == {
+        "messages": [
+            {
+                "sender": {
+                    "display_name": "Ada Envelope",
+                    "value": "ada-record@example.com",
+                }
+            }
+        ]
+    }
+
+    narrowed = execute_schema(
+        schema,
+        """
+        query RecordSenderParty($model: String!, $id: ID!) {
+          record_thread(input: {model_label: $model, record_id: $id}) {
+            messages { sender { party { display_name } } }
+          }
+        }
+        """,
+        {"model": "chatterdemo.ChatterDoc", "id": doc.sqid},
+        request=_request(reader),
+    )
+    assert narrowed.errors is not None
+    assert "Cannot query field 'party' on type 'RecordHandleType'" in str(narrowed.errors[0])
 
 
 def test_parts_resource_lists_a_message_parts_with_fragment_connectivity(

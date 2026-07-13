@@ -1,9 +1,10 @@
 import { graphql, type DocumentType } from "@angee/gql/console";
 
-// The messaging models a record thread reads: the live-refresh keys for the
-// thread/activity queries and the invalidation set every chatter mutation
-// republishes. One owner, shared by both chatter panes.
+// The models a record thread reads: the live-refresh keys for the thread/activity
+// queries and the invalidation set every chatter mutation republishes. One owner,
+// shared by both chatter panes.
 export const READ_MODELS = [
+  "parties.Handle",
   "messaging.Thread",
   "messaging.Message",
   "messaging.ThreadFollower",
@@ -19,7 +20,7 @@ export const READ_MODELS = [
 // are server-resolved capabilities (rebac + mail rules) the feed reads directly —
 // never a client heuristic. The client-preset resolves the fragment by name.
 export const RecordMessageFields = graphql(`
-  fragment RecordMessageFields on MessageType {
+  fragment RecordMessageFields on RecordMessageType {
     id
     title
     preview
@@ -111,6 +112,10 @@ export const TranscriptMessageFields = graphql(`
       id
       display_name
       value
+      party_link_confirmed
+      party {
+        display_name
+      }
     }
     parts {
       role

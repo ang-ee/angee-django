@@ -302,6 +302,8 @@ class Handle(SqidMixin, AuditMixin, AngeeModel):
         on_delete=models.SET_NULL,
         related_name="handles",
     )
+    party_link_confirmed = models.BooleanField(default=False, editable=False)
+    """Whether the winning link materialised into ``party`` is human-confirmed."""
 
     objects = HandleManager()
 

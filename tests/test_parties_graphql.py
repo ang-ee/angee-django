@@ -14,8 +14,6 @@ from rebac import app_settings, system_context
 from rebac.roles import grant
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.parties.models import Address as AbstractAddress
-from angee.parties.models import Organization as AbstractOrganization
 from tests import test_messaging as messaging_models
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
@@ -26,32 +24,8 @@ from tests.conftest import (
 )
 from tests.conftest import result_data as _data
 
-_AddressMeta = getattr(AbstractAddress, "Meta", object)
-_OrganizationMeta = getattr(AbstractOrganization, "Meta", object)
-
-
-class Address(AbstractAddress):
-    """Concrete address model used to import the parties schema."""
-
-    class Meta(_AddressMeta):
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_address"
-        rebac_resource_type = "parties/address"
-        rebac_id_attr = "sqid"
-
-
-class Organization(messaging_models.Party, AbstractOrganization):
-    """Concrete organization model matching the composer inheritance shape."""
-
-    class Meta(_OrganizationMeta):
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_organization"
-        rebac_resource_type = "parties/organization"
-        rebac_id_attr = "sqid"
-
-
+Address = messaging_models.Address
+Organization = messaging_models.Organization
 Person = messaging_models.Person
 PartyHandle = messaging_models.PartyHandle
 

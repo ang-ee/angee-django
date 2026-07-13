@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from datetime import date, datetime
 from decimal import Decimal
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
 # A fragment quoted by more than this many messages is boilerplate (a disclaimer or
 # repeated signature); quote-linking it would join the whole corpus, so skip it.
 _BOILERPLATE_CUTOFF = 100
+logger = logging.getLogger(__name__)
 
 _SUBJECT_PREFIX_RE = re.compile(r"^\s*(?:re|fwd|fw|aw|sv|vs|ref|tr|rif)\s*(?:\[\d+\])?\s*:\s*", re.IGNORECASE)
 _WS_RE = re.compile(r"\s+")
@@ -2109,21 +2111,24 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         message_kind = message_kind or self.model.MessageKind.EMAIL
         thread_model = apps.get_model("messaging", "Thread")
         ingested: list[Any] = []
+        unresolved_handles: dict[Any, Any] = {}
         for parsed in parsed_messages:
             if not parsed.external_id:
                 continue
             with transaction.atomic():
-                ingested.append(
-                    self._ingest_one(
-                        parsed,
-                        channel=channel,
-                        owner_id=owner_id,
-                        thread_model=thread_model,
-                        modality=modality,
-                        visibility=visibility,
-                        message_kind=message_kind,
-                    )
+                message, handles = self._ingest_one(
+                    parsed,
+                    channel=channel,
+                    owner_id=owner_id,
+                    thread_model=thread_model,
+                    modality=modality,
+                    visibility=visibility,
+                    message_kind=message_kind,
                 )
+                ingested.append(message)
+                for handle in handles:
+                    if handle.party_id is None:
+                        unresolved_handles[handle.pk] = handle
         # Quotation runs after the whole batch lands, so a message quoting a later
         # one in the same batch still links (an inline pass would miss it). It is the
         # email graph, so a non-email producer skips it via ``quote_edges=False``.
@@ -2131,6 +2136,28 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             edges = apps.get_model("messaging", "MessageEdge").objects
             for message in ingested:
                 edges.create_for_message(message)
+        # Revisit unresolved envelopes after each committed batch so later directory
+        # evidence can resolve an older sender without coupling it to first contact.
+        if unresolved_handles:
+            handles = tuple(unresolved_handles.values())
+
+            def suggest_parties() -> None:
+                try:
+                    party_handles = apps.get_model("parties", "PartyHandle").objects
+                except Exception:
+                    logger.exception("Could not initialize messaging party suggestions")
+                    return
+                for handle in handles:
+                    try:
+                        with system_context(reason="messaging.ingest.suggest_party"):
+                            party_handles.suggest_for(handle)
+                    except Exception:
+                        logger.exception(
+                            "Could not suggest a party for messaging handle %s",
+                            handle.pk,
+                        )
+
+            transaction.on_commit(suggest_parties)
         return ingested
 
     def _ingest_one(
@@ -2184,7 +2211,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             # Idempotent re-sync into the same thread with identical content: nothing
             # to write — skipping the part rebuild avoids churning Part primary keys,
             # re-upserting Fragments, and minting a spurious edit-history entry.
-            return self.model._base_manager.get(pk=prior["pk"])
+            return self.model._base_manager.get(pk=prior["pk"]), ()
         metadata = {**strip_null_bytes(parsed.metadata), _SYNC_HASH_KEY: content_hash}
         defaults = {
             "thread": thread,
@@ -2239,7 +2266,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     *(message.edit_history or []),
                 ]
                 message.save(update_fields=("edit_history", "updated_at"))
-        self._write_participants(message, thread, parsed, sender, owner_id)
+        handles = self._write_participants(message, thread, parsed, sender, owner_id)
         # Reconcile the denormalised thread counters. The winning thread gains the
         # message whenever it is a fresh row or a re-sync re-resolved an existing message
         # onto a *different* thread (e.g. a References parent that only just landed). The
@@ -2254,7 +2281,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             self._recount_thread(losing_thread)
         if created or thread_changed:
             self._bump_thread(thread_model, thread.pk, parsed.sent_at)
-        return message
+        return message, handles
 
     @staticmethod
     def _content_fragment_hashes(part_model: Any, message: Any) -> list[str]:
@@ -2370,11 +2397,19 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             owner_id=owner_id,
         )
 
-    def _write_participants(self, message: Any, thread: Any, parsed: ParsedMessage, sender: Any, owner_id: Any) -> None:
+    def _write_participants(
+        self,
+        message: Any,
+        thread: Any,
+        parsed: ParsedMessage,
+        sender: Any,
+        owner_id: Any,
+    ) -> list[Any]:
         participant_model = apps.get_model("messaging", "Participant")
         handle_model = apps.get_model("parties", "Handle")
         participant_model.objects.filter(message=message).delete()
         seen: set[tuple[Any, str]] = set()
+        handles: list[Any] = []
         if sender is not None:
             seen.add((sender.pk, str(participant_model.ParticipantRole.FROM)))
             participant_model.objects.create(
@@ -2384,6 +2419,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 role=participant_model.ParticipantRole.FROM,
                 created_by_id=owner_id,
             )
+            handles.append(sender)
         for recipient in parsed.recipients:
             handle = handle_model.objects.upsert(
                 platform=recipient.handle.platform,
@@ -2400,6 +2436,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             participant_model.objects.create(
                 message=message, thread=thread, handle=handle, role=recipient.role, created_by_id=owner_id
             )
+            handles.append(handle)
+        return handles
 
 
 class PartQuerySet(AngeeQuerySet[Any]):

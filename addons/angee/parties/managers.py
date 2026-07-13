@@ -190,7 +190,7 @@ class PartyHandleManager(AngeeManager):
         return link
 
     def resolve(self, handle: Any) -> None:
-        """Materialise ``handle.party`` to the highest-confidence, non-dismissed link.
+        """Materialise ``handle.party`` and its confirmed state from the winning link.
 
         The resolution ordering (``-is_confirmed, -confidence``) is the contacts
         rule: a human-confirmed link wins, then the strongest score. A handle with
@@ -207,9 +207,16 @@ class PartyHandleManager(AngeeManager):
         )
         resolved = winner.party if winner else None
         resolved_pk = resolved.pk if resolved else None
+        is_confirmed = bool(winner and winner.is_confirmed)
+        dirty = []
         if handle.party_id != resolved_pk:
             handle.party_id = resolved_pk
-            handle.save(update_fields=["party", "updated_at"])
+            dirty.append("party")
+        if handle.party_link_confirmed != is_confirmed:
+            handle.party_link_confirmed = is_confirmed
+            dirty.append("party_link_confirmed")
+        if dirty:
+            handle.save(update_fields=[*dirty, "updated_at"])
         if resolved is not None:
             self.recount(resolved)
         if previous_pk is not None and previous_pk != resolved_pk:

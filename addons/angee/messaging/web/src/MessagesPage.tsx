@@ -30,6 +30,21 @@ const DEFAULT_GROUPS = { list: { field: "channel.display_name" } } as const;
 const PART_GROUPS = { list: { field: "role" } } as const;
 
 type PartRow = StringIdRow;
+type MessageRow = StringIdRow & {
+  sender?: {
+    party?: { display_name?: string | null } | null;
+    party_link_confirmed?: boolean | null;
+    display_name?: string | null;
+    value?: string | null;
+  } | null;
+};
+
+const MESSAGE_FIELDS = ["sender.party_link_confirmed", "sender.display_name", "sender.value"] as const;
+
+function messageSenderName(row: MessageRow): string {
+  const partyName = row.sender?.party_link_confirmed ? row.sender.party?.display_name : null;
+  return partyName || row.sender?.display_name || row.sender?.value || "";
+}
 
 // The nested selection the part columns render from: the part's structural
 // facts plus its fragment's identity (kind, hash) and connectivity counts —
@@ -155,13 +170,18 @@ export function MessagesPage(): React.ReactElement {
   const recordTabs = React.useMemo(() => messageRecordTabs(t), [t]);
   return (
     <ResourceList resource={MODEL} placement="inline" routed hideCreate recordTabs={recordTabs}>
-      <List
+      <List<MessageRow>
         resource={MODEL}
+        fields={MESSAGE_FIELDS}
         defaultGroups={DEFAULT_GROUPS}
       >
         <Facet field="channel" label={t("messages.channel")} labelField="display_name" />
         <Column field="title" header={t("messages.title")} />
-        <Column field="sender" header={t("messages.sender")} />
+        <Column<MessageRow>
+          field="sender.party.display_name"
+          header={t("messages.sender")}
+          render={messageSenderName}
+        />
         <Column field="thread.title.text" header={t("messages.thread")} />
         <Column field="status" widget="statusBadge" />
         <Column field="sent_at" />

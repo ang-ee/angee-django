@@ -155,6 +155,25 @@ class MessageReactionGroupType:
     handles: list[HandleType] = strawberry.field(default_factory=list)
 
 
+@strawberry_django.type(Handle)
+class RecordHandleType(AngeeNode):
+    """Envelope identity exposed by record chatter, without party backedges."""
+
+    platform: auto
+    value: auto
+    display_name: auto
+
+
+@strawberry.type
+class RecordMessageReactionGroupType:
+    """A record-message reaction summary with narrowed handle projections."""
+
+    reaction: str
+    count: int
+    self_reacted: bool = strawberry.field(name="self_reacted")
+    handles: list[RecordHandleType] = strawberry.field(default_factory=list)
+
+
 @strawberry_django.type(Message)
 class MessageType(AngeeNode):
     """GraphQL projection of a message."""
@@ -252,6 +271,71 @@ class MessageType(AngeeNode):
         return cast(Any, self).can_delete(post_access=_message_post_access(self, info))
 
 
+@strawberry_django.type(Message)
+class RecordMessageParentType(AngeeNode):
+    """Minimal parent-message context shown in record chatter."""
+
+    preview: auto
+    message_type: auto
+    subtype: MessageSubtypeType | None
+
+
+@strawberry_django.type(Message)
+class RecordMessageType(AngeeNode):
+    """Record-gated message projection without generic inbox relation backedges."""
+
+    direction: auto
+    status: auto
+    message_type: auto
+    preview: auto
+    sent_at: auto
+    created_at: auto
+    sender: RecordHandleType | None
+    parent: RecordMessageParentType | None
+    subtype: MessageSubtypeType | None
+    parts: list[PartType]
+    tracking_values: list[TrackingValueType]
+
+    @strawberry.field
+    def title(self) -> str:
+        """Return the message title text from its sparse title part."""
+
+        return cast(Any, self).title()
+
+    @strawberry.field
+    def reaction_groups(self, info: strawberry.Info) -> list[RecordMessageReactionGroupType]:
+        """Return reaction groups with record-safe handle projections."""
+
+        return _record_message_reaction_groups(self, _request_user(info))
+
+    @strawberry.field
+    def starred(self, info: strawberry.Info) -> bool:
+        """Return whether the current user has starred this message."""
+
+        return bool(MessageStar.objects.is_starred(self, user=_request_user(info)))
+
+    @strawberry.field
+    def needaction(self, info: strawberry.Info) -> bool:
+        """Return whether this message sits past the current user's read receipt."""
+
+        resolved = getattr(self, "_current_user_needaction", None)
+        if resolved is not None:
+            return bool(resolved)
+        return bool(ThreadFollower.objects.needaction_for_message(self, user=_request_user(info)))
+
+    @strawberry_django.field(prefetch_related=["tracking_values"])
+    def can_edit(self, info: strawberry.Info) -> bool:
+        """Return the model-owned edit capability for this record message."""
+
+        return cast(Any, self).can_edit(post_access=_message_post_access(self, info))
+
+    @strawberry.field
+    def can_delete(self, info: strawberry.Info) -> bool:
+        """Return the model-owned delete capability for this record message."""
+
+        return cast(Any, self).can_delete(post_access=_message_post_access(self, info))
+
+
 @strawberry_django.type(Thread)
 class ThreadType(AngeeNode):
     """GraphQL projection of a thread."""
@@ -271,6 +355,72 @@ class ThreadType(AngeeNode):
     participants: list[ParticipantType]
     created_at: auto
     updated_at: auto
+
+
+@strawberry_django.type(Thread)
+class RecordThreadType(AngeeNode):
+    """Record-gated thread summary without generic inbox backedges."""
+
+    platform: auto
+    modality: auto
+    visibility: auto
+    title: FragmentType | None
+    message_count: auto
+    last_message_at: auto
+    messages: list[RecordMessageType]
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.type(ThreadFollower)
+class RecordThreadFollowerType(AngeeNode):
+    """Record-scoped follower projection without message or thread backedges."""
+
+    user: UserType
+    notification_policy: auto
+    subtype_keys: strawberry.scalars.JSON
+    metadata: strawberry.scalars.JSON
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.type(ThreadNotification)
+class RecordThreadNotificationType(AngeeNode):
+    """Record-scoped notification projection with narrowed message context."""
+
+    message: RecordMessageParentType
+    follower: RecordThreadFollowerType | None
+    user: UserType
+    notification_type: auto
+    notification_status: auto
+    failure_type: auto
+    failure_reason: auto
+    metadata: strawberry.scalars.JSON
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.type(ThreadActivity)
+class RecordThreadActivityType(AngeeNode):
+    """Record-scoped activity projection without thread or attachment backedges."""
+
+    user: UserType
+    activity_type: auto
+    summary: auto
+    note: auto
+    due_date: auto
+    completed_at: auto
+    feedback: auto
+    status: auto
+    metadata: strawberry.scalars.JSON
+    created_at: auto
+    updated_at: auto
+
+    @strawberry.field
+    def state(self) -> str:
+        """Return the Odoo-style activity state."""
+
+        return cast(Any, self).activity_state
 
 
 @strawberry_django.type(ThreadAttachment)
@@ -590,11 +740,11 @@ class RecordActivityCancelInput:
 class RecordThreadPayload:
     """A record chatter thread, or the error that prevented resolving it."""
 
-    thread: ThreadType | None = None
-    messages: list[MessageType] = strawberry.field(default_factory=list)
+    thread: RecordThreadType | None = None
+    messages: list[RecordMessageType] = strawberry.field(default_factory=list)
     message_result_count: int = strawberry.field(name="message_result_count", default=0)
-    followers: list[ThreadFollowerType] = strawberry.field(default_factory=list)
-    self_follower: ThreadFollowerType | None = strawberry.field(name="self_follower", default=None)
+    followers: list[RecordThreadFollowerType] = strawberry.field(default_factory=list)
+    self_follower: RecordThreadFollowerType | None = strawberry.field(name="self_follower", default=None)
     suggested_recipients: list[SuggestedRecipientType] = strawberry.field(
         name="suggested_recipients",
         default_factory=list,
@@ -602,12 +752,12 @@ class RecordThreadPayload:
     subtypes: list[MessageSubtypeOptionType] = strawberry.field(default_factory=list)
     follower_count: int = strawberry.field(name="follower_count", default=0)
     is_following: bool = strawberry.field(name="is_following", default=False)
-    notifications: list[ThreadNotificationType] = strawberry.field(default_factory=list)
+    notifications: list[RecordThreadNotificationType] = strawberry.field(default_factory=list)
     unread_count: int = strawberry.field(name="unread_count", default=0)
     needaction_count: int = strawberry.field(name="needaction_count", default=0)
     message_has_error: bool = strawberry.field(name="message_has_error", default=False)
     message_has_error_counter: int = strawberry.field(name="message_has_error_counter", default=0)
-    activities: list[ThreadActivityType] = strawberry.field(default_factory=list)
+    activities: list[RecordThreadActivityType] = strawberry.field(default_factory=list)
     activity_count: int = strawberry.field(name="activity_count", default=0)
     attachment_count: int = strawberry.field(name="attachment_count", default=0)
     error: str | None = None
@@ -618,17 +768,17 @@ class RecordThreadPayload:
 class RecordMessagePostPayload:
     """A posted chatter message, or the error that prevented posting it."""
 
-    message: MessageType | None = None
-    thread: ThreadType | None = None
-    followers: list[ThreadFollowerType] = strawberry.field(default_factory=list)
+    message: RecordMessageType | None = None
+    thread: RecordThreadType | None = None
+    followers: list[RecordThreadFollowerType] = strawberry.field(default_factory=list)
     follower_count: int = strawberry.field(name="follower_count", default=0)
     is_following: bool = strawberry.field(name="is_following", default=False)
-    notifications: list[ThreadNotificationType] = strawberry.field(default_factory=list)
+    notifications: list[RecordThreadNotificationType] = strawberry.field(default_factory=list)
     unread_count: int = strawberry.field(name="unread_count", default=0)
     needaction_count: int = strawberry.field(name="needaction_count", default=0)
     message_has_error: bool = strawberry.field(name="message_has_error", default=False)
     message_has_error_counter: int = strawberry.field(name="message_has_error_counter", default=0)
-    activities: list[ThreadActivityType] = strawberry.field(default_factory=list)
+    activities: list[RecordThreadActivityType] = strawberry.field(default_factory=list)
     activity_count: int = strawberry.field(name="activity_count", default=0)
     attachment_count: int = strawberry.field(name="attachment_count", default=0)
     error: str | None = None
@@ -639,17 +789,17 @@ class RecordMessagePostPayload:
 class RecordMessageUpdatePayload:
     """An updated chatter message, or the error that prevented editing it."""
 
-    message: MessageType | None = None
-    thread: ThreadType | None = None
-    followers: list[ThreadFollowerType] = strawberry.field(default_factory=list)
+    message: RecordMessageType | None = None
+    thread: RecordThreadType | None = None
+    followers: list[RecordThreadFollowerType] = strawberry.field(default_factory=list)
     follower_count: int = strawberry.field(name="follower_count", default=0)
     is_following: bool = strawberry.field(name="is_following", default=False)
-    notifications: list[ThreadNotificationType] = strawberry.field(default_factory=list)
+    notifications: list[RecordThreadNotificationType] = strawberry.field(default_factory=list)
     unread_count: int = strawberry.field(name="unread_count", default=0)
     needaction_count: int = strawberry.field(name="needaction_count", default=0)
     message_has_error: bool = strawberry.field(name="message_has_error", default=False)
     message_has_error_counter: int = strawberry.field(name="message_has_error_counter", default=0)
-    activities: list[ThreadActivityType] = strawberry.field(default_factory=list)
+    activities: list[RecordThreadActivityType] = strawberry.field(default_factory=list)
     activity_count: int = strawberry.field(name="activity_count", default=0)
     attachment_count: int = strawberry.field(name="attachment_count", default=0)
     error: str | None = None
@@ -661,18 +811,18 @@ class RecordMessageDeletePayload:
     """A deleted chatter message id plus refreshed thread state, or an error."""
 
     deleted_message_id: strawberry.ID | None = strawberry.field(name="deleted_message_id", default=None)
-    thread: ThreadType | None = None
-    messages: list[MessageType] = strawberry.field(default_factory=list)
+    thread: RecordThreadType | None = None
+    messages: list[RecordMessageType] = strawberry.field(default_factory=list)
     message_result_count: int = strawberry.field(name="message_result_count", default=0)
-    followers: list[ThreadFollowerType] = strawberry.field(default_factory=list)
+    followers: list[RecordThreadFollowerType] = strawberry.field(default_factory=list)
     follower_count: int = strawberry.field(name="follower_count", default=0)
     is_following: bool = strawberry.field(name="is_following", default=False)
-    notifications: list[ThreadNotificationType] = strawberry.field(default_factory=list)
+    notifications: list[RecordThreadNotificationType] = strawberry.field(default_factory=list)
     unread_count: int = strawberry.field(name="unread_count", default=0)
     needaction_count: int = strawberry.field(name="needaction_count", default=0)
     message_has_error: bool = strawberry.field(name="message_has_error", default=False)
     message_has_error_counter: int = strawberry.field(name="message_has_error_counter", default=0)
-    activities: list[ThreadActivityType] = strawberry.field(default_factory=list)
+    activities: list[RecordThreadActivityType] = strawberry.field(default_factory=list)
     activity_count: int = strawberry.field(name="activity_count", default=0)
     attachment_count: int = strawberry.field(name="attachment_count", default=0)
     error: str | None = None
@@ -683,8 +833,11 @@ class RecordMessageDeletePayload:
 class RecordMessageReactionPayload:
     """A reacted chatter message, or the error that prevented reacting."""
 
-    message: MessageType | None = None
-    reaction_groups: list[MessageReactionGroupType] = strawberry.field(name="reaction_groups", default_factory=list)
+    message: RecordMessageType | None = None
+    reaction_groups: list[RecordMessageReactionGroupType] = strawberry.field(
+        name="reaction_groups",
+        default_factory=list,
+    )
     error: str | None = None
     error_code: str | None = strawberry.field(name="error_code", default=None)
 
@@ -693,7 +846,7 @@ class RecordMessageReactionPayload:
 class RecordMessageStarPayload:
     """A starred/unstarred chatter message result, or the error that prevented it."""
 
-    message: MessageType | None = None
+    message: RecordMessageType | None = None
     starred: bool = False
     error: str | None = None
     error_code: str | None = strawberry.field(name="error_code", default=None)
@@ -703,9 +856,9 @@ class RecordMessageStarPayload:
 class RecordMessageDonePayload:
     """A message marked done for the user, or the error that prevented it."""
 
-    message: MessageType | None = None
-    thread: ThreadType | None = None
-    notifications: list[ThreadNotificationType] = strawberry.field(default_factory=list)
+    message: RecordMessageType | None = None
+    thread: RecordThreadType | None = None
+    notifications: list[RecordThreadNotificationType] = strawberry.field(default_factory=list)
     unread_count: int = strawberry.field(name="unread_count", default=0)
     needaction_count: int = strawberry.field(name="needaction_count", default=0)
     error: str | None = None
@@ -716,9 +869,9 @@ class RecordMessageDonePayload:
 class RecordFollowPayload:
     """A record follower update result, or the error that prevented it."""
 
-    follower: ThreadFollowerType | None = None
-    thread: ThreadType | None = None
-    followers: list[ThreadFollowerType] = strawberry.field(default_factory=list)
+    follower: RecordThreadFollowerType | None = None
+    thread: RecordThreadType | None = None
+    followers: list[RecordThreadFollowerType] = strawberry.field(default_factory=list)
     follower_count: int = strawberry.field(name="follower_count", default=0)
     is_following: bool = strawberry.field(name="is_following", default=False)
     error: str | None = None
@@ -729,9 +882,9 @@ class RecordFollowPayload:
 class RecordActivityPayload:
     """A record activity update result, or the error that prevented it."""
 
-    activity: ThreadActivityType | None = None
-    thread: ThreadType | None = None
-    activities: list[ThreadActivityType] = strawberry.field(default_factory=list)
+    activity: RecordThreadActivityType | None = None
+    thread: RecordThreadType | None = None
+    activities: list[RecordThreadActivityType] = strawberry.field(default_factory=list)
     activity_count: int = strawberry.field(name="activity_count", default=0)
     error: str | None = None
     error_code: str | None = strawberry.field(name="error_code", default=None)
@@ -976,7 +1129,7 @@ class MessagingMutation:
             return RecordMessageReactionPayload(error=str(error), error_code="BAD_REACTION")
         return RecordMessageReactionPayload(
             message=message,
-            reaction_groups=_message_reaction_groups(message, user),
+            reaction_groups=_record_message_reaction_groups(message, user),
         )
 
     @strawberry.mutation(name="set_record_message_starred")
@@ -1412,6 +1565,14 @@ _MESSAGING_SCHEMA_BUCKET = {
         MessageSubtypeOptionType,
         SuggestedRecipientType,
         MessageReactionGroupType,
+        RecordHandleType,
+        RecordMessageReactionGroupType,
+        RecordMessageParentType,
+        RecordMessageType,
+        RecordThreadType,
+        RecordThreadFollowerType,
+        RecordThreadNotificationType,
+        RecordThreadActivityType,
         RecordThreadPayload,
         RecordMessagePostPayload,
         RecordMessageUpdatePayload,
@@ -1476,6 +1637,23 @@ def _message_reaction_groups(message: Any, user: Any | None) -> list[MessageReac
 
     return [
         MessageReactionGroupType(
+            reaction=group.reaction,
+            count=group.count,
+            self_reacted=group.self_reacted,
+            handles=list(group.handles),
+        )
+        for group in message.reaction_groups(user)
+    ]
+
+
+def _record_message_reaction_groups(
+    message: Any,
+    user: Any | None,
+) -> list[RecordMessageReactionGroupType]:
+    """Project model-owned reaction groups without generic handle backedges."""
+
+    return [
+        RecordMessageReactionGroupType(
             reaction=group.reaction,
             count=group.count,
             self_reacted=group.self_reacted,

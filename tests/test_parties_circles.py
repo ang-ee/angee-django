@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Any
 
 import pytest
 import yaml
+from django.apps import apps as django_apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
@@ -25,15 +27,17 @@ from tests.test_messaging import (
     CircleMember,
     Folder,
     Handle,
+    Organization,
     Party,
+    PartyHandle,
+    Person,
     Relationship,
     RelationshipKind,
 )
-from tests.test_parties_graphql import Organization, PartyHandle, Person
 
 User = get_user_model()
 
-CIRCLES_TEST_MODELS = (*MESSAGING_TEST_MODELS, Organization)
+CIRCLES_TEST_MODELS = MESSAGING_TEST_MODELS
 
 
 @pytest.fixture
@@ -191,6 +195,7 @@ def test_confirm_and_dismiss_drive_resolution(parties_tables: None) -> None:
         handle.refresh_from_db()
         alice.refresh_from_db()
         assert handle.party_id == alice.pk
+        assert handle.party_link_confirmed is False
         assert alice.handle_count == 1
 
         # Dismissing the winner demotes the handle to the next candidate and
@@ -200,6 +205,7 @@ def test_confirm_and_dismiss_drive_resolution(parties_tables: None) -> None:
         alice.refresh_from_db()
         alicia.refresh_from_db()
         assert handle.party_id == alicia.pk
+        assert handle.party_link_confirmed is False
         assert alice.handle_count == 0
         assert alicia.handle_count == 1
 
@@ -221,6 +227,7 @@ def test_confirm_and_dismiss_drive_resolution(parties_tables: None) -> None:
         handle.refresh_from_db()
         strong.refresh_from_db()
         assert handle.party_id == alice.pk
+        assert handle.party_link_confirmed is True
         assert strong.is_confirmed and not strong.is_dismissed
         assert strong.confidence == 1.0
         assert strong.source == LinkSource.MANUAL
@@ -271,9 +278,56 @@ def test_claim_own_writes_control_and_identity_facts(parties_tables: None) -> No
         assert set(Handle.objects.owned_by(user).values_list("pk", flat=True)) == {handle.pk}
         person = Person.objects.for_user(user)
         assert handle.party_id == person.pk
+        assert handle.party_link_confirmed is True
         link = PartyHandle.objects.get(handle=handle, party=person)
         assert link.is_confirmed and link.source == LinkSource.OAUTH and link.confidence == 1.0
         assert PartyHandle.objects.filter(handle=handle, party=person).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_handle_confirmation_migration_backfills_only_confirmed_winners(parties_tables: None) -> None:
+    """The source migration derives the flag from the same surviving party-link pair."""
+
+    del parties_tables
+    with system_context(reason="test handle confirmation backfill"):
+        owner = _user("confirmation-backfill")
+        confirmed_party = Party._base_manager.create(display_name="Confirmed", created_by=owner)
+        suggested_party = Party._base_manager.create(display_name="Suggested", created_by=owner)
+        confirmed = Handle._base_manager.create(
+            platform=Handle.Platform.EMAIL,
+            value="confirmed@example.com",
+            created_by=owner,
+        )
+        suggested = Handle._base_manager.create(
+            platform=Handle.Platform.EMAIL,
+            value="suggested@example.com",
+            created_by=owner,
+        )
+        PartyHandle.objects.link(
+            confirmed_party,
+            confirmed,
+            is_confirmed=True,
+            created_by_id=owner.pk,
+        )
+        PartyHandle.objects.link(
+            suggested_party,
+            suggested,
+            is_confirmed=False,
+            created_by_id=owner.pk,
+        )
+        Handle._base_manager.filter(pk__in=(confirmed.pk, suggested.pk)).update(
+            party_link_confirmed=False
+        )
+
+        module = importlib.import_module(
+            "angee.parties.runtime_migrations.handle_party_link_confirmed"
+        )
+        module.backfill_confirmed_winners(django_apps, type("Editor", (), {"connection": connection})())
+
+    confirmed.refresh_from_db()
+    suggested.refresh_from_db()
+    assert confirmed.party_link_confirmed is True
+    assert suggested.party_link_confirmed is False
 
 
 @pytest.mark.django_db(transaction=True)
@@ -360,6 +414,85 @@ def test_suggest_for_exact_match_autolinks_at_full_confidence(parties_tables: No
     assert link.source == LinkSource.EMAIL_MATCH
     assert not link.is_confirmed
     assert link.confidence == 1.0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_suggest_for_resolved_handle_returns_without_competing_links(parties_tables: None) -> None:
+    """A resolved handle is final input to suggest_for, even when a twin disagrees."""
+
+    del parties_tables
+    with system_context(reason="test suggest resolved noop"):
+        owner = _user("resolved-suggestion")
+        alice = Party._base_manager.create(display_name="Alice", created_by=owner)
+        alicia = Party._base_manager.create(display_name="Alicia", created_by=owner)
+        resolved = Handle._base_manager.create(
+            platform=Handle.Platform.EMAIL,
+            value="alice@gmail.com",
+            created_by=owner,
+        )
+        competing_twin = Handle._base_manager.create(
+            platform=Handle.Platform.EMAIL,
+            value="a.lice+other@gmail.com",
+            created_by=owner,
+        )
+        PartyHandle.objects.link(
+            alice,
+            resolved,
+            source=LinkSource.MANUAL,
+            created_by_id=owner.pk,
+        )
+        PartyHandle.objects.link(
+            alicia,
+            competing_twin,
+            source=LinkSource.MANUAL,
+            created_by_id=owner.pk,
+        )
+
+        result = PartyHandle.objects.suggest_for(resolved)
+
+    assert result is None
+    assert list(PartyHandle._base_manager.filter(handle=resolved).values_list("party_id", flat=True)) == [
+        alice.pk
+    ]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_suggest_for_keeps_dismissed_link_dismissed(parties_tables: None) -> None:
+    """A repeated normalized-value suggestion never resurrects its durable anti-link."""
+
+    del parties_tables
+    with system_context(reason="test suggest dismissed noop"):
+        owner = _user("dismissed-suggestion")
+        alice = Party._base_manager.create(display_name="Alice", created_by=owner)
+        resolved = Handle._base_manager.create(
+            platform=Handle.Platform.EMAIL,
+            value="a.lice@gmail.com",
+            created_by=owner,
+        )
+        PartyHandle.objects.link(
+            alice,
+            resolved,
+            source=LinkSource.MANUAL,
+            created_by_id=owner.pk,
+        )
+        unknown = Handle._base_manager.create(
+            platform=Handle.Platform.EMAIL,
+            value="alice+unknown@gmail.com",
+            created_by=owner,
+        )
+        dismissed = PartyHandle.objects.suggest_for(unknown)
+        assert dismissed is not None
+        dismissed.dismiss()
+
+        repeated = PartyHandle.objects.suggest_for(unknown)
+
+    dismissed.refresh_from_db()
+    unknown.refresh_from_db()
+    assert repeated is not None and repeated.pk == dismissed.pk
+    assert dismissed.is_dismissed
+    assert not dismissed.is_confirmed
+    assert unknown.party_id is None
+    assert PartyHandle._base_manager.filter(party=alice, handle=unknown).count() == 1
 
 
 @pytest.mark.django_db(transaction=True)

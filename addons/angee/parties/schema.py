@@ -114,9 +114,22 @@ class HandleType(AngeeNode):
     label: auto
     is_preferred: auto
     is_verified: auto
-    party: PartyType | None
+    party_link_confirmed: auto
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(only=["party_id"])
+    def party(self) -> PartyType | None:
+        """Return the resolved party when the actor may read it, otherwise null.
+
+        Resolve by FK id through the actor-scoped owner: a guarded ``select_related``
+        must reject an unreadable target, while this nullable projection omits it.
+        """
+
+        party_id = cast(Any, self).party_id
+        if party_id is None:
+            return None
+        return cast("PartyType | None", Party.objects.filter(pk=party_id).first())
 
     @strawberry_django.field(only=["owner_id"])
     def owner(self) -> strawberry.ID | None:

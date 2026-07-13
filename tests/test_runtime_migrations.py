@@ -503,6 +503,24 @@ def test_parties_relationship_migration_applies_only_to_exact_old_state() -> Non
         module.applies(mixed)
 
 
+def test_parties_handle_confirmation_migration_adds_materialized_winner_state() -> None:
+    from angee.parties.models import Handle
+
+    module = importlib.import_module("angee.parties.runtime_migrations.handle_party_link_confirmed")
+    old_state = ProjectState()
+    handle = ModelState.from_model(Handle)
+    handle.fields.pop("party_link_confirmed")
+    old_state.add_model(handle)
+
+    assert module.applies(old_state) is True
+    migrated = module.Migration("probe", "parties").mutate_state(old_state)
+    field = migrated.models["parties", "handle"].fields["party_link_confirmed"]
+
+    assert isinstance(field, models.BooleanField)
+    assert field.default is False
+    assert module.applies(migrated) is False
+
+
 def test_parties_source_migration_is_not_discovered_as_an_app_migration() -> None:
     loader = MigrationLoader(None, ignore_no_migrations=True)
 

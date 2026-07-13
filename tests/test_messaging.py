@@ -43,6 +43,7 @@ from angee.base.models import AngeeModel
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
+from angee.messaging import managers as messaging_managers
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient
 from angee.messaging.managers import normalize_subject, strip_null_bytes
 from angee.messaging.models import Fragment as AbstractFragment
@@ -60,11 +61,14 @@ from angee.messaging.models import ThreadedModelMixin
 from angee.messaging.models import ThreadFollower as AbstractThreadFollower
 from angee.messaging.models import ThreadNotification as AbstractThreadNotification
 from angee.messaging.models import TrackingValue as AbstractTrackingValue
+from angee.parties.mixins import LinkSource
+from angee.parties.models import Address as AbstractAddress
 from angee.parties.models import Circle as AbstractCircle
 from angee.parties.models import CircleMember as AbstractCircleMember
 from angee.parties.models import Directory as AbstractDirectory
 from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
+from angee.parties.models import Organization as AbstractOrganization
 from angee.parties.models import Party as AbstractParty
 from angee.parties.models import PartyHandle as AbstractPartyHandle
 from angee.parties.models import Person as AbstractPerson
@@ -93,7 +97,9 @@ from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent
 from tests.test_integrate_vcs import VCS_TEST_MODELS
 
 _PartyHandleMeta = getattr(AbstractPartyHandle, "Meta", object)
+_OrganizationMeta = getattr(AbstractOrganization, "Meta", object)
 _PersonMeta = getattr(AbstractPerson, "Meta", object)
+_AddressMeta = getattr(AbstractAddress, "Meta", object)
 
 
 class Directory(Integration, AbstractDirectory):
@@ -135,6 +141,19 @@ class Party(AbstractParty):
         rebac_id_attr = "sqid"
 
 
+class Organization(Party, AbstractOrganization):
+    """Concrete organization matching the composer inheritance shape."""
+
+    class Meta(_OrganizationMeta):
+        """Django model options for the canonical test organization."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_organization"
+        rebac_resource_type = "parties/organization"
+        rebac_id_attr = "sqid"
+
+
 class Handle(AbstractHandle):
     """Concrete handle (a message sender/recipient) used by messaging tests."""
 
@@ -158,6 +177,19 @@ class Person(Party, AbstractPerson):
         app_label = "parties"
         db_table = "test_parties_person"
         rebac_resource_type = "parties/person"
+        rebac_id_attr = "sqid"
+
+
+class Address(AbstractAddress):
+    """Concrete party address used by contact-ingest tests."""
+
+    class Meta(_AddressMeta):
+        """Django model options for the canonical test address."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_address"
+        rebac_resource_type = "parties/address"
         rebac_id_attr = "sqid"
 
 
@@ -486,8 +518,10 @@ MESSAGING_TEST_MODELS = (
     Directory,
     Folder,
     Party,
+    Organization,
     Person,
     Handle,
+    Address,
     PartyHandle,
     Circle,
     CircleMember,
@@ -593,6 +627,21 @@ def _ingest(messages: list[ParsedMessage], *, channel: Any) -> int:
 
     with system_context(reason="test messaging ingest"):
         return len(Message.objects.ingest(messages, channel=channel))
+
+
+def _ingest_sender(*, channel: Any, external_id: str, value: str) -> Handle:
+    """Ingest one inbound message and return its persisted sender handle."""
+
+    parsed = ParsedMessage(
+        external_id=external_id,
+        platform="email",
+        subject="Identity suggestion",
+        sender=ParsedHandle(platform="email", value=value, display_name="Inbound sender"),
+        body=ParsedPart(text=external_id),
+    )
+    with system_context(reason="test messaging sender suggestion"):
+        Message.objects.ingest([parsed], channel=channel, quote_edges=False)
+    return Handle._base_manager.get(platform=Handle.Platform.EMAIL, value=value)
 
 
 def _storage_drive(tmp_path: Path, *, owner: Any) -> Any:
@@ -774,10 +823,17 @@ def test_threaded_model_toggles_message_reaction(messaging_tables: None) -> None
     assert reaction.handle is not None
     assert reaction.handle.platform == "email"
     assert reaction.handle.value == "reactor@example.com"
+    assert reaction.handle.owner_id == user.pk
+    person = Person._base_manager.get(user=user)
+    link = PartyHandle._base_manager.get(handle=reaction.handle, party=person)
+    assert link.confidence == 1.0
+    assert link.source == LinkSource.MANUAL
+    assert link.is_confirmed
 
     with system_context(reason="test threaded model reaction remove"):
         ticket.message_reaction(message, reaction="👍", user=user)
     assert not Reaction._base_manager.filter(message=message).exists()
+    assert PartyHandle._base_manager.filter(handle=reaction.handle, party=person).count() == 1
 
     with system_context(reason="test threaded model reaction guard"):
         with pytest.raises(ValueError, match="Message does not belong to this record thread."):
@@ -1859,6 +1915,235 @@ def test_threaded_model_schedules_and_completes_activity(messaging_tables: None)
 
 
 @pytest.mark.django_db(transaction=True)
+def test_ingest_autolinks_sender_from_resolved_normalized_twin(channel: Any) -> None:
+    """An inbound sender inherits the resolved identity of its normalized twin."""
+
+    with system_context(reason="test ingest normalized sender"):
+        owner = channel.owner
+        alice = Party._base_manager.create(display_name="Alice", created_by=owner)
+        resolved = Handle._base_manager.create(
+            platform=Handle.Platform.EMAIL,
+            value="a.lice@gmail.com",
+            created_by=owner,
+        )
+        PartyHandle.objects.link(
+            alice,
+            resolved,
+            source=LinkSource.MANUAL,
+            created_by_id=owner.pk,
+        )
+
+    sender = _ingest_sender(
+        channel=channel,
+        external_id="normalized-sender-1",
+        value="alice+inbound@gmail.com",
+    )
+    link = PartyHandle._base_manager.filter(handle=sender, party=alice).first()
+
+    assert link is not None
+    sender.refresh_from_db()
+    assert sender.party_id == alice.pk
+    assert link.confidence == 1.0
+    assert link.source == LinkSource.EMAIL_MATCH
+    assert not link.is_confirmed
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_leaves_unknown_first_contact_sender_unresolved(channel: Any) -> None:
+    """A first-contact sender with no evidence remains an unresolved handle."""
+
+    sender = _ingest_sender(
+        channel=channel,
+        external_id="unknown-sender-1",
+        value="stranger@nowhere.example",
+    )
+
+    assert sender.party_id is None
+    assert not PartyHandle._base_manager.filter(handle=sender).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_retries_unknown_sender_after_late_twin_without_duplicate_links(channel: Any) -> None:
+    """A later message retries an older unknown handle after directory evidence arrives."""
+
+    sender = _ingest_sender(
+        channel=channel,
+        external_id="retry-sender-1",
+        value="alice+late@gmail.com",
+    )
+    assert sender.party_id is None
+    assert not PartyHandle._base_manager.filter(handle=sender).exists()
+
+    with system_context(reason="test ingest late sender evidence"):
+        owner = channel.owner
+        alice = Party._base_manager.create(display_name="Alice", created_by=owner)
+        resolved = Handle._base_manager.create(
+            platform=Handle.Platform.EMAIL,
+            value="a.lice@gmail.com",
+            created_by=owner,
+        )
+        PartyHandle.objects.link(
+            alice,
+            resolved,
+            source=LinkSource.MANUAL,
+            created_by_id=owner.pk,
+        )
+
+    retried = _ingest_sender(
+        channel=channel,
+        external_id="retry-sender-2",
+        value="alice+late@gmail.com",
+    )
+
+    retried.refresh_from_db()
+    assert retried.pk == sender.pk
+    assert retried.party_id == alice.pk
+    assert PartyHandle._base_manager.filter(handle=retried, party=alice).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_keeps_dismissed_sender_suggestion_dismissed(channel: Any) -> None:
+    """A subsequent message cannot resurrect a human-dismissed sender suggestion."""
+
+    with system_context(reason="test ingest dismissed sender setup"):
+        owner = channel.owner
+        alice = Party._base_manager.create(display_name="Alice", created_by=owner)
+        resolved = Handle._base_manager.create(
+            platform=Handle.Platform.EMAIL,
+            value="a.lice@gmail.com",
+            created_by=owner,
+        )
+        PartyHandle.objects.link(
+            alice,
+            resolved,
+            source=LinkSource.MANUAL,
+            created_by_id=owner.pk,
+        )
+
+    sender = _ingest_sender(
+        channel=channel,
+        external_id="dismissed-sender-1",
+        value="alice+dismissed@gmail.com",
+    )
+    dismissed = PartyHandle._base_manager.filter(handle=sender, party=alice).first()
+    assert dismissed is not None
+    with system_context(reason="test ingest dismiss sender suggestion"):
+        dismissed.dismiss()
+
+    _ingest_sender(
+        channel=channel,
+        external_id="dismissed-sender-2",
+        value="alice+dismissed@gmail.com",
+    )
+
+    dismissed.refresh_from_db()
+    sender.refresh_from_db()
+    assert dismissed.is_dismissed
+    assert not dismissed.is_confirmed
+    assert sender.party_id is None
+    assert PartyHandle._base_manager.filter(handle=sender, party=alice).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_suggests_sender_from_organization_domain(channel: Any) -> None:
+    """An inbound sender matching a tracked domain receives the weak organization link."""
+
+    with system_context(reason="test ingest organization sender"):
+        owner = channel.owner
+        acme = Organization._base_manager.create(
+            display_name="Acme",
+            domain="acme.example",
+            created_by=owner,
+        )
+
+    sender = _ingest_sender(
+        channel=channel,
+        external_id="organization-sender-1",
+        value="bob@acme.example",
+    )
+    link = PartyHandle._base_manager.filter(handle=sender, party=acme).first()
+
+    assert link is not None
+    sender.refresh_from_db()
+    assert sender.party_id == acme.pk
+    assert link.confidence == 0.4
+    assert link.source == LinkSource.RULE
+    assert not link.is_confirmed
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_suggests_each_unresolved_handle_once_after_batch_commit(
+    channel: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One post-commit pass deduplicates unresolved handles across the ingest batch."""
+
+    callbacks: list[Any] = []
+    suggested: list[Any] = []
+    monkeypatch.setattr(messaging_managers.transaction, "on_commit", callbacks.append)
+    monkeypatch.setattr(
+        PartyHandle.objects,
+        "suggest_for",
+        lambda handle: suggested.append(handle.pk),
+    )
+    shared = ParsedHandle(platform="email", value="shared@example.com")
+    messages = [
+        ParsedMessage(
+            external_id=f"suggest-batch-{index}",
+            platform="email",
+            sender=shared,
+            recipients=(ParsedRecipient(handle=shared),),
+            body=ParsedPart(text=str(index)),
+        )
+        for index in range(2)
+    ]
+
+    with system_context(reason="test batched post-commit suggestions"):
+        landed = Message.objects.ingest(messages, channel=channel, quote_edges=False)
+
+    assert len(landed) == 2
+    assert suggested == []
+    assert len(callbacks) == 1
+    callbacks[0]()
+    assert suggested == [Handle._base_manager.get(value="shared@example.com").pk]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_contains_suggestion_failures_and_continues_batch(
+    channel: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed best-effort suggestion neither aborts ingest nor skips later handles."""
+
+    attempted: list[str] = []
+
+    def suggest(handle: Handle) -> None:
+        attempted.append(handle.value)
+        if handle.value == "fail@example.com":
+            raise RuntimeError("directory unavailable")
+
+    monkeypatch.setattr(PartyHandle.objects, "suggest_for", suggest)
+    messages = [
+        ParsedMessage(
+            external_id=f"suggest-failure-{index}",
+            platform="email",
+            sender=ParsedHandle(platform="email", value=value),
+            body=ParsedPart(text=value),
+        )
+        for index, value in enumerate(("fail@example.com", "continue@example.com"))
+    ]
+
+    with caplog.at_level("ERROR"), system_context(reason="test contained suggestions"):
+        landed = Message.objects.ingest(messages, channel=channel, quote_edges=False)
+
+    assert len(landed) == 2
+    assert Message._base_manager.filter(pk__in=[message.pk for message in landed]).count() == 2
+    assert attempted == ["fail@example.com", "continue@example.com"]
+    assert "Could not suggest a party for messaging handle" in caplog.text
+
+
+@pytest.mark.django_db(transaction=True)
 def test_ingest_dedup_is_channel_scoped(channel: Any) -> None:
     """Message identity is (channel, external_id): re-sync dedups, a second channel does not.
 
@@ -1885,6 +2170,102 @@ def test_ingest_dedup_is_channel_scoped(channel: Any) -> None:
     assert {row.thread_id for row in rows} == {thread.pk}
     thread.refresh_from_db()
     assert thread.message_count == 2
+
+
+@pytest.mark.django_db(transaction=True)
+def test_group_ingest_resolves_visibility_and_accumulates_unique_participants(channel: Any) -> None:
+    """GROUP ingest keeps one thread while each message contributes its envelope."""
+
+    alice = ParsedHandle(platform="whatsapp", value="+15550001", display_name="Alice")
+    bob = ParsedHandle(platform="whatsapp", value="+15550002", display_name="Bob")
+    carol = ParsedHandle(platform="whatsapp", value="+15550003", display_name="Carol")
+    messages = [
+        ParsedMessage(
+            external_id="group-1-message-1",
+            platform="whatsapp",
+            subject="Support crew",
+            sender=alice,
+            recipients=(ParsedRecipient(handle=bob), ParsedRecipient(handle=bob)),
+            body=ParsedPart(text="First"),
+        ),
+        ParsedMessage(
+            external_id="group-1-message-2",
+            platform="whatsapp",
+            subject="Support crew",
+            sender=carol,
+            recipients=(ParsedRecipient(handle=bob),),
+            body=ParsedPart(text="Second"),
+        ),
+    ]
+
+    with system_context(reason="test group messaging ingest"):
+        landed = Message.objects.ingest(
+            messages,
+            channel=channel,
+            modality=Thread.Modality.GROUP,
+            visibility=Thread.Visibility.RESTRICTED,
+            quote_edges=False,
+        )
+
+    assert len(landed) == 2
+    assert Thread._base_manager.count() == 1
+    thread = Thread._base_manager.get()
+    assert thread.modality == Thread.Modality.GROUP
+    assert thread.visibility == Thread.Visibility.RESTRICTED
+    assert {message.thread_id for message in landed} == {thread.pk}
+    assert list(
+        Participant._base_manager.filter(thread=thread)
+        .order_by("message__external_id", "role", "handle__value")
+        .values_list("message__external_id", "role", "handle__value")
+    ) == [
+        ("group-1-message-1", "from", "+15550001"),
+        ("group-1-message-1", "to", "+15550002"),
+        ("group-1-message-2", "from", "+15550003"),
+        ("group-1-message-2", "to", "+15550002"),
+    ]
+
+    later = ParsedMessage(
+        external_id="group-1-message-3",
+        platform="whatsapp",
+        subject="Support crew",
+        sender=alice,
+        recipients=(ParsedRecipient(handle=carol),),
+        body=ParsedPart(text="Third"),
+    )
+    with system_context(reason="test group messaging immutable thread shape"):
+        [later_message] = Message.objects.ingest(
+            [later],
+            channel=channel,
+            modality=Thread.Modality.DIRECT,
+            visibility=Thread.Visibility.PUBLIC,
+            quote_edges=False,
+        )
+
+    thread.refresh_from_db()
+    assert later_message.thread_id == thread.pk
+    assert thread.modality == Thread.Modality.GROUP
+    assert thread.visibility == Thread.Visibility.RESTRICTED
+
+    duplicate = Participant._base_manager.get(
+        message=landed[0],
+        role=Participant.ParticipantRole.FROM,
+    )
+    with system_context(reason="test group messaging constraints"):
+        with pytest.raises(IntegrityError), transaction.atomic():
+            Participant._base_manager.create(
+                message=landed[0],
+                thread=thread,
+                handle=duplicate.handle,
+                role=duplicate.role,
+            )
+        with pytest.raises(IntegrityError), transaction.atomic():
+            Thread._base_manager.create(
+                channel=channel,
+                platform=thread.platform,
+                external_id=thread.external_id,
+                modality=Thread.Modality.GROUP,
+                visibility=Thread.Visibility.RESTRICTED,
+            )
 
 
 def test_email_identity_columns_are_unbounded_and_subject_columns_are_gone() -> None:
