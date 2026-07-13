@@ -284,13 +284,11 @@ uv run examples/notes-angee/manage.py schema --check           # SDL, after runt
 ```
 
 For an isolated branch, load `.agents/skills/angee-workspace/SKILL.md` and
-follow its **Create Workspace** workflow to resolve and validate
-`work_state_path`, then create the workspace and run the stack inside it. `angee
-dev` walks up to the nearest `.angee`, so it works from the workspace root too.
+follow its **Create Workspace** workflow to create the workspace with validated
+work-state. Then run the stack inside it. `angee dev` walks up to the nearest
+`.angee`, so it works from the workspace root too.
 
 ```sh
-angee ws create <name> --template dev --input base_ref=main \
-  --input work_state_path="$work_state_path"   # branch from main
 cd .angee/workspaces/<name>
 angee dev
 angee ws status      # optional; defaults to the enclosing workspace
