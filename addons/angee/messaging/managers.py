@@ -31,8 +31,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
 from django.apps import apps
-from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.search import SearchQuery, SearchVector
+from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, connection, models, transaction
 from django.db.models.functions import MD5, Coalesce, Greatest
 from django.utils import timezone
@@ -40,6 +40,7 @@ from rebac import current_actor, system_context
 
 from angee.base.actors import actor_user_id
 from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.refs import canonical_record_target
 from angee.messaging.tracking import TrackingChange
 
 if TYPE_CHECKING:
@@ -484,22 +485,22 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
 
 
 class ThreadAttachmentManager(AngeeManager):
-    """Owns the polymorphic edge from a model row to its chatter thread."""
+    """Owns the polymorphic edge from a model row to its chatter thread.
 
-    @staticmethod
-    def _content_type(record: Any) -> Any:
-        """Return ``record``'s content type (proxy-aware) — the polymorphic edge key."""
-
-        return ContentType.objects.get_for_model(record, for_concrete_model=False)
+    The edge key is canonicalized across multi-table inheritance
+    (:func:`angee.base.refs.canonical_record_target`), so a record and each of its
+    REBAC-typed MTI ancestors share one chatter thread instead of splitting it.
+    """
 
     def for_record(self, record: Any, *, role: str = "chatter") -> Any | None:
         """Return the existing thread attachment for ``record`` and ``role``."""
 
         if record.pk is None:
             return None
+        content_type, object_id = canonical_record_target(record)
         return (
             self.model._base_manager.select_related("thread")
-            .filter(content_type=self._content_type(record), object_id=record.pk, role=role)
+            .filter(content_type=content_type, object_id=object_id, role=role)
             .first()
         )
 
@@ -517,8 +518,9 @@ class ThreadAttachmentManager(AngeeManager):
 
         if record.pk is None:
             raise ValueError("Cannot attach a thread to an unsaved record.")
-        content_type = self._content_type(record)
-        external_id = f"record:{content_type.app_label}.{content_type.model}:{record.pk}:{role}"
+        content_type, object_id = canonical_record_target(record)
+        _assert_canonical_composes_thread_mixin(record, content_type)
+        external_id = f"record:{content_type.app_label}.{content_type.model}:{object_id}:{role}"
         thread_model = self.model._meta.get_field("thread").related_model
         fragment_model = apps.get_model("messaging", "Fragment")
         # The host owns whether its record chatter streams over changes(); stamp its
@@ -541,7 +543,7 @@ class ThreadAttachmentManager(AngeeManager):
             self._reconcile_broadcast_state(thread, host_broadcasts=host_broadcasts)
             attachment, _created = self.model._base_manager.get_or_create(
                 content_type=content_type,
-                object_id=record.pk,
+                object_id=object_id,
                 role=role,
                 defaults={
                     "thread": thread,
@@ -598,8 +600,9 @@ class ThreadAttachmentManager(AngeeManager):
 
         if record.pk is None:
             return
+        content_type, object_id = canonical_record_target(record)
         thread_ids = list(
-            self.model._base_manager.filter(content_type=self._content_type(record), object_id=record.pk)
+            self.model._base_manager.filter(content_type=content_type, object_id=object_id)
             .values_list("thread_id", flat=True)
             .distinct()
         )
@@ -1272,6 +1275,33 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
         with system_context(reason="messaging.activity.cancel"):
             activity.save(update_fields=("status", "completed_at", "updated_at"))
         return activity
+
+
+def _assert_canonical_composes_thread_mixin(record: Any, canonical_content_type: Any) -> None:
+    """Fail fast on a child-composed / parent-uncomposed threaded MTI split.
+
+    ``ThreadedModelMixin`` owns the reverse ``thread_attachments`` GenericRelation and the
+    ``pre_delete`` teardown, both of which key on the model that composes the mixin — while
+    the attachment row is written at the *canonical* (topmost REBAC-typed) target
+    (:func:`angee.base.refs.canonical_record_target`). If a child composes the mixin but
+    its canonical ancestor does not, the ancestor cannot collect the child's attachment on
+    delete and a reused primary key would mis-resolve. Guard it where the write keys — the
+    placement invariant stated in :mod:`angee.base.refs`.
+    """
+
+    from angee.messaging.models import ThreadedModelMixin
+
+    if not isinstance(record, ThreadedModelMixin):
+        return
+    canonical_model = canonical_content_type.model_class()
+    if canonical_model is None or canonical_model is type(record):
+        return
+    if not issubclass(canonical_model, ThreadedModelMixin):
+        raise ImproperlyConfigured(
+            f"{type(record)._meta.label} composes ThreadedModelMixin but its canonical record "
+            f"target {canonical_model._meta.label} does not; compose the mixin on the topmost "
+            "REBAC-typed MTI ancestor the chatter edge keys on."
+        )
 
 
 def _record_attachment(record: Any, *, role: str = "chatter") -> Any | None:

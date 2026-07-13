@@ -34,7 +34,11 @@ tagged by attaching to its ``Party`` row (the canon's explicit-attach path). The
 ergonomic reverse accessor (``GenericRelation("tags.TagAssignment")`` on
 ``Party``) is a ``parties``-owned decision — adding it makes ``parties`` depend
 on ``tags`` for every composing project, so it lands in ``parties`` (model +
-``addon.toml`` dependency together) only when that dependency is wanted.
+``addon.toml`` dependency together) only when that dependency is wanted. Declare
+that reverse relation on ``Party`` itself — the topmost REBAC-typed MTI ancestor
+the canonical edge keys on (:func:`angee.base.refs.canonical_record_target`), never
+on a ``Person``/``Organization`` child — so the delete collector filters at the same
+content type the write used (the placement invariant in :mod:`angee.base.refs`).
 """
 
 from __future__ import annotations
@@ -64,7 +68,7 @@ from angee.base.models import (
     instance_from_public_id,
     role_anchor,
 )
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import CanonicalRecordTarget, RecordRefMixin, canonical_record_target
 
 SHARED_READER_RELATION = "shared"
 """The wildcard-subject relation that opens a shared (null-company) tag to everyone."""
@@ -196,15 +200,17 @@ class TagAssignmentManager(AngeeManager):
     check has no row id to gate on.
     """
 
-    def resolve_target(self, target_type: str, target_id: str) -> tuple[Any, Any] | None:
-        """Resolve ``(content_type, instance)`` for a public target address.
+    def resolve_target(self, target_type: str, target_id: str) -> CanonicalRecordTarget | None:
+        """Resolve the canonical edge target for a public target address.
 
         ``target_type`` is a REBAC resource type (e.g. ``parties/party``) and
         ``target_id`` the row's public id. Returns ``None`` when the type or row
         is unknown **or unreadable** — the lookup runs on the actor-scoped default
-        manager. Address a polymorphic target at one consistent type: an MTI child
-        (``parties/person``) and its parent (``parties/party``) are distinct
-        content types, so mixed-level addressing splits the edge set.
+        manager. The returned :class:`~angee.base.refs.CanonicalRecordTarget` carries
+        the ``content_type`` and ``object_id`` canonicalized to the target's topmost
+        REBAC MTI ancestor (:func:`angee.base.refs.canonical_record_target`): a
+        ``parties/person`` address and a ``parties/party`` address resolve to one
+        ``parties/party`` edge, so mixed-level addressing never splits the edge set.
         """
 
         model = model_for_resource_type(target_type)
@@ -213,16 +219,15 @@ class TagAssignmentManager(AngeeManager):
         instance = instance_from_public_id(model, target_id)
         if instance is None:
             return None
-        return ContentType.objects.get_for_model(model), instance
+        return canonical_record_target(instance)
 
     def for_target(self, target_type: str, target_id: str) -> models.QuerySet[Any]:
         """Return the assignments on one target row, empty when it does not resolve."""
 
-        resolved = self.resolve_target(target_type, target_id)
-        if resolved is None:
+        target = self.resolve_target(target_type, target_id)
+        if target is None:
             return self.none()
-        content_type, instance = resolved
-        return self.filter(content_type=content_type, object_id=instance.pk)
+        return self.filter(content_type=target.content_type, object_id=target.object_id)
 
     def attach(self, target_type: str, target_id: str, tag_ids: list[str]) -> list[Any]:
         """Attach each tag to the target row, idempotently per edge.
@@ -233,14 +238,15 @@ class TagAssignmentManager(AngeeManager):
         ambient actor, which elevation preserves.
         """
 
-        resolved = self.resolve_target(target_type, target_id)
-        if resolved is None:
+        target = self.resolve_target(target_type, target_id)
+        if target is None:
             raise ValueError("tag target not found")
-        content_type, instance = resolved
         tag_rows = [self._tag_for_id(tag_id) for tag_id in tag_ids]
         with system_context(reason="tags.assignment.attach"):
             return [
-                self.get_or_create(tag=tag_row, content_type=content_type, object_id=instance.pk)[0]
+                self.get_or_create(
+                    tag=tag_row, content_type=target.content_type, object_id=target.object_id
+                )[0]
                 for tag_row in tag_rows
             ]
 
@@ -251,14 +257,13 @@ class TagAssignmentManager(AngeeManager):
         only the delete elevates.
         """
 
-        resolved = self.resolve_target(target_type, target_id)
-        if resolved is None:
+        target = self.resolve_target(target_type, target_id)
+        if target is None:
             raise ValueError("tag target not found")
-        content_type, instance = resolved
         tag_pks = [self._tag_for_id(tag_id).pk for tag_id in tag_ids]
         with system_context(reason="tags.assignment.detach"):
             deleted, _by_model = self.filter(
-                content_type=content_type, object_id=instance.pk, tag_id__in=tag_pks
+                content_type=target.content_type, object_id=target.object_id, tag_id__in=tag_pks
             ).delete()
         return deleted
 

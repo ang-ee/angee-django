@@ -36,13 +36,12 @@ from rebac import (
     RelationshipTuple,
     SubjectRef,
     anonymous_actor,
-    to_object_ref,
     to_subject_ref,
     write_relationships,
 )
 from rebac.models import active_relationship_model
-from rebac.resources import model_resource_type
 
+from angee.base.refs import ancestor_object_refs
 from angee.resources.entries import GrantGroup, GrantRow
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.widgets import resolve_xref
@@ -114,36 +113,17 @@ def _resolve_resource_refs(
     """Resolve the grant resource to every REBAC identity it carries.
 
     A literal ref names exactly one identity. A row xref resolves through the
-    ledger to the loaded row and expands to each identity that row presents.
+    ledger to the loaded row and expands to each REBAC identity the row IS-A — the
+    MTI fan-out owned by :func:`angee.base.refs.ancestor_object_refs` — so a
+    grant on an MTI child also lands on every concrete parent identity a
+    parent-typed foreign key would scope reads on.
     """
 
     value = row.resource
     if _is_literal_ref(value):
         return [ObjectRef.parse(value)]
-    return _identity_refs(_resolve_row(row, value, ledger_model, addon_aliases))
-
-
-def _identity_refs(row: models.Model) -> list[ObjectRef]:
-    """Return every REBAC identity ``row`` carries, nearest identity first.
-
-    The row's own identity comes first — :func:`to_object_ref` fails fast if its
-    model declares no REBAC type. An MTI child IS-A each concrete parent it shares
-    a primary key with (``Organization`` IS-A ``Party``), so a grant on the child
-    must also land on each REBAC-registered parent identity — otherwise a foreign
-    key typed to the parent scopes reads on the parent type and the granted subject
-    stays blind. ``_meta.get_parent_list()`` owns the transitive concrete-ancestor
-    walk; an ancestor with no REBAC type carries no identity and is skipped. Every
-    identity shares the row's resource id (MTI shares the id-source field), so only
-    the type varies.
-    """
-
-    own = to_object_ref(row)
-    refs = [own]
-    for ancestor in type(row)._meta.get_parent_list():
-        rebac_type = model_resource_type(ancestor)
-        if rebac_type is not None:
-            refs.append(ObjectRef(rebac_type, own.resource_id))
-    return refs
+    resolved = _resolve_row(row, value, ledger_model, addon_aliases)
+    return list(ancestor_object_refs(resolved))
 
 
 def _resolve_subject(

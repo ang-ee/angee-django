@@ -116,6 +116,15 @@ class ThreadedModelMixin(models.Model):
     A concrete model opts in by inheriting this abstract mixin. The model remains
     the owner of the record; messaging owns the attached thread edge and the
     message write path.
+
+    **Placement across MTI.** The chatter edge keys on the record's canonical target —
+    its topmost REBAC-typed MTI ancestor (:func:`angee.base.refs.canonical_record_target`)
+    — while the reverse :attr:`thread_attachments` GenericRelation and the ``pre_delete``
+    teardown filter at the model that composes this mixin. Compose the mixin on that same
+    topmost REBAC-typed ancestor (``parties.Party``, not ``parties.Person``), so the write
+    content type and the collect content type match; ``ensure_for_record`` fails fast on a
+    child-composed / ancestor-uncomposed split (the placement invariant in
+    :mod:`angee.base.refs`).
     """
 
     thread_attachment_role: ClassVar[str] = "chatter"

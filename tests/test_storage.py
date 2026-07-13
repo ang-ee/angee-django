@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
+from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.db import connection, models
 from django.db.models.signals import post_save
@@ -31,6 +32,7 @@ from tests.conftest import (
     Backend,
     Drive,
     File,
+    FileAttachment,
     Folder,
     MimeType,
     _clear_model_tables,
@@ -39,6 +41,7 @@ from tests.conftest import (
     execute_schema,
     result_data,
 )
+from tests.mtidemo.models import MtiChild, MtiParent
 
 # A real 1x1 PNG — libmagic classifies it as image/png; a fake signature would not.
 PNG_BYTES = bytes.fromhex(
@@ -206,6 +209,31 @@ def _proxy_upload(drive: Any, payload: bytes, **draft_kwargs: Any) -> Any:
         File.objects.for_upload_token(token).receive_bytes(BytesIO(payload))
         fresh = File.objects.all().from_public_id(str(row.sqid))
         return fresh.finalize(expected_hash=hashlib.sha256(payload).hexdigest(), expected_size=len(payload))
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_attachment_attach_converges_across_mti_levels(tmp_path: Path, drive: Any) -> None:
+    """attach() keys the file edge on the canonical (topmost REBAC-typed) MTI target.
+
+    ``mtidemo``'s gated MTI pair stands in for ``parties.Person`` IS-A ``parties.Party``:
+    attaching a file at the child and at the parent converge on one canonical edge keyed to
+    the parent content type, so a child-side write is found by a parent-side read — the
+    ``storage.FileAttachment`` mirror of the tag/chatter canon.
+    """
+
+    del tmp_path
+    file = _proxy_upload(drive, PNG_BYTES)
+    with system_context(reason="file attachment mti"):
+        child = MtiChild.objects.create(title="Acme", detail="org")
+        parent = MtiParent.objects.get(pk=child.pk)
+        via_child = FileAttachment.objects.attach(file, child, label="child write")
+        via_parent = FileAttachment.objects.attach(file, parent)
+
+        # Both addresses converge on one edge keyed to the parent content type.
+        assert via_child.pk == via_parent.pk
+        assert via_child.content_type == ContentType.objects.get_for_model(MtiParent)
+        assert via_child.object_id == child.pk
+        assert FileAttachment._base_manager.count() == 1
 
 
 @pytest.mark.django_db(transaction=True)

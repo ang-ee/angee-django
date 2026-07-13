@@ -33,6 +33,7 @@ from angee.tags.models import TagAssignment as AbstractTagAssignment
 from angee.tags.models import TagRole as AbstractTagRole
 from tests.conftest import _clear_model_tables, _create_missing_tables, create_user
 from tests.iam_models import Company
+from tests.mtidemo.models import MtiChild, MtiParent
 from tests.test_messaging import Party
 
 
@@ -282,9 +283,8 @@ def test_resolve_target_maps_type_and_public_id_to_the_row(party_edge: SimpleNam
         resolved = TagAssignment.objects.resolve_target(*party_edge.party_address)
 
     assert resolved is not None
-    content_type, instance = resolved
-    assert instance.pk == party_edge.party.pk
-    assert content_type == ContentType.objects.get_for_model(Party)
+    assert resolved.object_id == party_edge.party.pk
+    assert resolved.content_type == ContentType.objects.get_for_model(Party)
 
 
 def test_resolve_target_is_none_for_an_unknown_type(party_edge: SimpleNamespace) -> None:
@@ -344,3 +344,34 @@ def test_for_target_returns_the_targets_edges(party_edge: SimpleNamespace) -> No
         objects.attach(*party_edge.party_address, [party_edge.tag.sqid])
         assert objects.for_target(*party_edge.party_address).count() == 1
         assert objects.for_target("nope/nope", "whatever").count() == 0
+
+
+def test_attaching_across_mti_levels_shares_one_edge(tags_tables: None) -> None:
+    """A tag addressed at an MTI child and at its parent resolve to one canonical edge.
+
+    ``mtidemo``'s gated MTI pair stands in for the ``parties.Person`` IS-A
+    ``parties.Party`` shape: ``attach`` canonicalizes both addresses to the topmost
+    REBAC-typed ancestor (the parent), so the child and parent never split the edge
+    set and a query at either level finds the one edge.
+    """
+
+    del tags_tables
+    objects = TagAssignment.objects
+    with system_context(reason="tags mti test"):
+        child = MtiChild.objects.create(title="Acme", detail="org")
+        parent = MtiParent.objects.get(pk=child.pk)
+        tag = Tag.objects.create(name="VIP")
+        child_address = ("mtidemo/child", child.public_id)
+        parent_address = ("mtidemo/parent", parent.public_id)
+        via_child = objects.attach(*child_address, [tag.sqid])
+        via_parent = objects.attach(*parent_address, [tag.sqid])
+
+        # Both addresses converge on one edge keyed to the parent content type.
+        assert [row.pk for row in via_child] == [row.pk for row in via_parent]
+        assert objects.count() == 1
+        edge = objects.get()
+        assert edge.content_type == ContentType.objects.get_for_model(MtiParent)
+        assert edge.object_id == child.pk
+        # Querying at either level finds the same single edge — no split set.
+        assert objects.for_target(*child_address).count() == 1
+        assert objects.for_target(*parent_address).count() == 1

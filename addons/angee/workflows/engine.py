@@ -66,7 +66,7 @@ def start(
         if version.status != WorkflowStatus.PUBLISHED:
             raise ValidationError({"workflow": "Workflow runs must pin a published version."})
 
-        subject_content_type, subject_object_id = _object_ref(subject)
+        subject_content_type, subject_object_id = _subject_gfk(subject)
         run_dedup_key = dedup_key or _dedup_key(trigger, subject_content_type, subject_object_id)
         owner_id = _owner_id(actor=actor, trigger=trigger, workflow=version)
 
@@ -1221,7 +1221,16 @@ def _is_error_workflow_run(run: Any) -> bool:
     return parent is not None
 
 
-def _object_ref(value: Any) -> tuple[Any | None, Any | None]:
+def _subject_gfk(value: Any) -> tuple[Any | None, Any | None]:
+    """Return the ``(ContentType, pk)`` a run stores for its subject — kind-exact by design.
+
+    The subject round-trips verbatim through ``WorkflowRun.subject`` (a GenericForeignKey)
+    and feeds the trigger dedup key, so the content type stays the subject's own
+    (proxy-aware) model — deliberately *not* canonicalized to an MTI ancestor the way a
+    polymorphic edge is (:func:`angee.base.refs.canonical_record_target`), which would
+    rehydrate the run against the wrong model and fuse distinct subjects under one key.
+    """
+
     if value is None:
         return None, None
     content_type = ContentType.objects.get_for_model(value, for_concrete_model=False)

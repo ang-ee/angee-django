@@ -86,6 +86,7 @@ from tests.conftest import (
 from tests.conftest import (
     File as StorageFile,
 )
+from tests.mtidemo.models import MtiChild, MtiParent
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent
 from tests.test_integrate_vcs import VCS_TEST_MODELS
 
@@ -627,6 +628,35 @@ def test_threaded_model_resolves_one_chatter_thread(messaging_tables: None) -> N
 
 
 @pytest.mark.django_db(transaction=True)
+def test_record_chatter_dedups_across_mti_levels(messaging_tables: None) -> None:
+    """A record and its REBAC-typed MTI ancestor share one canonical chatter edge.
+
+    ``mtidemo``'s gated MTI pair stands in for the ``parties.Person`` IS-A
+    ``parties.Party`` shape: ``ensure_for_record`` canonicalizes the edge key to
+    the topmost REBAC-typed ancestor, so attaching chatter at the child and at the
+    parent converge on one thread instead of splitting across two content types.
+    """
+
+    del messaging_tables
+    with system_context(reason="chatter mti dedup"):
+        child = MtiChild.objects.create(title="Acme", detail="org")
+        parent = MtiParent.objects.get(pk=child.pk)
+        via_child = ThreadAttachment.objects.ensure_for_record(child)
+        via_parent = ThreadAttachment.objects.ensure_for_record(parent)
+
+        # One attachment, one thread — the parent address converges on the child's edge.
+        assert via_child.pk == via_parent.pk
+        assert via_child.thread_id == via_parent.thread_id
+        assert ThreadAttachment.objects.for_record(parent).pk == via_child.pk
+        assert ThreadAttachment.objects.for_record(child).pk == via_child.pk
+
+    attachment = ThreadAttachment._base_manager.get()
+    assert attachment.content_type == ContentType.objects.get_for_model(MtiParent)
+    assert attachment.object_id == child.pk
+    assert ThreadAttachment._base_manager.count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
 def test_threaded_model_posts_internal_message(messaging_tables: None) -> None:
     """Posting on a threaded model writes a message body and advances the thread."""
 
@@ -963,6 +993,32 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(messaging_tables: 
     assert survivor_thread is not None
     assert Message._base_manager.filter(pk=survivor_message.pk).exists()
     assert Thread._base_manager.filter(pk=survivor_thread.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_threaded_mti_child_delete_leaves_no_attachment_row(messaging_tables: None) -> None:
+    """Deleting a threaded MTI child collects its chatter attachment, leaving no orphan.
+
+    ``TrackedRecordChild`` composes ``ThreadedModelMixin`` through its MTI parent, so the
+    chatter edge, the reverse ``thread_attachments`` GenericRelation, and the ``pre_delete``
+    teardown must all agree on the child's canonical content type. A leftover attachment on
+    a reused primary key would mis-resolve, so the delete must remove it (the placement
+    invariant in ``angee.base.refs``).
+    """
+
+    del messaging_tables
+    with system_context(reason="test threaded mti child delete"):
+        record = TrackedRecordChild.objects.create(title="Child record", note="child column")
+        attachment = record.message_thread_attachment(create=True)
+        attachment_pk = attachment.pk
+        thread_pk = attachment.thread_id
+        assert ThreadAttachment._base_manager.filter(pk=attachment_pk).exists()
+
+        record.delete()
+
+    assert not ThreadAttachment._base_manager.filter(pk=attachment_pk).exists()
+    assert not ThreadAttachment._base_manager.filter(object_id=record.pk).exists()
+    assert not Thread._base_manager.filter(pk=thread_pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)

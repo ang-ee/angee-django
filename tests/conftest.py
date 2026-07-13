@@ -52,6 +52,7 @@ from angee.social.models import Quota as AbstractQuota
 from angee.storage.models import Backend as AbstractStorageBackend
 from angee.storage.models import Drive as AbstractDrive
 from angee.storage.models import File as AbstractFile
+from angee.storage.models import FileAttachment as AbstractFileAttachment
 from angee.storage.models import Folder as AbstractFolder
 from angee.storage.models import MimeType as AbstractMimeType
 from angee.storage.models import StorageRole as AbstractStorageRole
@@ -486,6 +487,19 @@ class File(AbstractFile):
         rebac_id_attr = "sqid"
 
 
+class FileAttachment(AbstractFileAttachment):
+    """Concrete polymorphic file edge used by storage tests."""
+
+    class Meta(AbstractFileAttachment.Meta):
+        """Django model options for the canonical test file attachment."""
+
+        abstract = False
+        app_label = "storage"
+        db_table = "test_storage_file_attachment"
+        rebac_resource_type = "storage/file_attachment"
+        rebac_id_attr = "sqid"
+
+
 class StorageRole(AbstractStorageRole):
     """Concrete table-less REBAC anchor for the ``storage/role`` namespace.
 
@@ -505,7 +519,7 @@ class StorageRole(AbstractStorageRole):
         rebac_resource_type = "storage/role"
 
 
-STORAGE_TEST_MODELS = (Backend, Drive, Folder, MimeType, File)
+STORAGE_TEST_MODELS = (Backend, Drive, Folder, MimeType, File, FileAttachment)
 """Concrete storage models created on demand by storage test fixtures."""
 
 

@@ -67,7 +67,7 @@ from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, role_anchor
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import RecordRefMixin, canonical_record_target
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
 from angee.storage.signals import file_finalized
@@ -1159,13 +1159,43 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         )
 
 
+class FileAttachmentManager(AngeeManager):
+    """Owns the polymorphic file edge — the canonical-target attach write.
+
+    Mirrors :meth:`angee.tags.models.TagAssignmentManager.attach`: the edge keys on the
+    target's canonical record target (:func:`angee.base.refs.canonical_record_target`), so
+    a record and each of its REBAC-typed MTI ancestors share one attachment set instead of
+    splitting it. Only the ``get_or_create`` runs elevated — ``storage/file_attachment``
+    declares no ``create`` permission (rows enter through gated call sites that already
+    resolved the file and record), and a pre-insert check has no row id to gate on;
+    ``created_by`` still stamps from the ambient actor, which elevation preserves.
+    """
+
+    def attach(self, file: Any, record: models.Model, *, label: str = "") -> Any:
+        """Attach ``file`` to ``record``, idempotently per (file, canonical target) edge."""
+
+        target = canonical_record_target(record)
+        with system_context(reason="storage.file_attachment.attach"):
+            attachment, _created = self.get_or_create(
+                file=file,
+                content_type=target.content_type,
+                object_id=target.object_id,
+                defaults={"label": label},
+            )
+        return attachment
+
+
 class FileAttachment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     """Polymorphic edge attaching one :class:`File` to any model row.
 
-    Consumers attach explicitly (create a row against the concrete model) or
-    declare a ``GenericRelation("storage.FileAttachment")`` on the target for
-    an ergonomic reverse accessor. Access control rides entirely on the file
-    parent — see ``permissions.zed``.
+    Consumers attach explicitly through :meth:`FileAttachmentManager.attach` (which keys
+    the edge on the target's canonical record target) or declare a
+    ``GenericRelation("storage.FileAttachment")`` on the target for an ergonomic reverse
+    accessor. Declare that reverse relation on the same topmost REBAC-typed MTI ancestor
+    the canonical write keys on (:func:`angee.base.refs.canonical_record_target`), so the
+    delete collector filters at the write content type — the placement invariant in
+    :mod:`angee.base.refs`. Access control rides entirely on the file parent — see
+    ``permissions.zed``.
     """
 
     runtime = True
@@ -1180,6 +1210,8 @@ class FileAttachment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     object_id = models.PositiveBigIntegerField()
     target = GenericForeignKey("content_type", "object_id")
     label = models.CharField(max_length=200, blank=True)
+
+    objects = FileAttachmentManager()
 
     class Meta:
         """Django model options for file attachments."""

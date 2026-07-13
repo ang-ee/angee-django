@@ -9,12 +9,27 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
-from rebac import system_context
+from rebac import ObjectRef, system_context
+from rebac.resources import model_resource_type
 
 from angee.base.mixins import SqidMixin
 from angee.base.models import AngeeModel
-from angee.base.refs import RecordRef, RecordRefMixin, record_ref_for
+from angee.base.refs import (
+    CanonicalRecordTarget,
+    RecordRef,
+    RecordRefMixin,
+    ancestor_object_refs,
+    canonical_record_target,
+    record_ref_for,
+)
 from tests.conftest import _clear_model_tables, _create_missing_tables
+from tests.mtidemo.models import (
+    MtiChild,
+    MtiChildProxy,
+    MtiParent,
+    MtiParentProxy,
+    MtiTwoParent,
+)
 
 
 class RecordRefTypedTarget(SqidMixin, AngeeModel):
@@ -221,3 +236,96 @@ def test_record_ref_mixin_supports_subject_field_prefix(record_ref_tables: None)
     assert edge.record_public_id == target.public_id
     assert not hasattr(edge, "subject_model_label")
     assert not hasattr(edge, "subject_public_id")
+
+
+def test_canonical_record_target_canonicalizes_mti_child_to_typed_ancestor(record_ref_tables: None) -> None:
+    """The write rule keys a polymorphic edge on the topmost REBAC-typed MTI ancestor."""
+
+    del record_ref_tables
+    with system_context(reason="canonical record target mti"):
+        child = MtiChild.objects.create(title="Acme", detail="org")
+        parent = MtiParent.objects.create(title="Plain")
+    parent_content_type = ContentType.objects.get_for_model(MtiParent)
+
+    # A child canonicalizes to its parent's content type at the shared MTI pk.
+    assert canonical_record_target(child) == CanonicalRecordTarget(parent_content_type, child.pk)
+    # A row that is already the topmost typed model keeps its own content type.
+    assert canonical_record_target(parent) == CanonicalRecordTarget(parent_content_type, parent.pk)
+
+
+def test_canonical_record_target_leaves_leaf_and_untyped_rows_uncanonicalized(record_ref_tables: None) -> None:
+    """A REBAC-typed leaf keeps its own type; an untyped row is never canonicalized."""
+
+    del record_ref_tables
+    with system_context(reason="canonical record target typed leaf"):
+        typed = RecordRefTypedTarget.objects.create(name="typed")
+    plain = RecordRefPlainTarget.objects.create(name="plain")
+
+    assert canonical_record_target(typed) == CanonicalRecordTarget(
+        ContentType.objects.get_for_model(RecordRefTypedTarget), typed.pk
+    )
+    assert canonical_record_target(plain) == CanonicalRecordTarget(
+        ContentType.objects.get_for_model(RecordRefPlainTarget), plain.pk
+    )
+
+
+def test_canonical_record_target_resolves_a_proxy_to_its_concrete_target(record_ref_tables: None) -> None:
+    """A proxy resolves to its concrete model first, then the MTI walk runs from there.
+
+    An untyped proxy over a typed concrete row keys on the typed ancestor — never the
+    proxy's own content type (``for_concrete_model=False``), which the earlier behavior
+    would have stored. Pinned as a value so a regression flips the assertion.
+    """
+
+    del record_ref_tables
+    with system_context(reason="canonical record target proxy"):
+        child_proxy = MtiChildProxy.objects.create(title="Proxy child", detail="org")
+        parent_proxy = MtiParentProxy.objects.create(title="Proxy parent")
+
+    parent_content_type = ContentType.objects.get_for_model(MtiParent)
+    # A proxy over an MTI child canonicalizes to the topmost typed ancestor (the parent).
+    assert canonical_record_target(child_proxy) == CanonicalRecordTarget(parent_content_type, child_proxy.pk)
+    # A proxy over the typed flat model canonicalizes to that concrete model's own type.
+    assert canonical_record_target(parent_proxy) == CanonicalRecordTarget(parent_content_type, parent_proxy.pk)
+    # The proxy's own (proxy-aware) content type is never the edge key.
+    assert canonical_record_target(child_proxy).content_type != ContentType.objects.get_for_model(
+        MtiChildProxy, for_concrete_model=False
+    )
+    assert canonical_record_target(parent_proxy).content_type != ContentType.objects.get_for_model(
+        MtiParentProxy, for_concrete_model=False
+    )
+
+
+def test_canonical_record_target_rejects_a_multiple_mti_child(record_ref_tables: None) -> None:
+    """A child with two concrete parents has no single pk-sharing chain, so it fails fast."""
+
+    del record_ref_tables
+    with pytest.raises(ValueError, match="more than one concrete parent"):
+        canonical_record_target(MtiTwoParent())
+
+
+def test_ancestor_object_refs_fans_out_every_rebac_ancestor(record_ref_tables: None) -> None:
+    """The read/grant fan-out yields the row's own identity then each typed ancestor."""
+
+    del record_ref_tables
+    with system_context(reason="ancestor object refs mti"):
+        child = MtiChild.objects.create(title="Acme", detail="org")
+        parent = MtiParent.objects.create(title="Plain")
+
+    # Every identity shares the row's REBAC id; only the type varies down the chain.
+    assert ancestor_object_refs(child) == (
+        ObjectRef(model_resource_type(MtiChild), child.sqid),
+        ObjectRef(model_resource_type(MtiParent), child.sqid),
+    )
+    # A row with no typed ancestor yields exactly its own identity.
+    assert ancestor_object_refs(parent) == (ObjectRef(model_resource_type(MtiParent), parent.sqid),)
+
+
+def test_ancestor_object_refs_fails_fast_at_the_call_on_an_untyped_row(record_ref_tables: None) -> None:
+    """A row whose model declares no REBAC type has no identity to fan out — the tuple call raises."""
+
+    del record_ref_tables
+    plain = RecordRefPlainTarget.objects.create(name="plain")
+
+    with pytest.raises(TypeError):
+        ancestor_object_refs(plain)
