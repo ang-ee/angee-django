@@ -1222,6 +1222,101 @@ def test_resource_adoption_repairs_stale_ledger_target(tmp_path: Path) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_stale_ledger_pointer_to_wrong_live_row_is_repaired(tmp_path: Path) -> None:
+    """A ledger sqid that resolves to the WRONG live row is treated as stale.
+
+    Sqids encode pks, so after a table drop+recreate (a dev re-migration) a
+    surviving ledger pointer resolves to whatever new row reused the pk. The
+    loader must not skip the seed as "unchanged" (the content hash still
+    matches) nor write over the interloper: the adopt identity disagrees, so
+    the seed is re-created and the ledger repointed.
+    """
+
+    class StalePointerUser(AngeeModel):
+        """Model with a unique natural key for wrong-live-row repair tests."""
+
+        username = models.CharField(max_length=40, unique=True)
+        label = models.CharField(max_length=80, blank=True)
+
+        class Meta:
+            """Django model options for the stale-pointer test model."""
+
+            app_label = "base"
+
+    class StalePointerLedger(Resource):
+        """Concrete resource ledger for stale-pointer repair tests."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    resource_dir = tmp_path / "resources"
+    resource_dir.mkdir()
+    (resource_dir / "010_base.stalepointeruser.csv").write_text(
+        "_xref,username,label\nadmin,admin,Seeded\n",
+        encoding="utf-8",
+    )
+    owner = addon(
+        tmp_path,
+        manifest={
+            "master": (),
+            "install": (
+                {
+                    "path": "resources/010_base.stalepointeruser.csv",
+                    "adopt": "username",
+                },
+            ),
+            "demo": (),
+        },
+    )
+
+    models_to_create = (StalePointerUser, StalePointerLedger)
+    with connection.schema_editor() as schema_editor:
+        for model in models_to_create:
+            schema_editor.create_model(model)
+    try:
+        first = StalePointerLedger.objects.load_addons(
+            (owner,),
+            tiers=[Resource.Tier.INSTALL],
+        )
+        assert first.created == 1
+        with system_context(reason="stale-pointer fixture"):
+            seeded_pk = StalePointerUser.objects.get(username="admin").pk
+            # The drop+recreate: the seeded row vanishes and an unrelated row
+            # reuses its pk, so the untouched ledger sqid now resolves to it.
+            StalePointerUser.objects.all().delete()
+            interloper = StalePointerUser.objects.create(pk=seeded_pk, username="interloper", label="Existing")
+
+        result = StalePointerLedger.objects.load_addons(
+            (owner,),
+            tiers=[Resource.Tier.INSTALL],
+        )
+
+        assert result.skipped == 0
+        assert result.created == 1
+        interloper.refresh_from_db()
+        assert (interloper.username, interloper.label) == ("interloper", "Existing")
+        with system_context(reason="stale-pointer assertions"):
+            seeded = StalePointerUser.objects.get(username="admin")
+            assert seeded.label == "Seeded"
+        assert StalePointerLedger.objects.get(xref="admin").target_id == seeded.public_id
+
+        steady = StalePointerLedger.objects.load_addons(
+            (owner,),
+            tiers=[Resource.Tier.INSTALL],
+        )
+        assert steady.created == 0
+        assert steady.updated == 0
+        assert steady.skipped == 1
+    finally:
+        with connection.schema_editor() as schema_editor:
+            for model in reversed(models_to_create):
+                schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_resource_adoption_accepts_composite_unique_fields(tmp_path: Path) -> None:
     """Resource adoption can match existing rows by a composite unique key."""
 

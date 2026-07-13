@@ -59,6 +59,7 @@ class AngeeResource(resources.ModelResource):
         self._existing_ledgers: dict[str, Resource | None] = {}
         self._adopted_instances: dict[str, models.Model] = {}
         self._row_hashes: dict[str, str] = {}
+        self._stale_ledger_xrefs: set[str] = set()
         super().__init__()
         for field in self.fields.values():
             if isinstance(field.widget, XrefWidgetMixin):
@@ -115,6 +116,14 @@ class AngeeResource(resources.ModelResource):
         ledger = self._ledger_for_xref(xref)
         self._record_row_state(xref, row_hash, ledger)
         instance = self._instance_from_ledger(ledger)
+        if instance is not None and self._ledger_resolution_is_stale(row, instance):
+            # Sqids encode pks, so after a table drop+recreate a surviving
+            # ledger sqid resolves to a DIFFERENT, newly created row (pk
+            # reuse). The resolved row failed the entry's adopt identity, so
+            # the pointer is stale: fall through to adopt-or-create and let
+            # ``after_save_instance`` repoint the ledger.
+            self._stale_ledger_xrefs.add(xref)
+            instance = None
 
         adopted = self._adopt_for_row(xref, row, ledger, instance)
         if adopted is None:
@@ -148,6 +157,11 @@ class AngeeResource(resources.ModelResource):
 
         if xref in self._adopted_instances:
             return self._adopted_instances[xref]
+        if xref in self._stale_ledger_xrefs:
+            # A stale pointer must not resurface through the instance loader:
+            # with no adoptable match the row is created fresh, not written
+            # over the wrong row the ledger still names.
+            return None
         self._ledger_for_xref(xref)
         ledger = self._existing_ledgers[xref]
         if ledger is None:
@@ -310,6 +324,60 @@ class AngeeResource(resources.ModelResource):
                 f"{instance._meta.label}, not {self._meta.model._meta.label}"
             )
         return instance
+
+    def _ledger_resolution_is_stale(
+        self,
+        row: Mapping[str, Any],
+        instance: models.Model,
+    ) -> bool:
+        """Whether a ledger-resolved live row fails the entry's adopt identity.
+
+        The adopt key is the seed's declared natural identity, so a resolved
+        row that disagrees on it marks the ledger pointer stale rather than the
+        row adopted. Entries without an adopt key carry no seed-side identity
+        to check, and a row that omits its adopt values offers nothing to
+        compare — both trust the resolved row as-is (the prior behavior; xref
+        plus target-model checks still apply).
+        """
+
+        identity = self._adopt_identity(row)
+        if identity is None:
+            return False
+        for field_name, value in identity.items():
+            field = self._meta.model._meta.get_field(field_name)
+            if not isinstance(field, models.Field):
+                return False
+            current = self._prepared_condition_value(field, getattr(instance, field.attname))
+            wanted = self._prepared_condition_value(field, value)
+            if current != wanted:
+                return True
+        return False
+
+    def _adopt_identity(self, row: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Return the adopt-key field values one row declares, or ``None``.
+
+        Mirrors the three adoption shapes ``_adopt_existing_target`` accepts:
+        one named field, a composite tuple, and ``adopt=True`` (the single
+        adoptable unique field carried by the row). ``None`` means the entry
+        declares no adoption or the row omits the key values.
+        """
+
+        adopt = self.entry.adopt
+        if not adopt:
+            return None
+        if isinstance(adopt, str):
+            candidate = self._adoption_candidate(row, adopt)
+            return None if candidate is None else dict([candidate])
+        if isinstance(adopt, tuple):
+            return self._composite_adoption_candidate(row, adopt)
+        candidates = [
+            candidate
+            for field in self._meta.model._meta.fields
+            if self._is_adoptable_field(field) and (candidate := self._adoption_candidate(row, field.name)) is not None
+        ]
+        if len(candidates) != 1:
+            return None
+        return dict(candidates)
 
     def _adopt_existing_target(
         self,
