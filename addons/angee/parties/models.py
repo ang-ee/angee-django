@@ -11,6 +11,13 @@ so a sync can record an uncertain match as a weak candidate instead of guessing.
 model (:class:`Person`, :class:`Organization`), not a column — a person carries
 name parts and a link to its :class:`~angee.iam.models.User`, an organisation
 carries its legal name and domain.
+
+Parties are organised two ways, both human-owned facts: :class:`Circle` is a
+private, overlapping grouping (a party may belong to many circles; circles nest
+as a :class:`~angee.base.mixins.HierarchyMixin` tree), and :class:`Relationship`
+is a typed, directed party↔party edge whose vocabulary
+(:class:`RelationshipKind`) is catalogue data seeded from the XFN / vCard
+``RELATED`` values — never a schema fact.
 """
 
 from __future__ import annotations
@@ -21,15 +28,21 @@ from django.apps import apps
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from rebac import PermissionDenied, system_context
 from rebac.managers import RebacManager
 
 from angee.base.fields import SqidField, StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, SqidMixin
+from angee.base.mixins import AuditMixin, HierarchyMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel
 from angee.integrate.models import Bridge
 from angee.parties.backends import DirectoryBackend
-from angee.parties.managers import HandleManager, PartyHandleManager, PartyManager
+from angee.parties.managers import (
+    CircleManager,
+    HandleManager,
+    PartyHandleManager,
+    PartyManager,
+)
 
 
 class Party(SqidMixin, AuditMixin, AngeeModel):
@@ -72,6 +85,17 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
     )
     source_uid = models.CharField(max_length=512, blank=True, default="")
     source_etag = models.CharField(max_length=512, blank=True, default="")
+    introduced_by = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="introductions",
+    )
+    """The party that introduced this one — acquaintance provenance, not a typed edge."""
+
+    first_met_note = models.TextField(blank=True, default="")
+    """Free-text "how I know them" note (vCard has no property for this)."""
 
     objects = PartyManager()
 
@@ -297,6 +321,44 @@ class PartyHandle(SqidMixin, AuditMixin, AngeeModel):
 
         return f"{self.party_id}↔{self.handle_id} ({self.confidence})"
 
+    def confirm(self) -> None:
+        """Human-confirm this link, then re-resolve the handle's owner.
+
+        Confirmation is the strongest signal the resolution ordering knows
+        (``-is_confirmed`` sorts before any score), so the link also takes full
+        confidence and the ``manual`` source — a later sync must not out-score a
+        human decision. The actor must hold ``write`` on the link; the resolution
+        cascade (the handle's owner pointer, both parties' counts) is server-owned
+        bookkeeping and runs elevated.
+        """
+
+        if not self.has_access("write"):
+            raise PermissionDenied("write access to the party-handle link is required")
+        with system_context(reason="parties.party_handle.confirm"):
+            self.confidence = 1.0
+            self.source = self.Source.MANUAL  # type: ignore[assignment]  # TextChoices member unmodeled without django-stubs
+            self.is_confirmed = True
+            self.is_dismissed = False
+            self.save(update_fields=["confidence", "source", "is_confirmed", "is_dismissed", "updated_at"])
+            type(self).objects.resolve(self.handle)
+
+    def dismiss(self) -> None:
+        """Dismiss this link — the durable anti-link — then re-resolve the handle.
+
+        A dismissed link survives as a row so the same match is never re-proposed
+        (suggesters key on ``(party, handle)`` and skip existing links); resolution
+        simply ignores it, demoting the handle to its next candidate or to unowned.
+        Gated and elevated like :meth:`confirm`.
+        """
+
+        if not self.has_access("write"):
+            raise PermissionDenied("write access to the party-handle link is required")
+        with system_context(reason="parties.party_handle.dismiss"):
+            self.is_dismissed = True
+            self.is_confirmed = False
+            self.save(update_fields=["is_dismissed", "is_confirmed", "updated_at"])
+            type(self).objects.resolve(self.handle)
+
 
 class Address(SqidMixin, AuditMixin, AngeeModel):
     """A physical or postal address of a party (the vCard ``ADR`` property).
@@ -433,6 +495,238 @@ class Folder(SqidMixin, AuditMixin, AngeeModel):
         """Return the folder name for Django displays."""
 
         return self.name
+
+
+class Circle(HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
+    """A private, overlapping grouping of parties — how the owner organises people.
+
+    Circles are the curated counterpart of :class:`Folder` (which mirrors a synced
+    address book): "Family", "Inner Circle", a climbing crew. A party may belong to
+    many circles (:class:`CircleMember`), and circles nest as a tree — overlap
+    comes from multi-membership, never from multiple parents. The tree is
+    :class:`~angee.base.mixins.HierarchyMixin`'s materialized path, so "everyone in
+    this circle including sub-circles" is an indexed prefix scan
+    (``Circle.objects.subtree_of(circle)``), and ``hierarchy_scope_fields`` keeps a
+    personal circle tree from straddling owners.
+
+    Circles are an organising surface only — they never gate visibility or
+    sharing; REBAC stays the one authorization owner.
+    """
+
+    runtime = True
+    sqid_prefix = "cir_"
+    hierarchy_scope_fields = ("created_by",)
+
+    name = models.CharField(max_length=200)
+    description = models.TextField(blank=True, default="")
+    color = models.CharField(max_length=32, blank=True, default="")
+    """Display color token or hex for chips/dots; presentation only."""
+
+    icon = models.CharField(max_length=128, blank=True, default="")
+    """Icon registry name for navigation; presentation only."""
+
+    position = models.PositiveIntegerField(default=0)
+
+    objects = CircleManager()
+
+    class Meta(HierarchyMixin.Meta):
+        """Django model options carrying the hierarchy path index."""
+
+        abstract = True
+        ordering = ("position", "name", "sqid")
+        rebac_resource_type = "parties/circle"
+        rebac_id_attr = "sqid"
+
+    def __str__(self) -> str:
+        """Return the circle name for Django displays."""
+
+        return self.name
+
+
+class CircleMember(SqidMixin, AuditMixin, AngeeModel):
+    """A party's membership of one circle, scored like a :class:`PartyHandle` link.
+
+    Membership is confidence-bearing so a suggester (community detection, an
+    org-domain rule, an LLM) can propose a weak membership for review instead of
+    silently filing people; a human decision writes ``manual`` at full confidence.
+    One row per ``(circle, party)`` — re-suggesting an existing membership updates
+    the row rather than duplicating it.
+    """
+
+    runtime = True
+    sqid_prefix = "cme_"
+
+    class MembershipSource(models.TextChoices):
+        """Where a circle membership came from.
+
+        Named distinctly from :class:`PartyHandle.Source` — enum class names
+        project as global GraphQL enum names, so they must be schema-unique.
+        """
+
+        MANUAL = "manual", "Manual"
+        IMPORT = "import", "Import"
+        LLM = "llm", "LLM"
+        COMMUNITY = "community", "Community"
+        RULE = "rule", "Rule"
+
+    circle = models.ForeignKey(
+        "parties.Circle",
+        on_delete=models.CASCADE,
+        related_name="members",
+    )
+    party = models.ForeignKey(
+        "parties.Party",
+        on_delete=models.CASCADE,
+        related_name="circle_members",
+    )
+    confidence = models.FloatField(
+        default=1.0,
+        validators=(MinValueValidator(0.0), MaxValueValidator(1.0)),
+    )
+    source = StateField(choices_enum=MembershipSource, default=MembershipSource.MANUAL)
+
+    class Meta:
+        """Django model options for the circle-membership source model."""
+
+        abstract = True
+        ordering = ("circle", "sqid")
+        rebac_resource_type = "parties/circle_member"
+        rebac_id_attr = "sqid"
+        constraints = (
+            models.UniqueConstraint(
+                fields=("circle", "party"),
+                name="uq_circle_member",
+            ),
+        )
+
+    def __str__(self) -> str:
+        """Return a readable membership description for Django displays."""
+
+        return f"{self.party_id}∈{self.circle_id}"
+
+
+class RelationshipKind(SqidMixin, AuditMixin, AngeeModel):
+    """The relationship vocabulary — types as catalogue data, never schema.
+
+    One row expresses both directions of an asymmetric type through
+    ``inverse_name`` ("Parent" / "Child"); a blank inverse means the type is
+    symmetric ("Friend"). The master tier seeds the XFN / vCard ``RELATED``
+    vocabulary (adopted by slug, so a project may rename labels without forking
+    rows), and users may add their own kinds alongside.
+    """
+
+    runtime = True
+    catalogue = True
+    catalogue_tier = "master"
+    sqid_prefix = "rkd_"
+
+    class RelationshipCategory(models.TextChoices):
+        """The XFN category a relationship kind belongs to.
+
+        Schema-unique class name — enum class names project as global GraphQL
+        enum names.
+        """
+
+        FAMILY = "family", "Family"
+        FRIENDSHIP = "friendship", "Friendship"
+        ROMANTIC = "romantic", "Romantic"
+        PROFESSIONAL = "professional", "Professional"
+        GEOGRAPHICAL = "geographical", "Geographical"
+        OTHER = "other", "Other"
+
+    slug = models.SlugField(unique=True)
+    name = models.CharField(max_length=128)
+    """Forward label: ``from_party`` is the ``name`` of ``to_party`` ("Parent")."""
+
+    inverse_name = models.CharField(max_length=128, blank=True, default="")
+    """Reverse label ("Child"); blank means the kind is symmetric."""
+
+    category = StateField(choices_enum=RelationshipCategory, default=RelationshipCategory.OTHER)
+
+    class Meta:
+        """Django model options for the relationship-kind catalogue."""
+
+        abstract = True
+        ordering = ("slug",)
+        rebac_resource_type = "parties/relationship_kind"
+        rebac_id_attr = "sqid"
+
+    def __str__(self) -> str:
+        """Return the kind's forward label for Django displays."""
+
+        return self.name
+
+    @property
+    def is_symmetric(self) -> bool:
+        """Whether the kind reads the same in both directions."""
+
+        return not self.inverse_name
+
+    def label_for(self, *, outbound: bool) -> str:
+        """Return the label as seen from one side of the edge.
+
+        ``outbound=True`` is the ``from_party`` side ("Maya is my *sister*" renders
+        the forward name); the ``to_party`` side renders the inverse, falling back
+        to the forward name for a symmetric kind.
+        """
+
+        return self.name if outbound or self.is_symmetric else self.inverse_name
+
+
+class Relationship(SqidMixin, AuditMixin, AngeeModel):
+    """A typed, directed edge between two parties: ``from_party`` is *kind* of ``to_party``.
+
+    A single row carries both readings (Monica's Chandler shape — the mirror-row
+    scheme was abandoned there for drifting): render the reverse with
+    :meth:`RelationshipKind.label_for`. Edges are time-bounded (party-model
+    ``from``/``thru``), so "was my colleague 2019–2022" stays queryable after it
+    ends; an open edge has no ``ended_at``.
+    """
+
+    runtime = True
+    sqid_prefix = "rel_"
+
+    from_party = models.ForeignKey(
+        "parties.Party",
+        on_delete=models.CASCADE,
+        related_name="relationships",
+    )
+    to_party = models.ForeignKey(
+        "parties.Party",
+        on_delete=models.CASCADE,
+        related_name="inbound_relationships",
+    )
+    kind = models.ForeignKey(
+        "parties.RelationshipKind",
+        on_delete=models.PROTECT,
+        related_name="relationships",
+    )
+    started_at = models.DateField(null=True, blank=True)
+    ended_at = models.DateField(null=True, blank=True)
+    notes = models.TextField(blank=True, default="")
+
+    class Meta:
+        """Django model options for the relationship source model."""
+
+        abstract = True
+        ordering = ("from_party", "sqid")
+        rebac_resource_type = "parties/relationship"
+        rebac_id_attr = "sqid"
+        constraints = (
+            models.UniqueConstraint(
+                fields=("from_party", "to_party", "kind"),
+                name="uq_relationship_edge",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(from_party=models.F("to_party")),
+                name="ck_relationship_distinct_parties",
+            ),
+        )
+
+    def __str__(self) -> str:
+        """Return a readable edge description for Django displays."""
+
+        return f"{self.from_party_id}→{self.to_party_id} ({self.kind_id})"
 
 
 class Directory(Bridge):

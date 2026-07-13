@@ -40,6 +40,10 @@ Address = apps.get_model("parties", "Address")
 Affiliation = apps.get_model("parties", "Affiliation")
 Directory = apps.get_model("parties", "Directory")
 Folder = apps.get_model("parties", "Folder")
+Circle = apps.get_model("parties", "Circle")
+CircleMember = apps.get_model("parties", "CircleMember")
+RelationshipKind = apps.get_model("parties", "RelationshipKind")
+Relationship = apps.get_model("parties", "Relationship")
 
 
 @strawberry_django.type(Party)
@@ -49,6 +53,8 @@ class PartyType(AuthoredRefMixin, AngeeNode):
     display_name: auto
     notes: auto
     handle_count: auto
+    first_met_note: auto
+    introduced_by: "PartyType | None"
     created_at: auto
     updated_at: auto
 
@@ -56,6 +62,9 @@ class PartyType(AuthoredRefMixin, AngeeNode):
     party_handles: list["PartyHandleType"]
     addresses: list["AddressType"]
     affiliations: list["AffiliationType"]
+    circle_members: list["CircleMemberType"]
+    relationships: list["PartyRelationshipType"]
+    inbound_relationships: list["PartyRelationshipType"]
 
 
 @strawberry_django.type(Person)
@@ -200,6 +209,84 @@ class DirectoryType(IntegrationLabelMixin, BridgeSyncStatusMixin, AngeeNode):
     sync_progress: strawberry.scalars.JSON
     created_at: auto
     updated_at: auto
+
+
+@strawberry_django.type(Circle)
+class CircleType(AngeeNode):
+    """GraphQL projection of a circle (a private, overlapping grouping of parties)."""
+
+    name: auto
+    description: auto
+    color: auto
+    icon: auto
+    position: auto
+    parent: "CircleType | None"
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.type(CircleMember)
+class CircleMemberType(AngeeNode):
+    """GraphQL projection of a party's circle membership."""
+
+    circle: CircleType | None
+    party: PartyType | None
+    confidence: auto
+    source: auto
+    created_at: auto
+
+
+@strawberry_django.type(RelationshipKind)
+class RelationshipKindType(AngeeNode):
+    """GraphQL projection of a relationship-vocabulary kind."""
+
+    slug: auto
+    name: auto
+    inverse_name: auto
+    category: auto
+
+
+@strawberry_django.type(Relationship)
+class PartyRelationshipType(AngeeNode):
+    """GraphQL projection of a typed, directed party↔party edge.
+
+    Named ``PartyRelationshipType`` because the node-type namespace is global
+    and iam's REBAC tuple browser already resolves to ``RelationshipType``
+    through the ``iam.Relationship`` model-label fallback.
+    """
+
+    from_party: PartyType | None
+    to_party: PartyType | None
+    kind: RelationshipKindType | None
+    started_at: auto
+    ended_at: auto
+    notes: auto
+    created_at: auto
+
+
+@strawberry.type
+class PartiesIdentityMutation:
+    """Human decisions on party↔handle identity claims."""
+
+    @strawberry.mutation
+    def confirm_party_handle(self, info: strawberry.Info, id: strawberry.ID) -> PartyHandleType:
+        """Confirm a party↔handle link (the review queue's accept)."""
+
+        link = PartyHandle.objects.all().from_public_id(str(id))
+        if link is None:
+            raise ValueError("party handle link not found")
+        link.confirm()
+        return cast(PartyHandleType, link)
+
+    @strawberry.mutation
+    def dismiss_party_handle(self, info: strawberry.Info, id: strawberry.ID) -> PartyHandleType:
+        """Dismiss a party↔handle link — the durable anti-link (the review queue's reject)."""
+
+        link = PartyHandle.objects.all().from_public_id(str(id))
+        if link is None:
+            raise ValueError("party handle link not found")
+        link.dismiss()
+        return cast(PartyHandleType, link)
 
 
 @strawberry.type
@@ -408,6 +495,93 @@ _AFFILIATION_RESOURCE = hasura_model_resource(
     },
     write_backend=AngeeHasuraWriteBackend(Affiliation, public_id_fields=("party", "organization")),
 )
+_PARTY_HANDLE_RESOURCE = hasura_model_resource(
+    PartyHandleType,
+    model=PartyHandle,
+    name="party_handles",
+    filterable=[
+        "id",
+        "party",
+        "handle",
+        "confidence",
+        "source",
+        "is_confirmed",
+        "is_dismissed",
+        "created_at",
+    ],
+    sortable=["confidence", "source", "created_at", "updated_at"],
+    aggregatable=["id", "confidence"],
+    groupable=["source", "party", "party__display_name"],
+    # Links are written by syncs/suggesters (system context) and changed only
+    # through the confirm/dismiss mutations — never generic CRUD.
+    insert=False,
+    update=False,
+    delete=False,
+    field_id_decode={
+        "party": public_pk_decoder(Party),
+        "handle": public_pk_decoder(Handle),
+    },
+)
+_CIRCLE_RESOURCE = hasura_model_resource(
+    CircleType,
+    model=Circle,
+    name="circles",
+    filterable=["id", "name", "parent", "created_at", "updated_at"],
+    sortable=["position", "name", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["parent", "parent__name"],
+    insertable=["name", "description", "color", "icon", "position", "parent"],
+    updatable=["name", "description", "color", "icon", "position", "parent"],
+    field_id_decode={"parent": public_pk_decoder(Circle)},
+    write_backend=AngeeHasuraWriteBackend(Circle, public_id_fields=("parent",)),
+)
+_CIRCLE_MEMBER_RESOURCE = hasura_model_resource(
+    CircleMemberType,
+    model=CircleMember,
+    name="circle_members",
+    filterable=["id", "circle", "party", "source", "confidence", "created_at"],
+    sortable=["circle", "confidence", "created_at"],
+    aggregatable=["id"],
+    groupable=["circle", "circle__name", "party", "party__display_name", "source"],
+    # A human adds a membership by naming the pair; confidence/source are
+    # server-owned (manual/1.0 defaults; suggesters write elevated).
+    insertable=["circle", "party"],
+    update=False,
+    field_id_decode={
+        "circle": public_pk_decoder(Circle),
+        "party": public_pk_decoder(Party),
+    },
+    write_backend=AngeeHasuraWriteBackend(CircleMember, public_id_fields=("circle", "party")),
+)
+_RELATIONSHIP_KIND_RESOURCE = hasura_model_resource(
+    RelationshipKindType,
+    model=RelationshipKind,
+    name="relationship_kinds",
+    filterable=["id", "slug", "name", "category"],
+    sortable=["slug", "name", "category"],
+    aggregatable=["id"],
+    groupable=["category"],
+    insertable=["slug", "name", "inverse_name", "category"],
+    updatable=["name", "inverse_name", "category"],
+)
+_RELATIONSHIP_RESOURCE = hasura_model_resource(
+    PartyRelationshipType,
+    model=Relationship,
+    # iam's REBAC tuple browser already owns the bare `relationships` query root.
+    name="party_relationships",
+    filterable=["id", "from_party", "to_party", "kind", "started_at", "ended_at", "created_at"],
+    sortable=["kind", "started_at", "created_at"],
+    aggregatable=["id"],
+    groupable=["kind", "kind__name"],
+    insertable=["from_party", "to_party", "kind", "started_at", "ended_at", "notes"],
+    updatable=["kind", "started_at", "ended_at", "notes"],
+    field_id_decode={
+        "from_party": public_pk_decoder(Party),
+        "to_party": public_pk_decoder(Party),
+        "kind": public_pk_decoder(RelationshipKind),
+    },
+    write_backend=AngeeHasuraWriteBackend(Relationship, public_id_fields=("from_party", "to_party", "kind")),
+)
 _CONTACT_FOLDER_RESOURCE = hasura_model_resource(
     ContactFolderType,
     model=Folder,
@@ -449,8 +623,13 @@ _RESOURCE_TYPES = [
     *_PERSON_RESOURCE.types,
     *_ORGANIZATION_RESOURCE.types,
     *_HANDLE_RESOURCE.types,
+    *_PARTY_HANDLE_RESOURCE.types,
     *_ADDRESS_RESOURCE.types,
     *_AFFILIATION_RESOURCE.types,
+    *_CIRCLE_RESOURCE.types,
+    *_CIRCLE_MEMBER_RESOURCE.types,
+    *_RELATIONSHIP_KIND_RESOURCE.types,
+    *_RELATIONSHIP_RESOURCE.types,
     *_CONTACT_FOLDER_RESOURCE.types,
     *_DIRECTORY_RESOURCE.types,
 ]
@@ -462,19 +641,30 @@ _PARTIES_SCHEMA_BUCKET = {
         _PERSON_RESOURCE.query,
         _ORGANIZATION_RESOURCE.query,
         _HANDLE_RESOURCE.query,
+        _PARTY_HANDLE_RESOURCE.query,
         _ADDRESS_RESOURCE.query,
         _AFFILIATION_RESOURCE.query,
+        _CIRCLE_RESOURCE.query,
+        _CIRCLE_MEMBER_RESOURCE.query,
+        _RELATIONSHIP_KIND_RESOURCE.query,
+        _RELATIONSHIP_RESOURCE.query,
         _CONTACT_FOLDER_RESOURCE.query,
         _DIRECTORY_RESOURCE.query,
     ],
     "mutation": [
         PartiesDirectoryMutation,
+        PartiesIdentityMutation,
         _PARTY_RESOURCE.mutation,
         _PERSON_RESOURCE.mutation,
         _ORGANIZATION_RESOURCE.mutation,
         _HANDLE_RESOURCE.mutation,
+        _PARTY_HANDLE_RESOURCE.mutation,
         _ADDRESS_RESOURCE.mutation,
         _AFFILIATION_RESOURCE.mutation,
+        _CIRCLE_RESOURCE.mutation,
+        _CIRCLE_MEMBER_RESOURCE.mutation,
+        _RELATIONSHIP_KIND_RESOURCE.mutation,
+        _RELATIONSHIP_RESOURCE.mutation,
         _CONTACT_FOLDER_RESOURCE.mutation,
         _DIRECTORY_RESOURCE.mutation,
     ],
@@ -486,6 +676,10 @@ _PARTIES_SCHEMA_BUCKET = {
         PartyHandleType,
         AddressType,
         AffiliationType,
+        CircleType,
+        CircleMemberType,
+        RelationshipKindType,
+        PartyRelationshipType,
         DirectoryType,
         ContactFolderType,
         *_RESOURCE_TYPES,
@@ -503,6 +697,9 @@ schemas = {
             changes(Party, field="partyChanged"),
             changes(Handle, field="handleChanged"),
             changes(Directory, field="directoryChanged"),
+            changes(Circle, field="circleChanged"),
+            changes(CircleMember, field="circleMemberChanged"),
+            changes(Relationship, field="relationshipChanged"),
         ],
     },
 }

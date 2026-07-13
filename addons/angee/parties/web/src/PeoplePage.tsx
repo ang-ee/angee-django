@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Column, ResourceList, Facet, Field, Form, Group, ListView, List, type ListColumn, type RecordPanelContext, type RecordTabDescriptor, type StringIdRow } from "@angee/ui";
+import { IdentityTab } from "./IdentityTab";
 import { usePartiesT } from "./i18n";
 
 const MODEL = "parties.Person";
@@ -69,6 +70,68 @@ function PartyRelatedTab({
   );
 }
 
+function circleMembershipColumns(t: ReturnType<typeof usePartiesT>): readonly ListColumn<RelatedRow>[] {
+  return [
+    { field: "circle.name", header: t("person.circleName") },
+    { field: "source" },
+    { field: "confidence" },
+  ];
+}
+
+/**
+ * Both directions of the person's typed edges in one tab: edges this person
+ * authored ("is *kind* of…") and edges pointing at them (rendered through the
+ * kind's inverse label, falling back to the forward name for symmetric kinds).
+ */
+function RelationshipsTab({ recordId }: RecordPanelContext): React.ReactElement {
+  const t = usePartiesT();
+  const outboundColumns = React.useMemo<readonly ListColumn<RelatedRow>[]>(
+    () => [
+      { field: "kind.name", header: t("relationship.kind") },
+      { field: "to_party.display_name", header: t("relationship.person") },
+      { field: "started_at" },
+      { field: "ended_at" },
+    ],
+    [t],
+  );
+  const inboundColumns = React.useMemo<readonly ListColumn<RelatedRow>[]>(
+    () => [
+      {
+        field: "kind.name",
+        header: t("relationship.kind"),
+        render: (row) => {
+          const kind = (row as { kind?: { name?: string; inverse_name?: string } }).kind;
+          return <>{kind?.inverse_name || kind?.name || ""}</>;
+        },
+      },
+      { field: "from_party.display_name", header: t("relationship.person") },
+      { field: "started_at" },
+      { field: "ended_at" },
+    ],
+    [t],
+  );
+  return (
+    <div className="flex flex-col gap-4">
+      <ListView<RelatedRow>
+        resource="parties.Relationship"
+        scope="local"
+        fields={["id", "kind.name", "to_party.display_name", "started_at", "ended_at"]}
+        baseFilter={{ from_party: { exact: recordId } }}
+        columns={outboundColumns}
+        emptyContent={t("person.empty.relationships")}
+      />
+      <ListView<RelatedRow>
+        resource="parties.Relationship"
+        scope="local"
+        fields={["id", "kind.name", "kind.inverse_name", "from_party.display_name", "started_at", "ended_at"]}
+        baseFilter={{ to_party: { exact: recordId } }}
+        columns={inboundColumns}
+        emptyContent={t("person.empty.inboundRelationships")}
+      />
+    </div>
+  );
+}
+
 function personRecordTabs(
   t: ReturnType<typeof usePartiesT>,
 ): readonly RecordTabDescriptor[] {
@@ -85,6 +148,29 @@ function personRecordTabs(
           emptyContent={t("person.empty.handles")}
         />
       ),
+    },
+    {
+      id: "identity",
+      label: t("person.tabs.identity"),
+      render: (context) => <IdentityTab {...context} />,
+    },
+    {
+      id: "circles",
+      label: t("person.tabs.circles"),
+      render: (context) => (
+        <PartyRelatedTab
+          {...context}
+          resource="parties.CircleMember"
+          fields={["id", "circle.name", "source", "confidence"]}
+          columns={circleMembershipColumns(t)}
+          emptyContent={t("person.empty.circles")}
+        />
+      ),
+    },
+    {
+      id: "relationships",
+      label: t("person.tabs.relationships"),
+      render: (context) => <RelationshipsTab {...context} />,
     },
     {
       id: "addresses",

@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 4
 
 // A party and its related rows (handles, links, addresses, affiliations) are
 // each owned by the user that created them, with platform admins reaching every
@@ -110,6 +110,60 @@ definition parties/affiliation {
 }
 
 definition parties/folder {
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission delete = owner + admin->member
+}
+
+// Circles and relationships are the human-owned organising surfaces. They follow
+// the same per-row ownership shape as the rows they organise; a circle NEVER
+// gates party visibility (organising ≠ authorization — REBAC reader grants stay
+// the one read owner).
+
+definition parties/circle {
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission delete = owner + admin->member
+}
+
+definition parties/circle_member {
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission delete = owner + admin->member
+}
+
+// The relationship vocabulary is catalogue data every signed-in user picks
+// from; user-added kinds stay editable by their creator, seeded rows
+// (created_by null) only by platform admins.
+definition parties/relationship_kind {
+    relation owner: auth/user // rebac:field=created_by
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = authenticated
+    permission write  = owner + admin->member
+    permission delete = owner + admin->member
+}
+
+definition parties/relationship {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member

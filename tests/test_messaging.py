@@ -60,10 +60,14 @@ from angee.messaging.models import ThreadedModelMixin
 from angee.messaging.models import ThreadFollower as AbstractThreadFollower
 from angee.messaging.models import ThreadNotification as AbstractThreadNotification
 from angee.messaging.models import TrackingValue as AbstractTrackingValue
+from angee.parties.models import Circle as AbstractCircle
+from angee.parties.models import CircleMember as AbstractCircleMember
 from angee.parties.models import Directory as AbstractDirectory
 from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
 from angee.parties.models import Party as AbstractParty
+from angee.parties.models import Relationship as AbstractRelationship
+from angee.parties.models import RelationshipKind as AbstractRelationshipKind
 from angee.social.models import MessagePublic, ThreadPublic
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild, TrackedRecordParent
 from tests.conftest import (
@@ -135,6 +139,58 @@ class Handle(AbstractHandle):
         app_label = "parties"
         db_table = "test_parties_handle"
         rebac_resource_type = "parties/handle"
+        rebac_id_attr = "sqid"
+
+
+class Circle(AbstractCircle):
+    """Concrete circle used by parties-schema imports across the suite."""
+
+    class Meta(AbstractCircle.Meta):
+        """Django model options for the canonical test circle."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_circle"
+        rebac_resource_type = "parties/circle"
+        rebac_id_attr = "sqid"
+
+
+class CircleMember(AbstractCircleMember):
+    """Concrete circle membership used by parties-schema imports across the suite."""
+
+    class Meta(AbstractCircleMember.Meta):
+        """Django model options for the canonical test circle membership."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_circle_member"
+        rebac_resource_type = "parties/circle_member"
+        rebac_id_attr = "sqid"
+
+
+class RelationshipKind(AbstractRelationshipKind):
+    """Concrete relationship kind used by parties-schema imports across the suite."""
+
+    class Meta(AbstractRelationshipKind.Meta):
+        """Django model options for the canonical test relationship kind."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_relationship_kind"
+        rebac_resource_type = "parties/relationship_kind"
+        rebac_id_attr = "sqid"
+
+
+class Relationship(AbstractRelationship):
+    """Concrete relationship edge used by parties-schema imports across the suite."""
+
+    class Meta(AbstractRelationship.Meta):
+        """Django model options for the canonical test relationship."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_relationship"
+        rebac_resource_type = "parties/relationship"
         rebac_id_attr = "sqid"
 
 
@@ -399,6 +455,10 @@ MESSAGING_TEST_MODELS = (
     Folder,
     Party,
     Handle,
+    Circle,
+    CircleMember,
+    RelationshipKind,
+    Relationship,
     Fragment,
     Thread,
     ThreadAttachment,
@@ -1996,6 +2056,25 @@ def test_second_title_part_is_rejected(channel: Any) -> None:
                 role=Part.PartRole.TITLE,
                 fragment=fragment,
             )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fragment_upsert_survives_oversized_text(channel: Any) -> None:
+    """A text past the tsvector input bound still lands (vector prefix is bounded).
+
+    Regression: a 1.6 MB text part made ``to_tsvector`` reject the whole ingest
+    on Postgres ("string is too long for tsvector"), re-failing every sync
+    retry. SQLite skips the vector branch, so this asserts the write path; the
+    bounded-vector truth is verified live against Postgres.
+    """
+
+    del channel
+    huge = "word " * 400_000  # ~2 MB, well past _SEARCH_MAX_BYTES
+    with system_context(reason="test oversized fragment"):
+        fragment = Fragment.objects.upsert(text=huge)
+        again = Fragment.objects.upsert(text=huge)
+    assert fragment.pk is not None
+    assert again.pk == fragment.pk
 
 
 @pytest.mark.django_db(transaction=True)

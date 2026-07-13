@@ -1,0 +1,54 @@
+# The relationship vocabulary (master tier), derived from XFN 1.1 / vCard 4.0
+# RELATED values. Model inferred from the `parties.relationshipkind` filename.
+# Adopted by slug so renamed labels re-sync onto the same row; a blank
+# inverse_name means the kind is symmetric. Users add their own kinds alongside.
+- xref: friend
+  slug: friend
+  name: Friend
+  category: friendship
+- xref: acquaintance
+  slug: acquaintance
+  name: Acquaintance
+  category: friendship
+- xref: met
+  slug: met
+  name: Met
+  category: other
+- xref: colleague
+  slug: colleague
+  name: Colleague
+  category: professional
+- xref: mentor
+  slug: mentor
+  name: Mentor
+  inverse_name: Mentee
+  category: professional
+- xref: neighbor
+  slug: neighbor
+  name: Neighbor
+  category: geographical
+- xref: roommate
+  slug: roommate
+  name: Roommate
+  category: geographical
+- xref: parent
+  slug: parent
+  name: Parent
+  inverse_name: Child
+  category: family
+- xref: sibling
+  slug: sibling
+  name: Sibling
+  category: family
+- xref: spouse
+  slug: spouse
+  name: Spouse
+  category: family
+- xref: relative
+  slug: relative
+  name: Relative
+  category: family
+- xref: partner
+  slug: partner
+  name: Partner
+  category: romantic

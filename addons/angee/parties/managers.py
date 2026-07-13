@@ -18,11 +18,21 @@ from typing import TYPE_CHECKING, Any
 
 from django.apps import apps
 from django.db import transaction
+from rebac.managers import RebacManager
 
-from angee.base.models import AngeeManager
+from angee.base.mixins import HierarchyQuerySet
+from angee.base.models import AngeeManager, AngeeQuerySet
 
 if TYPE_CHECKING:
     from angee.parties.backends import ParsedContact
+
+
+class CircleQuerySet(HierarchyQuerySet, AngeeQuerySet):
+    """Circle read scopes: the hierarchy subtree vocabulary over the Angee base."""
+
+
+class CircleManager(RebacManager.from_queryset(CircleQuerySet)):  # type: ignore[misc]
+    """Manager for circles — subtree scopes ride in through :class:`CircleQuerySet`."""
 
 
 class HandleManager(AngeeManager):
@@ -77,9 +87,11 @@ class PartyHandleManager(AngeeManager):
 
         The resolution ordering (``-is_confirmed, -confidence``) is the contacts
         rule: a human-confirmed link wins, then the strongest score. A handle with
-        no surviving link is left unowned.
+        no surviving link is left unowned. A demotion (a dismissed winner) recounts
+        the previous owner too, so its ``handle_count`` never goes stale.
         """
 
+        previous_pk = handle.party_id
         winner = (
             self.filter(handle=handle, is_dismissed=False)
             .order_by("-is_confirmed", "-confidence", "sqid")
@@ -93,6 +105,11 @@ class PartyHandleManager(AngeeManager):
             handle.save(update_fields=["party", "updated_at"])
         if resolved is not None:
             self._recount(resolved)
+        if previous_pk is not None and previous_pk != resolved_pk:
+            party_model = apps.get_model("parties", "Party")
+            previous = party_model.objects.filter(pk=previous_pk).first()
+            if previous is not None:
+                self._recount(previous)
 
     def _recount(self, party: Any) -> None:
         """Refresh ``party.handle_count`` from the handles resolved onto it (write only on change)."""
