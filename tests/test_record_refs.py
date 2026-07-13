@@ -19,6 +19,7 @@ from angee.base.refs import (
     RecordRef,
     RecordRefMixin,
     ancestor_object_refs,
+    canonical_record_model,
     canonical_record_target,
     record_ref_for,
 )
@@ -251,6 +252,15 @@ def test_canonical_record_target_canonicalizes_mti_child_to_typed_ancestor(recor
     assert canonical_record_target(child) == CanonicalRecordTarget(parent_content_type, child.pk)
     # A row that is already the topmost typed model keeps its own content type.
     assert canonical_record_target(parent) == CanonicalRecordTarget(parent_content_type, parent.pk)
+
+
+def test_canonical_record_model_exposes_the_mti_ancestor_without_contenttypes() -> None:
+    """Metadata callers can ask the canonical ancestry owner using model classes."""
+
+    assert canonical_record_model(MtiChild) is MtiParent
+    assert canonical_record_model(MtiChildProxy) is MtiParent
+    assert canonical_record_model(RecordRefTypedTarget) is RecordRefTypedTarget
+    assert canonical_record_model(RecordRefPlainTarget) is RecordRefPlainTarget
 
 
 def test_canonical_record_target_leaves_leaf_and_untyped_rows_uncanonicalized(record_ref_tables: None) -> None:

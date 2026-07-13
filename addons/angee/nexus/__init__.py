@@ -1,9 +1,9 @@
-"""Nexus — derived relationship intelligence over parties × messaging.
+"""Nexus — party-graph relationship analytics over messaging.
 
-Everything here is computed, never authoritative: the human-owned facts (who a
-party is, its circles, its typed relationships) live in ``angee.parties``;
-messages live in ``angee.messaging``. Nexus overlays them with a per-party
-interaction rollup (:class:`~angee.nexus.models.Tie` — counts, recency, gravity,
-fading, stay-in-touch cadence) and the cross-channel person timeline read, so
-deleting the addon loses no source data.
+The canonical pair edges in :class:`~angee.nexus.models.Tie` are computed,
+never authoritative: deliberate addressed messages, replies, and mentions can
+rebuild every count, timestamp, gravity score, and fading signal. The separate
+:class:`~angee.nexus.models.Cadence` micro-model is the sole human fact, recording
+one user's stay-in-touch intent for one party. The cross-channel party timeline
+remains a read delegated to messaging.
 """

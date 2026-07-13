@@ -8,16 +8,21 @@ describe("nexus addon manifest", () => {
     expect(() => expectValidBaseAddon(nexus)).not.toThrow();
   });
 
-  test("registers only the ties resource pages", () => {
+  test("registers the derived ties and human cadence resource pages", () => {
     expect((nexus.routes ?? []).map((route) => route.name)).toEqual([
       "nexus.ties",
       "nexus.ties.record",
+      "nexus.cadences",
+      "nexus.cadences.record",
     ]);
   });
 
-  test("keeps only ties in the connections menu", () => {
+  test("keeps ties and cadences in the connections menu", () => {
     const menu = (nexus.menus ?? []).find((item) => item.id === "nexus");
-    expect(menu?.children?.map((item) => item.route)).toEqual(["nexus.ties"]);
+    expect(menu?.children?.map((item) => item.route)).toEqual([
+      "nexus.ties",
+      "nexus.cadences",
+    ]);
   });
 
   test("timeline chatter tab self-gates to party records", () => {
@@ -25,20 +30,35 @@ describe("nexus addon manifest", () => {
     expect(timeline?.render).toBeDefined();
     const render = timeline?.render;
     if (!render) throw new Error("missing render");
-    // A non-party record drops the tab (null render), a party record mounts it.
+    // A non-party canonical target drops the tab even when the route model is a
+    // Party subtype.
     expect(
       render({
-        pathname: "/storage/files/abc",
+        pathname: "/parties/people/abc",
         params: { id: "abc" },
-        route: { name: "storage.files.record", path: "/storage/files/$id", viewType: "list", modelLabel: "storage.File" },
+        route: {
+          name: "parties.people.record",
+          path: "/parties/people/$id",
+          viewType: "list",
+          modelLabel: "parties.Person",
+          canonicalLabel: "storage.File",
+        },
         view: { kind: "record", type: "list", sqid: "abc" },
       }),
     ).toBeNull();
+    // A future subtype inherits the tab from its canonical Party target without
+    // being named by nexus.
     expect(
       render({
-        pathname: "/parties/people/pty_1",
+        pathname: "/crm/vips/pty_1",
         params: { id: "pty_1" },
-        route: { name: "parties.people.record", path: "/parties/people/$id", viewType: "list", modelLabel: "parties.Person" },
+        route: {
+          name: "crm.vips.record",
+          path: "/crm/vips/$id",
+          viewType: "list",
+          modelLabel: "crm.Vip",
+          canonicalLabel: "parties.Party",
+        },
         view: { kind: "record", type: "list", sqid: "pty_1" },
       }),
     ).not.toBeNull();
@@ -47,7 +67,13 @@ describe("nexus addon manifest", () => {
       render({
         pathname: "/parties/people",
         params: {},
-        route: { name: "parties.people", path: "/parties/people", viewType: "list", modelLabel: "parties.Person" },
+        route: {
+          name: "parties.people",
+          path: "/parties/people",
+          viewType: "list",
+          modelLabel: "parties.Person",
+          canonicalLabel: "parties.Party",
+        },
         view: { kind: "dashboard", type: "list" },
       }),
     ).toBeNull();

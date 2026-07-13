@@ -4,14 +4,17 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { History, Radar } from "lucide-react";
 
 import { enNexusMessages } from "./i18n";
-import { TIMELINE_MODELS, TimelinePane } from "./TimelinePane";
+import { TimelinePane } from "./TimelinePane";
 
 const nexusMenu: readonly BaseMenuItem[] = [
   {
     id: "nexus",
     label: "Connections",
     icon: "radar",
-    children: [{ id: "nexus.ties", label: "Ties", route: "nexus.ties", icon: "radar" }],
+    children: [
+      { id: "nexus.ties", label: "Ties", route: "nexus.ties", icon: "radar" },
+      { id: "nexus.cadences", label: "Cadences", route: "nexus.cadences" },
+    ],
   },
 ];
 
@@ -19,6 +22,7 @@ const nexus = defineBaseAddon({
   id: "nexus",
   routes: [
     ...resourcePageRoutes("nexus.ties", "/nexus/ties", lazyRouteComponent(() => import("./TiesPage"), "TiesPage"), "nexus.Tie"),
+    ...resourcePageRoutes("nexus.cadences", "/nexus/cadences", lazyRouteComponent(() => import("./CadencesPage"), "CadencesPage"), "nexus.Cadence"),
   ],
   menus: nexusMenu,
   icons: { radar: Radar, timeline: History },
@@ -32,9 +36,8 @@ const nexus = defineBaseAddon({
       label: "Timeline",
       icon: "timeline",
       render: (context) => {
-        const model = context.route?.modelLabel;
         const partyId = context.view.kind === "record" ? context.view.sqid : undefined;
-        if (!model || !partyId || !TIMELINE_MODELS.has(model)) return null;
+        if (context.route?.canonicalLabel !== "parties.Party" || !partyId) return null;
         return <TimelinePane partyId={partyId} />;
       },
     },

@@ -16,11 +16,16 @@ interface SchemaWithMetadata {
   metadata?: AngeeSchemaMetadata;
 }
 
+interface ResourceFacts {
+  resourceType?: string | null;
+  canonicalLabel?: string | null;
+}
+
 export function chatterRouteIndex(
   routes: readonly BaseAddonRoute[],
   schemas: Readonly<Record<string, SchemaWithMetadata>>,
 ): readonly ChatterRoute[] {
-  const resourceTypesByModel = resourceTypesByModelLabel(schemas);
+  const resourceFactsByModel = resourceFactsByModelLabel(schemas);
   const routesByName = new Map(routes.map((route) => [route.name, route]));
   const childrenByParentName = childRoutesByParentName(routes);
   return routes.map((route) => {
@@ -28,6 +33,9 @@ export function chatterRouteIndex(
     const path = fullRoutePath(route, parent);
     const recordParam = trailingRouteParamName(path);
     const modelLabel = inheritedRouteResource(route, routesByName);
+    const canonicalLabel = modelLabel
+      ? resourceFactsByModel[modelLabel]?.canonicalLabel
+      : undefined;
     return {
       name: route.name,
       path,
@@ -35,9 +43,10 @@ export function chatterRouteIndex(
         route,
         routesByName,
         childrenByParentName,
-        resourceTypesByModel,
+        resourceFactsByModel,
       ),
       ...(modelLabel ? { modelLabel } : {}),
+      ...(canonicalLabel ? { canonicalLabel } : {}),
       ...(recordParam ? { recordParam } : {}),
     };
   });
@@ -47,11 +56,11 @@ function routeChatterViewType(
   route: BaseAddonRoute,
   routesByName: ReadonlyMap<string, BaseAddonRoute>,
   childrenByParentName: ReadonlyMap<string, readonly BaseAddonRoute[]>,
-  resourceTypesByModel: Readonly<Record<string, string>>,
+  resourceFactsByModel: Readonly<Record<string, ResourceFacts>>,
 ): string {
   const resource = inheritedRouteResource(route, routesByName);
   if (resource) {
-    return resourceTypesByModel[resource] ?? resourceTypeFromModelLabel(resource);
+    return resourceFactsByModel[resource]?.resourceType ?? resourceTypeFromModelLabel(resource);
   }
   if (!trailingRouteParamName(route.path)) {
     const recordChild = childrenByParentName
@@ -72,16 +81,18 @@ function inheritedRouteResource(
   return parent ? inheritedRouteResource(parent, routesByName) : undefined;
 }
 
-function resourceTypesByModelLabel(
+function resourceFactsByModelLabel(
   schemas: Readonly<Record<string, SchemaWithMetadata>>,
-): Record<string, string> {
-  const byModel: Record<string, string> = {};
+): Record<string, ResourceFacts> {
+  const byModel: Record<string, ResourceFacts> = {};
   for (const schema of Object.values(schemas)) {
     for (const resource of dataResourcesFromAngeeSchemaMetadata(schema.metadata)) {
-      const resourceType = resource.resourceType;
-      if (!resourceType) continue;
-      byModel[resource.modelLabel] = resourceType;
-      byModel[resource.modelName] = resourceType;
+      const facts = {
+        resourceType: resource.resourceType,
+        canonicalLabel: resource.canonicalLabel,
+      };
+      byModel[resource.modelLabel] = facts;
+      byModel[resource.modelName] = facts;
     }
   }
   return byModel;

@@ -1,10 +1,9 @@
 """Generic record references backed by Django contenttypes.
 
-Also the owner of the **record-target-across-MTI policy** — two named APIs for the
-one fact that a polymorphic edge and a REBAC grant see a multi-table-inheritance row
-from different sides: :func:`canonical_record_target` (the write rule, one canonical
-edge per row) and :func:`ancestor_object_refs` (the read/grant fan-out, every identity
-the row IS-A).
+Also the owner of the **record-target-across-MTI policy**: a polymorphic edge and a
+REBAC grant see a multi-table-inheritance row from different sides.
+:func:`canonical_record_model` and :func:`canonical_record_target` own the write
+identity; :func:`ancestor_object_refs` owns the read/grant fan-out.
 
 **Placement invariant.** A polymorphic edge that keys on
 :func:`canonical_record_target` — ``storage.FileAttachment``, ``tags.TagAssignment``,
@@ -73,7 +72,7 @@ def canonical_record_target(obj: models.Model) -> CanonicalRecordTarget:
     reads every level back.
     """
 
-    model = _canonical_rebac_model(type(obj))
+    model = canonical_record_model(type(obj))
     return CanonicalRecordTarget(ContentType.objects.get_for_model(model), obj.pk)
 
 
@@ -100,14 +99,13 @@ def ancestor_object_refs(obj: models.Model) -> tuple[ObjectRef, ...]:
     return tuple(refs)
 
 
-def _canonical_rebac_model(model: type[models.Model]) -> type[models.Model]:
+def canonical_record_model(model: type[models.Model]) -> type[models.Model]:
     """Return the topmost concrete MTI ancestor of ``model`` with a REBAC type.
 
-    Resolves ``model`` to its concrete model first (unwrapping a proxy), then walks the
-    primary-key MTI chain nearest-first. Falls back to the concrete model when neither
-    it nor any pk-sharing ancestor declares a ``rebac_resource_type`` — an untyped row
-    keys on its own concrete content type. The topmost typed model is the last typed one
-    in the chain.
+    This is the model-class projection of :func:`canonical_record_target`, for
+    callers such as resource metadata that need the canonical label without an
+    instance or a contenttypes query. Proxies unwrap first; untyped rows fall back
+    to their concrete model.
     """
 
     concrete = model._meta.concrete_model or model

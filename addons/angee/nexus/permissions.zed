@@ -1,19 +1,30 @@
 // Authorization schema for the nexus addon.
 // @rebac_package: nexus
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
-// A tie is derived bookkeeping about one party, so its access derives from that
-// party's row (the parties/directory → integration pattern): whoever may read
-// the party may read its rollup, whoever may write the party may set its
-// cadence. Rows are created/recomputed elevated (the periodic task), never via
-// user-facing create.
+// A derived edge is visible only when both endpoints are visible. The
+// intersection prevents a readable party from exposing an unreadable party's
+// network through their shared edge.
 definition nexus/tie {
-    relation party: parties/party // rebac:field=party
+    relation party_a: parties/party // rebac:field=party_a
+    relation party_b: parties/party // rebac:field=party_b
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
-    permission read   = party->read + admin->member
-    permission write  = party->write + admin->member
+    permission read   = party_a->read & party_b->read
+    permission write  = admin->member
     permission delete = admin->member
+}
+
+// Cadence is private user intent over a party the user may read. Its user
+// relation is server-bound to the authenticated actor on create.
+definition nexus/cadence {
+    relation user: auth/user // rebac:field=user
+    relation party: parties/party // rebac:field=party
+
+    permission create = user & party->read
+    permission read   = user & party->read
+    permission write  = user & party->read
+    permission delete = user & party->read
 }

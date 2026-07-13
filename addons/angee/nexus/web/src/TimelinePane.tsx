@@ -16,13 +16,6 @@ import { useNexusT } from "./i18n";
 
 const PAGE_SIZE = 30;
 
-/** Models whose record page carries the cross-channel timeline tab. */
-export const TIMELINE_MODELS: ReadonlySet<string> = new Set([
-  "parties.Party",
-  "parties.Person",
-  "parties.Organization",
-]);
-
 interface TimelineMessage {
   id: string;
   preview?: string | null;

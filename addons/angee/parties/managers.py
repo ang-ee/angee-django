@@ -347,6 +347,12 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         )
         return person
 
+    def identity_for_user_id(self, user_id: Any) -> Any | None:
+        """Return the existing Person party linked to ``user_id`` without creating one."""
+
+        person_model = apps.get_model("parties", "Person")
+        return person_model._base_manager.filter(user_id=user_id).first()
+
     def user_for(self, party: Any) -> Any | None:
         """Return the platform user linked to ``party`` when it is a Person.
 
