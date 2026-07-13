@@ -175,13 +175,18 @@ function tabsFromContributions(
 ): readonly ChatterTab[] {
   return contributions.flatMap((contribution) => {
     if (!contribution.render) return [];
+    // A render that returns null declares itself not applicable to the active
+    // view (e.g. a party-only tab on a non-party record): the tab is dropped,
+    // not shown empty.
+    const children = contribution.render(context);
+    if (children == null || children === false) return [];
     return [{
       id: contribution.id,
       label: contribution.label ?? contribution.id,
       ...(contribution.icon ? { icon: contribution.icon } : {}),
       ...(typeof contribution.count === "number" ? { count: contribution.count } : {}),
       ...(contribution.panelClassName ? { panelClassName: contribution.panelClassName } : {}),
-      children: contribution.render(context),
+      children,
     }];
   });
 }
