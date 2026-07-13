@@ -205,14 +205,7 @@ migrate, sync permissions, load data, check the GraphQL SDL), drive its
 isolation, create a workspace and run the stack inside it:
 
 ```sh
-repo_root=$(git rev-parse --show-toplevel) || exit 1
-test -L "$repo_root/.work" || exit 1
-work_state_path=$(cd "$repo_root/.work" && pwd -P) || exit 1
-work_state_top=$(git -C "$work_state_path" rev-parse --show-toplevel) || exit 1
-test "$work_state_top" = "$work_state_path" || exit 1
-test "$(basename "$work_state_path")" != "$(basename "$repo_root")" || exit 1
-angee ws create my-feature --template dev --input base_ref=main \
-  --input work_state_path="$work_state_path"
+angee ws create my-feature --template dev --input base_ref=main
 cd .angee/workspaces/my-feature
 angee dev
 ```

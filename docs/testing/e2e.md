@@ -109,14 +109,7 @@ present, two users' scopes are disjoint, an anonymous write is denied with
 
 ```sh
 # 1. Materialise an isolated, seeded stack (unique DB + ports + browser profile).
-repo_root=$(git rev-parse --show-toplevel) || exit 1
-test -L "$repo_root/.work" || exit 1
-work_state_path=$(cd "$repo_root/.work" && pwd -P) || exit 1
-work_state_top=$(git -C "$work_state_path" rev-parse --show-toplevel) || exit 1
-test "$work_state_top" = "$work_state_path" || exit 1
-test "$(basename "$work_state_path")" != "$(basename "$repo_root")" || exit 1
-angee ws create e2e --template dev --input base_ref=<branch> \
-  --input example=notes-angee --input work_state_path="$work_state_path"
+angee ws create e2e --template dev --input base_ref=<branch> --input example=notes-angee
 cd .angee/workspaces/e2e
 angee dev                      # brings the seeded stack up; note the allocated ui port
 
