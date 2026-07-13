@@ -65,6 +65,41 @@ describe("refine resource metadata", () => {
     // The node type name stays addressable too (relation/aggregate joins use it).
     expect(metadata.types.PlatformAddonRow?.resource).toBe(computed);
   });
+
+  test("resolves each model label exactly when derived type names collide across apps", () => {
+    // Regression: iam.Relationship (node name fallback → "RelationshipType")
+    // and parties.Relationship (node "PartyRelationshipType") both DERIVE
+    // "RelationshipType" from their labels. The label index must resolve each
+    // to its own resource — the convention fallback alone routed
+    // parties.Relationship queries to iam's tuple-browser roots.
+    const iamRelationships: DataResourceMetadata = {
+      ...resource(),
+      modelLabel: "iam.Relationship",
+      appLabel: "iam",
+      modelName: "Relationship",
+      roots: { ...resource().roots, list: "relationships" },
+      typeNames: {},
+    };
+    const partyRelationships: DataResourceMetadata = {
+      ...resource(),
+      modelLabel: "parties.Relationship",
+      appLabel: "parties",
+      modelName: "Relationship",
+      roots: { ...resource().roots, list: "party_relationships" },
+      typeNames: { node: "PartyRelationshipType" },
+    };
+    const metadata = schemaFieldMetadataFromDataResources([
+      iamRelationships,
+      partyRelationships,
+    ]);
+
+    expect(modelMetadataForLabel(metadata, "iam.Relationship")?.resource).toBe(
+      iamRelationships,
+    );
+    expect(
+      modelMetadataForLabel(metadata, "parties.Relationship")?.resource,
+    ).toBe(partyRelationships);
+  });
 });
 
 function resource(): DataResourceMetadata {
