@@ -282,6 +282,8 @@ export interface ModelMetadata {
 
 export interface SchemaFieldMetadata {
   types: Readonly<Record<string, ModelMetadata>>;
+  /** Exact model-label index — the collision-free lookup key for data views. */
+  labels?: Readonly<Record<string, ModelMetadata>>;
   resources?: readonly DataResourceMetadata[];
 }
 
@@ -312,6 +314,7 @@ export function schemaFieldMetadataFromDataResources(
   resources: readonly DataResourceMetadata[],
 ): SchemaFieldMetadata {
   const types: Record<string, ModelMetadata> = {};
+  const labels: Record<string, ModelMetadata> = {};
   const seenModelLabels = new Set<string>();
   for (const resource of resources) {
     if (seenModelLabels.has(resource.modelLabel)) {
@@ -344,12 +347,16 @@ export function schemaFieldMetadataFromDataResources(
       ...(recordRepresentation ? { recordRepresentation } : {}),
     };
     types[typeName] = entry;
+    labels[resource.modelLabel] = entry;
     // Also index by the model-label-derived type name so `modelMetadataForLabel`
     // resolves a resource whose node type does not follow the `<Model>Type`
     // convention (e.g. a computed `hasura_pydantic_resource` named
     // `PlatformAddonRow` for `platform.Addon`). The label is the lookup key the
     // data view passes (`ListView resource="platform.Addon"`); the node name is a
-    // schema detail.
+    // schema detail. The exact `labels` index above wins first — the derived
+    // name can collide across apps (`parties.Relationship` and
+    // `iam.Relationship` both derive "RelationshipType"), so it is only the
+    // legacy fallback for hand-built metadata without a label index.
     const labelTypeName = `${typeNameForModel(resource.modelLabel)}Type`;
     if (labelTypeName !== typeName && !types[labelTypeName]) {
       types[labelTypeName] = entry;
@@ -357,6 +364,7 @@ export function schemaFieldMetadataFromDataResources(
   }
   return {
     types,
+    labels,
     ...(resources.length > 0 ? { resources } : {}),
   };
 }
@@ -371,6 +379,12 @@ export function modelMetadataForLabel(
   metadata: SchemaFieldMetadata,
   modelLabel: string,
 ): ModelMetadata | null {
+  // The label is the unique key (duplicate labels are a build error); the
+  // name-derived fallbacks below can cross apps ("parties.Relationship" and
+  // "iam.Relationship" both derive "RelationshipType") and exist only for
+  // hand-built metadata without a label index.
+  const exact = metadata.labels?.[modelLabel];
+  if (exact) return exact;
   const typeName = typeNameForModel(modelLabel);
   return metadata.types[`${typeName}Type`] ?? metadata.types[typeName] ?? null;
 }
