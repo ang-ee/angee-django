@@ -6,6 +6,7 @@ import { describe, expect, test } from "vitest";
 import {
   AppRuntimeProvider,
   useDrawers,
+  useResourceRecordHref,
   useRuntimeAuth,
   useRuntimeUserPreferences,
   useSlot,
@@ -29,6 +30,25 @@ describe("useWidget", () => {
 
   test("returns undefined for an unknown widget", () => {
     const { result } = renderHook(() => useWidget("missing"));
+    expect(result.current).toBeUndefined();
+  });
+});
+
+describe("useResourceRecordHref", () => {
+  test("builds an encoded record href from the resource's composed route", () => {
+    const wrapper = wrapperFor({
+      routesByResource: { "messaging.Thread": "/messaging/threads" },
+    });
+    const { result } = renderHook(() => useResourceRecordHref("messaging.Thread"), {
+      wrapper,
+    });
+
+    expect(result.current?.("thr 1")).toBe("/messaging/threads/thr%201");
+  });
+
+  test("returns undefined when no route owns the resource", () => {
+    const { result } = renderHook(() => useResourceRecordHref("missing.Resource"));
+
     expect(result.current).toBeUndefined();
   });
 });

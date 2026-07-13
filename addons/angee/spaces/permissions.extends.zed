@@ -1,0 +1,9 @@
+// @rebac_package: spaces
+// @rebac_schema_revision: 2
+
+definition messaging/thread {
+    relation group: spaces/group // rebac:field=group
+
+    permission read = group->read
+    permission write = group->post
+}

@@ -347,6 +347,20 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         )
         return person
 
+    def user_for(self, party: Any) -> Any | None:
+        """Return the platform user linked to ``party`` when it is a Person.
+
+        This manager owns the Party-to-Person MTI lookup so consumers never
+        inspect the concrete child table or its base manager themselves. An
+        organization or external Person without a user resolves to ``None``.
+        """
+
+        person_model = apps.get_model("parties", "Person")
+        person = person_model._base_manager.select_related("user").filter(pk=party.pk).first()
+        if person is None or person.user_id is None:
+            return None
+        return person.user
+
     def ingest_contact(self, parsed: ParsedContact, *, folder: Any, created_by_id: Any) -> Any:
         """Upsert a person and its handles/addresses from one parsed contact.
 

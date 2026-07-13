@@ -75,6 +75,7 @@ from angee.parties.models import Person as AbstractPerson
 from angee.parties.models import Relationship as AbstractRelationship
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
 from angee.social.models import MessagePublic, ThreadPublic
+from angee.spaces.models import ThreadSpace
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild, TrackedRecordParent
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
@@ -93,6 +94,7 @@ from tests.conftest import (
     File as StorageFile,
 )
 from tests.mtidemo.models import MtiChild, MtiParent
+from tests.spaces_models import Group as SpaceGroup
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent
 from tests.test_integrate_vcs import VCS_TEST_MODELS
 
@@ -272,13 +274,11 @@ class Fragment(AbstractFragment):
         db_table = "test_messaging_fragment"
 
 
-class Thread(ThreadPublic, AbstractThread):
+class Thread(ThreadSpace, ThreadPublic, AbstractThread):
     """Concrete thread used by messaging tests.
 
-    Folds social's same-row ``ThreadPublic`` extension (``subject_url``/``body``/
-    ``tags``/``parent``) onto the one table, the way the composer emits
-    ``Thread(ThreadExtension1, AbstractThread)`` now that social is a composed base
-    addon — so the public-post payload rides the shared thread row.
+    Folds spaces' group pointer and social's public-post payload onto the one table,
+    mirroring the composer output for the installed base addons.
     """
 
     class Meta(AbstractThread.Meta):
@@ -527,6 +527,7 @@ MESSAGING_TEST_MODELS = (
     CircleMember,
     RelationshipKind,
     Relationship,
+    SpaceGroup,
     Fragment,
     Thread,
     ThreadAttachment,

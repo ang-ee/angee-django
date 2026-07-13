@@ -245,6 +245,22 @@ def test_only_the_shared_tag_carries_the_wildcard_reader(scoped_tags: SimpleName
     assert not _shared_reader_exists(scoped_tags.scoped_a)
 
 
+def test_deleting_a_shared_tag_removes_its_wildcard_tuple(tags_tables: None) -> None:
+    """The base REBAC delete seam removes a deleted tag's resource relationships."""
+
+    del tags_tables
+    with system_context(reason="tags delete relationship cleanup"):
+        tag = Tag.objects.create(name="Temporary")
+        resource_id = tag.sqid
+        assert _shared_reader_exists(tag)
+        tag.delete()
+
+    assert not active_relationship_model().objects.filter(
+        resource_type="tags/tag",
+        resource_id=resource_id,
+    ).exists()
+
+
 def test_flipping_scope_reconciles_the_wildcard_reader(scoped_tags: SimpleNamespace) -> None:
     """save() grants the wildcard when a tag turns shared and revokes it when scoped."""
 

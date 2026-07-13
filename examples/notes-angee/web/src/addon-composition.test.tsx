@@ -13,6 +13,7 @@ import operator from "@angee/operator";
 import parties from "@angee/parties";
 import platform from "@angee/platform";
 import resources from "@angee/resources";
+import spaces from "@angee/spaces";
 import storage from "@angee/storage";
 import tags from "@angee/tags";
 import workflows from "@angee/workflows";
@@ -37,6 +38,7 @@ const ADDONS = [
   iam,
   parties,
   messaging,
+  spaces,
   nexus,
   integrate,
   agents,

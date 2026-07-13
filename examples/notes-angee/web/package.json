@@ -24,6 +24,7 @@
     "@angee/parties": "workspace:*",
     "@angee/platform": "workspace:*",
     "@angee/resources": "workspace:*",
+    "@angee/spaces": "workspace:*",
     "@angee/storage": "workspace:*",
     "@angee/tags": "workspace:*",
     "@angee/workflows": "workspace:*",

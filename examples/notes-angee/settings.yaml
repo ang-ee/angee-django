@@ -20,6 +20,7 @@ INSTALLED_APPS:
   - angee.parties
   - angee.parties_integrate_carddav
   - angee.messaging
+  - angee.spaces
   - angee.nexus
   - angee.messaging_integrate_imap
   - angee.social
