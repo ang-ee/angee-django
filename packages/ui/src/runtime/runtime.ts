@@ -150,6 +150,20 @@ export function useResourceRoute(resource: string): string | undefined {
   return useAppRuntime().routesByResource?.[resource];
 }
 
+/** Build record hrefs from a resource's composed collection route, when routed. */
+export function useResourceRecordHref(
+  resource: string,
+): ((id: string) => string) | undefined {
+  const route = useResourceRoute(resource);
+  return useMemo(
+    () =>
+      route === undefined
+        ? undefined
+        : (id: string) => `${route.replace(/\/$/, "")}/${encodeURIComponent(id)}`,
+    [route],
+  );
+}
+
 /** The shell-readable auth state supplied by the app-owned auth provider. */
 export function useRuntimeAuth(): RuntimeAuthState {
   return useAppRuntime().auth ?? ANONYMOUS_RUNTIME_AUTH;
