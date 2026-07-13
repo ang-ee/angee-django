@@ -23,9 +23,14 @@ ROOT_GITIGNORE = ROOT / ".gitignore"
 LOCAL_COPIER = ROOT / "templates" / "stacks" / "local" / "copier.yml"
 LOCAL_TEMPLATE = ROOT / "templates" / "stacks" / "local" / "template" / "angee.yaml.jinja"
 LOCAL_STACK_GITIGNORE = ROOT / "templates" / "stacks" / "local" / "template" / ".gitignore.jinja"
+LOCAL_AGENTS_TEMPLATE = ROOT / "templates" / "stacks" / "local" / "template" / "AGENTS.md.jinja"
+LOCAL_CLAUDE_TEMPLATE = ROOT / "templates" / "stacks" / "local" / "template" / "CLAUDE.md"
 DEV_COPIER = ROOT / "templates" / "stacks" / "dev" / "copier.yml"
 DEV_TEMPLATE = ROOT / "templates" / "stacks" / "dev" / "template" / "{{ ANGEE_ROOT }}" / "angee.yaml.jinja"
+DEV_AGENTS_TEMPLATE = DEV_TEMPLATE.with_name("AGENTS.md.jinja")
+DEV_CLAUDE_TEMPLATE = DEV_TEMPLATE.with_name("CLAUDE.md")
 SHARED_BODY = ROOT / "templates" / "stacks" / "_shared" / "stack-body.yaml.jinja"
+SHARED_AGENTS = ROOT / "templates" / "stacks" / "_shared" / "AGENTS.md.jinja"
 PROJECT_GITIGNORE = ROOT / "templates" / "projects" / "web" / "template" / ".gitignore.jinja"
 PROJECT_SETTINGS_TEMPLATE = ROOT / "templates" / "projects" / "web" / "template" / "settings.yaml.jinja"
 
@@ -401,6 +406,33 @@ def test_both_stacks_render_from_one_shared_body() -> None:
     local = _render_local_stack()
     assert SHARED_SERVICES <= set(dev["services"])
     assert SHARED_SERVICES <= set(local["services"])
+
+
+def test_both_stacks_render_shared_root_agent_instructions() -> None:
+    """Every stack root teaches agents that it owns lifecycle and workspaces."""
+
+    assert SHARED_AGENTS.exists()
+    instructions = " ".join(SHARED_AGENTS.read_text(encoding="utf-8").split())
+    for contract in (
+        "The directory containing this file is `ANGEE_ROOT`.",
+        "This stack is already initialized",
+        "Do not run `angee init`",
+        "`ANGEE_ROOT/workspaces/`",
+        "Source checkouts are not stack roots",
+    ):
+        assert contract in instructions
+
+    include = '{% include "../../_shared/AGENTS.md.jinja" %}'
+    for agents_template in (DEV_AGENTS_TEMPLATE, LOCAL_AGENTS_TEMPLATE):
+        assert agents_template.read_text(encoding="utf-8").strip() == include
+
+    for claude_template in (DEV_CLAUDE_TEMPLATE, LOCAL_CLAUDE_TEMPLATE):
+        assert claude_template.is_symlink()
+        assert claude_template.readlink() == Path("AGENTS.md")
+
+    for copier_path in (DEV_COPIER, LOCAL_COPIER):
+        copier = yaml.safe_load(copier_path.read_text(encoding="utf-8"))
+        assert copier["_preserve_symlinks"] is True
 
 
 # --- local (docker) contracts --------------------------------------------------
