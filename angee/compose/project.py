@@ -143,14 +143,33 @@ class ProjectContract:
         project_settings: ModuleType,
         root: Path,
     ) -> None:
-        """Apply the project's YAML and environment settings overlay."""
+        """Apply the project's YAML and environment settings overlay.
+
+        A bounded reproduction of ``django_yamlconf.load``. That entry point
+        walks from the project root up to the filesystem root (``dirtree_find``)
+        collecting every ``settings.yaml`` it finds, so hosting this project
+        inside another Angee instance — whose own ``settings.yaml`` is an
+        ancestor of every nested project — silently loads and *overrides* the
+        project with the host's values. Composing the pipeline from yamlconf's
+        module-level functions bounds the sources to exactly the project's own
+        ``<root>/settings.yaml`` plus the explicit ``YAMLCONF_CONFFILE`` overlay,
+        preserving load order (project file, then ``YAMLCONF_CONFFILE``, then
+        the environment) and the ``BASE_DIR``/``TOP_DIR`` bootstrap.
+        """
 
         with _autoconfig.fail_on_yamlconf_errors():
-            django_yamlconf.load(
-                settings=project_settings,
-                base_dir=str(root),
-                project=PROJECT_YAML_NAME,
-            )
+            loader, loader_kwargs = django_yamlconf.get_loader("yaml")
+            if loader is None:
+                return
+            attributes = django_yamlconf.bootstrap_attributes(str(root))
+            project_yaml = root / f"{PROJECT_YAML_NAME}.yaml"
+            if os.access(project_yaml, os.R_OK):
+                django_yamlconf.load_conffile(attributes, project_settings, loader, loader_kwargs, str(project_yaml))
+            if final_conf := os.environ.get("YAMLCONF_CONFFILE"):
+                django_yamlconf.load_conffile(attributes, project_settings, loader, loader_kwargs, final_conf)
+            django_yamlconf.load_envdefs(attributes, project_settings)
+            django_yamlconf.expand_attribute_refs(attributes)
+            django_yamlconf.inject_attr(attributes, project_settings)
 
     def _reject_unexpected_yamlconf_sources(
         self,

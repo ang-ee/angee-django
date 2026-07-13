@@ -755,11 +755,17 @@ def test_compose_settings_module_rejects_malformed_yaml(
         importlib.reload(compose_settings)
 
 
-def test_compose_settings_module_rejects_ancestor_settings_yaml(
+def test_compose_settings_module_ignores_ancestor_settings_yaml(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Ancestor settings.yaml files must not silently override a project."""
+    """An ancestor settings.yaml never leaks into a nested host project.
+
+    Hosting the project inside another Angee instance puts that instance's own
+    ``settings.yaml`` on the path from the project root to the filesystem root.
+    The compose must bound its sources to the project's own file: it succeeds
+    and the ancestor value is neither applied nor allowed to override.
+    """
 
     project = tmp_path / "project"
     project.mkdir()
@@ -781,10 +787,35 @@ def test_compose_settings_module_rejects_ancestor_settings_yaml(
     monkeypatch.delitem(sys.modules, "settings", raising=False)
     monkeypatch.setattr(sys, "argv", [str(manage_py)])
 
-    with pytest.raises(ImproperlyConfigured, match="Unexpected django-yamlconf source"):
-        import angee.compose.settings as compose_settings
+    import angee.compose.settings as compose_settings
 
-        importlib.reload(compose_settings)
+    compose_settings = importlib.reload(compose_settings)
+
+    assert compose_settings.SECRET_KEY == "project-secret"
+    assert compose_settings.BASE_DIR == project
+
+
+def test_reject_unexpected_yamlconf_source_fails_fast(tmp_path: Path) -> None:
+    """The provenance guard still rejects a foreign yamlconf source.
+
+    With the bounded loader no ancestor cascade can reach the guard, so it
+    becomes a fail-fast assertion: any attribute whose recorded source is not
+    the project file, the ``YAMLCONF_CONFFILE`` overlay, or an internal/env
+    sentinel is a bug the composer must refuse.
+    """
+
+    from angee.compose.project import ProjectContract
+
+    project_settings = ModuleType("settings")
+    project_settings.__file__ = str(tmp_path / "settings.py")
+    setattr(
+        project_settings,
+        "_YAMLCONF_ATTRIBUTES",
+        {"SECRET_KEY": {"source": str(tmp_path.parent / "settings.yaml"), "history": ()}},
+    )
+
+    with pytest.raises(ImproperlyConfigured, match="Unexpected django-yamlconf source"):
+        ProjectContract({})._reject_unexpected_yamlconf_sources(project_settings, tmp_path, "settings")
 
 
 def test_compose_settings_module_uses_project_dir_for_non_manage_entrypoints(
