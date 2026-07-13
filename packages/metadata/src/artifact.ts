@@ -82,6 +82,8 @@ export interface DataResourceMetadata {
   resourceType?: string | null;
   appLabel: string;
   modelName: string;
+  /** Canonical pk-chain MTI record target, e.g. every Party subtype maps to `parties.Party`. */
+  canonicalLabel?: string | null;
   publicIdField: string;
   roots: DataResourceRootMetadata;
   typeNames: DataResourceTypeMetadata;
@@ -645,6 +647,9 @@ function validateGeneratedResource(resource: unknown, path: string): void {
   );
   if (value.recordRepresentation != null) {
     expectMetadataString(value.recordRepresentation, `${path}.recordRepresentation`);
+  }
+  if (value.canonicalLabel != null) {
+    expectMetadataString(value.canonicalLabel, `${path}.canonicalLabel`);
   }
   optionalMetadataArray(value.groupDimensions, `${path}.groupDimensions`)?.forEach(
     (dimension, index) =>

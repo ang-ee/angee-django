@@ -931,7 +931,7 @@ describe("createApp resource route index", () => {
     ).toThrow(/claims resource "OAuthClient"/);
   });
 
-  test("exposes inherited model labels on chatter record routes", async () => {
+  test("exposes inherited model and canonical labels on chatter record routes", async () => {
     const host = document.createElement("div");
     document.body.append(host);
     history.replaceState(null, "", "/notes/abc");
@@ -941,11 +941,11 @@ describe("createApp resource route index", () => {
       return createElement(
         "span",
         null,
-        `${route?.modelLabel ?? "none"} ${route?.recordParam ?? "none"}`,
+        `${route?.modelLabel ?? "none"} ${route?.canonicalLabel ?? "none"} ${route?.recordParam ?? "none"}`,
       );
     }
 
-    const app = createApp(testAppInput([
+    const input = testAppInput([
       {
         id: "notes",
         routes: [
@@ -964,12 +964,16 @@ describe("createApp resource route index", () => {
           },
         ],
       },
-    ]));
+    ]);
+    input.schemas = testSchemasWithConsoleResources([
+      { ...testDataResource("notes.Note"), canonicalLabel: "parties.Party" },
+    ]);
+    const app = createApp(input);
     const root = app.mount(host);
 
     try {
       await waitFor(() => {
-        expect(host.textContent).toContain("notes.Note id");
+        expect(host.textContent).toContain("notes.Note parties.Party id");
       });
     } finally {
       root.unmount();
