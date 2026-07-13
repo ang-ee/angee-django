@@ -248,15 +248,16 @@ class RelationshipKindType(AngeeNode):
 
 @strawberry_django.type(Relationship)
 class PartyRelationshipType(AngeeNode):
-    """GraphQL projection of a typed, directed party↔party edge.
+    """GraphQL projection of a typed party edge (anchor viewpoint).
 
     Named ``PartyRelationshipType`` because the node-type namespace is global
     and iam's REBAC tuple browser already resolves to ``RelationshipType``
     through the ``iam.Relationship`` model-label fallback.
     """
 
-    from_party: PartyType | None
-    to_party: PartyType | None
+    party: PartyType | None
+    other_party: PartyType | None
+    other_name: auto
     kind: RelationshipKindType | None
     started_at: auto
     ended_at: auto
@@ -569,18 +570,18 @@ _RELATIONSHIP_RESOURCE = hasura_model_resource(
     model=Relationship,
     # iam's REBAC tuple browser already owns the bare `relationships` query root.
     name="party_relationships",
-    filterable=["id", "from_party", "to_party", "kind", "started_at", "ended_at", "created_at"],
+    filterable=["id", "party", "other_party", "kind", "started_at", "ended_at", "created_at"],
     sortable=["kind", "started_at", "created_at"],
     aggregatable=["id"],
     groupable=["kind", "kind__name"],
-    insertable=["from_party", "to_party", "kind", "started_at", "ended_at", "notes"],
-    updatable=["kind", "started_at", "ended_at", "notes"],
+    insertable=["party", "other_party", "other_name", "kind", "started_at", "ended_at", "notes"],
+    updatable=["other_party", "other_name", "kind", "started_at", "ended_at", "notes"],
     field_id_decode={
-        "from_party": public_pk_decoder(Party),
-        "to_party": public_pk_decoder(Party),
+        "party": public_pk_decoder(Party),
+        "other_party": public_pk_decoder(Party),
         "kind": public_pk_decoder(RelationshipKind),
     },
-    write_backend=AngeeHasuraWriteBackend(Relationship, public_id_fields=("from_party", "to_party", "kind")),
+    write_backend=AngeeHasuraWriteBackend(Relationship, public_id_fields=("party", "other_party", "kind")),
 )
 _CONTACT_FOLDER_RESOURCE = hasura_model_resource(
     ContactFolderType,

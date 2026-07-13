@@ -79,16 +79,25 @@ function circleMembershipColumns(t: ReturnType<typeof usePartiesT>): readonly Li
 }
 
 /**
- * Both directions of the person's typed edges in one tab: edges this person
- * authored ("is *kind* of…") and edges pointing at them (rendered through the
- * kind's inverse label, falling back to the forward name for symmetric kinds).
+ * Both readings of the person's typed edges in one tab: rows anchored on this
+ * card (the counterparty is their *kind* — "Mother: Jane", including free-text
+ * relatives who are not directory entries) and rows anchored on other cards
+ * that name this person (rendered through the kind's inverse label, falling
+ * back to the forward name for symmetric kinds).
  */
 function RelationshipsTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = usePartiesT();
-  const outboundColumns = React.useMemo<readonly ListColumn<RelatedRow>[]>(
+  const anchoredColumns = React.useMemo<readonly ListColumn<RelatedRow>[]>(
     () => [
       { field: "kind.name", header: t("relationship.kind") },
-      { field: "to_party.display_name", header: t("relationship.person") },
+      {
+        field: "other_party.display_name",
+        header: t("relationship.person"),
+        render: (row) => {
+          const typed = row as { other_party?: { display_name?: string } | null; other_name?: string };
+          return <>{typed.other_party?.display_name || typed.other_name || ""}</>;
+        },
+      },
       { field: "started_at" },
       { field: "ended_at" },
     ],
@@ -104,7 +113,7 @@ function RelationshipsTab({ recordId }: RecordPanelContext): React.ReactElement 
           return <>{kind?.inverse_name || kind?.name || ""}</>;
         },
       },
-      { field: "from_party.display_name", header: t("relationship.person") },
+      { field: "party.display_name", header: t("relationship.person") },
       { field: "started_at" },
       { field: "ended_at" },
     ],
@@ -115,16 +124,16 @@ function RelationshipsTab({ recordId }: RecordPanelContext): React.ReactElement 
       <ListView<RelatedRow>
         resource="parties.Relationship"
         scope="local"
-        fields={["id", "kind.name", "to_party.display_name", "started_at", "ended_at"]}
-        baseFilter={{ from_party: { exact: recordId } }}
-        columns={outboundColumns}
+        fields={["id", "kind.name", "other_party.display_name", "other_name", "started_at", "ended_at"]}
+        baseFilter={{ party: { exact: recordId } }}
+        columns={anchoredColumns}
         emptyContent={t("person.empty.relationships")}
       />
       <ListView<RelatedRow>
         resource="parties.Relationship"
         scope="local"
-        fields={["id", "kind.name", "kind.inverse_name", "from_party.display_name", "started_at", "ended_at"]}
-        baseFilter={{ to_party: { exact: recordId } }}
+        fields={["id", "kind.name", "kind.inverse_name", "party.display_name", "started_at", "ended_at"]}
+        baseFilter={{ other_party: { exact: recordId } }}
         columns={inboundColumns}
         emptyContent={t("person.empty.inboundRelationships")}
       />

@@ -636,10 +636,10 @@ class RelationshipKind(SqidMixin, AuditMixin, AngeeModel):
 
     slug = models.SlugField(unique=True)
     name = models.CharField(max_length=128)
-    """Forward label: ``from_party`` is the ``name`` of ``to_party`` ("Parent")."""
+    """Anchor-side label: what the counterparty is *to the anchor* ("Mother")."""
 
     inverse_name = models.CharField(max_length=128, blank=True, default="")
-    """Reverse label ("Child"); blank means the kind is symmetric."""
+    """Counterparty-side label ("Child"); blank means the kind is symmetric."""
 
     category = StateField(choices_enum=RelationshipCategory, default=RelationshipCategory.OTHER)
 
@@ -665,20 +665,26 @@ class RelationshipKind(SqidMixin, AuditMixin, AngeeModel):
     def label_for(self, *, outbound: bool) -> str:
         """Return the label as seen from one side of the edge.
 
-        ``outbound=True`` is the ``from_party`` side ("Maya is my *sister*" renders
-        the forward name); the ``to_party`` side renders the inverse, falling back
-        to the forward name for a symmetric kind.
+        ``outbound=True`` is the anchor's side — on Maya's card her mother's row
+        renders ``name`` ("Mother"); the counterparty's card renders the inverse
+        ("Child": Maya is the mother's child), falling back to the forward name
+        for a symmetric kind.
         """
 
         return self.name if outbound or self.is_symmetric else self.inverse_name
 
 
 class Relationship(SqidMixin, AuditMixin, AngeeModel):
-    """A typed, directed edge between two parties: ``from_party`` is *kind* of ``to_party``.
+    """A typed edge from one party's viewpoint: the *other* is ``kind`` of ``party``.
 
-    A single row carries both readings (Monica's Chandler shape — the mirror-row
-    scheme was abandoned there for drifting): render the reverse with
-    :meth:`RelationshipKind.label_for`. Edges are time-bounded (party-model
+    ``kind.name`` names what the counterparty is to the anchor ("Mother",
+    "Mentor", "Colleague"); the counterparty's own card renders the reverse
+    through :meth:`RelationshipKind.label_for` ("Child", "Mentee"). A single row
+    carries both readings (Monica's Chandler shape — the mirror-row scheme was
+    abandoned there for drifting). The counterparty is a tracked :class:`Party`
+    when known, falling back to free-text ``other_name`` — the
+    :class:`Affiliation` idiom — so a family-history relative who is not a
+    directory entry still records. Edges are time-bounded (party-model
     ``from``/``thru``), so "was my colleague 2019–2022" stays queryable after it
     ends; an open edge has no ``ended_at``.
     """
@@ -686,16 +692,23 @@ class Relationship(SqidMixin, AuditMixin, AngeeModel):
     runtime = True
     sqid_prefix = "rel_"
 
-    from_party = models.ForeignKey(
+    party = models.ForeignKey(
         "parties.Party",
         on_delete=models.CASCADE,
         related_name="relationships",
     )
-    to_party = models.ForeignKey(
+    """The anchor — the contact whose card this fact lives on."""
+
+    other_party = models.ForeignKey(
         "parties.Party",
-        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         related_name="inbound_relationships",
     )
+    other_name = models.CharField(max_length=256, blank=True, default="")
+    """Free-text counterparty when the relative is not a tracked party."""
+
     kind = models.ForeignKey(
         "parties.RelationshipKind",
         on_delete=models.PROTECT,
@@ -709,24 +722,33 @@ class Relationship(SqidMixin, AuditMixin, AngeeModel):
         """Django model options for the relationship source model."""
 
         abstract = True
-        ordering = ("from_party", "sqid")
+        ordering = ("party", "sqid")
         rebac_resource_type = "parties/relationship"
         rebac_id_attr = "sqid"
         constraints = (
+            # One row per tracked pair per kind; free-text counterparties are
+            # unconstrained (two untracked "Cousin" rows are legitimate).
             models.UniqueConstraint(
-                fields=("from_party", "to_party", "kind"),
+                fields=("party", "other_party", "kind"),
+                condition=models.Q(other_party__isnull=False),
                 name="uq_relationship_edge",
             ),
             models.CheckConstraint(
-                condition=~models.Q(from_party=models.F("to_party")),
+                condition=models.Q(other_party__isnull=True) | ~models.Q(party=models.F("other_party")),
                 name="ck_relationship_distinct_parties",
+            ),
+            # The DB owns "every edge names its counterparty" — a tracked party
+            # or at least a free-text name.
+            models.CheckConstraint(
+                condition=models.Q(other_party__isnull=False) | ~models.Q(other_name=""),
+                name="ck_relationship_has_other",
             ),
         )
 
     def __str__(self) -> str:
         """Return a readable edge description for Django displays."""
 
-        return f"{self.from_party_id}→{self.to_party_id} ({self.kind_id})"
+        return f"{self.party_id}←{self.kind_id}: {self.other_name or self.other_party_id}"
 
 
 class Directory(Bridge):

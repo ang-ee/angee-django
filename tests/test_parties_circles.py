@@ -107,19 +107,22 @@ def test_relationship_kind_renders_both_directions(parties_tables: None) -> None
     del parties_tables
     with system_context(reason="test kinds"):
         friend = RelationshipKind._base_manager.create(slug="friend", name="Friend")
-        parent = RelationshipKind._base_manager.create(slug="parent", name="Parent", inverse_name="Child")
+        mother = RelationshipKind._base_manager.create(slug="mother", name="Mother", inverse_name="Child")
 
     assert friend.is_symmetric
     assert friend.label_for(outbound=True) == "Friend"
     assert friend.label_for(outbound=False) == "Friend"
-    assert not parent.is_symmetric
-    assert parent.label_for(outbound=True) == "Parent"
-    assert parent.label_for(outbound=False) == "Child"
+    assert not mother.is_symmetric
+    # On the anchor's card the counterparty is their Mother; on the mother's
+    # card the anchor renders as her Child.
+    assert mother.label_for(outbound=True) == "Mother"
+    assert mother.label_for(outbound=False) == "Child"
 
 
 @pytest.mark.django_db(transaction=True)
 def test_relationship_edge_constraints(parties_tables: None) -> None:
-    """An edge is unique per (from, to, kind) and never self-referential."""
+    """A tracked edge is unique per (party, other, kind), never self-referential,
+    and every edge names a counterparty (tracked or free-text)."""
 
     del parties_tables
     with system_context(reason="test relationships"):
@@ -127,11 +130,33 @@ def test_relationship_edge_constraints(parties_tables: None) -> None:
         kind = RelationshipKind._base_manager.create(slug="sibling", name="Sibling")
         maya = Party._base_manager.create(display_name="Maya", created_by=owner)
         anna = Party._base_manager.create(display_name="Anna", created_by=owner)
-        Relationship._base_manager.create(from_party=maya, to_party=anna, kind=kind, created_by=owner)
+        Relationship._base_manager.create(party=maya, other_party=anna, kind=kind, created_by=owner)
         with pytest.raises(IntegrityError), transaction.atomic():
-            Relationship._base_manager.create(from_party=maya, to_party=anna, kind=kind, created_by=owner)
+            Relationship._base_manager.create(party=maya, other_party=anna, kind=kind, created_by=owner)
         with pytest.raises(IntegrityError), transaction.atomic():
-            Relationship._base_manager.create(from_party=maya, to_party=maya, kind=kind, created_by=owner)
+            Relationship._base_manager.create(party=maya, other_party=maya, kind=kind, created_by=owner)
+        with pytest.raises(IntegrityError), transaction.atomic():
+            Relationship._base_manager.create(party=maya, kind=kind, created_by=owner)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_relationship_records_untracked_relatives(parties_tables: None) -> None:
+    """A relative who is not a directory entry records as free text (health-gaps).
+
+    Two same-kind free-text rows are legitimate (the tracked-pair uniqueness is
+    partial), so a family history lists both grandmothers.
+    """
+
+    del parties_tables
+    with system_context(reason="test relationships"):
+        owner = _user("gene")
+        kind = RelationshipKind._base_manager.create(slug="grandparent", name="Grandparent", inverse_name="Grandchild")
+        maya = Party._base_manager.create(display_name="Maya", created_by=owner)
+        first = Relationship._base_manager.create(party=maya, other_name="Rosa K.", kind=kind, created_by=owner)
+        second = Relationship._base_manager.create(party=maya, other_name="Vera M.", kind=kind, created_by=owner)
+
+    assert first.other_party_id is None
+    assert {first.other_name, second.other_name} == {"Rosa K.", "Vera M."}
 
 
 @pytest.mark.django_db(transaction=True)

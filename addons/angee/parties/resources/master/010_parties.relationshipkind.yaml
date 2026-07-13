@@ -1,7 +1,9 @@
 # The relationship vocabulary (master tier), derived from XFN 1.1 / vCard 4.0
-# RELATED values. Model inferred from the `parties.relationshipkind` filename.
-# Adopted by slug so renamed labels re-sync onto the same row; a blank
-# inverse_name means the kind is symmetric. Users add their own kinds alongside.
+# RELATED values plus the health-gaps kinship set. Model inferred from the
+# `parties.relationshipkind` filename. Adopted by slug so renamed labels re-sync
+# onto the same row. `name` is the anchor-side label (what the counterparty is
+# TO the party — "Mother"); a blank inverse_name means the kind is symmetric.
+# Users add their own kinds alongside.
 - xref: friend
   slug: friend
   name: Friend
@@ -35,6 +37,35 @@
   slug: parent
   name: Parent
   inverse_name: Child
+  category: family
+- xref: mother
+  slug: mother
+  name: Mother
+  inverse_name: Child
+  category: family
+- xref: father
+  slug: father
+  name: Father
+  inverse_name: Child
+  category: family
+- xref: grandparent
+  slug: grandparent
+  name: Grandparent
+  inverse_name: Grandchild
+  category: family
+- xref: aunt-uncle
+  slug: aunt-uncle
+  name: Aunt/Uncle
+  inverse_name: Niece/Nephew
+  category: family
+- xref: cousin
+  slug: cousin
+  name: Cousin
+  category: family
+- xref: guardian
+  slug: guardian
+  name: Guardian
+  inverse_name: Ward
   category: family
 - xref: sibling
   slug: sibling
