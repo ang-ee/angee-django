@@ -517,6 +517,16 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   `model._base_manager.using(db)`. And a fresh-DB `migrate` never executes a
   row-dependent backfill body: prove backfills against a database that has rows
   (the agents service-user backfill failed only on live dev DBs for this reason).
+- **Addon-owned runtime migrations are append-only, self-contained history.**
+  Put source modules in `runtime_migrations/`, not Django's conventional
+  `migrations/` package, and declare them through ordered `[[migrations]]` in
+  `addon.toml`. Their pure `applies(ProjectState)` guard must select the exact
+  old state, skip the complete new or absent state, and fail on recognized
+  partial states. Copy-local `RunPython` functions must use historical models
+  from `apps` and `_base_manager`; never import current models. Once an origin
+  has materialized downstream, never edit its source or copied runtime file —
+  ship a new named declaration. Explicit `angee build` is the only writer;
+  normal boot remains migration-write-free.
 - **Agent runtime auth is a `(runtime × provider × credential-kind)` fact, not provider-only.**
   The `AgentRuntime` an agent's `runtime_class` selects (`angee.agents.runtimes`) owns how a
   credential becomes container env *and* the synced secret payload (`auth_env` /

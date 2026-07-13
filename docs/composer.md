@@ -130,16 +130,53 @@ extension bases are owned by the base model classes they live on.
   multi-table-inheritance child whose generated concrete class inherits the
   target's generated runtime model and the child source model.
 
-The composer owns only the generated Python runtime source map. Django owns
-runtime migrations after `makemigrations`. GraphQL SDL under `runtime/schemas/`
-and TypeScript codegen output under `runtime/gql/` are owned by their GraphQL and
-frontend codegen lifecycles, so composer runtime drift checks ignore them.
+The composer owns only the generated Python runtime source map and explicit
+materialization of addon-owned manual migrations. Django owns the resulting
+runtime graph, `makemigrations`, execution, rollback, routing, and recording.
+GraphQL SDL under `runtime/schemas/` and TypeScript codegen output under
+`runtime/gql/` are owned by their GraphQL and frontend codegen lifecycles, so
+composer runtime drift checks ignore them.
+
+### Addon-owned runtime migrations
+
+An addon may declare ordered `[[migrations]]` entries in `addon.toml` when a
+model transition cannot be represented losslessly by downstream
+`makemigrations`:
+
+```toml
+[[migrations]]
+name = "relationship_anchor"
+app_label = "parties"
+module = "runtime_migrations.relationship_anchor"
+```
+
+The source module is an ordinary, self-contained Django migration with a
+`Migration` class plus a pure `applies(ProjectState) -> bool` guard. Keep it in
+an addon package such as `runtime_migrations/`, never the conventional
+`migrations/` package: Django would discover the latter as a migration of the
+abstract source app before the composer can attach it to the downstream graph.
+
+Explicit `angee build` evaluates declarations in addon and manifest order. For
+each applicable origin it copies the complete source module to
+`runtime/<app_label>/migrations/`, gives it the next numeric name, and attaches
+it to the target app's single current leaf. The footer records the stable
+`<addon>:<name>` origin and source digest. Existing origins are immutable and
+idempotent; source edits, copied-body edits, duplicate origins, split leaves,
+and invalid graphs fail before any planned file is written. A dependency on
+`(<app_label>, "__latest__")` is resolved to a concrete current leaf when copied.
+
+Normal app boot and `emit_if_stale()` never materialize migrations.
+`angee build --check` validates existing history and reports applicable pending
+origins without writing. After a successful build, normal `makemigrations` may
+generate any remaining lossless changes and Django handles the rest of the
+migration lifecycle.
 
 `ComposeConfig.import_models()` is the Django app-loading hook. In app-populate
 phase 2 it calls `emit_if_stale()` and then imports generated models:
 
 - `emit_if_stale()` is write-only and idempotent. It repairs missing or stale
-  generated sources file by file before import, and it never resets or cleans.
+  generated sources file by file before import, and it never resets, cleans, or
+  materializes addon migrations.
 - Orphaned runtime labels left by a removed addon are pruned only by explicit
   `angee build`, which calls the destructive emitter behind the generated
   sentinel guard.

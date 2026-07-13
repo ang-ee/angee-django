@@ -762,6 +762,7 @@ def make_contract(**overrides: object) -> AddonContract:
     fields: dict[str, object] = {
         "name": "tests.addon",
         "depends_on": (),
+        "migrations": (),
         "schemas": None,
         "web": None,
         "web_codegen": None,

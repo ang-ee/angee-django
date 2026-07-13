@@ -7,6 +7,11 @@ keywords = ["parties", "contacts", "crm"]
 category = "Data"
 depends_on = ["angee.iam", "angee.integrate", "angee.storage"]
 
+[[migrations]]
+name = "relationship_anchor"
+app_label = "parties"
+module = "runtime_migrations.relationship_anchor"
+
 [resources]
 master = [
   { path = "resources/master/010_parties.relationshipkind.yaml", adopt = "slug" },
