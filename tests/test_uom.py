@@ -226,3 +226,70 @@ def test_same_reference_flag_across_categories_is_allowed(uom_tables: None) -> N
     )
     assert kilogram.pk is not None
     assert litre.pk is not None
+
+
+@pytest.fixture()
+def temperatures(uom_tables: None) -> SimpleNamespace:
+    """Kelvin-referenced temperature units exercising the affine offset."""
+
+    del uom_tables
+    temperature = _make_category(name="Temperature")
+    kelvin = _make_uom(
+        category=temperature,
+        name="Kelvin",
+        ratio=Decimal(1),
+        rounding=Decimal("0.01"),
+        is_reference=True,
+    )
+    celsius = _make_uom(
+        category=temperature,
+        name="Celsius",
+        ratio=Decimal(1),
+        offset=Decimal("273.15"),
+        rounding=Decimal("0.1"),
+    )
+    fahrenheit = _make_uom(
+        category=temperature,
+        name="Fahrenheit",
+        ratio=Decimal("0.5555555556"),
+        offset=Decimal("255.3722222222"),
+        rounding=Decimal("0.1"),
+    )
+    return SimpleNamespace(kelvin=kelvin, celsius=celsius, fahrenheit=fahrenheit)
+
+
+def test_celsius_to_kelvin_applies_offset(temperatures: SimpleNamespace) -> None:
+    """0 °C is 273.15 K: the offset carries the zero-point shift."""
+
+    assert temperatures.celsius.convert(Decimal(0), temperatures.kelvin) == Decimal("273.15")
+
+
+def test_celsius_to_fahrenheit_round_trip(temperatures: SimpleNamespace) -> None:
+    """The affine map recovers the textbook anchor points both ways."""
+
+    assert temperatures.celsius.convert(Decimal(0), temperatures.fahrenheit) == Decimal("32.0")
+    assert temperatures.celsius.convert(Decimal(100), temperatures.fahrenheit) == Decimal("212.0")
+    assert temperatures.celsius.convert(Decimal(37), temperatures.fahrenheit) == Decimal("98.6")
+    assert temperatures.fahrenheit.convert(Decimal("98.6"), temperatures.celsius) == Decimal("37.0")
+
+
+def test_multiplicative_units_keep_zero_offset_math(units: SimpleNamespace) -> None:
+    """Offset defaults to 0, so ordinary units convert exactly as before."""
+
+    assert units.gram.offset == Decimal(0)
+    assert units.gram.convert(Decimal(500), units.kilogram) == Decimal("0.5")
+
+
+def test_reference_with_offset_is_rejected(uom_tables: None) -> None:
+    """A reference unit must be the identity map: ratio 1, offset 0."""
+
+    temperature = _make_category(name="Temperature (constraint)")
+    with pytest.raises(IntegrityError), transaction.atomic():
+        _make_uom(
+            category=temperature,
+            name="Bad reference",
+            ratio=Decimal(1),
+            offset=Decimal("273.15"),
+            rounding=Decimal("0.01"),
+            is_reference=True,
+        )

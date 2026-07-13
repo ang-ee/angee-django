@@ -75,3 +75,29 @@ rows:
       ratio: 24
       rounding: 0.01
       is_reference: false
+  # Temperature — reference: kelvin. Interval scale: Celsius and Fahrenheit
+  # carry a zero-point `offset` onto the reference (value_in_K = qty * ratio
+  # + offset), the affine slot ordinary multiplicative units leave at 0.
+  - xref: temperature_kelvin
+    fields:
+      category: uom.temperature
+      name: Kelvin
+      ratio: 1
+      rounding: 0.01
+      is_reference: true
+  - xref: temperature_celsius
+    fields:
+      category: uom.temperature
+      name: Celsius
+      ratio: 1
+      offset: 273.15
+      rounding: 0.1
+      is_reference: false
+  - xref: temperature_fahrenheit
+    fields:
+      category: uom.temperature
+      name: Fahrenheit
+      ratio: 0.5555555556
+      offset: 255.3722222222
+      rounding: 0.1
+      is_reference: false
