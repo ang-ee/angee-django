@@ -10,7 +10,6 @@ from types import SimpleNamespace
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
-from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.state import ModelState, ProjectState
 
@@ -462,7 +461,7 @@ def _old_relationship_state() -> ProjectState:
 
 
 def test_parties_relationship_migration_preserves_renamed_foreign_keys() -> None:
-    from angee.parties.models import Relationship
+    """The append-only source migration owns only the lossless anchor transition."""
 
     module = importlib.import_module("angee.parties.runtime_migrations.relationship_anchor")
     old_state = _old_relationship_state()
@@ -484,11 +483,6 @@ def test_parties_relationship_migration_preserves_renamed_foreign_keys() -> None
         "ck_relationship_distinct_parties",
         "ck_relationship_has_other",
     }
-
-    current = ProjectState()
-    current.add_model(ModelState.from_model(Relationship))
-    assert "parties" not in MigrationAutodetector(migrated, current)._detect_changes()
-
 
 def test_parties_relationship_migration_applies_only_to_exact_old_state() -> None:
     from angee.parties.models import Relationship

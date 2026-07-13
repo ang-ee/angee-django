@@ -34,7 +34,7 @@ export function HandlesPage(): React.ReactElement {
         </Group>
         <Group label={t("handle.group.flags")} columns={3}>
           <Field name="is_preferred" readOnly />
-          <Field name="is_own" readOnly />
+          <Field name="owner" readOnly />
           <Field name="is_verified" readOnly />
         </Group>
       </Form>

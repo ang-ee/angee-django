@@ -270,7 +270,7 @@ class IAMOverviewNamespaceType:
 
 
 @strawberry_django.type(active_relationship_model())
-class IAMRelationshipType:
+class RebacRelationshipType:
     """Raw active REBAC relationship tuple."""
 
     @strawberry_django.field
@@ -809,10 +809,10 @@ _COMPANY_RESOURCE = hasura_model_resource(
 # subject-relation columns are concrete in both storage modes.
 _RELATIONSHIP_FILTER_FIELDS = ("relation", "optional_subject_relation", "caveat_name")
 
-_RELATIONSHIP_RESOURCE = hasura_model_resource(
-    IAMRelationshipType,
+_REBAC_RELATIONSHIP_RESOURCE = hasura_model_resource(
+    RebacRelationshipType,
     model=active_relationship_model(),
-    name="relationships",
+    name="rebac_relationships",
     filterable=list(_RELATIONSHIP_FILTER_FIELDS),
     sortable=list(_RELATIONSHIP_FILTER_FIELDS),
     aggregatable=["id"],
@@ -1013,7 +1013,7 @@ schemas = {
             _COMPANY_RESOURCE.query,
             _ROLE_RESOURCE.query,
             _GRANT_RESOURCE.query,
-            _RELATIONSHIP_RESOURCE.query,
+            _REBAC_RELATIONSHIP_RESOURCE.query,
         ],
         "mutation": [
             IAMMutation,
@@ -1042,7 +1042,7 @@ schemas = {
             *_COMPANY_RESOURCE.types,
             *_ROLE_RESOURCE.types,
             *_GRANT_RESOURCE.types,
-            *_RELATIONSHIP_RESOURCE.types,
+            *_REBAC_RELATIONSHIP_RESOURCE.types,
         ],
     },
 }

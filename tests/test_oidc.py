@@ -43,11 +43,20 @@ from angee.integrate.oauth.errors import (
     OAuthFlowError,
 )
 from tests.conftest import (
+    IAM_CONNECTION_TEST_MODELS,
     Credential,
     ExternalAccount,
     OAuthClient,
     _create_missing_tables,
 )
+from tests.test_messaging import Handle as PartiesHandle
+from tests.test_messaging import Party as PartiesParty
+from tests.test_parties_graphql import PartyHandle as PartiesPartyHandle
+from tests.test_parties_graphql import Person as PartiesPerson
+
+# OIDC first login establishes the signed-in user's own Person + handle, so the
+# login-completion fixture provisions the parties tables that claim_own writes.
+_PARTIES_LOGIN_MODELS = (PartiesParty, PartiesHandle, PartiesPerson, PartiesPartyHandle)
 
 
 def test_discovery_fallback_fills_blank_authorize_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1076,6 +1085,7 @@ def test_userinfo_claims_merge_into_login_and_link_claims(
     id_claims = {
         "sub": "sub-merged",
         "email": "id-token@example.com",
+        "email_verified": True,
         "preferred_username": "id-token-name",
     }
     userinfo_claims = {
@@ -1086,6 +1096,7 @@ def test_userinfo_claims_merge_into_login_and_link_claims(
     expected_claims = {
         "sub": "sub-merged",
         "email": "id-token@example.com",
+        "email_verified": True,
         "preferred_username": "id-token-name",
         "groups": ["ops"],
     }
@@ -1130,6 +1141,13 @@ def test_userinfo_claims_merge_into_login_and_link_claims(
     assert captured["email"] == "id-token@example.com"
     assert captured["claims"] == expected_claims
 
+    # First login establishes the user's own party: an owned handle + confirmed self-link.
+    with system_context(reason="test verify login claim"):
+        own_handle = PartiesHandle.objects.get(value="id-token@example.com")
+        person = PartiesPerson.objects.for_user(link_user)
+        assert own_handle.owner_id == link_user.pk
+        assert own_handle.party_id == person.pk
+
     link_state, _link_record = oauth_state.issue(
         oauth_client,
         "https://app.example/callback",
@@ -1150,6 +1168,87 @@ def test_userinfo_claims_merge_into_login_and_link_claims(
     assert link_result.claims == expected_claims
     assert link_result.next_path == "/link-next"
     assert account.identity_claims == expected_claims
+
+
+@pytest.mark.django_db(transaction=True)
+def test_complete_login_does_not_claim_an_unverified_email(
+    oidc_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An OIDC email becomes a parties identity claim only when explicitly verified."""
+
+    del oidc_tables
+    user = get_user_model().objects.create_user(username="unverified-login", email="unverified@example.com")
+    oauth_client = _oauth_client(slug="unverified-claim")
+    state_token, _record = oauth_state.issue(oauth_client, "https://app.example/callback")
+    claims = {
+        "sub": "sub-unverified",
+        "email": "unverified@example.com",
+        "email_verified": False,
+    }
+    claimed: list[str] = []
+    monkeypatch.setattr(
+        OAuthClientOidcProtocol,
+        "exchange_code",
+        lambda self, **kwargs: {"access_token": "access", "id_token": "id-token"},
+    )
+    monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", lambda self, id_token, **kwargs: claims)
+    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token: {})
+    monkeypatch.setattr(identity, "resolve", lambda *args, **kwargs: user)
+    monkeypatch.setattr(identity, "_claim_login_handle", lambda user_arg, email, claims_arg: claimed.append(email))
+
+    completion = identity.complete_login(
+        oauth_client,
+        code="code",
+        state_token=state_token,
+        redirect_uri="https://app.example/callback",
+    )
+
+    assert completion.user.pk == user.pk
+    assert claimed == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_complete_login_contains_parties_bookkeeping_failure(
+    oidc_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A parties bookkeeping exception is logged but never turns a verified login into failure."""
+
+    del oidc_tables
+    user = get_user_model().objects.create_user(username="bookkeeping-login", email="bookkeeping@example.com")
+    oauth_client = _oauth_client(slug="bookkeeping-failure")
+    state_token, _record = oauth_state.issue(oauth_client, "https://app.example/callback")
+    claims = {
+        "sub": "sub-bookkeeping",
+        "email": "bookkeeping@example.com",
+        "email_verified": True,
+    }
+    monkeypatch.setattr(
+        OAuthClientOidcProtocol,
+        "exchange_code",
+        lambda self, **kwargs: {"access_token": "access", "id_token": "id-token"},
+    )
+    monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", lambda self, id_token, **kwargs: claims)
+    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token: {})
+    monkeypatch.setattr(identity, "resolve", lambda *args, **kwargs: user)
+
+    def fail_bookkeeping(user_arg: Any, email: str, claims_arg: dict[str, Any]) -> None:
+        del user_arg, email, claims_arg
+        raise RuntimeError("parties unavailable")
+
+    monkeypatch.setattr(identity, "_claim_login_handle", fail_bookkeeping)
+
+    completion = identity.complete_login(
+        oauth_client,
+        code="code",
+        state_token=state_token,
+        redirect_uri="https://app.example/callback",
+    )
+
+    assert completion.user.pk == user.pk
+    assert "Could not record the verified OIDC email in parties" in caplog.text
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1327,9 +1426,14 @@ def test_state_flow_binding_rejects_cross_flow_completion() -> None:
 
 @pytest.fixture()
 def oidc_tables() -> Iterator[None]:
-    """Create concrete connection test tables for one test."""
+    """Create concrete connection + parties tables for one test.
 
-    created_models = _create_missing_tables()
+    Login completion claims the signed-in user's own handle, so the parties tables
+    (Party/Person/Handle/PartyHandle) it writes must exist alongside the connection
+    tables.
+    """
+
+    created_models = _create_missing_tables(IAM_CONNECTION_TEST_MODELS + _PARTIES_LOGIN_MODELS)
     call_command("rebac", "sync", verbosity=0)
     try:
         yield

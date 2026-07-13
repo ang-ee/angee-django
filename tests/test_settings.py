@@ -198,9 +198,11 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "angee.operator",
         "angee.agents.apps.AgentsConfig",
         "angee.agents_integrate_anthropic",
-        "angee.iam_integrate_oidc.apps.IAMIntegrateOidcConfig",
         "angee.storage.apps.StorageConfig",
         "angee.parties.apps.PartiesConfig",
+        # OIDC login now composes parties (it claims the signed-in user's own
+        # handle), so it sorts after parties and its storage dependency.
+        "angee.iam_integrate_oidc.apps.IAMIntegrateOidcConfig",
         "django.contrib.postgres.apps.PostgresConfig",
         "angee.messaging.apps.MessagingConfig",
         "angee.workflows.apps.WorkflowsConfig",

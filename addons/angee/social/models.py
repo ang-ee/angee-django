@@ -207,7 +207,7 @@ class Feed(Bridge):
             key: handle_model.objects.upsert(
                 platform=parsed.platform,
                 value=parsed.value,
-                owner_id=owner_id,
+                created_by_id=owner_id,
                 display_name=parsed.display_name,
             )
             for key, parsed in specs.items()

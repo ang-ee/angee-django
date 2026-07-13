@@ -42,6 +42,7 @@ from angee.base.actors import actor_user_id
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
 from angee.messaging.tracking import TrackingChange
+from angee.parties.mixins import LinkSource
 
 if TYPE_CHECKING:
     from angee.messaging.backends import ParsedMessage, ParsedPart
@@ -1403,16 +1404,15 @@ def _reaction_handle_for_user(user: Any) -> Any:
     email = strip_null_bytes(getattr(user, "email", "") or "").strip()
     username = strip_null_bytes(user.get_username() if hasattr(user, "get_username") else getattr(user, "username", ""))
     value = email or username or str(user.pk)
-    platform = handle_model.Platform.EMAIL if email else handle_model.Platform.OTHER
     display_name = strip_null_bytes(
         user.get_full_name() if hasattr(user, "get_full_name") else "",
     ).strip() or username or value
-    return handle_model.objects.upsert(
-        platform=platform,
+    return handle_model.objects.claim_own(
+        user,
+        platform=handle_model.Platform.for_value(value),
         value=value,
-        owner_id=user.pk,
         display_name=display_name,
-        is_own=True,
+        source=LinkSource.MANUAL,
         metadata={"user_id": str(user.pk)},
     )
 
@@ -2162,7 +2162,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             sender = handle_model.objects.upsert(
                 platform=parsed.sender.platform,
                 value=parsed.sender.value,
-                owner_id=owner_id,
+                created_by_id=owner_id,
                 display_name=parsed.sender.display_name,
             )
         # Capture the message's prior state before the upsert moves it: the prior
@@ -2388,7 +2388,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             handle = handle_model.objects.upsert(
                 platform=recipient.handle.platform,
                 value=recipient.handle.value,
-                owner_id=owner_id,
+                created_by_id=owner_id,
                 display_name=recipient.handle.display_name,
             )
             # The write path owns envelope dedup (the unique constraint is the

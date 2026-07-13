@@ -110,7 +110,7 @@ def test_users_resource_lists_people_not_service_accounts(
     assert all(row["username"] != "hub-service" for row in data["users"])
 
 
-def test_relationships_resource_is_admin_scoped(
+def test_rebac_relationships_resource_is_admin_scoped(
     iam_permission_hub_tables: None,
 ) -> None:
     """The relationships Hasura resource lists rows for admins, empty otherwise.
@@ -127,7 +127,7 @@ def test_relationships_resource_is_admin_scoped(
     console_schema = _schema("console")
     query = """
         query {
-          relationships(limit: 50) {
+          rebac_relationships(limit: 50) {
             id
             resource_type
             resource_id
@@ -142,11 +142,11 @@ def test_relationships_resource_is_admin_scoped(
 
     denied = _execute(console_schema, query, user=plain)
     assert denied.errors is None
-    assert _data(denied)["relationships"] == []
+    assert _data(denied)["rebac_relationships"] == []
 
     allowed = _execute(console_schema, query, user=admin)
     assert allowed.errors is None
-    rows = _data(allowed)["relationships"]
+    rows = _data(allowed)["rebac_relationships"]
     assert rows
     assert any(row["relation"] == ROLE_RELATION for row in rows)
     assert all(row["id"] for row in rows)
@@ -646,7 +646,7 @@ def test_role_refs_are_current_user_only(
     public_sdl = public_schema.as_str()
     assert "users(" not in public_sdl
     assert "grants(" not in public_sdl
-    assert "relationships(" not in public_sdl
+    assert "rebac_relationships(" not in public_sdl
     assert "role_refs" not in _type_block(public_sdl, "UserType")
 
 

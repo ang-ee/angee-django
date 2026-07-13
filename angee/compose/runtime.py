@@ -794,8 +794,8 @@ class Runtime:
         - the opt-in is on a genuine materialized child (``runtime`` + ``extends``);
         - the reorder does not silently swap the child's default manager — it must
           inherit the parent's concrete default manager or declare its own
-          explicitly (``parties.Person`` declares a different manager, so a global
-          flip is unsafe and only a per-child opt-in is offered);
+          explicitly (a child may declare a manager that differs from its parent,
+          so a global flip is unsafe and only a per-child opt-in is offered);
         - the child's guarded-transition metadata still validates on the flipped
           MRO (``StateTransitions``/``@transition`` class-build checks hold).
         """

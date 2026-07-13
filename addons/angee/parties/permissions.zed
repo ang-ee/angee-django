@@ -1,9 +1,9 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 4
+// @rebac_schema_revision: 5
 
-// A party and its related rows (handles, links, addresses, affiliations) are
+// A party and its related rows (handles, links, addresses, relationships) are
 // each owned by the user that created them, with platform admins reaching every
 // row through the const-backed `angee/role:admin` membership (no per-row tuple).
 // Each owns its own created_by rather than reaching through the party, so a
@@ -86,18 +86,6 @@ definition parties/party_handle {
 }
 
 definition parties/address {
-    relation owner: auth/user // rebac:field=created_by
-    relation editor: auth/user | auth/group#member
-    relation reader: auth/user | auth/group#member
-    relation admin: angee/role // rebac:const=admin
-
-    permission create = authenticated
-    permission read   = owner + editor + reader + admin->member
-    permission write  = owner + editor + admin->member
-    permission delete = owner + admin->member
-}
-
-definition parties/affiliation {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member

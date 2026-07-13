@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
 name = "angee.parties"
-description = "Contacts — people and organizations, their circles, relationships, addresses, affiliations, and directory sync"
+description = "Contacts — people and organizations, their circles, relationships, addresses, and directory sync"
 keywords = ["parties", "contacts", "crm"]
 category = "Data"
 depends_on = ["angee.iam", "angee.integrate", "angee.storage"]

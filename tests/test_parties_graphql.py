@@ -15,10 +15,7 @@ from rebac.roles import grant
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.parties.models import Address as AbstractAddress
-from angee.parties.models import Affiliation as AbstractAffiliation
 from angee.parties.models import Organization as AbstractOrganization
-from angee.parties.models import PartyHandle as AbstractPartyHandle
-from angee.parties.models import Person as AbstractPerson
 from tests import test_messaging as messaging_models
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
@@ -30,10 +27,7 @@ from tests.conftest import (
 from tests.conftest import result_data as _data
 
 _AddressMeta = getattr(AbstractAddress, "Meta", object)
-_AffiliationMeta = getattr(AbstractAffiliation, "Meta", object)
 _OrganizationMeta = getattr(AbstractOrganization, "Meta", object)
-_PartyHandleMeta = getattr(AbstractPartyHandle, "Meta", object)
-_PersonMeta = getattr(AbstractPerson, "Meta", object)
 
 
 class Address(AbstractAddress):
@@ -44,39 +38,6 @@ class Address(AbstractAddress):
         app_label = "parties"
         db_table = "test_parties_address"
         rebac_resource_type = "parties/address"
-        rebac_id_attr = "sqid"
-
-
-class Affiliation(AbstractAffiliation):
-    """Concrete affiliation model used to import the parties schema."""
-
-    class Meta(_AffiliationMeta):
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_affiliation"
-        rebac_resource_type = "parties/affiliation"
-        rebac_id_attr = "sqid"
-
-
-class PartyHandle(AbstractPartyHandle):
-    """Concrete party-handle model used to import the parties schema."""
-
-    class Meta(_PartyHandleMeta):
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_party_handle"
-        rebac_resource_type = "parties/party_handle"
-        rebac_id_attr = "sqid"
-
-
-class Person(messaging_models.Party, AbstractPerson):
-    """Concrete person model matching the composer inheritance shape."""
-
-    class Meta(_PersonMeta):
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_person"
-        rebac_resource_type = "parties/person"
         rebac_id_attr = "sqid"
 
 
@@ -91,6 +52,10 @@ class Organization(messaging_models.Party, AbstractOrganization):
         rebac_id_attr = "sqid"
 
 
+Person = messaging_models.Person
+PartyHandle = messaging_models.PartyHandle
+
+
 # Import after the concrete test models are registered; the source schema resolves
 # the composer-emitted runtime models through Django's app registry.
 parties_schema = importlib.import_module("angee.parties.schema")
@@ -99,12 +64,9 @@ PARTIES_TEST_MODELS = (
     messaging_models.Directory,
     messaging_models.Folder,
     messaging_models.Party,
-    Person,
     Organization,
     messaging_models.Handle,
-    PartyHandle,
     Address,
-    Affiliation,
 )
 
 
@@ -268,10 +230,9 @@ def test_public_resource_metadata_converts_related_parties_surfaces() -> None:
     assert address.filter_fields == ("id", "party", "label", "created_at")
     assert address.create_fields[0] == "party"
 
-    affiliation = resources["parties.Affiliation"]
-    assert affiliation.roots.list_name == "affiliations"
-    assert affiliation.roots.detail_name == "affiliations_by_pk"
-    assert affiliation.create_fields[:2] == ("party", "organization")
+    relationship = resources["parties.Relationship"]
+    assert relationship.roots.list_name == "relationships"
+    assert relationship.create_fields[:2] == ("party", "other_party")
 
     folder = resources["parties.Folder"]
     assert folder.roots.list_name == "contact_folders"

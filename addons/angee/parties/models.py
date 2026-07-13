@@ -22,12 +22,12 @@ is a typed, directed party↔party edge whose vocabulary
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 from django.apps import apps
 from django.conf import settings
-from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models
+from django.core.exceptions import ValidationError
+from django.db import models, transaction
 from rebac import PermissionDenied, system_context
 from rebac.managers import RebacManager
 
@@ -43,6 +43,7 @@ from angee.parties.managers import (
     PartyHandleManager,
     PartyManager,
 )
+from angee.parties.mixins import LinkSource, ScoredLinkMixin
 
 
 class Party(SqidMixin, AuditMixin, AngeeModel):
@@ -114,12 +115,81 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
                 condition=~models.Q(source_uid=""),
                 name="uq_party_folder_source_uid",
             ),
+            models.CheckConstraint(
+                condition=~models.Q(merged_into=models.F("id")),
+                name="ck_party_not_merged_into_self",
+            ),
         )
 
     def __str__(self) -> str:
         """Return the party's display name for Django displays."""
 
         return self.display_name
+
+    @property
+    def concrete_kind(self) -> str | None:
+        """Return this party's concrete kind (``"person"`` / ``"organization"``), or ``None``.
+
+        A structural fact read straight from the multi-table-inheritance child rows
+        that share this party's primary key — not a stored column (the child model
+        *is* the kind). Read through the base manager: it is a system integrity fact,
+        never actor-scoped user data.
+        """
+
+        for kind in (
+            cast(RelationshipKind.PartyKind, RelationshipKind.PartyKind.ORGANIZATION),
+            cast(RelationshipKind.PartyKind, RelationshipKind.PartyKind.PERSON),
+        ):
+            child = kind.model()
+            if child is not None and child._base_manager.filter(pk=self.pk).exists():
+                return str(kind)
+        return None
+
+    def canonical(self) -> Party:
+        """Return the surviving party this one resolves to, following merge pointers.
+
+        :meth:`merge_into` flattens normal writes to the terminal, but this method
+        still follows a longer chain and guards a cycle so legacy/corrupt data
+        cannot loop forever during a read.
+        """
+
+        seen = {self.pk}
+        party = self
+        while party.merged_into_id is not None and party.merged_into_id not in seen:
+            seen.add(party.merged_into_id)
+            party = party.merged_into
+        return party
+
+    def merge_into(self, target: Party) -> Party:
+        """Atomically merge this party into ``target`` and return the terminal target.
+
+        The source chain head is row-locked through ``lock_if_supported`` before
+        its pointer changes. The target resolves defensively to its canonical
+        terminal, and existing rows that pointed at the source are repointed in the
+        same transaction so normal merge chains stay one hop deep. Reversing an
+        existing merge raises :class:`ValidationError` instead of silently clearing
+        either pointer.
+        """
+
+        if self.pk is None or target.pk is None:
+            raise ValidationError({"merged_into": "Both parties must be saved before merging."})
+        party_model = apps.get_model("parties", "Party")
+        with transaction.atomic():
+            source = party_model.objects.lock_if_supported().get(pk=self.pk)
+            target_head = party_model.objects.lock_if_supported().get(pk=target.pk)
+            terminal = target_head.canonical()
+            if terminal.pk == source.pk:
+                raise ValidationError(
+                    {"merged_into": "Cannot reverse a merge by merging its target back into the source."}
+                )
+            source.merged_into = terminal
+            source.save(update_fields=["merged_into", "updated_at"])
+            party_model._base_manager.filter(merged_into_id=source.pk).exclude(pk=source.pk).update(
+                merged_into_id=terminal.pk
+            )
+        self.merged_into = terminal
+        self.merged_into_id = terminal.pk
+        return cast(Party, terminal)
 
 
 class Person(AngeeModel):
@@ -144,8 +214,6 @@ class Person(AngeeModel):
         related_name="person",
     )
 
-    objects = AngeeManager()
-
     class Meta:
         """Django model options for the person child model."""
 
@@ -161,7 +229,7 @@ class Organization(AngeeModel):
     extends = "parties.Party"
 
     legal_name = models.TextField(blank=True, default="")
-    domain = models.CharField(max_length=255, blank=True, default="")
+    domain = models.CharField(max_length=255, blank=True, default="", db_index=True)
 
     objects = AngeeManager()
 
@@ -195,14 +263,36 @@ class Handle(SqidMixin, AuditMixin, AngeeModel):
         FACEBOOK = "facebook", "Facebook"
         OTHER = "other", "Other"
 
+        @classmethod
+        def for_value(cls, value: str) -> Handle.Platform:
+            """Classify a raw handle value through the one platform heuristic."""
+
+            return cast(Handle.Platform, cls.EMAIL if "@" in (value or "") else cls.OTHER)
+
     sqid = SqidField(real_field_name="id", prefix="hdl_", min_length=8)
     platform = StateField(choices_enum=Platform, default=Platform.EMAIL)
     value = models.CharField(max_length=512)
+    normalized_value = models.CharField(max_length=512, db_index=True, editable=False)
     external_id = models.CharField(max_length=512, blank=True, default="")
     display_name = models.CharField(max_length=4096, blank=True, default="")
     label = models.CharField(max_length=64, blank=True, default="")
     is_preferred = models.BooleanField(default=False)
-    is_own = models.BooleanField(default=False, db_index=True)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="own_handles",
+        db_index=True,
+    )
+    """The user who controls this address — sends, posts, or syncs as it.
+
+    The **control** fact, distinct from the **identity** fact (``party`` — who the
+    address reaches, resolved from :class:`PartyHandle`). A shared team inbox or a
+    service account may carry an ``owner`` without resolving to that user's party,
+    and an ex-address may reach a person's party without anyone controlling it.
+    """
+
     is_verified = models.BooleanField(default=False)
     metadata = models.JSONField(blank=True, default=dict)
     party = models.ForeignKey(
@@ -239,6 +329,34 @@ class Handle(SqidMixin, AuditMixin, AngeeModel):
 
         return self.value
 
+    @classmethod
+    def normalize_value(cls, platform: str, value: str) -> str:
+        """Return the persisted comparison value for one platform/value pair.
+
+        Every platform strips surrounding whitespace and lowercases. Email keeps
+        that rule and additionally collapses dots and plus-tags in Gmail local
+        parts for both ``gmail.com`` and ``googlemail.com`` domains.
+        """
+
+        normalized = (value or "").strip().lower()
+        if platform == cls.Platform.EMAIL and "@" in normalized:
+            local, _, domain = normalized.rpartition("@")
+            if domain in ("gmail.com", "googlemail.com"):
+                local = local.split("+", 1)[0].replace(".", "")
+            return f"{local}@{domain}"
+        return normalized
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Persist the handle while keeping ``normalized_value`` in lockstep."""
+
+        update_fields = kwargs.get("update_fields")
+        normalization_fields = {"platform", "value", "normalized_value"}
+        if self._state.adding or update_fields is None or normalization_fields.intersection(update_fields):
+            self.normalized_value = self.normalize_value(self.platform, self.value)
+            if update_fields is not None and "normalized_value" not in update_fields:
+                kwargs["update_fields"] = [*update_fields, "normalized_value"]
+        super().save(*args, **kwargs)
+
     @property
     def resolved_confidence(self) -> float | None:
         """Confidence of the link that resolved this handle's owner.
@@ -258,27 +376,17 @@ class Handle(SqidMixin, AuditMixin, AngeeModel):
         return None
 
 
-class PartyHandle(SqidMixin, AuditMixin, AngeeModel):
+class PartyHandle(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
     """A confidence-bearing link between a party and one of its handles.
 
-    A handle may carry several scored candidate parties, so a sync can surface an
-    uncertain match as a weak link (a conflicting claim is recorded at ``0.3``
-    confidence) instead of silently reassigning. The resolved owner is the
-    highest-confidence, non-dismissed link — the value the manager materialises
-    onto :attr:`Handle.party`.
+    A handle may carry several scored candidate parties (:class:`ScoredLinkMixin`),
+    so a sync can surface an uncertain match as a weak link (a conflicting claim is
+    recorded at ``0.3`` confidence) instead of silently reassigning. The resolved
+    owner is the highest-confidence, non-dismissed link — the value the manager
+    materialises onto :attr:`Handle.party`.
     """
 
     runtime = True
-
-    class Source(models.TextChoices):
-        """Where a party↔handle link came from."""
-
-        MANUAL = "manual", "Manual"
-        IMPORT = "import", "Import"
-        EMAIL_MATCH = "email_match", "Email Match"
-        LLM = "llm", "LLM"
-        OAUTH = "oauth", "OAuth"
-        CARDDAV = "carddav", "CardDAV"
 
     sqid = SqidField(real_field_name="id", prefix="phl_", min_length=8)
     party = models.ForeignKey(
@@ -291,13 +399,6 @@ class PartyHandle(SqidMixin, AuditMixin, AngeeModel):
         on_delete=models.CASCADE,
         related_name="party_links",
     )
-    confidence = models.FloatField(
-        default=1.0,
-        validators=(MinValueValidator(0.0), MaxValueValidator(1.0)),
-    )
-    source = StateField(choices_enum=Source, default=Source.MANUAL)
-    is_confirmed = models.BooleanField(default=False)
-    is_dismissed = models.BooleanField(default=False)
     metadata = models.JSONField(blank=True, default=dict)
 
     objects = PartyHandleManager()
@@ -324,40 +425,34 @@ class PartyHandle(SqidMixin, AuditMixin, AngeeModel):
     def confirm(self) -> None:
         """Human-confirm this link, then re-resolve the handle's owner.
 
-        Confirmation is the strongest signal the resolution ordering knows
-        (``-is_confirmed`` sorts before any score), so the link also takes full
-        confidence and the ``manual`` source — a later sync must not out-score a
-        human decision. The actor must hold ``write`` on the link; the resolution
-        cascade (the handle's owner pointer, both parties' counts) is server-owned
-        bookkeeping and runs elevated.
+        Overrides the plain :meth:`ScoredLinkMixin.confirm` to add the two facts a
+        contacts confirmation carries that the generic mixin must not: the actor must
+        hold ``write`` on the link, and the resolution cascade (the handle's owner
+        pointer, both parties' counts) is server-owned bookkeeping that runs elevated.
         """
 
         if not self.has_access("write"):
             raise PermissionDenied("write access to the party-handle link is required")
         with system_context(reason="parties.party_handle.confirm"):
-            self.confidence = 1.0
-            self.source = self.Source.MANUAL  # type: ignore[assignment]  # TextChoices member unmodeled without django-stubs
-            self.is_confirmed = True
-            self.is_dismissed = False
-            self.save(update_fields=["confidence", "source", "is_confirmed", "is_dismissed", "updated_at"])
-            type(self).objects.resolve(self.handle)
+            super().confirm()
 
     def dismiss(self) -> None:
         """Dismiss this link — the durable anti-link — then re-resolve the handle.
 
-        A dismissed link survives as a row so the same match is never re-proposed
-        (suggesters key on ``(party, handle)`` and skip existing links); resolution
-        simply ignores it, demoting the handle to its next candidate or to unowned.
-        Gated and elevated like :meth:`confirm`.
+        Gated and elevated like :meth:`confirm`; the mixin flips the flags and calls
+        :meth:`_resolve_link`, which demotes the handle to its next candidate or to
+        unowned.
         """
 
         if not self.has_access("write"):
             raise PermissionDenied("write access to the party-handle link is required")
         with system_context(reason="parties.party_handle.dismiss"):
-            self.is_dismissed = True
-            self.is_confirmed = False
-            self.save(update_fields=["is_dismissed", "is_confirmed", "updated_at"])
-            type(self).objects.resolve(self.handle)
+            super().dismiss()
+
+    def _resolve_link(self) -> None:
+        """Re-materialise :attr:`Handle.party` from this handle's surviving links."""
+
+        type(self).objects.resolve(self.handle)
 
 
 class Address(SqidMixin, AuditMixin, AngeeModel):
@@ -400,51 +495,6 @@ class Address(SqidMixin, AuditMixin, AngeeModel):
         """Return a one-line address for Django displays."""
 
         return ", ".join(part for part in (self.street, self.city, self.country) if part)
-
-
-class Affiliation(SqidMixin, AuditMixin, AngeeModel):
-    """A party's membership of an organisation (the vCard ``ORG``/``TITLE``/``ROLE``).
-
-    The organisation is an organisation-kind :class:`Party` when known, falling
-    back to a free-text ``organization_name`` when the organisation is not itself
-    a tracked party.
-    """
-
-    runtime = True
-
-    sqid = SqidField(real_field_name="id", prefix="afl_", min_length=8)
-    party = models.ForeignKey(
-        "parties.Party",
-        on_delete=models.CASCADE,
-        related_name="affiliations",
-    )
-    organization = models.ForeignKey(
-        "parties.Party",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="members",
-    )
-    organization_name = models.TextField(blank=True, default="")
-    role = models.TextField(blank=True, default="")
-    title = models.TextField(blank=True, default="")
-    department = models.TextField(blank=True, default="")
-    started_at = models.DateField(null=True, blank=True)
-    ended_at = models.DateField(null=True, blank=True)
-    is_primary = models.BooleanField(default=False)
-
-    class Meta:
-        """Django model options for the affiliation source model."""
-
-        abstract = True
-        ordering = ("-is_primary", "organization_name", "sqid")
-        rebac_resource_type = "parties/affiliation"
-        rebac_id_attr = "sqid"
-
-    def __str__(self) -> str:
-        """Return the affiliation title/org for Django displays."""
-
-        return self.organization_name or self.title or str(self.organization_id)
 
 
 class Folder(SqidMixin, AuditMixin, AngeeModel):
@@ -543,10 +593,10 @@ class Circle(HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
         return self.name
 
 
-class CircleMember(SqidMixin, AuditMixin, AngeeModel):
+class CircleMember(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
     """A party's membership of one circle, scored like a :class:`PartyHandle` link.
 
-    Membership is confidence-bearing so a suggester (community detection, an
+    Membership is a :class:`ScoredLinkMixin` so a suggester (community detection, an
     org-domain rule, an LLM) can propose a weak membership for review instead of
     silently filing people; a human decision writes ``manual`` at full confidence.
     One row per ``(circle, party)`` — re-suggesting an existing membership updates
@@ -555,19 +605,6 @@ class CircleMember(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
     sqid_prefix = "cme_"
-
-    class MembershipSource(models.TextChoices):
-        """Where a circle membership came from.
-
-        Named distinctly from :class:`PartyHandle.Source` — enum class names
-        project as global GraphQL enum names, so they must be schema-unique.
-        """
-
-        MANUAL = "manual", "Manual"
-        IMPORT = "import", "Import"
-        LLM = "llm", "LLM"
-        COMMUNITY = "community", "Community"
-        RULE = "rule", "Rule"
 
     circle = models.ForeignKey(
         "parties.Circle",
@@ -579,11 +616,6 @@ class CircleMember(SqidMixin, AuditMixin, AngeeModel):
         on_delete=models.CASCADE,
         related_name="circle_members",
     )
-    confidence = models.FloatField(
-        default=1.0,
-        validators=(MinValueValidator(0.0), MaxValueValidator(1.0)),
-    )
-    source = StateField(choices_enum=MembershipSource, default=MembershipSource.MANUAL)
 
     class Meta:
         """Django model options for the circle-membership source model."""
@@ -634,6 +666,29 @@ class RelationshipKind(SqidMixin, AuditMixin, AngeeModel):
         GEOGRAPHICAL = "geographical", "Geographical"
         OTHER = "other", "Other"
 
+    class PartyKind(models.TextChoices):
+        """The concrete party kind an edge end must be for a kind to be legal.
+
+        ``any`` places no constraint; ``person`` / ``organization`` require that end
+        to be that concrete :class:`Party` child (employment kinds require an
+        organisation counterparty). Schema-unique class name — projects as a global
+        GraphQL enum.
+        """
+
+        PERSON = "person", "Person"
+        ORGANIZATION = "organization", "Organization"
+        ANY = "any", "Any"
+
+        def model(self) -> type[models.Model] | None:
+            """Return the explicitly mapped concrete party model for this kind."""
+
+            label = {
+                type(self).PERSON: "parties.Person",
+                type(self).ORGANIZATION: "parties.Organization",
+                type(self).ANY: None,
+            }[self]
+            return apps.get_model(label) if label is not None else None
+
     slug = models.SlugField(unique=True)
     name = models.CharField(max_length=128)
     """Anchor-side label: what the counterparty is *to the anchor* ("Mother")."""
@@ -642,6 +697,11 @@ class RelationshipKind(SqidMixin, AuditMixin, AngeeModel):
     """Counterparty-side label ("Child"); blank means the kind is symmetric."""
 
     category = StateField(choices_enum=RelationshipCategory, default=RelationshipCategory.OTHER)
+    party_kind = StateField(choices_enum=PartyKind, default=PartyKind.ANY)
+    """Concrete kind the anchor (:attr:`Relationship.party`) must be, or ``any``."""
+
+    other_party_kind = StateField(choices_enum=PartyKind, default=PartyKind.ANY)
+    """Concrete kind the counterparty (:attr:`Relationship.other_party`) must be, or ``any``."""
 
     class Meta:
         """Django model options for the relationship-kind catalogue."""
@@ -673,6 +733,61 @@ class RelationshipKind(SqidMixin, AuditMixin, AngeeModel):
 
         return self.name if outbound or self.is_symmetric else self.inverse_name
 
+    def validate_ends(self, party: Party | None, other_party: Party | None) -> None:
+        """Raise :class:`ValidationError` if an edge's ends violate this kind's legality.
+
+        The knowledge-level guard: an ``organization``-typed end must be a tracked
+        organisation-kind party, a ``person``-typed end a person-kind party. A
+        free-text (untracked) counterparty is unconstrained — its kind is unknown —
+        so an employment kind still records a person's employer by free-text name.
+        """
+
+        requirements = (
+            ("party", self.PartyKind(self.party_kind), party),
+            ("other_party", self.PartyKind(self.other_party_kind), other_party),
+        )
+        checked = tuple(
+            (field, required, end)
+            for field, required, end in requirements
+            if required != self.PartyKind.ANY and end is not None
+        )
+        if not checked:
+            return
+        relation_names: set[str] = set()
+        for _field, required, _end in checked:
+            model = required.model()
+            if model is not None:
+                relation_names.add(model._meta.model_name)
+        party_model = apps.get_model("parties", "Party")
+        concrete_by_pk = {
+            row["pk"]: row
+            for row in party_model._base_manager.filter(
+                pk__in={end.pk for _field, _required, end in checked}
+            ).values("pk", *sorted(relation_names))
+        }
+        errors: dict[str, str] = {}
+        for field, required, end in checked:
+            self._validate_end(field, required, end, concrete_by_pk, errors)
+        if errors:
+            raise ValidationError(errors)
+
+    def _validate_end(
+        self,
+        field: str,
+        required: PartyKind,
+        party: Party,
+        concrete_by_pk: dict[Any, dict[str, Any]],
+        errors: dict[str, str],
+    ) -> None:
+        """Add one end error using the shared concrete-kind query result."""
+
+        model = required.model()
+        if model is None:
+            return
+        row = concrete_by_pk.get(party.pk, {})
+        if row.get(model._meta.model_name) is None:
+            errors[field] = f"{self.name} requires {required} on this end."
+
 
 class Relationship(SqidMixin, AuditMixin, AngeeModel):
     """A typed edge from one party's viewpoint: the *other* is ``kind`` of ``party``.
@@ -682,11 +797,11 @@ class Relationship(SqidMixin, AuditMixin, AngeeModel):
     through :meth:`RelationshipKind.label_for` ("Child", "Mentee"). A single row
     carries both readings (Monica's Chandler shape — the mirror-row scheme was
     abandoned there for drifting). The counterparty is a tracked :class:`Party`
-    when known, falling back to free-text ``other_name`` — the
-    :class:`Affiliation` idiom — so a family-history relative who is not a
-    directory entry still records. Edges are time-bounded (party-model
-    ``from``/``thru``), so "was my colleague 2019–2022" stays queryable after it
-    ends; an open edge has no ``ended_at``.
+    when known, falling back to free-text ``other_name`` so a family-history
+    relative — or a person's employer parsed from a vCard — who is not a directory
+    entry still records. Edges are time-bounded (party-model ``from``/``thru``), so
+    "was my colleague 2019–2022" stays queryable after it ends; an open edge has no
+    ``ended_at``. ``title`` carries the vCard ``TITLE`` ("CTO", "Godmother of").
     """
 
     runtime = True
@@ -714,6 +829,12 @@ class Relationship(SqidMixin, AuditMixin, AngeeModel):
         on_delete=models.PROTECT,
         related_name="relationships",
     )
+    source = StateField(choices_enum=LinkSource, default=LinkSource.MANUAL)
+    """Provenance of the edge; sync-owned rows stay distinct from human rows."""
+
+    title = models.TextField(blank=True, default="")
+    """Role title on this edge — the vCard ``TITLE`` ("CTO", "Godmother of")."""
+
     started_at = models.DateField(null=True, blank=True)
     ended_at = models.DateField(null=True, blank=True)
     notes = models.TextField(blank=True, default="")
@@ -743,12 +864,36 @@ class Relationship(SqidMixin, AuditMixin, AngeeModel):
                 condition=models.Q(other_party__isnull=False) | ~models.Q(other_name=""),
                 name="ck_relationship_has_other",
             ),
+            models.UniqueConstraint(
+                fields=("party", "kind", "source"),
+                condition=models.Q(
+                    other_party__isnull=True,
+                    source=LinkSource.CARDDAV,
+                ),
+                name="uq_relationship_carddav_employment",
+            ),
         )
 
     def __str__(self) -> str:
         """Return a readable edge description for Django displays."""
 
         return f"{self.party_id}←{self.kind_id}: {self.other_name or self.other_party_id}"
+
+    def clean(self) -> None:
+        """Enforce the kind's end legality so the Hasura ``full_clean`` create path surfaces it."""
+
+        super().clean()
+        if self.kind_id is not None:
+            self.kind.validate_ends(self.party, self.other_party)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Persist the edge, validating ends only when the write can change them."""
+
+        update_fields = kwargs.get("update_fields")
+        end_fields = {"party", "party_id", "other_party", "other_party_id", "kind", "kind_id"}
+        if self.kind_id is not None and (update_fields is None or end_fields.intersection(update_fields)):
+            self.kind.validate_ends(self.party, self.other_party)
+        super().save(*args, **kwargs)
 
 
 class Directory(Bridge):
@@ -818,7 +963,11 @@ class Directory(Bridge):
             for parsed in backend.fetch_contacts(book):
                 if not parsed.uid:
                     continue  # no stable per-folder key → cannot upsert idempotently
-                party_model.objects.ingest_contact(parsed, folder=folder, owner_id=self.owner_id)
+                party_model.objects.ingest_contact(
+                    parsed,
+                    folder=folder,
+                    created_by_id=self.owner_id,
+                )
                 seen.add(parsed.uid)
                 resolved += 1
             party_model.objects.purge_missing(folder=folder, keep_uids=seen)

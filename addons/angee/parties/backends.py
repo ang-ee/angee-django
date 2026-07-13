@@ -74,7 +74,8 @@ class ParsedContact:
     idempotency key, so it must be stable across syncs. ``etag`` is the
     per-resource version (for change detection) and ``raw_vcard`` is kept for
     lossless round-trip. Emails/phones are ``(value, label, is_preferred)`` triples.
-    ``organization``/``department``/``title``/``role`` carry the affiliation;
+    ``organization``/``department``/``title``/``role`` carry the employment (the map
+    folds ``organization``/``title``/``role`` onto an ``employee`` ``Relationship``);
     ``birthday``/``anniversary`` are resolved dates; ``photo`` is the avatar.
     """
 

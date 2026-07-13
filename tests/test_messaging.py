@@ -66,6 +66,8 @@ from angee.parties.models import Directory as AbstractDirectory
 from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
 from angee.parties.models import Party as AbstractParty
+from angee.parties.models import PartyHandle as AbstractPartyHandle
+from angee.parties.models import Person as AbstractPerson
 from angee.parties.models import Relationship as AbstractRelationship
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
 from angee.social.models import MessagePublic, ThreadPublic
@@ -89,6 +91,9 @@ from tests.conftest import (
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent
 from tests.test_integrate_vcs import VCS_TEST_MODELS
+
+_PartyHandleMeta = getattr(AbstractPartyHandle, "Meta", object)
+_PersonMeta = getattr(AbstractPerson, "Meta", object)
 
 
 class Directory(Integration, AbstractDirectory):
@@ -140,6 +145,32 @@ class Handle(AbstractHandle):
         app_label = "parties"
         db_table = "test_parties_handle"
         rebac_resource_type = "parties/handle"
+        rebac_id_attr = "sqid"
+
+
+class Person(Party, AbstractPerson):
+    """Concrete person used when messaging attributes a user-owned handle."""
+
+    class Meta(_PersonMeta):
+        """Django model options for the canonical test person."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_person"
+        rebac_resource_type = "parties/person"
+        rebac_id_attr = "sqid"
+
+
+class PartyHandle(AbstractPartyHandle):
+    """Concrete identity link used when messaging attributes a user-owned handle."""
+
+    class Meta(_PartyHandleMeta):
+        """Django model options for the canonical test party-handle."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_party_handle"
+        rebac_resource_type = "parties/party_handle"
         rebac_id_attr = "sqid"
 
 
@@ -455,7 +486,9 @@ MESSAGING_TEST_MODELS = (
     Directory,
     Folder,
     Party,
+    Person,
     Handle,
+    PartyHandle,
     Circle,
     CircleMember,
     RelationshipKind,

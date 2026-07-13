@@ -9,6 +9,7 @@ login policy allows. Account-connect (no login) lives in ``integrate.connect``.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any, cast
@@ -27,9 +28,11 @@ from angee.integrate.models import AccountStatus
 from angee.integrate.oauth import flow
 from angee.integrate.oauth.errors import INVALID_ID_TOKEN, INVALID_STATE, OAuthFlowError
 from angee.integrate.oauth.state import StateFlow, StateRecord
+from angee.parties.mixins import LinkSource
 
 IDENTITY_RESOLUTION_FAILED = "identity_resolution_failed"
 SESSION_AUTH_BACKEND = "angee.iam.auth.ModelBackend"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,14 +78,25 @@ class OidcLoginCompletion:
         self.protocol = OAuthClientOidcProtocol(oauth_client)
 
     def complete_login(self, *, code: str, state_token: str, redirect_uri: str) -> LoginCompletion:
-        """Complete an OIDC login redirect and return the resolved user with claims."""
+        """Complete an OIDC login redirect and return the resolved user with claims.
+
+        The verified login is authoritative. Recording its email in parties is a
+        named best-effort exception: bookkeeping failures are logged and contained,
+        so they never reject an otherwise valid authentication.
+        """
 
         record = flow.consume_validated_state(
             self.oauth_client, state_token, redirect_uri, expected_flow=StateFlow.LOGIN
         )
         _tokens, claims = self._exchange_verify(code, state_token, redirect_uri, record)
         sub = self._required_sub(claims)
-        user = resolve(self.oauth_client, sub=sub, email=self._claim_email(claims), claims=claims)
+        email = self._claim_email(claims)
+        user = resolve(self.oauth_client, sub=sub, email=email, claims=claims)
+        if email and claims.get("email_verified") is True:
+            try:
+                _claim_login_handle(user, email, claims)
+            except Exception:
+                logger.exception("Could not record the verified OIDC email in parties")
         return LoginCompletion(user=user, claims=claims, next_path=record.next_path or "/")
 
     def complete_link(self, *, code: str, state_token: str, redirect_uri: str) -> LinkCompletion:
@@ -280,6 +294,25 @@ def resolve(oauth_client: Any, *, sub: str, email: str | None, claims: dict[str,
     """
 
     return OidcIdentityResolver(oauth_client).resolve(sub=sub, email=email, claims=claims)
+
+
+def _claim_login_handle(user: Any, email: str, claims: dict[str, Any]) -> None:
+    """Record the signed-in user's own email address as their own handle.
+
+    OIDC first login is the earliest Person-establishing path: the parties owner
+    ``Handle.objects.claim_own`` writes both the control fact (``Handle.owner``) and
+    the confirmed identity link to ``Person.objects.for_user(user)`` — so the login
+    address resolves to the user's own party.
+    """
+
+    handle_model = apps.get_model("parties", "Handle")
+    handle_model.objects.claim_own(
+        user,
+        platform=handle_model.Platform.EMAIL,
+        value=email,
+        source=LinkSource.OAUTH,
+        display_name=str(claims.get("name") or "").strip(),
+    )
 
 
 def complete_login(oauth_client: Any, *, code: str, state_token: str, redirect_uri: str) -> LoginCompletion:
