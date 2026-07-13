@@ -67,26 +67,24 @@ describe("refine resource metadata", () => {
   });
 
   test("resolves each model label exactly when derived type names collide across apps", () => {
-    // Regression: iam.Relationship (node name fallback → "RelationshipType")
-    // and parties.Relationship (node "PartyRelationshipType") both DERIVE
-    // "RelationshipType" from their labels. The label index must resolve each
-    // to its own resource — the convention fallback alone routed
-    // parties.Relationship queries to iam's tuple-browser roots.
+    // Regression: distinct model labels stay authoritative even when both model
+    // names are Relationship. Their GraphQL node/root names are deliberately
+    // disambiguated by the owning addons.
     const iamRelationships: DataResourceMetadata = {
       ...resource(),
       modelLabel: "iam.Relationship",
       appLabel: "iam",
       modelName: "Relationship",
-      roots: { ...resource().roots, list: "relationships" },
-      typeNames: {},
+      roots: { ...resource().roots, list: "rebac_relationships" },
+      typeNames: { node: "RebacRelationshipType" },
     };
     const partyRelationships: DataResourceMetadata = {
       ...resource(),
       modelLabel: "parties.Relationship",
       appLabel: "parties",
       modelName: "Relationship",
-      roots: { ...resource().roots, list: "party_relationships" },
-      typeNames: { node: "PartyRelationshipType" },
+      roots: { ...resource().roots, list: "relationships" },
+      typeNames: { node: "RelationshipType" },
     };
     const metadata = schemaFieldMetadataFromDataResources([
       iamRelationships,
