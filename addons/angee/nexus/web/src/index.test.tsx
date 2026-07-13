@@ -8,12 +8,16 @@ describe("nexus addon manifest", () => {
     expect(() => expectValidBaseAddon(nexus)).not.toThrow();
   });
 
-  test("registers the review page and the ties resource pages", () => {
+  test("registers only the ties resource pages", () => {
     expect((nexus.routes ?? []).map((route) => route.name)).toEqual([
-      "nexus.review",
       "nexus.ties",
       "nexus.ties.record",
     ]);
+  });
+
+  test("keeps only ties in the connections menu", () => {
+    const menu = (nexus.menus ?? []).find((item) => item.id === "nexus");
+    expect(menu?.children?.map((item) => item.route)).toEqual(["nexus.ties"]);
   });
 
   test("timeline chatter tab self-gates to party records", () => {

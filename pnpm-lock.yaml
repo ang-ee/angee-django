@@ -1127,6 +1127,9 @@ importers:
       '@angee/messaging-integrate-imap':
         specifier: workspace:*
         version: link:../../../addons/angee/messaging_integrate_imap/web
+      '@angee/nexus':
+        specifier: workspace:*
+        version: link:../../../addons/angee/nexus/web
       '@angee/operator':
         specifier: workspace:*
         version: link:../../../addons/angee/operator/web
@@ -1142,6 +1145,9 @@ importers:
       '@angee/storage':
         specifier: workspace:*
         version: link:../../../addons/angee/storage/web
+      '@angee/tags':
+        specifier: workspace:*
+        version: link:../../../addons/angee/tags/web
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../angee/web/ui

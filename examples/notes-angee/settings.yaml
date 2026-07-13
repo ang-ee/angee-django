@@ -16,9 +16,11 @@ INSTALLED_APPS:
   - angee.knowledge
   - angee.mcp
   - angee.operator
+  - angee.tags
   - angee.parties
   - angee.parties_integrate_carddav
   - angee.messaging
+  - angee.nexus
   - angee.messaging_integrate_imap
   - angee.social
   - angee.platform

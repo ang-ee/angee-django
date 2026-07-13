@@ -316,6 +316,7 @@ export function schemaFieldMetadataFromDataResources(
   const types: Record<string, ModelMetadata> = {};
   const labels: Record<string, ModelMetadata> = {};
   const seenModelLabels = new Set<string>();
+  const legacyTypeFallbacks: [string, ModelMetadata][] = [];
   for (const resource of resources) {
     if (seenModelLabels.has(resource.modelLabel)) {
       throw new Error(
@@ -348,19 +349,36 @@ export function schemaFieldMetadataFromDataResources(
     };
     types[typeName] = entry;
     labels[resource.modelLabel] = entry;
-    // Also index by the model-label-derived type name so `modelMetadataForLabel`
-    // resolves a resource whose node type does not follow the `<Model>Type`
-    // convention (e.g. a computed `hasura_pydantic_resource` named
-    // `PlatformAddonRow` for `platform.Addon`). The label is the lookup key the
-    // data view passes (`ListView resource="platform.Addon"`); the node name is a
-    // schema detail. The exact `labels` index above wins first — the derived
-    // name can collide across apps (`parties.Relationship` and
-    // `iam.Relationship` both derive "RelationshipType"), so it is only the
-    // legacy fallback for hand-built metadata without a label index.
     const labelTypeName = `${typeNameForModel(resource.modelLabel)}Type`;
-    if (labelTypeName !== typeName && !types[labelTypeName]) {
-      types[labelTypeName] = entry;
+    if (labelTypeName !== typeName) {
+      legacyTypeFallbacks.push([labelTypeName, entry]);
     }
+  }
+  // Also index by the model-label-derived type name so `modelMetadataForLabel`
+  // resolves a resource whose node type does not follow the `<Model>Type`
+  // convention (e.g. a computed `hasura_pydantic_resource` named
+  // `PlatformAddonRow` for `platform.Addon`). Declared node names are contracts:
+  // they register first, win over every fallback, and duplicate declarations
+  // fail above. These fallbacks are only a best-effort legacy affordance, so a
+  // fallback collision drops the ambiguous name instead of throwing; both
+  // resources remain available through their collision-free label index.
+  const declaredTypeNames = new Set(Object.keys(types));
+  const claimedFallbackNames = new Set<string>();
+  const ambiguousFallbackNames = new Set<string>();
+  for (const [typeName, entry] of legacyTypeFallbacks) {
+    if (
+      declaredTypeNames.has(typeName) ||
+      ambiguousFallbackNames.has(typeName)
+    ) {
+      continue;
+    }
+    if (claimedFallbackNames.has(typeName)) {
+      delete types[typeName];
+      ambiguousFallbackNames.add(typeName);
+      continue;
+    }
+    claimedFallbackNames.add(typeName);
+    types[typeName] = entry;
   }
   return {
     types,
@@ -379,10 +397,10 @@ export function modelMetadataForLabel(
   metadata: SchemaFieldMetadata,
   modelLabel: string,
 ): ModelMetadata | null {
-  // The label is the unique key (duplicate labels are a build error); the
-  // name-derived fallbacks below can cross apps ("parties.Relationship" and
-  // "iam.Relationship" both derive "RelationshipType") and exist only for
-  // hand-built metadata without a label index.
+  // The label is the unique key (duplicate labels are a build error); declared
+  // node names can differ from the model-label-derived fallback
+  // (`iam.Relationship` declares `RebacRelationshipType`), and those fallbacks
+  // exist only for hand-built metadata without a label index.
   const exact = metadata.labels?.[modelLabel];
   if (exact) return exact;
   const typeName = typeNameForModel(modelLabel);

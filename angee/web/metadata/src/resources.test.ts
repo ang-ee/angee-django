@@ -47,7 +47,7 @@ describe("refine resource metadata", () => {
     expect(mapped?.list).toBe("/notes");
   });
 
-  test("resolves a resource by model label even when its node type does not follow the <Model>Type convention", () => {
+  test("keeps a model-label fallback when no explicit node type claims it", () => {
     // A computed `hasura_pydantic_resource` names its node after the pydantic
     // class (`PlatformAddonRow`), not `<Model>Type`; the data view still resolves
     // it by the model label it passes to `useModelMetadata`.
@@ -64,33 +64,25 @@ describe("refine resource metadata", () => {
     );
     // The node type name stays addressable too (relation/aggregate joins use it).
     expect(metadata.types.PlatformAddonRow?.resource).toBe(computed);
+    expect(metadata.types.AddonType?.resource).toBe(computed);
   });
 
-  test("resolves each model label exactly when derived type names collide across apps", () => {
+  test("lets an explicit node type beat another model's label-derived fallback", () => {
     // Regression: distinct model labels stay authoritative even when both model
     // names are Relationship. Their GraphQL node/root names are deliberately
     // disambiguated by the owning addons.
-    const iamRelationships: DataResourceMetadata = {
-      ...resource(),
-      modelLabel: "iam.Relationship",
-      appLabel: "iam",
-      modelName: "Relationship",
-      roots: { ...resource().roots, list: "rebac_relationships" },
-      typeNames: { node: "RebacRelationshipType" },
-    };
-    const partyRelationships: DataResourceMetadata = {
-      ...resource(),
-      modelLabel: "parties.Relationship",
-      appLabel: "parties",
-      modelName: "Relationship",
-      roots: { ...resource().roots, list: "relationships" },
-      typeNames: { node: "RelationshipType" },
-    };
+    const { iamRelationships, partyRelationships } = relationshipResources();
     const metadata = schemaFieldMetadataFromDataResources([
       iamRelationships,
       partyRelationships,
     ]);
 
+    expect(metadata.types.RebacRelationshipType?.resource).toBe(
+      iamRelationships,
+    );
+    expect(metadata.types.RelationshipType?.resource).toBe(
+      partyRelationships,
+    );
     expect(modelMetadataForLabel(metadata, "iam.Relationship")?.resource).toBe(
       iamRelationships,
     );
@@ -98,7 +90,76 @@ describe("refine resource metadata", () => {
       modelMetadataForLabel(metadata, "parties.Relationship")?.resource,
     ).toBe(partyRelationships);
   });
+
+  test("keeps explicit-over-fallback resolution independent of resource order", () => {
+    const { iamRelationships, partyRelationships } = relationshipResources();
+    const metadata = schemaFieldMetadataFromDataResources([
+      partyRelationships,
+      iamRelationships,
+    ]);
+
+    expect(metadata.types.RebacRelationshipType?.resource).toBe(
+      iamRelationships,
+    );
+    expect(metadata.types.RelationshipType?.resource).toBe(
+      partyRelationships,
+    );
+    expect(modelMetadataForLabel(metadata, "iam.Relationship")?.resource).toBe(
+      iamRelationships,
+    );
+    expect(
+      modelMetadataForLabel(metadata, "parties.Relationship")?.resource,
+    ).toBe(partyRelationships);
+  });
+
+  test("drops a name claimed by two model-label-derived fallbacks", () => {
+    const { iamRelationships } = relationshipResources();
+    const crmRelationships: DataResourceMetadata = {
+      ...resource(),
+      modelLabel: "crm.Relationship",
+      appLabel: "crm",
+      modelName: "Relationship",
+      roots: { ...resource().roots, list: "crm_relationships" },
+      typeNames: { node: "CrmRelationshipType" },
+    };
+    const metadata = schemaFieldMetadataFromDataResources([
+      iamRelationships,
+      crmRelationships,
+    ]);
+
+    expect(metadata.types.RelationshipType).toBeUndefined();
+    expect(modelMetadataForLabel(metadata, "iam.Relationship")?.resource).toBe(
+      iamRelationships,
+    );
+    expect(modelMetadataForLabel(metadata, "crm.Relationship")?.resource).toBe(
+      crmRelationships,
+    );
+  });
 });
+
+function relationshipResources(): {
+  iamRelationships: DataResourceMetadata;
+  partyRelationships: DataResourceMetadata;
+} {
+  return {
+    iamRelationships: {
+      ...resource(),
+      modelLabel: "iam.Relationship",
+      appLabel: "iam",
+      modelName: "Relationship",
+      roots: { ...resource().roots, list: "rebac_relationships" },
+      typeNames: { node: "RebacRelationshipType" },
+    },
+    partyRelationships: {
+      ...resource(),
+      modelLabel: "parties.Relationship",
+      appLabel: "parties",
+      modelName: "Relationship",
+      roots: { ...resource().roots, list: "relationships" },
+      typeNames: { node: "RelationshipType" },
+    },
+  };
+}
 
 function resource(): DataResourceMetadata {
   return {

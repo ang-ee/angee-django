@@ -1,11 +1,21 @@
 import * as React from "react";
-import { useAuthoredMutation } from "@angee/refine";
-import { Button, Glyph, ListView, Tag, type ListColumn, type RecordPanelContext, type StringIdRow } from "@angee/ui";
+import {
+  Button,
+  Glyph,
+  ListView,
+  Tag,
+  type ListColumn,
+  type RecordPanelContext,
+  type StringIdRow,
+  useAuthoredResourceMutation,
+} from "@angee/ui";
 
-import { ConfirmPartyHandle, DismissPartyHandle } from "./documents";
+import {
+  ConfirmPartyHandle,
+  DismissPartyHandle,
+  PARTY_HANDLE_DECISION_INVALIDATES,
+} from "./documents";
 import { usePartiesT } from "./i18n";
-
-const INVALIDATES = ["parties.PartyHandle", "parties.Handle", "parties.Party", "parties.Person"];
 
 type LinkRow = StringIdRow & {
   confidence?: number;
@@ -27,12 +37,14 @@ function linkState(row: LinkRow, t: ReturnType<typeof usePartiesT>): React.React
  */
 export function IdentityTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = usePartiesT();
-  const [confirm, { fetching: confirming }] = useAuthoredMutation(ConfirmPartyHandle, {
-    invalidateModels: INVALIDATES,
-  });
-  const [dismiss, { fetching: dismissing }] = useAuthoredMutation(DismissPartyHandle, {
-    invalidateModels: INVALIDATES,
-  });
+  const [confirm, { fetching: confirming }] = useAuthoredResourceMutation(
+    ConfirmPartyHandle,
+    { invalidateModels: PARTY_HANDLE_DECISION_INVALIDATES },
+  );
+  const [dismiss, { fetching: dismissing }] = useAuthoredResourceMutation(
+    DismissPartyHandle,
+    { invalidateModels: PARTY_HANDLE_DECISION_INVALIDATES },
+  );
   const busy = confirming || dismissing;
 
   const columns = React.useMemo<readonly ListColumn<LinkRow>[]>(
@@ -48,7 +60,9 @@ export function IdentityTab({ recordId }: RecordPanelContext): React.ReactElemen
       },
       {
         field: "id",
-        header: "",
+        header: t("review.actions"),
+        headerVisuallyHidden: true,
+        sortable: false,
         align: "right",
         render: (row) => (
           <span className="inline-flex gap-1">
