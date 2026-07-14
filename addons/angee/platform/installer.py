@@ -1,9 +1,10 @@
-"""The ``AddonInstaller`` seam — the one writer of ``settings.yaml``'s ``INSTALLED_APPS``.
+"""The ``AddonInstaller`` seam — the writer of project addon install manifests.
 
 Installing an addon = adding its root to ``settings.yaml`` ``INSTALLED_APPS`` and
-rebuilding; uninstalling = removing it. ``settings.yaml`` stays the boot source
-(no DB-driven settings-load): this module owns the *edit* of that one file, and the
-next compose reads it.
+adding its frontend package to the host ``web/package.json`` when the addon declares
+one; uninstalling = removing the backend root. ``settings.yaml`` stays the boot
+source (no DB-driven settings-load): this module owns the install-time project
+manifest edits, and the next compose reads them.
 
 The split mirrors an ``ImplClassField`` registry (``VcsBridge.backend_class`` /
 ``ANGEE_VCS_BACKEND_CLASSES``), in its row-less variant — there is no per-row choice,
@@ -11,7 +12,9 @@ it is a per-deployment one, so the selection is a settings key resolved against 
 registry rather than a model column:
 
 - :class:`AddonInstaller` owns all YAML logic — the comment-preserving
-  ``ruamel.yaml`` round-trip read → edit ``INSTALLED_APPS`` → write → request rebuild.
+  ``ruamel.yaml`` round-trip read → edit ``INSTALLED_APPS`` → write — and the small
+  JSON edit that keeps the host web dependencies aligned with enabled addon
+  contracts.
 - :class:`AddonInstallerBackend` is pure transport — it only moves the settings bytes
   and asks for a rebuild. ``local`` (the dev stub, defined here) edits the local
   ``settings.yaml`` and treats rebuild as a pending no-op (the addon composes on the
@@ -31,8 +34,10 @@ deployment flips the key to ``operator``. :func:`register_checks` binds a
 from __future__ import annotations
 
 import io
+import json
 from collections.abc import Mapping, MutableMapping, MutableSequence
 from dataclasses import dataclass
+from json import JSONDecodeError
 from pathlib import Path
 from typing import Any, ClassVar, cast
 
@@ -47,6 +52,8 @@ from angee.fs import write_atomic
 
 _INSTALLED_APPS_KEY = "INSTALLED_APPS"
 _SETTINGS_FILENAME = "settings.yaml"
+_WEB_PACKAGE_JSON = Path("web/package.json")
+_WEB_DEPENDENCY_VERSION = "workspace:*"
 _BACKEND_SETTING = "ANGEE_ADDON_INSTALLER_BACKEND"
 _REGISTRY_SETTING = "ANGEE_ADDON_INSTALLER_BACKEND_CLASSES"
 
@@ -70,6 +77,16 @@ class AddonInstallerBackend:
         """Write the edited ``settings.yaml`` text back to its source."""
 
         raise NotImplementedError
+
+    def read_web_package_json_text(self) -> str:
+        """Return the host web package manifest text."""
+
+        raise FileNotFoundError("web/package.json is not configured for this project.")
+
+    def write_web_package_json_text(self, text: str) -> None:
+        """Write the edited host web package manifest text back to its source."""
+
+        raise FileNotFoundError("web/package.json is not configured for this project.")
 
     def request_rebuild(self) -> str:
         """Trigger a rebuild/restart and return a short status marker."""
@@ -97,6 +114,16 @@ class LocalInstallerBackend(AddonInstallerBackend):
 
         write_atomic(self._settings_path(), text)
 
+    def read_web_package_json_text(self) -> str:
+        """Return the host web package manifest beside the local project."""
+
+        return self._project_path(_WEB_PACKAGE_JSON).read_text(encoding="utf-8")
+
+    def write_web_package_json_text(self, text: str) -> None:
+        """Write the host web package manifest atomically."""
+
+        write_atomic(self._project_path(_WEB_PACKAGE_JSON), text)
+
     def request_rebuild(self) -> str:
         """Mark the rebuild pending — the addon composes on the next ``angee dev`` boot."""
 
@@ -105,10 +132,15 @@ class LocalInstallerBackend(AddonInstallerBackend):
     def _settings_path(self) -> Path:
         """Return the project ``settings.yaml`` path, or raise when none is configured."""
 
+        return self._project_path(_SETTINGS_FILENAME)
+
+    def _project_path(self, relative_path: str | Path) -> Path:
+        """Return a path under the editable project root."""
+
         base_dir = getattr(settings, "BASE_DIR", None)
         if not base_dir:
-            raise FileNotFoundError("settings.BASE_DIR is not configured; no settings.yaml to edit.")
-        return Path(base_dir) / _SETTINGS_FILENAME
+            raise FileNotFoundError("settings.BASE_DIR is not configured; no project files to edit.")
+        return Path(base_dir) / relative_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,7 +237,7 @@ class AddonInstaller:
             return ()
         return tuple(str(name) for name in apps)
 
-    def install(self, name: str) -> InstallResult:
+    def install(self, name: str, *, web_package: str | None = None) -> InstallResult:
         """Add ``name`` to ``INSTALLED_APPS`` (idempotent), then request a rebuild.
 
         Degrades to a clear refusal when the backend cannot reach an editable
@@ -217,6 +249,10 @@ class AddonInstaller:
             data, apps = self._load_apps()
         except (FileNotFoundError, NotImplementedError) as error:
             return InstallResult.refusal(name, "install", _transport_unavailable(error))
+        try:
+            self._ensure_web_dependency(name, web_package)
+        except (FileNotFoundError, NotImplementedError, ImproperlyConfigured) as error:
+            return InstallResult.refusal(name, "install", str(error))
         already = name in apps
         if not already:
             apps.append(name)
@@ -261,6 +297,49 @@ class AddonInstaller:
         stream = io.StringIO()
         self._yaml.dump(data, stream)
         self.backend.write_settings_text(stream.getvalue())
+
+    def _ensure_web_dependency(self, addon: str, package: str | None) -> None:
+        """Ensure the host web manifest depends on ``package`` declared by ``addon``."""
+
+        if package is None:
+            return
+        try:
+            data = json.loads(self.backend.read_web_package_json_text())
+        except (FileNotFoundError, NotImplementedError) as error:
+            raise ImproperlyConfigured(
+                f"{addon} declares frontend package {package}, but {_WEB_PACKAGE_JSON} could not be read: {error}"
+            ) from error
+        except JSONDecodeError as error:
+            raise ImproperlyConfigured(f"{_WEB_PACKAGE_JSON} is not valid JSON: {error}") from error
+        if not isinstance(data, MutableMapping):
+            raise ImproperlyConfigured(f"{_WEB_PACKAGE_JSON} must contain a JSON object.")
+        raw_dependencies = data.get("dependencies")
+        if raw_dependencies is None:
+            dependencies: dict[str, Any] = {}
+            _insert_manifest_key(data, "dependencies", dependencies, before="devDependencies")
+        elif isinstance(raw_dependencies, MutableMapping):
+            dependencies = dict(raw_dependencies)
+        else:
+            raise ImproperlyConfigured(f"dependencies in {_WEB_PACKAGE_JSON} must be a JSON object.")
+        if package in dependencies:
+            return
+        dependencies[package] = _WEB_DEPENDENCY_VERSION
+        data["dependencies"] = {key: dependencies[key] for key in sorted(dependencies)}
+        self.backend.write_web_package_json_text(json.dumps(data, indent=2) + "\n")
+
+
+def _insert_manifest_key(data: MutableMapping[str, Any], key: str, value: Any, *, before: str) -> None:
+    """Insert ``key`` before ``before`` in a JSON object when that anchor exists."""
+
+    if before not in data:
+        data[key] = value
+        return
+    items = list(data.items())
+    data.clear()
+    for existing_key, existing_value in items:
+        if existing_key == before:
+            data[key] = value
+        data[existing_key] = existing_value
 
 
 def _transport_unavailable(error: Exception) -> str:

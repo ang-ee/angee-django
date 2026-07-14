@@ -37,6 +37,8 @@ const options = parseOptions(process.argv.slice(2));
 const webRoot = resolveFromCwd(options["web-root"] ?? ".");
 const runtimeDir = resolveFromCwd(options.runtime ?? "../runtime");
 const manifest = readManifest(runtimeDir);
+const addonPackages = addonPackagesFor(manifest);
+preflightAddonPackages(webRoot, addonPackages);
 const externalEntries = Array.isArray(manifest.codegen) ? manifest.codegen : [];
 const djangoSchemas = schemaNamesFor(runtimeDir);
 const documentRoots = documentRootsFor(webRoot, manifest);
@@ -55,7 +57,7 @@ for (const entry of externalEntries) {
   const documents = documentRoots.map((root) => `${root}/**/${entry.documents}`);
   await runCodegen(entry.schema, schemaPath, runtimeDir, documents, entry.types === true);
 }
-emitAppModule(runtimeDir, webRoot, manifest, djangoSchemas);
+emitAppModule(runtimeDir, webRoot, addonPackages, djangoSchemas);
 
 function parseOptions(args) {
   const parsed = {};
@@ -91,6 +93,46 @@ function readManifest(runtimeDir) {
   return manifest;
 }
 
+function addonPackagesFor(manifest) {
+  return Array.isArray(manifest.addonPackages) ? manifest.addonPackages : [];
+}
+
+function preflightAddonPackages(webRoot, addonPackages) {
+  if (addonPackages.length === 0) return;
+  const packageJsonPath = path.join(webRoot, "package.json");
+  if (!existsSync(packageJsonPath)) {
+    throw new Error(`Missing host web package manifest: ${packageJsonPath}`);
+  }
+  const hostPackage = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+  const dependencies =
+    hostPackage?.dependencies &&
+    typeof hostPackage.dependencies === "object" &&
+    !Array.isArray(hostPackage.dependencies)
+      ? hostPackage.dependencies
+      : {};
+  for (const pkg of addonPackages) {
+    if (!pkg || typeof pkg.package !== "string" || pkg.package.length === 0) {
+      continue;
+    }
+    if (!Object.hasOwn(dependencies, pkg.package)) {
+      throw new Error(
+        `${addonNameFor(pkg)} declares frontend package ${pkg.package}, ` +
+          `but it is missing from ${packageJsonPath}`,
+      );
+    }
+  }
+  for (const pkg of addonPackages) {
+    const entryBase = addonEntryBase(webRoot, pkg);
+    if (!addonEntryExtension(entryBase)) {
+      throw new Error(
+        `${addonNameFor(pkg)} declares frontend package ${pkg.package}, ` +
+          `but it cannot be resolved from ${path.join(webRoot, "node_modules", pkg.package)}. ` +
+          `Expected ${entryBase}.{ts,tsx,js,jsx}; run pnpm install.`,
+      );
+    }
+  }
+}
+
 function schemaNamesFor(runtimeDir) {
   // The SDL on disk is the source of truth for which schemas exist: the Django
   // `schema` command emits `runtime/schemas/<name>.graphql`, and external owners
@@ -121,8 +163,7 @@ function schemaIsLive(sdlPath) {
   return buildSchema(readFileSync(sdlPath, "utf8")).getSubscriptionType() != null;
 }
 
-function emitAppModule(runtimeDir, webRoot, manifest, schemaNames) {
-  const addonPackages = Array.isArray(manifest.addonPackages) ? manifest.addonPackages : [];
+function emitAppModule(runtimeDir, webRoot, addonPackages, schemaNames) {
   // `runtime/web/app.ts` lives outside the web package's module-resolution
   // scope, so addon packages are imported by their on-disk entry under the web
   // package's node_modules. The path is derived from the real --web-root (not a
@@ -172,15 +213,33 @@ function emitAppModule(runtimeDir, webRoot, manifest, schemaNames) {
 }
 
 function addonEntryImport(webRoot, webRel, pkg) {
-  const sourceRoot = typeof pkg.sourceRoot === "string" ? pkg.sourceRoot : "src";
-  const entryBase = path.join(webRoot, "node_modules", pkg.package, sourceRoot, "index");
-  const extension = ADDON_ENTRY_EXTENSIONS.find((candidate) => existsSync(`${entryBase}${candidate}`));
+  const entryBase = addonEntryBase(webRoot, pkg);
+  const extension = addonEntryExtension(entryBase);
   if (!extension) {
     throw new Error(
-      `Missing web addon entry for ${pkg.package}: expected ${entryBase}.{ts,tsx,js,jsx}`,
+      `${addonNameFor(pkg)} declares frontend package ${pkg.package}, ` +
+        `but it cannot be resolved from ${path.join(webRoot, "node_modules", pkg.package)}. ` +
+        `Expected ${entryBase}.{ts,tsx,js,jsx}; run pnpm install.`,
     );
   }
-  return `${webRel}/node_modules/${pkg.package}/${sourceRoot}/index${extension}`;
+  return `${webRel}/node_modules/${pkg.package}/${sourceRootFor(pkg)}/index${extension}`;
+}
+
+function addonEntryBase(webRoot, pkg) {
+  return path.join(webRoot, "node_modules", pkg.package, sourceRootFor(pkg), "index");
+}
+
+function addonEntryExtension(entryBase) {
+  return ADDON_ENTRY_EXTENSIONS.find((candidate) => existsSync(`${entryBase}${candidate}`));
+}
+
+function sourceRootFor(pkg) {
+  const sourceRoot = typeof pkg.sourceRoot === "string" ? pkg.sourceRoot : "src";
+  return sourceRoot;
+}
+
+function addonNameFor(pkg) {
+  return typeof pkg.app === "string" && pkg.app.length > 0 ? pkg.app : "An enabled addon";
 }
 
 async function runCodegen(name, schemaPath, runtimeDir, documents, types) {

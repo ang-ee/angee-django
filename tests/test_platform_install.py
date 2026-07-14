@@ -16,6 +16,7 @@ reflection table the way the composed console does:
 from __future__ import annotations
 
 import importlib
+import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -113,6 +114,7 @@ def test_install_is_idempotent_for_an_already_listed_root(
     """Installing a root already in ``INSTALLED_APPS`` reports the no-op, file unchanged."""
 
     del platform_tables
+    _write_web_package_json(project_settings_yaml.parent, dependencies={"@angee/platform": "workspace:*"})
     admin = _platform_admin("install-idempotent-admin")
     before = project_settings_yaml.read_text(encoding="utf-8")
 
@@ -121,6 +123,28 @@ def test_install_is_idempotent_for_an_already_listed_root(
     assert result["ok"] is True
     assert "already installed" in result["message"]
     assert project_settings_yaml.read_text(encoding="utf-8") == before
+
+
+def test_install_adds_declared_frontend_package_dependency(
+    platform_tables: None,
+    project_settings_yaml: Path,
+    settings: Any,
+) -> None:
+    """Installing an addon with a web package wires the host web dependency too."""
+
+    del platform_tables
+    addon_dir = _write_available_addon(project_settings_yaml.parent, "example.billing", web_package="@example/billing")
+    settings.ANGEE_ADDON_DIRS = (addon_dir.parent.parent,)
+    web_package_json = _write_web_package_json(project_settings_yaml.parent, dependencies={"@angee/app": "workspace:*"})
+    admin = _platform_admin("install-web-addon-admin")
+
+    result = _data(_execute(_schema(), _INSTALL, {"addon": "example.billing"}, user=admin))["install"]
+
+    assert result["ok"] is True
+    assert "example.billing" in project_settings_yaml.read_text(encoding="utf-8")
+    host_package = json.loads(web_package_json.read_text(encoding="utf-8"))
+    assert host_package["dependencies"]["@example/billing"] == "workspace:*"
+    assert host_package["dependencies"]["@angee/app"] == "workspace:*"
 
 
 def test_install_refuses_a_non_materialised_addon(
@@ -216,6 +240,29 @@ def _execute(schema: Any, query: str, variables: dict[str, Any] | None = None, *
     request = RequestFactory().post("/graphql/console/")
     request.user = user or AnonymousUser()
     return execute_schema(schema, query, variables, request=request)
+
+
+def _write_available_addon(base_dir: Path, name: str, *, web_package: str | None = None) -> Path:
+    """Write a local available addon manifest under ``base_dir/addons``."""
+
+    addon_dir = base_dir / "addons" / Path(*name.split("."))
+    addon_dir.mkdir(parents=True)
+    (addon_dir / "addon.toml").write_text(f'[addon]\nname = "{name}"\n', encoding="utf-8")
+    if web_package is not None:
+        web_dir = addon_dir / "web"
+        web_dir.mkdir()
+        (web_dir / "package.json").write_text(json.dumps({"name": web_package}), encoding="utf-8")
+    return addon_dir
+
+
+def _write_web_package_json(base_dir: Path, *, dependencies: dict[str, str]) -> Path:
+    """Write the host web package manifest the installer mutates."""
+
+    web_dir = base_dir / "web"
+    web_dir.mkdir()
+    path = web_dir / "package.json"
+    path.write_text(json.dumps({"name": "@example/host", "dependencies": dependencies}), encoding="utf-8")
+    return path
 
 
 def _platform_admin(username: str) -> Any:

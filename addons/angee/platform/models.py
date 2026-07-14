@@ -48,14 +48,17 @@ class AddonManager(AngeeManager):
         """
 
         with system_context(reason="platform.addon.install"):
-            if name not in available_addons(getattr(settings, "ANGEE_ADDON_DIRS", ())):
+            available = available_addons(getattr(settings, "ANGEE_ADDON_DIRS", ()))
+            ref = available.get(name)
+            if ref is None:
                 return InstallResult.refusal(
                     name,
                     "install",
                     f"{name} is not available to install — no installed bundle or local addon provides it. "
                     "A marketplace addon must be materialised from its source first.",
                 )
-            result = addon_installer().install(name)
+            contract = ref.contract()
+            result = addon_installer().install(name, web_package=contract.web if contract is not None else None)
             if result.ok:
                 self.reconcile_from_registry(router.db_for_write(self.model))
         return result
