@@ -20,7 +20,6 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from rebac import system_context
-from rebac.managers import RebacManager
 
 from angee.base.mixins import HierarchyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
@@ -34,7 +33,7 @@ class CircleQuerySet(HierarchyQuerySet, AngeeQuerySet):
     """Circle read scopes: the hierarchy subtree vocabulary over the Angee base."""
 
 
-class CircleManager(RebacManager.from_queryset(CircleQuerySet)):  # type: ignore[misc]
+class CircleManager(AngeeManager.from_queryset(CircleQuerySet)):  # type: ignore[misc]
     """Manager for circles — subtree scopes ride in through :class:`CircleQuerySet`."""
 
 

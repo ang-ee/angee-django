@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from rebac.managers import RebacManager
-
 from angee.base.mixins import HierarchyQuerySet
-from angee.base.models import AngeeQuerySet
+from angee.base.models import AngeeManager, AngeeQuerySet
 
 
 class GroupQuerySet(HierarchyQuerySet, AngeeQuerySet):
     """Group read scopes with hierarchy subtree and ancestor traversal."""
 
 
-class GroupManager(RebacManager.from_queryset(GroupQuerySet)):  # type: ignore[misc]
+class GroupManager(AngeeManager.from_queryset(GroupQuerySet)):  # type: ignore[misc]
     """Manager for unscoped shared group trees."""

@@ -828,3 +828,56 @@ def result_data(result: Any) -> dict[str, Any]:
     assert result.errors is None, result.errors
     assert result.data is not None
     return cast(dict[str, Any], result.data)
+
+
+def assert_private_hasura_insert_access(
+    schema: Any,
+    *,
+    creator: Any,
+    outsider: Any,
+    create_mutation: str,
+    create_root: str,
+    detail_query: str,
+    detail_root: str,
+    update_mutation: str,
+    update_root: str,
+    create_variables: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Execute and assert the private-row create/read/write/denied-read contract."""
+
+    assert not creator.is_superuser
+    created = result_data(
+        execute_schema(
+            schema,
+            create_mutation,
+            create_variables,
+            user=creator,
+        )
+    )[create_root]
+    variables = {"id": created["id"]}
+    readable = result_data(
+        execute_schema(
+            schema,
+            detail_query,
+            variables,
+            user=creator,
+        )
+    )[detail_root]
+    updated = result_data(
+        execute_schema(
+            schema,
+            update_mutation,
+            variables,
+            user=creator,
+        )
+    )[update_root]
+    denied = result_data(
+        execute_schema(
+            schema,
+            detail_query,
+            variables,
+            user=outsider,
+        )
+    )[detail_root]
+    assert denied is None
+    return created, readable, updated

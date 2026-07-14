@@ -20,11 +20,13 @@ from tests.conftest import (
     INTEGRATE_TEST_MODELS,
     SchemaAddon,
     _create_missing_tables,
+    assert_private_hasura_insert_access,
     execute_schema,
 )
 from tests.conftest import result_data as _data
 
 Address = messaging_models.Address
+Circle = messaging_models.Circle
 Organization = messaging_models.Organization
 Person = messaging_models.Person
 PartyHandle = messaging_models.PartyHandle
@@ -41,6 +43,7 @@ PARTIES_TEST_MODELS = (
     Organization,
     messaging_models.Handle,
     Address,
+    Circle,
 )
 
 
@@ -264,6 +267,50 @@ def test_person_hasura_insert_and_update(parties_tables: None) -> None:
         person = Person.objects.get(sqid=created["id"])
     assert person.display_name == "Ada"
     assert person.family_name == "Lovelace"
+
+
+def test_circle_console_insert_establishes_private_creator_access(
+    parties_tables: None,
+) -> None:
+    """A non-admin creator can create/read/write its private circle; an outsider cannot read it."""
+
+    del parties_tables
+    creator = User.objects.create_user(username="circle-creator")
+    outsider = User.objects.create_user(username="circle-outsider")
+    schema = _schema("console")
+
+    created, readable, updated = assert_private_hasura_insert_access(
+        schema,
+        creator=creator,
+        outsider=outsider,
+        create_mutation="""
+            mutation CreateCircle {
+              insert_circles_one(object: {name: "Friends"}) {
+                id
+                name
+              }
+            }
+            """,
+        create_root="insert_circles_one",
+        detail_query="""
+            query Circle($id: String!) {
+              circles_by_pk(id: $id) { id name description }
+            }
+            """,
+        detail_root="circles_by_pk",
+        update_mutation="""
+            mutation UpdateCircle($id: String!) {
+              update_circles_by_pk(
+                pk_columns: {id: $id}
+                _set: {description: "Creator write"}
+              ) { id description }
+            }
+            """,
+        update_root="update_circles_by_pk",
+    )
+    assert created["name"] == "Friends"
+    assert readable == {"id": created["id"], "name": "Friends", "description": ""}
+    assert updated == {"id": created["id"], "description": "Creator write"}
 
 
 @pytest.fixture()

@@ -28,6 +28,7 @@ from tests.conftest import (
     SchemaAddon,
     _clear_model_tables,
     _create_missing_tables,
+    assert_private_hasura_insert_access,
     execute_schema,
 )
 from tests.conftest import result_data as _data
@@ -519,6 +520,54 @@ def test_cadence_create_binds_the_authenticated_user(nexus_tables: None) -> None
     assert created["cadence_days"] == 10
     assert cadence.user_id == viewer.pk
     assert cadence.party_id == party.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_cadence_console_insert_establishes_private_creator_access(
+    nexus_tables: None,
+) -> None:
+    """A non-admin can create/read/write its cadence; an unrelated user cannot read it."""
+
+    del nexus_tables
+    creator = User.objects.create_user(username="cadence-private-creator")
+    outsider = User.objects.create_user(username="cadence-private-outsider")
+    with system_context(reason="test nexus private cadence seed"):
+        party = Party._base_manager.create(display_name="Party", created_by=creator)
+    schema = _schema()
+
+    created, readable, updated = assert_private_hasura_insert_access(
+        schema,
+        creator=creator,
+        outsider=outsider,
+        create_mutation="""
+            mutation CreateCadence($party: ID!) {
+              insert_cadences_one(object: {party: $party, cadence_days: 10}) {
+                id
+                cadence_days
+              }
+            }
+            """,
+        create_root="insert_cadences_one",
+        create_variables={"party": party.sqid},
+        detail_query="""
+            query Cadence($id: String!) {
+              cadences_by_pk(id: $id) { id cadence_days }
+            }
+            """,
+        detail_root="cadences_by_pk",
+        update_mutation="""
+            mutation UpdateCadence($id: String!) {
+              update_cadences_by_pk(
+                pk_columns: {id: $id}
+                _set: {cadence_days: 21}
+              ) { id cadence_days }
+            }
+            """,
+        update_root="update_cadences_by_pk",
+    )
+    assert created["cadence_days"] == 10
+    assert readable == {"id": created["id"], "cadence_days": 10}
+    assert updated == {"id": created["id"], "cadence_days": 21}
 
 
 @pytest.mark.django_db(transaction=True)

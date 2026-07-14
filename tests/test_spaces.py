@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -21,10 +22,23 @@ from angee.compose.permissions import (
     render_zed,
 )
 from angee.fs import write_atomic
-from tests.conftest import _clear_model_tables, _create_missing_tables, create_user
+from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from tests import test_messaging_graphql
+from tests.conftest import (
+    SchemaAddon,
+    _clear_model_tables,
+    _create_missing_tables,
+    assert_private_hasura_insert_access,
+    create_user,
+)
 from tests.spaces_models import Group, Membership
 from tests.test_messaging import Party, Person, Thread
 
+# These concrete test models register after Django's app population. The lazy
+# string relation resolves when ``Party`` registers, but Django may already have
+# cached ``related_model`` while the source models were inspected during setup.
+Membership._meta.get_field("party").__dict__.pop("related_model", None)
+spaces_schema = importlib.import_module("angee.spaces.schema")
 SPACES_TEST_MODELS = (Party, Person, Group, Membership, Thread)
 
 
@@ -104,6 +118,125 @@ def _person_for(username: str) -> tuple[Any, Person]:
     with system_context(reason="spaces test identity"):
         person = Person.objects.for_user(user)
     return user, person
+
+
+def _schema() -> Any:
+    """Build the composed console schema used by spaces."""
+
+    modules = (
+        test_messaging_graphql.parties_schema,
+        test_messaging_graphql.messaging_schema,
+        spaces_schema,
+    )
+    addons = [
+        SchemaAddon(
+            {
+                "console": {
+                    key: tuple(module.schemas["console"].get(key, ()))
+                    for key in SCHEMA_PART_KEYS
+                }
+            }
+        )
+        for module in modules
+    ]
+    return GraphQLSchemas(addons).build("console")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_group_console_insert_establishes_private_creator_access(
+    spaces_tables: None,
+) -> None:
+    """A non-admin creator can create/read/write its private group; an outsider cannot read it."""
+
+    del spaces_tables
+    creator = create_user("spaces-group-creator")
+    outsider = create_user("spaces-group-outsider")
+    schema = _schema()
+
+    created, readable, updated = assert_private_hasura_insert_access(
+        schema,
+        creator=creator,
+        outsider=outsider,
+        create_mutation="""
+            mutation CreateGroup {
+              insert_space_groups_one(object: {name: "Private", slug: "private"}) {
+                id
+                name
+              }
+            }
+            """,
+        create_root="insert_space_groups_one",
+        detail_query="""
+            query Group($id: String!) {
+              space_groups_by_pk(id: $id) { id name description }
+            }
+            """,
+        detail_root="space_groups_by_pk",
+        update_mutation="""
+            mutation UpdateGroup($id: String!) {
+              update_space_groups_by_pk(
+                pk_columns: {id: $id}
+                _set: {description: "Creator write"}
+              ) { id description }
+            }
+            """,
+        update_root="update_space_groups_by_pk",
+    )
+    assert created["name"] == "Private"
+    assert readable == {"id": created["id"], "name": "Private", "description": ""}
+    assert updated == {"id": created["id"], "description": "Creator write"}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_membership_console_insert_inherits_group_creator_access(
+    spaces_tables: None,
+) -> None:
+    """A non-admin can create/read/write its group membership; an outsider cannot read it."""
+
+    del spaces_tables
+    creator = create_user("spaces-membership-creator")
+    outsider = create_user("spaces-membership-outsider")
+    with system_context(reason="spaces membership GraphQL seed"):
+        group = Group._base_manager.create(
+            name="Private",
+            slug="private-membership",
+            created_by=creator,
+        )
+        party = Party._base_manager.create(display_name="Member", created_by=creator)
+    schema = _schema()
+
+    created, readable, updated = assert_private_hasura_insert_access(
+        schema,
+        creator=creator,
+        outsider=outsider,
+        create_mutation="""
+            mutation CreateMembership($group: ID!, $party: ID!) {
+              insert_space_memberships_one(
+                object: {group: $group, party: $party, role: "member"}
+              ) { id role }
+            }
+            """,
+        create_root="insert_space_memberships_one",
+        create_variables={"group": group.sqid, "party": party.sqid},
+        detail_query="""
+            query Membership($id: String!) {
+              space_memberships_by_pk(id: $id) { id role }
+            }
+            """,
+        detail_root="space_memberships_by_pk",
+        update_mutation="""
+            mutation UpdateMembership($id: String!) {
+              update_space_memberships_by_pk(
+                pk_columns: {id: $id}
+                _set: {role: "moderator"}
+              ) { id role }
+            }
+            """,
+        update_root="update_space_memberships_by_pk",
+    )
+    assert created["role"] == "MEMBER"
+    assert readable == {"id": created["id"], "role": "MEMBER"}
+    assert updated == {"id": created["id"], "role": "MODERATOR"}
 
 
 def test_group_crud_slug_uniqueness_and_unscoped_hierarchy(spaces_tables: None) -> None:
