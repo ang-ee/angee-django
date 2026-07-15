@@ -305,13 +305,19 @@ services:
 {% endif %}
 
 {# pongo2 has no list literals and takes Django-style filter args; split a string. #}
-{% for role in "worker,beat"|split:"," %}
-  # celery {{ role }}: worker owns background bridge syncs; beat owns static framework ticks.
+{# Core roles plus one dedicated `celery-<queue>` worker per `celery_queues` entry: a #}
+{# queue worker isolates an addon's long-lived tasks (threads pool — enforces no time #}
+{# limits, so queue isolation IS the protection) from the shared prefork worker, and #}
+{# inherits this block's env/command owner instead of duplicating it elsewhere. The #}
+{# trailing comma yields one empty item when celery_queues is blank; the guard skips it. #}
+{% for role in "worker,beat,"|add:celery_queues|split:"," %}{% if role %}
+  # celery {{ role }}: worker owns background bridge syncs; beat owns static framework
+  # ticks; any other role is a dedicated queue worker (-Q {{ role }}).
   celery-{{ role }}:
 {% if runtime_mode == "process" %}
     runtime: local
     workdir: source://app
-    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "celery", "-A", "angee.tasks.celery:app", "{{ role }}", "--loglevel=INFO"]
+    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "celery", "-A", "angee.tasks.celery:app", {% if role == "beat" %}"beat"{% else %}"worker"{% endif %}{% if role != "worker" and role != "beat" %}, "-Q", "{{ role }}", "--pool", "threads", "--concurrency", "8"{% endif %}, "--loglevel=INFO"]
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
@@ -352,10 +358,10 @@ services:
         [ "$$n" -ge 300 ] && { echo 'django migrations not ready after 300s:' >&2; cat /tmp/migratewait.err >&2; exit 1; };
         echo "waiting for django migrations ($$n/300)..."; sleep 1;
         done;
-        exec celery -A angee.tasks.celery:app {{ role }} --loglevel=INFO
+        exec celery -A angee.tasks.celery:app {% if role == "beat" %}beat{% else %}worker{% endif %}{% if role != "worker" and role != "beat" %} -Q {{ role }} --pool threads --concurrency 8{% endif %} --loglevel=INFO
     after: [django, redis]
 {% endif %}
-{% endfor %}
+{% endif %}{% endfor %}
 
 {% if runtime_mode == "process" %}
   # Vite dev server for the SPA. It proxies /graphql/ and /auth/csrf/ to Django so the
