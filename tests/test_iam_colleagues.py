@@ -1,11 +1,4 @@
-"""Tests for the member-scoped ``colleagues`` people surface.
-
-Unlike the platform-admin ``users`` catalogue, ``colleagues`` is available to a
-plain signed-in member and is scoped by REBAC company membership: it returns only
-the active users who share a company of record with the actor. It backs the
-consumer pickers (chatter recipient suggestions, the discuss person picker) that
-the admin-gated catalogue cannot serve.
-"""
+"""Tests for IAM's REBAC-native people directory surface."""
 
 from __future__ import annotations
 
@@ -17,21 +10,26 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
+from django.db import connection
 from rebac import (
+    ObjectRef,
     RelationshipTuple,
-    app_settings,
+    SubjectRef,
     system_context,
     to_object_ref,
     to_subject_ref,
     write_relationships,
 )
-from rebac.roles import grant
+from rebac.models import active_relationship_model
 
+from angee.resources.models import Resource
 from tests.conftest import addon_schema, execute_schema, graphql_request, result_data
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
 
+_EVERYONE = SubjectRef.of("auth/user", "*")
+_DIRECTORY = ObjectRef("iam/directory", "main")
 _COLLEAGUES = """
     query Colleagues($search: String, $limit: Int) {
       colleagues(search: $search, limit: $limit) {
@@ -51,20 +49,6 @@ def _console_schema() -> Any:
     return addon_schema(iam_schema.schemas, "console")
 
 
-def _grant_membership(company: Any, user: Any) -> None:
-    """Write one ``direct_member`` company-membership tuple for ``user``."""
-
-    write_relationships(
-        [
-            RelationshipTuple(
-                resource=to_object_ref(company),
-                relation="direct_member",
-                subject=to_subject_ref(user),
-            )
-        ]
-    )
-
-
 def _colleagues(actor: Any, *, search: str = "", limit: int = 20) -> list[dict[str, Any]]:
     """Execute the ``colleagues`` query as ``actor`` and return its rows."""
 
@@ -79,139 +63,220 @@ def _colleagues(actor: Any, *, search: str = "", limit: int = 20) -> list[dict[s
     return list(data["colleagues"])
 
 
-@pytest.mark.django_db
-def test_member_sees_co_members_across_their_companies_only() -> None:
-    """A member's colleagues span every company they belong to — and no further."""
+def _grant_directory_reader(resource: Any, subject: Any = _EVERYONE) -> None:
+    """Grant ``subject`` IAM directory-read reach on ``resource``."""
 
-    call_command("rebac", "sync", verbosity=0)
-    company_model = apps.get_model("iam", "Company")
-    actor = User.objects.create_user(username="actor", email="actor@example.com")
-    peer_x = User.objects.create_user(username="peer-x", email="x@example.com")
-    peer_y = User.objects.create_user(username="peer-y", email="y@example.com")
-    outsider = User.objects.create_user(username="outsider", email="out@example.com")
-    with system_context(reason="test colleagues setup"):
-        company_x = company_model.objects.create(name="Company X")
-        company_y = company_model.objects.create(name="Company Y")
-        company_z = company_model.objects.create(name="Company Z")
-    _grant_membership(company_x, actor)
-    _grant_membership(company_x, peer_x)
-    _grant_membership(company_y, actor)
-    _grant_membership(company_y, peer_y)
-    _grant_membership(company_z, outsider)
-
-    usernames = {row["username"] for row in _colleagues(actor)}
-
-    # Co-members of both of the actor's companies — never the actor themselves,
-    # and never a user (outsider) from a company the actor is not a member of.
-    assert usernames == {"peer-x", "peer-y"}
-
-
-@pytest.mark.django_db
-def test_member_with_no_company_sees_no_colleagues() -> None:
-    """A member of no company has no colleagues — the surface is never platform-wide."""
-
-    call_command("rebac", "sync", verbosity=0)
-    loner = User.objects.create_user(username="loner", email="loner@example.com")
-    User.objects.create_user(username="somebody", email="somebody@example.com")
-
-    assert _colleagues(loner) == []
-
-
-@pytest.mark.django_db
-def test_inactive_co_members_are_excluded() -> None:
-    """A deactivated co-member drops out of the colleague list."""
-
-    call_command("rebac", "sync", verbosity=0)
-    company_model = apps.get_model("iam", "Company")
-    actor = User.objects.create_user(username="active-actor", email="aa@example.com")
-    active = User.objects.create_user(username="active-peer", email="ap@example.com")
-    inactive = User.objects.create_user(
-        username="inactive-peer", email="ip@example.com", is_active=False
+    subject_ref = subject if isinstance(subject, SubjectRef) else to_subject_ref(subject)
+    write_relationships(
+        [
+            RelationshipTuple(
+                resource=to_object_ref(resource),
+                relation="directory_reader",
+                subject=subject_ref,
+            )
+        ]
     )
-    with system_context(reason="test colleagues inactive setup"):
-        company = company_model.objects.create(name="Company Active")
-    for member in (actor, active, inactive):
-        _grant_membership(company, member)
-
-    assert {row["username"] for row in _colleagues(actor)} == {"active-peer"}
 
 
-@pytest.mark.django_db
-def test_service_co_members_are_excluded_from_colleagues() -> None:
-    """People pickers list human users only; service rows remain attribution-only."""
+def _grant_directory(subject: Any = _EVERYONE) -> None:
+    """Grant ``subject`` platform-wide IAM directory reach."""
 
+    subject_ref = subject if isinstance(subject, SubjectRef) else to_subject_ref(subject)
+    write_relationships(
+        [
+            RelationshipTuple(
+                resource=_DIRECTORY,
+                relation="reader",
+                subject=subject_ref,
+            )
+        ]
+    )
+
+
+@pytest.fixture
+def iam_directory_schema(transactional_db: Any) -> None:
+    """Load the current REBAC schema before directory grants are written."""
+
+    del transactional_db
     call_command("rebac", "sync", verbosity=0)
-    company_model = apps.get_model("iam", "Company")
-    actor = User.objects.create_user(username="people-actor", email="people-actor@example.com")
-    person = User.objects.create_user(username="person-peer", email="person-peer@example.com")
-    service = User.objects.create_user(
+
+
+@pytest.mark.django_db(transaction=True)
+def test_seeded_wildcard_directory_reader_exposes_active_human_directory(iam_directory_schema: None) -> None:
+    """The shipped singleton wildcard posture opens user reads for non-admin actors."""
+
+    del iam_directory_schema
+    actor = User.objects.create_user(username="actor", email="actor@example.com")
+    User.objects.create_user(username="peer", email="peer@example.com")
+    User.objects.create_user(
+        username="inactive-peer",
+        email="inactive@example.com",
+        is_active=False,
+    )
+    User.objects.create_user(
         username="service-peer",
-        email="service-peer@example.com",
+        email="service@example.com",
         kind="service",
     )
-    with system_context(reason="test colleagues service setup"):
-        company = company_model.objects.create(name="Company Service")
-    for member in (actor, person, service):
-        _grant_membership(company, member)
+    _grant_directory()
 
-    assert {row["username"] for row in _colleagues(actor)} == {"person-peer"}
+    rows = _colleagues(actor)
+
+    assert {row["username"] for row in rows} == {"actor", "peer"}
+    assert not active_relationship_model().objects.filter(
+        resource_type="auth/user",
+        relation="directory_reader",
+        subject_type="auth/user",
+        subject_id="*",
+    ).exists()
 
 
-@pytest.mark.django_db
-def test_search_filters_colleagues() -> None:
-    """``search`` narrows the colleague list by username/name/email substring."""
+@pytest.mark.django_db(transaction=True)
+def test_absent_wildcard_directory_seed_leaves_only_directly_authorized_rows(iam_directory_schema: None) -> None:
+    """Without the wildcard seed, a member sees only rows with direct grants."""
 
-    call_command("rebac", "sync", verbosity=0)
-    company_model = apps.get_model("iam", "Company")
+    del iam_directory_schema
+    actor = User.objects.create_user(username="actor", email="actor@example.com")
+    granted = User.objects.create_user(username="granted", email="granted@example.com")
+    hidden = User.objects.create_user(username="hidden", email="hidden@example.com")
+    _grant_directory_reader(actor, actor)
+    _grant_directory_reader(granted, actor)
+
+    rows = _colleagues(actor)
+
+    assert {row["username"] for row in rows} == {"actor", "granted"}
+    assert hidden.username not in {row["username"] for row in rows}
+    assert not active_relationship_model().objects.filter(
+        resource_type="iam/directory",
+        resource_id="main",
+        relation="reader",
+        subject_type="auth/user",
+        subject_id="*",
+    ).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_search_ordering_and_limit_are_user_collection_mechanics(iam_directory_schema: None) -> None:
+    """Search, deterministic ordering, and caps layer over actor-scoped rows."""
+
+    del iam_directory_schema
     actor = User.objects.create_user(username="search-actor", email="sa@example.com")
-    grace = User.objects.create_user(
-        username="grace", email="grace@example.com", first_name="Grace", last_name="Hopper"
+    User.objects.create_user(
+        username="grace",
+        email="grace@example.com",
+        first_name="Grace",
+        last_name="Hopper",
     )
-    alan = User.objects.create_user(
-        username="alan", email="alan@example.com", first_name="Alan", last_name="Turing"
+    User.objects.create_user(
+        username="alan",
+        email="alan@example.com",
+        first_name="Alan",
+        last_name="Turing",
     )
-    with system_context(reason="test colleagues search setup"):
-        company = company_model.objects.create(name="Company Search")
-    for member in (actor, grace, alan):
-        _grant_membership(company, member)
+    _grant_directory()
 
     assert {row["username"] for row in _colleagues(actor, search="hopper")} == {"grace"}
-    assert {row["username"] for row in _colleagues(actor, search="alan")} == {"alan"}
+    assert [row["username"] for row in _colleagues(actor, limit=1)] == ["alan"]
 
 
-@pytest.mark.django_db
-def test_platform_admin_colleagues_stay_membership_scoped() -> None:
-    """Admin reach does not widen ``colleagues`` — it is membership-scoped for everyone.
+@pytest.mark.django_db(transaction=True)
+def test_visible_person_from_public_id_uses_actor_scoped_queryset(iam_directory_schema: None) -> None:
+    """Actions resolving a selected person cannot drift from the picker."""
 
-    A platform admin can read the whole ``users`` catalogue, but ``colleagues`` is a
-    people-picker scoped to shared company membership, so an admin who shares no
-    company still gets an empty colleague list (the admin catalogue is unaffected).
-    """
+    del iam_directory_schema
+    actor = User.objects.create_user(username="actor", email="actor@example.com")
+    visible = User.objects.create_user(username="visible", email="visible@example.com")
+    hidden = User.objects.create_user(username="hidden", email="hidden@example.com")
+    _grant_directory(actor)
+
+    assert User.objects.visible_person_from_public_id(actor, visible.public_id) == visible
+    assert User.objects.visible_person_from_public_id(actor, hidden.public_id) == hidden
+
+
+class IamDemoResourceLedger(Resource):
+    """Concrete resource ledger for IAM demo resource-load tests."""
+
+    class Meta(Resource.Meta):
+        """Django model options for the test ledger."""
+
+        app_label = "base"
+        abstract = False
+        managed = False
+        db_table = "test_iam_demo_resource"
+
+
+@pytest.fixture
+def iam_demo_resource_ledger(transactional_db: Any) -> None:
+    """Create the resource ledger table used by IAM demo load tests."""
+
+    del transactional_db
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(IamDemoResourceLedger)
+    try:
+        yield
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(IamDemoResourceLedger)
+
+
+def _load_iam_demo_resources() -> None:
+    """Load IAM's real demo resource tier through the resource manager."""
 
     call_command("rebac", "sync", verbosity=0)
-    company_model = apps.get_model("iam", "Company")
-    admin = User.objects.create_superuser(
-        username="admin", email="admin@example.com", password="admin"
+    IamDemoResourceLedger.objects.load_addons(
+        (apps.get_app_config("iam"),),
+        tiers=[Resource.Tier.DEMO],
+        allow_non_dev=True,
     )
-    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
-    member = User.objects.create_user(username="scoped-member", email="sm@example.com")
-    peer = User.objects.create_user(username="scoped-peer", email="sp@example.com")
-    with system_context(reason="test colleagues admin setup"):
-        company = company_model.objects.create(name="Members Only")
-    _grant_membership(company, member)
-    _grant_membership(company, peer)
-
-    # The admin shares no company, so colleagues is empty even for an admin …
-    assert _colleagues(admin) == []
-    # … while the scoped member still sees their co-member.
-    assert {row["username"] for row in _colleagues(member)} == {"scoped-peer"}
 
 
-@pytest.mark.django_db
-def test_anonymous_actor_is_denied() -> None:
+@pytest.mark.django_db(transaction=True)
+def test_iam_demo_resources_seed_directory_for_non_admin_user(iam_demo_resource_ledger: None) -> None:
+    """IAM demo resources seed a tuple-driven directory readable by fixture users."""
+
+    del iam_demo_resource_ledger
+    _load_iam_demo_resources()
+
+    with system_context(reason="test.iam.demo-directory.actor"):
+        alice = User.objects.get(username="alice")
+    rows = _colleagues(alice)
+
+    assert {row["username"] for row in rows} == {"admin", "alice", "bob"}
+    assert active_relationship_model().objects.filter(
+        resource_type="iam/directory",
+        resource_id="main",
+        relation="reader",
+        subject_type="auth/user",
+        subject_id="*",
+    ).exists()
+    assert not active_relationship_model().objects.filter(
+        resource_type="auth/user",
+        relation="directory_reader",
+        subject_type="auth/user",
+        subject_id="*",
+    ).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_iam_demo_directory_includes_user_created_after_resource_load(iam_demo_resource_ledger: None) -> None:
+    """A post-load user is still visible because directory reach is singleton-backed."""
+
+    del iam_demo_resource_ledger
+    _load_iam_demo_resources()
+
+    with system_context(reason="test.iam.demo-directory.post-load-user"):
+        alice = User.objects.get(username="alice")
+    created_later = User.objects.create_user(username="charlie", email="charlie@example.com")
+
+    assert "charlie" in {row["username"] for row in _colleagues(alice)}
+    assert {"admin", "alice", "bob", "charlie"} == {row["username"] for row in _colleagues(created_later)}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_anonymous_actor_is_denied(iam_directory_schema: None) -> None:
     """``colleagues`` requires a signed-in actor."""
 
-    call_command("rebac", "sync", verbosity=0)
+    del iam_directory_schema
     result = execute_schema(
         _console_schema(),
         _COLLEAGUES,

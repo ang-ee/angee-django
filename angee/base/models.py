@@ -36,7 +36,7 @@ _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
 def _delete_rebac_resource_relationships(sender: Any, instance: Any, **kwargs: Any) -> None:
-    """Delete resource-side tuples after any concrete REBAC model row is deleted."""
+    """Delete resource- and subject-side tuples after a concrete REBAC row is deleted."""
 
     del kwargs
     if not isinstance(instance, RebacMixin) or not model_resource_type(sender):
@@ -46,6 +46,12 @@ def _delete_rebac_resource_relationships(sender: Any, instance: Any, **kwargs: A
         RelationshipFilter(
             resource_type=resource.resource_type,
             resource_id=resource.resource_id,
+        )
+    )
+    delete_relationships(
+        RelationshipFilter(
+            subject_type=resource.resource_type,
+            subject_id=resource.resource_id,
         )
     )
 
@@ -354,10 +360,10 @@ class AngeeModel(TimestampMixin, RebacMixin):
         The auto-CRUD create preflight (``AngeeManager.check_create`` via the
         Hasura write backend) evaluates the REBAC ``create`` permission against
         the unsaved instance *before* ``save()`` runs. A field a model defaults
-        in ``save()`` — an :class:`~angee.iam.models.CompanyScopedMixin`
-        ``company`` taken from the actor's sole membership — is therefore still
-        blank when the gate fires, so a ``create = company->member`` arm
-        fail-closes on a create that would in fact have persisted a company.
+        in ``save()`` — a blank-on-input scope relation derived from the actor,
+        for example — is therefore still blank when the gate fires, so a
+        ``create = scope->member`` arm fail-closes on a create that would in fact
+        have persisted a scope.
 
         A model that defaults a subject-bearing relation on ``save()`` overrides
         this hook to apply that default here too (idempotent with ``save()``, so

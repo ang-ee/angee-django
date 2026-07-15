@@ -1121,7 +1121,7 @@ def test_activity_agenda_lists_assignee_activities_across_records(messaging_tabl
     activities are scheduled elevated (``created_by`` is not the assignee), so the actor
     reaches its own rows through the assignee arm alone, with no parent-record grant. The
     window is the whole bound — ``window_start`` inclusive, ``window_end`` exclusive — and
-    another actor's assignment, plus a company-B actor with no assignments, see nothing of
+    another actor's assignment, plus an unassigned actor, see nothing of
     it. Each row carries its parent pointer (label + sqid + model_label) through the
     attachment's owning model, computed without loading the target row.
     """
@@ -1132,7 +1132,7 @@ def test_activity_agenda_lists_assignee_activities_across_records(messaging_tabl
     with system_context(reason="agenda across-records setup"):
         assignee = user_model.objects.create_user(username="agenda-assignee", email="agenda-assignee@example.com")
         other = user_model.objects.create_user(username="agenda-other", email="agenda-other@example.com")
-        company_b = user_model.objects.create_user(username="agenda-company-b", email="agenda-company-b@example.com")
+        unassigned = user_model.objects.create_user(username="agenda-unassigned", email="agenda-unassigned@example.com")
         alpha = ThreadedTicket.objects.create(title="Alpha")
         beta = ThreadedTicket.objects.create(title="Beta")
         # Assignee's activities across two records, out of due-date order.
@@ -1141,13 +1141,13 @@ def test_activity_agenda_lists_assignee_activities_across_records(messaging_tabl
         # Window boundaries: start is inclusive, end is exclusive.
         alpha.activity_schedule(user=assignee, summary="Kickoff", due_date=window_start)
         alpha.activity_schedule(user=assignee, summary="Boundary", due_date=window_end)
-        # Out of window, another assignee, and an unassigned company-B actor — all absent.
+        # Out of window, another assignee, and an unassigned actor — all absent.
         alpha.activity_schedule(user=assignee, summary="Later", due_date=date(2026, 4, 15))
         alpha.activity_schedule(user=other, summary="Other task", due_date=date(2026, 3, 7))
 
     with actor_context(assignee):
         rows = list(ThreadActivity.objects.agenda(assignee, window_start, window_end))
-        empty = list(ThreadActivity.objects.agenda(company_b, window_start, window_end))
+        empty = list(ThreadActivity.objects.agenda(unassigned, window_start, window_end))
 
     assert [row.summary for row in rows] == ["Kickoff", "Email Alpha", "Call Beta"]
     assert {row.attachment.object_id for row in rows} == {alpha.pk, beta.pk}

@@ -370,6 +370,17 @@ data through REBAC, never a queryset bypass.
   permission evaluation); attribution converges through `actor_user_id` and the
   subject-type resolver registry. See the glossary's Principal/Actor/Service
   account entries.
+- **Visibility and access are REBAC-native, always.** Put relations and
+  permission arms on the model's zed and let the store scope reads; never stand
+  authorization up with a Python provider, `visible_to` projection, or queryset
+  filter. Scope roles live on the scope definition, and scoped models derive
+  arms from them (`scope->viewer` for read, `scope->editor` for write).
+- **Posture is data, not schema.** `permissions.extends.zed` fragments are
+  additive-only, so narrowable defaults ship as seeded tuples (the shared
+  wildcard pattern). Platform-wide tuple-driven visibility uses a const-backed
+  singleton relation on each row (for example, `auth/user#directory` →
+  `iam/directory:main`) plus a seed on that singleton (`iam/directory:main#reader`),
+  never base schema arms or per-row fan-out a deployment cannot omit.
 - Bracket every server-side read/write in `system_context`/`asystem_context` and
   resolve the actor with `@rebac_subject`; a bare `Model.objects.create()` under
   an actor is denied.
@@ -397,11 +408,13 @@ data through REBAC, never a queryset bypass.
   walks the arrow into `<ns>/role#admin`; without the anchor that const cannot
   resolve and the evaluator raises instead of returning a clean deny. Bump the
   package `@rebac_schema_revision` when migrating a def to the const shape.
-- **A consumer addon contributes domain relations to a framework definition
-  additively — never by editing the framework zed.** The owning addon's
-  `permissions.zed` declares the *seam* (e.g. `iam/company`); a consumer addon
-  that needs a company-scoped role adds it from its own **`permissions.extends.zed`**
-  (sibling to `permissions.zed`), owned by `angee.compose.permissions`. Each
+- **A consumer addon contributes domain relations to another addon's definition
+  additively — never by editing the target zed.** The owning addon's
+  `permissions.zed` declares the *seam* (for example, the in-repo spaces addon
+  extends `messaging/thread`); a consumer addon that needs its own role adds it
+  from its own **`permissions.extends.zed`** (sibling to `permissions.zed`),
+  owned by `angee.compose.permissions`. The `tests/extcontrib` fixture keeps the
+  mechanical merge covered. Each
   `definition <target> { … }` block in the fragment names an existing definition
   and lists the relations it contributes and the permission arms it unions in
   (`permission read = <term>` merges to `read = (<base>) + (<term>)`). The
@@ -655,12 +668,12 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   locks, constraints, and idempotent managers. Do not hold row locks during network
   IO.
 - **A `HierarchyMixin` consumer declares its scope fields — the mixin never probes
-  by column name.** A subtree that must stay inside a scope (a company, a tenant)
-  declares `hierarchy_scope_fields = ("company",)` (a `ClassVar` tuple; FKs compare
+  by column name.** A subtree that must stay inside a tenant or other scope
+  declares `hierarchy_scope_fields = ("scope",)` (a `ClassVar` tuple; FKs compare
   by stored id); the mixin rejects a reparent or create under a parent that differs
-  on any listed field. It is generic and iam-free — there is no `company`-by-name
-  fallback, so a company-scoped tree that omits the declaration silently accepts a
-  cross-company parent. `StateField` transitions guarded by `save_state` get an
+  on any listed field. It is generic and iam-free — there is no scope-field-name
+  fallback, so a scoped tree that omits the declaration silently accepts a parent
+  outside its scope. `StateField` transitions guarded by `save_state` get an
   optimistic-concurrency guard for free: the committed source is re-read under the
   same lock before the write, so a lost race raises `TransitionNotAllowed` instead
   of double-applying (e.g. double-posting a ledger).

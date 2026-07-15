@@ -197,6 +197,44 @@ def test_runtime_model_render_plan_keeps_model_owned_meta(tmp_path: Path) -> Non
     assert "rebac_resource_type = 'tests/second-render-plan'" in source
 
 
+def test_runtime_honors_explicit_label_when_module_terminal_differs(
+    tmp_path: Path,
+    stub_contracts: None,
+) -> None:
+    """A source module ending in ``base`` may emit under its explicit app label."""
+
+    del stub_contracts
+
+    def temp_config(name: str, label: str, module: ModuleType, *, depends_on: tuple[str, ...] = ()) -> AppConfig:
+        config_cls = type(
+            f"{label.title()}Config",
+            (AppConfig,),
+            {"name": name, "label": label, "path": str(tmp_path)},
+        )
+        config = config_cls(name, module)
+        config._addon_contract = make_contract(depends_on=depends_on)
+        return config
+
+    beta_module = ModuleType("tests.project_base")
+    beta_models = ModuleType("tests.project_base.models")
+    _source_model(beta_models, "ProjectThing", "beta", runtime=True)
+    beta = temp_config("tests.project_base", "beta", beta_module)
+    beta.models_module = beta_models
+    alpha = temp_config("tests.alpha", "alpha", ModuleType("tests.alpha"), depends_on=("beta",))
+
+    ordered = AppGraph().resolve((alpha, beta))
+    assert [config.label for config in ordered[:2]] == ["beta", "alpha"]
+
+    runtime = Runtime((beta,), runtime_dir=tmp_path / "runtime")
+    sources = runtime.render_sources()
+
+    assert set(runtime.sources_by_label) == {"beta"}
+    assert Path("beta/models.py") in sources
+    assert Path("project_base/models.py") not in sources
+    assert "app_label = 'beta'" in sources[Path("beta/models.py")]
+    assert "beta.projectthing" in runtime.source_models_by_composition_label
+
+
 def test_web_runtime_projects_addon_web_packages_in_composed_order(stub_contracts: None) -> None:
     """Addon web package declarations feed one generated web manifest."""
 

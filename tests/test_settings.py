@@ -388,7 +388,9 @@ def test_compose_settings_module_reads_project_runtime(
     project.SECRET_KEY = "bridge-secret"  # type: ignore[attr-defined]
     project.DEBUG = True  # type: ignore[attr-defined]
     project.ALLOWED_HOSTS = ["*"]  # type: ignore[attr-defined]
-    project.DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}  # type: ignore[attr-defined]
+    project.DATABASES = {  # type: ignore[attr-defined]
+        "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"},
+    }
     project.ANGEE_DATA_DIR = tmp_path / "data"  # type: ignore[attr-defined]
     project.INSTALLED_APPS = ("angee.resources",)  # type: ignore[attr-defined]
     project.ANGEE_RUNTIME_DIR = tmp_path / "runtime"  # type: ignore[attr-defined]

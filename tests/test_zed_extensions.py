@@ -209,18 +209,18 @@ def test_merge_is_deterministic(tmp_path: Path) -> None:
 def test_render_round_trips_a_real_backed_schema() -> None:
     """The emitter re-parses to the same relations/backing/permissions.
 
-    IAM's ``permissions.zed`` exercises field-backed (``rebac:field``) and const
-    (``rebac:const``) relations plus a specific-id subject — the shapes a naive
-    renderer drops.
+    ``scopedemo`` exercises field-backed (``rebac:field``), const
+    (``rebac:const``), and subject-union relations — the shapes a naive renderer
+    drops.
     """
 
-    source = Path(apps.get_app_config("iam").path) / "permissions.zed"
+    source = Path(apps.get_app_config("scopedemo").path) / "permissions.zed"
     schema = parse_zed(source.read_text(encoding="utf-8"))
-    reparsed = parse_zed(render_zed("angee.iam", schema))
+    reparsed = parse_zed(render_zed("tests.scopedemo", schema))
     assert not validate_schema(reparsed)
 
-    original = schema.get_definition("iam/company")
-    roundtripped = reparsed.get_definition("iam/company")
+    original = schema.get_definition("scopedemo/scope")
+    roundtripped = reparsed.get_definition("scopedemo/scope")
     assert {r.name for r in roundtripped.relations} == {r.name for r in original.relations}
     for relation in original.relations:
         emitted = next(r for r in roundtripped.relations if r.name == relation.name)

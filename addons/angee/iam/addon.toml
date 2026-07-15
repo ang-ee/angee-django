@@ -10,4 +10,5 @@ depends_on = ["angee.resources", "angee.graphql", "axes", "django.contrib.auth",
 [resources]
 demo = [
   { path = "resources/demo/010_iam.user.yaml", adopt = "username" },
+  { path = "resources/demo/020_iam.directory_reader.yaml", kind = "grants", depends_on = "resources/demo/010_iam.user.yaml" },
 ]

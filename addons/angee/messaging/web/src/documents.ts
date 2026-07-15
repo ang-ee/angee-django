@@ -203,10 +203,9 @@ export const ThreadTranscriptOlderDocument = graphql(`
   }
 `);
 
-// The recipient picker's "add anyone" catalogue. Member-scoped: the IAM
-// `colleagues` surface returns the active users who share a company of record with
-// the actor, so a plain member (not just a platform admin) can address a comment to
-// a co-worker. The admin-only `users` catalogue is out of reach here by design.
+// The recipient picker's "add anyone" catalogue. IAM's `colleagues` surface
+// returns active users the actor reaches through REBAC; the admin-only `users`
+// catalogue is out of reach here by design.
 export const MessagingRecipientUsersDocument = graphql(`
   query MessagingRecipientUsers($limit: Int = 100) {
     colleagues(limit: $limit) {

@@ -4,11 +4,10 @@
 installed app, parses it, and hard-errors on a definition declared twice. The
 SpiceDB schema language it accepts has no ``extend`` — a definition is owned,
 whole, by exactly one file. That makes the owning file the only place a relation
-can be declared, so a consumer addon that needs a company-scoped role binding on
-``iam/company`` has historically had to edit the framework's ``iam`` zed. That
-leaks domain vocabulary (``accountant``, ``salesperson``, …) into a
-framework-owned file — the framework should own the *seam*, each addon its own
-vocabulary.
+can be declared, so a consumer addon that needs its own role vocabulary on
+another addon's resource would otherwise have to edit that addon's zed. That
+leaks domain vocabulary across ownership boundaries — the target addon should
+own the *seam*, each extending addon its own vocabulary.
 
 This module is that seam. A consumer addon contributes to a definition owned by
 another addon through a sibling **``permissions.extends.zed``** fragment. Each

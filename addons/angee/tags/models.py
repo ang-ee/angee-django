@@ -1,4 +1,4 @@
-"""Tags: a polymorphic, shared-or-company-scoped labelling vocabulary.
+"""Tags: a polymorphic shared labelling vocabulary.
 
 A :class:`Tag` is one label in a vocabulary; a :class:`TagAssignment` is the
 polymorphic edge attaching a tag to **any** row. The edge follows the
@@ -9,20 +9,15 @@ back to it. Consumers attach explicitly through
 :meth:`TagAssignmentManager.attach` (create the edge against the concrete target)
 exactly as storage consumers attach a file.
 
-**Scope.** ``Tag.company`` is **nullable**: a null-company tag is *shared
-vocabulary* readable by every authenticated actor; a company-scoped tag is
-isolated to that company (``permissions.zed``: ``read = shared + company->member``).
-Scope is delivered through REBAC, not a queryset override — a scoped tag is
-field-backed by ``company`` (invisible cross-company), and a shared tag is opened
-to everyone through a wildcard ``shared@auth/user:*`` reader tuple maintained by
-:meth:`Tag.save` (the wildcard-subject relation ``storage/drive`` also allows for
-its everyone-grants; the save-time upkeep is this addon's own, because *shared* is
-a row fact here, not an optional grant). This is why ``Tag`` does **not** compose
-``CompanyScopedMixin`` — that mixin forces a non-null company and would forbid the
-shared vocabulary; ``Tag`` owns its own nullable ``company`` FK instead.
+**Scope.** Base tags are shared vocabulary, readable by every authenticated actor
+through a wildcard ``shared@auth/user:*`` reader tuple maintained by
+:meth:`Tag.save`. Downstream addons may extend the row with their own scope field
+and override :attr:`is_shared_scope`; the base model declares which stored fields
+back that fact through :attr:`shared_scope_source_fields` so deferred loads do not
+snapshot an unloaded value.
 
 **Pitfalls.** Shared-tag visibility rides :meth:`Tag.save`: any write path that
-skips ``save()`` — ``bulk_create``, ``queryset.update(company=...)``, raw
+skips ``save()`` — ``bulk_create``, ``queryset.update(...)``, raw
 ``loaddata`` — leaves the wildcard reader stale (an invisible shared tag or a
 lingering everyone-grant); route scope changes through instance saves. And the
 tuple write validates against the *loaded* REBAC schema, so creating a tag
@@ -43,7 +38,7 @@ content type the write used (the placement invariant in :mod:`angee.base.refs`).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
@@ -71,7 +66,7 @@ from angee.base.models import (
 from angee.base.refs import CanonicalRecordTarget, RecordRefMixin, canonical_record_target
 
 SHARED_READER_RELATION = "shared"
-"""The wildcard-subject relation that opens a shared (null-company) tag to everyone."""
+"""The wildcard-subject relation that opens a shared tag to everyone."""
 
 _EVERYONE = SubjectRef.of("auth/user", "*")
 """The ``auth/user:*`` wildcard subject — every authenticated actor at once."""
@@ -88,28 +83,20 @@ TagManager = AngeeManager.from_queryset(TagQuerySet)
 
 
 class Tag(ArchiveMixin, AngeeDataModel):
-    """One label in a shared-or-company-scoped vocabulary.
+    """One label in a shared vocabulary.
 
-    ``company`` is nullable by design (see the module docstring): ``None`` is
-    *shared* vocabulary every actor reads, a set company scopes the tag to that
-    company. :meth:`save` keeps the wildcard reader tuple in step with
-    ``company`` so the REBAC read scope stays truthful without a queryset
-    override.
+    :meth:`save` keeps the wildcard reader tuple in step with
+    :attr:`is_shared_scope` so the REBAC read scope stays truthful without a
+    queryset override.
     """
 
     runtime = True
     sqid_prefix = "tag_"
+    shared_scope_source_fields: ClassVar[tuple[str, ...]] = ()
+    """Stored fields from which :attr:`is_shared_scope` is computed."""
 
     name = models.CharField(max_length=128)
     color = models.CharField(max_length=32, blank=True, default="")
-    company = models.ForeignKey(
-        "iam.Company",
-        on_delete=models.PROTECT,
-        related_name="+",
-        null=True,
-        blank=True,
-    )
-    """The owning company, or ``None`` for shared vocabulary (see module docstring)."""
 
     objects = TagManager()
 
@@ -126,47 +113,58 @@ class Tag(ArchiveMixin, AngeeDataModel):
 
         return self.name
 
+    @property
+    def is_shared_scope(self) -> bool:
+        """Return whether this row should carry the shared wildcard reader."""
+
+        return True
+
     @classmethod
     def from_db(cls, db: Any, field_names: Any, values: Any) -> "Tag":
-        """Load a row, snapshotting its ``company_id`` so :meth:`save` spots a rescope.
+        """Load a row, snapshotting shared scope when its source fields are loaded.
 
         Tag owns the original-value snapshot the reconcile compares against (the
-        canonical Django "track the loaded value" shape), rather than reading a
-        framework-internal probe. ``company`` deferred out of the load leaves no
-        snapshot, so :meth:`save` fail-safes into the idempotent re-sync.
+        canonical Django "track the loaded value" shape). If any declared source
+        field is deferred, the snapshot is skipped so :meth:`save` fail-safes into
+        the idempotent re-sync rather than evaluating a missing row fact.
         """
 
         instance = super().from_db(db, field_names, values)
-        instance._loaded_company_id = (
-            instance.company_id if "company_id" in field_names else _NEVER_LOADED
-        )
+        source_attnames = cls._shared_scope_source_attnames()
+        if all(attname in field_names for attname in source_attnames):
+            instance._loaded_is_shared_scope = instance.is_shared_scope
+        else:
+            instance._loaded_is_shared_scope = _NEVER_LOADED
         return instance
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the row and reconcile its shared-reader wildcard tuple atomically.
 
-        A shared (null-company) tag carries a ``shared@auth/user:*`` tuple that
-        opens it to every actor; a company-scoped tag carries none (it reads
-        through the field-backed ``company`` arm instead). Row and tuple commit
-        or roll back together — a shared tag must never land without its reader,
-        nor a rescope leave a stale grant. The reconcile runs only when the row
-        is new or ``company`` actually changed (against the :meth:`from_db`
-        snapshot), so unrelated edits do not re-issue grants; an instance with no
-        snapshot fail-safes into the idempotent re-sync.
+        A shared tag carries a ``shared@auth/user:*`` tuple that opens it to every
+        actor. Row and tuple commit or roll back together — a shared tag must
+        never land without its reader, nor a scoped transition leave a stale
+        grant. The reconcile runs only when the row is new, no complete snapshot
+        exists, or the shared/scoped fact changes; an instance with no snapshot
+        fail-safes into the idempotent re-sync.
         """
 
         adding = self._state.adding
-        loaded_company_id = getattr(self, "_loaded_company_id", _NEVER_LOADED)
+        loaded_is_shared_scope = getattr(self, "_loaded_is_shared_scope", _NEVER_LOADED)
         with transaction.atomic():
             super().save(*args, **kwargs)
-            if adding or loaded_company_id is _NEVER_LOADED or loaded_company_id != self.company_id:
+            if (
+                adding
+                or loaded_is_shared_scope is _NEVER_LOADED
+                or loaded_is_shared_scope != self.is_shared_scope
+            ):
                 self._sync_shared_reader()
+            self._loaded_is_shared_scope = self.is_shared_scope
 
     def _sync_shared_reader(self) -> None:
         """Grant or revoke the ``shared@auth/user:*`` reader for this tag's scope."""
 
         resource = to_object_ref(self)
-        if self.company_id is None:
+        if self.is_shared_scope:
             write_relationships(
                 [
                     RelationshipTuple(
@@ -186,6 +184,16 @@ class Tag(ArchiveMixin, AngeeDataModel):
                     subject_id=_EVERYONE.subject_id,
                 )
             )
+
+    @classmethod
+    def _shared_scope_source_attnames(cls) -> tuple[str, ...]:
+        """Return attnames for declared shared-scope source fields."""
+
+        attnames: list[str] = []
+        for field_name in cls.shared_scope_source_fields:
+            field = cls._meta.get_field(field_name)
+            attnames.append(getattr(field, "attname", field.name))
+        return tuple(attnames)
 
 
 class TagAssignmentManager(AngeeManager):

@@ -11,7 +11,6 @@ export const enTagsMessages: Record<string, string> = {
   "pane.error": "Could not load tags.",
   "col.name": "Name",
   "col.color": "Color",
-  "col.scope": "Scope",
   "form.details": "Details",
 };
 

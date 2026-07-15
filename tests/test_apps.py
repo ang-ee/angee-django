@@ -172,7 +172,14 @@ def test_iam_config_owns_shared_demo_users() -> None:
     config = apps.get_app_config("iam")
     manifest = resource_manifest_for(config)
 
-    assert manifest["demo"] == ({"path": "resources/demo/010_iam.user.yaml", "adopt": "username"},)
+    assert manifest["demo"] == (
+        {"path": "resources/demo/010_iam.user.yaml", "adopt": "username"},
+        {
+            "path": "resources/demo/020_iam.directory_reader.yaml",
+            "kind": "grants",
+            "depends_on": ("resources/demo/010_iam.user.yaml",),
+        },
+    )
     rows = _resource_rows(config, "demo", "resources/demo/010_iam.user.yaml")
     assert set(rows) == {"user_admin", "user_alice", "user_bob"}
     assert rows["user_admin"]["username"] == "admin"

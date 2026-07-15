@@ -75,10 +75,10 @@ export function relationFieldInfo(
 /**
  * A to-one relation the node projects as a bare `ID` scalar (`kind: "scalar"`,
  * `scalar: "ID"`, carrying a `relationTarget`). The backend classifies a
- * `CompanyScopedMixin.company` (and any FK projected as `ID!` rather than a nested
- * object) this way, with a `select` scalar-id widget — so the detail/form query
- * selects it as a leaf instead of emitting a sub-selection the wire `ID` rejects,
- * while the relation picker still resolves through the relation metadata.
+ * Any FK projected as `ID!` rather than a nested object is classified this way,
+ * with a `select` scalar-id widget — so the detail/form query selects it as a
+ * leaf instead of emitting a sub-selection the wire `ID` rejects, while the
+ * relation picker still resolves through the relation metadata.
  */
 export function isScalarIdRelation(field: ModelFieldMetadata): boolean {
   return field.kind === "scalar" && field.scalar === "ID" && Boolean(field.relationTarget);

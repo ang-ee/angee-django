@@ -344,7 +344,7 @@ class HierarchyMixin(models.Model):
     for the ``subtree_of`` / ``ancestors_of`` read scopes, and **inherit its
     ``Meta``** so the concrete table carries the prefix index::
 
-        class Location(HierarchyMixin, CompanyScopedMixin, AngeeDataModel):
+        class Location(HierarchyMixin, AngeeDataModel):
             ...
 
             class Meta(HierarchyMixin.Meta):
@@ -365,13 +365,13 @@ class HierarchyMixin(models.Model):
     """
 
     hierarchy_scope_fields: ClassVar[tuple[str, ...]] = ()
-    """Field names a child must share with its parent (e.g. ``("company",)``).
+    """Field names a child must share with its parent (e.g. ``("scope",)``).
 
     A reparent (and a create under a parent) rejects a parent that differs on any
     of these fields, so a subtree never straddles a scope boundary. It is a
     declared contract — generic and iam-free — owned by the consuming model rather
-    than probed by column name: a company-scoped tree declares
-    ``hierarchy_scope_fields = ("company",)``, an unscoped tree leaves it empty. An
+    than probed by column name: a scoped tree declares
+    ``hierarchy_scope_fields = ("scope",)``, an unscoped tree leaves it empty. An
     FK is compared by its stored id (the field's ``attname``); a parent must agree
     on every listed field.
     """

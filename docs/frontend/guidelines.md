@@ -385,11 +385,10 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   keeping its `relationModelLabel`, so `relationFieldInfo` still resolves the picker
   and label (see the ID-scalar to-one pitfall below). A bare `ID` scalar with **no**
   relation target (a record's own id) stays a leaf with no widget.
-- **An `ID`-scalar to-one is selected as a leaf, not an object.** A
-  `CompanyScopedMixin.company` (and any FK a node projects as a bare `ID!` rather
-  than a nested object) is a scalar on the wire: FormView must select it *without* a
-  sub-selection, or the detail query fails to build with `Field 'company' must not
-  have a selection since type 'ID!' has no subfields`. The owner is the
+- **An `ID`-scalar to-one is selected as a leaf, not an object.** Any FK a node
+  projects as a bare `ID!` rather than a nested object is a scalar on the wire:
+  FormView must select it *without* a sub-selection, or the detail query fails to
+  build with a "must not have a selection" GraphQL error. The owner is the
   field-classification/metadata layer (`angee.graphql.data.field_classification` +
   the metadata projection): a to-one relation the node projects as a bare scalar id
   classifies as a `scalar` LEAF (so the form/detail query selects it as a scalar)

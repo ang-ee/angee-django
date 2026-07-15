@@ -67,6 +67,7 @@ def reconcile_permission_schema() -> int:
         return 0
 
     with system_context(reason="angee.platform.reconcile_permission_schema"), transaction.atomic():
+        _delete_stale_relationships(stale)
         for record in sorted(stale, key=_prune_key):
             target = record.target
             if target is not None:
@@ -160,6 +161,32 @@ def _is_stale_schema_record(
     if expected is None:
         return False
     return external_id not in expected
+
+
+def _delete_stale_relationships(records: list[Any]) -> None:
+    """Delete relationship data whose resource or relation schema is stale."""
+
+    from rebac import delete_relationships
+    from rebac.types import RelationshipFilter
+
+    stale_resource_types: set[str] = set()
+    stale_relations: set[tuple[str, str]] = set()
+    for record in records:
+        kind, _, name = str(getattr(record, "external_id", "")).partition(":")
+        if kind == "definition" and name:
+            stale_resource_types.add(name)
+        elif kind == "relation" and "#" in name:
+            resource_type, relation = name.split("#", maxsplit=1)
+            stale_relations.add((resource_type, relation))
+
+    for resource_type in sorted(stale_resource_types):
+        delete_relationships(RelationshipFilter(resource_type=resource_type))
+        delete_relationships(RelationshipFilter(subject_type=resource_type))
+
+    for resource_type, relation in sorted(stale_relations):
+        if resource_type in stale_resource_types:
+            continue
+        delete_relationships(RelationshipFilter(resource_type=resource_type, relation=relation))
 
 
 def _prune_key(record: object) -> tuple[int, str]:

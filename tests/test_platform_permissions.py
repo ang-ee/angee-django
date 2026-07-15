@@ -10,6 +10,49 @@ those orphans and stale rows inside still-composed packages.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+from django.core.management import call_command
+
+_OLD_IAM_ZED = """
+// @rebac_package: iam
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 10
+
+definition auth/user {
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = admin->member
+    permission write = admin->member
+    permission delete = admin->member
+}
+
+definition auth/group {
+    relation member: auth/user
+}
+
+definition angee/role {
+    relation member: auth/user | auth/group#member
+
+    permission effective_member = member
+}
+
+definition iam/company {
+    relation parent:        iam/company // rebac:field=parent
+    relation direct_member: auth/user | auth/group#member
+    relation admin:         angee/role // rebac:const=admin
+
+    permission member = direct_member + parent->member
+
+    permission create = admin->member
+    permission read   = member + admin->member
+    permission write  = admin->member
+    permission delete = admin->member
+}
+"""
+
 
 def _managed(package: str, resource_type: str):
     """Create a SchemaDefinition with a PackageManagedRecord owning it, as sync would."""
@@ -64,6 +107,92 @@ def _managed_relation(package: str, resource_type: str, name: str):
         last_synced_at=timezone.now(),
     )
     return definition, relation
+
+
+@pytest.fixture
+def _restore_iam_schema_path():
+    """Restore IAM's test-time ``rebac_schema`` override after a repoint."""
+
+    from django.apps import apps
+
+    iam = apps.get_app_config("iam")
+    sentinel = object()
+    original = getattr(iam, "rebac_schema", sentinel)
+    yield iam
+    if original is sentinel:
+        if hasattr(iam, "rebac_schema"):
+            delattr(iam, "rebac_schema")
+    else:
+        iam.rebac_schema = original
+
+
+@pytest.mark.django_db
+def test_reconcile_prunes_old_iam_company_rows_after_schema_removal(
+    tmp_path: Path,
+    _restore_iam_schema_path,
+) -> None:
+    """Old ``iam/company`` rows are pruned when IAM's current zed no longer declares them."""
+
+    from rebac import ObjectRef, RelationshipTuple, SubjectRef, write_relationships
+    from rebac.models import (
+        PackageManagedRecord,
+        SchemaDefinition,
+        SchemaPermission,
+        SchemaRelation,
+        active_relationship_model,
+    )
+
+    iam = _restore_iam_schema_path
+    old_schema = tmp_path / "old_iam_permissions.zed"
+    old_schema.write_text(_OLD_IAM_ZED, encoding="utf-8")
+    iam.rebac_schema = str(old_schema)
+    call_command("rebac", "sync", verbosity=0)
+
+    company = SchemaDefinition.objects.get(resource_type="iam/company")
+    assert company.relations.filter(name="direct_member").exists()
+    assert company.permissions.filter(name="member").exists()
+    assert PackageManagedRecord.objects.filter(package=iam.name, external_id="definition:iam/company").exists()
+    write_relationships(
+        [
+            RelationshipTuple(
+                resource=ObjectRef("iam/company", "old-company"),
+                relation="direct_member",
+                subject=SubjectRef.of("auth/user", "old-member"),
+            )
+        ]
+    )
+    relationship_model = active_relationship_model()
+    old_direct_member = relationship_model.objects.filter(
+        resource_type="iam/company",
+        resource_id="old-company",
+        relation="direct_member",
+        subject_type="auth/user",
+        subject_id="old-member",
+    )
+    assert old_direct_member.exists()
+
+    delattr(iam, "rebac_schema")
+    call_command("reconcile_permissions", verbosity=0)
+
+    assert not SchemaDefinition.objects.filter(resource_type="iam/company").exists()
+    assert not SchemaRelation.objects.filter(definition=company).exists()
+    assert not SchemaPermission.objects.filter(definition=company).exists()
+    assert not PackageManagedRecord.objects.filter(
+        package=iam.name,
+        external_id__in=(
+            "definition:iam/company",
+            "relation:iam/company#parent",
+            "relation:iam/company#direct_member",
+            "relation:iam/company#admin",
+            "permission:iam/company#member",
+            "permission:iam/company#create",
+            "permission:iam/company#read",
+            "permission:iam/company#write",
+            "permission:iam/company#delete",
+        ),
+    ).exists()
+    assert not old_direct_member.exists()
+    assert SchemaDefinition.objects.filter(resource_type="auth/user").exists()
 
 
 def test_reconcile_prunes_orphaned_package_and_keeps_composed(db) -> None:

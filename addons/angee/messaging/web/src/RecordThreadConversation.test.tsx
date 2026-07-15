@@ -154,6 +154,26 @@ describe("RecordThreadConversation", () => {
     expect(post?.vars.body).toBe("Hello room");
   });
 
+  test("offers visible people from IAM colleagues as message recipients", async () => {
+    mocks.recipientData = {
+      colleagues: [
+        {
+          id: "usr_ada",
+          username: "ada",
+          display_name: "Ada Lovelace",
+          email: "ada@example.com",
+          is_active: true,
+        },
+      ],
+    };
+
+    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Add recipient" }));
+
+    expect(await screen.findByText("Ada Lovelace · ada@example.com")).toBeTruthy();
+  });
+
   test("wires mark-read through the header seam", () => {
     // A room composes its own chrome via `header`; here a minimal header surfaces the
     // shared mark-read owner so the extracted wiring is exercised standalone.

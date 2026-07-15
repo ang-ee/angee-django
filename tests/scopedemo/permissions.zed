@@ -1,19 +1,31 @@
-// Authorization schema for the company-scope create-gate demo (test-only).
+// Authorization schema for the local-scope create-gate demo (test-only).
 // @rebac_package: scopedemo
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
-// A company-scoped document whose `create` rides `company->member` — the arm
-// that (unlike a const-backed functional role) fail-closes unless the auto-CRUD
-// create preflight is evaluated against the company `CompanyScopedMixin` defaults
-// from the actor's sole membership. This is the framework regression handle for
-// that gate (the shape downstream company-scoped documents ride).
+definition scopedemo/scope {
+    relation parent:        scopedemo/scope // rebac:field=parent
+    relation direct_member: auth/user | auth/group#member
+    relation admin:         angee/role // rebac:const=admin
+
+    permission member = direct_member + parent->member
+
+    permission create = admin->member
+    permission read   = member + admin->member
+    permission write  = admin->member
+    permission delete = admin->member
+}
+
+// A locally scoped document whose `create` rides `scope->member` — the arm that
+// fail-closes unless the auto-CRUD create preflight is evaluated against the
+// scope the row defaults from the actor's sole membership. This is the framework
+// regression handle for that gate.
 definition scopedemo/doc {
-    relation company: iam/company // rebac:field=company
-    relation admin:   angee/role   // rebac:const=admin
+    relation scope: scopedemo/scope // rebac:field=scope
+    relation admin: angee/role      // rebac:const=admin
 
-    permission create = company->member + admin->member
-    permission read   = company->member + admin->member
-    permission write  = company->member + admin->member
-    permission delete = company->member + admin->member
+    permission create = scope->member + admin->member
+    permission read   = scope->member + admin->member
+    permission write  = scope->member + admin->member
+    permission delete = scope->member + admin->member
 }

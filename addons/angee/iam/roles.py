@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, cast
 
 from django.contrib.auth import get_user_model
-from django.db.models import Exists, OuterRef, Q, QuerySet, Subquery
+from django.db.models import Exists, OuterRef, QuerySet, Subquery
 from django.http import HttpRequest
 from rebac import ObjectRef, app_settings, system_context
 from rebac import backend as rebac_backend
@@ -696,27 +695,6 @@ def _people_queryset(user_model: type[Any]) -> QuerySet[Any]:
     """Return the user rows intended for people-facing IAM list surfaces."""
 
     return cast(QuerySet[Any], user_model._default_manager.all().people())
-
-
-def user_subject_filter(user_model: type[Any], subject_ids: Iterable[Any]) -> Q:
-    """Return a user queryset filter matching REBAC subject ids."""
-
-    ids = tuple(dict.fromkeys(str(subject_id) for subject_id in subject_ids if subject_id))
-    if not ids:
-        return Q(pk__in=())
-    subject_lookup = user_subject_lookup(user_model)
-    if subject_lookup == "sqid":
-        public_lookup = getattr(user_model, "public_id_lookup", None)
-        query = Q(pk__in=())
-        if not callable(public_lookup):
-            return query
-        for subject_id in ids:
-            try:
-                query |= Q(**public_lookup(subject_id))
-            except (TypeError, ValueError):
-                continue
-        return query
-    return Q(**{f"{subject_lookup}__in": ids})
 
 
 def user_subject_lookup(user_model: type[Any] | None = None) -> str:
