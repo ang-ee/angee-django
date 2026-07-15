@@ -604,6 +604,10 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **A resource yaml loads only when listed** in the addon's `addon.toml`
   `[resources]` manifest (`{tier = [paths]}`); an unlisted file silently
   loads nothing.
+- **Demo resource tiers are additive across installed addons.** A deployment that
+  needs demo rows but not one permissive seed must exclude that exact entry with
+  `ANGEE_RESOURCE_EXCLUDED_ENTRIES`, keyed as `addon.name:resources/path.yaml`;
+  do not edit the addon seed or fork the loader.
 - **Workflow step implementations persist continuation state in `resume_state`.**
   Pre-suspend side effects must be idempotent because resume replays from the
   journal row, not process memory.

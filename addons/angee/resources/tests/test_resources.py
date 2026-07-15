@@ -280,6 +280,58 @@ def test_resource_tiers_include_prerequisites() -> None:
     assert ResourceTier.with_prerequisites(["demo", "master"]) == ("master", "install", "demo")
 
 
+def test_resource_entries_exclude_settings_declared_entry(tmp_path: Path, settings: Any) -> None:
+    """Resource selection can omit one project-excluded entry without dropping its tier siblings."""
+
+    class SelectionLedger(Resource):
+        """Concrete resource ledger for entry selection tests."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    owner = addon(
+        tmp_path,
+        name="angee.iam",
+        label="iam",
+        manifest={
+            "master": (),
+            "install": (),
+            "demo": (
+                {"path": "resources/demo/010_iam.user.yaml", "adopt": "username"},
+                {"path": "resources/demo/020_iam.directory_wildcard_reader.yaml", "kind": "grants"},
+            ),
+        },
+    )
+    settings.ANGEE_RESOURCE_EXCLUDED_ENTRIES = (
+        "angee.iam:resources/demo/020_iam.directory_wildcard_reader.yaml",
+    )
+
+    entries = SelectionLedger.objects._entries_for((owner,), tiers=[Resource.Tier.DEMO])
+
+    assert [item.source for item in entries] == ["resources/demo/010_iam.user.yaml"]
+
+
+def test_resource_entries_reject_malformed_exclusion_setting(settings: Any) -> None:
+    """A malformed resource exclusion setting fails before resource files are read."""
+
+    class SelectionValidationLedger(Resource):
+        """Concrete resource ledger for entry exclusion validation tests."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    settings.ANGEE_RESOURCE_EXCLUDED_ENTRIES = ("resources/demo/020_iam.directory_wildcard_reader.yaml",)
+
+    with pytest.raises(ImproperlyConfigured, match="ANGEE_RESOURCE_EXCLUDED_ENTRIES"):
+        SelectionValidationLedger.objects._entries_for((), tiers=[Resource.Tier.DEMO])
+
+
 def test_catalogue_tier_literals_match_resource_tiers() -> None:
     """Base catalogue tier literals stay in sync with the resource tier owner."""
 

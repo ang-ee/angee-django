@@ -8,5 +8,7 @@ SETTINGS = {
     "ANGEE_RESOURCE_SOURCE_CLASSES": {
         "path": "angee.resources.sources.path_source",
     },
+    # Optional project-level omissions keyed as ``addon.name:resource/path``.
+    "ANGEE_RESOURCE_EXCLUDED_ENTRIES": (),
 }
 """Django settings contributed when resources is installed."""

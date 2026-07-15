@@ -258,6 +258,31 @@ def test_iam_demo_resources_seed_directory_for_non_admin_user(iam_demo_resource_
 
 
 @pytest.mark.django_db(transaction=True)
+def test_iam_demo_resource_exclusion_omits_wildcard_directory_grant(
+    iam_demo_resource_ledger: None,
+    settings: Any,
+) -> None:
+    """A project can load IAM demo users while opting out of the wildcard directory grant."""
+
+    del iam_demo_resource_ledger
+    settings.ANGEE_RESOURCE_EXCLUDED_ENTRIES = (
+        "angee.iam:resources/demo/020_iam.directory_wildcard_reader.yaml",
+    )
+
+    _load_iam_demo_resources()
+
+    with system_context(reason="test.iam.demo-directory.excluded-users"):
+        assert set(User.objects.values_list("username", flat=True)) == {"admin", "alice", "bob"}
+    assert not active_relationship_model().objects.filter(
+        resource_type="iam/directory",
+        resource_id="main",
+        relation="reader",
+        subject_type="auth/user",
+        subject_id="*",
+    ).exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_iam_demo_directory_includes_user_created_after_resource_load(iam_demo_resource_ledger: None) -> None:
     """A post-load user is still visible because directory reach is singleton-backed."""
 

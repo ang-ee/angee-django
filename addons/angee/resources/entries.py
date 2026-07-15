@@ -260,6 +260,12 @@ class ResourceEntry:
         return self.source_value
 
     @property
+    def key(self) -> EntryKey:
+        """Return the dependency and exclusion key for this resource entry."""
+
+        return (self.addon.name, self.source)
+
+    @property
     def display(self) -> str:
         """Return an owner-qualified name for diagnostics."""
 
@@ -462,7 +468,7 @@ class EntryGraph:
         position: dict[EntryKey, int] = {}
         addon_names: dict[str, str] = {}
         for index, entry in enumerate(self.entries):
-            key = self._entry_key(entry)
+            key = entry.key
             if key in by_key:
                 raise ResourceLoadError(f"duplicate resource entry {entry.display}")
             by_key[key] = entry
@@ -496,11 +502,6 @@ class EntryGraph:
         if len(ordered) != len(by_key):
             raise ResourceLoadError("cycle detected in resource depends_on")
         return tuple(ordered)
-
-    def _entry_key(self, entry: ResourceEntry) -> EntryKey:
-        """Return the dependency graph key for ``entry``."""
-
-        return (entry.addon.name, entry.source)
 
     def _dependency_key(
         self,
