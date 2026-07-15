@@ -47,6 +47,7 @@ import { Form } from "./Form";
 import {
   FormView,
   FORM_VIEW_RECORD_CHROME_SLOT,
+  formViewRecordActionsSlot,
   formViewSectionsSlot,
   type FormField,
   type FormSubmitContext,
@@ -70,6 +71,11 @@ const sdkMocks = vi.hoisted(() => ({
   // routing ({pk, patch, lines}) without a live custom-mutation transport.
   save: vi.fn(),
   recordSelection: undefined as readonly string[] | undefined,
+  // When set, the record read answers with only the paths the view selected —
+  // what a GraphQL detail query actually returns. Opt-in, so the tests that stub a
+  // whole row and assert on it keep reading it whole; a test asserting that
+  // FormView *selects* what it reads turns it on.
+  projectToSelection: false,
   mutationAction: undefined as string | undefined,
   mutationOptions: undefined as { fields?: readonly string[]; enabled?: boolean } | undefined,
 }));
@@ -122,6 +128,17 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       mutation: { isPending: false, error: null },
     };
   };
+  // The read answers with the columns the caller selected and nothing else — the
+  // server-side projection this harness otherwise skips. Gated on
+  // `projectToSelection`; see the flag's note.
+  const projectedRecord = (selection: readonly string[] | undefined) => {
+    const record = sdkMocks.record ?? undefined;
+    if (!record || !sdkMocks.projectToSelection) return record;
+    const selected = new Set((selection ?? []).map((path) => path.split(".")[0]));
+    return Object.fromEntries(
+      Object.entries(record).filter(([name]) => selected.has(name)),
+    ) as Row;
+  };
   const formResult = (options?: {
     action?: "create" | "edit";
     id?: string | number;
@@ -140,7 +157,9 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       id: options?.id,
       setId: vi.fn(),
       query: {
-        data: { data: queryEnabled ? sdkMocks.record ?? undefined : undefined },
+        data: {
+          data: queryEnabled ? projectedRecord(sdkMocks.recordSelection) : undefined,
+        },
         isFetching: false,
         error: null,
         refetch: vi.fn(),
@@ -335,6 +354,7 @@ describe("FormView", () => {
     sdkMocks.listRows = [];
     sdkMocks.listEnabled = false;
     sdkMocks.recordSelection = undefined;
+    sdkMocks.projectToSelection = false;
     sdkMocks.mutationAction = undefined;
     sdkMocks.mutationOptions = undefined;
     sdkMocks.mutate.mockImplementation(async ({ data }: { data: Row }) => ({
@@ -1516,6 +1536,368 @@ describe("FormView", () => {
     expect(probe.textContent).toBe("notes.Note:note-1");
   });
 
+  test("renders record-action slot contributions beside the Actions menu", async () => {
+    function ActionProbe(): ReactElement {
+      const chrome = useRecordChromeContext();
+      return (
+        <button type="button">
+          Pause {chrome.recordId} via {chrome.dataProviderName} for{" "}
+          {chrome.canonicalResource}
+        </button>
+      );
+    }
+
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+        <Action id="archive" label="Archive" set={{ status: "ARCHIVED" }} />
+      </FormView>,
+      undefined,
+      undefined,
+      {
+        slots: [
+          {
+            slot: formViewRecordActionsSlot("notes.Note"),
+            id: "notes.pause",
+            content: <ActionProbe />,
+          },
+        ],
+      },
+    );
+
+    const actions = await screen.findByRole("button", { name: "Actions" });
+    const pause = await screen.findByRole("button", {
+      name: "Pause note-1 via console for notes.Note",
+    });
+    expect(pause.parentElement).toBe(actions.parentElement);
+  });
+
+  test("inherits record-action contributions from the model's canonical MTI parent", async () => {
+    // The addon that owns a parent model contributes its verbs against it once
+    // and reaches every subtype's form, instead of contributing globally and
+    // re-deriving the MTI mapping in a predicate on every form in the app.
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      mtiMetadata(),
+      undefined,
+      {
+        slots: [
+          {
+            slot: formViewRecordActionsSlot("parties.Party"),
+            id: "parties.pause",
+            content: <button type="button">Inherited pause</button>,
+          },
+        ],
+      },
+    );
+
+    expect(await screen.findByRole("button", { name: "Inherited pause" })).toBeTruthy();
+  });
+
+  test("lets an own-model contribution override the canonical entry of the same id", async () => {
+    // A subtype specializing an inherited verb: decided by declared model
+    // specificity, never by addon array order.
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      mtiMetadata(),
+      undefined,
+      {
+        slots: [
+          {
+            slot: formViewRecordActionsSlot("parties.Party"),
+            id: "lifecycle.pause",
+            content: <button type="button">Generic pause</button>,
+          },
+          {
+            slot: formViewRecordActionsSlot("parties.Party"),
+            id: "lifecycle.disconnect",
+            content: <button type="button">Generic disconnect</button>,
+          },
+          {
+            slot: formViewRecordActionsSlot("notes.Note"),
+            id: "lifecycle.pause",
+            content: <button type="button">Note pause</button>,
+          },
+        ],
+      },
+    );
+
+    // Same id against the more specific model wins…
+    expect(await screen.findByRole("button", { name: "Note pause" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Generic pause" })).toBeNull();
+    // …and an inherited verb the subtype did not specialize is untouched.
+    expect(screen.getByRole("button", { name: "Generic disconnect" })).toBeTruthy();
+  });
+
+  test("keeps the canonical parent's own form on its own entry", async () => {
+    // The override is scoped to the subtype: the parent's form still renders the
+    // parent's verb, so a subtype cannot reach up and replace it.
+    renderWithProviders(
+      <FormView resource="parties.Party" id="party-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      mtiMetadata(),
+      undefined,
+      {
+        slots: [
+          {
+            slot: formViewRecordActionsSlot("parties.Party"),
+            id: "lifecycle.pause",
+            content: <button type="button">Generic pause</button>,
+          },
+          {
+            slot: formViewRecordActionsSlot("notes.Note"),
+            id: "lifecycle.pause",
+            content: <button type="button">Note pause</button>,
+          },
+        ],
+      },
+    );
+
+    expect(await screen.findByRole("button", { name: "Generic pause" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Note pause" })).toBeNull();
+  });
+
+  test("lets an impl entry beat the own-model entry, which beats the canonical one", async () => {
+    // The three tiers of the record-verb key, resolved by declared specificity:
+    // canonical MTI parent → own model → own model + the row's impl key. This is
+    // what lets one vendor's addon specialize a verb for its own rows without
+    // naming — or displacing it on — a model it does not own.
+    sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "WHATSAPP" };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      implMetadata(),
+      undefined,
+      {
+        slots: [
+          {
+            slot: formViewRecordActionsSlot("parties.Party"),
+            id: "lifecycle.disconnect",
+            content: <button type="button">Generic disconnect</button>,
+          },
+          {
+            slot: formViewRecordActionsSlot("notes.Note"),
+            id: "lifecycle.disconnect",
+            content: <button type="button">Note disconnect</button>,
+          },
+          {
+            slot: formViewRecordActionsSlot("notes.Note", "whatsapp"),
+            id: "lifecycle.disconnect",
+            content: <button type="button">WhatsApp disconnect</button>,
+          },
+        ],
+      },
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "WhatsApp disconnect" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Note disconnect" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Generic disconnect" })).toBeNull();
+  });
+
+  test("selects the impl column it resolves the verb key from", async () => {
+    // The regression this guards: the impl key is built from
+    // `displayRecord[implField]`, but the selection is built from the form's
+    // *declared* fields — and this form declares only `title`. `_impl_fields`
+    // intersects with the **resource's** readable columns, which is not the
+    // form's selection, so nothing made the two meet. WhatsApp's verbs rendered
+    // only because messaging's channel form happened to carry a presentational
+    // `<Field name="backend_class" readOnly />`; deleting that line took every
+    // WhatsApp verb with it — no error, no failing test. So the read is driven
+    // here: the row answers with what the view selected and nothing more.
+    sdkMocks.projectToSelection = true;
+    sdkMocks.record = { id: "note-1", title: "Note", kind: "WHATSAPP" };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      implMetadata(),
+      undefined,
+      {
+        slots: [
+          {
+            slot: formViewRecordActionsSlot("notes.Note", "whatsapp"),
+            id: "lifecycle.disconnect",
+            content: <button type="button">WhatsApp disconnect</button>,
+          },
+        ],
+      },
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "WhatsApp disconnect" }),
+    ).toBeTruthy();
+    expect(sdkMocks.recordSelection).toContain("kind");
+  });
+
+  test("selects no impl column the resource does not name", async () => {
+    // The control for the test above. Same form, same row, same contribution —
+    // only `implFields` is gone from the resource, so the view has no column to
+    // select, the row arrives without `kind`, and the impl key never resolves.
+    // That is what proves the verb above rendered because the *view selected* the
+    // column, rather than because the harness handed it a whole stubbed row.
+    sdkMocks.projectToSelection = true;
+    sdkMocks.record = { id: "note-1", title: "Note", kind: "WHATSAPP" };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      mtiMetadata(),
+      undefined,
+      {
+        slots: [
+          {
+            slot: formViewRecordActionsSlot("notes.Note", "whatsapp"),
+            id: "lifecycle.disconnect",
+            content: <button type="button">WhatsApp disconnect</button>,
+          },
+        ],
+      },
+    );
+
+    await screen.findByDisplayValue("Note");
+    expect(sdkMocks.recordSelection).not.toContain("kind");
+    expect(screen.queryByRole("button", { name: "WhatsApp disconnect" })).toBeNull();
+  });
+
+  test("keeps the inherited verbs on a row of another impl", async () => {
+    // The IMAP case: WhatsApp's entries are keyed on its own impl, so a channel it
+    // does not own is untouched by them and keeps integrate's canonical verbs.
+    sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "IMAP" };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      implMetadata(),
+      undefined,
+      {
+        slots: [
+          {
+            slot: formViewRecordActionsSlot("parties.Party"),
+            id: "lifecycle.disconnect",
+            content: <button type="button">Generic disconnect</button>,
+          },
+          {
+            slot: formViewRecordActionsSlot("notes.Note", "whatsapp"),
+            id: "lifecycle.disconnect",
+            content: <button type="button">WhatsApp disconnect</button>,
+          },
+        ],
+      },
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "Generic disconnect" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "WhatsApp disconnect" })).toBeNull();
+  });
+
+  test("resolves the impl key case-insensitively against the row's enum read", async () => {
+    // The row reads its impl as the GraphQL enum member name (`WHATSAPP`) while an
+    // addon spells the registry key (`whatsapp`); `formViewRecordActionsSlot` owns
+    // that rule, so both sides land on one key.
+    sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "WHATSAPP" };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      implMetadata(),
+      undefined,
+      {
+        slots: [
+          {
+            slot: formViewRecordActionsSlot("notes.Note", "whatsapp"),
+            id: "whatsapp.connect",
+            content: <button type="button">Pair WhatsApp</button>,
+          },
+        ],
+      },
+    );
+
+    expect(await screen.findByRole("button", { name: "Pair WhatsApp" })).toBeTruthy();
+  });
+
+  test("composes two vendors' entries on one model without a collision", async () => {
+    // The cap the model-scoped key imposed: a second backend contributing the same
+    // verb id for the same model hit the `uniqueKind` throw at boot. Distinct impl
+    // keys make them siblings, and each row resolves only its own.
+    sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "IMAP" };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      implMetadata(),
+      undefined,
+      {
+        slots: [
+          {
+            slot: formViewRecordActionsSlot("notes.Note", "whatsapp"),
+            id: "lifecycle.disconnect",
+            content: <button type="button">WhatsApp disconnect</button>,
+          },
+          {
+            slot: formViewRecordActionsSlot("notes.Note", "imap"),
+            id: "lifecycle.disconnect",
+            content: <button type="button">IMAP disconnect</button>,
+          },
+        ],
+      },
+    );
+
+    expect(await screen.findByRole("button", { name: "IMAP disconnect" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "WhatsApp disconnect" })).toBeNull();
+  });
+
+  test("orders the merged record verbs by sequence across specificity tiers", async () => {
+    // `sequence` stays the ordering contract once a subtype specializes: merging
+    // two already-sorted groups by concatenation put the specialized verb's whole
+    // group last, so a vendor's Connect(10) landed after the inherited Pause(11).
+    sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "WHATSAPP" };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      implMetadata(),
+      undefined,
+      {
+        slots: [
+          {
+            slot: formViewRecordActionsSlot("parties.Party"),
+            id: "lifecycle.pause",
+            sequence: 11,
+            content: <button type="button">Pause</button>,
+          },
+          {
+            slot: formViewRecordActionsSlot("parties.Party"),
+            id: "lifecycle.disconnect",
+            sequence: 13,
+            content: <button type="button">Disconnect</button>,
+          },
+          {
+            slot: formViewRecordActionsSlot("notes.Note", "whatsapp"),
+            id: "whatsapp.connect",
+            sequence: 10,
+            content: <button type="button">Connect</button>,
+          },
+        ],
+      },
+    );
+
+    await screen.findByRole("button", { name: "Connect" });
+    const rendered = screen
+      .getAllByRole("button")
+      .map((button) => button.textContent)
+      .filter((label) => ["Connect", "Pause", "Disconnect"].includes(label ?? ""));
+    expect(rendered).toEqual(["Connect", "Pause", "Disconnect"]);
+  });
+
   test("merges FORM_VIEW_SECTIONS_SLOT fields into the submit payload", async () => {
     sdkMocks.record = null;
     renderWithProviders(
@@ -2298,9 +2680,63 @@ function defaultResource(typeName: string, modelLabel: string): DataResourceMeta
   };
 }
 
+/**
+ * An MTI pair: `notes.Note` reports `parties.Party` as its canonical parent, so
+ * a verb contributed against the parent reaches the subtype's form. The parent
+ * is its own canonical label, as the backend emits it.
+ */
+function mtiMetadata(): SchemaFieldMetadata {
+  return {
+    types: {
+      NoteType: mtiModel("NoteType", "notes.Note", "parties.Party"),
+      PartyType: mtiModel("PartyType", "parties.Party", "parties.Party"),
+    },
+  };
+}
+
+function mtiModel(
+  typeName: string,
+  modelLabel: string,
+  canonicalLabel: string,
+  implFields?: readonly string[],
+): ModelMetadata {
+  return {
+    ...defaultModel(typeName, modelLabel),
+    resource: {
+      ...defaultResource(typeName, modelLabel),
+      canonicalLabel,
+      ...(implFields ? { implFields } : {}),
+    },
+  };
+}
+
+/**
+ * The MTI pair above, with the subtype declaring an impl column — the shape the
+ * backend emits for `messaging.Channel` (`implFields: ["backend_class"]`, its
+ * canonical parent `integrate.Integration`).
+ *
+ * `kind` is a readable model field and *not* a declared form field, which is the
+ * shape that matters: `_impl_fields` intersects with the resource's readable
+ * columns, never with any form's selection, so a form reaches its impl value only
+ * because `FormView` selects it.
+ */
+function implMetadata(): SchemaFieldMetadata {
+  const note = mtiModel("NoteType", "notes.Note", "parties.Party", ["kind"]);
+  return {
+    types: {
+      NoteType: {
+        ...note,
+        fields: { ...note.fields, kind: { name: "kind", kind: "scalar", scalar: "String" } },
+      },
+      PartyType: mtiModel("PartyType", "parties.Party", "parties.Party"),
+    },
+  };
+}
+
 function modelLabelForType(typeName: string): string {
   const known: Record<string, string> = {
     NoteType: "notes.Note",
+    PartyType: "parties.Party",
     RepositoryType: "integrate.Repository",
     InferenceModelType: "agents.InferenceModel",
     IntegrationType: "integrate.Integration",

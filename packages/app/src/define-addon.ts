@@ -1,8 +1,16 @@
 // Addon composition. Each addon describes itself once with `defineAddon`; an
-// app folds the manifests into a single runtime with `composeAddons`. Registry
-// facts (routes, widgets, icons, i18n keys) must be contributed by exactly one
-// addon — a collision is a build-time error. Ordered contribution lists
-// (chatter tabs, slot entries) dedupe by key, last wins, and sort by sequence.
+// app folds the manifests into a single runtime with `composeAddons`. Every
+// contribution is keyed, and the key decides what a second claim on it means:
+//
+// - Registry facts (routes, menu ids, widgets, icons, i18n keys, forms, previews,
+//   data providers) and the keyed contribution lists that are extension points
+//   (slot entries by `(slot, id)`, drawers by `(edge, id)`) are unique — a second
+//   addon claiming one is a collision, and a composition-time error (app boot;
+//   `pnpm run test` composes the full addon set — `typecheck`/`build` do not).
+// - Chatter tabs dedupe by `id`, last addon wins, so a later addon can override a
+//   default.
+//
+// The ordered lists then sort by `sequence`, never by addon order.
 
 import type { I18nResources } from "@angee/refine";
 // The contribution contracts moved down into the binding (`@angee/ui` owns the
@@ -106,6 +114,15 @@ export function defineAddon(manifest: AddonManifest): AddonManifest {
  * `uniqueKind` to instead fail fast on a duplicate key (two addons claiming one
  * key is a collision, like widgets/previews). The chatter, slot, and drawer
  * merges are the same fold over different keys.
+ *
+ * Slots are additive extension points, so a slot entry is a unique key: a second
+ * addon claiming one silently deciding the winner by array order is a collision,
+ * not an override. An addon that needs to vary a contribution per row keys it on
+ * the fact the row already carries — an `ImplClassField` value — through the
+ * record-verb slot's impl key (`formViewRecordActionsSlot(resource, implValue)`),
+ * which resolves by declared specificity rather than by array order. Two vendors
+ * then specialize the same verb on the same model as siblings, each reaching only
+ * its own rows.
  */
 function mergeByKey<T extends { sequence?: number }>(
   groups: readonly (readonly T[])[],
@@ -138,7 +155,7 @@ export function mergeChatterContributions(
 export function mergeSlotContributions(
   ...groups: readonly (readonly SlotContribution[])[]
 ): SlotContribution[] {
-  return mergeByKey(groups, (entry) => `${entry.slot}\0${entry.id}`);
+  return mergeByKey(groups, (entry) => `${entry.slot}\0${entry.id}`, "slot entry");
 }
 
 export function mergeDrawerContributions(

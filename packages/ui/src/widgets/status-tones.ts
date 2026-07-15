@@ -1,4 +1,5 @@
 import { stateToneFromValue, type Tone, type ToneValueBuckets } from "../lib/tones";
+import { optionToken } from "./types";
 
 /**
  * The shared status vocabulary: which status-string values render in which tone. One
@@ -19,7 +20,7 @@ import { stateToneFromValue, type Tone, type ToneValueBuckets } from "../lib/ton
  */
 export const STATUS_TONES: ToneValueBuckets = {
   success: [
-    "active", "published", "approved", "live", "open", "done",
+    "active", "connected", "published", "approved", "live", "open", "done",
     "running", "ready", "up", "online", "healthy", "completed",
     "succeeded", "won", "ok",
     // Document lifecycle (accounting/sales): a posted/paid/confirmed/invoiced
@@ -36,7 +37,7 @@ export const STATUS_TONES: ToneValueBuckets = {
   danger: ["error", "failed", "denied", "lost", "down", "crashed"],
   info: ["started", "assigned"],
   neutral: [
-    "archived", "deleted", "disabled", "rejected", "blocked",
+    "archived", "deleted", "disabled", "disconnected", "rejected", "blocked",
     "stopped", "deprovisioned", "idle", "inactive", "offline", "unknown", "default",
     "scheduled", "canceled", "skipped",
     // Document lifecycle: cancelled (British spelling used by the ledger enums),
@@ -65,7 +66,7 @@ export function statusTone(
 ): Tone {
   const mapped = value && override ? override[value] : undefined;
   if (mapped) return mapped;
-  const normalized = value?.trim().toLowerCase();
+  const normalized = optionToken(value);
   if (!normalized) return options.emptyTone ?? "neutral";
   const tone = stateToneFromValue(normalized, STATUS_TONES);
   return tone === "brand" ? (options.unknownTone ?? "brand") : tone;
