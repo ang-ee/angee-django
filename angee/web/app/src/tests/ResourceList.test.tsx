@@ -150,6 +150,7 @@ const sdkMocks = vi.hoisted(() => ({
   listCalls: [] as ResourceListOptions[],
   mutate: vi.fn(async ({ data }: { data: Row }) => data),
   fetching: false,
+  groupTotals: true,
 }));
 
 vi.mock("@angee/ui/runtime", async (importOriginal) => {
@@ -780,7 +781,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
     );
     return {
       count: visibleBuckets.reduce((total, bucket) => total + bucket.count, 0),
-      totalCount: buckets.length,
+      ...(sdkMocks.groupTotals ? { totalCount: buckets.length } : {}),
       buckets: visibleBuckets,
       fetching: sdkMocks.fetching,
       error: null,
@@ -1138,6 +1139,7 @@ describe("ResourceList", () => {
     });
     sdkMocks.listCalls.length = 0;
     sdkMocks.fetching = false;
+    sdkMocks.groupTotals = true;
   });
 
   test("renders ListView with the resource toolbar and group controls", async () => {
@@ -2263,6 +2265,34 @@ describe("ResourceList", () => {
         screen.getByRole("button", { name: "Groups 3-4 / 4 groups" }),
       ).toBeTruthy(),
     );
+    await waitFor(() => {
+      const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
+      expect(latest?.searchParams.get("page")).toBe("2");
+    });
+  });
+
+  test("paginates grouped windows when the server does not return a total", async () => {
+    sdkMocks.groupTotals = false;
+    const onUrlUpdate = vi.fn();
+    render(
+      <TestUrlState
+        searchParams="?group=status&pageSize=2"
+        onUrlUpdate={onUrlUpdate}
+      >
+        <ResourceList
+          resource="notes.Note"
+          columns={columns}
+          formFields={formFields}
+        />
+      </TestUrlState>,
+    );
+
+    await screen.findByRole("button", { name: "Groups 1-2" });
+    const next = screen.getByRole("button", { name: "Next page" });
+    expect(next.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(next);
+
+    await screen.findByRole("button", { name: "Groups 3-3 / 3 groups" });
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
       expect(latest?.searchParams.get("page")).toBe("2");

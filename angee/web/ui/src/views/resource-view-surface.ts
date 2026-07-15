@@ -50,6 +50,7 @@ import {
   type AngeeListBatchScope,
   type GroupByBatchScope,
   type GroupByRequestOptions,
+  type GroupByResult,
   type UseAngeeGroupByResult,
   } from "@angee/refine";
 import {
@@ -315,6 +316,7 @@ function listResultFromPageState<TRow extends Row>({
   pageCount = total === undefined
     ? undefined
     : Math.max(1, Math.ceil(total / pageSize)),
+  hasNext = pageCount !== undefined && page < pageCount,
 }: {
   resourceView: ResourceViewContextValue;
   error: unknown;
@@ -325,6 +327,7 @@ function listResultFromPageState<TRow extends Row>({
   page?: number;
   pageSize?: number;
   pageCount?: number | undefined;
+  hasNext?: boolean;
 }): ResourceListResult {
   return {
     rows,
@@ -333,7 +336,7 @@ function listResultFromPageState<TRow extends Row>({
     page,
     pageSize,
     pageInfo: undefined,
-    hasNext: pageCount !== undefined && page < pageCount,
+    hasNext,
     hasPrev: page > 1,
     setPage: resourceView.setPage,
     firstPage: () => resourceView.setPage(1),
@@ -579,11 +582,22 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   });
 
   const rootResult = scopeModel.rootResult;
-  const rootTotal = rootResult
-    ? rootResult.totalCount ?? rootResult.buckets.length
+  const rootWindow = rootResult
+    ? groupedPageWindow(rootResult, rootPage, statePageSize)
     : undefined;
+  const rootTotal = rootWindow?.total;
   const rootPageCount =
     rootTotal === undefined ? undefined : Math.max(1, Math.ceil(rootTotal / statePageSize));
+  React.useEffect(() => {
+    if (
+      rootResult
+      && !rootResult.fetching
+      && rootPageCount !== undefined
+      && rootPage > rootPageCount
+    ) {
+      resourceView.setPage(rootPageCount);
+    }
+  }, [resourceView.setPage, rootPage, rootPageCount, rootResult]);
   const list = React.useMemo<ResourceListResult>(
     () =>
       listResultFromPageState({
@@ -596,8 +610,17 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
         page: rootPage,
         pageSize: statePageSize,
         pageCount: rootPageCount,
+        hasNext: rootWindow?.hasNext ?? false,
       }),
-    [resourceView, rootResult, rootPage, rootPageCount, rootTotal, statePageSize],
+    [
+      resourceView,
+      rootResult,
+      rootPage,
+      rootPageCount,
+      rootTotal,
+      rootWindow?.hasNext,
+      statePageSize,
+    ],
   );
   const listState = useResourceRowsSnapshot<TRow>(list);
 
@@ -2181,6 +2204,27 @@ function groupScopesEqual(
 function normaliseScopePage(page: number): number {
   if (!Number.isFinite(page)) return 1;
   return Math.max(1, Math.floor(page));
+}
+
+/** Pagination facts available from one server `_groups` window. */
+function groupedPageWindow(
+  result: GroupByResult,
+  page: number,
+  pageSize: number,
+): { total: number | undefined; hasNext: boolean } {
+  if (result.totalCount !== undefined) {
+    return {
+      total: result.totalCount,
+      hasNext: page * pageSize < result.totalCount,
+    };
+  }
+  const hasNext = result.buckets.length === pageSize;
+  return {
+    total: hasNext
+      ? undefined
+      : (page - 1) * pageSize + result.buckets.length,
+    hasNext,
+  };
 }
 
 function requireGroupedDataResource(

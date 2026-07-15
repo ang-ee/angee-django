@@ -67,7 +67,7 @@ function pagerRangeLabel({
   unit: string | undefined;
   formatNumber: (value: number) => string;
 }): string {
-  const start = total === undefined || total === 0
+  const start = total === 0
     ? 0
     : (page - 1) * pageSize + 1;
   const end = total === undefined
