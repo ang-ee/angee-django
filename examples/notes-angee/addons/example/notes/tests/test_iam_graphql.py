@@ -159,6 +159,22 @@ class IAMGraphQLTests(TransactionTestCase):
         planning = next(node for node in page if node["title"] == "Quarterly planning")
         self.assertEqual(planning["status"], "IN_REVIEW")
 
+    def test_messaging_recipient_picker_gets_seeded_people_directory(self) -> None:
+        """The example composition seeds IAM directory grants for the picker."""
+
+        alice = Client()
+        self.login(alice, "alice")
+        rows = self.post_console(
+            alice,
+            """
+            query {
+              colleagues(limit: 20) { username }
+            }
+            """,
+        )["data"]["colleagues"]
+
+        self.assertGreaterEqual({row["username"] for row in rows}, {"admin", "alice", "bob"})
+
     def test_note_exposes_scalar_audit_ids_and_stamps_updates(self) -> None:
         alice = Client()
         self.login(alice, "alice")
@@ -630,6 +646,22 @@ class IAMGraphQLTests(TransactionTestCase):
 
         response = client.post(
             "/graphql/public/",
+            data=json.dumps({"query": query, "variables": variables or {}}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        return cast(dict[str, Any], json.loads(response.content))
+
+    def post_console(
+        self,
+        client: Client,
+        query: str,
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Execute one GraphQL operation against the console schema."""
+
+        response = client.post(
+            "/graphql/console/",
             data=json.dumps({"query": query, "variables": variables or {}}),
             content_type="application/json",
         )

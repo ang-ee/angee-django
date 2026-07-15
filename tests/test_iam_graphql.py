@@ -39,7 +39,7 @@ from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import OAuthFlowError
 from tests.conftest import (
-    SOCIAL_TEST_MODELS,
+    POSTS_TEST_MODELS,
     Credential,
     ExternalAccount,
     OAuthClient,
@@ -49,6 +49,8 @@ from tests.conftest import (
 )
 from tests.conftest import _create_missing_tables as _create_connection_tables
 from tests.conftest import result_data as _data
+from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
+from tests.test_messaging import MESSAGING_TEST_MODELS
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -1739,9 +1741,9 @@ def iam_connection_tables(transactional_db: Any) -> Iterator[None]:
     """
 
     del transactional_db
-    from tests.test_messaging import MESSAGING_TEST_MODELS
-
-    connection_models = MESSAGING_TEST_MODELS + SOCIAL_TEST_MODELS
+    connection_models = tuple(
+        dict.fromkeys(MESSAGING_TEST_MODELS + POSTS_TEST_MODELS + AGENTS_GRAPHQL_MODELS)
+    )
     _create_connection_tables(connection_models)
     auth_models = tuple(_create_auth_app_tables())
     call_command("rebac", "sync", verbosity=0)

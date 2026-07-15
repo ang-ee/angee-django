@@ -1,4 +1,4 @@
-"""AppConfig for the company-scope create-gate demo (test-only installed app).
+"""AppConfig for the local-scope create-gate demo (test-only installed app).
 
 Registered in ``tests.settings`` so pytest-django creates the demo table on
 demand and ``rebac sync`` discovers the adjacent ``permissions.zed`` (its
@@ -12,7 +12,7 @@ from django.apps import AppConfig
 
 
 class ScopeDemoConfig(AppConfig):
-    """Installed app hosting the company-scoped create-gated document model."""
+    """Installed app hosting the locally scoped create-gated document model."""
 
     name = "tests.scopedemo"
     label = "scopedemo"

@@ -47,6 +47,7 @@ const TERMINAL_RUN_STATUSES = new Set(["SUCCEEDED", "FAILED", "CANCELED"]);
 
 export function RunsPage(): React.ReactElement {
   const t = useWorkflowsT();
+  // Correct as-is: WorkflowRun and Decision have changes(), while StepRun is read by an authored query.
   const [cancelRun] = useAuthoredMutation(CancelWorkflowRunDocument, {
     invalidateModels: [RUN_MODEL, STEP_RUN_MODEL, DECISION_MODEL],
     errorFrom: (data) =>

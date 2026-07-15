@@ -1,32 +1,38 @@
 import * as React from "react";
-import { Column, Facet, Field, Form, Group, List, ResourceList } from "@angee/ui";
+import { Column, Field, Form, Group, List, ResourceList, slotContents, useSlot } from "@angee/ui";
 
 import { useTagsT } from "../i18n";
+import {
+  TAG_SCOPE_COLUMN_SLOT,
+  TAG_SCOPE_FACET_SLOT,
+  TAG_SCOPE_FIELD_SLOT,
+} from "../slots";
 
 const TAG_MODEL = "tags.Tag";
 
 /**
- * The tag vocabulary — a plain resource page for the shared/company-scoped tags.
- * `company` is nullable (a shared tag when omitted), so the list facets by scope
- * and archive state; the polymorphic assignments themselves are edited per-record
- * through the tags chatter pane, not here.
+ * The tag vocabulary — a plain resource page for shared tags. Scope-specific
+ * addons may contribute their own facet/column/field declarations through slots.
  */
 export function TagsPage(): React.ReactElement {
   const t = useTagsT();
+  const scopeFacetEntries = useSlot(TAG_SCOPE_FACET_SLOT);
+  const scopeColumnEntries = useSlot(TAG_SCOPE_COLUMN_SLOT);
+  const scopeFieldEntries = useSlot(TAG_SCOPE_FIELD_SLOT);
   return (
     <ResourceList resource={TAG_MODEL} placement="inline" routed>
       <List resource={TAG_MODEL} defaultGroup={{ field: "is_archived" }}>
-        <Facet field="company" label={t("col.scope")} labelField="name" />
+        {slotContents(scopeFacetEntries)}
         <Column field="name" header={t("col.name")} />
         <Column field="color" header={t("col.color")} />
-        <Column field="company" header={t("col.scope")} />
+        {slotContents(scopeColumnEntries)}
         <Column field="updated_at" />
       </List>
       <Form resource={TAG_MODEL}>
         <Field name="name" title />
         <Group label={t("form.details")} columns={2}>
           <Field name="color" label={t("col.color")} />
-          <Field name="company" label={t("col.scope")} />
+          {slotContents(scopeFieldEntries)}
         </Group>
         <Field name="is_archived" />
       </Form>

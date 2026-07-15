@@ -150,6 +150,7 @@ const sdkMocks = vi.hoisted(() => ({
   listCalls: [] as ResourceListOptions[],
   mutate: vi.fn(async ({ data }: { data: Row }) => data),
   fetching: false,
+  groupTotals: true,
 }));
 
 vi.mock("@angee/ui/runtime", async (importOriginal) => {
@@ -490,7 +491,10 @@ vi.mock("@refinedev/react-table", async () => {
       refineCoreProps?: {
         pagination?: { currentPage?: number; pageSize?: number };
         sorters?: { initial?: Array<{ field: string; order: "asc" | "desc" }> };
-        filters?: { initial?: RefineFilter[] };
+        filters?: {
+          initial?: RefineFilter[];
+          permanent?: RefineFilter[];
+        };
         queryOptions?: { enabled?: boolean };
       };
       onExpandedChange?: (updater: unknown) => void;
@@ -503,7 +507,9 @@ vi.mock("@refinedev/react-table", async () => {
         props.pagination?.currentPage
         ?? ((options.state?.pagination?.pageIndex ?? 0) + 1);
       const active = props.queryOptions?.enabled !== false;
-      const filters = whereFromRefineFilters(props.filters?.initial);
+      const filters = whereFromRefineFilters(
+        props.filters?.permanent ?? props.filters?.initial,
+      );
       const order = angeeOrderFromSorters(props.sorters?.initial);
       sdkMocks.listCalls.push({
         page: requestedPage,
@@ -775,7 +781,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
     );
     return {
       count: visibleBuckets.reduce((total, bucket) => total + bucket.count, 0),
-      totalCount: buckets.length,
+      ...(sdkMocks.groupTotals ? { totalCount: buckets.length } : {}),
       buckets: visibleBuckets,
       fetching: sdkMocks.fetching,
       error: null,
@@ -887,7 +893,16 @@ const TEST_SCHEMA_METADATA: SchemaFieldMetadata = {
       },
       fields: {
         title: { name: "title", kind: "scalar", scalar: "String" },
-        status: { name: "status", kind: "scalar", scalar: "String" },
+        status: {
+          name: "status",
+          kind: "enum",
+          enumName: "NoteStatus",
+          values: [
+            { value: "DRAFT", description: "Draft" },
+            { value: "ACTIVE", description: "Active" },
+            { value: "ARCHIVED", description: "Archived" },
+          ],
+        },
         priority: { name: "priority", kind: "scalar", scalar: "String" },
         wordCount: { name: "wordCount", kind: "scalar", scalar: "Int" },
         updatedAt: { name: "updatedAt", kind: "scalar", scalar: "DateTime" },
@@ -1107,8 +1122,8 @@ function render(
   );
 }
 
-function lastListCall(): ResourceListOptions | undefined {
-  return sdkMocks.listCalls[sdkMocks.listCalls.length - 1];
+function lastActiveListCall(): ResourceListOptions | undefined {
+  return sdkMocks.listCalls.findLast((call) => call.enabled !== false);
 }
 
 describe("ResourceList", () => {
@@ -1124,6 +1139,7 @@ describe("ResourceList", () => {
     });
     sdkMocks.listCalls.length = 0;
     sdkMocks.fetching = false;
+    sdkMocks.groupTotals = true;
   });
 
   test("renders ListView with the resource toolbar and group controls", async () => {
@@ -1502,7 +1518,7 @@ describe("ResourceList", () => {
 
     expect(await screen.findByText("First")).toBeTruthy();
     await waitFor(() =>
-      expect(lastListCall()?.order).toEqual({
+      expect(lastActiveListCall()?.order).toEqual({
         updatedAt: "DESC",
       }),
     );
@@ -1522,7 +1538,7 @@ describe("ResourceList", () => {
 
     expect(await screen.findByText("First")).toBeTruthy();
     await waitFor(() =>
-      expect(lastListCall()?.order).toEqual({ title: "ASC" }),
+      expect(lastActiveListCall()?.order).toEqual({ title: "ASC" }),
     );
   });
 
@@ -1540,7 +1556,7 @@ describe("ResourceList", () => {
 
     expect(await screen.findByText("First")).toBeTruthy();
     await waitFor(() =>
-      expect(lastListCall()?.order).toEqual({ priority: "DESC" }),
+      expect(lastActiveListCall()?.order).toEqual({ priority: "DESC" }),
     );
   });
 
@@ -2249,6 +2265,34 @@ describe("ResourceList", () => {
         screen.getByRole("button", { name: "Groups 3-4 / 4 groups" }),
       ).toBeTruthy(),
     );
+    await waitFor(() => {
+      const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
+      expect(latest?.searchParams.get("page")).toBe("2");
+    });
+  });
+
+  test("paginates grouped windows when the server does not return a total", async () => {
+    sdkMocks.groupTotals = false;
+    const onUrlUpdate = vi.fn();
+    render(
+      <TestUrlState
+        searchParams="?group=status&pageSize=2"
+        onUrlUpdate={onUrlUpdate}
+      >
+        <ResourceList
+          resource="notes.Note"
+          columns={columns}
+          formFields={formFields}
+        />
+      </TestUrlState>,
+    );
+
+    await screen.findByRole("button", { name: "Groups 1-2" });
+    const next = screen.getByRole("button", { name: "Next page" });
+    expect(next.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(next);
+
+    await screen.findByRole("button", { name: "Groups 3-3 / 3 groups" });
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
       expect(latest?.searchParams.get("page")).toBe("2");

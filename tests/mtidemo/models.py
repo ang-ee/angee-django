@@ -48,3 +48,69 @@ class MtiChild(MtiParent):
         db_table = "test_mtidemo_child"
         rebac_resource_type = "mtidemo/child"
         rebac_id_attr = "sqid"
+
+
+class MtiChildProxy(MtiChild):
+    """An untyped proxy over the typed concrete ``MtiChild``.
+
+    Carries no ``rebac_resource_type`` of its own (a bare proxy Meta), so it pins the
+    proxy rule in :func:`angee.base.refs.canonical_record_target`: a proxy resolves to its
+    concrete model first, then the MTI walk runs — an untyped proxy over a typed concrete
+    row keys on the typed ancestor (``MtiParent``), never the proxy's own content type.
+    """
+
+    class Meta:
+        """Django model options for the untyped MTI-child proxy."""
+
+        proxy = True
+        app_label = "mtidemo"
+
+
+class MtiParentProxy(MtiParent):
+    """An untyped proxy over the typed flat topmost model ``MtiParent``.
+
+    The flat (non-MTI) counterpart of :class:`MtiChildProxy`: canonicalizes to
+    ``MtiParent``'s own content type, not the proxy's, pinning that the proxy content type
+    is never the edge key even without an MTI ancestor to climb to.
+    """
+
+    class Meta:
+        """Django model options for the untyped MTI-parent proxy."""
+
+        proxy = True
+        app_label = "mtidemo"
+
+
+class MtiSideParent(models.Model):
+    """A second concrete parent with its own primary key — a secondary MTI path.
+
+    Deliberately shares no abstract base with :class:`MtiParent`, so a child inheriting
+    both has two independent concrete tables (and two primary keys), not a diamond.
+    ``managed = False``: never a table, only the shape the two-parent guard rejects.
+    """
+
+    label = models.CharField(max_length=200, blank=True, default="")
+
+    class Meta:
+        """Django model options for the secondary concrete parent."""
+
+        managed = False
+        app_label = "mtidemo"
+        db_table = "test_mtidemo_side_parent"
+
+
+class MtiTwoParent(MtiParent, MtiSideParent):
+    """A multiple-MTI child with two concrete parents — the corrupting shape refs rejects.
+
+    ``MtiSideParent``'s row keeps its own primary key, so this child's pk does not address
+    it; :func:`angee.base.refs.canonical_record_target` fails fast rather than store the
+    child pk against the side parent's content type. ``managed = False`` — instantiated
+    only to exercise the guard, never saved.
+    """
+
+    class Meta:
+        """Django model options for the multiple-MTI child."""
+
+        managed = False
+        app_label = "mtidemo"
+        db_table = "test_mtidemo_two_parent"

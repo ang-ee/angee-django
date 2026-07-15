@@ -74,6 +74,13 @@ export const ConnectInferenceProvider = graphql(`
   }
 `);
 
+// Updating a provider can change both its row and its discovered model catalogue;
+// keep the resource blast radius beside the verb that owns it.
+export const INFERENCE_PROVIDER_UPDATE_INVALIDATES = [
+  "agents.InferenceProvider",
+  "agents.InferenceModel",
+] as const;
+
 export const UpdateInferenceProvider = graphql(`
   mutation UpdateInferenceProvider($data: InferenceProviderPatch!) {
     update_inference_provider(data: $data) {

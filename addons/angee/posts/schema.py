@@ -1,10 +1,11 @@
-"""GraphQL schema for the social addon — feeds and the following surface.
+"""GraphQL schema for the posts addon — feeds and the following surface.
 
 Feeds are polled through the ``Bridge`` scheduler and browsed/managed in the
 console through Hasura resources; ``FeedFollow`` exposes the following edge. The
-engagement projections (``PostMetrics`` and the reused ``messaging.Reaction``) ride
-the owning ``messaging.Message``, so their reader belongs on messaging's
-``MessageType`` as a type extension rather than as standalone resources here.
+reused ``messaging.Reaction`` rows are exposed by messaging's existing nested
+``MessageType.reaction_groups`` field. ``PostMetrics`` currently remains model and
+permission data only; this schema declares no standalone or message type projection
+for it.
 """
 
 from __future__ import annotations
@@ -21,8 +22,8 @@ from angee.integrate.schema import BridgeSyncStatusMixin, IntegrationLabelMixin
 from angee.parties.schema import HandleType
 
 Handle = apps.get_model("parties", "Handle")
-Feed = apps.get_model("social", "Feed")
-FeedFollow = apps.get_model("social", "FeedFollow")
+Feed = apps.get_model("posts", "Feed")
+FeedFollow = apps.get_model("posts", "FeedFollow")
 
 
 @strawberry_django.type(Feed)
@@ -103,7 +104,7 @@ _RESOURCE_TYPES = [
 ]
 
 
-_SOCIAL_SCHEMA_BUCKET = {
+_POSTS_SCHEMA_BUCKET = {
     "query": [
         _FEED_RESOURCE.query,
         _FEED_FOLLOW_RESOURCE.query,
@@ -122,7 +123,7 @@ _SOCIAL_SCHEMA_BUCKET = {
 
 schemas = {
     "console": {
-        **_SOCIAL_SCHEMA_BUCKET,
+        **_POSTS_SCHEMA_BUCKET,
         "subscription": [
             changes(Feed, field="feedChanged"),
         ],

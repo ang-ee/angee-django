@@ -42,6 +42,12 @@ only where the two modes differ. Both collapse the first-run lifecycle into one
   code-baked runtime image instead. `provision` runs inside the django container. This
   is how you run your own Angee app locally on a real (Postgres + pgvector) database.
 
+Before initializing either layout, check for an existing current or ancestor
+`angee.yaml`. If one exists, it owns the checkout; use that `ANGEE_ROOT` and do
+not initialize a nested `.angee/` under a source checkout. Both templates render
+the same root `AGENTS.md` contract so code agents retain that ownership rule
+while working below `sources/`.
+
 ### The `local` root is a git-controlled project
 
 Commit what you author; ignore what a tool regenerates:
@@ -52,6 +58,7 @@ Commit what you author; ignore what a tool regenerates:
   angee.yaml               # stack: operator · postgres · django · frontend ingress
   manage.py                # ANGEE_PROJECT_DIR = here
   settings.yaml            # INSTALLED_APPS (base) · DATABASE_URL → postgres
+  AGENTS.md · CLAUDE.md    # stack-root ownership rules for coding agents
   addons/<ns>/             # your addons
   web/                     # your frontend
   runtime/                 # composer output — the pinned, deployed artifact

@@ -8,11 +8,14 @@ import iam from "@angee/iam";
 import integrate from "@angee/integrate";
 import knowledge from "@angee/knowledge";
 import messaging from "@angee/messaging";
+import nexus from "@angee/nexus";
 import operator from "@angee/operator";
 import parties from "@angee/parties";
 import platform from "@angee/platform";
 import resources from "@angee/resources";
+import spaces from "@angee/spaces";
 import storage from "@angee/storage";
+import tags from "@angee/tags";
 import workflows from "@angee/workflows";
 import { describe, expect, test } from "vitest";
 
@@ -35,6 +38,8 @@ const ADDONS = [
   iam,
   parties,
   messaging,
+  spaces,
+  nexus,
   integrate,
   agents,
   operator,
@@ -42,6 +47,7 @@ const ADDONS = [
   workflows,
   knowledge,
   resources,
+  tags,
   platform,
 ] as const;
 const HOST_ADDONS = [{ id: "base", icons: baseIcons }, ...ADDONS] as const;

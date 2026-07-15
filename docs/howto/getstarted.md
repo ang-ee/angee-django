@@ -103,7 +103,10 @@ works:
 - **Workflows** — orchestration of multi-step, long-running work.
 - **Integrations** — connectors to outside systems and OAuth providers.
 - **Communications** — messaging and notification channels.
-- **CRM / PRM** — customer and partner relationship data models.
+- **Personal relationship management (PRM)** — the current base for parties,
+  relationships, communication, shared spaces, and stay-in-touch intent. CRM
+  composes over that base; partner relationship management is a possible future
+  addon, not a capability built today.
 - **UX with different layouts** — public, app, and operator UI layouts built from
   one component system and themeable by tokens.
 
@@ -181,8 +184,14 @@ example project, so it brings the whole stack up for you.
 
 3. **Set up and bring up the stack from the repo root.**
 
+   Before `angee init --dev`, check for an existing current or ancestor
+   `angee.yaml`. If one exists, it already owns this checkout: use that
+   `ANGEE_ROOT` and do not initialize a nested `.angee/` under the source. Only
+   a standalone checkout without an owning stack gets the repository-local
+   overlay.
+
    ```sh
-   angee init --dev   # render the dev-stack overlay into .angee/ (first time only)
+   angee init --dev   # standalone checkout only; render .angee/ once
    angee dev          # run the examples/notes-angee stack
    ```
 
@@ -205,8 +214,10 @@ migrate, sync permissions, load data, check the GraphQL SDL), drive its
 isolation, create a workspace and run the stack inside it:
 
 ```sh
-angee ws create my-feature --template dev --input base_ref=main
-cd .angee/workspaces/my-feature
+# Resolve angee_root and work_state_path with .agents/skills/angee-workspace/SKILL.md.
+angee --root "$angee_root" ws create my-feature --template dev \
+  --input base_ref=main --input work_state_path="$work_state_path"
+cd "$angee_root/workspaces/my-feature"
 angee dev
 ```
 

@@ -5,7 +5,7 @@ name = "angee.iam_integrate_oidc"
 description = "OIDC single sign-on — login and account linking over any OpenID Connect provider"
 keywords = ["oidc", "login", "sso"]
 category = "Integration"
-depends_on = ["angee.iam", "angee.integrate"]
+depends_on = ["angee.iam", "angee.integrate", "angee.parties"]
 
 [resources]
 install = [

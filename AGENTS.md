@@ -69,7 +69,7 @@ on top.
 ├── templates/              # Copier templates — project / stack / workspace / service kinds
 │   ├── projects/web/       # project template — scaffolds the host repo (owns the project root)
 │   ├── stacks/dev/         # dev Stack template — the `.angee/` overlay (`angee init --dev`)
-│   └── workspaces/dev/     # dev Workspace template (`angee ws create … --template dev`)
+│   └── workspaces/dev/     # dev Workspace template (created through the workspace workflow)
 ├── examples/notes-angee/   # the example project `angee dev` runs from the repo root
 │   ├── manage.py           # Django entrypoint (`uv run examples/notes-angee/manage.py …`)
 │   ├── settings.yaml       # project composition facts and project overrides
@@ -180,10 +180,10 @@ cleaner.
 - Domain knowledge never leaks into a framework-owned file. The framework owns
   the seam; each addon owns its own vocabulary and contributes it additively
   through that seam — never by editing a framework/base-addon file to name a
-  product concept. A REBAC `permissions.zed` relation is the named example: a
-  consumer addon adds a company-scoped role to `iam/company` from its own
-  `permissions.extends.zed`, and editing the framework's `iam` zed to name a
-  domain role (`accountant`, `salesperson`, …) is a bug.
+  product concept. A REBAC `permissions.extends.zed` fragment is the named
+  example: a consumer addon contributes its own role relation to an existing
+  resource definition from the addon that owns the role vocabulary; see
+  `tests/extcontrib` for the living fixture.
 - **Compose, never re-implement, at the addon level.** An addon composes the
   framework's shared primitives (the data grid/list/group/board views, forms,
   detail/record views, navigation, glyphs, state surfaces); it never hand-rolls
@@ -251,10 +251,25 @@ smaller and clearer.
 
 ## Run From The Root
 
+Resolve the stack that owns lifecycle before running `angee init`, `angee ws`,
+or another stack command. An existing current or ancestor `angee.yaml` wins over
+this checkout's `.angee/angee.yaml` dev overlay. When this checkout lives under
+a self-contained `ANGEE_ROOT` (for example `ANGEE_ROOT/sources/angee-django`),
+use that ancestor root for stack and workspace commands and do not initialize
+another `.angee/` inside this source checkout. Load
+`.agents/skills/angee-workspace/SKILL.md` for the canonical resolution flow; it
+binds the result as `angee_root` and runs lifecycle commands as
+`angee --root "$angee_root" ws ...`.
+
+The repository-local overlay described below is the fallback for a standalone
+checkout only: use it when no current or ancestor stack already owns the
+checkout.
+
 `angee dev` is the only supported way to bring the local stack up — do not start
-Django, Vite, Daphne, workers, or watchers by hand. Run it from the repository
-root: the root stack is wired to the `examples/notes-angee` project, so `angee
-dev` there runs that example against the framework.
+Django, Vite, Daphne, workers, or watchers by hand. Run it against the resolved
+stack root. For a standalone checkout, that is the repository-local overlay
+wired to `examples/notes-angee`; for a checkout below a self-contained stack,
+the ancestor manifest owns the project and sources.
 
 This repo-root `.angee/` is a **dev-stack overlay** — `ANGEE_ROOT=.angee` with
 `local` sources pointing at this checkout. It is one of two stack layouts (the
@@ -263,7 +278,7 @@ owns the repository root, the stack overlays into `.angee/`. See `docs/glossary.
 (Project / Project template / Host).
 
 ```sh
-angee dev            # from the repo root — runs the examples/notes-angee stack
+angee --root "$angee_root" dev
 ```
 
 `angee dev` is for bringing the long-running stack up. To run a one-shot Django
@@ -283,14 +298,15 @@ uv run examples/notes-angee/manage.py schema                  # write SDL
 uv run examples/notes-angee/manage.py schema --check           # SDL, after runtime load
 ```
 
-For an isolated branch, create a workspace and run the stack inside it. `angee
-dev` walks up to the nearest `.angee`, so it works from the workspace root too.
+For an isolated branch, load `.agents/skills/angee-workspace/SKILL.md` and
+follow its **Create Workspace** workflow to create the workspace with validated
+work-state. Then run the stack inside it. `angee dev` walks up to the nearest
+`.angee`, so it works from the workspace root too.
 
 ```sh
-angee ws create <name> --template dev --input base_ref=main   # branch from main
-cd .angee/workspaces/<name>
+cd "$angee_root/workspaces/<name>"
 angee dev
-angee ws status      # optional; defaults to the enclosing workspace
+angee --root "$angee_root" ws status <name>
 ```
 
 A workspace is pinned to `workspace/<name>` — never `git checkout`/`switch`
@@ -347,9 +363,12 @@ Durable project knowledge is checked in, not held in any agent's private memory
   in `docs/guidelines.md`).
 - **Shared agent methodology — reviewer agents, slash commands, skills, and
   workflows — lives in `.agents/`** (committed and public; see `.agents/README.md`).
-- **Agent work-state — plans, working notes, handovers — goes into `.work/`.**
+- **Agent work-state goes into `.work/`:** design specs: `.work/plans/specs/`;
+  plans: `.work/plans/`; notes: `.work/notes/`; handovers: `.work/handovers/`.
   `.work/` is a gitignored symlink to a separate, private work-state repo; it is
-  never mirrored to the public repo, and nothing in it is published.
+  never mirrored to the public repo, and nothing in it is published. Global
+  skill defaults such as `docs/superpowers/**` are overridden and forbidden in
+  this repository.
 - **Durable rules the team must inherit never live only in `.work/`.** A private
   note is invisible to teammates and to the next agent; capture the durable rule
   in the owning `docs/` guideline instead.

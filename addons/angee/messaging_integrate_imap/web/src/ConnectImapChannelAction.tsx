@@ -29,6 +29,7 @@ function ConnectDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }): React.ReactElement {
+  // Correct as-is: messaging.Channel declares changes(Channel, field="channelChanged").
   const [connect] = useAuthoredMutation(ConnectImapChannel, {
     invalidateModels: [MODEL],
   });

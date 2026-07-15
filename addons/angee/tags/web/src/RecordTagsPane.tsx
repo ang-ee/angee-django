@@ -11,8 +11,7 @@ import {
 } from "./documents.console";
 import { useTagsT } from "./i18n";
 
-// The reads register against the `tags.Tag` model so a vocabulary change (or an
-// (un)tag) live-refreshes the pane; the mutations invalidate the same key.
+// The authored reads register against `tags.Tag`; the mutations invalidate that key.
 const TAG_MODELS = ["tags.Tag"] as const;
 
 interface TagOption {
@@ -65,17 +64,16 @@ export function RecordTagsPane({
     { enabled, models: TAG_MODELS },
   );
 
+  // Correct as-is: TagAssignmentsDocument is an authored query keyed by TAG_MODELS.
   const [applyTags, applyState] = useAuthoredMutation(TagDocument, {
     invalidateModels: TAG_MODELS,
   });
+  // Correct as-is: TagAssignmentsDocument is an authored query keyed by TAG_MODELS.
   const [removeTags, removeState] = useAuthoredMutation(UntagDocument, {
     invalidateModels: TAG_MODELS,
   });
   const busy = applyState.fetching || removeState.fetching;
 
-  // The (un)tag mutations declare `invalidateModels: TAG_MODELS`, and both reads
-  // register against the same key — so the live-invalidation bridge refreshes
-  // this pane. That is the single refresh owner; no manual refetch on top.
   const add = React.useCallback(
     async (tagId: string) => {
       if (!targetId) return;

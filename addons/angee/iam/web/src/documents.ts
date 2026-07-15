@@ -81,6 +81,10 @@ export const IamRebacSchema = graphql(`
   }
 `);
 
+// Role writes change both computed REBAC resource projections; keep the blast
+// radius beside the verbs that own it.
+export const IAM_ROLE_MUTATION_INVALIDATES = ["iam.Grant", "iam.Relationship"] as const;
+
 export const IamRevokeRole = graphql(`
   mutation IamRevokeRole($principal_id: String!, $role: String!) {
     revoke_role(principal_id: $principal_id, role: $role)

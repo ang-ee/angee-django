@@ -51,7 +51,13 @@ function message(overrides: Partial<ThreadTranscriptRow> = {}): ThreadTranscript
     message_type: "EMAIL",
     sent_at: "2026-07-01T10:00:00Z",
     created_at: "2026-07-01T10:00:00Z",
-    sender: { id: "hnd_1", display_name: "Ada Lovelace", value: "ada@example.com" },
+    sender: {
+      id: "hnd_1",
+      display_name: "Ada Lovelace",
+      value: "ada@example.com",
+      party_link_confirmed: false,
+      party: null,
+    },
     parts: [{ role: "BODY", fragment: { text: "Hi there" }, file: null }],
     reaction_groups: [],
     ...overrides,
@@ -83,7 +89,7 @@ describe("ThreadTranscript", () => {
   test("renders inbound, outbound, and internal turns with their distinct treatments", () => {
     mocks.transcriptData = transcriptPayload([
       message({ id: "in", direction: "INBOUND", parts: [{ role: "BODY", fragment: { text: "Inbound hello" }, file: null }] as never }),
-      message({ id: "out", direction: "OUTBOUND", sender: { id: "hnd_2", display_name: "Support", value: "us@example.com" }, parts: [{ role: "BODY", fragment: { text: "Outbound reply" }, file: null }] as never }),
+      message({ id: "out", direction: "OUTBOUND", sender: { id: "hnd_2", display_name: "Support", value: "us@example.com", party_link_confirmed: false, party: null }, parts: [{ role: "BODY", fragment: { text: "Outbound reply" }, file: null }] as never }),
       message({ id: "note", direction: "INTERNAL", parts: [{ role: "BODY", fragment: { text: "Internal jotting" }, file: null }] as never }),
     ]);
 
@@ -94,6 +100,44 @@ describe("ThreadTranscript", () => {
     expect(screen.getByText("Internal jotting")).toBeTruthy();
     // The internal note carries its distinct label; inbound/outbound do not.
     expect(screen.getByText("Internal note")).toBeTruthy();
+  });
+
+  test("keeps the envelope name for an unconfirmed 1.0 email-match auto-link", () => {
+    mocks.transcriptData = transcriptPayload([
+      message({
+        sender: {
+          id: "hnd_1",
+          display_name: "Ada Envelope",
+          value: "ada@example.com",
+          party_link_confirmed: false,
+          party: { display_name: "Ada Curated" },
+        } as never,
+      }),
+    ]);
+
+    render(<ThreadTranscript threadId="thr_1" />);
+
+    expect(screen.getByText("Ada Envelope")).toBeTruthy();
+    expect(screen.queryByText("Ada Curated")).toBeNull();
+  });
+
+  test("prefers the curated party name after the resolving link is confirmed", () => {
+    mocks.transcriptData = transcriptPayload([
+      message({
+        sender: {
+          id: "hnd_1",
+          display_name: "Ada Envelope",
+          value: "ada@example.com",
+          party_link_confirmed: true,
+          party: { display_name: "Ada Curated" },
+        } as never,
+      }),
+    ]);
+
+    render(<ThreadTranscript threadId="thr_1" />);
+
+    expect(screen.getByText("Ada Curated")).toBeTruthy();
+    expect(screen.queryByText("Ada Envelope")).toBeNull();
   });
 
   test("renders read-only reaction pills from reaction groups", () => {

@@ -1,7 +1,7 @@
 // Authorization schema for the tags addon.
 // @rebac_package: tags
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 // Roles-as-namespace anchor, mirroring money/sequence/role: `includes` lets one
 // tags role imply another, and resources gate on `effective_member` so granted +
@@ -16,28 +16,22 @@ definition tags/role {
     permission effective_member = member + includes + admin->member
 }
 
-// A tag is either shared vocabulary (company null) or company-scoped. The two
-// reads compose in one permission:
-//   - `company->member` (field-backed by the nullable `company` FK) resolves the
-//     actor's membership in *this tag's* company; a null company matches no one,
-//     so a scoped tag is invisible cross-company (a member of only company B
-//     reads nothing of company A).
-//   - `shared` is a wildcard-subject relation: a shared (null-company) tag carries
-//     one `shared@auth/user:*` tuple (written by `Tag.save`) that opens it to every
-//     authenticated actor — the same mechanism `storage/drive` uses to open a
-//     drive to everyone. A scoped tag carries none.
+// A base tag is shared vocabulary. `shared` is a wildcard-subject relation: a
+// shared tag carries one `shared@auth/user:*` tuple (written by `Tag.save`) that
+// opens it to every authenticated actor — the same mechanism `storage/drive`
+// uses to open a drive to everyone. Downstream addons may contribute additional
+// scope relations through `permissions.extends.zed`.
 // Configuration is admin-only: a `tags_admin` (const-backed, the framework canon)
 // writes the vocabulary, everyone else only reads. The create path preflights
 // `create` through the write backend and runs elevated, so an admin/manager is
 // granted and everyone else denied on writes.
 definition tags/tag {
-    relation company:  iam/company // rebac:field=company
     relation shared:   auth/user:*
     relation admin:    angee/role  // rebac:const=admin
     relation manager:  tags/role   // rebac:const=tags_admin
 
     permission create = admin->member + manager->effective_member
-    permission read   = shared + company->member + admin->member + manager->effective_member
+    permission read   = shared + admin->member + manager->effective_member
     permission write  = admin->member + manager->effective_member
     permission delete = admin->member + manager->effective_member
 }

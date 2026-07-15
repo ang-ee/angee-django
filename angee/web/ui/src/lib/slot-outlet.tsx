@@ -13,15 +13,20 @@ export function SlotOutlet({
 }: {
   entries: readonly SlotContribution[];
 }): ReactElement | null {
-  const nodes = entries.flatMap((entry) => slotNode(entry.content, entry.id));
+  const nodes = slotContents(entries);
   return nodes.length > 0 ? <>{nodes}</> : null;
+}
+
+/** Return slot contributions as raw keyed nodes suitable for renderers or parsers. */
+export function slotContents(entries: readonly SlotContribution[]): ReactNode[] {
+  return entries.flatMap((entry) => slotNode(entry.content, entry.id));
 }
 
 /** Whether any contribution would render a node (so the host can omit an empty wrapper). */
 export function slotEntriesHaveContent(
   entries: readonly SlotContribution[],
 ): boolean {
-  return entries.some((entry) => slotNode(entry.content, entry.id).length > 0);
+  return slotContents(entries).length > 0;
 }
 
 function slotNode(value: unknown, key: string): ReactNode[] {

@@ -25,14 +25,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
 from django.apps import apps
-from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.search import SearchQuery, SearchVector
+from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, connection, models, transaction
 from django.db.models.functions import MD5, Coalesce, Greatest
 from django.utils import timezone
@@ -40,7 +41,9 @@ from rebac import current_actor, system_context
 
 from angee.base.actors import actor_user_id
 from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.refs import canonical_record_target
 from angee.messaging.tracking import TrackingChange
+from angee.parties.mixins import LinkSource
 
 if TYPE_CHECKING:
     from angee.messaging.backends import ParsedMessage, ParsedPart, ParsedThread
@@ -49,6 +52,7 @@ if TYPE_CHECKING:
 # A fragment quoted by more than this many messages is boilerplate (a disclaimer or
 # repeated signature); quote-linking it would join the whole corpus, so skip it.
 _BOILERPLATE_CUTOFF = 100
+logger = logging.getLogger(__name__)
 
 _SUBJECT_PREFIX_RE = re.compile(r"^\s*(?:re|fwd|fw|aw|sv|vs|ref|tr|rif)\s*(?:\[\d+\])?\s*:\s*", re.IGNORECASE)
 _WS_RE = re.compile(r"\s+")
@@ -94,6 +98,29 @@ _SEARCH_CONFIG = "simple"
 # UTF-8 bytes of a fragment (half the limit — headroom for the vector itself).
 # The regression fixture was a 1.6 MB text part that failed every sync retry.
 _SEARCH_MAX_BYTES = 512 * 1024
+
+# Parsed metadata is an externally controlled JSON envelope. Bound its canonical
+# UTF-8 representation at the same conservative size as fragment vector input;
+# reject rather than truncate because the envelope is explicitly lossless.
+_MESSAGE_METADATA_MAX_BYTES = 512 * 1024
+
+
+def _bounded_message_metadata(value: dict[str, Any]) -> dict[str, Any]:
+    """Return null-safe metadata or reject an envelope above the 512 KiB bound."""
+
+    metadata = strip_null_bytes(value)
+    encoded = json.dumps(
+        metadata,
+        sort_keys=True,
+        ensure_ascii=False,
+        default=str,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if len(encoded) > _MESSAGE_METADATA_MAX_BYTES:
+        raise ValueError(
+            f"message metadata exceeds {_MESSAGE_METADATA_MAX_BYTES} UTF-8 JSON bytes"
+        )
+    return cast(dict[str, Any], metadata)
 
 
 def _external_id_q(external_id: str) -> models.Q:
@@ -261,7 +288,12 @@ def _parsed_part_digest(part: ParsedPart | None) -> Any:
     }
 
 
-def _parsed_sync_hash(parsed: ParsedMessage, *, channel_id: Any) -> str:
+def _parsed_sync_hash(
+    parsed: ParsedMessage,
+    *,
+    channel_id: Any,
+    metadata: dict[str, Any],
+) -> str:
     """Return a stable digest of everything an ingest of ``parsed`` would write.
 
     Covers the message columns, its Part tree, and its participants for the given
@@ -277,7 +309,7 @@ def _parsed_sync_hash(parsed: ParsedMessage, *, channel_id: Any) -> str:
         "headers": [[name, value] for name, value in strip_null_bytes(list(parsed.headers))],
         "sent_at": parsed.sent_at.isoformat() if parsed.sent_at is not None else None,
         "received_at": parsed.received_at.isoformat() if parsed.received_at is not None else None,
-        "metadata": strip_null_bytes(parsed.metadata),
+        "metadata": metadata,
         "sender": (
             None
             if parsed.sender is None
@@ -514,22 +546,22 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
 
 
 class ThreadAttachmentManager(AngeeManager):
-    """Owns the polymorphic edge from a model row to its chatter thread."""
+    """Owns the polymorphic edge from a model row to its chatter thread.
 
-    @staticmethod
-    def _content_type(record: Any) -> Any:
-        """Return ``record``'s content type (proxy-aware) — the polymorphic edge key."""
-
-        return ContentType.objects.get_for_model(record, for_concrete_model=False)
+    The edge key is canonicalized across multi-table inheritance
+    (:func:`angee.base.refs.canonical_record_target`), so a record and each of its
+    REBAC-typed MTI ancestors share one chatter thread instead of splitting it.
+    """
 
     def for_record(self, record: Any, *, role: str = "chatter") -> Any | None:
         """Return the existing thread attachment for ``record`` and ``role``."""
 
         if record.pk is None:
             return None
+        content_type, object_id = canonical_record_target(record)
         return (
             self.model._base_manager.select_related("thread")
-            .filter(content_type=self._content_type(record), object_id=record.pk, role=role)
+            .filter(content_type=content_type, object_id=object_id, role=role)
             .first()
         )
 
@@ -547,8 +579,9 @@ class ThreadAttachmentManager(AngeeManager):
 
         if record.pk is None:
             raise ValueError("Cannot attach a thread to an unsaved record.")
-        content_type = self._content_type(record)
-        external_id = f"record:{content_type.app_label}.{content_type.model}:{record.pk}:{role}"
+        content_type, object_id = canonical_record_target(record)
+        _assert_canonical_composes_thread_mixin(record, content_type)
+        external_id = f"record:{content_type.app_label}.{content_type.model}:{object_id}:{role}"
         thread_model = self.model._meta.get_field("thread").related_model
         fragment_model = apps.get_model("messaging", "Fragment")
         # The host owns whether its record chatter streams over changes(); stamp its
@@ -571,7 +604,7 @@ class ThreadAttachmentManager(AngeeManager):
             self._reconcile_broadcast_state(thread, host_broadcasts=host_broadcasts)
             attachment, _created = self.model._base_manager.get_or_create(
                 content_type=content_type,
-                object_id=record.pk,
+                object_id=object_id,
                 role=role,
                 defaults={
                     "thread": thread,
@@ -628,8 +661,9 @@ class ThreadAttachmentManager(AngeeManager):
 
         if record.pk is None:
             return
+        content_type, object_id = canonical_record_target(record)
         thread_ids = list(
-            self.model._base_manager.filter(content_type=self._content_type(record), object_id=record.pk)
+            self.model._base_manager.filter(content_type=content_type, object_id=object_id)
             .values_list("thread_id", flat=True)
             .distinct()
         )
@@ -1304,6 +1338,33 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
         return activity
 
 
+def _assert_canonical_composes_thread_mixin(record: Any, canonical_content_type: Any) -> None:
+    """Fail fast on a child-composed / parent-uncomposed threaded MTI split.
+
+    ``ThreadedModelMixin`` owns the reverse ``thread_attachments`` GenericRelation and the
+    ``pre_delete`` teardown, both of which key on the model that composes the mixin — while
+    the attachment row is written at the *canonical* (topmost REBAC-typed) target
+    (:func:`angee.base.refs.canonical_record_target`). If a child composes the mixin but
+    its canonical ancestor does not, the ancestor cannot collect the child's attachment on
+    delete and a reused primary key would mis-resolve. Guard it where the write keys — the
+    placement invariant stated in :mod:`angee.base.refs`.
+    """
+
+    from angee.messaging.models import ThreadedModelMixin
+
+    if not isinstance(record, ThreadedModelMixin):
+        return
+    canonical_model = canonical_content_type.model_class()
+    if canonical_model is None or canonical_model is type(record):
+        return
+    if not issubclass(canonical_model, ThreadedModelMixin):
+        raise ImproperlyConfigured(
+            f"{type(record)._meta.label} composes ThreadedModelMixin but its canonical record "
+            f"target {canonical_model._meta.label} does not; compose the mixin on the topmost "
+            "REBAC-typed MTI ancestor the chatter edge keys on."
+        )
+
+
 def _record_attachment(record: Any, *, role: str = "chatter") -> Any | None:
     """Return the chatter attachment edge for ``record`` via its owning manager.
 
@@ -1403,16 +1464,15 @@ def _reaction_handle_for_user(user: Any) -> Any:
     email = strip_null_bytes(getattr(user, "email", "") or "").strip()
     username = strip_null_bytes(user.get_username() if hasattr(user, "get_username") else getattr(user, "username", ""))
     value = email or username or str(user.pk)
-    platform = handle_model.Platform.EMAIL if email else handle_model.Platform.OTHER
     display_name = strip_null_bytes(
         user.get_full_name() if hasattr(user, "get_full_name") else "",
     ).strip() or username or value
-    return handle_model.objects.upsert(
-        platform=platform,
+    return handle_model.objects.claim_own(
+        user,
+        platform=handle_model.Platform.for_value(value),
         value=value,
-        owner_id=user.pk,
         display_name=display_name,
-        is_own=True,
+        source=LinkSource.MANUAL,
         metadata={"user_id": str(user.pk)},
     )
 
@@ -1552,7 +1612,7 @@ class ReactionManager(AngeeManager):
     """Owns the attributed-reaction write — the row shape for a (message, handle, reaction).
 
     ``MessageManager.set_reaction`` is the user-keyed chatter toggle; this is the
-    distinct attributed write the ``social`` feed overlay lands for each external
+    distinct attributed write the ``posts`` feed overlay lands for each external
     reactor. The row shape (fields + ``created_by`` default) lives here with the table
     owner so a producer batches through this owner instead of hand-rolling its own
     ``get_or_create``.
@@ -2103,27 +2163,32 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         mislabelled email. ``quote_edges`` runs the RFC-5322 quotation builder — email's
         shared-fragment graph — and defaults on; a non-email producer whose short shared
         text would otherwise mint spurious ``quote`` edges passes ``quote_edges=False``.
+        The externally controlled metadata envelope is rejected above 512 KiB of
+        canonical UTF-8 JSON so the lossless column remains deterministically bounded.
         """
 
         owner_id = owner_id if owner_id is not None else channel.owner_id
         message_kind = message_kind or self.model.MessageKind.EMAIL
         thread_model = apps.get_model("messaging", "Thread")
         ingested: list[Any] = []
+        unresolved_handles: dict[Any, Any] = {}
         for parsed in parsed_messages:
             if not parsed.external_id:
                 continue
             with transaction.atomic():
-                ingested.append(
-                    self._ingest_one(
-                        parsed,
-                        channel=channel,
-                        owner_id=owner_id,
-                        thread_model=thread_model,
-                        modality=modality,
-                        visibility=visibility,
-                        message_kind=message_kind,
-                    )
+                message, handles = self._ingest_one(
+                    parsed,
+                    channel=channel,
+                    owner_id=owner_id,
+                    thread_model=thread_model,
+                    modality=modality,
+                    visibility=visibility,
+                    message_kind=message_kind,
                 )
+                ingested.append(message)
+                for handle in handles:
+                    if handle.party_id is None:
+                        unresolved_handles[handle.pk] = handle
         # Quotation runs after the whole batch lands, so a message quoting a later
         # one in the same batch still links (an inline pass would miss it). It is the
         # email graph, so a non-email producer skips it via ``quote_edges=False``.
@@ -2131,6 +2196,28 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             edges = apps.get_model("messaging", "MessageEdge").objects
             for message in ingested:
                 edges.create_for_message(message)
+        # Revisit unresolved envelopes after each committed batch so later directory
+        # evidence can resolve an older sender without coupling it to first contact.
+        if unresolved_handles:
+            handles = tuple(unresolved_handles.values())
+
+            def suggest_parties() -> None:
+                try:
+                    party_handles = apps.get_model("parties", "PartyHandle").objects
+                except Exception:
+                    logger.exception("Could not initialize messaging party suggestions")
+                    return
+                for handle in handles:
+                    try:
+                        with system_context(reason="messaging.ingest.suggest_party"):
+                            party_handles.suggest_for(handle)
+                    except Exception:
+                        logger.exception(
+                            "Could not suggest a party for messaging handle %s",
+                            handle.pk,
+                        )
+
+            transaction.on_commit(suggest_parties)
         return ingested
 
     def _ingest_one(
@@ -2146,6 +2233,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
     ) -> Any:
         handle_model = apps.get_model("parties", "Handle")
         part_model = apps.get_model("messaging", "Part")
+        envelope_metadata = _bounded_message_metadata(parsed.metadata)
         thread = thread_model.objects.resolve(
             platform=parsed.platform,
             channel=channel,
@@ -2163,7 +2251,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             sender = handle_model.objects.upsert(
                 platform=parsed.sender.platform,
                 value=parsed.sender.value,
-                owner_id=owner_id,
+                created_by_id=owner_id,
                 display_name=parsed.sender.display_name,
                 external_id=parsed.sender.external_id,
             )
@@ -2177,7 +2265,11 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             .values("pk", "thread_id", "metadata")
             .first()
         )
-        content_hash = _parsed_sync_hash(parsed, channel_id=channel.pk)
+        content_hash = _parsed_sync_hash(
+            parsed,
+            channel_id=channel.pk,
+            metadata=envelope_metadata,
+        )
         if (
             prior is not None
             and prior["thread_id"] == thread.pk
@@ -2186,8 +2278,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             # Idempotent re-sync into the same thread with identical content: nothing
             # to write — skipping the part rebuild avoids churning Part primary keys,
             # re-upserting Fragments, and minting a spurious edit-history entry.
-            return self.model._base_manager.get(pk=prior["pk"])
-        metadata = {**strip_null_bytes(parsed.metadata), _SYNC_HASH_KEY: content_hash}
+            return self.model._base_manager.get(pk=prior["pk"]), ()
+        metadata = {**envelope_metadata, _SYNC_HASH_KEY: content_hash}
         defaults = {
             "thread": thread,
             "channel": channel,
@@ -2241,7 +2333,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     *(message.edit_history or []),
                 ]
                 message.save(update_fields=("edit_history", "updated_at"))
-        self._write_participants(message, thread, parsed, sender, owner_id)
+        handles = self._write_participants(message, thread, parsed, sender, owner_id)
         # Reconcile the denormalised thread counters. The winning thread gains the
         # message whenever it is a fresh row or a re-sync re-resolved an existing message
         # onto a *different* thread (e.g. a References parent that only just landed). The
@@ -2256,7 +2348,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             self._recount_thread(losing_thread)
         if created or thread_changed:
             self._bump_thread(thread_model, thread.pk, parsed.sent_at)
-        return message
+        return message, handles
 
     @staticmethod
     def _content_fragment_hashes(part_model: Any, message: Any) -> list[str]:
@@ -2372,11 +2464,19 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             owner_id=owner_id,
         )
 
-    def _write_participants(self, message: Any, thread: Any, parsed: ParsedMessage, sender: Any, owner_id: Any) -> None:
+    def _write_participants(
+        self,
+        message: Any,
+        thread: Any,
+        parsed: ParsedMessage,
+        sender: Any,
+        owner_id: Any,
+    ) -> list[Any]:
         participant_model = apps.get_model("messaging", "Participant")
         handle_model = apps.get_model("parties", "Handle")
         participant_model.objects.filter(message=message).delete()
         seen: set[tuple[Any, str]] = set()
+        handles: list[Any] = []
         if sender is not None:
             seen.add((sender.pk, str(participant_model.ParticipantRole.FROM)))
             participant_model.objects.create(
@@ -2386,11 +2486,12 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 role=participant_model.ParticipantRole.FROM,
                 created_by_id=owner_id,
             )
+            handles.append(sender)
         for recipient in parsed.recipients:
             handle = handle_model.objects.upsert(
                 platform=recipient.handle.platform,
                 value=recipient.handle.value,
-                owner_id=owner_id,
+                created_by_id=owner_id,
                 display_name=recipient.handle.display_name,
                 external_id=recipient.handle.external_id,
             )
@@ -2403,6 +2504,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             participant_model.objects.create(
                 message=message, thread=thread, handle=handle, role=recipient.role, created_by_id=owner_id
             )
+            handles.append(handle)
+        return handles
 
 
 class PartQuerySet(AngeeQuerySet[Any]):
@@ -2487,7 +2590,7 @@ class MessageEdgeManager(AngeeManager):
     ) -> Any:
         """Write one typed edge from ``src`` to ``dst``, idempotent on the (src, dst, kind) key.
 
-        The single edge-write entry point on the table owner: a social producer relating
+        The single edge-write entry point on the table owner: a posts producer relating
         two messages (mention/crosspost/forward) writes through this one shape instead of
         its own ``get_or_create``, and the batched quotation builder lands the same
         :meth:`_edge_fields` columns. ``src``/``dst``/``fragment`` accept a row or its id;

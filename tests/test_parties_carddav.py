@@ -1,18 +1,76 @@
-"""Unit tests for the CardDAV vCard parser (pure functions, no database).
+"""Tests for the CardDAV connection boundary and vCard parser.
 
 The directory-sync map and `purge_missing` are exercised live against the example
 database; these cover the transport-parse boundary the live run can't assert
 deterministically — full field mapping and the UID fallback whose empty result the
 sync deliberately skips (an empty key would collapse keyless cards onto one row).
+The connect cases pin the probe-before-write boundary against concrete test models.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import date
+from typing import Any
 
+import pytest
 import vobject
+from django.core.management import call_command
+from django.db import connection
+from rebac import system_context
 
-from angee.parties_integrate_carddav.backend import _parse_data_uri, _parse_date, _parse_vcard
+from angee.parties_integrate_carddav.backend import (
+    CardDavDirectoryBackend,
+    CardDavError,
+    _parse_data_uri,
+    _parse_date,
+    _parse_vcard,
+)
+from tests import test_parties_graphql as parties_graphql
+from tests.conftest import (
+    IAM_CONNECTION_TEST_MODELS,
+    INTEGRATE_TEST_MODELS,
+    Credential,
+    Integration,
+    Vendor,
+    _clear_model_tables,
+    _create_missing_tables,
+    execute_schema,
+)
+from tests.test_messaging import Directory, Handle, Party, PartyHandle, Person
+
+_CARDDAV_CONNECT_MODELS = (
+    *IAM_CONNECTION_TEST_MODELS,
+    *INTEGRATE_TEST_MODELS,
+    Directory,
+    Party,
+    Person,
+    Handle,
+    PartyHandle,
+)
+
+_CONNECT_CARDDAV_MUTATION = """
+mutation ConnectCardDav(
+  $name: String!
+  $serverUrl: String!
+  $username: String!
+  $password: String!
+) {
+  connect_card_dav_directory(
+    name: $name
+    server_url: $serverUrl
+    username: $username
+    password: $password
+  ) {
+    id
+    display_name
+    backend_class
+    lifecycle
+    runtime_status
+    config
+  }
+}
+"""
 
 _FULL_VCARD = """BEGIN:VCARD
 VERSION:3.0
@@ -32,6 +90,137 @@ ANNIVERSARY:18350101
 PHOTO;ENCODING=b;TYPE=PNG:QUJD
 NOTE:First programmer.
 END:VCARD"""
+
+
+@pytest.fixture()
+def carddav_connect_tables(transactional_db: Any) -> Iterator[None]:
+    """Create the concrete integration and parties rows the connect flow owns."""
+
+    del transactional_db
+    created_models = _create_missing_tables(_CARDDAV_CONNECT_MODELS)
+    call_command("rebac", "sync", verbosity=0)
+    try:
+        yield
+    finally:
+        _clear_model_tables(_CARDDAV_CONNECT_MODELS)
+        if created_models:
+            with connection.schema_editor() as schema_editor:
+                for model in reversed(created_models):
+                    schema_editor.delete_model(model)
+
+
+def test_connect_probe_failure_writes_no_rows(
+    carddav_connect_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rejected external probe runs before atomic and leaves no partial rows."""
+
+    del carddav_connect_tables
+    probe_atomic_states: list[bool] = []
+
+    def reject_probe(backend: CardDavDirectoryBackend) -> None:
+        del backend
+        probe_atomic_states.append(connection.in_atomic_block)
+        raise CardDavError("CardDAV probe rejected")
+
+    monkeypatch.setattr(CardDavDirectoryBackend, "probe", reject_probe)
+    admin = parties_graphql._platform_admin("carddav-probe-failure-admin")
+
+    result = _connect_carddav(admin)
+
+    assert result.errors is not None
+    assert "CardDAV probe rejected" in str(result.errors[0])
+    assert probe_atomic_states == [False]
+    with system_context(reason="test.parties.carddav.probe_failure.verify"):
+        for model in (Credential, Vendor, Integration, Directory, Handle, Party, Person, PartyHandle):
+            assert not model._base_manager.exists(), model._meta.label
+
+
+def test_connect_probe_success_commits_every_owned_row_atomically(
+    carddav_connect_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful external probe precedes one complete atomic write phase."""
+
+    del carddav_connect_tables
+    probe_atomic_states: list[bool] = []
+    write_atomic_states: list[bool] = []
+
+    def accept_probe(backend: CardDavDirectoryBackend) -> None:
+        del backend
+        probe_atomic_states.append(connection.in_atomic_block)
+
+    claim_own = Handle.objects.claim_own
+
+    def atomic_claim_own(user: Any, **kwargs: Any) -> Any:
+        write_atomic_states.append(connection.in_atomic_block)
+        return claim_own(user, **kwargs)
+
+    monkeypatch.setattr(CardDavDirectoryBackend, "probe", accept_probe)
+    monkeypatch.setattr(Handle.objects, "claim_own", atomic_claim_own)
+    admin = parties_graphql._platform_admin("carddav-probe-success-admin")
+
+    result = _connect_carddav(admin)
+
+    assert result.errors is None
+    assert result.data is not None
+    directory_data = result.data["connect_card_dav_directory"]
+    assert directory_data == {
+        "id": directory_data["id"],
+        "display_name": "Ada Contacts",
+        "backend_class": "CARDDAV",
+        "lifecycle": "ACTIVE",
+        "runtime_status": "OK",
+        "config": {"server_url": "https://dav.example.com/"},
+    }
+    assert probe_atomic_states == [False]
+    assert write_atomic_states == [True]
+
+    with system_context(reason="test.parties.carddav.probe_success.verify"):
+        credential = Credential.objects.get()
+        vendor = Vendor.objects.get()
+        directory = Directory.objects.get()
+        integration = Integration.objects.get(pk=directory.pk)
+        handle = Handle.objects.get()
+        person = Person.objects.get()
+        link = PartyHandle.objects.get()
+
+        assert credential.user_id == admin.pk
+        assert credential.name == "CardDAV — Ada Contacts"
+        assert credential.reveal() == {
+            "username": "ada@example.com",
+            "password": "carddav-password",
+        }
+        assert (vendor.slug, vendor.display_name) == ("carddav", "CardDAV")
+        assert integration.credential_id == credential.pk
+        assert integration.owner_id == admin.pk
+        assert directory.backend_class == "carddav"
+        assert directory.lifecycle == "active"
+        assert directory.config == {"server_url": "https://dav.example.com/"}
+        assert handle.owner_id == admin.pk
+        assert (handle.platform, handle.value) == ("email", "ada@example.com")
+        assert person.user_id == admin.pk
+        assert link.party_id == person.pk
+        assert link.handle_id == handle.pk
+        assert link.source == "carddav"
+        assert link.confidence == 1.0
+        assert link.is_confirmed is True
+
+
+def _connect_carddav(admin: Any) -> Any:
+    """Execute the CardDAV connect mutation with one stable account payload."""
+
+    return execute_schema(
+        parties_graphql._schema("console"),
+        _CONNECT_CARDDAV_MUTATION,
+        {
+            "name": "Ada Contacts",
+            "serverUrl": "https://dav.example.com/",
+            "username": "ada@example.com",
+            "password": "carddav-password",
+        },
+        user=admin,
+    )
 
 
 def _parse(text: str, *, href: str = "/ab/ada.vcf") -> object:

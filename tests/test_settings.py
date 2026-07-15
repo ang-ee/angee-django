@@ -198,9 +198,11 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "angee.operator",
         "angee.agents.apps.AgentsConfig",
         "angee.agents_integrate_anthropic",
-        "angee.iam_integrate_oidc.apps.IAMIntegrateOidcConfig",
         "angee.storage.apps.StorageConfig",
         "angee.parties.apps.PartiesConfig",
+        # OIDC login now composes parties (it claims the signed-in user's own
+        # handle), so it sorts after parties and its storage dependency.
+        "angee.iam_integrate_oidc.apps.IAMIntegrateOidcConfig",
         "django.contrib.postgres.apps.PostgresConfig",
         "angee.messaging.apps.MessagingConfig",
         "angee.workflows.apps.WorkflowsConfig",
@@ -386,7 +388,9 @@ def test_compose_settings_module_reads_project_runtime(
     project.SECRET_KEY = "bridge-secret"  # type: ignore[attr-defined]
     project.DEBUG = True  # type: ignore[attr-defined]
     project.ALLOWED_HOSTS = ["*"]  # type: ignore[attr-defined]
-    project.DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}  # type: ignore[attr-defined]
+    project.DATABASES = {  # type: ignore[attr-defined]
+        "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"},
+    }
     project.ANGEE_DATA_DIR = tmp_path / "data"  # type: ignore[attr-defined]
     project.INSTALLED_APPS = ("angee.resources",)  # type: ignore[attr-defined]
     project.ANGEE_RUNTIME_DIR = tmp_path / "runtime"  # type: ignore[attr-defined]
@@ -759,12 +763,12 @@ def test_compose_settings_module_ignores_ancestor_settings_yaml(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Ancestor settings.yaml files never reach a nested project's composition.
+    """An ancestor settings.yaml never leaks into a nested host project.
 
-    A project regularly sits inside another Angee root — a framework checkout
-    deployed as a stack source, or a workspace inside that checkout. The
-    composer feeds yamlconf only the project root's own file, so the enclosing
-    stack's settings neither override the project nor fail its boot.
+    Hosting the project inside another Angee instance puts that instance's own
+    ``settings.yaml`` on the path from the project root to the filesystem root.
+    The compose must bound its sources to the project's own file: it succeeds
+    and the ancestor value is neither applied nor allowed to override.
     """
 
     project = tmp_path / "project"
@@ -792,6 +796,30 @@ def test_compose_settings_module_ignores_ancestor_settings_yaml(
     compose_settings = importlib.reload(compose_settings)
 
     assert compose_settings.SECRET_KEY == "project-secret"
+    assert compose_settings.BASE_DIR == project
+
+
+def test_reject_unexpected_yamlconf_source_fails_fast(tmp_path: Path) -> None:
+    """The provenance guard still rejects a foreign yamlconf source.
+
+    With the bounded loader no ancestor cascade can reach the guard, so it
+    becomes a fail-fast assertion: any attribute whose recorded source is not
+    the project file, the ``YAMLCONF_CONFFILE`` overlay, or an internal/env
+    sentinel is a bug the composer must refuse.
+    """
+
+    from angee.compose.project import ProjectContract
+
+    project_settings = ModuleType("settings")
+    project_settings.__file__ = str(tmp_path / "settings.py")
+    setattr(
+        project_settings,
+        "_YAMLCONF_ATTRIBUTES",
+        {"SECRET_KEY": {"source": str(tmp_path.parent / "settings.yaml"), "history": ()}},
+    )
+
+    with pytest.raises(ImproperlyConfigured, match="Unexpected django-yamlconf source"):
+        ProjectContract({})._reject_unexpected_yamlconf_sources(project_settings, tmp_path, "settings")
 
 
 def test_compose_settings_module_uses_project_dir_for_non_manage_entrypoints(

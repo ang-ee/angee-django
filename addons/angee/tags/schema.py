@@ -21,12 +21,11 @@ from rebac import ObjectRef
 from strawberry import auto
 from strawberry.permission import BasePermission
 
-from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
-from angee.graphql.ids import PublicID, to_public_id
+from angee.graphql.data import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
+from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.iam.permissions import RolePermission
 
-Company = apps.get_model("iam", "Company")
 Tag = apps.get_model("tags", "Tag")
 TagAssignment = apps.get_model("tags", "TagAssignment")
 
@@ -58,12 +57,6 @@ class TagType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["company_id"])
-    def company(self) -> PublicID | None:
-        """Return the owning company's public id, or ``None`` for shared vocabulary."""
-
-        return to_public_id(Company, cast(Any, self).company_id)
-
 
 @strawberry_django.type(TagAssignment)
 class TagAssignmentType(AngeeNode):
@@ -85,17 +78,49 @@ class TagAssignmentType(AngeeNode):
         return PublicID(cast(Any, self).record_public_id)
 
 
+_TAG_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(Tag, "hasura_readable_fields")
+_TAG_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(Tag, "hasura_insertable_fields")
+_TAG_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(Tag, "hasura_updatable_fields")
+_TAG_EXTENSION_WRITE_FIELDS = tuple(
+    dict.fromkeys((*_TAG_EXTENSION_INSERT_FIELDS, *_TAG_EXTENSION_UPDATE_FIELDS))
+)
+_TAG_EXTENSION_PUBLIC_ID_FIELDS = tuple(
+    name
+    for name in _TAG_EXTENSION_WRITE_FIELDS
+    if Tag._meta.get_field(name).is_relation
+)
+
+_TAG_FILTERABLE_FIELDS = (
+    "id",
+    "name",
+    "is_archived",
+    *_TAG_EXTENSION_READ_FIELDS,
+)
+_TAG_GROUPABLE_FIELDS = (
+    "is_archived",
+    *_TAG_EXTENSION_READ_FIELDS,
+)
+_TAG_BASE_WRITABLE_FIELDS = (
+    "name",
+    "color",
+    "is_archived",
+)
+
 _TAG_RESOURCE = hasura_model_resource(
     TagType,
     model=Tag,
     name="tags",
-    filterable=["id", "name", "is_archived", "company"],
+    filterable=list(_TAG_FILTERABLE_FIELDS),
     sortable=["name", "created_at", "updated_at"],
     aggregatable=["id"],
-    groupable=["company", "is_archived"],
-    writable=["name", "color", "company", "is_archived"],
-    field_id_decode={"company": public_pk_decoder(Company)},
-    write_backend=AngeeHasuraWriteBackend(Tag, public_id_fields=("company",)),
+    groupable=list(_TAG_GROUPABLE_FIELDS),
+    insertable=[*_TAG_BASE_WRITABLE_FIELDS, *_TAG_EXTENSION_INSERT_FIELDS],
+    updatable=[*_TAG_BASE_WRITABLE_FIELDS, *_TAG_EXTENSION_UPDATE_FIELDS],
+    declared_fields=_TAG_EXTENSION_READ_FIELDS,
+    write_backend=AngeeHasuraWriteBackend(
+        Tag,
+        public_id_fields=_TAG_EXTENSION_PUBLIC_ID_FIELDS,
+    ),
     id_column="sqid",
 )
 

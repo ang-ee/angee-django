@@ -1,7 +1,7 @@
 // Authorization schema for the IAM addon.
 // @rebac_package: iam
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 10
+// @rebac_schema_revision: 13
 
 definition auth/user {
     // Const-backed universal admin: every user points at angee/role:admin
@@ -9,11 +9,17 @@ definition auth/user {
     // platform-admin membership. This is what lets a superuser reach every
     // user with REBAC_SUPERUSER_BYPASS off, through relationships alone.
     relation admin: angee/role // rebac:const=admin
+    relation directory: iam/directory // rebac:const=main
+    relation directory_reader: auth/user | auth/user:*
 
     permission create = admin->member
-    permission read = admin->member
+    permission read = directory_reader + directory->reader + admin->member
     permission write = admin->member
     permission delete = admin->member
+}
+
+definition iam/directory {
+    relation reader: auth/user | auth/user:*
 }
 
 definition auth/group {
@@ -24,33 +30,4 @@ definition angee/role {
     relation member: auth/user | auth/group#member
 
     permission effective_member = member
-}
-
-// The company of record — the operating entity acting inside the system, an
-// access-control scope (not an external counterparty; that is parties/organization).
-// `parent` is the company hierarchy (field-backed by the parent FK): a member of
-// an ancestor company reaches every descendant scope through `parent->member`.
-// `direct_member` is the per-company membership grant, so a scoped resource reads
-// `company->member` (see CompanyScopedMixin). Company-scoped role bindings — a role
-// always *of a company*, never global, that a scoped resource reads as
-// `company-><role>` — are the seam: a consumer addon contributes each one additively
-// through its own `permissions.extends.zed` fragment (see `angee.compose.permissions`),
-// so the vocabulary stays in the addon that owns it and this framework definition
-// names no domain role. Platform admins (angee/role:admin) reach every company
-// through the const-backed `admin` relation (synthetic — no per-row tuple), the
-// same universal-admin path the other definitions use.
-definition iam/company {
-    relation parent:        iam/company // rebac:field=parent
-    relation direct_member: auth/user | auth/group#member
-    relation admin:         angee/role // rebac:const=admin
-
-    permission member = direct_member + parent->member
-
-    permission create = admin->member
-    permission read   = member + admin->member
-    // Company config (name, hierarchy) is an admin surface: re-parenting a
-    // company rewires every descendant scope, so plain membership must not
-    // grant it.
-    permission write  = admin->member
-    permission delete = admin->member
 }

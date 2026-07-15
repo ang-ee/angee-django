@@ -25,6 +25,27 @@
   name: Mentor
   inverse_name: Mentee
   category: professional
+# Employment edges anchor on the person; the counterparty is the organisation, so
+# other_party_kind pins that end. `name` is the person-side card label ("Employee:
+# Acme"), `inverse_name` the org-side label ("Employer: Ada").
+- xref: employee
+  slug: employee
+  name: Employee
+  inverse_name: Employer
+  category: professional
+  other_party_kind: organization
+- xref: founder
+  slug: founder
+  name: Founder
+  inverse_name: Founder
+  category: professional
+  other_party_kind: organization
+- xref: board-member
+  slug: board-member
+  name: Board Member
+  inverse_name: Board Member
+  category: professional
+  other_party_kind: organization
 - xref: neighbor
   slug: neighbor
   name: Neighbor

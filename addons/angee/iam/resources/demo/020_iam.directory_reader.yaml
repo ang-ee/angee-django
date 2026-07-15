@@ -1,0 +1,7 @@
+# Demo IAM directory posture. This grant is data, not schema: loading it makes
+# the singleton directory readable to every authenticated user. Narrow
+# deployments omit this seed and provide their own tuples.
+rows:
+  - resource: iam/directory:main
+    relation: reader
+    subject: auth/user:*

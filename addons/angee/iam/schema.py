@@ -12,19 +12,16 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
-from django.apps import apps
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth.models import Group as DjangoGroup
 from django.db import transaction
-from django.db.models import Q, QuerySet
+from django.db.models import QuerySet
 from django.http import HttpRequest
 from pydantic import BaseModel
-from rebac import (
-    system_context,
-)
+from rebac import system_context
 from rebac.models import active_relationship_model
 from rebac.roles import (
     grant as rebac_grant,
@@ -39,19 +36,14 @@ from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.base.models import SqidPublicIdentity, instance_from_public_id
-from angee.graphql.data import (
-    AngeeHasuraWriteBackend,
-    aggregate_queryset,
-    hasura_model_resource,
-    hasura_pydantic_resource,
-    public_pk_decoder,
-)
+from angee.graphql.data import aggregate_queryset, hasura_model_resource, hasura_pydantic_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
-from angee.graphql.ids import PublicID, to_public_id
+from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
 from angee.iam.identity import user_label, user_principal
+from angee.iam.models import VISIBLE_PEOPLE_DEFAULT_LIMIT
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import is_platform_admin, require_platform_admin, session_user
 from angee.iam.permissions import request_from_info as _request
@@ -66,8 +58,6 @@ from angee.iam.roles import (
     RelationInfo,
     ResourceSchemaInfo,
     RoleInfo,
-    user_ordering,
-    user_subject_filter,
 )
 from angee.iam.roles import (
     iam_overview as _iam_overview_owner,
@@ -90,17 +80,10 @@ from angee.iam.roles import (
 
 User = cast(type[Any], get_user_model())
 Group = DjangoGroup
-Company = apps.get_model("iam", "Company")
 GROUP_PUBLIC_IDENTITY = SqidPublicIdentity(prefix="grp_", min_length=8)
 """Public data identity for Django auth groups exposed by IAM."""
 
 _ROLE_SUFFIX = "/role"
-
-COLLEAGUES_DEFAULT_LIMIT = 20
-"""Default page size for the member-scoped ``colleagues`` people surface."""
-
-COLLEAGUES_MAX_LIMIT = 100
-"""Upper bound a ``colleagues`` caller's ``limit`` is clamped to."""
 
 
 def _preference_object(user: Any) -> JSON:
@@ -190,22 +173,6 @@ class GroupType:
         return PublicID(GROUP_PUBLIC_IDENTITY.public_id_from_pk(cast(Any, self).pk))
 
 
-@strawberry_django.type(Company)
-class CompanyType(AngeeNode):
-    """GraphQL projection of a company of record for the console admin page."""
-
-    name: auto
-    is_archived: auto
-    created_at: auto
-    updated_at: auto
-
-    @strawberry_django.field(only=["parent_id"])
-    def parent(self) -> strawberry.ID | None:
-        """Return the parent company's public id, if this company has one."""
-
-        return to_public_id(Company, cast(Any, self).parent_id)
-
-
 @strawberry.type
 class IAMRoleType:
     """Tuple-derived role exposed by the IAM permission hub."""
@@ -270,7 +237,7 @@ class IAMOverviewNamespaceType:
 
 
 @strawberry_django.type(active_relationship_model())
-class IAMRelationshipType:
+class RebacRelationshipType:
     """Raw active REBAC relationship tuple."""
 
     @strawberry_django.field
@@ -466,38 +433,6 @@ def _admin_user_queryset(info: strawberry.Info) -> QuerySet[Any]:
 
     require_platform_admin(info)
     return cast(QuerySet[Any], User.objects.people())
-
-
-def _colleagues(actor: Any, *, search: str, limit: int) -> list[Any]:
-    """Return the actor's active co-workers for the member-scoped people surface.
-
-    Scoped to the actor's own companies' direct members through the IAM membership
-    owner (``Company.co_member_subject_ids``) — never platform-wide. The actor is
-    excluded (a picker of *other* people), inactive users are dropped, and the
-    matched rows are read elevated because the shared-company membership tuple is
-    itself the authorization (``auth/user`` read is otherwise admin-only). Ordering
-    is deterministic and the result is capped at :data:`COLLEAGUES_MAX_LIMIT`.
-    """
-
-    subject_ids = apps.get_model("iam", "Company").objects.co_member_subject_ids(actor)
-    if not subject_ids:
-        return []
-    bounded = max(1, min(limit, COLLEAGUES_MAX_LIMIT))
-    queryset = (
-        User.objects.system_context(reason="iam.colleagues: shared company membership is the authorization")
-        .people()
-        .filter(user_subject_filter(User, subject_ids), is_active=True)
-        .exclude(pk=actor.pk)
-    )
-    term = search.strip()
-    if term:
-        queryset = queryset.filter(
-            Q(username__icontains=term)
-            | Q(first_name__icontains=term)
-            | Q(last_name__icontains=term)
-            | Q(email__icontains=term)
-        )
-    return list(queryset.order_by(*user_ordering(User))[:bounded])
 
 
 def _admin_user_aggregate_queryset(info: strawberry.Info) -> QuerySet[Any]:
@@ -786,22 +721,6 @@ _GROUP_RESOURCE = hasura_model_resource(
 )
 
 
-_COMPANY_RESOURCE = hasura_model_resource(
-    CompanyType,
-    model=Company,
-    name="companies",
-    filterable=["id", "name", "parent", "is_archived"],
-    sortable=["name", "created_at", "updated_at"],
-    aggregatable=["id"],
-    groupable=["parent", "is_archived"],
-    insertable=["name", "parent", "is_archived"],
-    updatable=["name", "parent", "is_archived"],
-    field_id_decode={"parent": public_pk_decoder(Company)},
-    write_backend=AngeeHasuraWriteBackend(Company, public_id_fields=("parent",)),
-    model_label="iam.Company",
-)
-
-
 # Filter/sort only on columns the active relationship store materializes as
 # direct concrete fields. The denormalized ``resource_type``/``subject_type``
 # strings live behind ``resource_fk``/``subject_fk`` in registry storage mode, so
@@ -809,10 +728,10 @@ _COMPANY_RESOURCE = hasura_model_resource(
 # subject-relation columns are concrete in both storage modes.
 _RELATIONSHIP_FILTER_FIELDS = ("relation", "optional_subject_relation", "caveat_name")
 
-_RELATIONSHIP_RESOURCE = hasura_model_resource(
-    IAMRelationshipType,
+_REBAC_RELATIONSHIP_RESOURCE = hasura_model_resource(
+    RebacRelationshipType,
     model=active_relationship_model(),
-    name="relationships",
+    name="rebac_relationships",
     filterable=list(_RELATIONSHIP_FILTER_FIELDS),
     sortable=list(_RELATIONSHIP_FILTER_FIELDS),
     aggregatable=["id"],
@@ -858,17 +777,16 @@ class IAMConsoleQuery:
         self,
         info: strawberry.Info,
         search: str = "",
-        limit: int = COLLEAGUES_DEFAULT_LIMIT,
+        limit: int = VISIBLE_PEOPLE_DEFAULT_LIMIT,
     ) -> list[UserType]:
-        """Return the signed-in actor's co-workers for member-scoped people pickers.
+        """Return the signed-in actor's visible people for member pickers.
 
-        The member surface the admin-only ``users`` catalogue cannot serve: the
-        active users who share a company of record with the actor (recipient
-        suggestions, the discuss person picker). Requires a signed-in actor and is
-        scoped to that actor's own companies' members — not platform-wide.
+        The member surface the admin-only ``users`` catalogue cannot serve. REBAC
+        read arms authorize rows; the User collection owns active-human filtering,
+        ordering, search, and limits.
         """
 
-        return cast(list[UserType], _colleagues(session_user(info), search=search, limit=limit))
+        return cast(list[UserType], User.objects.visible_people(session_user(info), search=search, limit=limit))
 
     @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def roles(self) -> list[IAMRoleType]:
@@ -1010,16 +928,14 @@ schemas = {
             IAMConsoleQuery,
             _USER_RESOURCE.query,
             _GROUP_RESOURCE.query,
-            _COMPANY_RESOURCE.query,
             _ROLE_RESOURCE.query,
             _GRANT_RESOURCE.query,
-            _RELATIONSHIP_RESOURCE.query,
+            _REBAC_RELATIONSHIP_RESOURCE.query,
         ],
         "mutation": [
             IAMMutation,
             _USER_RESOURCE.mutation,
             _GROUP_RESOURCE.mutation,
-            _COMPANY_RESOURCE.mutation,
             IAMUserDeletePreviewMutation,
             IAMPermissionHubMutation,
         ],
@@ -1028,7 +944,6 @@ schemas = {
             UserType,
             CurrentUserType,
             GroupType,
-            CompanyType,
             IAMRoleType,
             IAMGrantType,
             IAMRelationType,
@@ -1039,10 +954,9 @@ schemas = {
             IAMOverviewType,
             *_USER_RESOURCE.types,
             *_GROUP_RESOURCE.types,
-            *_COMPANY_RESOURCE.types,
             *_ROLE_RESOURCE.types,
             *_GRANT_RESOURCE.types,
-            *_RELATIONSHIP_RESOURCE.types,
+            *_REBAC_RELATIONSHIP_RESOURCE.types,
         ],
     },
 }

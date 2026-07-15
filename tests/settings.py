@@ -31,8 +31,9 @@ INSTALLED_APPS = [
     # Installed (imap is not) because this addon ships a management command
     # (`whatsapp_import`) whose discovery needs INSTALLED_APPS membership.
     "angee.messaging_integrate_whatsapp",
+    "angee.spaces",
     "angee.nexus",
-    "angee.social",
+    "angee.posts",
     "angee.platform",
     "angee.platform_integrate_vcs",
     "tests.linesdemo",
@@ -104,16 +105,17 @@ ANGEE_ADDON_INSTALLER_BACKEND_CLASSES = {
 # here so the ImplClassField registries are non-empty at model-import time.
 ANGEE_DIRECTORY_BACKEND_CLASSES = {
     "manual": "angee.parties.backends.ManualDirectoryBackend",
+    "carddav": "angee.parties_integrate_carddav.backend.CardDavDirectoryBackend",
 }
 ANGEE_CHANNEL_BACKEND_CLASSES = {
     "manual": "angee.messaging.backends.ManualChannelBackend",
     "imap": "angee.messaging_integrate_imap.backend.ImapChannelBackend",
     "whatsapp": "angee.messaging_integrate_whatsapp.backend.WhatsAppChannelBackend",
 }
-# Feed backends a ``social.Feed`` may select (social's autoconfig normally
-# contributes these). ``stub`` returns canned posts queued by the social tests.
-ANGEE_SOCIAL_FEED_BACKEND_CLASSES = {
-    "manual": "angee.social.backends.ManualFeedBackend",
+# Feed backends a ``posts.Feed`` may select (posts' autoconfig normally
+# contributes these). ``stub`` returns canned posts queued by the posts tests.
+ANGEE_POSTS_FEED_BACKEND_CLASSES = {
+    "manual": "angee.posts.backends.ManualFeedBackend",
     "stub": "tests.conftest.StubFeedBackend",
 }
 # OAuth provider types (normally each addon's autoconfig contributes these); the

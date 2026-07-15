@@ -9,10 +9,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import strawberry
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import connection
 from django.test import RequestFactory, override_settings
+from django.test.utils import CaptureQueriesContext
 from rebac import (
     RelationshipTuple,
     actor_context,
@@ -26,6 +28,7 @@ from rebac.roles import grant
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.messaging.models import Channel as AbstractChannel
+from angee.parties.mixins import LinkSource
 from tests import test_messaging as messaging_models
 from tests import test_parties_graphql as parties_graphql
 from tests.conftest import (
@@ -68,6 +71,20 @@ MESSAGING_GRAPHQL_MODELS = (
     *messaging_models.MESSAGING_TEST_MODELS,
     Channel,
 )
+
+
+@strawberry.type
+class SudoHandleQuery:
+    """Test surface that returns handles whose party FK cache was loaded elevated."""
+
+    @strawberry.field
+    def sudo_handles(self) -> list[parties_schema.HandleType]:
+        """Return sudo-loaded handles to exercise nested relation re-gating."""
+
+        with system_context(reason="test.messaging.sudo_handles"):
+            return list(
+                messaging_models.Handle._base_manager.select_related("party").order_by("value")
+            )
 
 
 def test_console_resource_metadata_declares_message_surface() -> None:
@@ -254,6 +271,353 @@ def test_message_by_pk_serves_title_beside_a_parts_selection(messaging_graphql_t
         ("TITLE", "Detail subject"),
         ("BODY", "Detail body"),
     ]
+
+
+def test_message_sender_and_participant_expose_resolved_party(messaging_graphql_tables: None) -> None:
+    """Message and participant handles expose the curated party identity."""
+
+    admin = _platform_admin("msg-party-handle-admin")
+    thread, message = _seed_thread_and_message(admin)
+    with system_context(reason="test.messaging.party.handle"):
+        party = messaging_models.Party.objects.create(
+            display_name="Ada Curated",
+            created_by_id=admin.pk,
+        )
+        handle = messaging_models.Handle.objects.create(
+            platform="email",
+            value="ada@example.com",
+            display_name="Ada Envelope",
+            created_by_id=admin.pk,
+        )
+        messaging_models.PartyHandle.objects.link(
+            party,
+            handle,
+            source=LinkSource.MANUAL,
+            is_confirmed=True,
+            created_by_id=admin.pk,
+        )
+        message.sender = handle
+        message.save(update_fields=("sender", "updated_at"))
+        messaging_models.Participant.objects.create(
+            thread=thread,
+            message=message,
+            handle=handle,
+            role=messaging_models.Participant.ParticipantRole.FROM,
+            created_by_id=admin.pk,
+        )
+
+    payload = _data(
+        execute_schema(
+            _schema(),
+            """
+            query MessageIdentity($id: String!) {
+              messages_by_pk(id: $id) {
+                sender { display_name party_link_confirmed party { display_name } }
+                participants { handle { display_name party_link_confirmed party { display_name } } }
+              }
+            }
+            """,
+            {"id": message.sqid},
+            request=_request(admin),
+        )
+    )["messages_by_pk"]
+
+    assert payload == {
+        "sender": {
+            "display_name": "Ada Envelope",
+            "party_link_confirmed": True,
+            "party": {"display_name": "Ada Curated"},
+        },
+        "participants": [
+            {
+                "handle": {
+                    "display_name": "Ada Envelope",
+                    "party_link_confirmed": True,
+                    "party": {"display_name": "Ada Curated"},
+                }
+            }
+        ],
+    }
+
+
+def test_inbox_sender_redacts_party_without_party_read(messaging_graphql_tables: None) -> None:
+    """A message reader sees the envelope handle while its unreadable party is null."""
+
+    owner = User.objects.create_user(username="msg-party-owner", email="msg-party-owner@example.com")
+    reader = User.objects.create_user(username="msg-party-reader", email="msg-party-reader@example.com")
+    _thread, message = _seed_thread_and_message(owner)
+    with system_context(reason="test.messaging.party.redaction.seed"):
+        party = messaging_models.Party.objects.create(
+            display_name="Ada Curated",
+            created_by_id=owner.pk,
+        )
+        handle = messaging_models.Handle.objects.create(
+            platform="email",
+            value="ada@example.com",
+            display_name="Ada Envelope",
+            created_by_id=owner.pk,
+        )
+        messaging_models.PartyHandle.objects.link(
+            party,
+            handle,
+            source=LinkSource.MANUAL,
+            is_confirmed=True,
+            created_by_id=owner.pk,
+        )
+        message.sender = handle
+        message.save(update_fields=("sender", "updated_at"))
+    _grant(message, "reader", reader)
+    _grant(handle, "reader", reader)
+
+    payload = _data(
+        execute_schema(
+            _schema(),
+            """
+            query MessageIdentity($id: String!) {
+              messages_by_pk(id: $id) {
+                sender { display_name party { display_name } }
+              }
+            }
+            """,
+            {"id": message.sqid},
+            request=_request(reader),
+        )
+    )["messages_by_pk"]
+
+    assert payload == {
+        "sender": {
+            "display_name": "Ada Envelope",
+            "party": None,
+        }
+    }
+
+
+def test_handle_party_redacts_mixed_visibility_without_permission_error(
+    messaging_graphql_tables: None,
+) -> None:
+    """A handle list keeps readable parties and nulls unreadable parties."""
+
+    owner = User.objects.create_user(username="mixed-party-owner")
+    reader = User.objects.create_user(username="mixed-party-reader")
+    with system_context(reason="test.messaging.party.mixed_visibility.seed"):
+        readable_party = messaging_models.Party.objects.create(
+            display_name="Readable Party",
+            created_by_id=owner.pk,
+        )
+        hidden_party = messaging_models.Party.objects.create(
+            display_name="Hidden Party",
+            created_by_id=owner.pk,
+        )
+        readable_handle = messaging_models.Handle.objects.create(
+            platform="email",
+            value="a-readable@example.com",
+            display_name="Readable Handle",
+            party=readable_party,
+            created_by_id=owner.pk,
+        )
+        hidden_handle = messaging_models.Handle.objects.create(
+            platform="email",
+            value="z-hidden@example.com",
+            display_name="Hidden Handle",
+            party=hidden_party,
+            created_by_id=owner.pk,
+        )
+    _grant(readable_handle, "reader", reader)
+    _grant(hidden_handle, "reader", reader)
+    _grant(readable_party, "reader", reader)
+
+    result = execute_schema(
+        _schema(),
+        """
+        query Handles {
+          handles(order_by: [{value: asc}]) {
+            value
+            party { display_name }
+          }
+        }
+        """,
+        request=_request(reader),
+    )
+
+    assert result.errors is None, result.errors
+    assert result.data == {
+        "handles": [
+            {
+                "value": "a-readable@example.com",
+                "party": {"display_name": "Readable Party"},
+            },
+            {
+                "value": "z-hidden@example.com",
+                "party": None,
+            },
+        ]
+    }
+
+
+def test_handle_party_batches_one_related_model_query(
+    messaging_graphql_tables: None,
+) -> None:
+    """A multi-handle list fetches all readable parties in one SQL query."""
+
+    admin = _platform_admin("batched-party-admin")
+    with system_context(reason="test.messaging.party.batching.seed"):
+        for index in range(3):
+            party = messaging_models.Party.objects.create(
+                display_name=f"Party {index}",
+                created_by_id=admin.pk,
+            )
+            messaging_models.Handle.objects.create(
+                platform="email",
+                value=f"party-{index}@example.com",
+                display_name=f"Handle {index}",
+                party=party,
+                created_by_id=admin.pk,
+            )
+    schema = _schema()
+
+    with CaptureQueriesContext(connection) as queries:
+        result = execute_schema(
+            schema,
+            """
+            query Handles {
+              handles(order_by: [{value: asc}]) {
+                value
+                party { display_name }
+              }
+            }
+            """,
+            request=_request(admin),
+        )
+
+    assert result.errors is None, result.errors
+    assert [row["party"]["display_name"] for row in result.data["handles"]] == [
+        "Party 0",
+        "Party 1",
+        "Party 2",
+    ]
+    party_selects = [
+        query["sql"]
+        for query in queries.captured_queries
+        if query["sql"].lstrip().upper().startswith("SELECT")
+        and f'FROM "{messaging_models.Party._meta.db_table}"' in query["sql"]
+    ]
+    assert len(party_selects) == 1, party_selects
+
+
+def test_handle_party_regates_sudo_loaded_parent(
+    messaging_graphql_tables: None,
+) -> None:
+    """An elevated parent FK cache never bypasses the request actor's party read."""
+
+    owner = User.objects.create_user(username="sudo-party-owner")
+    reader = User.objects.create_user(username="sudo-party-reader")
+    with system_context(reason="test.messaging.party.sudo.seed"):
+        party = messaging_models.Party.objects.create(
+            display_name="Sudo Hidden Party",
+            created_by_id=owner.pk,
+        )
+        handle = messaging_models.Handle.objects.create(
+            platform="email",
+            value="sudo-hidden@example.com",
+            display_name="Sudo Handle",
+            party=party,
+            created_by_id=owner.pk,
+        )
+    _grant(handle, "reader", reader)
+
+    result = execute_schema(
+        _schema_with_sudo_handle_query(),
+        """
+        query SudoHandles {
+          sudo_handles { value party { display_name } }
+        }
+        """,
+        request=_request(reader),
+    )
+
+    assert result.errors is None, result.errors
+    assert result.data == {
+        "sudo_handles": [
+            {
+                "value": "sudo-hidden@example.com",
+                "party": None,
+            }
+        ]
+    }
+
+
+def test_record_thread_sender_projection_omits_party_for_non_admin_reader(
+    messaging_graphql_tables: None,
+) -> None:
+    """Record chatter narrows sender identity instead of exposing sudo-loaded parties."""
+
+    owner = User.objects.create_user(username="record-party-owner", email="record-owner@example.com")
+    reader = User.objects.create_user(username="record-party-reader", email="record-reader@example.com")
+    with system_context(reason="test.messaging.record.party.seed"):
+        doc = messaging_models.ChatterDoc.objects.create(title="Party-safe chatter", status="open")
+        message = doc.message_post("Internal update")
+        party = messaging_models.Party.objects.create(
+            display_name="Ada Curated",
+            created_by_id=owner.pk,
+        )
+        handle = messaging_models.Handle.objects.create(
+            platform="email",
+            value="ada-record@example.com",
+            display_name="Ada Envelope",
+            created_by_id=owner.pk,
+        )
+        messaging_models.PartyHandle.objects.link(
+            party,
+            handle,
+            source=LinkSource.MANUAL,
+            is_confirmed=True,
+            created_by_id=owner.pk,
+        )
+        message.sender = handle
+        message.save(update_fields=("sender", "updated_at"))
+    _grant(doc, "reader", reader)
+    _grant(handle, "reader", reader)
+    schema = _schema()
+
+    visible = _data(
+        execute_schema(
+            schema,
+            """
+            query RecordSender($model: String!, $id: ID!) {
+              record_thread(input: {model_label: $model, record_id: $id}) {
+                messages { sender { display_name value } }
+              }
+            }
+            """,
+            {"model": "chatterdemo.ChatterDoc", "id": doc.sqid},
+            request=_request(reader),
+        )
+    )["record_thread"]
+    assert visible == {
+        "messages": [
+            {
+                "sender": {
+                    "display_name": "Ada Envelope",
+                    "value": "ada-record@example.com",
+                }
+            }
+        ]
+    }
+
+    narrowed = execute_schema(
+        schema,
+        """
+        query RecordSenderParty($model: String!, $id: ID!) {
+          record_thread(input: {model_label: $model, record_id: $id}) {
+            messages { sender { party { display_name } } }
+          }
+        }
+        """,
+        {"model": "chatterdemo.ChatterDoc", "id": doc.sqid},
+        request=_request(reader),
+    )
+    assert narrowed.errors is not None
+    assert "Cannot query field 'party' on type 'RecordHandleType'" in str(narrowed.errors[0])
 
 
 def test_parts_resource_lists_a_message_parts_with_fragment_connectivity(
@@ -2379,6 +2743,26 @@ def _schema() -> Any:
         SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
         for module in (iam_schema, integrate_schema, parties_schema, messaging_schema)
     ]
+    return GraphQLSchemas(addons).build("console")
+
+
+def _schema_with_sudo_handle_query() -> Any:
+    """Build the console schema with the test-only elevated handle root."""
+
+    addons = [
+        SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
+        for module in (iam_schema, integrate_schema, parties_schema, messaging_schema)
+    ]
+    addons.append(
+        SchemaAddon(
+            {
+                "console": {
+                    key: (SudoHandleQuery,) if key == "query" else ()
+                    for key in SCHEMA_PART_KEYS
+                }
+            }
+        )
+    )
     return GraphQLSchemas(addons).build("console")
 
 

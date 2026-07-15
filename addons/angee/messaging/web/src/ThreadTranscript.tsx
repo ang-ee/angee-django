@@ -292,7 +292,14 @@ function TranscriptMessage({ message, t }: TranscriptMessageProps): React.ReactE
   // Read the SDL's UPPERCASE `Direction` enum verbatim — one enum-casing convention
   // across the messaging web surface (see `message_type` reads in RecordChatterPane).
   const direction = message.direction;
-  const author = message.sender?.display_name || message.sender?.value || t("message.author");
+  const partyName = message.sender?.party_link_confirmed
+    ? message.sender.party?.display_name
+    : null;
+  const author =
+    partyName ||
+    message.sender?.display_name ||
+    message.sender?.value ||
+    t("message.author");
   const text = transcriptText(message);
   const timestamp = message.sent_at ?? message.created_at;
   const attachments = message.parts

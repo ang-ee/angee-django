@@ -11,6 +11,7 @@ from django.db import models
 from rebac.resources import model_resource_type
 from strawberry.utils.str_converters import to_camel_case
 
+from angee.base.refs import canonical_record_model
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.resource_fields import (
     DataRelationAxisMetadata,
@@ -249,6 +250,7 @@ class DataResourceMetadata:
     public_id_field: str
     roots: DataResourceRoots
     type_names: DataResourceTypeNames
+    canonical_label: str | None = None
     row_model: str = "server"
     record_representation: str | None = None
     capabilities: tuple[str, ...] = ()
@@ -294,6 +296,16 @@ class DataResourceMetadata:
             ),
             roots=self.roots.merge(self, other),
             type_names=self.type_names.merge(self, other),
+            canonical_label=cast(
+                str | None,
+                _merge_value(
+                    self,
+                    other,
+                    "canonical_label",
+                    self.canonical_label,
+                    other.canonical_label,
+                ),
+            ),
             row_model=_merge_row_model(self, other),
             record_representation=cast(
                 str | None,
@@ -454,6 +466,7 @@ def make_data_resource_metadata(
         public_id_field=public_id_field,
         roots=roots,
         type_names=type_names,
+        canonical_label=canonical_record_model(model)._meta.label if model is not None else None,
         row_model=row_model,
         record_representation=record_representation,
         capabilities=capabilities,

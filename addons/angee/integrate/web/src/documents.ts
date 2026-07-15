@@ -62,6 +62,10 @@ export const IntegrateSearchRepositories = graphql(`
   }
 `);
 
+// Inventory writes create `integrate.Repository` resource rows; keep that blast
+// radius beside the verb that owns it.
+export const INTEGRATE_ADD_REPOSITORY_INVALIDATES = ["integrate.Repository"] as const;
+
 /** Inventory one picked repository; returns the created row. */
 export const IntegrateAddRepository = graphql(`
   mutation IntegrateAddRepository($vcsBridgeId: ID!, $name: String!) {

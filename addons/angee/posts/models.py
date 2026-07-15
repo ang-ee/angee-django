@@ -1,8 +1,8 @@
-"""Source models for the social addon — public feeds, engagement, and following.
+"""Source models for the posts addon — public feeds, engagement, and following.
 
-Social is the public-social surface layered on ``messaging``. It reuses the one
+Posts is the public-post surface layered on ``messaging``. It reuses the one
 idempotent ``Message.objects.ingest`` write path (a public post *is* a
-``messaging.Message`` in a ``messaging.Thread``) and adds the social overlay:
+``messaging.Message`` in a ``messaging.Thread``) and adds the posts overlay:
 
 - :class:`Feed` — an ``integrate.Integration`` child + ``Bridge`` (exactly like
   ``messaging.Channel``) that polls an external platform for public posts; its
@@ -10,34 +10,33 @@ idempotent ``Message.objects.ingest`` write path (a public post *is* a
   messaging ingest, then overlays engagement.
 - :class:`FeedFollow` — the following / timeline subscription edge.
 - :class:`PostMetrics` — rolled-up public engagement counts for a message.
-- per-actor social reactions (like / repost / emoji) reuse the single
-  ``messaging.Reaction`` table — social writes ``like``/``repost`` as reaction values
+- per-actor post reactions (like / repost / emoji) reuse the single
+  ``messaging.Reaction`` table — posts writes ``like``/``repost`` as reaction values
   on the shared ``messaging.Message`` rather than owning a parallel table.
-- :class:`Quota` — the per-handle, per-platform API-unit ledger feed backends spend.
-- :class:`ThreadPublic` / :class:`MessagePublic` — the public-thread fields social
+- :class:`Quota` — the per-integration API-unit ledger feed backends spend.
+- :class:`ThreadPublic` / :class:`MessagePublic` — the public-thread fields posts
   contributes **onto** ``messaging.Thread`` / ``messaging.Message`` through the
   same-row ``extends`` seam.
 
-The dependency points one way (social → messaging → parties/integrate/storage);
-social never edits or forks messaging.
+The dependency points one way (posts → messaging → parties/integrate/storage);
+posts never edits or forks messaging.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, cast
 
 from django.apps import apps
 from django.db import models
 from rebac.managers import RebacManager
 
-from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.integrate.models import Bridge
-from angee.parties.models import Handle
-from angee.social.backends import FeedBackend, ParsedPost
-from angee.social.managers import (
+from angee.posts.backends import FeedBackend, ParsedPost
+from angee.posts.managers import (
     FeedFollowManager,
     PostMetricsManager,
     QuotaManager,
@@ -52,7 +51,7 @@ class Feed(Bridge):
     through ``sync``; ``integrate.scheduler.run_due_bridges`` auto-discovers any
     concrete ``Bridge`` subclass, so no registration is needed). ``backend_class``
     selects the platform — ``youtube`` / ``facebook`` are contributed by downstream
-    ``social_integrate_*`` addons; ``manual`` is the neutral null-object.
+    ``posts_integrate_*`` addons; ``manual`` is the neutral null-object.
 
     A *paused* feed carries a NULL ``next_sync_at`` (not scheduled); activating it
     schedules the first poll. ``handle`` is the ``parties.Handle`` the feed monitors
@@ -65,7 +64,7 @@ class Feed(Bridge):
 
     backend_class = ImplClassField(
         base_class=FeedBackend,
-        registry_setting="ANGEE_SOCIAL_FEED_BACKEND_CLASSES",
+        registry_setting="ANGEE_POSTS_FEED_BACKEND_CLASSES",
         default="manual",
     )
     """Registry key for the feed backend bound to this feed."""
@@ -86,7 +85,7 @@ class Feed(Bridge):
         """Django model options for the feed child model."""
 
         abstract = True
-        rebac_resource_type = "social/feed"
+        rebac_resource_type = "posts/feed"
         rebac_id_attr = "sqid"
 
     @property
@@ -100,8 +99,8 @@ class Feed(Bridge):
         """Fetch new posts, ingest their message core, and overlay engagement.
 
         The message core (thread/message/parts) is the messaging owner's job, so a
-        public post shares email's one idempotent write path; social only writes the
-        overlay it owns (public payload / metrics / reactions / social edges). The
+        public post shares email's one idempotent write path; posts only writes the
+        overlay it owns (public payload / metrics / reactions / post edges). The
         ingest is told the facts a public feed differs on, each set through the
         messaging owner rather than bulk-patched afterward: every thread is born a
         ``PUBLIC_THREAD`` with ``PUBLIC`` visibility, each message lands under the
@@ -114,7 +113,13 @@ class Feed(Bridge):
         message_model = apps.get_model("messaging", "Message")
         thread_model = apps.get_model("messaging", "Thread")
         messages = message_model.objects.ingest(
-            [post.message for post in posts],
+            [
+                replace(
+                    post.message,
+                    metadata={**post.message.metadata, "tags": list(post.tags)},
+                )
+                for post in posts
+            ],
             channel=self,
             modality=thread_model.Modality.PUBLIC_THREAD,
             visibility=thread_model.Visibility.PUBLIC,
@@ -126,12 +131,12 @@ class Feed(Bridge):
         return len(messages)
 
     def _overlay_engagement(self, posts: list[ParsedPost], messages: list) -> None:
-        """Attach the social overlay to the message rows the ingest just landed.
+        """Attach the posts overlay to the message rows the ingest just landed.
 
         Keys the ``messages`` the owner returned by ``(platform, external_id)`` — no
         re-query, since ``Message.objects.ingest`` hands back the rows it resolved — and
-        writes what social owns: the public-post payload it folds onto the shared rows
-        (``is_original_post``/``subject_url``/``tags`` via
+        writes what posts owns: the public-post payload it folds onto the shared rows
+        (``is_original_post``/``subject_url`` via
         :class:`MessagePublic`/:class:`ThreadPublic`), rolled-up :class:`PostMetrics`,
         per-actor reactions on the reused ``messaging.Reaction`` table, and cross-post
         edges through the ``messaging.MessageEdge`` owner (``relate``). The engagement is
@@ -146,9 +151,9 @@ class Feed(Bridge):
 
         if not posts:
             return
-        metrics_model = apps.get_model("social", "PostMetrics")
+        metrics_model = apps.get_model("posts", "PostMetrics")
         # Reactions reuse the single messaging.Reaction table (one per-actor reaction
-        # store, not a parallel social one): social writes like/repost as reaction values.
+        # store, not a parallel posts one): posts writes like/repost as reaction values.
         reaction_model = apps.get_model("messaging", "Reaction")
         edge_model = apps.get_model("messaging", "MessageEdge")
         handle_model = apps.get_model("parties", "Handle")
@@ -182,7 +187,7 @@ class Feed(Bridge):
 
         # Cross-post edges: pre-key every target from this fetch, then one query resolves
         # any referenced post not in the batch; the MessageEdge owner writes the edge
-        # shape once (idempotent on the (src, dst, kind) key) — social only supplies the kind.
+        # shape once (idempotent on the (src, dst, kind) key) — posts only supplies the kind.
         targets = self._resolve_relation_targets(landed, by_key, channel_id=self.pk)
         for message, post in landed:
             for relation in post.relations:
@@ -207,7 +212,7 @@ class Feed(Bridge):
             key: handle_model.objects.upsert(
                 platform=parsed.platform,
                 value=parsed.value,
-                owner_id=owner_id,
+                created_by_id=owner_id,
                 display_name=parsed.display_name,
             )
             for key, parsed in specs.items()
@@ -245,8 +250,8 @@ class Feed(Bridge):
     def _write_public_payload(message: Any, post: ParsedPost) -> None:
         """Fold the parsed public-post payload onto its message/thread rows.
 
-        ``is_original_post`` rides the message and ``subject_url``/``tags`` ride its
-        thread — the fields :class:`MessagePublic`/:class:`ThreadPublic` contribute onto
+        ``is_original_post`` rides the message and ``subject_url`` rides its thread —
+        the fields :class:`MessagePublic`/:class:`ThreadPublic` contribute onto
         the single messaging tables. Each row is written only when a value actually
         changes, so an idempotent re-sync stays a no-op.
         """
@@ -258,11 +263,9 @@ class Feed(Bridge):
         if thread is None:
             return
         subject_url = post.subject_url or ""
-        tags = list(post.tags)
-        if thread.subject_url != subject_url or thread.tags != tags:
+        if thread.subject_url != subject_url:
             thread.subject_url = subject_url
-            thread.tags = tags
-            thread.save(update_fields=("subject_url", "tags", "updated_at"))
+            thread.save(update_fields=("subject_url", "updated_at"))
 
 
 class FeedFollow(SqidMixin, AuditMixin, AngeeModel):
@@ -278,7 +281,7 @@ class FeedFollow(SqidMixin, AuditMixin, AngeeModel):
     sqid_prefix = "ffl_"
 
     feed = models.ForeignKey(
-        "social.Feed",
+        "posts.Feed",
         on_delete=models.CASCADE,
         related_name="followers",
     )
@@ -297,7 +300,7 @@ class FeedFollow(SqidMixin, AuditMixin, AngeeModel):
 
         abstract = True
         ordering = ("-started_at", "sqid")
-        rebac_resource_type = "social/feed_follow"
+        rebac_resource_type = "posts/feed_follow"
         rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
@@ -342,7 +345,7 @@ class PostMetrics(SqidMixin, AuditMixin, AngeeModel):
         """Django model options for the post-metrics source model."""
 
         abstract = True
-        rebac_resource_type = "social/post_metrics"
+        rebac_resource_type = "posts/post_metrics"
         rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
@@ -352,10 +355,10 @@ class PostMetrics(SqidMixin, AuditMixin, AngeeModel):
 
 
 class Quota(SqidMixin, AuditMixin, AngeeModel):
-    """A per-handle, per-platform API-unit ledger for one billing period.
+    """A per-integration API-unit ledger for one billing period.
 
     Feed backends spend platform API units (search, list, insert) against a per-period
-    budget; :meth:`~angee.social.managers.QuotaManager.consume` atomically debits this
+    budget; :meth:`~angee.posts.managers.QuotaManager.consume` atomically debits this
     ledger and refuses when the budget is insufficient. Enforcement is cooperative —
     the backend must ask before it spends.
     """
@@ -363,14 +366,11 @@ class Quota(SqidMixin, AuditMixin, AngeeModel):
     runtime = True
     sqid_prefix = "qta_"
 
-    handle = models.ForeignKey(
-        "parties.Handle",
+    integration = models.ForeignKey(
+        "integrate.Integration",
         on_delete=models.CASCADE,
         related_name="quotas",
     )
-    # No default: platform is part of the (handle, platform, period_start) identity, so
-    # a ledger is always opened for an explicit platform, never a defaulted one.
-    platform = StateField(choices_enum=Handle.Platform)
     period_start = models.DateTimeField(db_index=True)
     period_end = models.DateTimeField()
     quota_used = models.PositiveIntegerField(default=0)
@@ -385,19 +385,19 @@ class Quota(SqidMixin, AuditMixin, AngeeModel):
 
         abstract = True
         ordering = ("-period_start", "sqid")
-        rebac_resource_type = "social/quota"
+        rebac_resource_type = "posts/quota"
         rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
-                fields=("handle", "platform", "period_start"),
-                name="uq_quota_handle_platform_period",
+                fields=("integration", "period_start"),
+                name="uq_quota_integration_period",
             ),
         )
 
     def __str__(self) -> str:
         """Return a readable quota label for Django displays."""
 
-        return f"{self.handle_id}/{self.platform}: {self.quota_used}/{self.quota_limit}"
+        return f"{self.integration_id}: {self.quota_used}/{self.quota_limit}"
 
 
 # --- Same-row extensions onto messaging (the public-post payload) ---------------
@@ -407,18 +407,18 @@ class Quota(SqidMixin, AuditMixin, AngeeModel):
 # ``extends``, NO ``runtime`` — like ``iam_integrate_oidc.OAuthClientOidc``). Only
 # fields with no base producer are extended here: ``modality``/``visibility`` STAY
 # owned by ``messaging`` (its ``ThreadManager.resolve`` writes both on every thread,
-# and its schema/console bind them), so social sets ``modality=public_thread`` /
+# and its schema/console bind them), so posts sets ``modality=public_thread`` /
 # ``visibility=public`` through that owner rather than re-owning the columns. The base
 # ``messaging`` slice carries no field of these names, so the composer folds these onto
 # the one table with no collision.
 
 
 class ThreadPublic(AngeeModel):
-    """Public-post payload fields social contributes onto ``messaging.Thread`` (same row).
+    """Public-post payload fields posts contributes onto ``messaging.Thread`` (same row).
 
-    A public thread's row *is* its subject post: ``subject_url``/``body``/``tags`` carry
-    the post payload and ``parent`` nests a thread under another (a reply/quote thread).
-    These have no producer in base messaging, so social owns them; the structural
+    A public thread's row *is* its subject post: ``subject_url``/``body`` carry the
+    post payload and ``parent`` nests a thread under another (a reply/quote thread).
+    These have no producer in base messaging, so posts owns them; the structural
     ``modality``/``visibility`` discriminators stay owned by messaging.
     """
 
@@ -433,7 +433,6 @@ class ThreadPublic(AngeeModel):
     )
     body = models.TextField(blank=True, default="")
     subject_url = models.URLField(max_length=1024, blank=True, default="")
-    tags = models.JSONField(blank=True, default=list)
 
     class Meta:
         """Abstract same-row extension composed into ``messaging.Thread``."""
@@ -442,10 +441,10 @@ class ThreadPublic(AngeeModel):
 
 
 class MessagePublic(AngeeModel):
-    """Public-post fields social contributes onto ``messaging.Message`` (same row).
+    """Public-post fields posts contributes onto ``messaging.Message`` (same row).
 
     ``is_original_post`` marks the root post of a public thread (a post with no parent).
-    It has no producer in base messaging, so social owns it and the composer folds it
+    It has no producer in base messaging, so posts owns it and the composer folds it
     onto the single ``messaging.Message`` table.
     """
 

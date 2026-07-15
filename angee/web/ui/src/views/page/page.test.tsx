@@ -16,6 +16,7 @@ import {
   parsePageGroups,
 } from "./index";
 import type { ColumnDescriptor } from "./Column";
+import { slotContents } from "../../lib/slot-outlet";
 
 interface TestRow {
   title: string;
@@ -63,6 +64,7 @@ describe("page element markers", () => {
           header="Title"
           widget="text"
           sortable
+          headerVisuallyHidden
           aggregate="count"
           align="left"
           render={renderTitle}
@@ -78,6 +80,7 @@ describe("page element markers", () => {
       header: "Title",
       widget: "text",
       sortable: true,
+      headerVisuallyHidden: true,
       aggregate: "count",
       align: "left",
     });
@@ -139,6 +142,28 @@ describe("page element markers", () => {
         kind: "selection",
       },
     ]);
+  });
+
+  test("parse raw slot contents wrapped in keyed fragments", () => {
+    const nodes = slotContents([
+      {
+        slot: "tags.scope",
+        id: "scope",
+        content: [
+          <>
+            <Facet field="scope" label="Scope" />
+            <Column field="scope" header="Scope" />
+          </>,
+          <Group label="Scope">
+            <Field name="scope" />
+          </Group>,
+        ],
+      },
+    ]);
+
+    expect(parsePageFacets(nodes)).toEqual([{ field: "scope", label: "Scope" }]);
+    expect(parsePageColumns(nodes)).toMatchObject([{ field: "scope", header: "Scope" }]);
+    expect(parsePageFields(nodes)).toEqual([{ name: "scope" }]);
   });
 
   test("parse group fields and group actions", () => {

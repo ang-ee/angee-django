@@ -54,6 +54,7 @@ export interface ChatterRoute {
   path: string;
   viewType: string;
   modelLabel?: string;
+  canonicalLabel?: string;
   recordParam?: string;
 }
 

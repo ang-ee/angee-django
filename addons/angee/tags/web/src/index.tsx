@@ -10,6 +10,12 @@ import { Tag as TagIcon, Tags as TagsIcon } from "lucide-react";
 import { enTagsMessages } from "./i18n";
 import { RecordTagsPane } from "./RecordTagsPane";
 
+export {
+  TAG_SCOPE_COLUMN_SLOT,
+  TAG_SCOPE_FACET_SLOT,
+  TAG_SCOPE_FIELD_SLOT,
+} from "./slots";
+
 const TAGS_ID = "tags";
 
 const tagsRoutes: readonly BaseAddonRoute[] = [

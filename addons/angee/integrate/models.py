@@ -854,12 +854,12 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
         credential's identity. OAuth credentials are minted by the connect/login flow only.
         """
 
-        handler = handler_for(kind)
-        if handler.kind == CredentialKind.OAUTH:
-            raise ValueError("OAuth credentials are minted by the connect/login flow, not create_local_credential().")
-        if not name:
-            raise ValueError("A provider-less credential requires a name.")
-        operation_values, update_values = self._assemble_values(handler, material, fields)
+        operation_values, update_values = self._local_credential_values(
+            kind=kind,
+            name=name,
+            material=material,
+            fields=fields,
+        )
         create_values = {
             "oauth_client": None,
             "external_account": None,
@@ -876,6 +876,53 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
                 create_defaults=create_values,
             )
         return instance
+
+    def prepare_local_credential(
+        self,
+        user: Any,
+        *,
+        kind: str,
+        name: str,
+        material: dict[str, Any],
+        **fields: Any,
+    ) -> Any:
+        """Return a validated, unsaved provider-less credential for external preflight."""
+
+        operation_values, update_values = self._local_credential_values(
+            kind=kind,
+            name=name,
+            material=material,
+            fields=fields,
+        )
+        create_values = {
+            "external_account": None,
+            **self._blank_create_values(),
+            **operation_values,
+            **update_values,
+        }
+        return self.model(
+            user=user,
+            name=name,
+            oauth_client=None,
+            **create_values,
+        )
+
+    def _local_credential_values(
+        self,
+        *,
+        kind: str,
+        name: str,
+        material: dict[str, Any],
+        fields: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Validate one local credential and return its owned operation/update values."""
+
+        handler = handler_for(kind)
+        if handler.kind == CredentialKind.OAUTH:
+            raise ValueError("OAuth credentials are minted by the connect/login flow, not create_local_credential().")
+        if not name:
+            raise ValueError("A provider-less credential requires a name.")
+        return self._assemble_values(handler, material, fields)
 
     def _assemble_values(
         self,

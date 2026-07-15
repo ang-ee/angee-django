@@ -33,7 +33,7 @@ from angee.integrate.credentials import CredentialKind
 from angee.integrate.events import EventKind
 from angee.integrate.webhooks import WebhookDeliveryError
 from tests.conftest import (
-    SOCIAL_TEST_MODELS,
+    POSTS_TEST_MODELS,
     Credential,
     Integration,
     OAuthClient,
@@ -51,6 +51,8 @@ from tests.conftest import (
 from tests.conftest import (
     result_data as _data,
 )
+from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
+from tests.test_messaging import MESSAGING_TEST_MODELS
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -1189,9 +1191,14 @@ def integrate_console_tables(transactional_db: Any) -> Iterator[None]:
     """Create the iam + integrate (incl. webhook) console tables and sync REBAC."""
 
     del transactional_db
-    from tests.test_messaging import MESSAGING_TEST_MODELS
-
-    connection_models = MESSAGING_TEST_MODELS + SOCIAL_TEST_MODELS + (VcsBridge, WebhookSubscription)
+    connection_models = tuple(
+        dict.fromkeys(
+            MESSAGING_TEST_MODELS
+            + POSTS_TEST_MODELS
+            + (VcsBridge, WebhookSubscription)
+            + AGENTS_GRAPHQL_MODELS
+        )
+    )
     _create_connection_tables(connection_models)
     call_command("rebac", "sync", verbosity=0)
     try:

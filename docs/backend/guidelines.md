@@ -370,6 +370,17 @@ data through REBAC, never a queryset bypass.
   permission evaluation); attribution converges through `actor_user_id` and the
   subject-type resolver registry. See the glossary's Principal/Actor/Service
   account entries.
+- **Visibility and access are REBAC-native, always.** Put relations and
+  permission arms on the model's zed and let the store scope reads; never stand
+  authorization up with a Python provider, `visible_to` projection, or queryset
+  filter. Scope roles live on the scope definition, and scoped models derive
+  arms from them (`scope->viewer` for read, `scope->editor` for write).
+- **Posture is data, not schema.** `permissions.extends.zed` fragments are
+  additive-only, so narrowable defaults ship as seeded tuples (the shared
+  wildcard pattern). Platform-wide tuple-driven visibility uses a const-backed
+  singleton relation on each row (for example, `auth/user#directory` →
+  `iam/directory:main`) plus a seed on that singleton (`iam/directory:main#reader`),
+  never base schema arms or per-row fan-out a deployment cannot omit.
 - Bracket every server-side read/write in `system_context`/`asystem_context` and
   resolve the actor with `@rebac_subject`; a bare `Model.objects.create()` under
   an actor is denied.
@@ -397,11 +408,13 @@ data through REBAC, never a queryset bypass.
   walks the arrow into `<ns>/role#admin`; without the anchor that const cannot
   resolve and the evaluator raises instead of returning a clean deny. Bump the
   package `@rebac_schema_revision` when migrating a def to the const shape.
-- **A consumer addon contributes domain relations to a framework definition
-  additively — never by editing the framework zed.** The owning addon's
-  `permissions.zed` declares the *seam* (e.g. `iam/company`); a consumer addon
-  that needs a company-scoped role adds it from its own **`permissions.extends.zed`**
-  (sibling to `permissions.zed`), owned by `angee.compose.permissions`. Each
+- **A consumer addon contributes domain relations to another addon's definition
+  additively — never by editing the target zed.** The owning addon's
+  `permissions.zed` declares the *seam* (for example, the in-repo spaces addon
+  extends `messaging/thread`); a consumer addon that needs its own role adds it
+  from its own **`permissions.extends.zed`** (sibling to `permissions.zed`),
+  owned by `angee.compose.permissions`. The `tests/extcontrib` fixture keeps the
+  mechanical merge covered. Each
   `definition <target> { … }` block in the fragment names an existing definition
   and lists the relations it contributes and the permission arms it unions in
   (`permission read = <term>` merges to `read = (<base>) + (<term>)`). The
@@ -470,7 +483,29 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   the holder must exit for a clean reconciler restart instead of racing a
   duplicate against shared state. The reconciler enqueues with `expires=` of one
   tick so a saturated or absent worker never accumulates a backlog
-  (`messaging_integrate_whatsapp/client.py` + `tasks.py` is the reference).
+  (`messaging_integrate_whatsapp/session.py` + `tasks.py` is the reference).
+- **Run every changed test module standalone.** A full suite's file order can
+  leak concrete test models into the shared registry and mask a missing
+  registration; a broad run does not replace the direct module run.
+- **GraphQL authorization tests include a non-admin reader.** Admin-only tests
+  neither pin deny-hard-fail behavior nor expose a leaked `sudo()` scope.
+- **Foreign write paths defer parties bookkeeping until commit and contain its
+  failures.** Follow the OIDC/ingest precedent: schedule the parties-owned work
+  with `transaction.on_commit`, catch and log callback failures, and let the
+  already-successful foreign write continue.
+- **Polymorphic edges write at the canonical MTI level.** Route their targets
+  through `angee.base.canonical_record_target`; compose `ThreadedModelMixin` and
+  reverse `GenericRelation`s on that same canonical ancestor.
+- **Derived columns have two drift classes and two owners.** Signals own instance
+  saves/deletes, cascades, and queryset deletes; idempotent repair passes own
+  `bulk_create` and queryset `update` paths, where signals do not run.
+- **`ScoredLinkMixin` is the scored-suggestion shape, not a permission owner.**
+  A subclass that needs REBAC side effects overrides the transition; never add
+  REBAC writes to the shared mixin.
+- **Upgrading this refactor is an operator-run reconciliation.** Downstream
+  consumers need repoint/merge data migrations for tags and thread-attachment
+  child-content-type edges, then one `manage.py reconcile_permissions` run for
+  the `social/*` to `posts/*` zed rename; do not hide either step in startup.
 - **State columns are `StateField`; guarded changes go through transition methods, never direct assignment.**
 - **`hasura_model_resource` create `full_clean`s the input, so model + input defaults must agree.**
   The Hasura model-resource create path builds a dummy instance from the input and calls
@@ -531,6 +566,16 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   `model._base_manager.using(db)`. And a fresh-DB `migrate` never executes a
   row-dependent backfill body: prove backfills against a database that has rows
   (the agents service-user backfill failed only on live dev DBs for this reason).
+- **Addon-owned runtime migrations are append-only, self-contained history.**
+  Put source modules in `runtime_migrations/`, not Django's conventional
+  `migrations/` package, and declare them through ordered `[[migrations]]` in
+  `addon.toml`. Their pure `applies(ProjectState)` guard must select the exact
+  old state, skip the complete new or absent state, and fail on recognized
+  partial states. Copy-local `RunPython` functions must use historical models
+  from `apps` and `_base_manager`; never import current models. Once an origin
+  has materialized downstream, never edit its source or copied runtime file —
+  ship a new named declaration. Explicit `angee build` is the only writer;
+  normal boot remains migration-write-free.
 - **Agent runtime auth is a `(runtime × provider × credential-kind)` fact, not provider-only.**
   The `AgentRuntime` an agent's `runtime_class` selects (`angee.agents.runtimes`) owns how a
   credential becomes container env *and* the synced secret payload (`auth_env` /
@@ -637,12 +682,12 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   locks, constraints, and idempotent managers. Do not hold row locks during network
   IO.
 - **A `HierarchyMixin` consumer declares its scope fields — the mixin never probes
-  by column name.** A subtree that must stay inside a scope (a company, a tenant)
-  declares `hierarchy_scope_fields = ("company",)` (a `ClassVar` tuple; FKs compare
+  by column name.** A subtree that must stay inside a tenant or other scope
+  declares `hierarchy_scope_fields = ("scope",)` (a `ClassVar` tuple; FKs compare
   by stored id); the mixin rejects a reparent or create under a parent that differs
-  on any listed field. It is generic and iam-free — there is no `company`-by-name
-  fallback, so a company-scoped tree that omits the declaration silently accepts a
-  cross-company parent. `StateField` transitions guarded by `save_state` get an
+  on any listed field. It is generic and iam-free — there is no scope-field-name
+  fallback, so a scoped tree that omits the declaration silently accepts a parent
+  outside its scope. `StateField` transitions guarded by `save_state` get an
   optimistic-concurrency guard for free: the committed source is re-read under the
   same lock before the write, so a lost race raises `TransitionNotAllowed` instead
   of double-applying (e.g. double-posting a ledger).

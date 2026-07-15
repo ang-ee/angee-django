@@ -83,7 +83,7 @@ def _scan_only_the_fixture_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     """Scope the scheduler's model scan to this module's fixture bridge.
 
     The shared test registry accumulates concrete bridge models from other
-    modules (social's Feed, messaging's Channel) whose on-demand tables may not
+    modules (posts' Feed, messaging's Channel) whose on-demand tables may not
     exist in this session, so an unscoped scan fails on table/relation state
     these tests don't own. Cross-model discovery itself is covered by
     ``test_integrate_registry_discovers_bridge_models_in_deterministic_order``,

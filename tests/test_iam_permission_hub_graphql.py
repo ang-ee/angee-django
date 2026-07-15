@@ -110,7 +110,7 @@ def test_users_resource_lists_people_not_service_accounts(
     assert all(row["username"] != "hub-service" for row in data["users"])
 
 
-def test_relationships_resource_is_admin_scoped(
+def test_rebac_relationships_resource_is_admin_scoped(
     iam_permission_hub_tables: None,
 ) -> None:
     """The relationships Hasura resource lists rows for admins, empty otherwise.
@@ -127,7 +127,7 @@ def test_relationships_resource_is_admin_scoped(
     console_schema = _schema("console")
     query = """
         query {
-          relationships(limit: 50) {
+          rebac_relationships(limit: 50) {
             id
             resource_type
             resource_id
@@ -142,11 +142,11 @@ def test_relationships_resource_is_admin_scoped(
 
     denied = _execute(console_schema, query, user=plain)
     assert denied.errors is None
-    assert _data(denied)["relationships"] == []
+    assert _data(denied)["rebac_relationships"] == []
 
     allowed = _execute(console_schema, query, user=admin)
     assert allowed.errors is None
-    rows = _data(allowed)["relationships"]
+    rows = _data(allowed)["rebac_relationships"]
     assert rows
     assert any(row["relation"] == ROLE_RELATION for row in rows)
     assert all(row["id"] for row in rows)
@@ -396,36 +396,6 @@ def test_iam_overview_privileged_grants_on_registry_relationship_storage(
     assert {row["role"] for row in overview["privileged_grants"]} == {"angee/role:admin"}
 
 
-def test_unassigned_user_queryset_sqid_path_uses_relationship_subquery(
-    iam_permission_hub_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The sqid user path must not build a Python OR-chain from grant subject ids."""
-
-    admin = _platform_admin("hub-unassigned-admin")
-    assigned = User.objects.create_user(
-        username="hub-unassigned-assigned",
-        email="hub-unassigned-assigned@example.com",
-    )
-    unassigned = User.objects.create_user(
-        username="hub-unassigned-free",
-        email="hub-unassigned-free@example.com",
-    )
-    grant(actor=assigned, role="angee/role:auditor")
-
-    def forbidden_user_subject_filter(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("unassigned_user_queryset must use the relationship subquery")
-
-    monkeypatch.setattr(iam_roles, "user_subject_filter", forbidden_user_subject_filter)
-
-    with system_context(reason="test.iam.unassigned"):
-        rows = list(iam_roles.unassigned_user_queryset())
-
-    assert admin not in rows
-    assert assigned not in rows
-    assert unassigned in rows
-
-
 def test_permission_hub_mutations_are_admin_only(
     iam_permission_hub_tables: None,
 ) -> None:
@@ -646,7 +616,7 @@ def test_role_refs_are_current_user_only(
     public_sdl = public_schema.as_str()
     assert "users(" not in public_sdl
     assert "grants(" not in public_sdl
-    assert "relationships(" not in public_sdl
+    assert "rebac_relationships(" not in public_sdl
     assert "role_refs" not in _type_block(public_sdl, "UserType")
 
 

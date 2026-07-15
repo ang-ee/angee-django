@@ -14,81 +14,22 @@ from rebac import app_settings, system_context
 from rebac.roles import grant
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.parties.models import Address as AbstractAddress
-from angee.parties.models import Affiliation as AbstractAffiliation
-from angee.parties.models import Organization as AbstractOrganization
-from angee.parties.models import PartyHandle as AbstractPartyHandle
-from angee.parties.models import Person as AbstractPerson
 from tests import test_messaging as messaging_models
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
     SchemaAddon,
     _create_missing_tables,
+    assert_private_hasura_insert_access,
     execute_schema,
 )
 from tests.conftest import result_data as _data
 
-_AddressMeta = getattr(AbstractAddress, "Meta", object)
-_AffiliationMeta = getattr(AbstractAffiliation, "Meta", object)
-_OrganizationMeta = getattr(AbstractOrganization, "Meta", object)
-_PartyHandleMeta = getattr(AbstractPartyHandle, "Meta", object)
-_PersonMeta = getattr(AbstractPerson, "Meta", object)
-
-
-class Address(AbstractAddress):
-    """Concrete address model used to import the parties schema."""
-
-    class Meta(_AddressMeta):
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_address"
-        rebac_resource_type = "parties/address"
-        rebac_id_attr = "sqid"
-
-
-class Affiliation(AbstractAffiliation):
-    """Concrete affiliation model used to import the parties schema."""
-
-    class Meta(_AffiliationMeta):
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_affiliation"
-        rebac_resource_type = "parties/affiliation"
-        rebac_id_attr = "sqid"
-
-
-class PartyHandle(AbstractPartyHandle):
-    """Concrete party-handle model used to import the parties schema."""
-
-    class Meta(_PartyHandleMeta):
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_party_handle"
-        rebac_resource_type = "parties/party_handle"
-        rebac_id_attr = "sqid"
-
-
-class Person(messaging_models.Party, AbstractPerson):
-    """Concrete person model matching the composer inheritance shape."""
-
-    class Meta(_PersonMeta):
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_person"
-        rebac_resource_type = "parties/person"
-        rebac_id_attr = "sqid"
-
-
-class Organization(messaging_models.Party, AbstractOrganization):
-    """Concrete organization model matching the composer inheritance shape."""
-
-    class Meta(_OrganizationMeta):
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_organization"
-        rebac_resource_type = "parties/organization"
-        rebac_id_attr = "sqid"
+Address = messaging_models.Address
+Circle = messaging_models.Circle
+Organization = messaging_models.Organization
+Person = messaging_models.Person
+PartyHandle = messaging_models.PartyHandle
 
 
 # Import after the concrete test models are registered; the source schema resolves
@@ -99,12 +40,10 @@ PARTIES_TEST_MODELS = (
     messaging_models.Directory,
     messaging_models.Folder,
     messaging_models.Party,
-    Person,
     Organization,
     messaging_models.Handle,
-    PartyHandle,
     Address,
-    Affiliation,
+    Circle,
 )
 
 
@@ -268,10 +207,9 @@ def test_public_resource_metadata_converts_related_parties_surfaces() -> None:
     assert address.filter_fields == ("id", "party", "label", "created_at")
     assert address.create_fields[0] == "party"
 
-    affiliation = resources["parties.Affiliation"]
-    assert affiliation.roots.list_name == "affiliations"
-    assert affiliation.roots.detail_name == "affiliations_by_pk"
-    assert affiliation.create_fields[:2] == ("party", "organization")
+    relationship = resources["parties.Relationship"]
+    assert relationship.roots.list_name == "relationships"
+    assert relationship.create_fields[:2] == ("party", "other_party")
 
     folder = resources["parties.Folder"]
     assert folder.roots.list_name == "contact_folders"
@@ -329,6 +267,50 @@ def test_person_hasura_insert_and_update(parties_tables: None) -> None:
         person = Person.objects.get(sqid=created["id"])
     assert person.display_name == "Ada"
     assert person.family_name == "Lovelace"
+
+
+def test_circle_console_insert_establishes_private_creator_access(
+    parties_tables: None,
+) -> None:
+    """A non-admin creator can create/read/write its private circle; an outsider cannot read it."""
+
+    del parties_tables
+    creator = User.objects.create_user(username="circle-creator")
+    outsider = User.objects.create_user(username="circle-outsider")
+    schema = _schema("console")
+
+    created, readable, updated = assert_private_hasura_insert_access(
+        schema,
+        creator=creator,
+        outsider=outsider,
+        create_mutation="""
+            mutation CreateCircle {
+              insert_circles_one(object: {name: "Friends"}) {
+                id
+                name
+              }
+            }
+            """,
+        create_root="insert_circles_one",
+        detail_query="""
+            query Circle($id: String!) {
+              circles_by_pk(id: $id) { id name description }
+            }
+            """,
+        detail_root="circles_by_pk",
+        update_mutation="""
+            mutation UpdateCircle($id: String!) {
+              update_circles_by_pk(
+                pk_columns: {id: $id}
+                _set: {description: "Creator write"}
+              ) { id description }
+            }
+            """,
+        update_root="update_circles_by_pk",
+    )
+    assert created["name"] == "Friends"
+    assert readable == {"id": created["id"], "name": "Friends", "description": ""}
+    assert updated == {"id": created["id"], "description": "Creator write"}
 
 
 @pytest.fixture()

@@ -1,1 +1,1 @@
-"""Tags addon — a shared-or-company-scoped vocabulary attachable to any row."""
+"""Tags addon — a shared vocabulary attachable to any row."""

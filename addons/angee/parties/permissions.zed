@@ -1,9 +1,9 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 4
+// @rebac_schema_revision: 5
 
-// A party and its related rows (handles, links, addresses, affiliations) are
+// A party and its related rows (handles, links, addresses, relationships) are
 // each owned by the user that created them, with platform admins reaching every
 // row through the const-backed `angee/role:admin` membership (no per-row tuple).
 // Each owns its own created_by rather than reaching through the party, so a
@@ -11,15 +11,15 @@
 
 // Read-model decision (v1): party visibility is a per-row `reader` grant — a
 // tuple naming a user or a group#member on the concrete row — not a directory- or
-// company-wide read arm. A persona therefore sees a party only where a `reader`
+// scope-wide read arm. A persona therefore sees a party only where a `reader`
 // grant reaches it, so demo tiers grant readers explicitly (the per-row `reader`
 // grant fixtures each parties-owning addon ships); a grant on an MTI child lands
 // on the child *and* every concrete parent it IS-A via the resources grant
 // loader's MTI-aware expansion (`addons/angee/resources/grants.py`), so a foreign
-// key typed to `parties/party` still authorizes. A first-class directory/company
+// key typed to `parties/party` still authorizes. A first-class scoped directory
 // read arm is deliberately deferred until a real multi-tenant directory
-// requirement lands — parties are shared directory entities, not the
-// company-isolation surface (documents are).
+// requirement lands — parties are shared directory entities, not a tenant
+// isolation surface.
 
 definition parties/party {
     relation owner: auth/user // rebac:field=created_by
@@ -86,18 +86,6 @@ definition parties/party_handle {
 }
 
 definition parties/address {
-    relation owner: auth/user // rebac:field=created_by
-    relation editor: auth/user | auth/group#member
-    relation reader: auth/user | auth/group#member
-    relation admin: angee/role // rebac:const=admin
-
-    permission create = authenticated
-    permission read   = owner + editor + reader + admin->member
-    permission write  = owner + editor + admin->member
-    permission delete = owner + admin->member
-}
-
-definition parties/affiliation {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member

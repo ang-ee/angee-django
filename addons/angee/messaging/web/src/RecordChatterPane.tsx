@@ -71,6 +71,7 @@ function ChatterConversationHeader({
   recordId,
   t,
 }: ChatterConversationHeaderProps): React.ReactElement {
+  // Correct as-is: RecordThreadDocument is an authored query keyed by READ_MODELS.
   const [setFollowing, followState] = useAuthoredMutation(SetRecordFollowingDocument, {
     invalidateModels: READ_MODELS,
     errorFrom: (data) => data?.set_record_following,

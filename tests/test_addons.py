@@ -9,7 +9,70 @@ fresh install of `django-angee` enumerates them with no `INSTALLED_APPS` list.
 
 from __future__ import annotations
 
-from angee.addons import AddonContract, AvailableAddon, available_addons
+import pytest
+from django.core.exceptions import ImproperlyConfigured
+
+from angee.addons import (
+    AddonContract,
+    AddonMigration,
+    AvailableAddon,
+    _read_addon_contract,
+    available_addons,
+)
+
+
+def test_addon_contract_parses_ordered_runtime_migrations(tmp_path) -> None:
+    marker = tmp_path / "addon.toml"
+    marker.write_text(
+        """\
+[addon]
+name = "example.demo"
+
+[[migrations]]
+name = "rename_owner"
+app_label = "demo"
+module = "runtime_migrations.rename_owner"
+
+[[migrations]]
+name = "backfill_owner"
+app_label = "demo"
+module = "example.demo.runtime_migrations.backfill_owner"
+""",
+        encoding="utf-8",
+    )
+
+    contract = _read_addon_contract(str(marker))
+
+    assert contract is not None
+    assert contract.migrations == (
+        AddonMigration("rename_owner", "demo", "runtime_migrations.rename_owner"),
+        AddonMigration(
+            "backfill_owner",
+            "demo",
+            "example.demo.runtime_migrations.backfill_owner",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "body, message",
+    [
+        ("[migrations]\nname = 'bad'\n", "migrations must be an array of tables"),
+        ("[[migrations]]\nname = 'bad'\n", "requires string app_label"),
+        (
+            "[[migrations]]\nname = 3\napp_label = 'demo'\nmodule = 'm.x'\n",
+            "requires string name",
+        ),
+    ],
+)
+def test_addon_contract_rejects_invalid_runtime_migration_entries(
+    tmp_path, body: str, message: str
+) -> None:
+    marker = tmp_path / "addon.toml"
+    marker.write_text(f'[addon]\nname = "example.demo"\n\n{body}', encoding="utf-8")
+
+    with pytest.raises(ImproperlyConfigured, match=message):
+        _read_addon_contract(str(marker))
 
 
 def test_available_addons_enumerates_installed_base_addons() -> None:

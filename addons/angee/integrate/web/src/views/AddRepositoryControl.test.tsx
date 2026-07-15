@@ -22,6 +22,7 @@ const sdkMocks = vi.hoisted(() => ({
   },
   lastSearchVars: null as unknown,
   addOptions: null as unknown,
+  resourceAddOptions: null as unknown,
   addRepository: vi.fn(),
   addState: { fetching: false, error: null as Error | null },
 }));
@@ -38,6 +39,10 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
+    useAuthoredResourceMutation: (_document: unknown, options: unknown) => {
+      sdkMocks.resourceAddOptions = options;
+      return [sdkMocks.addRepository, sdkMocks.addState];
+    },
     useRelationOptions: () => ({
       list: { fetching: false, refetch: baseMocks.refetchBridges },
       options: baseMocks.bridgeOptions,
@@ -83,6 +88,7 @@ describe("AddRepositoryControl typeahead", () => {
     sdkMocks.search.fetching = false;
     sdkMocks.lastSearchVars = null;
     sdkMocks.addOptions = null;
+    sdkMocks.resourceAddOptions = null;
     sdkMocks.addRepository.mockReset();
   });
 
@@ -127,8 +133,8 @@ describe("AddRepositoryControl typeahead", () => {
         name: "acme/widgets",
       }),
     );
-    // Adding declares the repository model so authored hooks refresh the list.
-    expect(sdkMocks.addOptions).toEqual({
+    // Adding declares the repository model so the resource-aware owner refreshes the list.
+    expect(sdkMocks.resourceAddOptions).toEqual({
       invalidateModels: ["integrate.Repository"],
     });
     expect(await screen.findByText("Added")).toBeTruthy();

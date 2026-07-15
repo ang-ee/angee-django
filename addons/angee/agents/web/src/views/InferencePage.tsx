@@ -1,12 +1,16 @@
 import * as React from "react";
 import { rowPublicId, type Row, } from "@angee/metadata";
 import {
-  Action, Column, ResourceList, Facet, Field, Form, Group, List, useRecordActionMutation, useEnumOptions, useImplPrefill, type FormSubmit } from "@angee/ui";
+  Action, Column, ResourceList, Facet, Field, Form, Group, List, useAuthoredResourceMutation, useRecordActionMutation, useEnumOptions, useImplPrefill, type FormSubmit } from "@angee/ui";
 import { canConnectRecord, ConnectOAuthButton, } from "@angee/integrate";
 import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
-import { ConnectInferenceProvider, UpdateInferenceProvider } from "../documents";
+import {
+  ConnectInferenceProvider,
+  INFERENCE_PROVIDER_UPDATE_INVALIDATES,
+  UpdateInferenceProvider,
+} from "../documents";
 import { useAgentsT } from "../i18n";
 
 const PROVIDER_MODEL = "agents.InferenceProvider";
@@ -18,8 +22,8 @@ export function InferenceProvidersPage(): React.ReactElement {
     "refresh_provider_models",
     { invalidateModels: [MODEL_MODEL] },
   );
-  const [updateProvider] = useAuthoredMutation(UpdateInferenceProvider, {
-    invalidateModels: [PROVIDER_MODEL, MODEL_MODEL],
+  const [updateProvider] = useAuthoredResourceMutation(UpdateInferenceProvider, {
+    invalidateModels: INFERENCE_PROVIDER_UPDATE_INVALIDATES,
   });
   const backendClassOptions = useEnumOptions(PROVIDER_MODEL, "backend_class");
   const backendClassPrefill = useImplPrefill(PROVIDER_MODEL, "backend_class");

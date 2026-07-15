@@ -1,7 +1,7 @@
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { type BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
-import { AtSign, Building2, CircleDot, Contact, HeartHandshake, Users } from "lucide-react";
+import { AtSign, Building2, CircleDot, Contact, HeartHandshake, UserCheck, Users } from "lucide-react";
 import { enPartiesMessages } from "./i18n";
 
 // One rail root ("Parties") whose children are the People and Organizations
@@ -27,6 +27,7 @@ const partiesMenu: readonly BaseMenuItem[] = [
         icon: "relationship",
       },
       { id: "parties.handles", label: "Handles", route: "parties.handles", icon: "handle" },
+      { id: "parties.review", label: "Review", route: "parties.review", icon: "user-check" },
       {
         id: "parties.directories",
         label: "Directories",
@@ -55,6 +56,12 @@ const parties = defineBaseAddon({
       "parties.Relationship",
     ),
     ...resourcePageRoutes("parties.handles", "/parties/handles", lazyRouteComponent(() => import("./HandlesPage"), "HandlesPage"), "parties.Handle"),
+    {
+      name: "parties.review",
+      path: "/parties/review",
+      layout: "console",
+      component: lazyRouteComponent(() => import("./ReviewPage"), "ReviewPage"),
+    },
     ...resourcePageRoutes("parties.directories", "/parties/directories", lazyRouteComponent(() => import("./DirectoriesPage"), "DirectoriesPage"), "parties.Directory"),
   ],
   menus: partiesMenu,
@@ -65,6 +72,7 @@ const parties = defineBaseAddon({
     handle: AtSign,
     circle: CircleDot,
     relationship: HeartHandshake,
+    "user-check": UserCheck,
   },
   i18n: { parties: enPartiesMessages },
 });

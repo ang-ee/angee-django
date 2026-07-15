@@ -191,6 +191,7 @@ export function defineAngeeWebViteConfig({
     // tsconfig/vitest.
     resolve: {
       alias: [{ find: /^@angee\/gql\//, replacement: gqlRuntimeDir }],
+      dedupe: ["react", "react-dom"],
     },
     // Prebundle installed `@angee/*` packages; the serve-only
     // `angeePrebundleForcePlugin` merges in `force` when their workspace source

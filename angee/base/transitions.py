@@ -15,8 +15,8 @@ when a transition runs — ``allow`` adds edges, ``deny`` removes them, deny win
 over allow — so a deployment enables or disables specific edges through composed
 settings (autoconfig defaults overridden by the project ``settings.yaml``) with no
 code change. Reading the overlay at call time is what lets composed settings and
-test overrides take effect. A per-company resolution seam (resolving the overlay
-through the instance's company) is reserved but not built.
+test overrides take effect. A per-scope resolution seam (resolving the overlay
+through the instance's owning scope) is reserved but not built.
 
 ``@transition(field, source=..., target=..., conditions=[...], on_success=...,
 policy=...)`` decorates the model's own transition methods. ``source`` is a single

@@ -50,10 +50,11 @@ const GRANT_ROWS = vi.hoisted(() => ({
 const sdkMocks = vi.hoisted(() => ({
   revoke_role: vi.fn(),
   revokeState: { fetching: false, error: null as Error | null },
+  resourceMutationOptions: null as unknown,
 }));
 
-// Revoke rides `useAuthoredMutation`; drive it directly so the test controls
-// success/failure and pending timing without a live transport.
+// Revoke rides the resource-aware authored mutation owner; drive its mutation
+// directly so the test controls success/failure and pending timing without transport.
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredMutation: () => [sdkMocks.revoke_role, sdkMocks.revokeState],
@@ -68,6 +69,10 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
+    useAuthoredResourceMutation: (_document: unknown, options: unknown) => {
+      sdkMocks.resourceMutationOptions = options;
+      return [sdkMocks.revoke_role, sdkMocks.revokeState];
+    },
     useConfirm: () => async () => true,
     ListView: ({
       columns,
@@ -115,6 +120,16 @@ describe("IAM grants page", () => {
     sdkMocks.revoke_role.mockReset();
     sdkMocks.revokeState.fetching = false;
     sdkMocks.revokeState.error = null;
+    sdkMocks.resourceMutationOptions = null;
+  });
+
+  test("routes revoke invalidation through the resource owner", () => {
+    renderGrants();
+
+    expect(sdkMocks.resourceMutationOptions).toEqual({
+      invalidateModels: ["iam.Grant", "iam.Relationship"],
+      shouldInvalidate: expect.any(Function),
+    });
   });
 
   test("surfaces a failed revoke as a danger toast", async () => {

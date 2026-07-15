@@ -15,4 +15,7 @@ class PartiesConfig(AppConfig):
         """Run parties ready-time hooks after app population."""
 
         super().ready()
-        # Phase-1 ready hooks belong here when parties needs populated models.
+        # App population phase 1 imports AppConfig before the models exist; defer.
+        from angee.parties import signals
+
+        signals.connect()

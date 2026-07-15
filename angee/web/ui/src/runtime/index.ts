@@ -11,6 +11,7 @@ export {
   useWidget,
   useFormOverride,
   useResourceRoute,
+  useResourceRecordHref,
   useRuntimeAuth,
   useRuntimeLogoutAction,
   useRuntimeUserPreferences,

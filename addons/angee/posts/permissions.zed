@@ -1,15 +1,13 @@
-// Authorization schema for the social addon.
-// @rebac_package: social
+// Authorization schema for the posts addon.
+// @rebac_package: posts
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 2
+// @rebac_schema_revision: 4
 
-// Each social row is owned by the user that created it (feed sync writes set
-// created_by to the feed owner), with platform admins reaching every row via the
-// const-backed angee/role:admin membership. A Feed is a multi-table inheritance
-// child of integrate/integration, so its access derives from the parent
-// integration the way messaging/channel and integrate/vcs_bridge do.
+// Feed and Quota access derives from their integrate/integration parent or FK;
+// system-created quota rows intentionally need no created_by owner. Platform admins
+// reach every row through const-backed angee/role:admin membership.
 
-definition social/feed {
+definition posts/feed {
     relation integration: integrate/integration // rebac:field=integration_ptr
     relation admin: angee/role // rebac:const=admin
 
@@ -19,7 +17,7 @@ definition social/feed {
     permission delete = integration->write + admin->member
 }
 
-definition social/feed_follow {
+definition posts/feed_follow {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
@@ -36,7 +34,7 @@ definition social/feed_follow {
 // projections messaging/message_star and messaging/tracking_value do, so the counts
 // are exactly as visible as the post itself — a message reader is not denied its
 // engagement just because it did not own the feed sync that wrote the row.
-definition social/post_metrics {
+definition posts/post_metrics {
     relation message: messaging/message // rebac:field=message
     relation owner: auth/user // rebac:field=created_by
     relation admin: angee/role // rebac:const=admin
@@ -47,12 +45,12 @@ definition social/post_metrics {
     permission delete = owner + admin->member
 }
 
-definition social/quota {
-    relation owner: auth/user // rebac:field=created_by
+definition posts/quota {
+    relation integration: integrate/integration // rebac:field=integration
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
-    permission read   = owner + admin->member
-    permission write  = owner + admin->member
-    permission delete = owner + admin->member
+    permission read   = integration->read + admin->member
+    permission write  = integration->write + admin->member
+    permission delete = integration->write + admin->member
 }

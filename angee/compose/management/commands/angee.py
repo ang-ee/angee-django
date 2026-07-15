@@ -73,7 +73,7 @@ class Command(BaseCommand):
         handler(options)
 
     def _handle_build(self, options: dict[str, Any]) -> None:
-        """Emit or check runtime source files."""
+        """Emit/check runtime sources and materialize addon migrations."""
 
         runtime = Runtime.from_django()
         try:
@@ -81,8 +81,7 @@ class Command(BaseCommand):
                 runtime.check()
                 message = "angee build --check: ok"
             else:
-                if not runtime.is_current():
-                    runtime.emit()
+                runtime.build()
                 message = "angee build: ok"
         except RuntimeError as error:
             raise CommandError(str(error)) from error
@@ -107,7 +106,8 @@ class Command(BaseCommand):
         steps. The order is fixed:
 
         1. Wait for the default database to accept connections (in-process).
-        2. ``angee build`` — emit the concrete runtime.
+        2. ``angee build`` — emit the concrete runtime and materialize applicable
+           addon-owned migrations onto each downstream app's current leaf.
         3. ``reconcile_permissions`` — prune stale package-managed REBAC schema
            before any check-gated DB step (see angee.platform.permissions).
         4. ``makemigrations`` — bare; the composer owns app discovery.

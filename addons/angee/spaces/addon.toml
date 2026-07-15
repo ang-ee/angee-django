@@ -1,0 +1,8 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.spaces"
+description = "Shared groups with canonical rosters, role-derived access, and group threads"
+keywords = ["spaces", "groups", "rosters", "roles"]
+category = "Data"
+depends_on = ["angee.iam", "angee.parties", "angee.messaging"]

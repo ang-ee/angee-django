@@ -14,7 +14,7 @@ from rebac import system_context
     retry_kwargs={"max_retries": 3},
 )
 def recompute_ties(timestamp: int | None = None) -> int:
-    """Recompute every party's tie rollup (the periodic gardening pass)."""
+    """Recompute every derived party-pair edge."""
 
     del timestamp
     tie_model = apps.get_model("nexus", "Tie")

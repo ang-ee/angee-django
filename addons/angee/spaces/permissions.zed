@@ -1,0 +1,29 @@
+// Authorization schema for the spaces addon.
+// @rebac_package: spaces
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 2
+
+definition spaces/group {
+    relation creator: auth/user // rebac:field=created_by
+    relation owner: auth/user
+    relation moderator: auth/user
+    relation member: auth/user | auth/group#member
+    relation reader: auth/user | auth/user:*
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = creator + member + moderator + owner + reader + admin->member
+    permission post   = member + moderator + owner + admin->member
+    permission write  = creator + moderator + owner + admin->member
+    permission delete = creator + owner + admin->member
+}
+
+definition spaces/membership {
+    relation group: spaces/group // rebac:field=group
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = group->read + admin->member
+    permission write  = group->write + admin->member
+    permission delete = group->delete + admin->member
+}

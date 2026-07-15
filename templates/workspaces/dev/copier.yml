@@ -33,6 +33,10 @@ _angee:
       type: str
       default: "../.."
       help: Where sibling repos live, relative to ANGEE_ROOT (the host's .angee/). Default "../.." resolves to the directory containing this angee-django checkout and its sibling repos.
+    work_state_path:
+      type: str
+      required: true
+      help: Path to the shared private work-state Git repository.
   ensure:
     operator.port_pool.django:     { range: "8101-8199" }
     operator.port_pool.ui:         { range: "5175-5273" }
@@ -57,6 +61,11 @@ _angee:
       ref: "${inputs.base_ref}"
       branch: "${inputs.branch_prefix}/${name | slug}"
       subpath: .
+    work-state:
+      source: work-angee-django
+      kind: local
+      path: "${inputs.work_state_path}"
+      subpath: .work
   chain_root: .angee
   chain:
     - template: templates/stacks/dev
@@ -101,3 +110,7 @@ repo_url:
 source_cache_path:
   type: str
   default: "../.."
+
+work_state_path:
+  type: str
+  help: Path to the shared private work-state Git repository.

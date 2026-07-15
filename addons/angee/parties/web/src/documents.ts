@@ -6,9 +6,18 @@
 
 import { graphql } from "@angee/gql/console";
 
-// Identity decisions: the two verbs of the review flow. Accepting sets full
+// Identity decisions: the two verbs of the review flow. Confirming sets full
 // confidence + manual source and re-resolves the handle; dismissing writes the
-// durable anti-link. Both return the link so caches update in place.
+// durable anti-link. Their write blast radius lives here with the verbs;
+// `useAuthoredResourceMutation` maps it to both Refine resource invalidations
+// and authored-read refetches because this stack has no normalized cache.
+export const PARTY_HANDLE_DECISION_INVALIDATES = [
+  "parties.PartyHandle",
+  "parties.Handle",
+  "parties.Party",
+  "parties.Person",
+] as const;
+
 export const ConfirmPartyHandle = graphql(`
   mutation ConfirmPartyHandle($id: ID!) {
     confirm_party_handle(id: $id) {

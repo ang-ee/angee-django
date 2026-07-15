@@ -6,3 +6,8 @@ description = "Relationship intelligence — interaction rollups, gravity/fading
 keywords = ["nexus", "contacts", "relationships", "timeline"]
 category = "Data"
 depends_on = ["angee.parties", "angee.messaging"]
+
+[[migrations]]
+name = "tie_pair_reshape"
+app_label = "nexus"
+module = "runtime_migrations.tie_pair_reshape"

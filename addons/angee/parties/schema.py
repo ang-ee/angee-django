@@ -25,11 +25,13 @@ from angee.graphql.data import (
 )
 from angee.graphql.ids import optional_public_id
 from angee.graphql.node import AngeeNode
+from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
 from angee.integrate.schema import BridgeSyncStatusMixin, IntegrationLabelMixin
+from angee.parties.mixins import LinkSource
 
 Party = apps.get_model("parties", "Party")
 Person = apps.get_model("parties", "Person")
@@ -37,7 +39,6 @@ Organization = apps.get_model("parties", "Organization")
 Handle = apps.get_model("parties", "Handle")
 PartyHandle = apps.get_model("parties", "PartyHandle")
 Address = apps.get_model("parties", "Address")
-Affiliation = apps.get_model("parties", "Affiliation")
 Directory = apps.get_model("parties", "Directory")
 Folder = apps.get_model("parties", "Folder")
 Circle = apps.get_model("parties", "Circle")
@@ -61,10 +62,9 @@ class PartyType(AuthoredRefMixin, AngeeNode):
     handles: list["HandleType"]
     party_handles: list["PartyHandleType"]
     addresses: list["AddressType"]
-    affiliations: list["AffiliationType"]
     circle_members: list["CircleMemberType"]
-    relationships: list["PartyRelationshipType"]
-    inbound_relationships: list["PartyRelationshipType"]
+    relationships: list["RelationshipType"]
+    inbound_relationships: list["RelationshipType"]
 
 
 @strawberry_django.type(Person)
@@ -114,11 +114,18 @@ class HandleType(AngeeNode):
     display_name: auto
     label: auto
     is_preferred: auto
-    is_own: auto
     is_verified: auto
-    party: PartyType | None
+    party_link_confirmed: auto
     created_at: auto
     updated_at: auto
+
+    party: PartyType | None = actor_scoped_to_one("party")
+
+    @strawberry_django.field(only=["owner_id"])
+    def owner(self) -> strawberry.ID | None:
+        """Return the controlling user's public id, when a user has claimed this handle."""
+
+        return optional_public_id(user_public_id(cast(Any, self).owner_id))
 
     @strawberry_django.field(only=["party_id"], prefetch_related="party_links")
     def confidence(self) -> float | None:
@@ -159,21 +166,6 @@ class AddressType(AngeeNode):
     country: auto
     latitude: auto
     longitude: auto
-    is_primary: auto
-
-
-@strawberry_django.type(Affiliation)
-class AffiliationType(AngeeNode):
-    """GraphQL projection of an organisation affiliation."""
-
-    party: PartyType | None
-    organization: PartyType | None
-    organization_name: auto
-    role: auto
-    title: auto
-    department: auto
-    started_at: auto
-    ended_at: auto
     is_primary: auto
 
 
@@ -244,21 +236,20 @@ class RelationshipKindType(AngeeNode):
     name: auto
     inverse_name: auto
     category: auto
+    party_kind: auto
+    other_party_kind: auto
 
 
 @strawberry_django.type(Relationship)
-class PartyRelationshipType(AngeeNode):
-    """GraphQL projection of a typed party edge (anchor viewpoint).
-
-    Named ``PartyRelationshipType`` because the node-type namespace is global
-    and iam's REBAC tuple browser already resolves to ``RelationshipType``
-    through the ``iam.Relationship`` model-label fallback.
-    """
+class RelationshipType(AngeeNode):
+    """GraphQL projection of a typed party edge (anchor viewpoint)."""
 
     party: PartyType | None
     other_party: PartyType | None
     other_name: auto
     kind: RelationshipKindType | None
+    source: auto
+    title: auto
     started_at: auto
     ended_at: auto
     notes: auto
@@ -314,29 +305,45 @@ class PartiesDirectoryMutation:
         user = session_user(info)
         credential_model = apps.get_model("integrate", "Credential")
         vendor_model = apps.get_model("integrate", "Vendor")
-        # Credential creation, the directory, and the connection probe share one
-        # transaction so a probe failure rolls all of it back — no orphan credential.
+        credential_values = {
+            "kind": "basic_auth",
+            "name": f"CardDAV — {name}",
+            "material": {"username": username, "password": password},
+        }
+        directory_values = {
+            "owner": user,
+            "backend_class": "carddav",
+            "display_name": name,
+            "config": {"server_url": server_url},
+            "lifecycle": "active",
+            "created_by_id": user.pk,
+        }
+
+        # Complete validation and network discovery before opening the database
+        # transaction. Both rows are intentionally unsaved probe inputs.
+        probe_credential = credential_model.objects.prepare_local_credential(user, **credential_values)
+        Directory(credential=probe_credential, **directory_values).backend.probe()
+
+        # Persist every owned row in one write-only transaction after the probe.
         with system_context(reason="parties.graphql.connect_carddav"), transaction.atomic():
-            credential = credential_model.objects.create_local_credential(
-                user,
-                kind="basic_auth",
-                name=f"CardDAV — {name}",
-                material={"username": username, "password": password},
-            )
+            credential = credential_model.objects.create_local_credential(user, **credential_values)
             vendor, _created = vendor_model.objects.get_or_create(slug="carddav", defaults={"display_name": "CardDAV"})
             directory = Directory.objects.create(
                 vendor=vendor,
-                owner=user,
                 credential=credential,
-                backend_class="carddav",
-                display_name=name,
-                config={"server_url": server_url},
-                lifecycle="active",
-                created_by_id=user.pk,
+                **directory_values,
             )
-            # Validate the URL + credentials before the directory persists, so a bad
-            # connection surfaces here instead of as a silent first-sync failure.
-            directory.backend.probe()
+            # The connected account's own login address is the admin's own handle:
+            # claim it (control ownership + confirmed self-identity link). Synced
+            # *contacts'* handles get neither fact — only this connected account's.
+            if username.strip():
+                Handle.objects.claim_own(
+                    user,
+                    platform=Handle.Platform.for_value(username),
+                    value=username.strip(),
+                    source=LinkSource.CARDDAV,
+                    display_name=name,
+                )
         return cast(DirectoryType, directory)
 
 
@@ -419,7 +426,6 @@ _HANDLE_RESOURCE = hasura_model_resource(
         "display_name",
         "party",
         "platform",
-        "is_own",
         "is_verified",
         "is_preferred",
         "created_at",
@@ -465,36 +471,6 @@ _ADDRESS_RESOURCE = hasura_model_resource(
     ],
     field_id_decode={"party": public_pk_decoder(Party)},
     write_backend=AngeeHasuraWriteBackend(Address, public_id_fields=("party",)),
-)
-_AFFILIATION_RESOURCE = hasura_model_resource(
-    AffiliationType,
-    model=Affiliation,
-    name="affiliations",
-    filterable=["id", "party", "organization", "created_at"],
-    sortable=["party", "organization", "created_at"],
-    aggregatable=["id"],
-    insertable=[
-        "party",
-        "organization",
-        "organization_name",
-        "role",
-        "title",
-        "department",
-        "is_primary",
-    ],
-    updatable=[
-        "organization",
-        "organization_name",
-        "role",
-        "title",
-        "department",
-        "is_primary",
-    ],
-    field_id_decode={
-        "party": public_pk_decoder(Party),
-        "organization": public_pk_decoder(Party),
-    },
-    write_backend=AngeeHasuraWriteBackend(Affiliation, public_id_fields=("party", "organization")),
 )
 _PARTY_HANDLE_RESOURCE = hasura_model_resource(
     PartyHandleType,
@@ -562,20 +538,19 @@ _RELATIONSHIP_KIND_RESOURCE = hasura_model_resource(
     sortable=["slug", "name", "category"],
     aggregatable=["id"],
     groupable=["category"],
-    insertable=["slug", "name", "inverse_name", "category"],
-    updatable=["name", "inverse_name", "category"],
+    insertable=["slug", "name", "inverse_name", "category", "party_kind", "other_party_kind"],
+    updatable=["name", "inverse_name", "category", "party_kind", "other_party_kind"],
 )
 _RELATIONSHIP_RESOURCE = hasura_model_resource(
-    PartyRelationshipType,
+    RelationshipType,
     model=Relationship,
-    # iam's REBAC tuple browser already owns the bare `relationships` query root.
-    name="party_relationships",
-    filterable=["id", "party", "other_party", "kind", "started_at", "ended_at", "created_at"],
-    sortable=["kind", "started_at", "created_at"],
+    name="relationships",
+    filterable=["id", "party", "other_party", "kind", "source", "started_at", "ended_at", "created_at"],
+    sortable=["kind", "source", "started_at", "created_at"],
     aggregatable=["id"],
-    groupable=["kind", "kind__name"],
-    insertable=["party", "other_party", "other_name", "kind", "started_at", "ended_at", "notes"],
-    updatable=["other_party", "other_name", "kind", "started_at", "ended_at", "notes"],
+    groupable=["kind", "kind__name", "source"],
+    insertable=["party", "other_party", "other_name", "kind", "title", "started_at", "ended_at", "notes"],
+    updatable=["other_party", "other_name", "kind", "title", "started_at", "ended_at", "notes"],
     field_id_decode={
         "party": public_pk_decoder(Party),
         "other_party": public_pk_decoder(Party),
@@ -626,7 +601,6 @@ _RESOURCE_TYPES = [
     *_HANDLE_RESOURCE.types,
     *_PARTY_HANDLE_RESOURCE.types,
     *_ADDRESS_RESOURCE.types,
-    *_AFFILIATION_RESOURCE.types,
     *_CIRCLE_RESOURCE.types,
     *_CIRCLE_MEMBER_RESOURCE.types,
     *_RELATIONSHIP_KIND_RESOURCE.types,
@@ -644,7 +618,6 @@ _PARTIES_SCHEMA_BUCKET = {
         _HANDLE_RESOURCE.query,
         _PARTY_HANDLE_RESOURCE.query,
         _ADDRESS_RESOURCE.query,
-        _AFFILIATION_RESOURCE.query,
         _CIRCLE_RESOURCE.query,
         _CIRCLE_MEMBER_RESOURCE.query,
         _RELATIONSHIP_KIND_RESOURCE.query,
@@ -661,7 +634,6 @@ _PARTIES_SCHEMA_BUCKET = {
         _HANDLE_RESOURCE.mutation,
         _PARTY_HANDLE_RESOURCE.mutation,
         _ADDRESS_RESOURCE.mutation,
-        _AFFILIATION_RESOURCE.mutation,
         _CIRCLE_RESOURCE.mutation,
         _CIRCLE_MEMBER_RESOURCE.mutation,
         _RELATIONSHIP_KIND_RESOURCE.mutation,
@@ -676,11 +648,10 @@ _PARTIES_SCHEMA_BUCKET = {
         HandleType,
         PartyHandleType,
         AddressType,
-        AffiliationType,
         CircleType,
         CircleMemberType,
         RelationshipKindType,
-        PartyRelationshipType,
+        RelationshipType,
         DirectoryType,
         ContactFolderType,
         *_RESOURCE_TYPES,

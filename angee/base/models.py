@@ -11,19 +11,68 @@ from typing import Any, Self, TypeVar, cast
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import connections, models
+from django.db.models.signals import class_prepared, post_delete
 from django.db.models.utils import make_model_tuple
-from rebac import RebacMixin, SubjectRef, check_new, current_actor, to_object_ref
+from rebac import (
+    RebacMixin,
+    SubjectRef,
+    check_new,
+    current_actor,
+    delete_relationships,
+    to_object_ref,
+)
 from rebac.actors import is_sudo as ambient_is_sudo
 from rebac.actors import to_subject_ref
 from rebac.errors import MissingActorError, NoActorResolvedError, PermissionDenied
 from rebac.managers import RebacManager, RebacQuerySet
 from rebac.resources import model_resource_type
+from rebac.types import RelationshipFilter
 
 from angee.base.fields import SqidField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import SqidMixin, TimestampMixin
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
+
+
+def _delete_rebac_resource_relationships(sender: Any, instance: Any, **kwargs: Any) -> None:
+    """Delete resource- and subject-side tuples after a concrete REBAC row is deleted."""
+
+    del kwargs
+    if not isinstance(instance, RebacMixin) or not model_resource_type(sender):
+        return
+    resource = to_object_ref(instance)
+    delete_relationships(
+        RelationshipFilter(
+            resource_type=resource.resource_type,
+            resource_id=resource.resource_id,
+        )
+    )
+    delete_relationships(
+        RelationshipFilter(
+            subject_type=resource.resource_type,
+            subject_id=resource.resource_id,
+        )
+    )
+
+
+def _bind_rebac_resource_relationship_gc(sender: type[models.Model], **kwargs: Any) -> None:
+    """Bind tuple cleanup only to concrete models that inherit ``RebacMixin``."""
+
+    del kwargs
+    if sender._meta.abstract or not issubclass(sender, RebacMixin):
+        return
+    post_delete.connect(
+        _delete_rebac_resource_relationships,
+        sender=sender,
+        dispatch_uid=f"angee.base.rebac_resource_relationship_gc.{sender._meta.label_lower}",
+    )
+
+
+class_prepared.connect(
+    _bind_rebac_resource_relationship_gc,
+    dispatch_uid="angee.base.bind_rebac_resource_relationship_gc",
+)
 
 CATALOGUE_TIERS = ("master", "install", "demo")
 """Resource tiers a catalogue model may declare.
@@ -311,10 +360,10 @@ class AngeeModel(TimestampMixin, RebacMixin):
         The auto-CRUD create preflight (``AngeeManager.check_create`` via the
         Hasura write backend) evaluates the REBAC ``create`` permission against
         the unsaved instance *before* ``save()`` runs. A field a model defaults
-        in ``save()`` — an :class:`~angee.iam.models.CompanyScopedMixin`
-        ``company`` taken from the actor's sole membership — is therefore still
-        blank when the gate fires, so a ``create = company->member`` arm
-        fail-closes on a create that would in fact have persisted a company.
+        in ``save()`` — a blank-on-input scope relation derived from the actor,
+        for example — is therefore still blank when the gate fires, so a
+        ``create = scope->member`` arm fail-closes on a create that would in fact
+        have persisted a scope.
 
         A model that defaults a subject-bearing relation on ``save()`` overrides
         this hook to apply that default here too (idempotent with ``save()``, so

@@ -197,6 +197,44 @@ def test_runtime_model_render_plan_keeps_model_owned_meta(tmp_path: Path) -> Non
     assert "rebac_resource_type = 'tests/second-render-plan'" in source
 
 
+def test_runtime_honors_explicit_label_when_module_terminal_differs(
+    tmp_path: Path,
+    stub_contracts: None,
+) -> None:
+    """A source module ending in ``base`` may emit under its explicit app label."""
+
+    del stub_contracts
+
+    def temp_config(name: str, label: str, module: ModuleType, *, depends_on: tuple[str, ...] = ()) -> AppConfig:
+        config_cls = type(
+            f"{label.title()}Config",
+            (AppConfig,),
+            {"name": name, "label": label, "path": str(tmp_path)},
+        )
+        config = config_cls(name, module)
+        config._addon_contract = make_contract(depends_on=depends_on)
+        return config
+
+    beta_module = ModuleType("tests.project_base")
+    beta_models = ModuleType("tests.project_base.models")
+    _source_model(beta_models, "ProjectThing", "beta", runtime=True)
+    beta = temp_config("tests.project_base", "beta", beta_module)
+    beta.models_module = beta_models
+    alpha = temp_config("tests.alpha", "alpha", ModuleType("tests.alpha"), depends_on=("beta",))
+
+    ordered = AppGraph().resolve((alpha, beta))
+    assert [config.label for config in ordered[:2]] == ["beta", "alpha"]
+
+    runtime = Runtime((beta,), runtime_dir=tmp_path / "runtime")
+    sources = runtime.render_sources()
+
+    assert set(runtime.sources_by_label) == {"beta"}
+    assert Path("beta/models.py") in sources
+    assert Path("project_base/models.py") not in sources
+    assert "app_label = 'beta'" in sources[Path("beta/models.py")]
+    assert "beta.projectthing" in runtime.source_models_by_composition_label
+
+
 def test_web_runtime_projects_addon_web_packages_in_composed_order(stub_contracts: None) -> None:
     """Addon web package declarations feed one generated web manifest."""
 
@@ -1449,29 +1487,99 @@ def test_build_check_reports_command_error_when_runtime_is_stale(
         Command()._handle_build({"check": True})
 
 
-def test_build_emit_does_not_recheck_after_writing(
+def test_build_command_delegates_the_complete_write_lifecycle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The build command leaves write integrity to the emit path."""
+    """The build command delegates source emission and migration writes to Runtime."""
 
     calls: list[str] = []
 
     class FakeRuntime:
-        def is_current(self) -> bool:
-            calls.append("current")
-            return False
-
-        def emit(self) -> None:
-            calls.append("emit")
-
-        def check(self) -> None:
-            calls.append("check")
+        def build(self) -> tuple[Path, ...]:
+            calls.append("build")
+            return ()
 
     monkeypatch.setattr(runtime_module.Runtime, "from_django", classmethod(lambda cls: FakeRuntime()))
 
     Command()._handle_build({"check": False})
 
-    assert calls == ["current", "emit"]
+    assert calls == ["build"]
+
+
+def test_runtime_build_emits_stale_sources_before_materializing(tmp_path: Path, monkeypatch) -> None:
+    runtime = runtime_for(tmp_path)
+    calls: list[str] = []
+    output = runtime.runtime_dir / "resources" / "migrations" / "0001_manual.py"
+
+    class FakeMigrations:
+        def materialize(self) -> tuple[Path, ...]:
+            calls.append("materialize")
+            return (output,)
+
+    monkeypatch.setattr(runtime, "is_current", lambda: False)
+    monkeypatch.setattr(runtime, "emit", lambda: calls.append("emit"))
+    monkeypatch.setattr(runtime, "runtime_migrations", lambda: FakeMigrations())
+
+    assert runtime.build() == (output,)
+    assert calls == ["emit", "materialize"]
+
+
+def test_runtime_build_materializes_when_sources_are_current(tmp_path: Path, monkeypatch) -> None:
+    runtime = runtime_for(tmp_path)
+    calls: list[str] = []
+
+    class FakeMigrations:
+        def materialize(self) -> tuple[Path, ...]:
+            calls.append("materialize")
+            return ()
+
+    monkeypatch.setattr(runtime, "is_current", lambda: True)
+    monkeypatch.setattr(runtime, "emit", lambda: calls.append("emit"))
+    monkeypatch.setattr(runtime, "runtime_migrations", lambda: FakeMigrations())
+
+    assert runtime.build() == ()
+    assert calls == ["materialize"]
+
+
+def test_runtime_check_validates_migrations_after_source_drift_is_clean(tmp_path: Path, monkeypatch) -> None:
+    runtime = runtime_for(tmp_path)
+    calls: list[str] = []
+
+    class FakeMigrations:
+        def check(self) -> None:
+            calls.append("migration_check")
+
+    monkeypatch.setattr(runtime, "_drift", lambda: [])
+    monkeypatch.setattr(runtime, "runtime_migrations", lambda: FakeMigrations())
+
+    runtime.check()
+
+    assert calls == ["migration_check"]
+
+
+def test_runtime_check_does_not_plan_migrations_while_sources_are_stale(tmp_path: Path, monkeypatch) -> None:
+    runtime = runtime_for(tmp_path)
+    calls: list[str] = []
+    monkeypatch.setattr(runtime, "_drift", lambda: [Path("resources/models.py")])
+    monkeypatch.setattr(runtime, "runtime_migrations", lambda: calls.append("migration_check"))
+
+    with pytest.raises(RuntimeError, match="generated runtime is stale"):
+        runtime.check()
+
+    assert calls == []
+
+
+def test_emit_if_stale_never_constructs_runtime_migrations(tmp_path: Path, monkeypatch) -> None:
+    runtime = runtime_for(tmp_path)
+    monkeypatch.setattr(runtime, "_drift", lambda: [])
+    monkeypatch.setattr(
+        runtime,
+        "runtime_migrations",
+        lambda: pytest.fail("normal boot must not materialize migrations"),
+        raising=False,
+    )
+
+    assert runtime.emit_if_stale() is False
 
 
 def _provision_options(**overrides: Any) -> dict[str, Any]:

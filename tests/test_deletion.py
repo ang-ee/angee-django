@@ -9,7 +9,9 @@ from django.contrib.auth.models import Group
 from django.db import connection, models, transaction
 from django.db.models.deletion import Collector
 from django.db.models.signals import post_delete, pre_delete
-from rebac import RebacMixin, SubjectRef, actor_context, system_context
+from django.test import override_settings
+from rebac import RebacMixin, SubjectRef, actor_context, system_context, to_object_ref
+from rebac.models import active_relationship_model
 from rebac.signals import _rebac_cascade_resource, _rebac_pre_delete
 
 import angee.graphql.deletion as deletion_module
@@ -292,6 +294,49 @@ def test_deletion_preview_hides_rebac_child_leaves_without_read_access() -> None
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(PreviewScopedChild)
             schema_editor.delete_model(PreviewScopedParent)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_delete_user_removes_denormalized_subject_relationships() -> None:
+    """Deleting an ``auth/user`` row removes tuples where it is the subject."""
+
+    class DeletedUserSubject(RebacMixin):
+        """Concrete ``auth/user`` row for delete-GC coverage."""
+
+        label = models.CharField(max_length=32)
+
+        class Meta:
+            """Django model options for the test user row."""
+
+            app_label = "auth"
+            rebac_resource_type = "auth/user"
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(DeletedUserSubject)
+    try:
+        with override_settings(REBAC_LOCAL_BACKEND_STORAGE="denormalized"):
+            with system_context(reason="test.subject-relationship-gc.setup"):
+                user = DeletedUserSubject.objects.create(label="subject")
+            subject = to_object_ref(user)
+            active_relationship_model().objects.create(
+                resource_type="angee/role",
+                resource_id="auditor",
+                relation="member",
+                subject_type=subject.resource_type,
+                subject_id=subject.resource_id,
+                caveat_context={},
+            )
+
+            with system_context(reason="test.subject-relationship-gc"):
+                user.delete()
+
+            assert not active_relationship_model().objects.filter(
+                subject_type=subject.resource_type,
+                subject_id=subject.resource_id,
+            ).exists()
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(DeletedUserSubject)
 
 
 def _tree_object_labels(node: DeletePreviewNode) -> tuple[str, ...]:

@@ -1,10 +1,9 @@
-"""Tests for the tags addon — the polymorphic edge, company scope, and the manager protocol.
+"""Tests for the tags addon — the polymorphic edge, shared scope, and manager protocol.
 
 The vocabulary is an admin-curated surface, so rows are created under
 ``system_context``; the scope reads run under ``actor_context`` after
-``rebac sync`` loads the schema — emulating the authenticated actor a real
-request runs as. Party tagging is exercised against a real ``parties.Party``
-row through the polymorphic edge, with no ``parties`` change.
+``rebac sync`` loads the schema. Party tagging is exercised against a real
+``parties.Party`` row through the polymorphic edge, with no ``parties`` change.
 """
 
 from __future__ import annotations
@@ -16,23 +15,21 @@ from typing import Any
 import pytest
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError, connection, models, transaction
+from django.test.utils import CaptureQueriesContext
 from rebac import (
-    RelationshipTuple,
     actor_context,
     system_context,
-    to_object_ref,
-    to_subject_ref,
-    write_relationships,
 )
 from rebac.models import active_relationship_model
 
 from angee.base.models import public_id_for
+from angee.tags.models import _NEVER_LOADED
 from angee.tags.models import Tag as AbstractTag
 from angee.tags.models import TagAssignment as AbstractTagAssignment
 from angee.tags.models import TagRole as AbstractTagRole
 from tests.conftest import _clear_model_tables, _create_missing_tables, create_user
-from tests.iam_models import Company
+from tests.mtidemo.models import MtiChild, MtiParent
 from tests.test_messaging import Party
 
 
@@ -62,6 +59,28 @@ class TagAssignment(AbstractTagAssignment):
         rebac_id_attr = "sqid"
 
 
+class ScopeFlagTag(AbstractTag):
+    """Concrete tag whose shared row fact is backed by a local boolean field."""
+
+    shared_marker = models.BooleanField(default=True)
+    shared_scope_source_fields = ("shared_marker",)
+
+    class Meta(AbstractTag.Meta):
+        """Django model options for the shared-scope fact regression tag."""
+
+        abstract = False
+        app_label = "tags"
+        db_table = "test_tags_scope_flag_tag"
+        rebac_resource_type = "tags/tag"
+        rebac_id_attr = "sqid"
+
+    @property
+    def is_shared_scope(self) -> bool:
+        """Return the row's declared shared-scope fact."""
+
+        return bool(self.shared_marker)
+
+
 class TagRole(AbstractTagRole):
     """Concrete table-less REBAC anchor for the ``tags/role`` namespace.
 
@@ -81,7 +100,7 @@ class TagRole(AbstractTagRole):
         rebac_resource_type = "tags/role"
 
 
-TAGS_TEST_MODELS = (Tag, TagAssignment, Party)
+TAGS_TEST_MODELS = (Tag, ScopeFlagTag, TagAssignment, Party)
 """Concrete tags models (plus the party target) created on demand by tags fixtures."""
 
 
@@ -106,20 +125,6 @@ def tags_tables(transactional_db: Any) -> Iterator[None]:
             with connection.schema_editor() as schema_editor:
                 for model in reversed(created_models):
                     schema_editor.delete_model(model)
-
-
-def _grant_membership(company: Any, user: Any) -> None:
-    """Write one direct company-of-record membership tuple."""
-
-    write_relationships(
-        [
-            RelationshipTuple(
-                resource=to_object_ref(company),
-                relation="direct_member",
-                subject=to_subject_ref(user),
-            )
-        ]
-    )
 
 
 def _shared_reader_exists(tag: Any) -> bool:
@@ -186,78 +191,131 @@ def test_the_same_tag_attaches_once_per_target(tags_tables: None) -> None:
             TagAssignment.objects.create(tag=tag, content_type=content_type, object_id=party.pk)
 
 
-@pytest.fixture()
-def scoped_tags(tags_tables: None) -> SimpleNamespace:
-    """Seed one scoped and one shared tag, and two company members."""
+def test_base_tag_is_always_shared_and_declares_no_scope_source_fields(tags_tables: None) -> None:
+    """The framework tag is shared vocabulary; consumers may extend scope later."""
 
     del tags_tables
-    with system_context(reason="tags test setup"):
-        company_a = Company.objects.create(name="Company A")
-        company_b = Company.objects.create(name="Company B")
-        scoped_a = Tag.objects.create(name="A-only", company=company_a)
-        shared = Tag.objects.create(name="Everyone")
 
-    user_a = create_user("tags-user-a")
-    user_b = create_user("tags-user-b")
-    _grant_membership(company_a, user_a)
-    _grant_membership(company_b, user_b)
-    return SimpleNamespace(
-        company_a=company_a,
-        company_b=company_b,
-        scoped_a=scoped_a,
-        shared=shared,
-        user_a=user_a,
-        user_b=user_b,
-    )
+    tag_relation_fields = {
+        field.name
+        for field in Tag._meta.fields
+        if field.is_relation and field.name not in {"created_by", "updated_by"}
+    }
+    assert Tag.shared_scope_source_fields == ()
+    assert tag_relation_fields == set()
+    assert Tag(name="Framework").is_shared_scope is True
 
 
-def _visible(user: Any, tag: Any) -> bool:
-    """Return whether ``user`` can read ``tag`` through the scoped queryset."""
+def test_shared_scope_fact_controls_the_wildcard_reader(tags_tables: None) -> None:
+    """The wildcard reader reconciles from ``is_shared_scope``, not a hardcoded FK."""
 
-    with actor_context(user):
-        return Tag.objects.filter(pk=tag.pk).exists()
+    del tags_tables
+    with system_context(reason="tags test scope fact"):
+        shared = ScopeFlagTag.objects.create(name="Everyone", shared_marker=True)
+        scoped = ScopeFlagTag.objects.create(name="Local", shared_marker=False)
 
-
-def test_a_scoped_tag_is_visible_to_its_company_member(scoped_tags: SimpleNamespace) -> None:
-    """A member of company A reads company A's scoped tag."""
-
-    assert _visible(scoped_tags.user_a, scoped_tags.scoped_a)
-
-
-def test_a_scoped_tag_is_invisible_cross_company(scoped_tags: SimpleNamespace) -> None:
-    """A member of only company B never reads company A's scoped tag."""
-
-    assert not _visible(scoped_tags.user_b, scoped_tags.scoped_a)
+    assert _shared_reader_exists(shared)
+    assert not _shared_reader_exists(scoped)
 
 
-def test_a_shared_tag_is_visible_to_every_actor(scoped_tags: SimpleNamespace) -> None:
-    """A null-company tag reads for members of either company."""
+def test_deleting_a_shared_tag_removes_its_wildcard_tuple(tags_tables: None) -> None:
+    """The base REBAC delete seam removes a deleted tag's resource relationships."""
 
-    assert _visible(scoped_tags.user_a, scoped_tags.shared)
-    assert _visible(scoped_tags.user_b, scoped_tags.shared)
+    del tags_tables
+    with system_context(reason="tags delete relationship cleanup"):
+        tag = ScopeFlagTag.objects.create(name="Temporary")
+        resource_id = tag.sqid
+        assert _shared_reader_exists(tag)
+        tag.delete()
+
+    assert not active_relationship_model().objects.filter(
+        resource_type="tags/tag",
+        resource_id=resource_id,
+    ).exists()
 
 
-def test_only_the_shared_tag_carries_the_wildcard_reader(scoped_tags: SimpleNamespace) -> None:
-    """The wildcard reader is written for the shared tag and not the scoped one."""
+def test_flipping_shared_scope_reconciles_the_wildcard_reader(tags_tables: None) -> None:
+    """A same-instance double flip grants and revokes the wildcard every time."""
 
-    assert _shared_reader_exists(scoped_tags.shared)
-    assert not _shared_reader_exists(scoped_tags.scoped_a)
-
-
-def test_flipping_scope_reconciles_the_wildcard_reader(scoped_tags: SimpleNamespace) -> None:
-    """save() grants the wildcard when a tag turns shared and revokes it when scoped."""
-
+    del tags_tables
     with system_context(reason="tags test rescope"):
-        scoped_tags.scoped_a.company = None
-        scoped_tags.scoped_a.save()
-        scoped_tags.shared.company = scoped_tags.company_b
-        scoped_tags.shared.save()
+        created = ScopeFlagTag.objects.create(name="Local", shared_marker=False)
+        tag = ScopeFlagTag.objects.get(pk=created.pk)
+        tag.shared_marker = True
+        tag.save()
+        assert _shared_reader_exists(tag)
 
-    assert _shared_reader_exists(scoped_tags.scoped_a)
-    assert not _shared_reader_exists(scoped_tags.shared)
-    # And the read scope follows: the now-shared tag reads cross-company.
-    assert _visible(scoped_tags.user_b, scoped_tags.scoped_a)
-    assert not _visible(scoped_tags.user_a, scoped_tags.shared)
+        tag.shared_marker = False
+        tag.save()
+        assert not _shared_reader_exists(tag)
+
+        tag.shared_marker = True
+        tag.save()
+        assert _shared_reader_exists(tag)
+
+        tag.shared_marker = False
+        tag.save()
+        assert not _shared_reader_exists(tag)
+
+
+def test_shared_scope_fact_controls_actor_scoped_reads(tags_tables: None) -> None:
+    """Actor-scoped reads allow shared rows and deny marker-off rows."""
+
+    del tags_tables
+    reader = create_user("tags-scope-reader")
+    with system_context(reason="tags test actor scope setup"):
+        shared = ScopeFlagTag.objects.create(name="Everyone", shared_marker=True)
+        scoped = ScopeFlagTag.objects.create(name="Local", shared_marker=False)
+
+    with actor_context(reader):
+        assert ScopeFlagTag.objects.filter(pk=shared.pk).exists()
+        assert not ScopeFlagTag.objects.filter(pk=scoped.pk).exists()
+
+
+def test_deferred_scope_source_field_defers_snapshot(tags_tables: None) -> None:
+    """A deferred scope source does not evaluate ``is_shared_scope`` in ``from_db``."""
+
+    del tags_tables
+    with system_context(reason="tags test deferred scope setup"):
+        tag = ScopeFlagTag.objects.create(name="Deferred", shared_marker=False)
+        with CaptureQueriesContext(connection) as ctx:
+            loaded = ScopeFlagTag.objects.defer("shared_marker").get(pk=tag.pk)
+
+    assert len(ctx.captured_queries) == 1
+    assert loaded.get_deferred_fields() == {"shared_marker"}
+    assert getattr(loaded, "_loaded_is_shared_scope") is _NEVER_LOADED
+
+
+def test_deferred_scope_source_field_save_resyncs_idempotently(tags_tables: None) -> None:
+    """A row loaded without its scope source falls back to an idempotent resync."""
+
+    del tags_tables
+    with system_context(reason="tags test deferred scope save"):
+        tag = ScopeFlagTag.objects.create(name="Deferred", shared_marker=True)
+        loaded = ScopeFlagTag.objects.defer("shared_marker").get(pk=tag.pk)
+        loaded.name = "Deferred renamed"
+        loaded.save()
+
+    assert _shared_reader_exists(tag)
+
+
+def test_loaded_scope_snapshot_skips_unrelated_wildcard_rewrites(tags_tables: None) -> None:
+    """An unrelated save with a complete snapshot does not rewrite wildcard rows."""
+
+    del tags_tables
+    with system_context(reason="tags test complete scope snapshot"):
+        tag = ScopeFlagTag.objects.create(name="Stable", shared_marker=True)
+        loaded = ScopeFlagTag.objects.get(pk=tag.pk)
+        loaded.name = "Still stable"
+        with CaptureQueriesContext(connection) as ctx:
+            loaded.save()
+
+    tuple_writes = [
+        query
+        for query in ctx.captured_queries
+        if "rebac" in query["sql"].lower() and ("relationship" in query["sql"].lower())
+    ]
+    assert tuple_writes == []
 
 
 @pytest.fixture()
@@ -282,9 +340,8 @@ def test_resolve_target_maps_type_and_public_id_to_the_row(party_edge: SimpleNam
         resolved = TagAssignment.objects.resolve_target(*party_edge.party_address)
 
     assert resolved is not None
-    content_type, instance = resolved
-    assert instance.pk == party_edge.party.pk
-    assert content_type == ContentType.objects.get_for_model(Party)
+    assert resolved.object_id == party_edge.party.pk
+    assert resolved.content_type == ContentType.objects.get_for_model(Party)
 
 
 def test_resolve_target_is_none_for_an_unknown_type(party_edge: SimpleNamespace) -> None:
@@ -344,3 +401,34 @@ def test_for_target_returns_the_targets_edges(party_edge: SimpleNamespace) -> No
         objects.attach(*party_edge.party_address, [party_edge.tag.sqid])
         assert objects.for_target(*party_edge.party_address).count() == 1
         assert objects.for_target("nope/nope", "whatever").count() == 0
+
+
+def test_attaching_across_mti_levels_shares_one_edge(tags_tables: None) -> None:
+    """A tag addressed at an MTI child and at its parent resolve to one canonical edge.
+
+    ``mtidemo``'s gated MTI pair stands in for the ``parties.Person`` IS-A
+    ``parties.Party`` shape: ``attach`` canonicalizes both addresses to the topmost
+    REBAC-typed ancestor (the parent), so the child and parent never split the edge
+    set and a query at either level finds the one edge.
+    """
+
+    del tags_tables
+    objects = TagAssignment.objects
+    with system_context(reason="tags mti test"):
+        child = MtiChild.objects.create(title="Acme", detail="org")
+        parent = MtiParent.objects.get(pk=child.pk)
+        tag = Tag.objects.create(name="VIP")
+        child_address = ("mtidemo/child", child.public_id)
+        parent_address = ("mtidemo/parent", parent.public_id)
+        via_child = objects.attach(*child_address, [tag.sqid])
+        via_parent = objects.attach(*parent_address, [tag.sqid])
+
+        # Both addresses converge on one edge keyed to the parent content type.
+        assert [row.pk for row in via_child] == [row.pk for row in via_parent]
+        assert objects.count() == 1
+        edge = objects.get()
+        assert edge.content_type == ContentType.objects.get_for_model(MtiParent)
+        assert edge.object_id == child.pk
+        # Querying at either level finds the same single edge — no split set.
+        assert objects.for_target(*child_address).count() == 1
+        assert objects.for_target(*parent_address).count() == 1

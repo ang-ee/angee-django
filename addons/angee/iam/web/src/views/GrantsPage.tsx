@@ -1,10 +1,9 @@
-import { useAuthoredMutation } from "@angee/refine";
 import { useMemo, useState, type ReactElement, } from "react";
 
 import {
-  Button, Code, ListView, errorMessage, useConfirm, useToast, type ListColumn } from "@angee/ui";
+  Button, Code, ListView, errorMessage, useAuthoredResourceMutation, useConfirm, useToast, type ListColumn } from "@angee/ui";
 
-import { IamRevokeRole } from "../documents";
+import { IAM_ROLE_MUTATION_INVALIDATES, IamRevokeRole } from "../documents";
 import { useIamT } from "../i18n";
 
 // The `iam.Grant` Hasura resource row (`hasura_pydantic_resource`,
@@ -22,18 +21,12 @@ interface GrantResourceRow extends Record<string, unknown> {
   namespace: string;
 }
 
-// Revoking a grant removes a REBAC role tuple, which is what both the grants
-// list (iam.Grant) and the relationships list (iam.Relationship) render — so
-// refresh both. The old "rebac.RelationshipRegistry" label matched no resource
-// and threw in resourceInvalidationTargets at render.
-const GRANT_INVALIDATES = ["iam.Grant", "iam.Relationship"];
-
 export function GrantsPage(): ReactElement {
   const t = useIamT();
   const confirm = useConfirm();
   const toast = useToast();
-  const [revoke_role, revokeState] = useAuthoredMutation(IamRevokeRole, {
-    invalidateModels: GRANT_INVALIDATES,
+  const [revoke_role, revokeState] = useAuthoredResourceMutation(IamRevokeRole, {
+    invalidateModels: IAM_ROLE_MUTATION_INVALIDATES,
     shouldInvalidate: (result) => result?.revoke_role === true,
   });
   const [pendingGrantId, setPendingGrantId] = useState<string | null>(null);

@@ -44,7 +44,14 @@ from angee.base.models import AngeeModel
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
-from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient, ParsedThread
+from angee.messaging import managers as messaging_managers
+from angee.messaging.backends import (
+    ParsedHandle,
+    ParsedMessage,
+    ParsedPart,
+    ParsedRecipient,
+    ParsedThread,
+)
 from angee.messaging.managers import normalize_subject, strip_null_bytes
 from angee.messaging.models import Fragment as AbstractFragment
 from angee.messaging.models import Message as AbstractMessage
@@ -61,15 +68,21 @@ from angee.messaging.models import ThreadedModelMixin
 from angee.messaging.models import ThreadFollower as AbstractThreadFollower
 from angee.messaging.models import ThreadNotification as AbstractThreadNotification
 from angee.messaging.models import TrackingValue as AbstractTrackingValue
+from angee.parties.mixins import LinkSource
+from angee.parties.models import Address as AbstractAddress
 from angee.parties.models import Circle as AbstractCircle
 from angee.parties.models import CircleMember as AbstractCircleMember
 from angee.parties.models import Directory as AbstractDirectory
 from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
+from angee.parties.models import Organization as AbstractOrganization
 from angee.parties.models import Party as AbstractParty
+from angee.parties.models import PartyHandle as AbstractPartyHandle
+from angee.parties.models import Person as AbstractPerson
 from angee.parties.models import Relationship as AbstractRelationship
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
-from angee.social.models import MessagePublic, ThreadPublic
+from angee.posts.models import MessagePublic, ThreadPublic
+from angee.spaces.models import ThreadSpace
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild, TrackedRecordParent
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
@@ -87,8 +100,15 @@ from tests.conftest import (
 from tests.conftest import (
     File as StorageFile,
 )
+from tests.mtidemo.models import MtiChild, MtiParent
+from tests.spaces_models import Group as SpaceGroup
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent
 from tests.test_integrate_vcs import VCS_TEST_MODELS
+
+_PartyHandleMeta = getattr(AbstractPartyHandle, "Meta", object)
+_OrganizationMeta = getattr(AbstractOrganization, "Meta", object)
+_PersonMeta = getattr(AbstractPerson, "Meta", object)
+_AddressMeta = getattr(AbstractAddress, "Meta", object)
 
 
 class Directory(Integration, AbstractDirectory):
@@ -130,6 +150,19 @@ class Party(AbstractParty):
         rebac_id_attr = "sqid"
 
 
+class Organization(Party, AbstractOrganization):
+    """Concrete organization matching the composer inheritance shape."""
+
+    class Meta(_OrganizationMeta):
+        """Django model options for the canonical test organization."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_organization"
+        rebac_resource_type = "parties/organization"
+        rebac_id_attr = "sqid"
+
+
 class Handle(AbstractHandle):
     """Concrete handle (a message sender/recipient) used by messaging tests."""
 
@@ -140,6 +173,45 @@ class Handle(AbstractHandle):
         app_label = "parties"
         db_table = "test_parties_handle"
         rebac_resource_type = "parties/handle"
+        rebac_id_attr = "sqid"
+
+
+class Person(Party, AbstractPerson):
+    """Concrete person used when messaging attributes a user-owned handle."""
+
+    class Meta(_PersonMeta):
+        """Django model options for the canonical test person."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_person"
+        rebac_resource_type = "parties/person"
+        rebac_id_attr = "sqid"
+
+
+class Address(AbstractAddress):
+    """Concrete party address used by contact-ingest tests."""
+
+    class Meta(_AddressMeta):
+        """Django model options for the canonical test address."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_address"
+        rebac_resource_type = "parties/address"
+        rebac_id_attr = "sqid"
+
+
+class PartyHandle(AbstractPartyHandle):
+    """Concrete identity link used when messaging attributes a user-owned handle."""
+
+    class Meta(_PartyHandleMeta):
+        """Django model options for the canonical test party-handle."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_party_handle"
+        rebac_resource_type = "parties/party_handle"
         rebac_id_attr = "sqid"
 
 
@@ -209,13 +281,11 @@ class Fragment(AbstractFragment):
         db_table = "test_messaging_fragment"
 
 
-class Thread(ThreadPublic, AbstractThread):
+class Thread(ThreadSpace, ThreadPublic, AbstractThread):
     """Concrete thread used by messaging tests.
 
-    Folds social's same-row ``ThreadPublic`` extension (``subject_url``/``body``/
-    ``tags``/``parent``) onto the one table, the way the composer emits
-    ``Thread(ThreadExtension1, AbstractThread)`` now that social is a composed base
-    addon — so the public-post payload rides the shared thread row.
+    Folds spaces' group pointer and posts' public-post payload onto the one table,
+    mirroring the composer output for the installed base addons.
     """
 
     class Meta(AbstractThread.Meta):
@@ -281,9 +351,9 @@ class MessageSubtype(AbstractMessageSubtype):
 class Message(MessagePublic, AbstractMessage):
     """Concrete message used by messaging tests.
 
-    Folds social's same-row ``MessagePublic`` extension (``is_original_post``) onto
+    Folds posts' same-row ``MessagePublic`` extension (``is_original_post``) onto
     the one table, the way the composer emits ``Message(MessageExtension1,
-    AbstractMessage)`` now that social is a composed base addon.
+    AbstractMessage)`` now that posts is a composed base addon.
     """
 
     class Meta(AbstractMessage.Meta):
@@ -455,11 +525,16 @@ MESSAGING_TEST_MODELS = (
     Directory,
     Folder,
     Party,
+    Organization,
+    Person,
     Handle,
+    Address,
+    PartyHandle,
     Circle,
     CircleMember,
     RelationshipKind,
     Relationship,
+    SpaceGroup,
     Fragment,
     Thread,
     ThreadAttachment,
@@ -535,6 +610,7 @@ def _parsed(
     text: str = "Body text",
     references: tuple[str, ...] = (),
     in_reply_to: str = "",
+    metadata: dict[str, Any] | None = None,
 ) -> ParsedMessage:
     """Build a neutral ParsedMessage with a single text body part."""
 
@@ -548,6 +624,7 @@ def _parsed(
         in_reply_to=in_reply_to,
         references=references,
         body=ParsedPart(type="text/plain", role="body", text=text),
+        metadata=metadata or {},
     )
 
 
@@ -560,6 +637,21 @@ def _ingest(messages: list[ParsedMessage], *, channel: Any) -> int:
 
     with system_context(reason="test messaging ingest"):
         return len(Message.objects.ingest(messages, channel=channel))
+
+
+def _ingest_sender(*, channel: Any, external_id: str, value: str) -> Handle:
+    """Ingest one inbound message and return its persisted sender handle."""
+
+    parsed = ParsedMessage(
+        external_id=external_id,
+        platform="email",
+        subject="Identity suggestion",
+        sender=ParsedHandle(platform="email", value=value, display_name="Inbound sender"),
+        body=ParsedPart(text=external_id),
+    )
+    with system_context(reason="test messaging sender suggestion"):
+        Message.objects.ingest([parsed], channel=channel, quote_edges=False)
+    return Handle._base_manager.get(platform=Handle.Platform.EMAIL, value=value)
 
 
 def _storage_drive(tmp_path: Path, *, owner: Any) -> Any:
@@ -625,6 +717,35 @@ def test_threaded_model_resolves_one_chatter_thread(messaging_tables: None) -> N
     assert attachment.thread_id == first.pk
     assert attachment.object_id == ticket.pk
     assert attachment.role == "chatter"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_record_chatter_dedups_across_mti_levels(messaging_tables: None) -> None:
+    """A record and its REBAC-typed MTI ancestor share one canonical chatter edge.
+
+    ``mtidemo``'s gated MTI pair stands in for the ``parties.Person`` IS-A
+    ``parties.Party`` shape: ``ensure_for_record`` canonicalizes the edge key to
+    the topmost REBAC-typed ancestor, so attaching chatter at the child and at the
+    parent converge on one thread instead of splitting across two content types.
+    """
+
+    del messaging_tables
+    with system_context(reason="chatter mti dedup"):
+        child = MtiChild.objects.create(title="Acme", detail="org")
+        parent = MtiParent.objects.get(pk=child.pk)
+        via_child = ThreadAttachment.objects.ensure_for_record(child)
+        via_parent = ThreadAttachment.objects.ensure_for_record(parent)
+
+        # One attachment, one thread — the parent address converges on the child's edge.
+        assert via_child.pk == via_parent.pk
+        assert via_child.thread_id == via_parent.thread_id
+        assert ThreadAttachment.objects.for_record(parent).pk == via_child.pk
+        assert ThreadAttachment.objects.for_record(child).pk == via_child.pk
+
+    attachment = ThreadAttachment._base_manager.get()
+    assert attachment.content_type == ContentType.objects.get_for_model(MtiParent)
+    assert attachment.object_id == child.pk
+    assert ThreadAttachment._base_manager.count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -712,10 +833,17 @@ def test_threaded_model_toggles_message_reaction(messaging_tables: None) -> None
     assert reaction.handle is not None
     assert reaction.handle.platform == "email"
     assert reaction.handle.value == "reactor@example.com"
+    assert reaction.handle.owner_id == user.pk
+    person = Person._base_manager.get(user=user)
+    link = PartyHandle._base_manager.get(handle=reaction.handle, party=person)
+    assert link.confidence == 1.0
+    assert link.source == LinkSource.MANUAL
+    assert link.is_confirmed
 
     with system_context(reason="test threaded model reaction remove"):
         ticket.message_reaction(message, reaction="👍", user=user)
     assert not Reaction._base_manager.filter(message=message).exists()
+    assert PartyHandle._base_manager.filter(handle=reaction.handle, party=person).count() == 1
 
     with system_context(reason="test threaded model reaction guard"):
         with pytest.raises(ValueError, match="Message does not belong to this record thread."):
@@ -967,6 +1095,32 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(messaging_tables: 
 
 
 @pytest.mark.django_db(transaction=True)
+def test_threaded_mti_child_delete_leaves_no_attachment_row(messaging_tables: None) -> None:
+    """Deleting a threaded MTI child collects its chatter attachment, leaving no orphan.
+
+    ``TrackedRecordChild`` composes ``ThreadedModelMixin`` through its MTI parent, so the
+    chatter edge, the reverse ``thread_attachments`` GenericRelation, and the ``pre_delete``
+    teardown must all agree on the child's canonical content type. A leftover attachment on
+    a reused primary key would mis-resolve, so the delete must remove it (the placement
+    invariant in ``angee.base.refs``).
+    """
+
+    del messaging_tables
+    with system_context(reason="test threaded mti child delete"):
+        record = TrackedRecordChild.objects.create(title="Child record", note="child column")
+        attachment = record.message_thread_attachment(create=True)
+        attachment_pk = attachment.pk
+        thread_pk = attachment.thread_id
+        assert ThreadAttachment._base_manager.filter(pk=attachment_pk).exists()
+
+        record.delete()
+
+    assert not ThreadAttachment._base_manager.filter(pk=attachment_pk).exists()
+    assert not ThreadAttachment._base_manager.filter(object_id=record.pk).exists()
+    assert not Thread._base_manager.filter(pk=thread_pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_activity_agenda_lists_assignee_activities_across_records(messaging_tables: None) -> None:
     """The actor's assigned activities across records, ordered by due date, windowed (F-act).
 
@@ -974,7 +1128,7 @@ def test_activity_agenda_lists_assignee_activities_across_records(messaging_tabl
     activities are scheduled elevated (``created_by`` is not the assignee), so the actor
     reaches its own rows through the assignee arm alone, with no parent-record grant. The
     window is the whole bound — ``window_start`` inclusive, ``window_end`` exclusive — and
-    another actor's assignment, plus a company-B actor with no assignments, see nothing of
+    another actor's assignment, plus an unassigned actor, see nothing of
     it. Each row carries its parent pointer (label + sqid + model_label) through the
     attachment's owning model, computed without loading the target row.
     """
@@ -985,7 +1139,7 @@ def test_activity_agenda_lists_assignee_activities_across_records(messaging_tabl
     with system_context(reason="agenda across-records setup"):
         assignee = user_model.objects.create_user(username="agenda-assignee", email="agenda-assignee@example.com")
         other = user_model.objects.create_user(username="agenda-other", email="agenda-other@example.com")
-        company_b = user_model.objects.create_user(username="agenda-company-b", email="agenda-company-b@example.com")
+        unassigned = user_model.objects.create_user(username="agenda-unassigned", email="agenda-unassigned@example.com")
         alpha = ThreadedTicket.objects.create(title="Alpha")
         beta = ThreadedTicket.objects.create(title="Beta")
         # Assignee's activities across two records, out of due-date order.
@@ -994,13 +1148,13 @@ def test_activity_agenda_lists_assignee_activities_across_records(messaging_tabl
         # Window boundaries: start is inclusive, end is exclusive.
         alpha.activity_schedule(user=assignee, summary="Kickoff", due_date=window_start)
         alpha.activity_schedule(user=assignee, summary="Boundary", due_date=window_end)
-        # Out of window, another assignee, and an unassigned company-B actor — all absent.
+        # Out of window, another assignee, and an unassigned actor — all absent.
         alpha.activity_schedule(user=assignee, summary="Later", due_date=date(2026, 4, 15))
         alpha.activity_schedule(user=other, summary="Other task", due_date=date(2026, 3, 7))
 
     with actor_context(assignee):
         rows = list(ThreadActivity.objects.agenda(assignee, window_start, window_end))
-        empty = list(ThreadActivity.objects.agenda(company_b, window_start, window_end))
+        empty = list(ThreadActivity.objects.agenda(unassigned, window_start, window_end))
 
     assert [row.summary for row in rows] == ["Kickoff", "Email Alpha", "Call Beta"]
     assert {row.attachment.object_id for row in rows} == {alpha.pk, beta.pk}
@@ -1771,6 +1925,235 @@ def test_threaded_model_schedules_and_completes_activity(messaging_tables: None)
 
 
 @pytest.mark.django_db(transaction=True)
+def test_ingest_autolinks_sender_from_resolved_normalized_twin(channel: Any) -> None:
+    """An inbound sender inherits the resolved identity of its normalized twin."""
+
+    with system_context(reason="test ingest normalized sender"):
+        owner = channel.owner
+        alice = Party._base_manager.create(display_name="Alice", created_by=owner)
+        resolved = Handle._base_manager.create(
+            platform=Handle.Platform.EMAIL,
+            value="a.lice@gmail.com",
+            created_by=owner,
+        )
+        PartyHandle.objects.link(
+            alice,
+            resolved,
+            source=LinkSource.MANUAL,
+            created_by_id=owner.pk,
+        )
+
+    sender = _ingest_sender(
+        channel=channel,
+        external_id="normalized-sender-1",
+        value="alice+inbound@gmail.com",
+    )
+    link = PartyHandle._base_manager.filter(handle=sender, party=alice).first()
+
+    assert link is not None
+    sender.refresh_from_db()
+    assert sender.party_id == alice.pk
+    assert link.confidence == 1.0
+    assert link.source == LinkSource.EMAIL_MATCH
+    assert not link.is_confirmed
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_leaves_unknown_first_contact_sender_unresolved(channel: Any) -> None:
+    """A first-contact sender with no evidence remains an unresolved handle."""
+
+    sender = _ingest_sender(
+        channel=channel,
+        external_id="unknown-sender-1",
+        value="stranger@nowhere.example",
+    )
+
+    assert sender.party_id is None
+    assert not PartyHandle._base_manager.filter(handle=sender).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_retries_unknown_sender_after_late_twin_without_duplicate_links(channel: Any) -> None:
+    """A later message retries an older unknown handle after directory evidence arrives."""
+
+    sender = _ingest_sender(
+        channel=channel,
+        external_id="retry-sender-1",
+        value="alice+late@gmail.com",
+    )
+    assert sender.party_id is None
+    assert not PartyHandle._base_manager.filter(handle=sender).exists()
+
+    with system_context(reason="test ingest late sender evidence"):
+        owner = channel.owner
+        alice = Party._base_manager.create(display_name="Alice", created_by=owner)
+        resolved = Handle._base_manager.create(
+            platform=Handle.Platform.EMAIL,
+            value="a.lice@gmail.com",
+            created_by=owner,
+        )
+        PartyHandle.objects.link(
+            alice,
+            resolved,
+            source=LinkSource.MANUAL,
+            created_by_id=owner.pk,
+        )
+
+    retried = _ingest_sender(
+        channel=channel,
+        external_id="retry-sender-2",
+        value="alice+late@gmail.com",
+    )
+
+    retried.refresh_from_db()
+    assert retried.pk == sender.pk
+    assert retried.party_id == alice.pk
+    assert PartyHandle._base_manager.filter(handle=retried, party=alice).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_keeps_dismissed_sender_suggestion_dismissed(channel: Any) -> None:
+    """A subsequent message cannot resurrect a human-dismissed sender suggestion."""
+
+    with system_context(reason="test ingest dismissed sender setup"):
+        owner = channel.owner
+        alice = Party._base_manager.create(display_name="Alice", created_by=owner)
+        resolved = Handle._base_manager.create(
+            platform=Handle.Platform.EMAIL,
+            value="a.lice@gmail.com",
+            created_by=owner,
+        )
+        PartyHandle.objects.link(
+            alice,
+            resolved,
+            source=LinkSource.MANUAL,
+            created_by_id=owner.pk,
+        )
+
+    sender = _ingest_sender(
+        channel=channel,
+        external_id="dismissed-sender-1",
+        value="alice+dismissed@gmail.com",
+    )
+    dismissed = PartyHandle._base_manager.filter(handle=sender, party=alice).first()
+    assert dismissed is not None
+    with system_context(reason="test ingest dismiss sender suggestion"):
+        dismissed.dismiss()
+
+    _ingest_sender(
+        channel=channel,
+        external_id="dismissed-sender-2",
+        value="alice+dismissed@gmail.com",
+    )
+
+    dismissed.refresh_from_db()
+    sender.refresh_from_db()
+    assert dismissed.is_dismissed
+    assert not dismissed.is_confirmed
+    assert sender.party_id is None
+    assert PartyHandle._base_manager.filter(handle=sender, party=alice).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_suggests_sender_from_organization_domain(channel: Any) -> None:
+    """An inbound sender matching a tracked domain receives the weak organization link."""
+
+    with system_context(reason="test ingest organization sender"):
+        owner = channel.owner
+        acme = Organization._base_manager.create(
+            display_name="Acme",
+            domain="acme.example",
+            created_by=owner,
+        )
+
+    sender = _ingest_sender(
+        channel=channel,
+        external_id="organization-sender-1",
+        value="bob@acme.example",
+    )
+    link = PartyHandle._base_manager.filter(handle=sender, party=acme).first()
+
+    assert link is not None
+    sender.refresh_from_db()
+    assert sender.party_id == acme.pk
+    assert link.confidence == 0.4
+    assert link.source == LinkSource.RULE
+    assert not link.is_confirmed
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_suggests_each_unresolved_handle_once_after_batch_commit(
+    channel: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One post-commit pass deduplicates unresolved handles across the ingest batch."""
+
+    callbacks: list[Any] = []
+    suggested: list[Any] = []
+    monkeypatch.setattr(messaging_managers.transaction, "on_commit", callbacks.append)
+    monkeypatch.setattr(
+        PartyHandle.objects,
+        "suggest_for",
+        lambda handle: suggested.append(handle.pk),
+    )
+    shared = ParsedHandle(platform="email", value="shared@example.com")
+    messages = [
+        ParsedMessage(
+            external_id=f"suggest-batch-{index}",
+            platform="email",
+            sender=shared,
+            recipients=(ParsedRecipient(handle=shared),),
+            body=ParsedPart(text=str(index)),
+        )
+        for index in range(2)
+    ]
+
+    with system_context(reason="test batched post-commit suggestions"):
+        landed = Message.objects.ingest(messages, channel=channel, quote_edges=False)
+
+    assert len(landed) == 2
+    assert suggested == []
+    assert len(callbacks) == 1
+    callbacks[0]()
+    assert suggested == [Handle._base_manager.get(value="shared@example.com").pk]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_contains_suggestion_failures_and_continues_batch(
+    channel: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed best-effort suggestion neither aborts ingest nor skips later handles."""
+
+    attempted: list[str] = []
+
+    def suggest(handle: Handle) -> None:
+        attempted.append(handle.value)
+        if handle.value == "fail@example.com":
+            raise RuntimeError("directory unavailable")
+
+    monkeypatch.setattr(PartyHandle.objects, "suggest_for", suggest)
+    messages = [
+        ParsedMessage(
+            external_id=f"suggest-failure-{index}",
+            platform="email",
+            sender=ParsedHandle(platform="email", value=value),
+            body=ParsedPart(text=value),
+        )
+        for index, value in enumerate(("fail@example.com", "continue@example.com"))
+    ]
+
+    with caplog.at_level("ERROR"), system_context(reason="test contained suggestions"):
+        landed = Message.objects.ingest(messages, channel=channel, quote_edges=False)
+
+    assert len(landed) == 2
+    assert Message._base_manager.filter(pk__in=[message.pk for message in landed]).count() == 2
+    assert attempted == ["fail@example.com", "continue@example.com"]
+    assert "Could not suggest a party for messaging handle" in caplog.text
+
+
+@pytest.mark.django_db(transaction=True)
 def test_ingest_dedup_is_channel_scoped(channel: Any) -> None:
     """Message identity is (channel, external_id): re-sync dedups, a second channel does not.
 
@@ -1797,6 +2180,102 @@ def test_ingest_dedup_is_channel_scoped(channel: Any) -> None:
     assert {row.thread_id for row in rows} == {thread.pk}
     thread.refresh_from_db()
     assert thread.message_count == 2
+
+
+@pytest.mark.django_db(transaction=True)
+def test_group_ingest_resolves_visibility_and_accumulates_unique_participants(channel: Any) -> None:
+    """GROUP ingest keeps one thread while each message contributes its envelope."""
+
+    alice = ParsedHandle(platform="whatsapp", value="+15550001", display_name="Alice")
+    bob = ParsedHandle(platform="whatsapp", value="+15550002", display_name="Bob")
+    carol = ParsedHandle(platform="whatsapp", value="+15550003", display_name="Carol")
+    messages = [
+        ParsedMessage(
+            external_id="group-1-message-1",
+            platform="whatsapp",
+            subject="Support crew",
+            sender=alice,
+            recipients=(ParsedRecipient(handle=bob), ParsedRecipient(handle=bob)),
+            body=ParsedPart(text="First"),
+        ),
+        ParsedMessage(
+            external_id="group-1-message-2",
+            platform="whatsapp",
+            subject="Support crew",
+            sender=carol,
+            recipients=(ParsedRecipient(handle=bob),),
+            body=ParsedPart(text="Second"),
+        ),
+    ]
+
+    with system_context(reason="test group messaging ingest"):
+        landed = Message.objects.ingest(
+            messages,
+            channel=channel,
+            modality=Thread.Modality.GROUP,
+            visibility=Thread.Visibility.RESTRICTED,
+            quote_edges=False,
+        )
+
+    assert len(landed) == 2
+    assert Thread._base_manager.count() == 1
+    thread = Thread._base_manager.get()
+    assert thread.modality == Thread.Modality.GROUP
+    assert thread.visibility == Thread.Visibility.RESTRICTED
+    assert {message.thread_id for message in landed} == {thread.pk}
+    assert list(
+        Participant._base_manager.filter(thread=thread)
+        .order_by("message__external_id", "role", "handle__value")
+        .values_list("message__external_id", "role", "handle__value")
+    ) == [
+        ("group-1-message-1", "from", "+15550001"),
+        ("group-1-message-1", "to", "+15550002"),
+        ("group-1-message-2", "from", "+15550003"),
+        ("group-1-message-2", "to", "+15550002"),
+    ]
+
+    later = ParsedMessage(
+        external_id="group-1-message-3",
+        platform="whatsapp",
+        subject="Support crew",
+        sender=alice,
+        recipients=(ParsedRecipient(handle=carol),),
+        body=ParsedPart(text="Third"),
+    )
+    with system_context(reason="test group messaging immutable thread shape"):
+        [later_message] = Message.objects.ingest(
+            [later],
+            channel=channel,
+            modality=Thread.Modality.DIRECT,
+            visibility=Thread.Visibility.PUBLIC,
+            quote_edges=False,
+        )
+
+    thread.refresh_from_db()
+    assert later_message.thread_id == thread.pk
+    assert thread.modality == Thread.Modality.GROUP
+    assert thread.visibility == Thread.Visibility.RESTRICTED
+
+    duplicate = Participant._base_manager.get(
+        message=landed[0],
+        role=Participant.ParticipantRole.FROM,
+    )
+    with system_context(reason="test group messaging constraints"):
+        with pytest.raises(IntegrityError), transaction.atomic():
+            Participant._base_manager.create(
+                message=landed[0],
+                thread=thread,
+                handle=duplicate.handle,
+                role=duplicate.role,
+            )
+        with pytest.raises(IntegrityError), transaction.atomic():
+            Thread._base_manager.create(
+                channel=channel,
+                platform=thread.platform,
+                external_id=thread.external_id,
+                modality=Thread.Modality.GROUP,
+                visibility=Thread.Visibility.RESTRICTED,
+            )
 
 
 def test_email_identity_columns_are_unbounded_and_subject_columns_are_gone() -> None:
@@ -2076,6 +2555,18 @@ def test_fragment_upsert_survives_oversized_text(channel: Any) -> None:
         again = Fragment.objects.upsert(text=huge)
     assert fragment.pk is not None
     assert again.pk == fragment.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_rejects_oversized_message_metadata(channel: Any) -> None:
+    """Externally controlled metadata over 512 KiB is rejected before a message lands."""
+
+    parsed = _parsed("oversized-metadata", metadata={"tags": ["x" * (512 * 1024)]})
+
+    with pytest.raises(ValueError, match="message metadata exceeds 524288 UTF-8 JSON bytes"):
+        _ingest([parsed], channel=channel)
+
+    assert not Message._base_manager.filter(external_id="oversized-metadata").exists()
 
 
 @pytest.mark.django_db(transaction=True)

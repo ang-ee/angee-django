@@ -5,7 +5,7 @@ subtree membership is a database prefix test, not a client-side ``parent`` walk.
 These cover the contract the inventory ``Location`` tree (the first hard
 consumer) depends on: inclusive ``subtree_of`` / exclusive ``ancestors_of``,
 padded-segment prefix correctness (pk ``1`` never prefix-matches pk ``11``), the
-single-``UPDATE`` reparent cascade, cycle and cross-company rejection, the derived
+single-``UPDATE`` reparent cascade, cycle and cross-scope rejection, the derived
 create-path shape, and the pattern-ops prefix index. Reads run under
 ``system_context`` because the demo models use the REBAC-aware manager in
 strict mode, exactly as the real ``Location`` reads do server-side.
@@ -22,7 +22,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
 from tests.hierdemo.models import HierNode, ScopedHierNode
-from tests.iam_models import Company
+from tests.scopedemo.models import Scope
 
 
 def _tree() -> dict[str, HierNode]:
@@ -320,14 +320,14 @@ def test_self_parent_is_rejected_as_cycle() -> None:
 
 
 @pytest.mark.django_db
-def test_cross_company_parent_is_rejected() -> None:
-    """A company-scoped node rejects a parent belonging to another company."""
+def test_cross_scope_parent_is_rejected() -> None:
+    """A scoped node rejects a parent belonging to another scope."""
 
-    with system_context(reason="test hierarchy company boundary"):
-        company_a = Company.objects.create(name="Company A")
-        company_b = Company.objects.create(name="Company B")
-        root_a = ScopedHierNode.objects.create(name="root-a", company=company_a)
-        node_b = ScopedHierNode.objects.create(name="node-b", company=company_b)
+    with system_context(reason="test hierarchy scope boundary"):
+        scope_a = Scope.objects.create(name="Scope A")
+        scope_b = Scope.objects.create(name="Scope B")
+        root_a = ScopedHierNode.objects.create(name="root-a", scope=scope_a)
+        node_b = ScopedHierNode.objects.create(name="node-b", scope=scope_b)
 
         node_b.parent = root_a
         with pytest.raises(ValidationError) as excinfo:
@@ -336,15 +336,15 @@ def test_cross_company_parent_is_rejected() -> None:
 
 
 @pytest.mark.django_db
-def test_same_company_parent_is_accepted() -> None:
-    """A same-company parent is accepted and the child path derives from it."""
+def test_same_scope_parent_is_accepted() -> None:
+    """A same-scope parent is accepted and the child path derives from it."""
 
-    with system_context(reason="test hierarchy same company"):
-        company = Company.objects.create(name="Company")
-        root = ScopedHierNode.objects.create(name="root", company=company)
-        child = ScopedHierNode.objects.create(name="child", parent=root, company=company)
+    with system_context(reason="test hierarchy same scope"):
+        scope = Scope.objects.create(name="Scope")
+        root = ScopedHierNode.objects.create(name="root", scope=scope)
+        child = ScopedHierNode.objects.create(name="child", parent=root, scope=scope)
     assert child.path.startswith(root.path)
-    assert child.company_id == company.pk
+    assert child.scope_id == scope.pk
 
 
 def test_path_index_declares_pattern_ops() -> None:

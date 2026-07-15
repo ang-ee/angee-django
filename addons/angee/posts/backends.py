@@ -1,19 +1,19 @@
 """Feed backend contract — poll an external platform for public posts.
 
-A :class:`~angee.social.models.Feed` (an ``integrate.Integration`` child + ``Bridge``)
+A :class:`~angee.posts.models.Feed` (an ``integrate.Integration`` child + ``Bridge``)
 selects one ``FeedBackend`` by registry key. The backend does the per-platform
 *transport* + *parse* — ``fetch_posts`` returns neutral :class:`ParsedPost` rows.
 Each post's *core* (thread/message/parts) reuses messaging's neutral
 :class:`~angee.messaging.backends.ParsedMessage`, so the idempotent channel-scoped
 external-id upsert, the Part/Fragment tree, and thread resolution stay owned by
-``Message.objects.ingest`` — social never forks that write path. A
-post adds the social *overlay*: rolled-up :class:`ParsedMetrics`, per-actor
+``Message.objects.ingest`` — posts never forks that write path. A
+post adds the posts *overlay*: rolled-up :class:`ParsedMetrics`, per-actor
 :class:`ParsedReaction`\\s, and cross-post :class:`ParsedRelation`\\s that the
-:class:`~angee.social.models.Feed` maps onto ``PostMetrics``, the reused
+:class:`~angee.posts.models.Feed` maps onto ``PostMetrics``, the reused
 ``messaging.Reaction`` table, and the shared ``messaging.MessageEdge`` graph.
 
-Source addons (``social_integrate_youtube``/``…_facebook``) contribute concrete
-backends; the ``manual`` null-object keeps ``ANGEE_SOCIAL_FEED_BACKEND_CLASSES``
+Source addons (``posts_integrate_youtube``/``…_facebook``) contribute concrete
+backends; the ``manual`` null-object keeps ``ANGEE_POSTS_FEED_BACKEND_CLASSES``
 non-empty when no source is installed.
 """
 
@@ -63,7 +63,7 @@ class ParsedRelation:
 
 @dataclass(frozen=True)
 class ParsedPost:
-    """One public post parsed from a feed — the message core plus the social overlay.
+    """One public post parsed from a feed — the message core plus the posts overlay.
 
     ``message`` is the neutral messaging shape (its ``external_id`` is the
     idempotency key, ``in_reply_to`` carries the parent post id). ``is_original_post``
@@ -75,6 +75,12 @@ class ParsedPost:
     is_original_post: bool = False
     subject_url: str = ""
     tags: tuple[str, ...] = ()
+    """Exact parsed hashtags stored in ``message.metadata["tags"]`` on feed ingest.
+
+    Order, spelling, and duplicates are preserved pending the backlogged
+    vocabulary-governance decision; this envelope fact does not create ``Tag`` or
+    ``TagAssignment`` rows.
+    """
     metrics: ParsedMetrics | None = None
     reactions: tuple[ParsedReaction, ...] = ()
     relations: tuple[ParsedRelation, ...] = ()
@@ -101,7 +107,7 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
 class ManualFeedBackend(FeedBackend):
     """The null-object default: a feed with no source backend ingests nothing.
 
-    Keeps ``ANGEE_SOCIAL_FEED_BACKEND_CLASSES`` non-empty when no source addon is
+    Keeps ``ANGEE_POSTS_FEED_BACKEND_CLASSES`` non-empty when no source addon is
     installed (``ImplClassField`` requires a non-empty registry), so the GraphQL
     enum is never empty and a draft feed always has a selectable backend.
     """

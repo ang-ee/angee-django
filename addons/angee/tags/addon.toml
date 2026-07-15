@@ -1,6 +1,6 @@
 [addon]
 name = "angee.tags"
-description = "Polymorphic tags: a shared-or-company-scoped vocabulary attachable to any row."
+description = "Polymorphic tags: a shared vocabulary attachable to any row."
 keywords = ["tags", "labels", "taxonomy", "polymorphic"]
 category = "Foundation"
 depends_on = ["angee.iam", "angee.resources", "angee.graphql"]
