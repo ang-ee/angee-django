@@ -251,10 +251,25 @@ smaller and clearer.
 
 ## Run From The Root
 
+Resolve the stack that owns lifecycle before running `angee init`, `angee ws`,
+or another stack command. An existing current or ancestor `angee.yaml` wins over
+this checkout's `.angee/angee.yaml` dev overlay. When this checkout lives under
+a self-contained `ANGEE_ROOT` (for example `ANGEE_ROOT/sources/angee-django`),
+use that ancestor root for stack and workspace commands and do not initialize
+another `.angee/` inside this source checkout. Load
+`.agents/skills/angee-workspace/SKILL.md` for the canonical resolution flow; it
+binds the result as `angee_root` and runs lifecycle commands as
+`angee --root "$angee_root" ws ...`.
+
+The repository-local overlay described below is the fallback for a standalone
+checkout only: use it when no current or ancestor stack already owns the
+checkout.
+
 `angee dev` is the only supported way to bring the local stack up — do not start
-Django, Vite, Daphne, workers, or watchers by hand. Run it from the repository
-root: the root stack is wired to the `examples/notes-angee` project, so `angee
-dev` there runs that example against the framework.
+Django, Vite, Daphne, workers, or watchers by hand. Run it against the resolved
+stack root. For a standalone checkout, that is the repository-local overlay
+wired to `examples/notes-angee`; for a checkout below a self-contained stack,
+the ancestor manifest owns the project and sources.
 
 This repo-root `.angee/` is a **dev-stack overlay** — `ANGEE_ROOT=.angee` with
 `local` sources pointing at this checkout. It is one of two stack layouts (the
@@ -263,7 +278,7 @@ owns the repository root, the stack overlays into `.angee/`. See `docs/glossary.
 (Project / Project template / Host).
 
 ```sh
-angee dev            # from the repo root — runs the examples/notes-angee stack
+angee --root "$angee_root" dev
 ```
 
 `angee dev` is for bringing the long-running stack up. To run a one-shot Django
@@ -289,9 +304,9 @@ work-state. Then run the stack inside it. `angee dev` walks up to the nearest
 `.angee`, so it works from the workspace root too.
 
 ```sh
-cd .angee/workspaces/<name>
+cd "$angee_root/workspaces/<name>"
 angee dev
-angee ws status      # optional; defaults to the enclosing workspace
+angee --root "$angee_root" ws status <name>
 ```
 
 A workspace is pinned to `workspace/<name>` — never `git checkout`/`switch`

@@ -11,30 +11,67 @@ names unless the CLI cannot answer.
 
 ## Owners
 
-- Workspace lifecycle: `angee ws ...`.
-- Workspace Git state: `angee ws git <name> --json` and
-  `angee gitops topology --json`.
-- Source-slot operations: `angee ws source ...`.
+- Workspace lifecycle: `angee --root "$angee_root" ws ...`.
+- Workspace Git state: `angee --root "$angee_root" ws git <name> --json` and
+  `angee --root "$angee_root" gitops topology --json`.
+- Source-slot operations: `angee --root "$angee_root" ws source ...`.
 - Raw Git is only for committing reviewed changes, inspecting worktrees, and
   checking upstream state that Angee does not expose.
 
-Run Angee commands from the repository root unless already inside the target
-workspace. Never `git checkout` or `git switch` inside an Angee workspace; a
-workspace is pinned to its `workspace/<name>` branch.
+Resolve the controlling stack root before any workspace or GitOps command. Run
+those commands with the resolved root explicitly, even while inside a source
+checkout or target workspace. Never `git checkout` or `git switch` inside an
+Angee workspace; a workspace is pinned to its `workspace/<name>` branch.
+
+## Resolve The Controlling Stack Root
+
+An existing current or ancestor stack owns workspace lifecycle. Search upward
+from the repository root for `angee.yaml` first; only when no ancestor stack
+exists may this repository's `.angee/angee.yaml` dev overlay be the owner:
+
+```sh
+repo_root=$(git rev-parse --show-toplevel) || exit 1
+angee_root=
+candidate=$repo_root
+while :; do
+  if test -f "$candidate/angee.yaml"; then
+    angee_root=$(cd "$candidate" && pwd -P)
+    break
+  fi
+  parent=$(dirname "$candidate")
+  test "$parent" != "$candidate" || break
+  candidate=$parent
+done
+if test -z "$angee_root" && test -f "$repo_root/.angee/angee.yaml"; then
+  angee_root=$(cd "$repo_root/.angee" && pwd -P)
+fi
+test -n "$angee_root" || exit 1
+```
+
+If neither location exists, stop and ask the user how the stack should be
+initialized; do not run `angee init` unless the user explicitly requested a new
+stack. Never initialize `.angee/` inside a checkout that already sits below a
+stack root.
+
+Use `angee --root "$angee_root" ...` for every workspace and GitOps command
+below. The explicit root is intentional: the CLI otherwise defaults to the
+current directory, which can silently select a checkout-local dev overlay.
 
 ## Resolve The Current Workspace
 
-1. If the current directory is under `.angee/workspaces/<name>`, use `<name>`.
+1. If the current directory is under `$angee_root/workspaces/<name>`, use
+   `<name>`.
 2. Otherwise require the workspace name from the command arguments or user
    prompt.
-3. Confirm with `angee ws git <name> --json`.
+3. Confirm with `angee --root "$angee_root" ws git <name> --json`.
 4. If there is more than one git source slot, operate per slot. Match slots by
    name when pulling from another workspace.
 
 For each workspace source, the parent ref is the source `ref` reported by
-`angee ws git <name> --json` or the matching link in
-`angee gitops topology --json`. That ref may be a normal branch (`main`), a
-feature branch, or another workspace branch (`workspace/<parent>`).
+`angee --root "$angee_root" ws git <name> --json` or the matching link in
+`angee --root "$angee_root" gitops topology --json`. That ref may be a normal
+branch (`main`), a feature branch, or another workspace branch
+(`workspace/<parent>`).
 
 A "parent workspace" is the workspace whose reported source `branch` equals the
 current workspace's parent ref. When such a workspace exists locally, treat that
@@ -61,7 +98,6 @@ Resolve and validate the shared work-state repository before choosing the
 workspace parent:
 
 ```sh
-repo_root=$(git rev-parse --show-toplevel) || exit 1
 test -L "$repo_root/.work" || exit 1
 work_state_path=$(cd "$repo_root/.work" && pwd -P) || exit 1
 work_state_top=$(git -C "$work_state_path" rev-parse --show-toplevel) || exit 1
@@ -79,7 +115,7 @@ Use the dev workspace template unless the user names another template, and pass
 the validated canonical path through the template's required input:
 
 ```sh
-angee ws create <name> --template dev --input base_ref=<parent-ref> \
+angee --root "$angee_root" ws create <name> --template dev --input base_ref=<parent-ref> \
   --input work_state_path="$work_state_path"
 ```
 
@@ -98,7 +134,7 @@ After creation, report:
 - Parent ref.
 - Resolved work-state path.
 - `angee dev` command from the workspace root.
-- `angee ws status <name>` for follow-up inspection.
+- `angee --root "$angee_root" ws status <name>` for follow-up inspection.
 
 ## Pull: Bring Changes Into Current Workspace
 
@@ -122,7 +158,7 @@ With no argument, pull from the current workspace's parent ref:
 7. Merge the parent into the workspace with Angee:
 
 ```sh
-angee ws sync-base <current-workspace> --merge
+angee --root "$angee_root" ws sync-base <current-workspace> --merge
 ```
 
 Use `--rebase` only when the user explicitly asks for rebase. Merge is the
@@ -133,7 +169,8 @@ default because `/pull` is branch-style integration, not history rewriting.
 With an argument, merge that workspace or ref into the current workspace:
 
 1. Resolve the argument:
-   - If it is a workspace name, read `angee ws git <source> --json`.
+   - If it is a workspace name, read
+     `angee --root "$angee_root" ws git <source> --json`.
    - If it is a branch/ref, use it directly.
 2. For a source workspace:
    - Stop if the source workspace is dirty unless the user explicitly
@@ -146,7 +183,7 @@ With an argument, merge that workspace or ref into the current workspace:
 5. Merge with Angee:
 
 ```sh
-angee ws source merge <current-workspace> <slot> <source-branch-or-ref>
+angee --root "$angee_root" ws source merge <current-workspace> <slot> <source-branch-or-ref>
 ```
 
 For a workspace argument, `<source-branch-or-ref>` is the source slot's reported
@@ -157,7 +194,7 @@ the repo's owners and `AGENTS.md`, then commit the merge. If the user wants to
 abandon the merge, use:
 
 ```sh
-angee ws source merge-abort <current-workspace> <slot>
+angee --root "$angee_root" ws source merge-abort <current-workspace> <slot>
 ```
 
 ## Push: Commit And Publish Current Workspace
@@ -166,8 +203,8 @@ angee ws source merge-abort <current-workspace> <slot>
 branch." It does not merge into the parent branch.
 
 1. Resolve the current workspace and source slots.
-2. Inspect `angee ws git <name> --json` and `git -C <workspace-path> status
-   --short --branch`.
+2. Inspect `angee --root "$angee_root" ws git <name> --json` and
+   `git -C <workspace-path> status --short --branch`.
 3. If there are changes, review them before staging.
    - Stage source changes deliberately.
    - Do not stage generated runtime output, scratch artifacts, `.vite`, test
@@ -180,18 +217,18 @@ branch." It does not merge into the parent branch.
    - If the slot has an upstream, push it:
 
 ```sh
-angee ws source push <workspace> <slot>
+angee --root "$angee_root" ws source push <workspace> <slot>
 ```
 
    - If the slot has no upstream, publish it and set upstream:
 
 ```sh
-angee ws source publish <workspace> <slot> --remote origin --branch <branch>
+angee --root "$angee_root" ws source publish <workspace> <slot> --remote origin --branch <branch>
 ```
 
    `<branch>` comes from the source slot's reported `branch`.
-6. Re-run `angee ws git <name> --json` and report whether each slot is clean and
-   pushed.
+6. Re-run `angee --root "$angee_root" ws git <name> --json` and report whether
+   each slot is clean and pushed.
 
 Publishing usually needs network access. If the command fails because of
 sandboxed network access, request escalation for the same command with a scoped

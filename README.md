@@ -74,11 +74,16 @@ are.*
 
 ## Quick start
 
+Before `angee init --dev`, check for an existing current or ancestor
+`angee.yaml`. If one exists, it already owns this checkout: use that
+`ANGEE_ROOT` and do not initialize a nested `.angee/` under the source. The
+repository-local `.angee/` overlay is only for a standalone checkout.
+
 ```sh
 git clone https://github.com/ang-ee/angee-django.git
 cd angee-django
 curl -fsSL https://angee.ai/install.sh | sh   # the angee CLI, if not already installed
-angee init --dev                              # set up the angee dev stack from the template
+angee init --dev                              # standalone checkout only; set up .angee/
 angee dev                                     # run the examples/notes-angee stack from the repo root
 ```
 

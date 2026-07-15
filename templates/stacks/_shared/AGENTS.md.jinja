@@ -1,0 +1,28 @@
+# Angee Stack Root
+
+The directory containing this file is `ANGEE_ROOT`. This stack is already
+initialized: its authoritative manifest is `angee.yaml` beside this file.
+
+## Stack Ownership
+
+- Do not run `angee init` in this directory or anywhere below it. In particular,
+  never create a nested `.angee/` inside `sources/`.
+- Source checkouts are not stack roots. Their own `AGENTS.md` files govern source
+  changes, but they do not move stack or workspace lifecycle into the checkout.
+- All workspaces created for this stack belong under `ANGEE_ROOT/workspaces/`.
+  Do not create or move workspaces under a source checkout.
+- Run stack and workspace lifecycle commands from `ANGEE_ROOT`. If working from
+  another directory, resolve this directory to an absolute path and pass it as
+  `angee --root "$ANGEE_ROOT" ...`; never point `--root` at a source checkout.
+
+At the start of a shell session, change to the directory containing this file
+before capturing the root:
+
+```sh
+ANGEE_ROOT=$(pwd -P)
+test -f "$ANGEE_ROOT/angee.yaml" || exit 1
+```
+
+When entering a source checkout, read and follow its nested `AGENTS.md` for code,
+testing, and repository workflow. This file remains authoritative for which
+stack owns workspace lifecycle.
