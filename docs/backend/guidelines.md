@@ -290,6 +290,16 @@ Rules that follow from the layering:
   `kind` column. Reach for a child model, not a `StateField`, when the kinds carry
   their own fields (e.g. a `Person` linking to an `iam.User` that an `Organization`
   never has).
+- **A hand-written `@strawberry.type` owes the boundary the same enum.** The rule
+  above is not about models — it is about the API boundary, so a `state: str`
+  field on a plain strawberry type has the identical defect: it crosses as a bare
+  `String` and pushes the vocabulary check onto every client at runtime. Declare
+  the closed set as an `enum.StrEnum` exposed with `@strawberry.enum` and type the
+  field as it; the member value stays the serialized/stored token and the
+  upper-case member name is the wire value
+  (`messaging_integrate_whatsapp.client.PairingState` is the reference). Keep the
+  enum next to the vocabulary it names, not in `schema.py`, when a worker-side
+  owner must return it without importing the console schema.
 - **Integration implementations are concrete integration children.** The
   top-level `integrate.Integration` row is the shared connection identity and
   lifecycle. Concrete integration kinds such as inference providers and VCS
@@ -507,6 +517,55 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   child-content-type edges, then one `manage.py reconcile_permissions` run for
   the `social/*` to `posts/*` zed rename; do not hide either step in startup.
 - **State columns are `StateField`; guarded changes go through transition methods, never direct assignment.**
+- **A lifecycle column is declared intent, never proof of achievement.**
+  `integrate.Integration.lifecycle` records what the operator asked for; how far a
+  runtime handshake actually got belongs on `runtime_status`/`sync_progress`.
+  Overloading one lifecycle value with "not finished yet" — a WhatsApp channel
+  that stayed `disconnected` until its worker proved a JID — makes that value
+  unusable as a stop signal, because a guard cannot tell "the operator released
+  this" from "still connecting". So a worker never writes the lifecycle back: a
+  logout or a rejected account is an outcome, not a request, and recording it as
+  one reverts the operator within a tick. It reports the failure on the runtime
+  axis and stops itself through the desired-state it also owns.
+- **An Integration child's second intent axis is the reconciler's to close.**
+  A child declaring no `sqid_prefix` of its own *is* an `int_…` row, so the
+  generic lifecycle actions (`integrate/schema.py`, `IntegrationActionMutation`)
+  move it without the owning addon in the call path. They can only know the one
+  axis every Integration has, so any second axis a child adds — a live
+  desired-state, a subscription — is unset on rows that arrive that way. Two
+  independently writable intent axes need a declared precedence and one owner
+  that reconciles the other: let the child's reconciler select on the lifecycle
+  and drive its own axis from it, rather than select on its own axis and trust
+  something else to have set it. A child's runtime guards must equally honour the
+  lifecycle itself — test the one state that runs, not the one state you happen
+  to stop on. `messaging_integrate_whatsapp/tasks.py` is the reference:
+  `ensure_sessions` selects CONNECTED and reconciles the live desire to it, and
+  gates on `runtime_status` so a known-broken handshake is not redispatched
+  forever. Reconcile only when the axes disagree: the write has no dirty check and
+  publishes a subscription event, so an unconditional one broadcasts a no-op edit
+  per row per tick.
+- **A latching gate needs a reset the operator's verb owns.** A reconciler that
+  skips rows on `runtime_status=ERROR` disables itself until something clears the
+  error — so the repair verb must clear it *itself*, not rely on a lifecycle edge
+  doing it as a side effect. `set_lifecycle` returns early when the row already
+  reads the target, so a CONNECTED+ERROR row repaired by a verb that only declares
+  CONNECTED clears nothing and gets exactly the one dispatch the verb enqueues
+  directly; lose that (worker down, queue saturated, a restart) and the row is
+  skipped forever. `resume_whatsapp_pairing` reports OK unconditionally for this
+  reason. Keep the gate on the shared `runtime_status` rather than a private
+  health key: a private one is a further axis the generic verbs cannot clear, so
+  it reintroduces the same latch on the generic path.
+- **A method on `Integration` cannot be overridden by an Integration child.**
+  The composer emits a child as `class Child(Integration, AbstractChild)`, so the
+  parent's *abstract source* precedes the child's own source in the MRO and
+  shadows it — `angee.integrate.models.Integration` wins over
+  `angee.messaging.models.Channel`. A seam a child must override therefore belongs
+  on a base that follows the child source (`Bridge` owns `start_live` /
+  `stop_live` / `_next_sync_at` for exactly this reason), never on `Integration`.
+  A parent verb that needs child behaviour has to compose instead: reach the
+  concrete row by the primary key it shares (`sync_integration` is the
+  precedent) — and note that walking `bridge_models` fans a query across every
+  installed bridge's table, so it is not free.
 - **`hasura_model_resource` create `full_clean`s the input, so model + input defaults must agree.**
   The Hasura model-resource create path builds a dummy instance from the input and calls
   `full_clean()` before saving — two traps follow. (1) A `JSONField(default=dict)`

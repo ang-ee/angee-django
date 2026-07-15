@@ -11,12 +11,25 @@ is not itself a safeguard — Celery inherits the global limit rather than
 dropping it — so this must never run on a prefork worker; the threads-pool
 routing is the fact that makes it safe.
 
-``whatsapp.ensure_sessions`` is the beat reconciler on the default queue: any
-live-desired channel whose session is not running gets a fresh start with
-``expires`` of one tick, so a crashed worker resumes within a minute and a
+``whatsapp.ensure_sessions`` is the beat reconciler on the default queue: it
+reconciles every healthy connected channel to a running session, restarting one
+with ``expires`` of one tick, so a crashed worker resumes within a minute and a
 saturated or absent worker never accumulates a backlog. The cross-process lock
 probe is an optimization only — on the process-local lock floor the task's own
 acquire stays the gate.
+
+A session runs for a CONNECTED channel only. The lifecycle is the operator's
+declared connection intent and it is reachable from outside this addon — a
+channel *is* an ``integrate.Integration`` row, so the generic Integration
+actions move it by its ``int_`` sqid — so both other lifecycles stop the session
+here, in ``run_session``, and in the session's own wake loop alike. The
+reconciler closes the same loop in the CONNECTED direction, so the lifecycle is
+the one axis an operator has to get right; the live desire follows it.
+
+Neither teardown path writes the lifecycle back. A logout or a rejected
+duplicate is how far the handshake got, not what the operator asked for, so it
+lands on ``runtime_status``/``sync_progress`` and stops the session through the
+live desire the same call clears.
 """
 
 from __future__ import annotations
@@ -32,19 +45,20 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.integrate.locks import bridge_advisory_lock, bridge_is_locked
+from angee.integrate.models import IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.integrate.sync import bridge_progress_context
-from angee.messaging_integrate_whatsapp.backend import (
-    SESSION_START_EXPIRES,
-    WhatsAppChannelBackend,
+from angee.messaging_integrate_whatsapp.backend import WhatsAppChannelBackend
+from angee.messaging_integrate_whatsapp.client import (
+    DuplicateAccountRejected,
+    PairingState,
+    SessionLoggedOut,
 )
-from angee.messaging_integrate_whatsapp.client import SessionLoggedOut
 from angee.messaging_integrate_whatsapp.constants import (
     ENSURE_SESSIONS_TASK,
     RUN_SESSION_TASK,
     SESSION_QUEUE,
 )
 from angee.messaging_integrate_whatsapp.session import WhatsAppSession
-from angee.tasks.enqueue import enqueue_task
 from angee.tasks.locks import task_locks_are_cross_process
 
 logger = logging.getLogger(__name__)
@@ -79,6 +93,8 @@ def run_session(channel_id: Any) -> dict[str, Any]:
             return {"ok": True, "skipped": True, "reason": "not-a-whatsapp-channel"}
         if channel.subscription_state.get("desired") != channel.LiveState.LIVE:
             return {"ok": True, "skipped": True, "reason": "not-live-desired"}
+        if IntegrationLifecycle.from_value(channel.lifecycle) is not IntegrationLifecycle.CONNECTED:
+            return {"ok": True, "skipped": True, "reason": "not-connected"}
         with bridge_advisory_lock(channel) as acquired:
             if not acquired:
                 return {"ok": True, "skipped": True, "reason": "session-already-running"}
@@ -87,18 +103,23 @@ def run_session(channel_id: Any) -> dict[str, Any]:
                 try:
                     state = session.run()
                 except SessionLoggedOut as error:
-                    _record_logged_out(channel, error)
+                    _record_logged_out(channel, error, session=session)
                     return {"ok": False, "logged_out": True}
+                if state == PairingState.DUPLICATE_ACCOUNT:
+                    _record_duplicate_account(channel, session=session)
+                    return {"ok": False, "duplicate_account": True}
                 reporter.report(channel.SyncStage.IDLE, details={"pairing": {"state": state}})
         return {"ok": True, "state": state, "items": session.landed}
 
 
-def _record_logged_out(channel: Any, error: Exception) -> None:
-    """Persist the unlinked state: an explicit pairing reset is the only way back.
+def _record_logged_out(channel: Any, error: Exception, *, session: WhatsAppSession) -> None:
+    """Record a phone-side logout as a runtime failure and release the void claim.
 
-    Clearing the live desire keeps the reconciler from re-dispatching a session
-    that can only fail again; ``record_sync_error`` owns the error bookkeeping
-    (and leaves a live channel unscheduled through ``_next_sync_at``).
+    The lifecycle is untouched: the operator declared this channel connected and
+    a handshake outcome does not revoke that. ``record_sync_error`` puts the
+    outcome where it belongs (``runtime_status`` ERROR + the FAILED stage), which
+    is also what keeps ``ensure_sessions`` from re-dispatching a session that can
+    only fail again; the store is void, so it goes.
     """
 
     # Error bookkeeping first: while the desire still reads live,
@@ -106,12 +127,55 @@ def _record_logged_out(channel: Any, error: Exception) -> None:
     # stage isn't masked by a later no-op poll. Only then clear the desire —
     # merged under a row lock so it never clobbers a concurrent operator write.
     channel.record_sync_error(error, now=timezone.now())
-    channel.merge_subscription_state(desired=channel.LiveState.STOPPED)
+    channel.backend.release_account(desired=channel.LiveState.STOPPED)
+    session.discard_store()
+
+
+def _record_duplicate_account(channel: Any, *, session: WhatsAppSession) -> None:
+    """Record a rejected duplicate as a runtime failure and release the void claim.
+
+    Symmetric with :func:`_record_logged_out`, and for the same reason: being
+    told "another channel owns this account" is a handshake outcome, not the
+    operator changing their mind, so it lands on ``runtime_status`` and the
+    lifecycle stands. The store is discarded only if this session created the
+    pairing material it would delete
+    (:meth:`~.session.WhatsAppSession.discard_new_store`).
+    """
+
+    channel.record_sync_error(
+        DuplicateAccountRejected("Another channel already owns this WhatsApp account."),
+        now=timezone.now(),
+    )
+    channel.backend.release_account(desired=channel.LiveState.STOPPED)
+    session.discard_new_store()
 
 
 @shared_task(name=ENSURE_SESSIONS_TASK)
 def ensure_sessions() -> dict[str, Any]:
-    """Restart any live-desired channel whose session is not running (beat, 60s)."""
+    """Reconcile every healthy connected channel to a running session (beat, 60s).
+
+    Selects on the lifecycle — the operator's declared intent — and reconciles
+    the live desire to it through ``start_live``, rather than selecting on the
+    desire and trusting it to already agree. That closes the CONNECTED direction:
+    a channel connected through the *generic* ``markIntegrationConnected`` (every
+    Integration child answers to it by its ``int_`` sqid, without this addon in
+    the call path) declares lifecycle only, and nothing else would ever give it a
+    session.
+
+    ``runtime_status`` is the gate in the other direction. A channel whose last
+    handshake ended in a logout or a rejected duplicate keeps its CONNECTED
+    lifecycle — the operator still wants it — but reconciling it would redispatch
+    a session that can only fail the same way. It waits for an operator repair to
+    clear the error, and every repair verb does: ``resumeWhatsappPairing`` (which
+    ``resetWhatsappPairing`` ends in) reports OK itself, and the generic
+    ``markIntegrationConnected`` clears it through ``connect()``.
+
+    The live desire is reconciled only when the two axes disagree. ``start_live``
+    has no dirty check — it takes a row lock, writes, and publishes
+    ``channelChanged`` — so writing it every tick would broadcast a no-op edit per
+    healthy channel per minute, and would force ``desired=LIVE`` back onto a row
+    something else had just stopped.
+    """
 
     model = apps.get_model("messaging", "Channel")
     dispatched = 0
@@ -119,18 +183,17 @@ def ensure_sessions() -> dict[str, Any]:
     with system_context(reason="whatsapp.ensure_sessions"):
         channels = model._default_manager.filter(
             backend_class=WhatsAppChannelBackend.key,
-            subscription_state__desired=model.LiveState.LIVE.value,
+            lifecycle=str(IntegrationLifecycle.CONNECTED),
+            runtime_status=str(IntegrationRuntimeStatus.OK),
         )
         cross_process = task_locks_are_cross_process()
         for channel in channels:
             if cross_process and bridge_is_locked(channel):
                 continue
-            enqueue_task(
-                RUN_SESSION_TASK,
-                kwargs={"channel_id": channel.pk},
-                queue=SESSION_QUEUE,
-                expires=SESSION_START_EXPIRES,
-            )
+            if channel.subscription_state.get("desired") != channel.LiveState.LIVE:
+                channel.start_live()
+            else:
+                channel.backend.start_live()
             dispatched += 1
             # A syncing stage with no held lock (probe-visible backends only)
             # means a session died or never got a pool slot — make it visible.

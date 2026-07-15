@@ -1,8 +1,14 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
-import { MenuTree, type BaseMenuItem, type ChromeMenuItem } from "@angee/ui";
+import {
+  formViewRecordActionsSlot,
+  MenuTree,
+  type BaseMenuItem,
+  type ChromeMenuItem,
+} from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import integrate from "./index";
+import { INTEGRATION_MODEL } from "./IntegrationLifecycleActions";
 
 describe("integrate addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
@@ -176,5 +182,30 @@ describe("integrate addon manifest", () => {
     ] as const) {
       expect(integrate.icons?.[name]).toBeDefined();
     }
+  });
+
+  test("contributes its lifecycle verbs against the MTI parent every subtype inherits", () => {
+    // Contributed against `integrate.Integration` rather than globally, so each
+    // subtype's form inherits them through its canonical label and a subtype can
+    // specialize one by id without this addon naming the subtype.
+    const integrationSlot = formViewRecordActionsSlot(INTEGRATION_MODEL);
+    const recordActions = (integrate.slots ?? []).filter(
+      (entry) => entry.slot === integrationSlot,
+    );
+
+    expect(recordActions.map((entry) => entry.id)).toEqual([
+      "integrate.lifecycle.pause",
+      "integrate.lifecycle.resume",
+      "integrate.lifecycle.disconnect",
+    ]);
+  });
+
+  test("ships no Connect verb — a handshake belongs to the addon that owns the vendor", () => {
+    // `mark_integration_connected` is a credential-free flag flip, correct only
+    // as the inverse of a pause. Contributing it as Connect shadowed the real
+    // OAuth/CardDAV/WhatsApp handshakes, so it backs Resume and nothing else.
+    const ids = (integrate.slots ?? []).map((entry) => entry.id);
+    expect(ids).not.toContain("integrate.lifecycle.connect");
+    expect(integrate.i18n?.integrate?.["lifecycle.connect"]).toBeUndefined();
   });
 });

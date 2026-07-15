@@ -27,7 +27,13 @@ from angee.addons import addon_contract
 from angee.fs import GENERATED_SENTINEL
 
 CORE_WEB_PACKAGES: tuple[str, ...] = ("@angee/app", "@angee/ui")
-"""Rendered framework packages every host must scan and compose against."""
+"""Rendered framework packages every host must scan and compose against.
+
+Scan and compose is all this drives: the Tailwind ``@source`` list and the
+codegen document roots. A package that renders nothing and declares no documents
+belongs to the host's ``package.json``, not here — listing it would contribute an
+empty scan and an empty document root.
+"""
 
 WEB_PACKAGE_RE = re.compile(r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
 

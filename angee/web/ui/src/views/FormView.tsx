@@ -33,6 +33,7 @@ import {
 import {
   useFormOverride,
   useSlot,
+  type SlotContribution,
   } from "../runtime";
 import {
   useModelMetadata,
@@ -75,7 +76,7 @@ import {
 import {
   slugify,
 } from "../widgets";
-import { canonicalOptionValue, relationValueId } from "../widgets/types";
+import { canonicalOptionValue, optionToken, relationValueId } from "../widgets/types";
 import { dateFromUnknown, formatDate } from "../widgets/date-format";
 import {
   fieldWidgetId,
@@ -253,6 +254,57 @@ export type FormSubmit = (
 export const FORM_VIEW_RECORD_CHROME_SLOT = "form-view.record-chrome";
 
 /**
+ * Slot for record verbs rendered directly beside the declared Actions menu.
+ * Contributions receive the same saved-record context as passive record chrome,
+ * but remain in the action cluster instead of the right-aligned chrome cluster.
+ *
+ * Contributed content is *rendered*, so a verb here owns its own hooks: it fires
+ * whatever mutation it likes (`useRecordChromeActionMutation`) and can mount its
+ * own UX — a vendor pairing dialog. A verb the form can declare instead belongs
+ * in the Actions menu as a contributed `<Action>` (see
+ * {@link formViewSectionsSlot}), which owns confirm/prompt/pending/toasts.
+ * That is the seam: what the `<Action>` contract can express is declared, and
+ * what it cannot is rendered here.
+ */
+export const FORM_VIEW_RECORD_ACTIONS_SLOT = "form-view.record-actions";
+
+/**
+ * The record-verb slot key an addon contributes a rendered verb to.
+ *
+ * Keys name one form in increasing specificity: the model's canonical MTI parent,
+ * the model itself, then the model plus each impl value it carries (a resource may
+ * name more than one impl column). `FormView` resolves all of them, a more
+ * specific entry replacing a less specific one of the same id. So the addon that
+ * owns a parent model contributes a verb once against it and reaches every
+ * subtype, and the addon that owns one impl specializes that verb for its own rows
+ * only, by declared specificity rather than by addon array order.
+ *
+ * `implValue` is the row's own `ImplClassField` key (the resource metadata names
+ * the columns that carry one). Both sides pass it through here, so the key's
+ * casing rule ({@link optionToken}: an enum reads back as `WHATSAPP`, an addon
+ * spells `whatsapp`) is applied once, here. Omit it for a model-scoped key; a
+ * value that carries no key throws rather than quietly *becoming* that key, which
+ * would displace the verb for every row of the model and cap the model at one
+ * vendor.
+ */
+export function formViewRecordActionsSlot(
+  resource: string,
+  implValue?: string,
+): string {
+  const key = `${FORM_VIEW_RECORD_ACTIONS_SLOT}:${resource}`;
+  if (implValue === undefined) return key;
+  const impl = optionToken(implValue);
+  if (!impl) {
+    throw new Error(
+      `Record-verb slot for "${resource}" was given an impl value that carries no ` +
+        `key (${JSON.stringify(implValue)}); pass the ImplClassField key, or omit ` +
+        "it for the model-scoped key.",
+    );
+  }
+  return `${key}/${impl}`;
+}
+
+/**
  * Model-scoped slot for addon-contributed form sections. The addon that owns a
  * model's `ImplClassField` impls contributes the section that impl enables (e.g.
  * the OIDC login tab the iam addon adds to integrate's OAuth client form), gating
@@ -260,10 +312,22 @@ export const FORM_VIEW_RECORD_CHROME_SLOT = "form-view.record-chrome";
  * agnostic to the contributing addon's fields and a project without that addon
  * composes cleanly. Contributed `<Group>`/`<Action>` content parses like declared
  * children, so the fields join the form's values, selection, and submit.
+ *
+ * Contributed content is parsed, not rendered, so its props are static: a
+ * contributed `<Action>` can carry a declarative `set` patch but not a `run`
+ * callback, which would need a hook the contributing addon cannot call here. A
+ * verb that fires a mutation is contributed to
+ * {@link formViewRecordActionsSlot} as a rendered component instead.
  */
 export const FORM_VIEW_SECTIONS_SLOT = "form-view.sections";
 
-/** The model-scoped section-slot name an addon contributes form groups/actions to. */
+/**
+ * The model-scoped section-slot name an addon contributes form groups/actions to.
+ *
+ * Sections resolve the form's own model only — deliberately, unlike the
+ * record-verb slot: a contributed section carries *fields*, and a field exists on
+ * the subtype that declares it, not on every sibling of an MTI parent.
+ */
 export function formViewSectionsSlot(resource: string): string {
   return `${FORM_VIEW_SECTIONS_SLOT}:${resource}`;
 }
@@ -353,6 +417,12 @@ export function FormView({
   const modelMetadata = useModelMetadata(resource);
   const schemaMetadata = useSchemaFieldMetadata();
   const formOverride = useFormOverride(resource);
+  const dataResource = modelMetadata?.resource ?? null;
+  // The topmost concrete MTI ancestor this model reports, so the addon that owns
+  // a parent model contributes its verbs against it once and reaches every
+  // subtype's form — instead of contributing globally and re-deriving the MTI
+  // mapping in a predicate on every form in the app.
+  const canonicalResource = dataResource?.canonicalLabel ?? resource;
   // Host/addon-contributed record chrome (star/share/…); base ships none.
   const recordChrome = useSlot(FORM_VIEW_RECORD_CHROME_SLOT);
   // Addon-contributed form sections for this model (e.g. the OIDC login tab the
@@ -491,10 +561,15 @@ export function FormView({
     // data to read (it is guaranteed a readable String scalar by the metadata).
     const representation = modelMetadata?.recordRepresentation;
     if (representation && modelMetadata.fields[representation]) paths.add(representation);
+    // `recordActionSlotKeys` reads each impl column off the loaded record, so
+    // select them here — the form declares its own fields, and the resource's
+    // impl columns are not among them unless the form happened to declare one.
+    for (const field of modelMetadata?.resource?.implFields ?? []) {
+      if (modelMetadata?.fields[field]) paths.add(field);
+    }
     return [...paths];
   }, [formFields, isCreate, modelMetadata, relationByField, returning, schemaMetadata]);
 
-  const dataResource = modelMetadata?.resource ?? null;
   const refineFields = React.useMemo(
     () => refineFieldsFromPaths(selection),
     [selection],
@@ -591,11 +666,44 @@ export function FormView({
         ? null
         : {
             resource,
+            dataProviderName: dataResource?.schemaName,
+            canonicalResource,
             recordId: rowPublicId(displayRecord) ?? id,
             record: displayRecord ?? null,
           },
-    [displayRecord, id, isCreate, resource],
+    [canonicalResource, dataResource, displayRecord, id, isCreate, resource],
   );
+
+  // The record-verb slot keys this form resolves, least specific first: the
+  // model's canonical MTI parent, then the model itself, then the model plus each
+  // impl key the loaded record carries (the resource metadata names the columns
+  // that hold one). The record's impl value arrives with the record, so these
+  // re-resolve as it loads — the keys are data, not hooks.
+  const recordActionSlotKeys = React.useMemo(() => {
+    const keys = [formViewRecordActionsSlot(canonicalResource)];
+    if (canonicalResource !== resource) {
+      keys.push(formViewRecordActionsSlot(resource));
+    }
+    for (const field of dataResource?.implFields ?? []) {
+      const impl = optionToken(displayRecord?.[field]);
+      if (impl) keys.push(formViewRecordActionsSlot(resource, impl));
+    }
+    return keys;
+  }, [canonicalResource, dataResource, displayRecord, resource]);
+  // Host/addon-contributed record verbs rendered beside the Actions menu. An
+  // entry under a more specific key replaces the entry of the same id from a less
+  // specific one — a subtype, or one vendor's impl, specializing an inherited
+  // verb by declared specificity rather than by addon array order, and scoped so
+  // the parent's own form keeps its own verb. `sequence` orders the merged
+  // result, so a specialized verb keeps its place among the inherited ones.
+  const recordActionEntries = useSlot(recordActionSlotKeys);
+  const recordActions = React.useMemo(() => {
+    const byId = new Map<string, SlotContribution>();
+    for (const entry of recordActionEntries) byId.set(entry.id, entry);
+    return [...byId.values()].sort(
+      (left, right) => (left.sequence ?? 0) - (right.sequence ?? 0),
+    );
+  }, [recordActionEntries]);
 
   // Editable document lines (F6): active only when the resource metadata carries a
   // `linesResource`, on an existing record — the `<resource>_save` diff-apply is
@@ -1230,6 +1338,11 @@ export function FormView({
               reload={reload}
               deleteAction={visibleDeleteAction}
             />
+          ) : null}
+          {recordChromeContext ? (
+            <RecordChromeProvider value={recordChromeContext}>
+              <SlotOutlet entries={recordActions} />
+            </RecordChromeProvider>
           ) : null}
         </div>
         <div className="min-w-2 flex-1" />

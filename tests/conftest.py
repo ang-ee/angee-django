@@ -291,7 +291,7 @@ def make_integration(
             "vendor": vendor,
             "credential": credential,
             "owner": user,
-            "lifecycle": "active",
+            "lifecycle": "connected",
             **attrs,
         }
         field_names = {field.name for field in model._meta.fields}

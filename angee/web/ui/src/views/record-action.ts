@@ -1,15 +1,12 @@
 import * as React from "react";
 import { runActionResult, useActionMutation } from "@angee/refine";
-import {
-  refineInvalidationParams,
-  resourceInvalidationTargets,
-  useSchemaFieldMetadata,
-} from "@angee/metadata";
+import { useResourceInvalidates } from "@angee/metadata";
 
 import {
   useActionResultRun,
   type ActionResultRunOptions,
 } from "./action-result-run";
+import { useRecordChromeContext } from "./record-chrome-context";
 import type { ActionContext, ActionResult } from "./page";
 
 export type RecordActionRunner = (
@@ -80,15 +77,7 @@ export function useRecordActionMutation<TField extends string = string>(
   field: TField,
   options?: UseRecordActionOptions,
 ): [RecordAction, { fetching: boolean; error: Error | null }] {
-  const schemaMetadata = useSchemaFieldMetadata();
-  const invalidates = React.useMemo(
-    () =>
-      resourceInvalidationTargets(
-        schemaMetadata,
-        options?.invalidateModels ?? [],
-      ).map(refineInvalidationParams),
-    [schemaMetadata, options?.invalidateModels],
-  );
+  const invalidates = useResourceInvalidates(options?.invalidateModels);
   const [mutate, state] = useActionMutation<TField>(field, {
     invalidates,
   });
@@ -118,4 +107,83 @@ export function useRecordActionMutation<TField extends string = string>(
     [mutate, settleActionResult, settleOptions],
   );
   return [useRecordAction(run, options), state];
+}
+
+export interface UseActionResultMutationOptions {
+  /** Angee model labels whose refine caches this verb moves. */
+  invalidateModels?: readonly string[];
+  /** Schema that owns the target record; defaults to the ambient data provider. */
+  dataProviderName?: string;
+}
+
+export type ActionResultMutation = (id: string) => Promise<void>;
+
+/**
+ * Fire one generated single-id `ActionResult` mutation and settle its outcome.
+ *
+ * The ceremony a non-`<Action>` verb needs: resolve the mutated model labels'
+ * refine `invalidates` through `@angee/metadata`'s {@link useResourceInvalidates},
+ * fire by id, and settle through the shared `ActionResult` owner — which toasts
+ * the server's own refusal message, including the in-band reasons an `ok=false`
+ * outcome carries (it resolves rather than throws, so a bare `.catch()` would
+ * surface nothing). A caller therefore renders no failure state of its own.
+ *
+ * Bound to no context, so it serves a verb rendered anywhere. A verb rendered in
+ * record chrome takes {@link useRecordChromeActionMutation}, which reads the
+ * record's own facts from that context instead of restating them here.
+ */
+export function useActionResultMutation<TField extends string = string>(
+  field: TField,
+  options: UseActionResultMutationOptions = {},
+): [ActionResultMutation, { fetching: boolean; error: Error | null }] {
+  const { dataProviderName } = options;
+  const invalidates = useResourceInvalidates(options.invalidateModels);
+  const [mutate, state] = useActionMutation<TField>(field, {
+    ...(dataProviderName !== undefined ? { dataProviderName } : {}),
+    invalidates,
+  });
+  const settle = useActionResultRun();
+  const run = React.useCallback<ActionResultMutation>(
+    async (id) => {
+      await settle(() => mutate(id));
+    },
+    [mutate, settle],
+  );
+  return [run, state];
+}
+
+export interface UseRecordChromeActionMutationOptions {
+  /**
+   * Further Angee model labels this verb writes. The record's own model and its
+   * canonical MTI parent are always invalidated, so only name a *third* model.
+   */
+  invalidateModels?: readonly string[];
+}
+
+/**
+ * Run one generated single-id `ActionResult` mutation from a record-chrome slot.
+ *
+ * {@link useRecordActionMutation} binds a form's *declared* `<Action run>` to its
+ * `ActionContext` (record id + `refresh`); a contribution to a record-verb or
+ * record-chrome slot has a `RecordChromeContext` instead. This reads that context
+ * itself — the record's owning schema, its model, and the canonical MTI parent
+ * whose caches the verb also moves — so a contributing addon declares only the
+ * field it fires and never re-spells the mapping. It is
+ * {@link useActionResultMutation} with those facts filled in from the context.
+ */
+export function useRecordChromeActionMutation<TField extends string = string>(
+  field: TField,
+  options: UseRecordChromeActionMutationOptions = {},
+): [ActionResultMutation, { fetching: boolean; error: Error | null }] {
+  const { canonicalResource, dataProviderName, resource } =
+    useRecordChromeContext();
+  // Derived during render: `useResourceInvalidates` keys on the labels'
+  // contents, so a fresh array identity here costs nothing downstream.
+  const invalidateModels = [
+    ...new Set([resource, canonicalResource, ...(options.invalidateModels ?? [])]),
+  ];
+  return useActionResultMutation<TField>(field, {
+    ...(dataProviderName !== undefined ? { dataProviderName } : {}),
+    invalidateModels,
+  });
 }

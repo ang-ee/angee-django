@@ -11,6 +11,7 @@ from django.db import models
 from rebac.resources import model_resource_type
 from strawberry.utils.str_converters import to_camel_case
 
+from angee.base.impl import ImplClassField
 from angee.base.refs import canonical_record_model
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.resource_fields import (
@@ -254,6 +255,7 @@ class DataResourceMetadata:
     canonical_label: str | None = None
     row_model: str = "server"
     record_representation: str | None = None
+    impl_fields: tuple[str, ...] = ()
     capabilities: tuple[str, ...] = ()
     fields: tuple[DataResourceFieldMetadata, ...] = ()
     filter_fields: tuple[str, ...] = ()
@@ -318,6 +320,7 @@ class DataResourceMetadata:
                     other.record_representation,
                 ),
             ),
+            impl_fields=self.impl_fields or other.impl_fields,
             capabilities=_merge_capabilities(self.capabilities, other.capabilities),
             fields=merge_resource_fields(self.fields, other.fields),
             filter_fields=self.filter_fields or other.filter_fields,
@@ -470,6 +473,7 @@ def make_data_resource_metadata(
         canonical_label=canonical_record_model(model)._meta.label if model is not None else None,
         row_model=row_model,
         record_representation=record_representation,
+        impl_fields=_impl_fields(model, node_type, active_fields),
         capabilities=capabilities,
         fields=active_fields,
         filter_fields=filter_fields,
@@ -651,6 +655,34 @@ def _is_display_scalar(field: DataResourceFieldMetadata | None) -> bool:
     """Return whether ``field`` is suitable as a compact record label."""
 
     return field is not None and field.kind == "scalar" and field.scalar == "String"
+
+
+def _impl_fields(
+    model: type[models.Model] | None,
+    node_type: type | None,
+    fields: tuple[DataResourceFieldMetadata, ...],
+) -> tuple[str, ...]:
+    """Return this resource's readable ``ImplClassField`` column names, sorted.
+
+    The impl key a row stores is the declared fact a frontend contribution varies
+    on per row, so naming the columns that carry one keeps the console from
+    hardcoding a model's impl column. Only columns this resource projects are
+    named — an impl column the node surface does not expose cannot be read off a
+    row. A model may carry several (an MTI parent's and its child's), so this is
+    a set, sorted for a deterministic artifact.
+    """
+
+    if model is None:
+        return ()
+    readable = {field.name for field in fields}
+    names = {
+        resource_wire_field_name(node_type, field.name) or field.name
+        for field in model._meta.get_fields()
+        if isinstance(field, ImplClassField)
+    }
+    return tuple(sorted(names & readable))
+
+
 def _metadata_key(name: str) -> str:
     """Return the camelCase JSON key for one metadata-envelope dataclass field.
 

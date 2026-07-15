@@ -9,7 +9,9 @@ const actionMocks = vi.hoisted(() => ({
   mutationOptions: null as Record<string, unknown> | null,
   dialogProps: null as Record<string, unknown> | null,
   queryArgs: null as { variables: unknown; options: unknown } | null,
-  syncProgress: null as unknown,
+  pairing: { state: "STARTING", qr: "", jid: "", phone: "" } as Record<string, string>,
+  actions: new Map<string, ReturnType<typeof vi.fn>>(),
+  settled: vi.fn(async (fire: () => Promise<unknown>) => fire()),
 }));
 
 vi.mock("@angee/refine", () => ({
@@ -20,7 +22,7 @@ vi.mock("@angee/refine", () => ({
   useAuthoredQuery: (_document: unknown, variables: unknown, options: unknown) => {
     actionMocks.queryArgs = { variables, options };
     return {
-      data: { channels_by_pk: { id: "chn_1", sync_progress: actionMocks.syncProgress } },
+      data: { whatsapp_pairing: actionMocks.pairing },
       fetching: false,
       error: null,
       refetch: () => undefined,
@@ -29,6 +31,14 @@ vi.mock("@angee/refine", () => ({
 }));
 
 vi.mock("@angee/ui", () => ({
+  useActionResultRun: () => actionMocks.settled,
+  // The pairing pane this action opens fires its lifecycle verbs through the
+  // shared `@angee/ui` owner, which maps invalidation and settles the outcome.
+  useActionResultMutation: (field: string) => {
+    const action = actionMocks.actions.get(field) ?? vi.fn(async () => undefined);
+    actionMocks.actions.set(field, action);
+    return [action, { fetching: false, error: null }];
+  },
   Button: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
     <button type="button" {...props}>
       {children}
@@ -65,7 +75,6 @@ vi.mock("./i18n", () => ({
 }));
 
 import { ConnectWhatsappChannelAction } from "./ConnectWhatsappChannelAction";
-import { pairingFromSyncProgress } from "./documents";
 
 describe("ConnectWhatsappChannelAction", () => {
   afterEach(cleanup);
@@ -75,12 +84,17 @@ describe("ConnectWhatsappChannelAction", () => {
     actionMocks.mutationOptions = null;
     actionMocks.dialogProps = null;
     actionMocks.queryArgs = null;
-    actionMocks.syncProgress = null;
+    actionMocks.pairing = { state: "STARTING", qr: "", jid: "", phone: "" };
+    actionMocks.actions.clear();
+    actionMocks.settled.mockClear();
   });
 
   test("connects with a trimmed name, then opens the live pairing pane", async () => {
-    actionMocks.syncProgress = {
-      details: { pairing: { state: "awaiting_scan", qr: "data:image/png;base64,QR" } },
+    actionMocks.pairing = {
+      state: "AWAITING_SCAN",
+      qr: "data:image/png;base64,QR",
+      jid: "",
+      phone: "",
     };
     render(<ConnectWhatsappChannelAction />);
 
@@ -100,8 +114,11 @@ describe("ConnectWhatsappChannelAction", () => {
   });
 
   test("shows the paired state with the linked phone", async () => {
-    actionMocks.syncProgress = {
-      details: { pairing: { state: "paired", phone: "+4917000001" } },
+    actionMocks.pairing = {
+      state: "PAIRED",
+      qr: "",
+      jid: "4917000001@s.whatsapp.net",
+      phone: "+4917000001",
     };
     render(<ConnectWhatsappChannelAction />);
     fireEvent.click(screen.getByRole("button", { name: /channel.whatsapp.button/ }));
@@ -109,15 +126,5 @@ describe("ConnectWhatsappChannelAction", () => {
 
     await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
     expect(screen.getByText(/channel.whatsapp.paired/).textContent).toContain("+4917000001");
-  });
-});
-
-describe("pairingFromSyncProgress", () => {
-  test("narrows the untyped progress JSON and defaults to starting", () => {
-    expect(pairingFromSyncProgress(undefined)).toEqual({ state: "starting" });
-    expect(pairingFromSyncProgress({ details: {} })).toEqual({ state: "starting" });
-    expect(
-      pairingFromSyncProgress({ details: { pairing: { state: "paired", jid: "1@s.whatsapp.net" } } }),
-    ).toEqual({ state: "paired", jid: "1@s.whatsapp.net" });
   });
 });

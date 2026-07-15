@@ -45,10 +45,10 @@ class IntegrationImpl(ImplBase):
 
 
 class NullIntegrationImpl(IntegrationImpl):
-    """Neutral implementation for a draft row with no chosen implementation."""
+    """Neutral implementation for a row that has chosen none."""
 
     key = "none"
-    label = "Draft"
+    label = "None"
 
 
 class BridgeImpl(IntegrationImpl):

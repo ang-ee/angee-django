@@ -129,12 +129,25 @@ export function ConnectOAuthButton({
   );
 }
 
+/**
+ * Whether an OAuth Connect has a credential to author for this row.
+ *
+ * Only a row with no credential does: `credential === null` is the
+ * selected-and-empty read, while an unselected `credential` reads `undefined` and
+ * means *unknown*, never *absent* — so a list that does not project it offers no
+ * Connect. A row that still holds its credential reconnects through Resume
+ * instead; `lifecycle` alone never means "needs OAuth".
+ *
+ * Known gap: this cannot tell whether the row's vendor connects through OAuth at
+ * all, so a credential-less non-OAuth integration (a WhatsApp channel, whose
+ * pairing store *is* its credential and which therefore never carries a
+ * `Credential` row) is still offered a Connect that its impl has no client for.
+ * The deciding fact is `IntegrationImpl.connect_oauth_client` — server-side, and
+ * exposed on neither `Integration` nor `Vendor` (`OAuthClient` deliberately has
+ * no vendor FK). Gating this honestly needs that fact emitted onto the row first.
+ */
 export function canConnectRecord(row: Record<string, unknown>): boolean {
-  return row.credential === null || normalizeValue(row.lifecycle) === "draft";
-}
-
-function normalizeValue(value: unknown): string {
-  return String(value ?? "").trim().toLowerCase();
+  return row.credential === null;
 }
 
 export function parseManualCode(

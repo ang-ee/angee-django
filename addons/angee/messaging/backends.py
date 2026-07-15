@@ -197,7 +197,7 @@ class ManualChannelBackend(ChannelBackend):
 
     Keeps ``ANGEE_CHANNEL_BACKEND_CLASSES`` non-empty when no source addon is
     installed (``ImplClassField`` requires a non-empty registry), so the GraphQL
-    enum is never empty and a draft channel always has a selectable backend.
+    enum is never empty and a new channel always has a selectable backend.
     """
 
     key = "manual"

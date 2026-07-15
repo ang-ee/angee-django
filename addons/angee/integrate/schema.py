@@ -746,7 +746,7 @@ def _current_user_integration(
     vendor_slug: str,
     impl_class: str,
 ) -> Any:
-    """Return the current user's target integration, creating the draft selector row when needed."""
+    """Return the user's target integration, creating a disconnected row when needed."""
 
     if integration_id is not None:
         integration = resolve_action_target(
@@ -763,7 +763,7 @@ def _current_user_integration(
         raise ValueError("connectIntegration requires integrationId or vendorSlug and implClass.")
     impl_key = Integration.impl_key_for("impl_class", impl_class)
     vendor = _vendor_by_slug(vendor_key)
-    return Integration.objects.draft_for(user, vendor=vendor, impl_class=impl_key)
+    return Integration.objects.disconnected_for(user, vendor=vendor, impl_class=impl_key)
 
 
 def _attach_completed_integration(integration_sqid: str, user: Any, credential: Any) -> None:
@@ -1408,7 +1408,7 @@ class IntegrationCredentialMutation:
         if oauth_credential.user_id != user.pk:
             raise PermissionDenied("Credential does not belong to the current user.")
         vendor = _vendor_by_slug(vendor_slug)
-        integration = Integration.objects.activate_from_credential(
+        integration = Integration.objects.connect_from_credential(
             user,
             vendor=vendor,
             credential=oauth_credential,
@@ -1423,12 +1423,16 @@ class IntegrationActionMutation:
     # Follow-up: surface these declared lifecycle actions as console row buttons
     # once the action metadata registry lands.
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def activate_integration(self, id: PublicID) -> ActionResult:
-        """Move an integration to ACTIVE through its guarded transition."""
+    def mark_integration_connected(self, id: PublicID) -> ActionResult:
+        """Move an integration to CONNECTED through its guarded transition."""
 
-        with action_target(Integration, id, reason="integrate.graphql.activate_integration") as integration:
-            integration.activate()
-        return ActionResult(ok=True, message="Activated integration.")
+        with action_target(
+            Integration,
+            id,
+            reason="integrate.graphql.mark_integration_connected",
+        ) as integration:
+            integration.connect()
+        return ActionResult(ok=True, message="Connected integration.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def pause_integration(self, id: PublicID) -> ActionResult:
@@ -1439,12 +1443,16 @@ class IntegrationActionMutation:
         return ActionResult(ok=True, message="Paused integration.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def disable_integration(self, id: PublicID) -> ActionResult:
-        """Move an integration to DISABLED through its guarded transition."""
+    def mark_integration_disconnected(self, id: PublicID) -> ActionResult:
+        """Move an integration to DISCONNECTED through its guarded transition."""
 
-        with action_target(Integration, id, reason="integrate.graphql.disable_integration") as integration:
-            integration.disable()
-        return ActionResult(ok=True, message="Disabled integration.")
+        with action_target(
+            Integration,
+            id,
+            reason="integrate.graphql.mark_integration_disconnected",
+        ) as integration:
+            integration.disconnect()
+        return ActionResult(ok=True, message="Disconnected integration.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def sync_integration(self, id: PublicID) -> ActionResult:

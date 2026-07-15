@@ -9,11 +9,12 @@ from types import SimpleNamespace
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
-from django.db import connection, models
+from django.db import connection, migrations, models
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.state import ModelState, ProjectState
 
 from angee.addons import AddonContract, AddonMigration
+from angee.base.fields import StateField
 from angee.compose.migrations import RuntimeMigrations
 
 
@@ -215,10 +216,7 @@ class Migration(migrations.Migration):
     materializer.materialize()
 
     text = (runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py").read_text(encoding="utf-8")
-    assert (
-        '("iam", "0004_current") if dependency == ("iam", "__latest__")'
-        in text
-    )
+    assert '("iam", "0004_current") if dependency == ("iam", "__latest__")' in text
 
 
 def test_materialization_is_idempotent(runtime_migration_probe) -> None:
@@ -427,6 +425,192 @@ class Migration(migrations.Migration):
     assert not (runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py").exists()
 
 
+def _integration_lifecycle_state(
+    choices: tuple[tuple[str, str], ...],
+) -> ProjectState:
+    state = ProjectState()
+    state.add_model(
+        ModelState(
+            "integrate",
+            "Integration",
+            [
+                ("id", models.AutoField(primary_key=True)),
+                ("lifecycle", models.CharField(choices=choices, max_length=32)),
+            ],
+        )
+    )
+    return state
+
+
+def test_integrate_lifecycle_values_migration_applies_on_the_legacy_marker_values() -> None:
+    """The predicate keys on marker values, so a later fourth value is not a landmine."""
+
+    module = importlib.import_module("angee.integrate.runtime_migrations.integration_lifecycle_values")
+    legacy = _integration_lifecycle_state(
+        (
+            ("draft", "Draft"),
+            ("active", "Active"),
+            ("paused", "Paused"),
+            ("disabled", "Disabled"),
+        )
+    )
+    current = _integration_lifecycle_state(
+        (
+            ("disconnected", "Disconnected"),
+            ("connected", "Connected"),
+            ("paused", "Paused"),
+        )
+    )
+    # The whole point of keying on markers: a project that adds a fourth
+    # lifecycle value later still reads as already-migrated. Against an
+    # exact-tuple predicate this raised, failing `angee build` forever for every
+    # project that had not yet materialized the migration — unrepairable, because
+    # editing the module raises "source digest changed" for every project that had.
+    extended = _integration_lifecycle_state(
+        (
+            ("disconnected", "Disconnected"),
+            ("connected", "Connected"),
+            ("paused", "Paused"),
+            ("erroring", "Erroring"),
+        )
+    )
+    partial = _integration_lifecycle_state(
+        (
+            ("disconnected", "Disconnected"),
+            ("active", "Active"),
+            ("paused", "Paused"),
+        )
+    )
+
+    assert module.applies(ProjectState()) is False
+    assert module.applies(legacy) is True
+    assert module.applies(current) is False
+    assert module.applies(extended) is False
+    with pytest.raises(ImproperlyConfigured, match="partial Integration lifecycle transition"):
+        module.applies(partial)
+
+    migrated = module.Migration("probe", "integrate").mutate_state(legacy)
+    field = migrated.models["integrate", "integration"].fields["lifecycle"]
+    assert tuple(value for value, _label in field.choices) == module.CURRENT_VALUES
+    assert field.max_length == 12
+    assert isinstance(module.Migration.operations[0], migrations.AlterField)
+    assert isinstance(module.Migration.operations[1], migrations.RunPython)
+    assert all(operation.reversible for operation in module.Migration.operations)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_integrate_lifecycle_values_migration_rewrites_existing_rows() -> None:
+    module = importlib.import_module("angee.integrate.runtime_migrations.integration_lifecycle_values")
+
+    class LegacyIntegrationLifecycle(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        ACTIVE = "active", "Active"
+        PAUSED = "paused", "Paused"
+        DISABLED = "disabled", "Disabled"
+
+    class LegacyIntegration(models.Model):
+        lifecycle = StateField(
+            choices_enum=LegacyIntegrationLifecycle,
+            default=LegacyIntegrationLifecycle.DRAFT,
+            max_length=8,
+        )
+
+        class Meta:
+            app_label = "tests"
+            db_table = "test_legacy_integration_lifecycle_values"
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(LegacyIntegration)
+    historical_apps = SimpleNamespace(get_model=lambda *args: LegacyIntegration)
+    try:
+        LegacyIntegration._base_manager.bulk_create(
+            [
+                LegacyIntegration(lifecycle="draft"),
+                LegacyIntegration(lifecycle="active"),
+                LegacyIntegration(lifecycle="paused"),
+                LegacyIntegration(lifecycle="disabled"),
+            ]
+        )
+        with connection.schema_editor() as schema_editor:
+            module.rewrite_lifecycle_values(historical_apps, schema_editor)
+
+        table = connection.ops.quote_name(LegacyIntegration._meta.db_table)
+        lifecycle = connection.ops.quote_name("lifecycle")
+        identifier = connection.ops.quote_name("id")
+        with connection.cursor() as cursor:
+            cursor.execute(f"SELECT {lifecycle} FROM {table} ORDER BY {identifier}")
+            values = [row[0] for row in cursor.fetchall()]
+        assert values == ["disconnected", "connected", "paused", "disconnected"]
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(LegacyIntegration)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_integrate_lifecycle_values_migration_restores_legacy_values_that_fit_the_narrow_column() -> None:
+    """Reversing rewrites data back to legacy values before the column narrows again.
+
+    Operations reverse last-first, so this rewrite runs while the column is still
+    ``max_length=12`` and must leave only values the ``max_length=8`` column the
+    reverse ``AlterField`` restores can hold. A ``noop`` reverse left
+    ``disconnected`` (12 chars) in place: Postgres then fails the reverse
+    ``AlterField`` with "value too long for type character varying(8)" (verified
+    against Postgres 17), while SQLite ignores the width and leaves every row
+    failing the legacy ``StateField``'s ``to_python``.
+    """
+
+    module = importlib.import_module("angee.integrate.runtime_migrations.integration_lifecycle_values")
+
+    class LegacyIntegrationLifecycle(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        ACTIVE = "active", "Active"
+        PAUSED = "paused", "Paused"
+        DISABLED = "disabled", "Disabled"
+
+    class ReversedIntegration(models.Model):
+        lifecycle = StateField(
+            choices_enum=LegacyIntegrationLifecycle,
+            default=LegacyIntegrationLifecycle.DRAFT,
+            max_length=8,
+        )
+
+        class Meta:
+            app_label = "tests"
+            db_table = "test_reversed_integration_lifecycle_values"
+
+    legacy_width = ReversedIntegration._meta.get_field("lifecycle").max_length
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(ReversedIntegration)
+    historical_apps = SimpleNamespace(get_model=lambda *args: ReversedIntegration)
+    try:
+        ReversedIntegration._base_manager.bulk_create(
+            [
+                ReversedIntegration(lifecycle="draft"),
+                ReversedIntegration(lifecycle="active"),
+                ReversedIntegration(lifecycle="paused"),
+                ReversedIntegration(lifecycle="disabled"),
+            ]
+        )
+        with connection.schema_editor() as schema_editor:
+            module.rewrite_lifecycle_values(historical_apps, schema_editor)
+            module.restore_lifecycle_values(historical_apps, schema_editor)
+
+        table = connection.ops.quote_name(ReversedIntegration._meta.db_table)
+        lifecycle = connection.ops.quote_name("lifecycle")
+        identifier = connection.ops.quote_name("id")
+        with connection.cursor() as cursor:
+            cursor.execute(f"SELECT {lifecycle} FROM {table} ORDER BY {identifier}")
+            values = [row[0] for row in cursor.fetchall()]
+        # Lossy by construction: the `disabled` row comes back as `draft`,
+        # because `disconnected` has two legacy sources and keeps neither.
+        assert values == ["draft", "active", "paused", "draft"]
+        assert all(len(value) <= legacy_width for value in values)
+        assert set(values) <= set(LegacyIntegrationLifecycle.values)
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(ReversedIntegration)
+
+
 def _old_relationship_state() -> ProjectState:
     from angee.parties.models import Relationship
 
@@ -483,6 +667,7 @@ def test_parties_relationship_migration_preserves_renamed_foreign_keys() -> None
         "ck_relationship_distinct_parties",
         "ck_relationship_has_other",
     }
+
 
 def test_parties_relationship_migration_applies_only_to_exact_old_state() -> None:
     from angee.parties.models import Relationship
@@ -568,9 +753,11 @@ def test_parties_handle_normalized_value_migration_backfills_existing_rows() -> 
         with connection.schema_editor() as schema_editor:
             module.backfill_normalized_values(historical_apps, schema_editor)
 
-        assert list(
-            LegacyHandle._base_manager.order_by("id").values_list("normalized_value", flat=True)
-        ) == ["alicesmith@gmail.com", "user@example.com", "+420 123 456"]
+        assert list(LegacyHandle._base_manager.order_by("id").values_list("normalized_value", flat=True)) == [
+            "alicesmith@gmail.com",
+            "user@example.com",
+            "+420 123 456",
+        ]
     finally:
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(LegacyHandle)
@@ -663,9 +850,7 @@ def test_rejects_source_in_djangos_conventional_migrations_package(runtime_migra
     materializer, addon, _, _, _ = runtime_migration_probe
     addon._addon_contract = AddonContract(
         name="example.demo",
-        migrations=(
-            AddonMigration("rename_legacy", "resources", "migrations.rename_legacy"),
-        ),
+        migrations=(AddonMigration("rename_legacy", "resources", "migrations.rename_legacy"),),
     )
 
     with pytest.raises(RuntimeError, match="must live outside Django's conventional migrations package"):
@@ -734,9 +919,7 @@ def test_materialized_origin_uses_app_config_name(runtime_migration_probe) -> No
     materializer, addon, _, _, _ = runtime_migration_probe
     addon._addon_contract = AddonContract(
         name="stale.manifest.name",
-        migrations=(
-            AddonMigration("rename_legacy", "resources", "runtime_migrations.rename_legacy"),
-        ),
+        migrations=(AddonMigration("rename_legacy", "resources", "runtime_migrations.rename_legacy"),),
     )
 
     (output,) = materializer.materialize()

@@ -21,7 +21,7 @@ SETTINGS = {
     },
     # The ``Integration.impl_class`` registry: each key a parent-only
     # ``Integration`` row may name → the dotted path of its integration-level
-    # behavior. ``none`` is the neutral draft/null-object implementation
+    # behavior. ``none`` is the neutral null-object implementation
     # (``ImplClassField`` requires a non-empty registry). Concrete child models
     # own their domain backend field/registry (e.g. ``VcsBridge.backend_class``).
     # See ``angee.base.impl.ImplClassField``.

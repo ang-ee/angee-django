@@ -671,10 +671,10 @@ def test_ensure_fresh_does_not_call_select_for_update_on_sqlite(monkeypatch: pyt
 
 
 @pytest.mark.django_db(transaction=True)
-def test_activate_from_credential_does_not_call_select_for_update_on_sqlite(
+def test_connect_from_credential_does_not_call_select_for_update_on_sqlite(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """SQLite is the documented floor; activation locking degrades to a plain read there."""
+    """SQLite is the documented floor; connection locking degrades to a plain read there."""
 
     created_models = _create_missing_tables()
     try:
@@ -700,17 +700,17 @@ def test_activate_from_credential_does_not_call_select_for_update_on_sqlite(
 
         monkeypatch.setattr(type(Integration.objects.all()), "select_for_update", forbidden_select_for_update)
 
-        integration = Integration.objects.activate_from_credential(user, vendor=vendor, credential=credential)
+        integration = Integration.objects.connect_from_credential(user, vendor=vendor, credential=credential)
 
         assert integration.credential_id == credential.pk
-        assert integration.lifecycle == "active"
+        assert integration.lifecycle == "connected"
     finally:
         _drop_models(created_models)
 
 
 @pytest.mark.django_db(transaction=True)
-def test_activate_from_credential_reconnect_swaps_credential_on_active_integration() -> None:
-    """Re-auth can replace credentials on an already-active parent row without a self-edge."""
+def test_connect_from_credential_reconnect_swaps_credential_on_connected_integration() -> None:
+    """Re-auth can replace credentials on an already-connected row without a self-edge."""
 
     created_models = _create_missing_tables()
     try:
@@ -731,21 +731,21 @@ def test_activate_from_credential_reconnect_swaps_credential_on_active_integrati
                 material={"api_key": "second"},
             )
 
-        integration = Integration.objects.activate_from_credential(user, vendor=vendor, credential=first)
+        integration = Integration.objects.connect_from_credential(user, vendor=vendor, credential=first)
         with system_context(reason="test activate again seed error"):
             integration.report_status("error", "expired token")
 
-        reconnected = Integration.objects.activate_from_credential(user, vendor=vendor, credential=second)
+        reconnected = Integration.objects.connect_from_credential(user, vendor=vendor, credential=second)
 
         assert reconnected.pk == integration.pk
         assert reconnected.credential_id == second.pk
-        assert str(reconnected.lifecycle) == "active"
+        assert str(reconnected.lifecycle) == "connected"
         assert str(reconnected.runtime_status) == "ok"
         assert reconnected.last_error == ""
         with system_context(reason="test activate again verify"):
             persisted = Integration.objects.get(pk=integration.pk)
             assert persisted.credential_id == second.pk
-            assert str(persisted.lifecycle) == "active"
+            assert str(persisted.lifecycle) == "connected"
             assert str(persisted.runtime_status) == "ok"
             assert persisted.last_error == ""
     finally:

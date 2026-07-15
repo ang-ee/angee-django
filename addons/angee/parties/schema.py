@@ -294,11 +294,11 @@ class PartiesDirectoryMutation:
         username: str,
         password: str,
     ) -> DirectoryType:
-        """Create a Basic-auth credential and an active CardDAV directory to sync.
+        """Create a Basic-auth credential and a connected CardDAV directory to sync.
 
         ``server_url`` is the account/server URL — discovery finds the address
         books, so no exact collection URL is needed. The directory is created
-        ``active`` and owned by the calling admin; ``syncIntegration`` then pulls its
+        ``connected`` and owned by the calling admin; ``syncIntegration`` then pulls its
         contacts into one :class:`~angee.parties.models.Folder` per address book.
         """
 
@@ -315,7 +315,7 @@ class PartiesDirectoryMutation:
             "backend_class": "carddav",
             "display_name": name,
             "config": {"server_url": server_url},
-            "lifecycle": "active",
+            "lifecycle": "connected",
             "created_by_id": user.pk,
         }
 

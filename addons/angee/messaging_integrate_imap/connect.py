@@ -36,7 +36,7 @@ def connect_imap_channel(
     mailboxes: list[str] | None = None,
     own_addresses: list[str] | None = None,
 ) -> Any:
-    """Create an active IMAP channel and a channel-scoped Basic-auth credential."""
+    """Create a connected IMAP channel and a channel-scoped Basic-auth credential."""
 
     clean_host = str(host).strip()
     if not clean_host:
@@ -58,7 +58,7 @@ def connect_imap_channel(
             backend_class=_IMAP_VENDOR_SLUG,
             display_name=display_name,
             config=config,
-            lifecycle="draft",
+            lifecycle="disconnected",
             created_by_id=user.pk,
         )
         credential = Credential.objects.create_local_credential(
@@ -67,7 +67,7 @@ def connect_imap_channel(
             name=_credential_name(display_name, channel.sqid),
             material={"username": username, "password": password},
         )
-        channel.activate(credential=credential, account=getattr(credential, "external_account", None))
+        channel.connect(credential=credential, account=getattr(credential, "external_account", None))
     return channel
 
 

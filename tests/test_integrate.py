@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
 from django.db import models
 
-from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus, integration_status_axes
+from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.integrate.registry import bridge_models, check_source_kind_contracts, source_kind_models
 from tests.conftest import Integration, Source, Template
 
@@ -79,44 +80,56 @@ def test_report_status_records_integration_telemetry() -> None:
 
     integration.report_status(status=IntegrationRuntimeStatus.ERROR, error="boom")
 
-    assert integration.lifecycle == IntegrationLifecycle.DRAFT
+    assert integration.lifecycle == IntegrationLifecycle.DISCONNECTED
     assert integration.runtime_status == IntegrationRuntimeStatus.ERROR
     assert integration.last_used_status == "error"
     assert integration.last_error == "boom"
     assert integration.last_error_at is not None
     assert integration.last_used_at is not None
 
-    # A bare-string legacy success status maps to the healthy runtime axis.
-    integration.report_status(status="active")
+    # A healthy report clears the error it recorded, and never moves the
+    # lifecycle — a status report is not the operator.
+    integration.report_status(status=IntegrationRuntimeStatus.OK)
 
+    assert integration.lifecycle == IntegrationLifecycle.DISCONNECTED
     assert integration.runtime_status == IntegrationRuntimeStatus.OK
-    assert integration.last_used_status == "active"
+    assert integration.last_used_status == "ok"
     assert integration.last_error == ""
     assert integration.last_error_at is None
 
 
-def test_integration_lifecycle_from_value_accepts_graphql_enum_name() -> None:
-    """The integration lifecycle owner accepts GraphQL enum member names."""
+def test_integration_lifecycle_is_connection_focused() -> None:
+    """One shared lifecycle answers whether an integration is connected."""
 
-    assert IntegrationLifecycle.from_value("DISABLED") is IntegrationLifecycle.DISABLED
+    assert IntegrationLifecycle.values == ["disconnected", "connected", "paused"]
+    assert Integration().lifecycle == IntegrationLifecycle.DISCONNECTED
+    assert IntegrationLifecycle.from_value("CONNECTED") is IntegrationLifecycle.CONNECTED
 
 
-def test_legacy_integration_status_mapping_is_deterministic() -> None:
-    """Every legacy fused status maps to a lifecycle/runtime-status pair."""
+def test_report_status_normalizes_names_and_values_and_rejects_the_rest() -> None:
+    """A status resolves by runtime-status member name or value — the shape GraphQL serializes.
 
-    assert {
-        "draft": integration_status_axes("draft"),
-        "active": integration_status_axes("active"),
-        "paused": integration_status_axes("paused"),
-        "disabled": integration_status_axes("disabled"),
-        "error": integration_status_axes("error"),
-    } == {
-        "draft": (IntegrationLifecycle.DRAFT, IntegrationRuntimeStatus.OK),
-        "active": (IntegrationLifecycle.ACTIVE, IntegrationRuntimeStatus.OK),
-        "paused": (IntegrationLifecycle.PAUSED, IntegrationRuntimeStatus.OK),
-        "disabled": (IntegrationLifecycle.DISABLED, IntegrationRuntimeStatus.OK),
-        "error": (IntegrationLifecycle.ACTIVE, IntegrationRuntimeStatus.ERROR),
-    }
+    A status arrives as the uppercase member name (``ERROR``) as often as the
+    stored value. Anything that is neither fails at the vocabulary that could
+    not read it, naming that vocabulary — a *lifecycle* value included, because
+    the operator declares the lifecycle and a runtime report is not the
+    operator, and the legacy fused values, which the ``integrate`` runtime
+    migration erases from every column rather than translating here.
+    """
+
+    integration = Integration()
+
+    for reported in ("ERROR", "error"):
+        integration.report_status(status=reported)
+        assert integration.runtime_status == IntegrationRuntimeStatus.ERROR
+
+    for reported in ("OK", "ok"):
+        integration.report_status(status=reported)
+        assert integration.runtime_status == IntegrationRuntimeStatus.OK
+
+    for rejected in ("CONNECTED", "connected", "paused", "nonsense", "active", "draft", "disabled"):
+        with pytest.raises(ValueError, match="Unsupported integration runtime status"):
+            integration.report_status(status=rejected)
 
 
 def test_report_status_updates_unsaved_integration_in_memory() -> None:

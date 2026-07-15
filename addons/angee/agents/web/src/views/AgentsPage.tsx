@@ -6,10 +6,8 @@ import { useOne, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
   Action, Button, Card, CardContent, Column, ResourceList, Field, Form, Glyph, Group, List, errorMessage, useRecordActionMutation, useToast, type RecordToolbarContext, type RecordTabDescriptor } from "@angee/ui";
 import {
-  refineInvalidationParams,
-  resourceInvalidationTargets,
   useModelMetadata,
-  useSchemaFieldMetadata,
+  useResourceInvalidates,
 } from "@angee/metadata";
 import {
   refineFieldsFromPaths,
@@ -96,14 +94,7 @@ function AgentProvisionToolbarAction({
 }: RecordToolbarContext): React.ReactElement | null {
   const t = useAgentsT();
   const toast = useToast();
-  const schemaMetadata = useSchemaFieldMetadata();
-  const invalidates = React.useMemo(
-    () =>
-      resourceInvalidationTargets(schemaMetadata, [MODEL]).map(
-        refineInvalidationParams,
-      ),
-    [schemaMetadata],
-  );
+  const invalidates = useResourceInvalidates([MODEL]);
   const [optimisticProvisioning, setOptimisticProvisioning] = React.useState(false);
   const [provisionAgent, provisionState] = useActionMutation<ActionFieldName>(
     "provision_agent",

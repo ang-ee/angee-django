@@ -9,6 +9,16 @@ export const enIntegrateMessages: Record<string, string> = {
   "action.syncNow": "Sync now",
   "action.refresh": "Refresh",
 
+  // Shared integration lifecycle record actions. Connect is absent by design:
+  // it is a real handshake per subtype, so the addon that owns the vendor owns
+  // its label as well as its UX.
+  "lifecycle.pause": "Pause",
+  "lifecycle.resume": "Resume",
+  "lifecycle.disconnect": "Disconnect",
+  "lifecycle.disconnectConfirm.title": "Disconnect this integration?",
+  "lifecycle.disconnectConfirm.body":
+    "It stops syncing and its live session ends. Its configuration is kept, so you can connect it again later.",
+
   // Shared list/group column labels.
   "col.status": "Status",
   "col.lifecycle": "Lifecycle",

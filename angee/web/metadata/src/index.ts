@@ -5,6 +5,7 @@ export {
 export {
   refineInvalidationParams,
   resourceInvalidationTargets,
+  useResourceInvalidates,
   type ResourceInvalidationTarget,
 } from "./invalidation";
 export {

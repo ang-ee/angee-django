@@ -14,15 +14,17 @@ vi.mock("@angee/refine", () => ({
   useAuthoredMutation: dataMocks.useAuthoredMutation,
 }));
 
+// The metadata edge, faked at the one seam this hook composes: `@angee/metadata`
+// owns folding model labels into refine invalidation params, and `invalidation.ts`
+// there owns testing that fold. What this file owns is that the mapped targets are
+// *appended* to the caller's own `invalidates` rather than replacing them.
 vi.mock("@angee/metadata", () => ({
-  refineInvalidationParams: (target: { modelLabel: string }) => ({
-    dataProviderName: "console",
-    invalidates: ["list", "many", "detail"],
-    resource: target.modelLabel,
-  }),
-  resourceInvalidationTargets: (_metadata: unknown, modelLabels: readonly string[]) =>
-    modelLabels.map((modelLabel) => ({ modelLabel })),
-  useSchemaFieldMetadata: () => ({ schemas: {} }),
+  useResourceInvalidates: (modelLabels: readonly string[] | undefined) =>
+    (modelLabels ?? []).map((modelLabel) => ({
+      dataProviderName: "console",
+      invalidates: ["list", "many", "detail"],
+      resource: modelLabel,
+    })),
 }));
 
 const RateDocument = { rate: true } as never;

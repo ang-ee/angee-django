@@ -8,6 +8,7 @@ import {
   recordActionId,
   useRecordAction,
   useRecordActionMutation,
+  useRecordChromeActionMutation,
 } from "./record-action";
 
 const dataMocks = vi.hoisted(() => ({
@@ -15,6 +16,17 @@ const dataMocks = vi.hoisted(() => ({
   useActionMutation: vi.fn(),
   settle: vi.fn(),
   useActionResultRun: vi.fn(),
+  chrome: {
+    resource: "messaging.Channel",
+    canonicalResource: "integrate.Integration",
+    dataProviderName: "console",
+    recordId: "chn_1",
+    record: { lifecycle: "CONNECTED" },
+  },
+}));
+
+vi.mock("./record-chrome-context", () => ({
+  useRecordChromeContext: () => dataMocks.chrome,
 }));
 
 // Keep the real `runActionResult` — the hook under test projects the in-band
@@ -28,15 +40,17 @@ vi.mock("./action-result-run", () => ({
   useActionResultRun: dataMocks.useActionResultRun,
 }));
 
+// The metadata edge, faked at the one seam these hooks compose: `@angee/metadata`
+// owns folding model labels into refine invalidation params, and `invalidation.ts`
+// there owns testing that fold. What the tests below own is which labels reach it,
+// and in what order — so the fake keeps the label visible in its output.
 vi.mock("@angee/metadata", () => ({
-  refineInvalidationParams: (target: { modelLabel: string }) => ({
-    dataProviderName: "console",
-    invalidates: ["list"],
-    resource: target.modelLabel,
-  }),
-  resourceInvalidationTargets: (_metadata: unknown, modelLabels: readonly string[]) =>
-    modelLabels.map((modelLabel) => ({ modelLabel })),
-  useSchemaFieldMetadata: () => ({ schemas: {} }),
+  useResourceInvalidates: (modelLabels: readonly string[] | undefined) =>
+    (modelLabels ?? []).map((modelLabel) => ({
+      dataProviderName: "console",
+      invalidates: ["list"],
+      resource: modelLabel,
+    })),
 }));
 
 describe("record action helpers", () => {
@@ -192,6 +206,102 @@ describe("record action helpers", () => {
     dataMocks.mutate.mockResolvedValueOnce({ ok: false, message: "Sync refused." });
     await expect(result.current[0](actionContext("src_1"))).rejects.toThrow(
       "Sync refused.",
+    );
+  });
+});
+
+describe("useRecordChromeActionMutation", () => {
+  beforeEach(() => {
+    dataMocks.mutate.mockClear();
+    dataMocks.settle.mockReset();
+    dataMocks.settle.mockImplementation(async (fire: () => Promise<unknown>) => {
+      await fire();
+      return undefined;
+    });
+    dataMocks.useActionResultRun.mockReset();
+    dataMocks.useActionResultRun.mockReturnValue(dataMocks.settle);
+    dataMocks.useActionMutation.mockReset();
+    dataMocks.useActionMutation.mockReturnValue([
+      dataMocks.mutate,
+      { fetching: false, error: null },
+    ]);
+    dataMocks.chrome = {
+      resource: "messaging.Channel",
+      canonicalResource: "integrate.Integration",
+      dataProviderName: "console",
+      recordId: "chn_1",
+      record: { lifecycle: "CONNECTED" },
+    };
+  });
+
+  test("invalidates the record's own model and its canonical MTI parent", async () => {
+    // The three chrome call sites each re-spelled this mapping; it lives here now,
+    // read off the chrome context rather than declared by each contributing addon.
+    const { result } = renderHook(() =>
+      useRecordChromeActionMutation("pause_integration"),
+    );
+
+    await act(async () => {
+      await result.current[0]("chn_1");
+    });
+
+    expect(dataMocks.useActionMutation).toHaveBeenCalledWith("pause_integration", {
+      dataProviderName: "console",
+      invalidates: [
+        { dataProviderName: "console", invalidates: ["list"], resource: "messaging.Channel" },
+        { dataProviderName: "console", invalidates: ["list"], resource: "integrate.Integration" },
+      ],
+    });
+    expect(dataMocks.mutate).toHaveBeenCalledWith("chn_1");
+    expect(dataMocks.settle).toHaveBeenCalledOnce();
+  });
+
+  test("names the model once when it is its own canonical parent", () => {
+    dataMocks.chrome = {
+      ...dataMocks.chrome,
+      resource: "integrate.Integration",
+      canonicalResource: "integrate.Integration",
+    };
+    renderHook(() => useRecordChromeActionMutation("pause_integration"));
+
+    expect(dataMocks.useActionMutation).toHaveBeenCalledWith(
+      "pause_integration",
+      expect.objectContaining({
+        invalidates: [
+          { dataProviderName: "console", invalidates: ["list"], resource: "integrate.Integration" },
+        ],
+      }),
+    );
+  });
+
+  test("adds a third model the verb also writes", () => {
+    renderHook(() =>
+      useRecordChromeActionMutation("disconnect_whatsapp_channel", {
+        invalidateModels: ["messaging.Thread"],
+      }),
+    );
+
+    expect(dataMocks.useActionMutation).toHaveBeenCalledWith(
+      "disconnect_whatsapp_channel",
+      expect.objectContaining({
+        invalidates: [
+          { dataProviderName: "console", invalidates: ["list"], resource: "messaging.Channel" },
+          { dataProviderName: "console", invalidates: ["list"], resource: "integrate.Integration" },
+          { dataProviderName: "console", invalidates: ["list"], resource: "messaging.Thread" },
+        ],
+      }),
+    );
+  });
+
+  test("routes the verb to the schema that owns the record", () => {
+    // The chrome context carries the record's own data provider, so a contribution
+    // never names a schema (an addon hardcoding `"console"` broke on any other).
+    dataMocks.chrome = { ...dataMocks.chrome, dataProviderName: "operator" };
+    renderHook(() => useRecordChromeActionMutation("pause_integration"));
+
+    expect(dataMocks.useActionMutation).toHaveBeenCalledWith(
+      "pause_integration",
+      expect.objectContaining({ dataProviderName: "operator" }),
     );
   });
 });

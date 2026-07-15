@@ -29,6 +29,23 @@ describe("statusBadge widget tone", () => {
     expect(screen.getByText("Draft").className).toContain("bg-warning-soft");
   });
 
+  test("colors integration connection lifecycle values", () => {
+    render(
+      <>
+        <Badge
+          value="CONNECTED"
+          field={{ options: [{ value: "CONNECTED", label: "Connected" }] }}
+        />
+        <Badge
+          value="DISCONNECTED"
+          field={{ options: [{ value: "DISCONNECTED", label: "Disconnected" }] }}
+        />
+      </>,
+    );
+    expect(screen.getByText("Connected").className).toContain("bg-success-soft");
+    expect(screen.getByText("Disconnected").className).toContain("bg-inset");
+  });
+
   test("the convention lowercases the value (UPPERCASE enum member reads)", () => {
     // The read side serializes the UPPERCASE member name; the convention's
     // lowercase vocabulary must still match it.

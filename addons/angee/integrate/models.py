@@ -1252,12 +1252,11 @@ class Vendor(SqidMixin, AuditMixin, AngeeModel):
 
 
 class IntegrationLifecycle(models.TextChoices):
-    """Declared lifecycle state for one integration implementation."""
+    """Durable connection lifecycle shared by every integration."""
 
-    DRAFT = "draft", "Draft"
-    ACTIVE = "active", "Active"
+    DISCONNECTED = "disconnected", "Disconnected"
+    CONNECTED = "connected", "Connected"
     PAUSED = "paused", "Paused"
-    DISABLED = "disabled", "Disabled"
 
     @classmethod
     def from_value(cls, value: object) -> IntegrationLifecycle:
@@ -1293,29 +1292,6 @@ class IntegrationRuntimeStatus(models.TextChoices):
             raise ValueError(f"Unsupported integration runtime status: {raw}") from error
 
 
-def integration_status_axes(status: object) -> tuple[IntegrationLifecycle, IntegrationRuntimeStatus]:
-    """Map one legacy fused integration status onto lifecycle and runtime axes."""
-
-    # Legacy callers and migration tests can still hand the pre-split fused value
-    # to telemetry code; keep that compatibility at the split-axis owner.
-    raw = str(getattr(status, "value", status)).strip()
-    lifecycle_member = IntegrationLifecycle.__members__.get(raw)
-    if lifecycle_member is not None:
-        return cast(IntegrationLifecycle, lifecycle_member), cast(IntegrationRuntimeStatus, IntegrationRuntimeStatus.OK)
-    if raw in {"ERROR", "error"}:
-        return (
-            cast(IntegrationLifecycle, IntegrationLifecycle.ACTIVE),
-            cast(IntegrationRuntimeStatus, IntegrationRuntimeStatus.ERROR),
-        )
-    try:
-        return (
-            cast(IntegrationLifecycle, IntegrationLifecycle(raw)),
-            cast(IntegrationRuntimeStatus, IntegrationRuntimeStatus.OK),
-        )
-    except ValueError as error:
-        raise ValueError(f"Unsupported legacy integration status: {raw}") from error
-
-
 class IntegrationManager(AngeeManager):
     """Manager factories for invariants that span Integration and its impl row."""
 
@@ -1324,10 +1300,10 @@ class IntegrationManager(AngeeManager):
 
         return cast(type[IntegrationImpl], self.model.resolve_impl_class("impl_class", key))
 
-    def draft_for(self, user: Any, *, vendor: Any, impl_class: str) -> Any:
-        """Return the parent integration row for a user's vendor/implementation draft."""
+    def disconnected_for(self, user: Any, *, vendor: Any, impl_class: str) -> Any:
+        """Return the user's parent row for one disconnected integration."""
 
-        with system_context(reason="integrate.integration.draft"):
+        with system_context(reason="integrate.integration.disconnected"):
             integration = (
                 self.filter(
                     owner=user,
@@ -1347,7 +1323,7 @@ class IntegrationManager(AngeeManager):
                         vendor=vendor,
                         impl_class=impl_class,
                         kind=Integration.integration_kind_label,
-                        lifecycle=IntegrationLifecycle.DRAFT,
+                        lifecycle=IntegrationLifecycle.DISCONNECTED,
                     )
             except IntegrityError:
                 return self.get(
@@ -1357,7 +1333,7 @@ class IntegrationManager(AngeeManager):
                     kind=Integration.integration_kind_label,
                 )
 
-    def activate_from_credential(
+    def connect_from_credential(
         self,
         user: Any,
         *,
@@ -1365,13 +1341,13 @@ class IntegrationManager(AngeeManager):
         credential: Any,
         impl_class: str = "none",
     ) -> Any:
-        """Attach ``credential`` to the user's parent integration row and activate it."""
+        """Attach ``credential`` to the user's parent row and connect it."""
 
-        integration = self.draft_for(user, vendor=vendor, impl_class=impl_class)
-        with system_context(reason="integrate.integration.activate_from_credential"), transaction.atomic():
+        integration = self.disconnected_for(user, vendor=vendor, impl_class=impl_class)
+        with system_context(reason="integrate.integration.connect_from_credential"), transaction.atomic():
             integration = self.locked_get(pk=integration.pk)
             account = getattr(credential, "external_account", None)
-            if str(integration.lifecycle) == str(IntegrationLifecycle.ACTIVE):
+            if str(integration.lifecycle) == str(IntegrationLifecycle.CONNECTED):
                 integration.credential = credential
                 integration.account = account
                 integration.runtime_status = cast(IntegrationRuntimeStatus, IntegrationRuntimeStatus.OK)
@@ -1388,7 +1364,7 @@ class IntegrationManager(AngeeManager):
                     ]
                 )
             else:
-                integration.activate(credential=credential, account=account)
+                integration.connect(credential=credential, account=account)
         return integration
 
     def sync_kinds(self) -> int:
@@ -1440,7 +1416,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     # PROTECT: a present credential is the integration's authentication. It may
     # belong to a principal other than ``owner`` (an org/app-install credential), so
     # deleting a credential still in use is refused rather than silently breaking
-    # the integration. Draft integrations leave it empty.
+    # the integration. Disconnected integrations may leave it empty.
     credential = models.ForeignKey(
         "integrate.Credential",
         on_delete=models.PROTECT,
@@ -1456,11 +1432,12 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         related_name="integrations",
     )
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="integrations")
-    lifecycle = StateField(choices_enum=IntegrationLifecycle, default=IntegrationLifecycle.DRAFT)
-    """Declared lifecycle journey for the integration connection itself.
+    lifecycle = StateField(choices_enum=IntegrationLifecycle, default=IntegrationLifecycle.DISCONNECTED)
+    """Declared connection intent for this integration.
 
-    This is the operator-controlled capability axis: draft setup, active use,
-    paused, or disabled. Runtime health lives separately on ``runtime_status``.
+    Connected means configured and enabled, paused retains configuration while
+    intentionally stopped, and disconnected releases the connection. Runtime
+    health lives separately on ``runtime_status``.
     """
     runtime_status = StateField(choices_enum=IntegrationRuntimeStatus, default=IntegrationRuntimeStatus.OK)
     """Observed health for the integration's last runtime interaction.
@@ -1478,19 +1455,15 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     lifecycle_transitions = StateTransitions(
         lifecycle,
         {
-            IntegrationLifecycle.DRAFT: [
-                IntegrationLifecycle.ACTIVE,
-                IntegrationLifecycle.DISABLED,
-            ],
-            IntegrationLifecycle.ACTIVE: [
+            IntegrationLifecycle.DISCONNECTED: [IntegrationLifecycle.CONNECTED],
+            IntegrationLifecycle.CONNECTED: [
                 IntegrationLifecycle.PAUSED,
-                IntegrationLifecycle.DISABLED,
+                IntegrationLifecycle.DISCONNECTED,
             ],
             IntegrationLifecycle.PAUSED: [
-                IntegrationLifecycle.ACTIVE,
-                IntegrationLifecycle.DISABLED,
+                IntegrationLifecycle.CONNECTED,
+                IntegrationLifecycle.DISCONNECTED,
             ],
-            IntegrationLifecycle.DISABLED: [IntegrationLifecycle.ACTIVE],
         },
     )
 
@@ -1567,12 +1540,12 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
 
     @transition(
         lifecycle,
-        source=[IntegrationLifecycle.DRAFT, IntegrationLifecycle.PAUSED, IntegrationLifecycle.DISABLED],
-        target=IntegrationLifecycle.ACTIVE,
+        source=[IntegrationLifecycle.DISCONNECTED, IntegrationLifecycle.PAUSED],
+        target=IntegrationLifecycle.CONNECTED,
         on_success=save_state,
     )
-    def activate(self, *, credential: Any = _UNSET, account: Any = _UNSET) -> None:
-        """Mark this integration active, optionally attaching connection rows."""
+    def connect(self, *, credential: Any = _UNSET, account: Any = _UNSET) -> None:
+        """Mark this integration connected, optionally attaching connection rows."""
 
         fields: set[str] = set()
         if credential is not _UNSET:
@@ -1589,21 +1562,21 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
 
     @transition(
         lifecycle,
-        source=IntegrationLifecycle.ACTIVE,
+        source=IntegrationLifecycle.CONNECTED,
         target=IntegrationLifecycle.PAUSED,
         on_success=save_state,
     )
     def pause(self) -> None:
-        """Pause this active integration without changing its runtime health."""
+        """Pause this connected integration without changing its runtime health."""
 
     @transition(
         lifecycle,
-        source=[IntegrationLifecycle.DRAFT, IntegrationLifecycle.ACTIVE, IntegrationLifecycle.PAUSED],
-        target=IntegrationLifecycle.DISABLED,
+        source=[IntegrationLifecycle.CONNECTED, IntegrationLifecycle.PAUSED],
+        target=IntegrationLifecycle.DISCONNECTED,
         on_success=save_state,
     )
-    def disable(self) -> None:
-        """Disable this integration without changing its runtime health."""
+    def disconnect(self) -> None:
+        """Disconnect this integration without changing its runtime health."""
 
     def set_lifecycle(self, lifecycle: IntegrationLifecycle | str) -> None:
         """Move to one declared lifecycle state using this model's transition methods."""
@@ -1611,17 +1584,17 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         target = IntegrationLifecycle.from_value(lifecycle)
         if str(self.lifecycle) == target.value:
             return
-        if target == IntegrationLifecycle.ACTIVE:
-            self.activate()
+        if target == IntegrationLifecycle.CONNECTED:
+            self.connect()
         elif target == IntegrationLifecycle.PAUSED:
             self.pause()
-        elif target == IntegrationLifecycle.DISABLED:
-            self.disable()
+        elif target == IntegrationLifecycle.DISCONNECTED:
+            self.disconnect()
         else:
             self.lifecycle_transitions.not_allowed(self.lifecycle, target)
 
     def attach_credential(self, credential: Any) -> None:
-        """Attach a live credential and activate this draft integration."""
+        """Attach a live credential and connect this disconnected integration."""
 
         account = getattr(credential, "external_account", None)
         if self.pk is None:
@@ -1630,16 +1603,16 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
             self.runtime_status = cast(IntegrationRuntimeStatus, IntegrationRuntimeStatus.OK)
             self.last_error = ""
             self.last_error_at = None
-            if self.lifecycle == IntegrationLifecycle.DRAFT:
+            if self.lifecycle == IntegrationLifecycle.DISCONNECTED:
                 self.lifecycle_transitions.force_state(
                     self,
-                    IntegrationLifecycle.ACTIVE,
+                    IntegrationLifecycle.CONNECTED,
                     reason="unsaved integration attach resolves initial lifecycle before insert",
                 )
             return
-        if self.lifecycle == IntegrationLifecycle.DRAFT:
+        if self.lifecycle == IntegrationLifecycle.DISCONNECTED:
             with system_context(reason="integrate.integration.attach_credential"), transaction.atomic():
-                self.activate(credential=credential, account=account)
+                self.connect(credential=credential, account=account)
             return
         self.credential = credential
         self.account = account
@@ -1658,14 +1631,19 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
                 ]
             )
 
-    def report_status(self, status: IntegrationRuntimeStatus | IntegrationLifecycle | str, error: str = "") -> None:
-        """Record implementation status telemetry and persist this integration."""
+    def report_status(self, status: IntegrationRuntimeStatus | str, error: str = "") -> None:
+        """Record implementation status telemetry and persist this integration.
+
+        ``status`` is a runtime status, resolved by member name (``ERROR`` — the
+        shape GraphQL serializes) or stored value (``error``); anything else
+        fails at the vocabulary that could not read it. Only the runtime axis is
+        written — ``lifecycle`` is the operator's to declare, and a status report
+        is not the operator. ``last_used_status`` keeps what was reported
+        verbatim.
+        """
 
         raw_status = str(getattr(status, "value", status)).strip()
-        try:
-            normalized = IntegrationRuntimeStatus.from_value(status)
-        except ValueError:
-            _lifecycle, normalized = integration_status_axes(status)
+        normalized = IntegrationRuntimeStatus.from_value(status)
         reported_at = timezone.now()
         self.runtime_status = normalized
         self.last_used_at = reported_at

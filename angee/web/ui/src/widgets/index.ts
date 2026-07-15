@@ -39,6 +39,7 @@ export type {
   WidgetOption,
   WidgetRenderProps,
 } from "./types";
+export { optionToken } from "./types";
 export { widgetLabel } from "./label";
 export { slugify } from "./slug";
 export { STATUS_TONES, statusTone, type StatusToneOptions } from "./status-tones";

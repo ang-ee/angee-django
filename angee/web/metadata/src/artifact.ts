@@ -95,6 +95,14 @@ export interface DataResourceMetadata {
   */
   rowModel?: "client" | "server";
   recordRepresentation?: string | null;
+  /**
+   * Column names on this resource that carry an `ImplClassField` key — the
+   * declared per-row fact an addon varies a contribution on (`FormView` resolves
+   * its record-verb slot by one). Emitted sorted, and only for columns the
+   * resource projects, so each name is readable — a reader still has to select
+   * it for a row to carry the value (`FormView` folds these into its selection).
+   */
+  implFields?: readonly string[];
   capabilities: readonly string[];
   fields?: readonly DataResourceFieldMetadata[];
   filterFields: readonly string[];
@@ -643,6 +651,8 @@ function validateGeneratedResource(resource: unknown, path: string): void {
     );
   }
   metadataArray(value.relationAxes, `${path}.relationAxes`);
+  const implFields = optionalMetadataArray(value.implFields, `${path}.implFields`);
+  if (implFields) validateStringArray(implFields, `${path}.implFields`);
   optionalMetadataArray(value.fields, `${path}.fields`)?.forEach((field, index) =>
     validateGeneratedField(field, `${path}.fields[${index}]`),
   );

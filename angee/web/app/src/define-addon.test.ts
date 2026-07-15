@@ -95,7 +95,11 @@ describe("composeAddons", () => {
     ]);
   });
 
-  test("a later slot contribution with the same key overrides the earlier one", () => {
+  test("two addons claiming one slot entry is a collision, not an override", () => {
+    // Silently letting addon array order pick the winner hid a real clash (the
+    // integrate/whatsapp record-verb ids). An addon that means to specialize
+    // another's verb contributes to the model-scoped slot its own model owns,
+    // where the merge is by declared specificity rather than by order.
     const a = defineAddon({
       id: "a",
       slots: [{ slot: "header", id: "logo", sequence: 1, content: "A" }],
@@ -104,10 +108,7 @@ describe("composeAddons", () => {
       id: "b",
       slots: [{ slot: "header", id: "logo", sequence: 2, content: "B" }],
     });
-    const slots = composeAddons([a, b]).slots;
-    expect(slots).toHaveLength(1);
-    expect(slots[0]?.sequence).toBe(2);
-    expect(slots[0]?.content).toBe("B");
+    expect(() => composeAddons([a, b])).toThrow(/slot entry/);
   });
 
   test("the same slot id under a different slot is kept separate", () => {

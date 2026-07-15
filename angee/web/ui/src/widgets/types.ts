@@ -35,9 +35,25 @@ export function optionLabel(
 }
 
 /**
+ * The comparable token for an enum-ish value: trimmed and lower-cased, `""` for
+ * anything that is not a string.
+ *
+ * A GraphQL enum reads back as its member *name* (`CONNECTED`, `WHATSAPP`) while
+ * the code comparing it spells the backend's own lower-case token (`connected`,
+ * `whatsapp`), so a read is compared through this rule rather than matched
+ * exactly. The one owner of that rule: `canonicalOptionValue` applies it when an
+ * authored option list is available to resolve against, `statusTone` against the
+ * status vocabulary, and a caller with neither compares tokens directly.
+ */
+export function optionToken(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+/**
  * Match a scalar option value back to the authored option value. Direct matches
- * win; a unique case-insensitive match covers GraphQL enum reads such as
- * `ANTHROPIC` when mutation inputs use the lower-case value `anthropic`.
+ * win; a unique case-insensitive match ({@link optionToken}) covers GraphQL enum
+ * reads such as `ANTHROPIC` when mutation inputs use the lower-case value
+ * `anthropic`.
  */
 export function canonicalOptionValue(
   options: readonly WidgetOption[] | undefined,
@@ -48,8 +64,10 @@ export function canonicalOptionValue(
   }
   const direct = options.find((option) => option.value === value);
   if (direct) return direct.value;
-  const lower = value.toLowerCase();
-  const matches = options.filter((option) => option.value.toLowerCase() === lower);
+  const lower = optionToken(value);
+  const matches = options.filter(
+    (option) => optionToken(option.value) === lower,
+  );
   return matches.length === 1 ? matches[0]?.value : undefined;
 }
 

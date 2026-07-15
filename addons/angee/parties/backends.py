@@ -140,7 +140,7 @@ class ManualDirectoryBackend(DirectoryBackend):
 
     Keeps ``ANGEE_DIRECTORY_BACKEND_CLASSES`` non-empty when no source addon is
     installed (``ImplClassField`` requires a non-empty registry), so the GraphQL
-    enum is never empty and a draft directory always has a selectable backend.
+    enum is never empty and a new directory always has a selectable backend.
     """
 
     key = "manual"

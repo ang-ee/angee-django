@@ -2,6 +2,7 @@ import { createNamespaceT } from "@angee/ui";
 
 export const enMessagingWhatsappMessages: Record<string, string> = {
   "channel.whatsapp.button": "Connect WhatsApp",
+  "channel.whatsapp.connect": "Connect WhatsApp",
   "channel.whatsapp.title": "Connect WhatsApp",
   "channel.whatsapp.description": "Link a WhatsApp account by scanning a QR code with your phone.",
   "channel.whatsapp.name": "Name",
@@ -17,8 +18,15 @@ export const enMessagingWhatsappMessages: Record<string, string> = {
   "channel.whatsapp.paired": "Linked! Your chats are syncing.",
   "channel.whatsapp.stopped": "The pairing session stopped before completing.",
   "channel.whatsapp.loggedOut": "This device was unlinked from the phone.",
+  "channel.whatsapp.paused": "This WhatsApp connection is paused.",
+  "channel.whatsapp.duplicate": "This WhatsApp account is already connected to another channel.",
   "channel.whatsapp.repair": "Re-pair",
+  "channel.whatsapp.resume": "Resume",
+  "channel.whatsapp.pairing": "Pairing status",
   "channel.whatsapp.disconnect": "Disconnect",
+  "channel.whatsapp.disconnectConfirm.title": "Disconnect this WhatsApp channel?",
+  "channel.whatsapp.disconnectConfirm.body":
+    "The live session stops and the account is released. The linked device is retained, so you can reconnect without scanning again.",
   "channel.whatsapp.done": "Done",
 };
 

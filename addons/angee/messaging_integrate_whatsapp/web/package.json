@@ -15,10 +15,10 @@
   },
   "dependencies": {
     "@angee/app": "workspace:*",
+    "@angee/integrate": "workspace:*",
     "@angee/messaging": "workspace:*",
     "@angee/refine": "workspace:*",
-    "@angee/ui": "workspace:*",
-    "valibot": "^1.4.0"
+    "@angee/ui": "workspace:*"
   },
   "peerDependencies": {
     "@tanstack/react-router": "^1",

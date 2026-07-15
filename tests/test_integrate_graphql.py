@@ -90,7 +90,7 @@ def test_integration_node_resolves_nested_relations(
         )
     )["integrations_by_pk"]
     assert resolved == {
-        "lifecycle": "ACTIVE",
+        "lifecycle": "CONNECTED",
         "runtime_status": "OK",
         "vendor": {"slug": "conn-node"},
         # ``make_integration`` builds the OAuth client with ``display_name=slug.title()``,
@@ -267,7 +267,7 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert kind_field["groupable"] is True
     assert kind_field["updatable"] is False
     impl_field = {field["name"]: field for field in integration["fields"]}["impl_class"]
-    assert impl_field["values"] == [{"value": "NONE", "description": "Draft"}]
+    assert impl_field["values"] == [{"value": "NONE", "description": "None"}]
     lifecycle_field = {field["name"]: field for field in integration["fields"]}["lifecycle"]
     assert lifecycle_field["kind"] == "enum"
     assert lifecycle_field["widget"] == "select"
@@ -283,6 +283,25 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert runtime_status_field["sortable"] is True
     assert runtime_status_field["groupable"] is True
     assert runtime_status_field["updatable"] is False
+
+
+def test_resource_metadata_names_the_impl_columns_it_projects() -> None:
+    """A resource names its readable ``ImplClassField`` columns; one without names none.
+
+    The impl key a row stores is the fact a console contribution varies on per
+    row, so the artifact names the column that carries it and the console never
+    hardcodes a model's impl column.
+    """
+
+    schema = _schema()
+    resources = {item.model_label: item for item in schema.angee_resources}
+    assert resources["integrate.Integration"].impl_fields == ("impl_class",)
+    assert resources["integrate.VcsBridge"].impl_fields == ("backend_class",)
+    assert resources["integrate.Vendor"].impl_fields == ()
+
+    wire = {item["modelLabel"]: item for item in schema._schema.extensions["angee"]["resources"]}
+    assert wire["integrate.Integration"]["implFields"] == ["impl_class"]
+    assert wire["integrate.Vendor"]["implFields"] == []
 
 
 def test_impl_choices_are_admin_only(integrate_console_tables: None) -> None:
@@ -399,7 +418,7 @@ def test_vcs_bridge_child_creation_creates_parent_identity(integrate_console_tab
             credential=credential,
             owner=user,
             backend_class="stub",
-            lifecycle="draft",
+            lifecycle="disconnected",
             webhook_secret="created-secret",
         )
         integration = Integration.objects.get(pk=bridge.pk)
@@ -407,7 +426,7 @@ def test_vcs_bridge_child_creation_creates_parent_identity(integrate_console_tab
         assert integration.impl_class == "none"
         assert integration.kind == "VCS bridge"
         assert bridge.backend_class == "stub"
-        assert str(integration.lifecycle) == "draft"
+        assert str(integration.lifecycle) == "disconnected"
         assert bridge.pk == integration.pk
         assert bridge.owner_id == integration.owner_id
         assert bridge.vendor_id == integration.vendor_id
@@ -488,7 +507,9 @@ def test_integration_update_delete_are_admin_only(
         assert not Integration.objects.filter(pk=conn.pk).exists()
 
 
-def test_integration_lifecycle_action_mutations_pause_and_activate(integrate_console_tables: None) -> None:
+def test_integration_lifecycle_action_mutations_pause_connect_and_disconnect(
+    integrate_console_tables: None,
+) -> None:
     """Admin action mutations move Integration lifecycle through guarded transitions."""
 
     plain = User.objects.create_user(username="conn-action-plain", email="plain@example.com")
@@ -510,24 +531,41 @@ def test_integration_lifecycle_action_mutations_pause_and_activate(integrate_con
         conn.refresh_from_db()
         conn.report_status("error", "token expired")
 
-    activated = _data(
+    connected = _data(
         _execute(
             console_schema,
             """
-            mutation Activate($id: ID!) {
-              activate_integration(id: $id) { ok message }
+            mutation Connect($id: ID!) {
+              mark_integration_connected(id: $id) { ok message }
             }
             """,
             {"id": integration_id},
             user=admin,
         )
-    )["activate_integration"]
-    assert activated == {"ok": True, "message": "Activated integration."}
+    )["mark_integration_connected"]
+    assert connected == {"ok": True, "message": "Connected integration."}
     with system_context(reason="test.integrate.integration_actions.verify"):
         conn.refresh_from_db()
-        assert str(conn.lifecycle) == "active"
+        assert str(conn.lifecycle) == "connected"
         assert str(conn.runtime_status) == "ok"
         assert conn.last_error == ""
+
+    disconnected = _data(
+        _execute(
+            console_schema,
+            """
+            mutation Disconnect($id: ID!) {
+              mark_integration_disconnected(id: $id) { ok message }
+            }
+            """,
+            {"id": integration_id},
+            user=admin,
+        )
+    )["mark_integration_disconnected"]
+    assert disconnected == {"ok": True, "message": "Disconnected integration."}
+    with system_context(reason="test.integrate.integration_actions.verify_disconnect"):
+        conn.refresh_from_db()
+        assert str(conn.lifecycle) == "disconnected"
 
 
 def test_webhook_crud_secret_write_only(
@@ -747,16 +785,16 @@ def test_connect_integration_reuses_existing_row_with_enum_impl_class(
         ).count() == 1
 
 
-def test_integration_draft_factory_is_database_unique(
+def test_integration_disconnected_factory_is_database_unique(
     integrate_console_tables: None,
 ) -> None:
-    """The Integration owner, not resolvers, owns parent draft uniqueness."""
+    """The Integration owner, not resolvers, owns disconnected-row uniqueness."""
 
     owner = User.objects.create_user(username="draft-unique", email="draft-unique@example.com")
     with system_context(reason="test.integrate.draft_unique.seed"):
         vendor = Vendor.objects.create(slug="draft-unique", display_name="Draft Unique")
-        first = Integration.objects.draft_for(owner, vendor=vendor, impl_class="none")
-        second = Integration.objects.draft_for(owner, vendor=vendor, impl_class="none")
+        first = Integration.objects.disconnected_for(owner, vendor=vendor, impl_class="none")
+        second = Integration.objects.disconnected_for(owner, vendor=vendor, impl_class="none")
 
     assert second.pk == first.pk
     with pytest.raises(IntegrityError), system_context(reason="test.integrate.draft_unique.duplicate"):
@@ -985,17 +1023,17 @@ def test_update_vcs_bridge_lifecycle_accepts_the_lowercase_value(
             console_schema,
             """
             mutation($id: ID!) {
-              update_vcs_bridge(data: {id: $id, lifecycle: "disabled"}) { lifecycle }
+              update_vcs_bridge(data: {id: $id, lifecycle: "disconnected"}) { lifecycle }
             }
             """,
             {"id": _public_id(bridge)},
             user=admin,
         )
     )["update_vcs_bridge"]
-    assert result["lifecycle"] == "DISABLED"
+    assert result["lifecycle"] == "DISCONNECTED"
     with system_context(reason="test.integrate.lifecycle.verify"):
         bridge.refresh_from_db()
-        assert str(bridge.lifecycle) == "disabled"
+        assert str(bridge.lifecycle) == "disconnected"
 
 
 def test_update_vcs_bridge_lifecycle_only_emits_one_state_save(integrate_console_tables: None) -> None:
@@ -1089,7 +1127,11 @@ def test_create_vcs_bridge_creates_child_row(
         )
     )["create_vcs_bridge"]
 
-    assert result == {"backend_class": "STUB", "lifecycle": "DRAFT", "config": {"stub_repos": []}}
+    assert result == {
+        "backend_class": "STUB",
+        "lifecycle": "DISCONNECTED",
+        "config": {"stub_repos": []},
+    }
 
 
 def test_update_vcs_bridge_accepts_backend_class(

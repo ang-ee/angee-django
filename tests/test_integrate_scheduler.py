@@ -186,7 +186,7 @@ def test_run_due_bridges_persists_success_telemetry(scheduler_tables: None) -> N
     assert bridge.last_sync_summary["items"] == 7
     assert bridge.cursor == {"seen": 7}
     assert bridge.next_sync_at == now + timedelta(seconds=42)
-    assert integration.lifecycle == IntegrationLifecycle.ACTIVE
+    assert integration.lifecycle == IntegrationLifecycle.CONNECTED
     assert integration.runtime_status == IntegrationRuntimeStatus.OK
     assert integration.last_used_status == "ok"
 
@@ -219,7 +219,7 @@ def test_run_due_bridges_records_errors_on_integration_runtime_status(scheduler_
     assert bridge.sync_progress["stage"] == Bridge.SyncStage.FAILED
     assert bridge.sync_progress["error"] == "RuntimeError: vendor unavailable"
     assert bridge.next_sync_at == now + timedelta(seconds=17)
-    assert integration.lifecycle == IntegrationLifecycle.ACTIVE
+    assert integration.lifecycle == IntegrationLifecycle.CONNECTED
     assert integration.runtime_status == IntegrationRuntimeStatus.ERROR
     assert integration.last_used_status == "error"
     assert integration.last_error == "RuntimeError: vendor unavailable"
@@ -264,7 +264,7 @@ def test_run_due_bridges_success_recovers_bridge_and_integration_runtime_status(
     assert bridge.last_sync_status == "ok"
     assert bridge.last_sync_items == 5
     assert bridge.next_sync_at == second_now + timedelta(seconds=23)
-    assert integration.lifecycle == IntegrationLifecycle.ACTIVE
+    assert integration.lifecycle == IntegrationLifecycle.CONNECTED
     assert integration.runtime_status == IntegrationRuntimeStatus.OK
     assert integration.last_used_status == "ok"
     assert integration.last_error == ""

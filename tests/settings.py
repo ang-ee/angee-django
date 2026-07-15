@@ -28,14 +28,25 @@ INSTALLED_APPS = [
     "angee.tags",
     "angee.uom",
     "angee.messaging",
-    # Installed (imap is not) because this addon ships a management command
-    # (`whatsapp_import`) whose discovery needs INSTALLED_APPS membership.
     "angee.messaging_integrate_whatsapp",
     "angee.spaces",
     "angee.nexus",
     "angee.posts",
     "angee.platform",
     "angee.platform_integrate_vcs",
+    # Every remaining source addon that declares models. Django resolves an
+    # abstract model's app_label from the registry when the class is created, so
+    # an addon whose models a test imports while its app is absent gets
+    # app_label=None — permanently, for the process, whichever test imported it
+    # first. `test_resource_fixtures` composes every addon's sources and needs
+    # them all labelled; installing them here is what makes that independent of
+    # test order. They contribute abstract sources only (bare test settings run
+    # no composer), which is why this is a registry fact, not a model change.
+    "angee.integrate_github",
+    "angee.messaging_integrate_imap",
+    "angee.operator",
+    "angee.parties_integrate_carddav",
+    "angee.platform_integrate_operator",
     "tests.linesdemo",
     "tests.chatterdemo",
     "tests.scopedemo",

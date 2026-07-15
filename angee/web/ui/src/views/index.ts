@@ -105,8 +105,10 @@ export { Metric, type MetricProps } from "./dashboard/Metric";
 export { Form, type FormProps } from "./Form";
 export {
   FormView,
+  FORM_VIEW_RECORD_ACTIONS_SLOT,
   FORM_VIEW_RECORD_CHROME_SLOT,
   FORM_VIEW_SECTIONS_SLOT,
+  formViewRecordActionsSlot,
   formViewSectionsSlot,
   type FormViewProps,
   type FormSubmit,
@@ -164,11 +166,16 @@ export {
 export { useBulkDelete, type UseBulkDeleteResult } from "./useBulkDelete";
 export {
   recordActionId,
+  useActionResultMutation,
   useRecordAction,
   useRecordActionMutation,
+  useRecordChromeActionMutation,
+  type ActionResultMutation,
   type RecordAction,
   type RecordActionRunner,
+  type UseActionResultMutationOptions,
   type UseRecordActionOptions,
+  type UseRecordChromeActionMutationOptions,
 } from "./record-action";
 export { useAuthoredResourceMutation } from "./authored-resource-mutation";
 export {

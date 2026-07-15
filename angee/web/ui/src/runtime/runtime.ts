@@ -179,10 +179,26 @@ export function useRuntimeUserPreferences(): RuntimeUserPreferencesState {
   return useAppRuntime().userPreferences ?? EMPTY_RUNTIME.userPreferences;
 }
 
-/** The slot entries contributed to one slot, in merged order. */
-export function useSlot(slot: string): readonly SlotContribution[] {
+/**
+ * The slot entries contributed to one slot, in merged order.
+ *
+ * Given several keys, the entries for each are concatenated in key order — for a
+ * caller resolving one surface from a key list whose *length* varies (the
+ * record-verb slot adds one key per impl field the model declares), which a
+ * `useSlot` per key could not do without varying hook order. Memoize the array
+ * you pass; a fresh identity each render recomputes the filter.
+ */
+export function useSlot(
+  slot: string | readonly string[],
+): readonly SlotContribution[] {
   const { slots } = useAppRuntime();
-  return useMemo(() => slots.filter((entry) => entry.slot === slot), [slots, slot]);
+  return useMemo(
+    () =>
+      typeof slot === "string"
+        ? slots.filter((entry) => entry.slot === slot)
+        : slot.flatMap((key) => slots.filter((entry) => entry.slot === key)),
+    [slots, slot],
+  );
 }
 
 /** The addon-contributed file-preview renderers, in composed order. */

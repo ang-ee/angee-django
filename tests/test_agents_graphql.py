@@ -453,7 +453,7 @@ def test_create_inference_provider_creates_child_row(agents_console_tables: None
         "name": "Provider",
         "base_url": "https://api.example.test",
         "backend_class": "MANUAL",
-        "lifecycle": "DRAFT",
+        "lifecycle": "DISCONNECTED",
         "runtime_status": "OK",
     }
     with system_context(reason="test.agents.provider_mti.verify"):
@@ -553,7 +553,7 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(agents_co
         "attached": True,
         "error": None,
         "integration": {
-            "lifecycle": "ACTIVE",
+            "lifecycle": "CONNECTED",
             "credential": {"display_name": "Anthropic Personal"},
         },
     }

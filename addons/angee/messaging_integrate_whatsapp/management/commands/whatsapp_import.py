@@ -30,7 +30,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--create",
             metavar="NAME",
-            help="Create a draft WhatsApp channel with this name instead of --channel.",
+            help="Create a disconnected WhatsApp channel with this name instead of --channel.",
         )
         parser.add_argument("--owner", help="Owner username for --create.")
         parser.add_argument(

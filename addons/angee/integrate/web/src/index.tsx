@@ -1,4 +1,4 @@
-import type { BaseMenuItem } from "@angee/ui";
+import { formViewRecordActionsSlot, type BaseMenuItem } from "@angee/ui";
 import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import {
@@ -18,6 +18,15 @@ import {
   CONNECT_CALLBACK_PATH,
 } from "./connect/redirects";
 import { enIntegrateMessages } from "./i18n";
+import {
+  DisconnectIntegrationAction,
+  INTEGRATION_DISCONNECT_ACTION_ID,
+  INTEGRATION_MODEL,
+  INTEGRATION_PAUSE_ACTION_ID,
+  INTEGRATION_RESUME_ACTION_ID,
+  PauseIntegrationAction,
+  ResumeIntegrationAction,
+} from "./IntegrationLifecycleActions";
 
 const INTEGRATE_ID = "integrate";
 
@@ -119,6 +128,30 @@ const integrate = defineBaseAddon({
   forms: {
     Credential: credentialCreateForm,
   },
+  // Lifecycle verbs contributed against the MTI parent, so every integration
+  // subtype's form inherits them. Connecting is not among them: it means a real
+  // handshake wherever an integration has credentials, and the addon that owns
+  // the vendor contributes that against its own model.
+  slots: [
+    {
+      slot: formViewRecordActionsSlot(INTEGRATION_MODEL),
+      id: INTEGRATION_PAUSE_ACTION_ID,
+      sequence: 11,
+      content: <PauseIntegrationAction />,
+    },
+    {
+      slot: formViewRecordActionsSlot(INTEGRATION_MODEL),
+      id: INTEGRATION_RESUME_ACTION_ID,
+      sequence: 12,
+      content: <ResumeIntegrationAction />,
+    },
+    {
+      slot: formViewRecordActionsSlot(INTEGRATION_MODEL),
+      id: INTEGRATION_DISCONNECT_ACTION_ID,
+      sequence: 13,
+      content: <DisconnectIntegrationAction />,
+    },
+  ],
   icons: {
     integrate: Cable,
     integration: Link2,
@@ -137,6 +170,22 @@ export {
   parseManualCode,
   type OAuthConnectPayload,
 } from "./connect/ConnectOAuthButton";
+export {
+  ConditionalMutationButton,
+  type ConditionalMutationButtonContext,
+  type ConditionalMutationButtonProps,
+} from "./ConditionalMutationButton";
+export {
+  DisconnectIntegrationAction,
+  INTEGRATION_DISCONNECT_ACTION_ID,
+  INTEGRATION_MODEL,
+  INTEGRATION_PAUSE_ACTION_ID,
+  INTEGRATION_RESUME_ACTION_ID,
+  integrationLifecycle,
+  isConnectedOrPaused,
+  PauseIntegrationAction,
+  ResumeIntegrationAction,
+} from "./IntegrationLifecycleActions";
 export {
   CONNECT_CALLBACK_LOOPBACK_PATH,
   CONNECT_CALLBACK_PATH,

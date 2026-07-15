@@ -204,7 +204,20 @@ TanStack apply the URL-owned filter object to in-memory rows.
   result in the thin route component, and the dynamic `import()` still splits the
   view.
 - One component tree. Extend or register; do not fork.
-- Slots are additive extension points. Use them before copying a component.
+- **Slots are additive extension points.** Use them before copying a component.
+  A slot entry is uniquely keyed by `(slot, id)` and a second addon claiming one
+  **collides** at composition — it is never a silent override decided by addon
+  array order. So an addon contributes only to a key it owns. To vary a
+  contribution per row, key it on the fact the row already carries (an
+  `ImplClassField` value), never on a probe of the record inside the component: a
+  contribution that inspects the row to decide whether it should have rendered is
+  contributed to the wrong key. **Record-verb slots resolve canonical → model →
+  model+impl by specificity** (`formViewRecordActionsSlot`), a more specific entry
+  replacing the same id from a less specific one, then order by `sequence`. That
+  is how the addon owning an MTI parent contributes a verb once for every subtype,
+  and how two vendors specialize the same verb on one model without colliding.
+  Contributing a vendor's verb to a *model-scoped* key the vendor does not own
+  displaces it for every row of that model and caps the model at one vendor.
 - Tokens beat color props and one-off variants. Theme by overriding tokens.
 - Color is two orthogonal axes (`lib/tones.ts` is the owner): `tone` (the palette
   — `neutral`/`brand`/`info`/`success`/`warning`/`danger`) × `variant`/fill

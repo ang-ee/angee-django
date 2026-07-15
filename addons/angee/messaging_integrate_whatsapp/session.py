@@ -19,8 +19,10 @@ reconciler restart cleanly instead of racing a duplicate session against the
 same store. The wake stays shorter than the reconciler tick so that overlap
 window is bounded. A large history batch is drained in bounded chunks so those
 checks are never starved behind one payload. The session store under
-``ANGEE_DATA_DIR`` is never deleted on transient errors — only an explicit
-pairing reset wipes it.
+``ANGEE_DATA_DIR`` outlives every transient error; it is deleted only once the
+pairing material in it is known void — a phone-side logout or a rejected
+duplicate — and only through :meth:`WhatsAppSession.discard_store`, which
+requires proof that the vendor connection released it first.
 
 Session-level Postgres advisory locks are per-connection: this module assumes a
 direct connection or session pooling, not pgbouncer transaction pooling (which
@@ -39,6 +41,7 @@ import base64
 import logging
 import queue
 import threading
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
@@ -51,13 +54,16 @@ from neonize.client import NewClient
 from neonize.events import ConnectedEv, HistorySyncEv, LoggedOutEv, MessageEv, PairStatusEv
 
 from angee.integrate.locks import bridge_is_locked
+from angee.integrate.models import IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.integrate.sync import BridgeProgressReporter
 from angee.messaging_integrate_whatsapp.client import (
     STOP_JOIN_SECONDS,
     WAKE_SECONDS,
     PairingState,
     SessionLoggedOut,
+    reset_session_store,
     session_store_path,
+    whatsapp_account_lock_key,
 )
 from angee.messaging_integrate_whatsapp.parser import (
     ChatMessage,
@@ -66,6 +72,7 @@ from angee.messaging_integrate_whatsapp.parser import (
     parsed_message,
     phone_for_jid,
 )
+from angee.tasks.locks import task_lock
 
 logger = logging.getLogger(__name__)
 
@@ -161,16 +168,30 @@ class WhatsAppSession:
         self.client: Any = None
         self.pairing = PairingState.STARTING
         self.own_jid = str(self.channel.subscription_state.get("own_jid") or "")
+        self.created_store = False
+        """Whether this session's store file was absent when it started.
+
+        Whatever pairing material the store holds afterwards is then this
+        session's own. Set at :meth:`run` entry by asking the store, the owner of
+        the fact (see :meth:`discard_new_store`). A session that never ran created
+        nothing, so the default preserves the store."""
         self.landed = 0
+        self.store_released = False
+        """Whether ``run`` saw the vendor connection unwind — the only proof that
+        nothing still holds this session's store open (see :meth:`discard_store`)."""
+        self._account_locks = ExitStack()
+        self._account_jid = ""
 
     # -- lifecycle ---------------------------------------------------------
 
-    def run(self) -> str:
+    def run(self) -> PairingState:
         """Connect and drain events until stopped, shut down, logged out, or unlocked."""
 
         store = session_store_path(self.channel)
+        device = store / "session.db"
+        self.created_store = not device.exists()
         store.mkdir(parents=True, exist_ok=True)
-        self.client = self._build_client(store / "session.db")
+        self.client = self._build_client(device)
         connection = threading.Thread(
             target=self._connect,
             name=f"whatsapp-{self.channel.sqid}",
@@ -185,7 +206,8 @@ class WhatsAppSession:
                 if not connection.is_alive():
                     raise ConnectionError("WhatsApp connection ended unexpectedly.")
         finally:
-            self._shutdown(connection)
+            self.store_released = self._shutdown(connection)
+            self._account_locks.close()
         if self.pairing == PairingState.LOGGED_OUT:
             raise SessionLoggedOut("The linked phone removed this device.")
         return self.pairing
@@ -200,14 +222,76 @@ class WhatsAppSession:
         finally:
             self.events.put(("disconnected", None))
 
-    def _shutdown(self, connection: threading.Thread) -> None:
-        """Cancel the vendor connection and wait for the Go call to unwind."""
+    def _shutdown(self, connection: threading.Thread) -> bool:
+        """Cancel the vendor connection; report whether the Go call actually unwound.
+
+        ``join(timeout=…)`` returns either way, so the liveness check is the only
+        thing that distinguishes a released store from a cgo client that is still
+        holding it open.
+        """
 
         try:
             self.client.stop()
         except Exception:  # noqa: BLE001 - best-effort teardown of a foreign runtime
             logger.exception("Stopping the WhatsApp client for channel %s failed.", self.channel.sqid)
         connection.join(timeout=STOP_JOIN_SECONDS)
+        return not connection.is_alive()
+
+    def discard_store(self) -> None:
+        """Delete this session's store, but only once the vendor connection released it.
+
+        The void-pairing paths (a phone-side logout, a rejected duplicate) call
+        this instead of ``reset_session_store`` directly: they hold the bridge
+        lock themselves, so they cannot reuse ``reset_whatsapp_pairing``'s
+        bounded wait, and this session's own confirmed exit is the equivalent
+        proof. Without it the wipe would run against an open SQLite store and
+        silently half-delete it, so the store is left for an explicit pairing
+        reset to reclaim under that bounded wait instead.
+        """
+
+        if not self.store_released:
+            logger.warning(
+                "WhatsApp session for channel %s did not release its store within %ss; "
+                "leaving it for an explicit pairing reset.",
+                self.channel.sqid,
+                STOP_JOIN_SECONDS,
+            )
+            return
+        reset_session_store(self.channel)
+
+    def discard_new_store(self) -> None:
+        """Discard the store only when this session created the pairing material in it.
+
+        A duplicate rejection means "another channel owns this account". That is
+        not proof this row's device credential is void, and the counter-case is
+        reachable with no race: ``disconnectWhatsappChannel`` deliberately
+        retains ``own_jid`` and the store, a disconnected row holds no claim
+        (:attr:`~.backend.WhatsAppChannelBackend.CLAIMING_LIFECYCLES`) so another
+        channel may take the same account, and ``resumeWhatsappPairing`` then
+        re-declares intent without re-checking that the retained claim is still
+        available. Deleting here would destroy the credential ``disconnect`` was
+        designed to preserve, on the channel the operator just asked to resume.
+        A session that found no store file at all is the only one that created
+        what it would delete; the rest report the conflict and leave the store for
+        an explicit pairing reset. An unscanned earlier attempt leaves a store
+        with no credential in it, so this errs toward keeping a worthless store
+        rather than toward deleting a real one.
+
+        The store answers that question (:attr:`created_store`), not the row's
+        ``own_jid``: this path's own ``release_account`` drops that claim before
+        the discard runs, so deriving it from the row would read "no prior claim"
+        on the operator's *second* identical attempt and wipe the credential the
+        first one correctly kept.
+        """
+
+        if not self.created_store:
+            logger.info(
+                "WhatsApp session for channel %s was rejected while resuming a pre-existing "
+                "device store; leaving it for an explicit pairing reset.",
+                self.channel.sqid,
+            )
+            return
+        self.discard_store()
 
     def _drain_once(self) -> bool:
         """Handle queued events for up to one wake; return whether to keep running."""
@@ -220,9 +304,10 @@ class WhatsAppSession:
             self.pairing = PairingState.AWAITING_SCAN
             self._report(PairingState.AWAITING_SCAN, qr=_qr_data_uri(payload))
         elif kind == "paired":
-            self._mark_paired(payload)
+            return self._mark_paired(payload)
         elif kind == "logged_out":
             self.pairing = PairingState.LOGGED_OUT
+            self._report(PairingState.LOGGED_OUT)
             return False
         elif kind == "disconnected":
             return False
@@ -231,13 +316,27 @@ class WhatsAppSession:
         return self._still_wanted()
 
     def _still_wanted(self) -> bool:
-        """The bounded wake checks: shutdown event, persisted desire, lock held."""
+        """The bounded wake checks: shutdown event, persisted desire, lifecycle, lock held.
+
+        A live session runs only while its channel is CONNECTED. Both other
+        lifecycles are stop signals the operator can raise through any surface —
+        ``pauseIntegration`` and ``markIntegrationDisconnected`` reach a channel
+        by its ``int_`` sqid without going through this addon at all — so the
+        check is "still connected?", never "not paused?".
+        """
 
         if self.stop_event.is_set():
             self.pairing = PairingState.STOPPED if self.pairing != PairingState.PAIRED else self.pairing
             return False
-        self.channel.refresh_from_db(fields=["subscription_state"])
+        self.channel.refresh_from_db(fields=["lifecycle", "subscription_state"])
         if self.channel.subscription_state.get("desired") != self.channel.LiveState.LIVE:
+            self.pairing = PairingState.STOPPED
+            return False
+        lifecycle = IntegrationLifecycle.from_value(self.channel.lifecycle)
+        if lifecycle is IntegrationLifecycle.PAUSED:
+            self.pairing = PairingState.PAUSED
+            return False
+        if lifecycle is not IntegrationLifecycle.CONNECTED:
             self.pairing = PairingState.STOPPED
             return False
         if not bridge_is_locked(self.channel):
@@ -250,7 +349,7 @@ class WhatsAppSession:
 
     # -- state reports -----------------------------------------------------
 
-    def _report(self, state: str, **pairing: Any) -> None:
+    def _report(self, state: PairingState, **pairing: Any) -> None:
         """Persist pairing + progress; each save streams over ``channelChanged``."""
 
         stage = (
@@ -268,19 +367,61 @@ class WhatsAppSession:
             details["items"] = self.landed
         self.reporter.report(stage, details=details)
 
-    def _mark_paired(self, jid: str) -> None:
-        """Record the linked identity and clear the QR from the persisted row.
+    def _mark_paired(self, jid: str) -> bool:
+        """Record the linked identity once per account, then let reconnects pass.
 
-        The own-JID is merged under a row lock (not a full-column write from this
-        long-lived instance) so a reconnect cannot clobber a concurrent operator
-        ``stop``/``disconnect`` writing the ``desired`` key.
+        whatsmeow re-fires ``ConnectedEv`` for the life of the session, so this
+        runs on every reconnect while the account almost never changes. The
+        account lock this session already holds is the proof of ownership, so an
+        unchanged JID needs no second claim: skipping it drops a ``SELECT … FOR
+        UPDATE``, an owners ``EXISTS`` across the MTI parent, a save, a
+        ``refresh_from_db`` and a redundant ``channelChanged`` per reconnect.
+
+        The first claim of an account is also the one place a live handshake is
+        known healthy, so it clears any runtime error the last one left.
         """
 
-        if jid:
-            self.own_jid = bare_jid(jid)
-            self.channel.merge_subscription_state(own_jid=self.own_jid)
+        normalized = bare_jid(jid) or self.own_jid
+        if not normalized:
+            return self._still_wanted()
+        if self._account_jid == normalized and self.pairing == PairingState.PAIRED:
+            return self._still_wanted()
+        self.own_jid = normalized
+        if self._account_jid != normalized:
+            acquired = self._account_locks.enter_context(
+                task_lock(whatsapp_account_lock_key(normalized))
+            )
+            if not acquired:
+                return self._mark_duplicate()
+            if not self.channel.backend.claim_account(normalized):
+                return self._mark_duplicate()
+            self._account_jid = normalized
+        if not self._still_wanted():
+            return False
         self.pairing = PairingState.PAIRED
         self._report(PairingState.PAIRED)
+        self.channel.report_status(IntegrationRuntimeStatus.OK)
+        return True
+
+    def _mark_duplicate(self) -> bool:
+        """Report a rejected account without naming the channel that owns it.
+
+        The report carries no *foreign* row attributes: the rejected channel's
+        ``sync_progress`` is readable by its own owner and broadcast over
+        ``channelChanged``, and a duplicate is by construction "an account that
+        belongs to someone else's channel", so nothing about that channel — its
+        name, its sqid — may ride along. The account itself does: ``_report``
+        merges this session's own ``own_jid``, which is the account this caller
+        just scanned. The admin-gated pairing query names the conflicting channel
+        off its own read instead
+        (:meth:`~.backend.WhatsAppChannelBackend._duplicate_owner`), which is
+        also how ``backend.pairing()`` still has a JID to project after a release
+        has dropped ``own_jid`` from the row.
+        """
+
+        self.pairing = PairingState.DUPLICATE_ACCOUNT
+        self._report(PairingState.DUPLICATE_ACCOUNT)
+        return False
 
     # -- ingest ------------------------------------------------------------
 

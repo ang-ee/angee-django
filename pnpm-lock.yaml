@@ -341,6 +341,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../angee/web/app
+      '@angee/integrate':
+        specifier: workspace:*
+        version: link:../../integrate/web
       '@angee/messaging':
         specifier: workspace:*
         version: link:../../messaging/web
@@ -350,9 +353,6 @@ importers:
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../angee/web/ui
-      valibot:
-        specifier: ^1.4.0
-        version: 1.4.1(typescript@6.0.3)
     devDependencies:
       '@tanstack/react-router':
         specifier: ^1.170.16
@@ -1216,6 +1216,9 @@ importers:
       '@angee/messaging-integrate-whatsapp':
         specifier: workspace:*
         version: link:../../../addons/angee/messaging_integrate_whatsapp/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../angee/web/metadata
       '@angee/nexus':
         specifier: workspace:*
         version: link:../../../addons/angee/nexus/web
@@ -1228,6 +1231,9 @@ importers:
       '@angee/platform':
         specifier: workspace:*
         version: link:../../../addons/angee/platform/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../angee/web/refine
       '@angee/resources':
         specifier: workspace:*
         version: link:../../../addons/angee/resources/web

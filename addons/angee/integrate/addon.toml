@@ -7,6 +7,11 @@ keywords = ["integrations", "oauth", "connections"]
 category = "Integration"
 depends_on = ["angee.iam", "angee.resources", "angee.tasks"]
 
+[[migrations]]
+name = "integration_lifecycle_values"
+app_label = "integrate"
+module = "runtime_migrations.integration_lifecycle_values"
+
 [resources]
 master = [
   { path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" },

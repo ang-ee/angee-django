@@ -1,23 +1,16 @@
 // @vitest-environment happy-dom
 
 import { composeAddons, defineBaseAddon } from "@angee/app";
-import { baseIcons, getIcon, type ComposedMenuItem } from "@angee/ui";
-import notes from "@angee-example/notes-web";
+import {
+  baseIcons,
+  formViewRecordActionsSlot,
+  getIcon,
+  type ComposedMenuItem,
+} from "@angee/ui";
 import agents from "@angee/agents";
-import iam from "@angee/iam";
-import integrate from "@angee/integrate";
-import knowledge from "@angee/knowledge";
-import messaging from "@angee/messaging";
-import nexus from "@angee/nexus";
-import operator from "@angee/operator";
-import parties from "@angee/parties";
-import platform from "@angee/platform";
-import resources from "@angee/resources";
-import spaces from "@angee/spaces";
-import storage from "@angee/storage";
-import tags from "@angee/tags";
-import workflows from "@angee/workflows";
 import { describe, expect, test } from "vitest";
+
+import { composedAddons } from "../../runtime/web/app";
 
 const authAddon = defineBaseAddon({
   id: "auth",
@@ -26,35 +19,55 @@ const authAddon = defineBaseAddon({
   ],
 });
 
-// The full addon set the host composes (mirrors main.tsx). `composeAddons` is
-// fail-fast on any id collision — icon, route, menu, i18n key, widget, form,
-// preview — but that check runs only at app boot, not during typecheck/build, so
-// a clash between a base glyph and an addon's contribution would otherwise ship
-// green and crash `angee dev`. This guard composes every addon so the gate
-// catches it.
-const ADDONS = [
-  notes,
+// The full addon set the host composes, read from the generated runtime `main.tsx`
+// composes — not a hand-listed copy, which silently drifted from it and left the
+// two messaging integration addons uncomposed here (the reason a slot-id
+// collision between integrate and messaging-integrate-whatsapp was invisible to
+// CI). `composeAddons` is fail-fast on any id collision — icon, route, menu,
+// i18n key, widget, form, preview, slot entry — but that check runs only at app
+// boot, not during typecheck/build, so a clash would otherwise ship green and
+// crash `angee dev`. This guard composes exactly what boots.
+const HOST_ADDONS = [
+  { id: "base", icons: baseIcons },
+  ...composedAddons,
   authAddon,
-  iam,
-  parties,
-  messaging,
-  spaces,
-  nexus,
-  integrate,
-  agents,
-  operator,
-  storage,
-  workflows,
-  knowledge,
-  resources,
-  tags,
-  platform,
 ] as const;
-const HOST_ADDONS = [{ id: "base", icons: baseIcons }, ...ADDONS] as const;
 
 describe("full addon composition", () => {
   test("composes every addon without an id collision", () => {
     expect(() => composeAddons(HOST_ADDONS)).not.toThrow();
+  });
+
+  test("composes integrate's and WhatsApp's record verbs into per-key slots", () => {
+    // Both addons contribute the Resume/Disconnect ids. They compose only because
+    // each is scoped to a key it owns: integrate to the MTI parent it owns, and
+    // WhatsApp to its own backend's impl key — never to `messaging.Channel`, which
+    // `messaging` owns and where WhatsApp's entries would displace integrate's for
+    // every channel, IMAP's included. Contributed to one shared key, the shared ids
+    // would collide and `composeAddons` would throw. The split is also what lets
+    // FormView pick a row's entry by declared specificity, not addon array order.
+    const composed = composeAddons(HOST_ADDONS);
+    const entryIds = (slot: string): string[] =>
+      composed.slots.filter((entry) => entry.slot === slot).map((entry) => entry.id);
+
+    expect(entryIds(formViewRecordActionsSlot("integrate.Integration"))).toEqual([
+      "integrate.lifecycle.pause",
+      "integrate.lifecycle.resume",
+      "integrate.lifecycle.disconnect",
+    ]);
+    expect(
+      entryIds(formViewRecordActionsSlot("messaging.Channel", "whatsapp")),
+    ).toEqual([
+      // The two ids WhatsApp owns outright — a QR pairing and a read of its
+      // result have no shared verb to specialize — then the two it replaces.
+      "messaging-integrate-whatsapp.connect",
+      "messaging-integrate-whatsapp.pairing",
+      "integrate.lifecycle.resume",
+      "integrate.lifecycle.disconnect",
+    ]);
+    // No addon claims the bare channel-model key, so an IMAP channel resolves only
+    // integrate's canonical verbs.
+    expect(entryIds(formViewRecordActionsSlot("messaging.Channel"))).toEqual([]);
   });
 
   test("resolves every menu icon through the composed glyph registry", () => {

@@ -169,7 +169,7 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
         "id": directory_data["id"],
         "display_name": "Ada Contacts",
         "backend_class": "CARDDAV",
-        "lifecycle": "ACTIVE",
+        "lifecycle": "CONNECTED",
         "runtime_status": "OK",
         "config": {"server_url": "https://dav.example.com/"},
     }
@@ -195,7 +195,7 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
         assert integration.credential_id == credential.pk
         assert integration.owner_id == admin.pk
         assert directory.backend_class == "carddav"
-        assert directory.lifecycle == "active"
+        assert directory.lifecycle == "connected"
         assert directory.config == {"server_url": "https://dav.example.com/"}
         assert handle.owner_id == admin.pk
         assert (handle.platform, handle.value) == ("email", "ada@example.com")
