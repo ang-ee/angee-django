@@ -202,6 +202,7 @@ type Mutation {
   jobRun(name: String!, inputs: [KeyValueInput!]): String!
   fileWrite(source: String!, path: String!, content: String!, etag: String): FileRef!
   serviceInit(input: ServiceInput!): MutationResult
+  serviceUpdateFromTemplate(name: String!, input: ServiceTemplateUpdateInput): ServiceTemplateUpdateResult!
   insert_services_one(object: services_insert_input!): ServiceState
   update_services_by_pk(pk_columns: services_pk_columns_input!, _set: services_set_input!): ServiceState
   delete_services_by_pk(id: String!): ServiceState
@@ -330,6 +331,20 @@ type ServiceState {
   runtime: String!
   status: String!
   health: String
+}
+
+input ServiceTemplateUpdateInput {
+  inputs: [KeyValueInput!]
+  dryRun: Boolean
+  overwrite: Boolean
+}
+
+type ServiceTemplateUpdateResult {
+  name: String!
+  service: ServiceState!
+  changed: Boolean!
+  changes: [TemplateChange!]!
+  conflicts: [TemplateConflict!]!
 }
 
 input ServicesGroupBySpec {
@@ -559,6 +574,16 @@ type Subscription {
 
   """Emitted whenever the aggregate stack snapshot's hash changes."""
   onStackSnapshotChange: StackSnapshot!
+}
+
+type TemplateChange {
+  path: String!
+  kind: String!
+}
+
+type TemplateConflict {
+  path: String!
+  reason: String!
 }
 
 type TemplateDescriptor {
@@ -923,4 +948,5 @@ input workspaces_pk_columns_input {
 input workspaces_set_input {
   ttl: String
   inputs: [KeyValueInput!]
+  overwrite: Boolean
 }

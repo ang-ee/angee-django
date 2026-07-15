@@ -14,6 +14,7 @@ schema-shaped TypeScript is ever authored in Python.
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -40,6 +41,7 @@ class WebPackage:
 
     package: str
     source_root: str = "src"
+    root: str | None = None
     app: str | None = None
     label: str | None = None
 
@@ -50,6 +52,8 @@ class WebPackage:
             "package": self.package,
             "sourceRoot": self.source_root,
         }
+        if self.root is not None:
+            entry["root"] = self.root
         if self.app is not None:
             entry["app"] = self.app
         if self.label is not None:
@@ -99,11 +103,13 @@ class WebRuntime:
         self,
         addons: Iterable[AppConfig],
         *,
+        runtime_dir: Path | None = None,
         web_root: str = DEFAULT_WEB_ROOT,
     ) -> None:
         """Create a web projector over ``addons`` rooted at ``web_root``."""
 
         self.addons = tuple(addons)
+        self.runtime_dir = runtime_dir
         self.web_root = web_root
         self.core_packages = tuple(WebPackage(package) for package in CORE_WEB_PACKAGES)
         self.addon_packages = self._addon_packages()
@@ -172,11 +178,24 @@ class WebRuntime:
             packages.append(
                 WebPackage(
                     raw_package,
+                    root=self._addon_web_root(addon),
                     app=addon.name,
                     label=addon.label,
                 )
             )
         return tuple(packages)
+
+    def _addon_web_root(self, addon: AppConfig) -> str | None:
+        """Return the addon's web root relative to the generated manifest."""
+
+        if self.runtime_dir is None:
+            return None
+        addon_path = getattr(addon, "path", None)
+        if not isinstance(addon_path, str) or not addon_path:
+            return None
+        manifest_dir = self.runtime_dir.resolve() / "web"
+        package_root = Path(addon_path).resolve() / "web"
+        return Path(os.path.relpath(package_root, manifest_dir)).as_posix()
 
     def _codegen_entries(self) -> tuple[WebCodegen, ...]:
         """Return external codegen contributions in composed app order."""

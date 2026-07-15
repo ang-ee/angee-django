@@ -189,7 +189,9 @@ class Runtime:
                 label,
                 source_models,
             )
-        sources.update(WebRuntime(self.addons).render_sources())
+        sources.update(
+            WebRuntime(self.addons, runtime_dir=self.runtime_dir).render_sources()
+        )
         sources.update(extension_source_map(self.addons))
         return sources
 

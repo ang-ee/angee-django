@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import is_dataclass
 from pathlib import Path
@@ -249,6 +250,34 @@ def test_web_runtime_projects_addon_web_packages_in_composed_order(stub_contract
     # The composer holds no schema-name knowledge — the CLI discovers schemas
     # from the SDL on disk — so the manifest carries no schema list.
     assert '"schemas"' not in manifest
+
+
+def test_web_runtime_projects_addon_web_root_relative_to_runtime(
+    tmp_path: Path,
+    stub_contracts: None,
+) -> None:
+    """An addon's resolved Django path becomes a relocatable manifest web root."""
+
+    addon = SimpleNamespace(
+        name="tests.addon",
+        label="addon",
+        path=str(tmp_path / "addon"),
+        _addon_contract=make_contract(web="@demo/addon"),
+    )
+
+    manifest = json.loads(
+        WebRuntime((addon,), runtime_dir=tmp_path / "runtime").manifest_json()
+    )
+
+    assert manifest["addonPackages"] == [
+        {
+            "app": "tests.addon",
+            "label": "addon",
+            "package": "@demo/addon",
+            "root": "../../addon/web",
+            "sourceRoot": "src",
+        }
+    ]
 
 
 def test_web_runtime_projects_external_codegen_entries(stub_contracts: None) -> None:
