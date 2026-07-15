@@ -521,6 +521,61 @@ def test_parties_handle_confirmation_migration_adds_materialized_winner_state() 
     assert module.applies(migrated) is False
 
 
+def test_parties_handle_normalized_value_migration_adds_required_indexed_field() -> None:
+    from angee.parties.models import Handle
+
+    module = importlib.import_module("angee.parties.runtime_migrations.handle_normalized_value")
+    old_state = ProjectState()
+    handle = ModelState.from_model(Handle)
+    handle.fields.pop("normalized_value")
+    old_state.add_model(handle)
+
+    assert module.applies(old_state) is True
+    migrated = module.Migration("probe", "parties").mutate_state(old_state)
+    field = migrated.models["parties", "handle"].fields["normalized_value"]
+
+    assert isinstance(field, models.CharField)
+    assert field.null is False
+    assert field.db_index is True
+    assert field.editable is False
+    assert module.applies(migrated) is False
+
+
+@pytest.mark.django_db(transaction=True)
+def test_parties_handle_normalized_value_migration_backfills_existing_rows() -> None:
+    module = importlib.import_module("angee.parties.runtime_migrations.handle_normalized_value")
+
+    class LegacyHandle(models.Model):
+        platform = models.CharField(max_length=8)
+        value = models.CharField(max_length=512)
+        normalized_value = models.CharField(max_length=512, null=True)
+
+        class Meta:
+            app_label = "tests"
+            db_table = "test_legacy_handle_normalized_value"
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(LegacyHandle)
+    historical_apps = SimpleNamespace(get_model=lambda *args: LegacyHandle)
+    try:
+        LegacyHandle._base_manager.bulk_create(
+            [
+                LegacyHandle(platform="email", value=" Alice.Smith+work@GMAIL.com "),
+                LegacyHandle(platform="email", value="User@Example.COM"),
+                LegacyHandle(platform="phone", value=" +420 123 456 "),
+            ]
+        )
+        with connection.schema_editor() as schema_editor:
+            module.backfill_normalized_values(historical_apps, schema_editor)
+
+        assert list(
+            LegacyHandle._base_manager.order_by("id").values_list("normalized_value", flat=True)
+        ) == ["alicesmith@gmail.com", "user@example.com", "+420 123 456"]
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(LegacyHandle)
+
+
 def _old_nexus_state() -> ProjectState:
     from angee.nexus.models import Tie
 

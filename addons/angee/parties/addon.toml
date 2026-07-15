@@ -17,6 +17,11 @@ name = "handle_party_link_confirmed"
 app_label = "parties"
 module = "runtime_migrations.handle_party_link_confirmed"
 
+[[migrations]]
+name = "handle_normalized_value"
+app_label = "parties"
+module = "runtime_migrations.handle_normalized_value"
+
 [resources]
 master = [
   { path = "resources/master/010_parties.relationshipkind.yaml", adopt = "slug" },
