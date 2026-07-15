@@ -1,9 +1,12 @@
-import { useAuthoredMutation } from "@angee/refine";
 import { useCallback, type ReactElement, type ReactNode } from "react";
 import {
-  Badge, Button, Chip, Glyph, errorMessage, statusTone, textRoleVariants, useToast, type CardActionContext, type Tone } from "@angee/ui";
+  Badge, Button, Chip, Glyph, errorMessage, statusTone, textRoleVariants, useAuthoredResourceMutation, useToast, type CardActionContext, type Tone } from "@angee/ui";
 
-import { InstallAddon, UninstallAddon } from "../documents";
+import {
+  InstallAddon,
+  PLATFORM_ADDON_MUTATION_INVALIDATES,
+  UninstallAddon,
+} from "../documents";
 import { usePlatformT } from "../i18n";
 
 /** The reflection resource the board reads + invalidates after every lifecycle write. */
@@ -104,12 +107,12 @@ export function AddonCardActions({
   const toast = useToast();
   // Invalidate the board only on an *effective* write — a server refusal (`ok: false`)
   // changed nothing, so it should not trigger a refetch.
-  const [install, installState] = useAuthoredMutation(InstallAddon, {
-    invalidateModels: [ADDON_MODEL],
+  const [install, installState] = useAuthoredResourceMutation(InstallAddon, {
+    invalidateModels: PLATFORM_ADDON_MUTATION_INVALIDATES,
     shouldInvalidate: (data) => Boolean(data?.install?.ok),
   });
-  const [uninstall, uninstallState] = useAuthoredMutation(UninstallAddon, {
-    invalidateModels: [ADDON_MODEL],
+  const [uninstall, uninstallState] = useAuthoredResourceMutation(UninstallAddon, {
+    invalidateModels: PLATFORM_ADDON_MUTATION_INVALIDATES,
     shouldInvalidate: (data) => Boolean(data?.uninstall?.ok),
   });
   const busy = installState.fetching || uninstallState.fetching;

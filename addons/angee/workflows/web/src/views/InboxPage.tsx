@@ -108,6 +108,7 @@ function DecisionResolutionPanel({
   const payloadId = React.useId();
   const [payload, setPayload] = React.useState("{}");
   const [error, setError] = React.useState<string | null>(null);
+  // Correct as-is: PendingWorkflowDecisionsDocument is an authored query keyed by DECISION_MODEL.
   const [decide, decideState] = useAuthoredMutation(DecideWorkflowDecisionDocument, {
     dataProviderName: "public",
     invalidateModels: [DECISION_MODEL],

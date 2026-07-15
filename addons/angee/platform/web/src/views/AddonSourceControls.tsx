@@ -1,16 +1,16 @@
-import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Button, Dialog, Glyph, MutationDialog, Spinner, errorMessage, textRoleVariants, useRelationOptions, useToast, type MutationDialogField } from "@angee/ui";
+import { Button, Dialog, Glyph, MutationDialog, Spinner, errorMessage, textRoleVariants, useAuthoredResourceMutation, useRelationOptions, useToast, type MutationDialogField } from "@angee/ui";
 import { VCS_BRIDGE_RELATION } from "@angee/integrate";
 
 import {
   AddAddonSource,
   AddonSources,
+  PLATFORM_ADDON_MUTATION_INVALIDATES,
   ScanAddonSource,
   type AddonSourceRow,
 } from "../documents";
 import { usePlatformT } from "../i18n";
-import { ADDON_MODEL } from "./AddonCard";
 
 /**
  * The marketplace source controls for the board toolbar: **Add source** inventories a
@@ -56,8 +56,8 @@ function AddSourceDialog({
   const soleBridge = bridgeOptions.length === 1 ? bridgeOptions[0] : undefined;
   const vcsBridgeId = soleBridge?.value ?? "";
 
-  const [addSource] = useAuthoredMutation(AddAddonSource, {
-    invalidateModels: [ADDON_MODEL],
+  const [addSource] = useAuthoredResourceMutation(AddAddonSource, {
+    invalidateModels: PLATFORM_ADDON_MUTATION_INVALIDATES,
     shouldInvalidate: (data) => Boolean(data?.add_source?.ok),
   });
   const fields = React.useMemo<readonly MutationDialogField[]>(
@@ -140,8 +140,8 @@ function ScanSourcesDialog({
   const query = useAuthoredQuery(AddonSources, undefined, { enabled: open });
   const sources = query.data?.sources ?? [];
   const { refetch } = query;
-  const [scan] = useAuthoredMutation(ScanAddonSource, {
-    invalidateModels: [ADDON_MODEL],
+  const [scan] = useAuthoredResourceMutation(ScanAddonSource, {
+    invalidateModels: PLATFORM_ADDON_MUTATION_INVALIDATES,
     shouldInvalidate: (data) => Boolean(data?.scan?.ok),
   });
   const [scanning, setScanning] = React.useState<string | null>(null);

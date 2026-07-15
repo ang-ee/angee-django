@@ -1,19 +1,18 @@
 import * as React from "react";
-import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
-import { Button, DialogForm, Glyph, Input, RelationField, Spinner, cn, errorMessage, textRoleVariants, useRelationOptions } from "@angee/ui";
+import { useAuthoredQuery } from "@angee/refine";
+import { Button, DialogForm, Glyph, Input, RelationField, Spinner, cn, errorMessage, textRoleVariants, useAuthoredResourceMutation, useRelationOptions } from "@angee/ui";
 import { useDebounce } from "use-debounce";
 import type { DocumentVariables } from "@angee/refine";
 
 import { useIntegrateT } from "../i18n";
 import { VCS_BRIDGE_RELATION } from "../data/vcs-bridge";
 import {
+  INTEGRATE_ADD_REPOSITORY_INVALIDATES,
   IntegrateAddRepository,
   IntegrateSearchRepositories,
   type RepoCandidate,
 } from "../documents";
 
-/** The repository model whose list refetches after an add. */
-const REPOSITORY_MODEL = "integrate.Repository";
 // Debounce keystrokes before hitting the host search API.
 const SEARCH_DEBOUNCE_MS = 250;
 
@@ -71,8 +70,8 @@ function AddRepositoryDialog({
   });
   const candidates = searchQuery.data?.search_repositories ?? [];
 
-  const [addRepository] = useAuthoredMutation(IntegrateAddRepository, {
-    invalidateModels: [REPOSITORY_MODEL],
+  const [addRepository] = useAuthoredResourceMutation(IntegrateAddRepository, {
+    invalidateModels: INTEGRATE_ADD_REPOSITORY_INVALIDATES,
   });
 
   // The repo currently being inventoried, the set already added this session, and

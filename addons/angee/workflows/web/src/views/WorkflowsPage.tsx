@@ -51,6 +51,7 @@ export function WorkflowsPage(): React.ReactElement {
     errorFrom: (data) =>
       data?.publish_workflow.ok === false ? data.publish_workflow.message : null,
   });
+  // Correct as-is: workflows.WorkflowRun declares changes(WorkflowRun, field="workflowRunChanged").
   const [startWorkflowRun] = useAuthoredMutation(StartWorkflowRunDocument, {
     invalidateModels: [RUN_MODEL],
     errorFrom: (data) =>
@@ -153,9 +154,11 @@ function WorkflowCanvas({
     { workflow: workflowId },
     { models: [WORKFLOW_MODEL, STEP_MODEL, EDGE_MODEL] },
   );
+  // Correct as-is: WorkflowGraphDocument is an authored query keyed by STEP_MODEL.
   const [updatePosition] = useAuthoredMutation(UpdateWorkflowStepPositionDocument, {
     invalidateModels: [STEP_MODEL],
   });
+  // Correct as-is: WorkflowGraphDocument is an authored query keyed by EDGE_MODEL.
   const [createEdge] = useAuthoredMutation(CreateWorkflowEdgeDocument, {
     invalidateModels: [EDGE_MODEL],
   });

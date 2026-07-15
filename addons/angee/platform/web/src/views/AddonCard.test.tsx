@@ -5,12 +5,14 @@ import { useCallback } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { AddonCard, AddonCardActions, type AddonResourceRow } from "./AddonCard";
+import { AddonSourceControls } from "./AddonSourceControls";
 
 const mocks = vi.hoisted(() => ({
   mutate: vi.fn(async () => ({
     install: { ok: true, message: "Installed" },
     uninstall: { ok: true, message: "Uninstalled" },
   })),
+  resourceMutation: vi.fn(),
   toast: { success: vi.fn(), danger: vi.fn() },
 }));
 
@@ -19,6 +21,8 @@ vi.mock("@angee/ui", async (importOriginal) => {
   return {
     ...actual,
     Glyph: () => <span />,
+    useAuthoredResourceMutation: mocks.resourceMutation,
+    useRelationOptions: () => ({ options: [] }),
     useToast: () => mocks.toast,
     // Mirror the real (memoized) translator so the namespace bundle resolves to English.
     useNamespaceT: (_namespace: string, messages: Record<string, string>) =>
@@ -29,6 +33,12 @@ vi.mock("@angee/ui", async (importOriginal) => {
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredMutation: () => [mocks.mutate, { fetching: false, error: null }],
+  useAuthoredQuery: () => ({
+    data: { sources: [] },
+    fetching: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
 }));
 
 function row(overrides: Partial<AddonResourceRow> = {}): AddonResourceRow {
@@ -57,6 +67,11 @@ function row(overrides: Partial<AddonResourceRow> = {}): AddonResourceRow {
 const CONTEXT = { refresh: vi.fn() };
 
 beforeEach(() => {
+  mocks.resourceMutation.mockReset();
+  mocks.resourceMutation.mockReturnValue([
+    mocks.mutate,
+    { fetching: false, error: null },
+  ]);
   mocks.mutate.mockClear();
   mocks.toast.success.mockClear();
   mocks.toast.danger.mockClear();
@@ -86,6 +101,22 @@ describe("AddonCard", () => {
 });
 
 describe("AddonCardActions", () => {
+  test("routes install and uninstall invalidation through the resource owner", () => {
+    render(<AddonCardActions row={row()} context={CONTEXT} />);
+
+    expect(mocks.resourceMutation).toHaveBeenCalledTimes(2);
+    expect(mocks.resourceMutation.mock.calls.map((call) => call[1])).toEqual([
+      {
+        invalidateModels: ["platform.Addon"],
+        shouldInvalidate: expect.any(Function),
+      },
+      {
+        invalidateModels: ["platform.Addon"],
+        shouldInvalidate: expect.any(Function),
+      },
+    ]);
+  });
+
   test("uninstalls an enabled addon", async () => {
     render(<AddonCardActions row={row()} context={CONTEXT} />);
     const button = screen.getByRole("button", { name: "Uninstall" });
@@ -130,5 +161,23 @@ describe("AddonCardActions", () => {
     expect((button as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(button);
     expect(mocks.mutate).not.toHaveBeenCalled();
+  });
+});
+
+describe("AddonSourceControls", () => {
+  test("routes add and scan invalidation through the resource owner", () => {
+    render(<AddonSourceControls />);
+
+    expect(mocks.resourceMutation).toHaveBeenCalledTimes(2);
+    expect(mocks.resourceMutation.mock.calls.map((call) => call[1])).toEqual([
+      {
+        invalidateModels: ["platform.Addon"],
+        shouldInvalidate: expect.any(Function),
+      },
+      {
+        invalidateModels: ["platform.Addon"],
+        shouldInvalidate: expect.any(Function),
+      },
+    ]);
   });
 });

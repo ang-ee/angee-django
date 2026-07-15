@@ -40,14 +40,17 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
     enabled,
     models: READ_MODELS,
   });
+  // Correct as-is: RecordActivityThreadDocument is an authored query keyed by READ_MODELS.
   const [scheduleActivity] = useAuthoredMutation(ScheduleRecordActivityDocument, {
     invalidateModels: READ_MODELS,
     errorFrom: (data) => data?.schedule_record_activity,
   });
+  // Correct as-is: RecordActivityThreadDocument is an authored query keyed by READ_MODELS.
   const [completeActivity, completeState] = useAuthoredMutation(CompleteRecordActivityDocument, {
     invalidateModels: READ_MODELS,
     errorFrom: (data) => data?.complete_record_activity,
   });
+  // Correct as-is: RecordActivityThreadDocument is an authored query keyed by READ_MODELS.
   const [cancelActivity, cancelState] = useAuthoredMutation(CancelRecordActivityDocument, {
     invalidateModels: READ_MODELS,
     errorFrom: (data) => data?.cancel_record_activity,

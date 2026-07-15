@@ -68,6 +68,10 @@ export type PlatformFieldData = PlatformModelData["fields"][number];
 // console schema. The board consumes them all through the one generated console
 // contract — never an ad-hoc cross-addon import.
 
+// Every marketplace verb changes the reflected board rows; keep that resource
+// blast radius beside the verbs that own it.
+export const PLATFORM_ADDON_MUTATION_INVALIDATES = ["platform.Addon"] as const;
+
 /** Add an addon root to `settings.yaml`; the row reflects `pending` until the next boot. */
 export const InstallAddon = graphql(`
   mutation InstallAddon($addon: String!) {

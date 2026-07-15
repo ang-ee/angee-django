@@ -75,6 +75,7 @@ function ConnectDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }): React.ReactElement {
+  // Correct as-is: parties.Directory declares changes(Directory, field="directoryChanged").
   const [connect] = useAuthoredMutation(ConnectCardDavDirectory, {
     invalidateModels: [MODEL],
   });
