@@ -17,12 +17,26 @@ describe("nexus addon manifest", () => {
     ]);
   });
 
-  test("keeps ties and cadences in the connections menu", () => {
-    const menu = (nexus.menus ?? []).find((item) => item.id === "nexus");
-    expect(menu?.children?.map((item) => item.route)).toEqual([
+  test("overlays the parties rail instead of standing up its own app", () => {
+    // The chrome derives the app rail from the menu roots, so contributing a root
+    // here would make nexus a destination beside parties rather than an
+    // intelligence layer over it. Every item hangs off the rail parties owns.
+    const menus = nexus.menus ?? [];
+    expect(menus.map((item) => item.route)).toEqual([
       "nexus.ties",
       "nexus.cadences",
     ]);
+    expect(menus.map((item) => item.parentId)).toEqual(["parties", "parties"]);
+    expect(menus.some((item) => item.children)).toBe(false);
+  });
+
+  test("declares a glyph for every menu item it contributes", () => {
+    // A menu item without an icon falls back to looking its id up in the glyph
+    // registry, which silently renders nothing.
+    for (const item of nexus.menus ?? []) {
+      expect(item.icon, `${item.id} declares no icon`).toBeTruthy();
+      expect(Object.keys(nexus.icons ?? {})).toContain(item.icon);
+    }
   });
 
   test("timeline chatter tab self-gates to party records", () => {
