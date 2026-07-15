@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
-from django.db import models
+from django.db import connection, models
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.state import ModelState, ProjectState
 
@@ -519,6 +519,83 @@ def test_parties_handle_confirmation_migration_adds_materialized_winner_state() 
     assert isinstance(field, models.BooleanField)
     assert field.default is False
     assert module.applies(migrated) is False
+
+
+def _old_nexus_state() -> ProjectState:
+    from angee.nexus.models import Tie
+
+    tie = ModelState.from_model(Tie)
+    tie.fields.pop("party_a")
+    tie.fields.pop("party_b")
+    tie.fields.pop("a_to_b_count")
+    tie.fields.pop("b_to_a_count")
+    tie.fields["party"] = models.OneToOneField(
+        "parties.Party",
+        on_delete=models.CASCADE,
+        related_name="tie",
+    )
+    tie.fields["outbound_count"] = models.PositiveIntegerField(default=0)
+    tie.fields["inbound_count"] = models.PositiveIntegerField(default=0)
+    tie.fields["cadence_days"] = models.PositiveIntegerField(null=True, blank=True)
+    tie.fields["touch_due_at"] = models.DateTimeField(null=True, blank=True, db_index=True)
+    tie.options["constraints"] = []
+    state = ProjectState()
+    state.add_model(tie)
+    return state
+
+
+def test_nexus_tie_pair_migration_replaces_only_the_exact_legacy_shape() -> None:
+    from angee.nexus.models import Cadence, Tie
+
+    module = importlib.import_module("angee.nexus.runtime_migrations.tie_pair_reshape")
+    old_state = _old_nexus_state()
+
+    assert module.applies(old_state) is True
+    migrated = module.Migration("probe", "nexus").mutate_state(old_state)
+    assert ("nexus", "tie") not in migrated.models
+
+    current = ProjectState()
+    current.add_model(ModelState.from_model(Tie))
+    current.add_model(ModelState.from_model(Cadence))
+    assert module.applies(ProjectState()) is False
+    assert module.applies(current) is False
+
+    mixed = _old_nexus_state()
+    mixed.models["nexus", "tie"].fields["party_a"] = models.ForeignKey(
+        "parties.Party",
+        on_delete=models.CASCADE,
+        related_name="mixed_ties",
+    )
+    with pytest.raises(ImproperlyConfigured, match="partial Tie field transition"):
+        module.applies(mixed)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_nexus_tie_pair_migration_refuses_to_discard_cadence_values() -> None:
+    module = importlib.import_module("angee.nexus.runtime_migrations.tie_pair_reshape")
+
+    class LegacyNexusTie(models.Model):
+        cadence_days = models.PositiveIntegerField(null=True, blank=True)
+
+        class Meta:
+            app_label = "tests"
+            db_table = "test_legacy_nexus_tie_guard"
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(LegacyNexusTie)
+    historical_apps = SimpleNamespace(get_model=lambda *args: LegacyNexusTie)
+    try:
+        LegacyNexusTie._base_manager.create(cadence_days=None)
+        with connection.schema_editor() as schema_editor:
+            module.assert_no_legacy_cadence_values(historical_apps, schema_editor)
+
+        LegacyNexusTie._base_manager.create(cadence_days=30)
+        with connection.schema_editor() as schema_editor:
+            with pytest.raises(RuntimeError, match="legacy cadence values"):
+                module.assert_no_legacy_cadence_values(historical_apps, schema_editor)
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(LegacyNexusTie)
 
 
 def test_parties_source_migration_is_not_discovered_as_an_app_migration() -> None:
