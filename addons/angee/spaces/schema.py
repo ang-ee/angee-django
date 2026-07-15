@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import cast
 
 import strawberry
 import strawberry_django
@@ -16,6 +16,7 @@ from angee.graphql.data import (
     public_pk_decoder,
 )
 from angee.graphql.node import AngeeNode
+from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.messaging.schema import FragmentType
 from angee.parties.schema import PartyType
@@ -37,14 +38,7 @@ class SpaceGroupType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["parent_id"])
-    def parent(self) -> SpaceGroupType | None:
-        """Return the parent when the actor may read it, otherwise null."""
-
-        parent_id = cast(Any, self).parent_id
-        if parent_id is None:
-            return None
-        return cast("SpaceGroupType | None", Group.objects.filter(pk=parent_id).first())
+    parent: SpaceGroupType | None = actor_scoped_to_one("parent")
 
 
 @strawberry_django.type(Membership)
@@ -60,14 +54,7 @@ class SpaceMembershipType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["party_id"])
-    def party(self) -> PartyType | None:
-        """Return the roster party when the actor may read it, otherwise null."""
-
-        party_id = cast(Any, self).party_id
-        if party_id is None:
-            return None
-        return cast("PartyType | None", Party.objects.filter(pk=party_id).first())
+    party: PartyType | None = actor_scoped_to_one("party")
 
 
 @strawberry_django.type(Thread)
@@ -81,14 +68,7 @@ class SpaceThreadType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["group_id"])
-    def group(self) -> SpaceGroupType | None:
-        """Return the bound group when the actor may read it, otherwise null."""
-
-        group_id = cast(Any, self).group_id
-        if group_id is None:
-            return None
-        return cast("SpaceGroupType | None", Group.objects.filter(pk=group_id).first())
+    group: SpaceGroupType | None = actor_scoped_to_one("group")
 
 
 @strawberry.type

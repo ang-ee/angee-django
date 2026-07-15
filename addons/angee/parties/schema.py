@@ -25,6 +25,7 @@ from angee.graphql.data import (
 )
 from angee.graphql.ids import optional_public_id
 from angee.graphql.node import AngeeNode
+from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
@@ -118,18 +119,7 @@ class HandleType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["party_id"])
-    def party(self) -> PartyType | None:
-        """Return the resolved party when the actor may read it, otherwise null.
-
-        Resolve by FK id through the actor-scoped owner: a guarded ``select_related``
-        must reject an unreadable target, while this nullable projection omits it.
-        """
-
-        party_id = cast(Any, self).party_id
-        if party_id is None:
-            return None
-        return cast("PartyType | None", Party.objects.filter(pk=party_id).first())
+    party: PartyType | None = actor_scoped_to_one("party")
 
     @strawberry_django.field(only=["owner_id"])
     def owner(self) -> strawberry.ID | None:

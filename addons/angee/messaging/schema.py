@@ -546,6 +546,10 @@ class AgendaActivityType(AngeeNode):
     def attachment(self) -> RecordPointerType:
         """Return the minimal pointer to the record this activity is attached to.
 
+        This is the explicit exception to
+        :func:`angee.graphql.relations.actor_scoped_to_one`: a narrow-projection
+        contract, not visibility redaction.
+
         The ``attachment`` FK is primed elevated and by id on the agenda queryset
         (:meth:`ThreadActivityQuerySet.with_record_pointers`), so this reads no extra
         row; the three pointer facts come from the ``ThreadAttachment`` owner without
