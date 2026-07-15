@@ -2118,7 +2118,7 @@ function buildGroupedRenderModel<TRow extends Row>(
       return;
     }
 
-    const levelTotal = result.totalCount ?? result.buckets.length;
+    const levelTotal = result.totalCount;
     const isLeafLevel = depth === groupStack.length - 1;
     for (const bucket of result.buckets) {
       const bucketFilter = bucketFilterForGroup(bucket, axisGroup, modelMetadata);
@@ -2211,19 +2211,10 @@ function groupedPageWindow(
   result: GroupByResult,
   page: number,
   pageSize: number,
-): { total: number | undefined; hasNext: boolean } {
-  if (result.totalCount !== undefined) {
-    return {
-      total: result.totalCount,
-      hasNext: page * pageSize < result.totalCount,
-    };
-  }
-  const hasNext = result.buckets.length === pageSize;
+): { total: number; hasNext: boolean } {
   return {
-    total: hasNext
-      ? undefined
-      : (page - 1) * pageSize + result.buckets.length,
-    hasNext,
+    total: result.totalCount,
+    hasNext: page * pageSize < result.totalCount,
   };
 }
 

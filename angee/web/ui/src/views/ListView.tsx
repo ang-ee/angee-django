@@ -496,17 +496,6 @@ function ListViewContent<TRow extends Row = Row>({
     [resolvedColumns],
   );
   const toolbarPager = React.useMemo<PagerState>(() => {
-    if (!groupedListMode) {
-      return {
-        total: surface.list.total,
-        page: surface.list.page,
-        pageSize: surface.list.pageSize,
-        hasPrev: surface.list.hasPrev,
-        hasNext: surface.list.hasNext,
-      };
-    }
-    // Group-level pager: `_groups` may not report an exact total, so preserve
-    // the surface's explicit window-navigation state for Pager.
     return {
       total: surface.list.total,
       page: surface.list.page,
@@ -515,7 +504,6 @@ function ListViewContent<TRow extends Row = Row>({
       hasNext: surface.list.hasNext,
     };
   }, [
-    groupedListMode,
     surface.list.hasNext,
     surface.list.hasPrev,
     surface.list.page,

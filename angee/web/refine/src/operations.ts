@@ -40,8 +40,8 @@ export interface AggregateBucket {
 
 export interface GroupByResult {
   count: number;
-  /** Hasura `_groups` returns only the current window, so this is known only when a caller supplies it. */
-  totalCount?: number;
+  /** Exact post-filter/post-HAVING group cardinality before limit/offset. */
+  totalCount: number;
   buckets: readonly AggregateBucket[];
 }
 
@@ -73,6 +73,7 @@ export interface AggregateRequestOptions {
 
 export interface GroupByRequestOptions extends AggregateRequestOptions {
   dimensions: readonly GroupDimension[];
+  having?: Record<string, unknown>;
   orderBy?: readonly GroupOrder[];
   page?: number;
   pageSize?: number;
@@ -93,7 +94,7 @@ export interface ResourceFacetOption {
 
 export interface ResourceFacetResult {
   count: number;
-  totalCount?: number;
+  totalCount: number;
   options: readonly ResourceFacetOption[];
 }
 
@@ -297,6 +298,7 @@ export function groupByVariables(
   return {
     group_by: options.dimensions.map(groupBySpecVariable),
     ...(options.where !== undefined ? { where: options.where } : {}),
+    ...(options.having !== undefined ? { having: options.having } : {}),
     ...(options.orderBy !== undefined
       ? { order_by: options.orderBy.map(groupOrderVariable) }
       : {}),
@@ -319,10 +321,20 @@ export function extractAggregate(
 }
 
 export function extractGroupBy(data: unknown, root: string): GroupByResult {
-  const rows = arrayValue(recordValue(data)?.[root]);
+  const response = recordValue(data);
+  const rows = arrayValue(response?.[root]);
   const buckets = rows.filter(isRecord).map(groupBucket);
+  const totalCount = response?.totalCount;
+  if (
+    typeof totalCount !== "number" ||
+    !Number.isInteger(totalCount) ||
+    totalCount < 0
+  ) {
+    throw new TypeError("Grouped response requires a numeric totalCount");
+  }
   return {
     count: buckets.reduce((total, bucket) => total + bucket.count, 0),
+    totalCount,
     buckets,
   };
 }
@@ -455,9 +467,7 @@ function facetResult(
 ): ResourceFacetResult {
   return {
     count: result.count,
-    ...(result.totalCount === undefined
-      ? {}
-      : { totalCount: result.totalCount }),
+    totalCount: result.totalCount,
     options: result.buckets.flatMap((bucket) => {
       const key = bucket.key ?? {};
       const valueKey =

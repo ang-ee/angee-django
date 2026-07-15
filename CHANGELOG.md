@@ -9,6 +9,19 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## 2026-07-15 — Exact grouped pagination totals
+
+- Groupable Hasura resources now advertise a `groupsCount` root alongside
+  `groups`, including Angee's JSON-path grouping adapter. The scalar root
+  delegates to the aggregation owner's database-side count and shares the row
+  query's filter, dimensions, and `HAVING` semantics without inheriting its
+  order, limit, or offset.
+- Generated group operation documents select the row window and exact total in
+  one GraphQL request. The Refine boundary requires a numeric `totalCount`, and
+  grouped list/facet pagination no longer guesses cardinality from page length.
+- The minimum composition stack is now `strawberry-django-aggregates 0.10.0`
+  and `strawberry-django-hasura 0.6.0`.
+
 ## 2026-06-07 — Storage base addon (backend)
 
 `angee.storage` lands the file domain as a base addon: `Backend` (credentialed

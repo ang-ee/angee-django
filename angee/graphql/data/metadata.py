@@ -177,6 +177,7 @@ class DataResourceRoots:
     detail_name: str | None = dataclasses.field(default=None, metadata={"wire": "detail"})
     aggregate_name: str | None = dataclasses.field(default=None, metadata={"wire": "aggregate"})
     group_name: str | None = dataclasses.field(default=None, metadata={"wire": "groups"})
+    group_count_name: str | None = dataclasses.field(default=None, metadata={"wire": "groupsCount"})
     create_name: str | None = dataclasses.field(default=None, metadata={"wire": "create"})
     update_name: str | None = dataclasses.field(default=None, metadata={"wire": "update"})
     save_name: str | None = dataclasses.field(default=None, metadata={"wire": "save"})

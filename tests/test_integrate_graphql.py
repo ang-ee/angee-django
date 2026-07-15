@@ -209,6 +209,7 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert integration["roots"]["detail"] == "integrations_by_pk"
     assert integration["roots"]["aggregate"] == "integrations_aggregate"
     assert integration["roots"]["groups"] == "integrations_groups"
+    assert integration["roots"]["groupsCount"] == "integrations_groups_count"
     assert integration["roots"]["create"] == "insert_integrations_one"
     assert integration["roots"]["update"] == "update_integrations_by_pk"
     assert integration["roots"]["delete"] == "delete_integrations_by_pk"

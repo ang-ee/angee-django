@@ -154,6 +154,7 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     assert message["roots"]["detail"] == "messages_by_pk"
     assert message["roots"]["aggregate"] == "messages_aggregate"
     assert message["roots"]["groups"] == "messages_groups"
+    assert message["roots"]["groupsCount"] == "messages_groups_count"
     assert message["roots"]["create"] is None
     assert message["roots"]["update"] == "update_messages_by_pk"
     assert message["roots"]["delete"] == "delete_messages_by_pk"

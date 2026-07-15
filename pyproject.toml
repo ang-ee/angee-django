@@ -32,8 +32,8 @@ dependencies = [
   # INSTALLED_APPS install/uninstall edit (pyyaml round-trips lose comments/layout).
   "ruamel.yaml>=0.18",
   "strawberry-graphql>=0.270",
-  "strawberry-django-aggregates>=0.9.1",
-  "strawberry-django-hasura>=0.5",
+  "strawberry-django-aggregates>=0.10.0",
+  "strawberry-django-hasura>=0.6.0",
   "strawberry-graphql-django>=0.86",
   "tablib>=3",
   "django-choices-field>=4.0.0",

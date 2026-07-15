@@ -108,6 +108,7 @@ def test_public_resource_metadata_declares_people_surface() -> None:
     assert person["roots"]["detail"] == "people_by_pk"
     assert person["roots"]["aggregate"] == "people_aggregate"
     assert person["roots"]["groups"] == "people_groups"
+    assert person["roots"]["groupsCount"] == "people_groups_count"
     assert person["roots"]["create"] == "insert_people_one"
     assert person["roots"]["update"] == "update_people_by_pk"
     assert person["roots"]["delete"] is None

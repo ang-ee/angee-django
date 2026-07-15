@@ -138,6 +138,7 @@ export interface DataResourceRootMetadata {
   detail?: string | null;
   aggregate?: string | null;
   groups?: string | null;
+  groupsCount?: string | null;
   create?: string | null;
   update?: string | null;
   /** Authored `<resource>_save(pk, patch, lines)` diff-apply mutation (F6). */

@@ -14,6 +14,7 @@ from django.db import models, transaction
 from rebac import PermissionDenied, system_context
 from strawberry_django.mutations import resolvers as mutation_resolvers
 from strawberry_django_aggregates import (
+    AggregateOp,
     compute_aggregation,
     default_operators_for,
     group_by_alias,
@@ -639,8 +640,8 @@ def _make_json_groups_field(  # noqa: PLR0913 - mirrors strawberry-django-hasura
     id_column: str = "pk",
     field_decoders: Mapping[str, Callable[[Any], Any]] | None = None,
     max_groups: int | None = None,
-) -> tuple[Any, list[type]]:
-    """Return a Hasura groups field that carries JSON-paths into execution."""
+) -> tuple[Any, Any, list[type]]:
+    """Return Hasura group row/count fields carrying JSON-path execution."""
 
     module = hasura_grouping._host_module(resource_name)
     group_key_type = built.group_key_type
@@ -664,6 +665,19 @@ def _make_json_groups_field(  # noqa: PLR0913 - mirrors strawberry-django-hasura
     )
     setattr(module, f"{resource_name}_group", group_type)
 
+    def filtered_queryset(info: strawberry.Info, where: Any) -> models.QuerySet[Any]:
+        qs = get_queryset(info)
+        if where is not None:
+            qs = qs.filter(
+                hasura_filtering.where_to_q(
+                    where,
+                    id_column=id_column,
+                    id_decode=id_decode,
+                    field_decoders=field_decoders,
+                )
+            )
+        return qs
+
     def resolve_groups(
         self: Any,
         info: strawberry.Info,
@@ -675,16 +689,7 @@ def _make_json_groups_field(  # noqa: PLR0913 - mirrors strawberry-django-hasura
         offset: int | None = None,
     ) -> list[Any]:
         del self
-        qs = get_queryset(info)
-        if where is not None:
-            qs = qs.filter(
-                hasura_filtering.where_to_q(
-                    where,
-                    id_column=id_column,
-                    id_decode=id_decode,
-                    field_decoders=field_decoders,
-                )
-            )
+        qs = filtered_queryset(info, where)
         spec = builder.translate_group_by(group_by)
         public_relation_aliases = _public_relation_group_key_aliases(builder.model, spec)
         requested = hasura_grouping._requested_group_ops(info)
@@ -728,10 +733,44 @@ def _make_json_groups_field(  # noqa: PLR0913 - mirrors strawberry-django-hasura
         "offset": int | None,
         "return": list[group_type],  # type: ignore[valid-type]
     }
+
+    def resolve_groups_count(
+        self: Any,
+        info: strawberry.Info,
+        group_by: list[Any],
+        where: Any = None,
+        having: Any = None,
+    ) -> int:
+        del self
+        qs = filtered_queryset(info, where)
+        spec = builder.translate_group_by(group_by)
+        requested = [(AggregateOp.COUNT, None)]
+        having_dict = builder.translate_having(having, requested)
+        return int(
+            builder.count_groups(
+                qs,
+                spec,
+                requested,
+                having_dict,
+            )
+        )
+
+    resolve_groups_count.__annotations__ = {
+        "self": Any,
+        "info": strawberry.Info,
+        "group_by": list[group_by_spec],  # type: ignore[valid-type]
+        "where": filter_type | None,
+        "having": having_input | None,
+        "return": int,
+    }
     return (
         strawberry.field(
             resolver=resolve_groups,
             name=f"{resource_name}_groups",
+        ),
+        strawberry.field(
+            resolver=resolve_groups_count,
+            name=f"{resource_name}_groups_count",
         ),
         [
             group_type,
@@ -878,12 +917,13 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
                 kwargs.setdefault("json_paths", json_path_allowlist)
                 super().__init__(*args, **kwargs)
 
-        def _make_json_path_groups_field(**kwargs: Any) -> tuple[Any, list[type]]:
+        def _make_json_path_groups_field(**kwargs: Any) -> tuple[Any, Any, list[type]]:
             return _make_json_groups_field(json_paths=json_path_allowlist, **kwargs)
 
         aggregate_builder_globals["AggregateBuilder"] = _JsonPathAggregateBuilder
     else:
-        def _make_json_path_groups_field(**kwargs: Any) -> tuple[Any, list[type]]:
+
+        def _make_json_path_groups_field(**kwargs: Any) -> tuple[Any, Any, list[type]]:
             return _make_json_groups_field(json_paths=active_json_paths, **kwargs)
 
     aggregate_builder_globals["make_groups_field"] = _make_json_path_groups_field
@@ -1104,6 +1144,7 @@ def attach_hasura_resource_metadata(
     detail_root = resource_attr(resource, "detail_root", f"{name}_by_pk")
     aggregate_root = resource_attr(resource, "aggregate_root", f"{name}_aggregate")
     groups_root = resource_attr(resource, "groups_root", f"{name}_groups")
+    groups_count_root = resource_attr(resource, "groups_count_root", f"{name}_groups_count")
     filter_type = resource_attr(
         resource,
         "filter_type",
@@ -1196,6 +1237,11 @@ def attach_hasura_resource_metadata(
                 group_name=(
                     resource_wire_field_name(resource.query, str(groups_root))
                     if groupable and groups_root is not None
+                    else None
+                ),
+                group_count_name=(
+                    resource_wire_field_name(resource.query, str(groups_count_root))
+                    if groupable and groups_count_root is not None
                     else None
                 ),
             ),

@@ -222,6 +222,7 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
         detail_name="things_by_pk",
         aggregate_name="things_aggregate",
         group_name="things_groups",
+        group_count_name="things_groups_count",
         create_name="insert_things_one",
         update_name="update_things_by_pk",
         delete_name="delete_things_by_pk",
@@ -275,6 +276,8 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
     assert fields["word_count"].aggregatable is True
     assert fields["word_count"].creatable is True
     assert fields["word_count"].updatable is True
+    serialized = schema._schema.extensions["angee"]["resources"][0]
+    assert serialized["roots"]["groupsCount"] == "things_groups_count"
     sdl = schema.as_str()
     assert "word_count" in sdl
     assert "wordCount" not in sdl
@@ -397,11 +400,12 @@ def test_hasura_model_resource_groups_json_path_values(transactional_db: Any) ->
             HasuraJsonResourceThing.objects.create(name="three", metadata={"mailbox": "INBOX"})
 
         with system_context(reason="test.aggregate.json_path_group.query"):
-            grouped = result_data(
+            result = result_data(
                 execute_schema(
                     schema,
                     """
                     query MailboxGroups($groupBy: [HasuraJsonValuesThingTypeGroupBySpec!]!) {
+                      json_value_things_groups_count(group_by: $groupBy)
                       json_value_things_groups(group_by: $groupBy, limit: 10) {
                         key { metadata__mailbox }
                         aggregate { count }
@@ -410,7 +414,7 @@ def test_hasura_model_resource_groups_json_path_values(transactional_db: Any) ->
                     """,
                     {"groupBy": [{"field": "METADATA__MAILBOX"}]},
                 )
-            )["json_value_things_groups"]
+            )
     finally:
         _clear_model_tables((HasuraJsonResourceThing,))
         if created:
@@ -418,7 +422,11 @@ def test_hasura_model_resource_groups_json_path_values(transactional_db: Any) ->
                 for model in reversed(created):
                     schema_editor.delete_model(model)
 
-    assert sorted(grouped, key=lambda row: row["key"]["metadata__mailbox"] or "") == [
+    assert result["json_value_things_groups_count"] == 2
+    assert sorted(
+        result["json_value_things_groups"],
+        key=lambda row: row["key"]["metadata__mailbox"] or "",
+    ) == [
         {"key": {"metadata__mailbox": "INBOX"}, "aggregate": {"count": 2}},
         {"key": {"metadata__mailbox": "Sent Messages"}, "aggregate": {"count": 1}},
     ]
