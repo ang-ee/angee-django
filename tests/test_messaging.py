@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -44,7 +45,13 @@ from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.messaging import managers as messaging_managers
-from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient
+from angee.messaging.backends import (
+    ParsedHandle,
+    ParsedMessage,
+    ParsedPart,
+    ParsedRecipient,
+    ParsedThread,
+)
 from angee.messaging.managers import normalize_subject, strip_null_bytes
 from angee.messaging.models import Fragment as AbstractFragment
 from angee.messaging.models import Message as AbstractMessage
@@ -2982,3 +2989,73 @@ def test_first_post_autofollow_seeds_the_author_receipt(messaging_tables: None) 
         follower = ThreadFollower._base_manager.get(thread_id=message.thread_id, user=author)
         assert follower.last_read_message_id == message.pk
         assert ThreadFollower.objects.unread_messages(message.thread, user=author).count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_named_thread_converges_chat_messages(channel: Any) -> None:
+    """A chat adapter's ParsedThread names the conversation — one thread per chat.
+
+    The manager owns the ``chat:`` key namespace: adapters pass the raw source
+    conversation id, both messages land in one channel-scoped thread carrying
+    the hint's modality and title, and a different chat id lands apart. The
+    hint's modality/title stick to the created row only — an established thread
+    keeps its own when a later hint disagrees.
+    """
+
+    chat = ParsedThread(external_id="room-7", modality="group", title="Weekend plans")
+    first = replace(_parsed("chat-1", subject=""), thread=chat)
+    second = replace(_parsed("chat-2", subject=""), thread=chat)
+    other = replace(_parsed("chat-3", subject=""), thread=ParsedThread(external_id="room-9"))
+
+    assert _ingest([first, second, other], channel=channel) == 3
+
+    scope = channel.pk
+    threads = {thread.external_id: thread for thread in Thread._base_manager.all()}
+    assert set(threads) == {f"chat:{scope}:room-7", f"chat:{scope}:room-9"}
+    room = threads[f"chat:{scope}:room-7"]
+    assert room.modality == Thread.Modality.GROUP
+    assert room.title.text == "Weekend plans"
+    assert Message._base_manager.filter(thread=room).count() == 2
+
+    # A later hint with a different title/modality reuses the row unchanged.
+    renamed = replace(
+        _parsed("chat-4", subject=""),
+        thread=ParsedThread(external_id="room-7", modality="direct", title="Renamed"),
+    )
+    assert _ingest([renamed], channel=channel) == 1
+    room.refresh_from_db()
+    assert room.modality == Thread.Modality.GROUP
+    assert room.title.text == "Weekend plans"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_handle_upsert_resolves_external_id_before_value(messaging_tables: None) -> None:
+    """The source-stable external id wins over the human-readable value.
+
+    A handle whose value drifts (a chat account behind a changed number) must
+    refresh the existing row — resolving ``(platform, external_id)`` first —
+    instead of forking a duplicate or crashing on the conditional unique key.
+    """
+
+    del messaging_tables
+    with system_context(reason="test handle external-id upsert"):
+        original = Handle.objects.upsert(
+            platform=Handle.Platform.WHATSAPP,
+            value="+4917000001",
+            external_id="4917000001@s.whatsapp.net",
+            display_name="Ada",
+        )
+        drifted = Handle.objects.upsert(
+            platform=Handle.Platform.WHATSAPP,
+            value="+4917999999",
+            external_id="4917000001@s.whatsapp.net",
+            display_name="Ada L.",
+        )
+        assert drifted.pk == original.pk
+        assert drifted.value == "+4917999999"
+        assert drifted.display_name == "Ada L."
+
+        # Value-keyed resolution still converges when the source has no external id.
+        by_value = Handle.objects.upsert(platform=Handle.Platform.WHATSAPP, value="+4917999999")
+        assert by_value.pk == original.pk
+        assert Handle._base_manager.count() == 1

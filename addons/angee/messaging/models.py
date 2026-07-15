@@ -905,6 +905,56 @@ class Channel(Bridge):
         backend_class = cast("type[ChannelBackend]", self.resolve_impl("backend_class"))
         return backend_class(self)
 
+    class LiveState(models.TextChoices):
+        """Desired live-ingest state persisted in ``subscription_state["desired"]``.
+
+        The base owns this vocabulary: :meth:`start_live`/:meth:`stop_live` write
+        it, a live backend's session loop and its reconciler read it. Stopping is
+        cooperative — a running session notices ``STOPPED`` and exits; nothing
+        force-kills it.
+        """
+
+        LIVE = "live", "Live"
+        STOPPED = "stopped", "Stopped"
+
+    def start_live(self) -> None:
+        """Mark this channel live-desired, then dispatch the backend's live ingest.
+
+        The Bridge live contract for channels: the base persists the desired
+        state (so a reconciler can restart a dropped session), the selected
+        backend owns the vendor dispatch. A poll-only backend's no-op hook makes
+        this safely idempotent on any channel. The desire is merged under a row
+        lock so a concurrent live session writing its own pairing keys cannot
+        clobber it.
+        """
+
+        self.merge_subscription_state(desired=self.LiveState.LIVE)
+        self.backend.start_live()
+
+    def stop_live(self) -> None:
+        """Mark this channel stop-desired, then dispatch the backend's live stop.
+
+        A running live session notices the persisted desire on its next wake and
+        exits cooperatively; the backend hook exists for vendors that also need
+        an active teardown call. The desire is merged under a row lock so the
+        running session cannot clobber it with a stale write.
+        """
+
+        self.merge_subscription_state(desired=self.LiveState.STOPPED)
+        self.backend.stop_live()
+
+    def _next_sync_at(self, *, now: Any) -> Any:
+        """A live-desired channel stays out of the poll loop — push ingest owns it.
+
+        ``record_sync``/``record_sync_error`` recompute the next poll through
+        this hook, so a live channel's manual sync or live-session error never
+        re-arms polling; a stopped or never-live channel keeps the interval.
+        """
+
+        if self.subscription_state.get("desired") == self.LiveState.LIVE:
+            return None
+        return super()._next_sync_at(now=now)
+
     def sync(self) -> int:
         """Sync the channel's source (the Bridge child-sync contract); report the landed count.
 
@@ -1643,6 +1693,7 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
 
         COMMENT = "comment", "Comment"
         EMAIL = "email", "Email"
+        CHAT = "chat", "Chat"
         NOTIFICATION = "notification", "Notification"
         AUTO_COMMENT = "auto_comment", "Auto comment"
         USER_NOTIFICATION = "user_notification", "User notification"

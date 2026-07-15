@@ -21,7 +21,7 @@ def test_tasks_app_exports_celery_app() -> None:
 def test_enqueue_task_sends_named_task(monkeypatch: Any) -> None:
     """Callers enqueue by stable task name through the Angee seam."""
 
-    calls: list[tuple[str, dict[str, Any] | None, datetime | None, str | None]] = []
+    calls: list[tuple[str, dict[str, Any] | None, datetime | None, str | None, float | datetime | None]] = []
 
     def fake_send_task(
         name: str,
@@ -29,8 +29,9 @@ def test_enqueue_task_sends_named_task(monkeypatch: Any) -> None:
         kwargs: dict[str, Any] | None = None,
         eta: datetime | None = None,
         queue: str | None = None,
+        expires: float | datetime | None = None,
     ) -> None:
-        calls.append((name, kwargs, eta, queue))
+        calls.append((name, kwargs, eta, queue, expires))
 
     monkeypatch.setattr("angee.tasks.enqueue.celery_app.send_task", fake_send_task)
 
@@ -39,8 +40,12 @@ def test_enqueue_task_sends_named_task(monkeypatch: Any) -> None:
     eta = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
 
     enqueue_task("workflows.advance", kwargs={"run_id": 1}, eta=eta, queue="default")
+    enqueue_task("whatsapp.run_session", kwargs={"channel_id": 1}, queue="whatsapp", expires=60.0)
 
-    assert calls == [("workflows.advance", {"run_id": 1}, eta, "default")]
+    assert calls == [
+        ("workflows.advance", {"run_id": 1}, eta, "default", None),
+        ("whatsapp.run_session", {"channel_id": 1}, None, "whatsapp", 60.0),
+    ]
 
 
 def test_task_autoconfig_declares_celery_defaults_only() -> None:

@@ -15,7 +15,13 @@ def enqueue_task(
     kwargs: Mapping[str, Any],
     eta: datetime | None = None,
     queue: str | None = None,
+    expires: float | datetime | None = None,
 ) -> None:
-    """Send one named Celery task."""
+    """Send one named Celery task.
 
-    celery_app.send_task(name, kwargs=dict(kwargs), eta=eta, queue=queue)
+    ``expires`` (seconds or an absolute instant) discards the task if no worker
+    picks it up in time — a periodic reconciler enqueues with the tick period so
+    a saturated or absent worker never accumulates a stale backlog.
+    """
+
+    celery_app.send_task(name, kwargs=dict(kwargs), eta=eta, queue=queue, expires=expires)

@@ -70,3 +70,11 @@ edge_port:
 process_compose_port:
   type: int
   default: 8080
+
+# Extra Celery queues, comma-separated; each renders a dedicated `celery-<queue>`
+# worker service (threads pool) beside the shared worker. An addon running
+# long-lived tasks names its queue here — e.g. `whatsapp` for live WhatsApp
+# channel sessions (messaging_integrate_whatsapp).
+celery_queues:
+  type: str
+  default: ""

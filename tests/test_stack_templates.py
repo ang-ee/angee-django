@@ -60,7 +60,7 @@ def _render_stack_manifest(manifest_path: Path, variables: dict[str, str]) -> di
     text = _strip_jinja_comments(text)
     text = _render_jinja_set_tags(text, variables)
     text = _render_conditional_blocks(text, variables)
-    text = _render_for_loops(text)
+    text = _render_for_loops(text, variables)
     text = _render_inline_eq_conditionals(text, variables)
     text = _render_inline_flag_conditionals(text, variables)
     for key, value in variables.items():
@@ -207,21 +207,46 @@ def _parent_active(frames: list[dict[str, bool]]) -> bool:
     return all(frame["active"] for frame in frames)
 
 
-def _render_for_loops(text: str) -> str:
-    """Expand the celery `{% for role in "worker,beat"|split:"," %}…{% endfor %}` loop.
+def _render_for_loops(text: str, variables: dict[str, str]) -> str:
+    """Expand the celery role loop, including the queue-worker extension.
 
     pongo2 has no list literals in expressions and takes Django-style (colon)
-    filter args, so the template iterates a split string — this renderer expands
-    exactly that form.
+    filter args, so the template iterates a split string — optionally
+    concatenated with the ``celery_queues`` input (``"…"|add:VAR|split:","``)
+    and guarded by ``{% if role %}`` so the trailing comma's empty item is
+    skipped. Per-role inline conditionals (``role == "…"`` with an optional
+    ``{% else %}``, and the two-way ``role != … and role != …`` queue-args
+    guard) resolve against each concrete item.
     """
 
+    def resolve_role_conditionals(piece: str, item: str) -> str:
+        piece = re.sub(
+            r'{%\s*if\s+role\s*==\s*"([^"]*)"\s*%}(.*?)(?:{%\s*else\s*%}(.*?))?{%\s*endif\s*%}',
+            lambda m: m.group(2) if item == m.group(1) else (m.group(3) or ""),
+            piece,
+            flags=re.DOTALL,
+        )
+        piece = re.sub(
+            r'{%\s*if\s+role\s*!=\s*"([^"]*)"\s+and\s+role\s*!=\s*"([^"]*)"\s*%}(.*?){%\s*endif\s*%}',
+            lambda m: m.group(3) if item not in (m.group(1), m.group(2)) else "",
+            piece,
+            flags=re.DOTALL,
+        )
+        return piece.replace("{{ role }}", item)
+
     def expand(match: re.Match[str]) -> str:
-        items = [item.strip() for item in match.group(1).split(match.group(2))]
-        body = match.group(3)
-        return "".join(body.replace("{{ role }}", item) for item in items)
+        literal, add_var, sep, body = match.groups()
+        joined = literal + (variables.get(add_var, "") if add_var else "")
+        guard = re.match(r"\s*{%\s*if\s+role\s*%}(.*){%\s*endif\s*%}\s*$", body, flags=re.DOTALL)
+        inner = guard.group(1) if guard is not None else body
+        return "".join(
+            resolve_role_conditionals(inner, item.strip())
+            for item in joined.split(sep)
+            if item.strip() or guard is None
+        )
 
     return re.sub(
-        r'{%\s*for\s+role\s+in\s+"([^"]*)"\|split:"([^"]*)"\s*%}(.*?){%\s*endfor\s*%}',
+        r'{%\s*for\s+role\s+in\s+"([^"]*)"(?:\|add:(\w+))?\|split:"([^"]*)"\s*%}(.*?){%\s*endfor\s*%}',
         expand,
         text,
         flags=re.DOTALL,
@@ -280,12 +305,13 @@ def _eval_atom(atom: str, variables: dict[str, str]) -> str:
 # --- per-template renderers ----------------------------------------------------
 
 
-def _render_local_stack(*, framework: str = "source") -> dict[str, Any]:
+def _render_local_stack(*, framework: str = "source", celery_queues: str = "") -> dict[str, Any]:
     """Render the docker-mode local stack enough for YAML contract tests."""
 
     variables = {
         "_src_path": "https://github.com/ang-ee/angee-django/tree/v0.1.7/templates/stacks/local",
         "caddy_image": "caddy:2.9-alpine",
+        "celery_queues": celery_queues,
         "django_image": "ghcr.io/ang-ee/django-angee-base:latest",
         "django_port": "8000",
         "framework": framework,
@@ -302,6 +328,7 @@ def _render_dev_stack(
     *,
     project_path: str = "../examples/notes-angee",
     framework_path: str = "..",
+    celery_queues: str = "",
 ) -> dict[str, Any]:
     """Render the process-mode dev stack enough for YAML contract tests.
 
@@ -315,6 +342,7 @@ def _render_dev_stack(
 
     variables = {
         "ANGEE_ROOT": ".angee",
+        "celery_queues": celery_queues,
         "django_port": "8100",
         "edge_port": "7001",
         "framework_path": framework_path,
@@ -748,3 +776,41 @@ def test_dev_stack_local_processes_do_not_depend_on_container_services() -> None
     for name, process in local_processes.items():
         dependencies = set(process.get("depends_on", [])) | set(process.get("after", []))
         assert not dependencies & container_services, name
+
+
+def test_celery_queue_workers_render_in_both_modes() -> None:
+    """`celery_queues` renders one dedicated `celery-<queue>` worker per entry.
+
+    The queue worker inherits the celery block's env/command owner (no duplicated
+    stack facts) and isolates long-lived addon tasks on a threads pool: `-Q <queue>`
+    is the routing contract an addon like messaging_integrate_whatsapp dispatches to.
+    A blank input (the default) renders no extra service.
+    """
+
+    for render in (_render_dev_stack, _render_local_stack):
+        stack = render()
+        assert {name for name in stack["services"] if name.startswith("celery-")} == {
+            "celery-worker",
+            "celery-beat",
+        }
+
+    dev = _render_dev_stack(celery_queues="whatsapp")
+    dev_service = dev["services"]["celery-whatsapp"]
+    assert dev_service["runtime"] == "local"
+    command = dev_service["command"]
+    assert command[command.index("-Q") + 1] == "whatsapp"
+    assert command[command.index("--pool") + 1] == "threads"
+    assert "beat" not in command
+    # The queue worker shares the shared block's env owner verbatim.
+    assert dev_service["env"] == dev["services"]["celery-worker"]["env"]
+
+    local = _render_local_stack(celery_queues="whatsapp")
+    local_service = local["services"]["celery-whatsapp"]
+    assert local_service["runtime"] == "container"
+    exec_line = local_service["command"][-1]
+    assert "worker -Q whatsapp --pool threads --concurrency 8" in exec_line
+    assert local_service["image"] == local["services"]["celery-worker"]["image"]
+
+    # Two queues render two workers; the shared pair stays untouched.
+    two = _render_dev_stack(celery_queues="whatsapp,voice")
+    assert {"celery-whatsapp", "celery-voice", "celery-worker", "celery-beat"} <= set(two["services"])

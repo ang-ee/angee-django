@@ -50,11 +50,23 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
     """Factory + upsert for handles (the contact-point write path)."""
 
     def upsert(self, *, platform: str, value: str, created_by_id: Any = None, **fields: Any) -> Any:
-        """Get-or-create a handle by its ``(platform, value)`` dedup key, refreshing display fields.
+        """Get-or-create a handle on the identity it actually has, refreshing display fields.
+
+        A source-stable ``external_id`` (in ``fields``, when the source has one)
+        is the stronger identity — the model's conditional unique key — so the
+        write serializes on whichever identity is present: ``get_or_create`` on
+        ``(platform, external_id)`` when given, else ``(platform, value)``. That
+        means an address whose human-readable ``value`` drifts (a chat account
+        behind a changed number) refreshes the existing row instead of forking a
+        duplicate or crashing a concurrent insert on the external-id constraint.
+        The value-keyed path never rewrites ``external_id`` (it is not the key it
+        matched on).
 
         ``created_by_id`` stamps the audit owner. Control ownership is deliberately
         excluded from the generic refresh loop; :meth:`claim_own` is its only write
         path, so a routine upsert cannot silently transfer an account between users.
+        ``normalized_value`` tracks ``value`` on every hit. Display fields refresh
+        on every hit; blank values never clobber.
         """
 
         if "owner" in fields or "owner_id" in fields:
@@ -62,6 +74,21 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         if "normalized_value" in fields:
             raise TypeError("Handle.normalized_value is maintained by Handle.save().")
         normalized_value = self.model.normalize_value(platform, value)
+        external_id = str(fields.get("external_id") or "")
+        if external_id:
+            handle, created = self.get_or_create(
+                platform=platform,
+                external_id=external_id,
+                defaults={
+                    "created_by_id": created_by_id,
+                    "value": value,
+                    "normalized_value": normalized_value,
+                    **fields,
+                },
+            )
+            if not created:
+                self._refresh(handle, {"value": value, "normalized_value": normalized_value, **fields})
+            return handle
         handle, created = self.get_or_create(
             platform=platform,
             value=value,
@@ -72,16 +99,20 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
             },
         )
         if not created:
-            dirty = [name for name, new in fields.items() if new and getattr(handle, name, None) != new]
-            if handle.normalized_value != normalized_value:
-                handle.normalized_value = normalized_value
-                dirty.append("normalized_value")
-            if dirty:
-                for name in dirty:
-                    if name in fields:
-                        setattr(handle, name, fields[name])
-                handle.save(update_fields=[*dirty, "updated_at"])
+            # The value matched, not the external id — never rewrite it here.
+            refresh = {name: val for name, val in fields.items() if name != "external_id"}
+            self._refresh(handle, {"normalized_value": normalized_value, **refresh})
         return handle
+
+    @staticmethod
+    def _refresh(handle: Any, fields: dict[str, Any]) -> None:
+        """Apply the non-blank ``fields`` that differ; one save, only when dirty."""
+
+        dirty = [name for name, new in fields.items() if new and getattr(handle, name, None) != new]
+        if dirty:
+            for name in dirty:
+                setattr(handle, name, fields[name])
+            handle.save(update_fields=[*dirty, "updated_at"])
 
     def claim_own(
         self,

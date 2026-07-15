@@ -28,6 +28,9 @@ INSTALLED_APPS = [
     "angee.tags",
     "angee.uom",
     "angee.messaging",
+    # Installed (imap is not) because this addon ships a management command
+    # (`whatsapp_import`) whose discovery needs INSTALLED_APPS membership.
+    "angee.messaging_integrate_whatsapp",
     "angee.spaces",
     "angee.nexus",
     "angee.posts",
@@ -107,6 +110,7 @@ ANGEE_DIRECTORY_BACKEND_CLASSES = {
 ANGEE_CHANNEL_BACKEND_CLASSES = {
     "manual": "angee.messaging.backends.ManualChannelBackend",
     "imap": "angee.messaging_integrate_imap.backend.ImapChannelBackend",
+    "whatsapp": "angee.messaging_integrate_whatsapp.backend.WhatsAppChannelBackend",
 }
 # Feed backends a ``posts.Feed`` may select (posts' autoconfig normally
 # contributes these). ``stub`` returns canned posts queued by the posts tests.

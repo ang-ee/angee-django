@@ -24,11 +24,18 @@ from angee.integrate.impl import BridgeImpl
 
 @dataclass(frozen=True)
 class ParsedHandle:
-    """A reachable address parsed from a message (sender or recipient)."""
+    """A reachable address parsed from a message (sender or recipient).
+
+    ``external_id`` carries the source's stable identifier for the address when
+    it differs from ``value`` (a chat platform's user id behind a display
+    number). The map resolves on ``(platform, external_id)`` first, so an
+    address whose human-readable ``value`` drifts still converges on one handle.
+    """
 
     platform: str
     value: str
     display_name: str = ""
+    external_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -60,6 +67,23 @@ class ParsedPart:
 
 
 @dataclass(frozen=True)
+class ParsedThread:
+    """The conversation a chat message belongs to, named by the source.
+
+    Email threads are *resolved* (reply headers, subject); a chat source *names*
+    its conversation outright. ``external_id`` is the source's raw conversation
+    id, scoped by the adapter exactly like ``ParsedMessage.external_id`` — the
+    map namespaces it (the ``chat:`` thread key), so adapters never compose
+    prefixes. ``modality``/``title`` land on a newly created thread only; an
+    established thread keeps its own.
+    """
+
+    external_id: str
+    modality: str = ""
+    title: str = ""
+
+
+@dataclass(frozen=True)
 class ParsedMessage:
     """One message parsed from a source, neutral of the wire format.
 
@@ -84,6 +108,7 @@ class ParsedMessage:
     received_at: datetime | None = None
     in_reply_to: str = ""
     references: tuple[str, ...] = ()
+    thread: ParsedThread | None = None
     body: ParsedPart | None = None
     metadata: dict = field(default_factory=dict)
 
@@ -146,6 +171,24 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
         ``Channel.sync`` calls this in ``finally``, so a run that fails mid-drain
         does not leak an authenticated connection. The default is a no-op for
         connectionless backends.
+        """
+
+    def start_live(self) -> None:
+        """Dispatch this source's live ingest (start a session, renew a subscription).
+
+        ``Channel.start_live`` owns the persisted desired-state and calls this
+        hook for the vendor action only — a live backend enqueues or renews its
+        long-lived worker here. The default is a no-op: a poll-only backend has
+        no live mode, and the channel is simply marked live-desired with nothing
+        to dispatch.
+        """
+
+    def stop_live(self) -> None:
+        """Dispatch this source's live-ingest stop.
+
+        The counterpart of :meth:`start_live`; ``Channel.stop_live`` persists the
+        desired-state and a live backend's session notices it cooperatively, so
+        most backends need nothing here. The default is a no-op.
         """
 
 
