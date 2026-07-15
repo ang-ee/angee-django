@@ -170,9 +170,9 @@ describe("ListView client row model", () => {
     // Grouped client-side by namespace: the fetched set is grouped in the
     // browser into the two namespace buckets, which render as TanStack group
     // headers (groups start collapsed).
-    // Group headers carry the title-cased namespace value (statusLabel).
-    const example = (await screen.findByText("Example")).closest("button");
-    const angee = screen.getByText("Angee").closest("button");
+    // Namespace is free text, so group headers preserve its value verbatim.
+    const example = (await screen.findByText("example")).closest("button");
+    const angee = screen.getByText("angee").closest("button");
     expect(example?.getAttribute("aria-expanded")).toBe("false");
     expect(angee?.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByText("Notes")).toBeNull();
