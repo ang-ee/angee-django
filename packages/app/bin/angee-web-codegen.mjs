@@ -370,13 +370,14 @@ function buildOperationDocuments(name, runtimeDir) {
     "export interface GroupVariables {",
     "  group_by: readonly Record<string, unknown>[];",
     "  where?: Record<string, unknown>;",
+    "  having?: Record<string, unknown>;",
     "  order_by?: readonly Record<string, unknown>[];",
     "  limit?: number;",
     "  offset?: number;",
     "}",
     "",
     "export type GroupDocument = TypedDocumentNode<",
-    "  Record<string, { key: Record<string, unknown>; aggregate: Record<string, unknown> }[]>,",
+    "  Record<string, { key: Record<string, unknown>; aggregate: Record<string, unknown> }[] | number>,",
     "  GroupVariables",
     ">;",
     "",
@@ -528,30 +529,43 @@ function groupFields(metadataPath) {
     .flatMap((resource) => {
       const modelLabel = resource?.modelLabel;
       const groupsRoot = resource?.roots?.groups;
+      const groupsCountRoot = resource?.roots?.groupsCount;
       const filterType = resource?.typeNames?.filter;
       const groupByType = resource?.typeNames?.groupBySpec;
       const groupOrderType = resource?.typeNames?.groupOrder;
+      const havingType = resource?.typeNames?.having;
       const keyFields = groupKeyFields(resource);
-      if (
-        typeof modelLabel !== "string" ||
-        typeof groupsRoot !== "string" ||
-        groupsRoot === "" ||
-        typeof filterType !== "string" ||
-        filterType === "" ||
-        typeof groupByType !== "string" ||
-        groupByType === "" ||
-        typeof groupOrderType !== "string" ||
-        groupOrderType === "" ||
-        keyFields.length === 0
-      ) {
+      if (typeof groupsRoot !== "string" || groupsRoot === "") {
         return [];
+      }
+      const missing = [
+        ["roots.groupsCount", groupsCountRoot],
+        ["typeNames.having", havingType],
+        ["modelLabel", modelLabel],
+        ["typeNames.filter", filterType],
+        ["typeNames.groupBySpec", groupByType],
+        ["typeNames.groupOrder", groupOrderType],
+      ]
+        .filter(([, value]) => typeof value !== "string" || value === "")
+        .map(([field]) => field);
+      if (keyFields.length === 0) missing.push("groupDimensions");
+      if (missing.length > 0) {
+        const resourceName =
+          typeof modelLabel === "string" && modelLabel !== ""
+            ? modelLabel
+            : "<unknown>";
+        throw new Error(
+          `Grouped resource ${resourceName} is missing required ${missing.join(", ")}`,
+        );
       }
       return [{
         modelLabel,
         groupsRoot,
+        groupsCountRoot,
         filterType,
         groupByType,
         groupOrderType,
+        havingType,
         keyFields,
         measures: Array.isArray(resource?.aggregateMeasures)
           ? resource.aggregateMeasures
@@ -712,13 +726,16 @@ function groupDocument(resource) {
     `query ${actionOperationName(resource.groupsRoot)}(` +
       `$group_by: [${assertGraphQLName(resource.groupByType)}!]!, ` +
       `$where: ${assertGraphQLName(resource.filterType)}, ` +
+      `$having: ${assertGraphQLName(resource.havingType)}, ` +
       `$order_by: [${assertGraphQLName(resource.groupOrderType)}!], ` +
       "$limit: Int, $offset: Int) { " +
       `${assertGraphQLName(resource.groupsRoot)}(` +
-      "group_by: $group_by, where: $where, order_by: $order_by, " +
+      "group_by: $group_by, where: $where, having: $having, order_by: $order_by, " +
       "limit: $limit, offset: $offset" +
       `) { key { ${groupKeySelection(resource.keyFields)} } ` +
-      `aggregate { ${aggregateSelection(resource.measures)} } } }`,
+      `aggregate { ${aggregateSelection(resource.measures)} } } ` +
+      `totalCount: ${assertGraphQLName(resource.groupsCountRoot)}(` +
+      "group_by: $group_by, where: $where, having: $having) }",
     { noLocation: true },
   );
 }

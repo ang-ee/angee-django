@@ -42,7 +42,7 @@ describe("Hasura custom operations", () => {
     expect(request.meta.gqlQuery).toBe(document);
   });
 
-  test("builds a typed-key grouped request using group_by, where, order_by, limit, and offset", () => {
+  test("builds a typed-key grouped request with filters and page variables", () => {
     const document = {
       kind: "Document",
       definitions: [],
@@ -52,6 +52,7 @@ describe("Hasura custom operations", () => {
       {
         dimensions: [groupDimension("STATUS", "status")],
         where: { is_starred: { _eq: true } },
+        having: { count_gt: 1 },
         orderBy: [{ field: "status", direction: "ASC", nulls: "LAST" }],
         page: 2,
         pageSize: 20,
@@ -63,6 +64,7 @@ describe("Hasura custom operations", () => {
     expect(request.meta.gqlVariables).toEqual({
       group_by: [{ field: "STATUS" }],
       where: { is_starred: { _eq: true } },
+      having: { count_gt: 1 },
       order_by: [{ field: "status", direction: "ASC", nulls: "LAST" }],
       limit: 20,
       offset: 20,
@@ -333,11 +335,13 @@ describe("Hasura custom operations", () => {
               aggregate: { count: 1, avg: { word_count: 5 } },
             },
           ],
+          totalCount: 8,
         },
         "notes_groups",
       ),
     ).toEqual({
       count: 3,
+      totalCount: 8,
       buckets: [
         {
           key: { status: "ACTIVE" },
@@ -353,6 +357,18 @@ describe("Hasura custom operations", () => {
     });
   });
 
+  test("rejects a grouped response without an exact numeric total", () => {
+    expect(() => extractGroupBy({ notes_groups: [] }, "notes_groups")).toThrow(
+      "numeric totalCount",
+    );
+    expect(() =>
+      extractGroupBy(
+        { notes_groups: [], totalCount: "8" },
+        "notes_groups",
+      ),
+    ).toThrow("numeric totalCount");
+  });
+
   test("extracts facet options from a grouped response", () => {
     expect(
       extractFacet(
@@ -363,12 +379,14 @@ describe("Hasura custom operations", () => {
               aggregate: { count: 7 },
             },
           ],
+          totalCount: 1,
         },
         "notes_groups",
         { id: "status", dimensions: [groupDimension("STATUS", "status")] },
       ),
     ).toEqual({
       count: 7,
+      totalCount: 1,
       options: [
         {
           value: "ACTIVE",

@@ -77,6 +77,12 @@ export interface UseAngeeGroupByResult extends GroupByResult {
   refetch: () => void;
 }
 
+const EMPTY_GROUP_BY_RESULT: GroupByResult = {
+  count: 0,
+  totalCount: 0,
+  buckets: [],
+};
+
 export interface UseAngeeFacetsOptions {
   enabled?: boolean;
   facets: readonly FacetRequestSpec[];
@@ -212,7 +218,10 @@ export function useAngeeGroupBy(
     queryOptions: { enabled: canQuery },
   });
   const data = run.query.data?.data ?? run.result.data;
-  const result = request ? extractGroupBy(data, request.root) : { count: 0, buckets: [] };
+  const result =
+    request && data != null
+      ? extractGroupBy(data, request.root)
+      : EMPTY_GROUP_BY_RESULT;
   return {
     ...result,
     fetching: run.query.isFetching,
@@ -242,7 +251,9 @@ export function useAngeeFacets(
       facets: Object.fromEntries(
         activeFacets.map((facet) => [
           facet.id,
-          extractFacet(batch.get(facet.id)?.data, root, facet),
+          batch.get(facet.id)?.data == null
+            ? { count: 0, totalCount: 0, options: [] }
+            : extractFacet(batch.get(facet.id)?.data, root, facet),
         ]),
       ),
       fetching: values.some((entry) => entry.fetching),
@@ -347,7 +358,9 @@ export function useAngeeGroupByBatch(
         [...batch.entries()].map(([key, entry]) => [
           key,
           {
-            ...extractGroupBy(entry.data, root),
+            ...(entry.data == null
+              ? EMPTY_GROUP_BY_RESULT
+              : extractGroupBy(entry.data, root)),
             fetching: entry.fetching,
             error: entry.error,
             refetch: entry.refetch,
