@@ -18,6 +18,7 @@ const config = {
     vite.resolve = {
       ...(vite.resolve ?? {}),
       preserveSymlinks: true,
+      dedupe: ["react", "react-dom"],
       alias: {
         ...(vite.resolve?.alias ?? {}),
         react: join(ROOT, "node_modules/react"),
