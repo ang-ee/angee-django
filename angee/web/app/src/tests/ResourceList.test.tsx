@@ -490,7 +490,10 @@ vi.mock("@refinedev/react-table", async () => {
       refineCoreProps?: {
         pagination?: { currentPage?: number; pageSize?: number };
         sorters?: { initial?: Array<{ field: string; order: "asc" | "desc" }> };
-        filters?: { initial?: RefineFilter[] };
+        filters?: {
+          initial?: RefineFilter[];
+          permanent?: RefineFilter[];
+        };
         queryOptions?: { enabled?: boolean };
       };
       onExpandedChange?: (updater: unknown) => void;
@@ -503,7 +506,9 @@ vi.mock("@refinedev/react-table", async () => {
         props.pagination?.currentPage
         ?? ((options.state?.pagination?.pageIndex ?? 0) + 1);
       const active = props.queryOptions?.enabled !== false;
-      const filters = whereFromRefineFilters(props.filters?.initial);
+      const filters = whereFromRefineFilters(
+        props.filters?.permanent ?? props.filters?.initial,
+      );
       const order = angeeOrderFromSorters(props.sorters?.initial);
       sdkMocks.listCalls.push({
         page: requestedPage,
@@ -887,7 +892,16 @@ const TEST_SCHEMA_METADATA: SchemaFieldMetadata = {
       },
       fields: {
         title: { name: "title", kind: "scalar", scalar: "String" },
-        status: { name: "status", kind: "scalar", scalar: "String" },
+        status: {
+          name: "status",
+          kind: "enum",
+          enumName: "NoteStatus",
+          values: [
+            { value: "DRAFT", description: "Draft" },
+            { value: "ACTIVE", description: "Active" },
+            { value: "ARCHIVED", description: "Archived" },
+          ],
+        },
         priority: { name: "priority", kind: "scalar", scalar: "String" },
         wordCount: { name: "wordCount", kind: "scalar", scalar: "Int" },
         updatedAt: { name: "updatedAt", kind: "scalar", scalar: "DateTime" },
@@ -1107,8 +1121,8 @@ function render(
   );
 }
 
-function lastListCall(): ResourceListOptions | undefined {
-  return sdkMocks.listCalls[sdkMocks.listCalls.length - 1];
+function lastActiveListCall(): ResourceListOptions | undefined {
+  return sdkMocks.listCalls.findLast((call) => call.enabled !== false);
 }
 
 describe("ResourceList", () => {
@@ -1502,7 +1516,7 @@ describe("ResourceList", () => {
 
     expect(await screen.findByText("First")).toBeTruthy();
     await waitFor(() =>
-      expect(lastListCall()?.order).toEqual({
+      expect(lastActiveListCall()?.order).toEqual({
         updatedAt: "DESC",
       }),
     );
@@ -1522,7 +1536,7 @@ describe("ResourceList", () => {
 
     expect(await screen.findByText("First")).toBeTruthy();
     await waitFor(() =>
-      expect(lastListCall()?.order).toEqual({ title: "ASC" }),
+      expect(lastActiveListCall()?.order).toEqual({ title: "ASC" }),
     );
   });
 
@@ -1540,7 +1554,7 @@ describe("ResourceList", () => {
 
     expect(await screen.findByText("First")).toBeTruthy();
     await waitFor(() =>
-      expect(lastListCall()?.order).toEqual({ priority: "DESC" }),
+      expect(lastActiveListCall()?.order).toEqual({ priority: "DESC" }),
     );
   });
 
