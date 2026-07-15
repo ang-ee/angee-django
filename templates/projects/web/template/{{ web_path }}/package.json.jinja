@@ -10,6 +10,11 @@
     "typecheck": "tsc --noEmit",
     "codegen": "angee-web-codegen --runtime ../runtime --web-root ."
   },
+{# `@angee/metadata` and `@angee/refine` are direct dependencies even though the
+   host imports neither by name: both own React contexts consumed across the
+   host/addon boundary, and taking them directly is what makes Vite prebundle one
+   shared module instance rather than embedding a copy inside each package that
+   depends on them. A second copy is a second context. #}
   "dependencies": {
     "@angee/agents": "workspace:*",
     "@angee/app": "workspace:*",
@@ -17,9 +22,11 @@
     "@angee/integrate": "workspace:*",
     "@angee/knowledge": "workspace:*",
     "@angee/messaging": "workspace:*",
+    "@angee/metadata": "workspace:*",
     "@angee/operator": "workspace:*",
     "@angee/parties": "workspace:*",
     "@angee/platform": "workspace:*",
+    "@angee/refine": "workspace:*",
     "@angee/resources": "workspace:*",
     "@angee/storage": "workspace:*",
     "@angee/ui": "workspace:*",
