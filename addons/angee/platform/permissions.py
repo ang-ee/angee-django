@@ -29,6 +29,7 @@ from typing import Any
 
 from django.apps import apps
 from django.db import DatabaseError, transaction
+from rebac.models import active_relationship_model
 
 # A managed record's ``external_id`` is ``<kind>:<name>``; only schema rows are ours
 # to prune (the library also manages relationship rows under other prefixes).
@@ -164,11 +165,9 @@ def _is_stale_schema_record(
 
 
 def _delete_stale_relationships(records: list[Any]) -> None:
-    """Delete relationship data whose resource or relation schema is stale."""
+    """Directly delete stored relationship rows whose schema is stale."""
 
-    from rebac import delete_relationships
-    from rebac.types import RelationshipFilter
-
+    relationship_model = active_relationship_model()
     stale_resource_types: set[str] = set()
     stale_relations: set[tuple[str, str]] = set()
     for record in records:
@@ -180,13 +179,16 @@ def _delete_stale_relationships(records: list[Any]) -> None:
             stale_relations.add((resource_type, relation))
 
     for resource_type in sorted(stale_resource_types):
-        delete_relationships(RelationshipFilter(resource_type=resource_type))
-        delete_relationships(RelationshipFilter(subject_type=resource_type))
+        relationship_model.objects.filter(resource_type=resource_type).delete()
+        relationship_model.objects.filter(subject_type=resource_type).delete()
 
     for resource_type, relation in sorted(stale_relations):
         if resource_type in stale_resource_types:
             continue
-        delete_relationships(RelationshipFilter(resource_type=resource_type, relation=relation))
+        relationship_model.objects.filter(
+            resource_type=resource_type,
+            relation=relation,
+        ).delete()
 
 
 def _prune_key(record: object) -> tuple[int, str]:

@@ -109,6 +109,37 @@ def _managed_relation(package: str, resource_type: str, name: str):
     return definition, relation
 
 
+def _managed_relation_for_definition(
+    package: str,
+    definition,
+    name: str,
+    *,
+    backing: dict[str, str] | None,
+):
+    """Create one package-managed relation on an existing definition."""
+
+    from django.contrib.contenttypes.models import ContentType
+    from django.utils import timezone
+    from rebac.models import PackageManagedRecord, SchemaRelation
+
+    relation = SchemaRelation.objects.create(
+        definition=definition,
+        name=name,
+        allowed_subjects=[{"type": "auth/user", "relation": "", "wildcard": False}],
+        backing=backing,
+    )
+    PackageManagedRecord.objects.create(
+        package=package,
+        external_id=f"relation:{definition.resource_type}#{name}",
+        schema_revision=1,
+        target_ct=ContentType.objects.get_for_model(SchemaRelation),
+        target_pk=relation.pk,
+        content_hash="x",
+        last_synced_at=timezone.now(),
+    )
+    return relation
+
+
 @pytest.fixture
 def _restore_iam_schema_path():
     """Restore IAM's test-time ``rebac_schema`` override after a repoint."""
@@ -248,6 +279,78 @@ def test_reconcile_prunes_stale_rows_inside_composed_package(db) -> None:
         package=package,
         external_id="definition:messaging/message",
     ).exists()
+
+
+@pytest.mark.parametrize("storage_mode", ("denormalized", "registry"))
+def test_reconcile_directly_purges_stale_relations_from_active_store(
+    db,
+    settings,
+    storage_mode: str,
+) -> None:
+    """A renamed field-backed relation cannot block direct stale-tuple cleanup."""
+
+    from django.apps import apps
+    from rebac.models import (
+        PackageManagedRecord,
+        SchemaDefinition,
+        SchemaRelation,
+        active_relationship_model,
+    )
+
+    from angee.platform.permissions import reconcile_permission_schema
+
+    settings.REBAC_LOCAL_BACKEND_STORAGE = storage_mode
+    package = apps.get_app_config("nexus").name
+    definition = _managed(package, "nexus/tie")
+    stale_backed = _managed_relation_for_definition(
+        package,
+        definition,
+        "party",
+        backing={"attname": "party", "kind": "fk"},
+    )
+    stale_stored = _managed_relation_for_definition(
+        package,
+        definition,
+        "legacy_reader",
+        backing=None,
+    )
+    kept = _managed_relation_for_definition(
+        package,
+        definition,
+        "party_a",
+        backing={"attname": "party_a", "kind": "fk"},
+    )
+
+    relationship_model = active_relationship_model()
+    stale_tuple = relationship_model.objects.create(
+        resource_type="nexus/tie",
+        resource_id="old-tie",
+        relation="legacy_reader",
+        subject_type="auth/user",
+        subject_id="old-reader",
+    )
+    unrelated_tuple = relationship_model.objects.create(
+        resource_type="angee/role",
+        resource_id="admin",
+        relation="member",
+        subject_type="auth/user",
+        subject_id="kept-reader",
+    )
+
+    assert reconcile_permission_schema() == 2
+
+    assert SchemaDefinition.objects.filter(pk=definition.pk).exists()
+    assert SchemaRelation.objects.filter(pk=kept.pk).exists()
+    assert not SchemaRelation.objects.filter(pk__in=(stale_backed.pk, stale_stored.pk)).exists()
+    assert not PackageManagedRecord.objects.filter(
+        package=package,
+        external_id__in=(
+            "relation:nexus/tie#party",
+            "relation:nexus/tie#legacy_reader",
+        ),
+    ).exists()
+    assert not relationship_model.objects.filter(pk=stale_tuple.pk).exists()
+    assert relationship_model.objects.filter(pk=unrelated_tuple.pk).exists()
 
 
 def test_reconcile_is_a_noop_when_nothing_stale(db) -> None:
