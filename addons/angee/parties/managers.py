@@ -39,20 +39,48 @@ class HandleManager(AngeeManager):
     """Factory + upsert for handles (the contact-point write path)."""
 
     def upsert(self, *, platform: str, value: str, owner_id: Any = None, **fields: Any) -> Any:
-        """Get-or-create a handle by its ``(platform, value)`` dedup key, refreshing display fields."""
+        """Get-or-create a handle on the identity it actually has, refreshing display fields.
 
+        A source-stable ``external_id`` (in ``fields``, when the source has one)
+        is the stronger identity — the model's conditional unique key — so the
+        write serializes on whichever identity is present: ``get_or_create`` on
+        ``(platform, external_id)`` when given, else ``(platform, value)``. That
+        means an address whose human-readable ``value`` drifts (a chat account
+        behind a changed number) refreshes the existing row instead of forking a
+        duplicate or crashing a concurrent insert on the external-id constraint.
+        The value-keyed path never rewrites ``external_id`` (it is not the key it
+        matched on). Display fields refresh on every hit; blank values never
+        clobber.
+        """
+
+        external_id = fields.get("external_id") or ""
+        if external_id:
+            handle, created = self.get_or_create(
+                platform=platform,
+                external_id=external_id,
+                defaults={"created_by_id": owner_id, "value": value, **fields},
+            )
+            if not created:
+                self._refresh(handle, {"value": value, **fields})
+            return handle
         handle, created = self.get_or_create(
             platform=platform,
             value=value,
             defaults={"created_by_id": owner_id, **fields},
         )
         if not created:
-            dirty = [name for name, new in fields.items() if new and getattr(handle, name, None) != new]
-            if dirty:
-                for name in dirty:
-                    setattr(handle, name, fields[name])
-                handle.save(update_fields=[*dirty, "updated_at"])
+            self._refresh(handle, {name: val for name, val in fields.items() if name != "external_id"})
         return handle
+
+    @staticmethod
+    def _refresh(handle: Any, fields: dict[str, Any]) -> None:
+        """Apply the non-blank ``fields`` that differ; one save, only when dirty."""
+
+        dirty = [name for name, new in fields.items() if new and getattr(handle, name, None) != new]
+        if dirty:
+            for name in dirty:
+                setattr(handle, name, fields[name])
+            handle.save(update_fields=[*dirty, "updated_at"])
 
 
 class PartyHandleManager(AngeeManager):

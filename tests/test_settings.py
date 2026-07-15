@@ -755,11 +755,17 @@ def test_compose_settings_module_rejects_malformed_yaml(
         importlib.reload(compose_settings)
 
 
-def test_compose_settings_module_rejects_ancestor_settings_yaml(
+def test_compose_settings_module_ignores_ancestor_settings_yaml(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Ancestor settings.yaml files must not silently override a project."""
+    """Ancestor settings.yaml files never reach a nested project's composition.
+
+    A project regularly sits inside another Angee root — a framework checkout
+    deployed as a stack source, or a workspace inside that checkout. The
+    composer feeds yamlconf only the project root's own file, so the enclosing
+    stack's settings neither override the project nor fail its boot.
+    """
 
     project = tmp_path / "project"
     project.mkdir()
@@ -781,10 +787,11 @@ def test_compose_settings_module_rejects_ancestor_settings_yaml(
     monkeypatch.delitem(sys.modules, "settings", raising=False)
     monkeypatch.setattr(sys, "argv", [str(manage_py)])
 
-    with pytest.raises(ImproperlyConfigured, match="Unexpected django-yamlconf source"):
-        import angee.compose.settings as compose_settings
+    import angee.compose.settings as compose_settings
 
-        importlib.reload(compose_settings)
+    compose_settings = importlib.reload(compose_settings)
+
+    assert compose_settings.SECRET_KEY == "project-secret"
 
 
 def test_compose_settings_module_uses_project_dir_for_non_manage_entrypoints(

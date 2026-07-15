@@ -58,6 +58,8 @@ dependencies = [
   "httpx>=0.28.1,<0.29",
   "imapclient>=3.1.0",
   "mail-parser-reply>=1.36",
+  "neonize>=0.4.3.post0",
+  "qrcode[pil]>=8.2",
 ]
 
 [project.optional-dependencies]

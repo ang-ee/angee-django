@@ -17,7 +17,6 @@ from django.core.exceptions import ImproperlyConfigured
 
 from angee.compose import autoconfig as _autoconfig
 from angee.compose.composer import Composer
-from angee.paths import resolve_path
 from angee.project import PROJECT_SETTINGS_ENV, PROJECT_YAML_NAME, project_dir
 
 DEFAULTS_SETTINGS_MODULE = "angee.compose.defaults"
@@ -67,7 +66,6 @@ class ProjectContract:
         prepend_import_paths((root,))
         project_settings = self._load_project_settings(root, settings_module)
         self._load_yaml_settings(project_settings, root)
-        self._reject_unexpected_yamlconf_sources(project_settings, root, settings_module)
         self._apply_defaults(project_settings, root)
 
         prepend_import_paths((*self.namespace.get("ANGEE_ADDON_DIRS", ()), root))
@@ -143,45 +141,37 @@ class ProjectContract:
         project_settings: ModuleType,
         root: Path,
     ) -> None:
-        """Apply the project's YAML and environment settings overlay."""
+        """Apply the project's YAML and environment settings overlay.
 
+        Feeds django-yamlconf exactly the sanctioned sources — the project
+        root's ``settings.yaml``, the explicit ``YAMLCONF_CONFFILE`` final
+        overlay, and ``YAMLCONF_*`` environment definitions — composed from the
+        library's own loading steps instead of ``load()``'s implicit directory
+        walk. The walk climbs to the filesystem root and lets the *outermost*
+        ``settings.yaml`` win, so any project nested inside another Angee root
+        (a checkout deployed as a stack source, a workspace inside it) would
+        absorb that stack's settings. Loading only these sources is the
+        enforcement — ancestor files never enter the attribute set — so there is
+        no separate reject pass to keep in step.
+        """
+
+        loader, loader_kwargs = django_yamlconf.get_loader("yaml")
+        if loader is None:
+            raise ImproperlyConfigured("django-yamlconf could not resolve a YAML loader")
         with _autoconfig.fail_on_yamlconf_errors():
-            django_yamlconf.load(
-                settings=project_settings,
-                base_dir=str(root),
-                project=PROJECT_YAML_NAME,
-            )
-
-    def _reject_unexpected_yamlconf_sources(
-        self,
-        project_settings: ModuleType,
-        root: Path,
-        settings_module: str,
-    ) -> None:
-        """Reject yamlconf's implicit ancestor ``settings.yaml`` cascade."""
-
-        allowed_sources = {
-            _autoconfig.YAMLCONF_INTERNAL_SOURCE,
-            _autoconfig.YAMLCONF_ENVIRONMENT_SOURCE,
-            settings_module,
-        }
-        project_yaml = (root / "settings.yaml").resolve()
-        if project_yaml.exists():
-            allowed_sources.add(str(project_yaml))
-        if final_conf := os.environ.get("YAMLCONF_CONFFILE"):
-            allowed_sources.add(str(resolve_path(final_conf)))
-
-        for attribute in getattr(project_settings, _autoconfig.YAMLCONF_ATTRIBUTES, {}).values():
-            sources = [attribute.get("source"), *(source for _value, source in attribute.get("history", ()))]
-            for source in sources:
-                if source in allowed_sources:
-                    continue
-                try:
-                    source_path = str(resolve_path(str(source)))
-                except ImproperlyConfigured, OSError, TypeError, ValueError:
-                    source_path = str(source)
-                if source_path not in allowed_sources:
-                    raise ImproperlyConfigured(f"Unexpected django-yamlconf source {source!r}")
+            attributes = django_yamlconf.bootstrap_attributes(str(root))
+            project_yaml = root / f"{PROJECT_YAML_NAME}.yaml"
+            if project_yaml.exists():
+                django_yamlconf.load_conffile(
+                    attributes, project_settings, loader, loader_kwargs, str(project_yaml)
+                )
+            if final_conf := os.environ.get("YAMLCONF_CONFFILE"):
+                django_yamlconf.load_conffile(
+                    attributes, project_settings, loader, loader_kwargs, final_conf
+                )
+            django_yamlconf.load_envdefs(attributes, project_settings)
+            django_yamlconf.expand_attribute_refs(attributes)
+            django_yamlconf.inject_attr(attributes, project_settings)
 
     def _apply_defaults(
         self,

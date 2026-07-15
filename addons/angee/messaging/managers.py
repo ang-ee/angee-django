@@ -43,7 +43,7 @@ from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.messaging.tracking import TrackingChange
 
 if TYPE_CHECKING:
-    from angee.messaging.backends import ParsedMessage, ParsedPart
+    from angee.messaging.backends import ParsedMessage, ParsedPart, ParsedThread
     from angee.messaging.models import Message
 
 # A fragment quoted by more than this many messages is boilerplate (a disclaimer or
@@ -368,15 +368,28 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         owner_id: Any = None,
         modality: Any = None,
         visibility: Any = None,
+        thread: ParsedThread | None = None,
     ) -> Any:
         """Resolve the thread a message belongs to, creating one if needed.
 
-        Priority: ``In-Reply-To`` → ``References`` (newest-first, i.e. right-to-left,
-        resolved in one batch query) → normalised subject → a new thread. The subject
-        match and the create run under ``select_for_update`` on a deterministic
-        external id (``subj:<normalized>`` or ``msg:<id>``) so two concurrent batches
-        resolving the same subject collide on the unique constraint and converge to
-        one thread instead of double-creating.
+        A source that *names* its conversation (a chat adapter's
+        :class:`~angee.messaging.backends.ParsedThread`) resolves first and
+        directly: the thread keys on ``chat:<channel>:<external_id>`` — this
+        manager owns the deterministic-key namespace (``chat:`` beside
+        ``subj:``/``msg:``), so adapters pass raw conversation ids and never
+        compose prefixes. Chat threads are **channel-scoped**, unlike email's
+        platform-wide merge: two linked accounts that each DM the same person
+        are two private conversations owned by different people, so they must
+        not fuse into one REBAC-shared thread. The hint's ``modality``/``title``
+        land on a newly created thread only.
+
+        Otherwise the email priority applies: ``In-Reply-To`` → ``References``
+        (newest-first, i.e. right-to-left, resolved in one batch query) →
+        normalised subject → a new thread. The subject match and the create run
+        under ``select_for_update`` on a deterministic external id
+        (``subj:<normalized>`` or ``msg:<id>``) so two concurrent batches
+        resolving the same subject collide on the unique constraint and converge
+        to one thread instead of double-creating.
 
         A message with no threading hint *and* no subject keys on ``msg:<external_id>``
         — its own one-message thread, never merged with another, because there is no
@@ -391,6 +404,24 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         ignored when an existing thread is reused (an established thread keeps its own).
         """
 
+        fragment_model = apps.get_model("messaging", "Fragment")
+        if thread is not None and thread.external_id:
+            title = (
+                fragment_model.objects.upsert(text=thread.title, owner_id=owner_id) if thread.title else None
+            )
+            scope = channel.pk if channel is not None else ""
+            named, _created = self.get_or_create_by_external_id(
+                platform=platform,
+                external_id=f"chat:{scope}:{thread.external_id}",
+                defaults={
+                    "channel": channel,
+                    "title": title,
+                    "modality": thread.modality or modality or self.model.Modality.DIRECT,
+                    "visibility": visibility or self.model.Visibility.PRIVATE,
+                    "created_by_id": owner_id,
+                },
+            )
+            return named
         message_model = apps.get_model("messaging", "Message")
         if in_reply_to:
             # Reference resolution is platform-wide (a reply through account B must
@@ -417,7 +448,6 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
                     return row.thread
 
         normalized = normalize_subject(subject)
-        fragment_model = apps.get_model("messaging", "Fragment")
         with transaction.atomic():
             if normalized:
                 # Subject grouping is a hash lookup on the content-addressed store:
@@ -2126,6 +2156,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             owner_id=owner_id,
             modality=modality,
             visibility=visibility,
+            thread=parsed.thread,
         )
         sender = None
         if parsed.sender is not None:
@@ -2134,6 +2165,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 value=parsed.sender.value,
                 owner_id=owner_id,
                 display_name=parsed.sender.display_name,
+                external_id=parsed.sender.external_id,
             )
         # Capture the message's prior state before the upsert moves it: the prior
         # thread (a re-sync that re-resolves to a different thread must reconcile both
@@ -2360,6 +2392,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 value=recipient.handle.value,
                 owner_id=owner_id,
                 display_name=recipient.handle.display_name,
+                external_id=recipient.handle.external_id,
             )
             # The write path owns envelope dedup (the unique constraint is the
             # backstop): any producer may repeat an address within one role.

@@ -457,6 +457,20 @@ data through REBAC, never a queryset bypass.
 
 Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 
+- **A long-lived Celery task needs the three-check wake loop.** A session task
+  that outlives the tick (a live chat connection) runs on a dedicated queue's
+  threads-pool worker — the threads pool enforces **no** time limits, so queue
+  isolation is the protection and `time_limit=None` on the task is only
+  defense-in-depth. Its loop must wake on a bound (shorter than the reconciler
+  tick) and check: (1) the persisted desired-state, so a cooperative stop never
+  waits on an idle socket; (2) a process-local `worker_shutting_down` event, or
+  a warm SIGTERM wedges behind the pool's blocking join until SIGKILL; (3) that
+  it still holds its advisory lock — Postgres advisory locks are
+  connection-scoped, and a DB reconnect drops the lock under a live process, so
+  the holder must exit for a clean reconciler restart instead of racing a
+  duplicate against shared state. The reconciler enqueues with `expires=` of one
+  tick so a saturated or absent worker never accumulates a backlog
+  (`messaging_integrate_whatsapp/client.py` + `tasks.py` is the reference).
 - **State columns are `StateField`; guarded changes go through transition methods, never direct assignment.**
 - **`hasura_model_resource` create `full_clean`s the input, so model + input defaults must agree.**
   The Hasura model-resource create path builds a dummy instance from the input and calls
@@ -757,9 +771,10 @@ Addon autoconfig uses yamlconf-style `SETTINGS` keys: plain keys are defaults,
 `:raw` protects literal braces, and declared `ANGEE_*` addon settings may be
 overlaid by same-named process environment values from the stack. Use
 `settings.py` only when the project truly needs Python-computed settings. Angee
-treats yamlconf errors as Django configuration failures and rejects implicit
-ancestor `settings.yaml` files; only the project file and an explicit
-`YAMLCONF_CONFFILE` may contribute file-backed settings. Generic typed yamlconf
+treats yamlconf errors as Django configuration failures and feeds yamlconf only
+the project root's own `settings.yaml` plus an explicit `YAMLCONF_CONFFILE`, so
+ancestor `settings.yaml` files never contribute (a project nested under another
+Angee stack root boots on its own settings, not the enclosing stack's). Generic typed yamlconf
 environment overrides still require `:jsonenv`.
 Anchor project defaults to `BASE_DIR`, never to the current working directory.
 

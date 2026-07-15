@@ -1924,8 +1924,38 @@ class Bridge(AngeeModel):
 
         raise NotImplementedError("Bridge subclasses must implement stop_live().")
 
-    def _next_sync_at(self, *, now: datetime) -> datetime:
-        """Return the next polling timestamp from this bridge's interval."""
+    def merge_subscription_state(self, **values: Any) -> dict[str, Any]:
+        """Merge sub-keys into ``subscription_state`` under a row lock; return it.
+
+        ``subscription_state`` has disjoint owners — the operator writes
+        ``desired`` (start/stop), a live session writes its own pairing facts —
+        that may write concurrently from separately-loaded instances. A full
+        read-modify-write from a stale instance would clobber the other owner's
+        key, so this re-reads the row locked, merges only the given keys, and
+        saves. Mirrors :meth:`Channel._persist_cursor_slice`.
+        """
+
+        with transaction.atomic():
+            row = (
+                type(self)
+                .objects.sudo(reason="integrate.bridge.subscription_state")
+                .lock_if_supported()
+                .get(pk=self.pk)
+            )
+            state = dict(row.subscription_state) if isinstance(row.subscription_state, dict) else {}
+            state.update(values)
+            row.subscription_state = state
+            row.save(update_fields=["subscription_state", "updated_at"])
+        self.subscription_state = state
+        return state
+
+    def _next_sync_at(self, *, now: datetime) -> datetime | None:
+        """Return the next polling timestamp from this bridge's interval.
+
+        ``None`` keeps the bridge unscheduled — a push-mode child (a live chat
+        channel) overrides this to stay out of the poll loop while its live
+        ingest owns delivery.
+        """
 
         return now + timedelta(seconds=int(self.poll_interval))
 
