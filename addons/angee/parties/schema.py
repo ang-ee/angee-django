@@ -315,29 +315,34 @@ class PartiesDirectoryMutation:
         user = session_user(info)
         credential_model = apps.get_model("integrate", "Credential")
         vendor_model = apps.get_model("integrate", "Vendor")
-        # Credential creation, the directory, and the connection probe share one
-        # transaction so a probe failure rolls all of it back — no orphan credential.
+        credential_values = {
+            "kind": "basic_auth",
+            "name": f"CardDAV — {name}",
+            "material": {"username": username, "password": password},
+        }
+        directory_values = {
+            "owner": user,
+            "backend_class": "carddav",
+            "display_name": name,
+            "config": {"server_url": server_url},
+            "lifecycle": "active",
+            "created_by_id": user.pk,
+        }
+
+        # Complete validation and network discovery before opening the database
+        # transaction. Both rows are intentionally unsaved probe inputs.
+        probe_credential = credential_model.objects.prepare_local_credential(user, **credential_values)
+        Directory(credential=probe_credential, **directory_values).backend.probe()
+
+        # Persist every owned row in one write-only transaction after the probe.
         with system_context(reason="parties.graphql.connect_carddav"), transaction.atomic():
-            credential = credential_model.objects.create_local_credential(
-                user,
-                kind="basic_auth",
-                name=f"CardDAV — {name}",
-                material={"username": username, "password": password},
-            )
+            credential = credential_model.objects.create_local_credential(user, **credential_values)
             vendor, _created = vendor_model.objects.get_or_create(slug="carddav", defaults={"display_name": "CardDAV"})
             directory = Directory.objects.create(
                 vendor=vendor,
-                owner=user,
                 credential=credential,
-                backend_class="carddav",
-                display_name=name,
-                config={"server_url": server_url},
-                lifecycle="active",
-                created_by_id=user.pk,
+                **directory_values,
             )
-            # Validate the URL + credentials before the directory persists, so a bad
-            # connection surfaces here instead of as a silent first-sync failure.
-            directory.backend.probe()
             # The connected account's own login address is the admin's own handle:
             # claim it (control ownership + confirmed self-identity link). Synced
             # *contacts'* handles get neither fact — only this connected account's.

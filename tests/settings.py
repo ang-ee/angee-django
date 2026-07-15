@@ -102,6 +102,7 @@ ANGEE_ADDON_INSTALLER_BACKEND_CLASSES = {
 # here so the ImplClassField registries are non-empty at model-import time.
 ANGEE_DIRECTORY_BACKEND_CLASSES = {
     "manual": "angee.parties.backends.ManualDirectoryBackend",
+    "carddav": "angee.parties_integrate_carddav.backend.CardDavDirectoryBackend",
 }
 ANGEE_CHANNEL_BACKEND_CLASSES = {
     "manual": "angee.messaging.backends.ManualChannelBackend",
