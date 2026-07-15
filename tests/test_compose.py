@@ -6,7 +6,7 @@ import sys
 from dataclasses import is_dataclass
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import pytest
 from django.apps import AppConfig, apps
@@ -1087,6 +1087,153 @@ def test_runtime_extensions_follow_app_graph_order_not_class_names(tmp_path: Pat
     assert "from tests.preferred.models import ZPreferredExtension as TargetRuntimeExtension1" in source
     assert "from tests.fallback.models import AFallbackExtension as TargetRuntimeExtension2" in source
     assert "class TargetRuntime(TargetRuntimeExtension1, TargetRuntimeExtension2, AbstractTargetRuntime):" in source
+
+
+def test_runtime_composes_bodyful_donor_before_its_contributed_bases(tmp_path: Path) -> None:
+    """A donor with its own body and abstract bases keeps donor-first MRO precedence."""
+
+    def base_display(self: object) -> str:
+        del self
+        return "base"
+
+    def donor_display(self: object) -> str:
+        del self
+        return "donor"
+
+    target_module = ModuleType("tests.bodytarget.models")
+    base_module = ModuleType("tests.bodybase.models")
+    donor_module = ModuleType("tests.bodydonor.models")
+    BodyTarget = _source_model(target_module, "BodyTarget", "bodytarget", runtime=True)
+    BodyBase = type(
+        "BodyBase",
+        (AngeeModel,),
+        {
+            "__module__": base_module.__name__,
+            "display": property(base_display),
+            "Meta": type("Meta", (), {"abstract": True, "app_label": "bodybase"}),
+        },
+    )
+    BodyDonor = type(
+        "BodyDonor",
+        (BodyBase,),
+        {
+            "__module__": donor_module.__name__,
+            "__annotations__": {
+                "class_marker": ClassVar[str],
+                "hasura_readable_fields": ClassVar[tuple[str, ...]],
+            },
+            "extends": "bodytarget.BodyTarget",
+            "display": property(donor_display),
+            "class_marker": "donor",
+            "hasura_readable_fields": ("donor_field",),
+            "Meta": type("Meta", (), {"abstract": True, "app_label": "bodydonor"}),
+        },
+    )
+    base_module.BodyBase = BodyBase
+    donor_module.BodyDonor = BodyDonor
+
+    extension_bases = BodyDonor.get_extension_bases()
+    EmittedBodyTarget = type(
+        "EmittedBodyTarget",
+        (*extension_bases, BodyTarget),
+        {
+            "__module__": target_module.__name__,
+            "Meta": type("Meta", (), {"abstract": False, "app_label": "bodytarget"}),
+        },
+    )
+
+    assert extension_bases == (BodyDonor, BodyBase)
+    assert EmittedBodyTarget().display == "donor"
+    assert EmittedBodyTarget.class_marker == "donor"
+    assert EmittedBodyTarget.hasura_readable_fields == ("donor_field",)
+
+    runtime = Runtime(
+        (
+            _addon_config("bodytarget", target_module),
+            _addon_config("bodydonor", donor_module),
+        ),
+        runtime_dir=tmp_path / "runtime",
+    )
+
+    source = runtime.render_sources()[Path("bodytarget/models.py")]
+
+    assert "from tests.bodydonor.models import BodyDonor as BodyTargetExtension1" in source
+    assert "from tests.bodybase.models import BodyBase as BodyTargetExtension2" in source
+    assert "class BodyTarget(BodyTargetExtension1, BodyTargetExtension2, AbstractBodyTarget):" in source
+
+
+def test_runtime_keeps_bodyless_base_composer_donor_unchanged(tmp_path: Path) -> None:
+    """A same-row donor with only structural plumbing still contributes only its bases."""
+
+    target_module = ModuleType("tests.bodylesstarget.models")
+    base_module = ModuleType("tests.bodylessbase.models")
+    donor_module = ModuleType("tests.bodylessdonor.models")
+    _source_model(target_module, "BodylessTarget", "bodylesstarget", runtime=True)
+    BodylessBase = type(
+        "BodylessBase",
+        (AngeeModel,),
+        {
+            "__module__": base_module.__name__,
+            "Meta": type("Meta", (), {"abstract": True, "app_label": "bodylessbase"}),
+        },
+    )
+    BodylessDonor = type(
+        "BodylessDonor",
+        (BodylessBase,),
+        {
+            "__module__": donor_module.__name__,
+            "extends": "bodylesstarget.BodylessTarget",
+            "Meta": type("Meta", (), {"abstract": True, "app_label": "bodylessdonor"}),
+        },
+    )
+    base_module.BodylessBase = BodylessBase
+    donor_module.BodylessDonor = BodylessDonor
+
+    assert BodylessDonor.get_extension_bases() == (BodylessBase,)
+
+    runtime = Runtime(
+        (
+            _addon_config("bodylesstarget", target_module),
+            _addon_config("bodylessdonor", donor_module),
+        ),
+        runtime_dir=tmp_path / "runtime",
+    )
+
+    source = runtime.render_sources()[Path("bodylesstarget/models.py")]
+
+    assert "from tests.bodylessbase.models import BodylessBase as BodylessTargetExtension1" in source
+    assert "BodylessDonor as BodylessTargetExtension" not in source
+    assert "class BodylessTarget(BodylessTargetExtension1, AbstractBodylessTarget):" in source
+
+
+def test_bodyful_extension_donor_must_be_abstract() -> None:
+    """A donor shape that cannot be composed fails before runtime source emission."""
+
+    module = ModuleType("tests.concretedonor.models")
+    ConcreteBase = type(
+        "ConcreteBase",
+        (AngeeModel,),
+        {
+            "__module__": module.__name__,
+            "Meta": type("Meta", (), {"abstract": True, "app_label": "concretedonor"}),
+        },
+    )
+    ConcreteDonor = type(
+        "ConcreteDonor",
+        (ConcreteBase,),
+        {
+            "__module__": module.__name__,
+            "extends": "target.TargetRuntime",
+            "marker": "body",
+            "Meta": type("Meta", (), {"abstract": False, "app_label": "concretedonor"}),
+        },
+    )
+
+    with pytest.raises(
+        ImproperlyConfigured,
+        match="tests.concretedonor.models.ConcreteDonor.*not abstract",
+    ):
+        ConcreteDonor.get_extension_bases()
 
 
 def test_runtime_aggregates_multiple_after_resource_load_donors(tmp_path: Path) -> None:

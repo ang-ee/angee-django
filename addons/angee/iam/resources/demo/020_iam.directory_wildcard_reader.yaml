@@ -1,6 +1,8 @@
 # Demo IAM directory posture. This grant is data, not schema: loading it makes
 # the singleton directory readable to every authenticated user. Narrow
-# deployments omit this seed and provide their own tuples.
+# deployments can omit just this seed with:
+# ANGEE_RESOURCE_EXCLUDED_ENTRIES =
+#   ("angee.iam:resources/demo/020_iam.directory_wildcard_reader.yaml",)
 rows:
   - resource: iam/directory:main
     relation: reader

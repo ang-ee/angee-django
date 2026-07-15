@@ -15,6 +15,7 @@ from angee.base.models import AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.resources.entries import (
     GRANT_KIND,
     EntryGraph,
+    EntryKey,
     GrantGroup,
     LoadResult,
     ResourceEntry,
@@ -251,19 +252,44 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
         """Return selected resource entries in dependency order."""
 
         active_tiers = self._normalize_tiers(tiers)
+        excluded = self._excluded_entry_keys()
         entries: list[ResourceEntry] = []
         for addon in addons:
             manifest = resource_manifest_for(addon)
             for tier in active_tiers:
                 for declaration in manifest.get(tier, ()):
-                    entries.append(
-                        ResourceEntry.from_declaration(
-                            addon,
-                            tier,
-                            declaration,
-                        )
+                    entry = ResourceEntry.from_declaration(
+                        addon,
+                        tier,
+                        declaration,
                     )
+                    if entry.key not in excluded:
+                        entries.append(entry)
         return EntryGraph.from_entries(entries).ordered()
+
+    def _excluded_entry_keys(self) -> frozenset[EntryKey]:
+        """Return project-excluded resource entry keys from settings."""
+
+        raw = getattr(settings, "ANGEE_RESOURCE_EXCLUDED_ENTRIES", ())
+        if raw is None:
+            return frozenset()
+        if isinstance(raw, str) or not isinstance(raw, Iterable):
+            raise ImproperlyConfigured(
+                "ANGEE_RESOURCE_EXCLUDED_ENTRIES must be an iterable of 'addon:source' strings."
+            )
+        keys: list[EntryKey] = []
+        for item in raw:
+            if not isinstance(item, str):
+                raise ImproperlyConfigured(
+                    "ANGEE_RESOURCE_EXCLUDED_ENTRIES must contain only 'addon:source' strings."
+                )
+            addon, separator, source = item.partition(":")
+            if not separator or not addon or not source:
+                raise ImproperlyConfigured(
+                    "ANGEE_RESOURCE_EXCLUDED_ENTRIES entries must use 'addon:source' strings."
+                )
+            keys.append((addon, source))
+        return frozenset(keys)
 
     def _normalize_tiers(
         self,
@@ -292,6 +318,8 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
                     )
                 seen[key] = row
 
+
+setattr(ResourceQuerySet._entries_for, "queryset_only", False)
 
 ResourceManager = AngeeUnscopedManager.from_queryset(ResourceQuerySet)
 """Manager exposing resource ledger operations."""

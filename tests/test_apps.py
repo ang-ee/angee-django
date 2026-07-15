@@ -175,14 +175,18 @@ def test_iam_config_owns_shared_demo_users() -> None:
     assert manifest["demo"] == (
         {"path": "resources/demo/010_iam.user.yaml", "adopt": "username"},
         {
-            "path": "resources/demo/020_iam.directory_reader.yaml",
+            "path": "resources/demo/020_iam.directory_wildcard_reader.yaml",
             "kind": "grants",
-            "depends_on": ("resources/demo/010_iam.user.yaml",),
         },
     )
     rows = _resource_rows(config, "demo", "resources/demo/010_iam.user.yaml")
     assert set(rows) == {"user_admin", "user_alice", "user_bob"}
     assert rows["user_admin"]["username"] == "admin"
+    wildcard_entry = ResourceEntry.from_declaration(config, "demo", manifest["demo"][1])
+    (wildcard_grant,) = wildcard_entry.read_grant_rows()
+    assert wildcard_grant.resource == "iam/directory:main"
+    assert wildcard_grant.relation == "reader"
+    assert wildcard_grant.subject == "auth/user:*"
 
 
 def test_agents_config_owns_builtin_mcp_demo_seed() -> None:

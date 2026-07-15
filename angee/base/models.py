@@ -82,6 +82,28 @@ tier owner. ``angee.base`` cannot import the resources addon without reversing t
 dependency direction, so the resources test suite pins these literals in sync.
 """
 
+EXTENSION_DONOR_STRUCTURAL_MEMBERS = frozenset(
+    {
+        "__annotations__",
+        "__classcell__",
+        "__dict__",
+        "__doc__",
+        "__firstlineno__",
+        "__module__",
+        "__qualname__",
+        "__static_attributes__",
+        "__weakref__",
+        "DoesNotExist",
+        "Meta",
+        "MultipleObjectsReturned",
+        "_meta",
+        "extends",
+        "id",
+        "objects",
+    }
+)
+"""Class-dict members that do not make a same-row extension donor semantic."""
+
 
 class AngeeQuerySet(RebacQuerySet[_ModelT]):
     """QuerySet API shared by Angee source and runtime models."""
@@ -400,7 +422,46 @@ class AngeeModel(TimestampMixin, RebacMixin):
             return ()
 
         bases = tuple(base for base in cls.__bases__ if _is_contributed_extension_base(base))
+        if bases and cls._has_extension_body():
+            cls._check_bodyful_extension_bases(bases)
+            return (cls, *bases)
         return bases or (cls,)
+
+    @classmethod
+    def _has_extension_body(cls) -> bool:
+        """Return whether this donor declares semantic members of its own."""
+
+        return any(
+            name not in EXTENSION_DONOR_STRUCTURAL_MEMBERS
+            and not _is_inherited_abstract_field_member(cls, name)
+            for name in cls.__dict__
+        )
+
+    @classmethod
+    def _check_bodyful_extension_bases(cls, bases: tuple[type[models.Model], ...]) -> None:
+        """Raise if this donor cannot be composed ahead of its contributed bases."""
+
+        donor = f"{cls.__module__}.{cls.__name__}"
+        if not cls._meta.abstract:
+            raise ImproperlyConfigured(
+                f"{donor} cannot compose as a same-row extension because it is not abstract."
+            )
+        seen: set[type[models.Model]] = set()
+        for base in bases:
+            if base in seen:
+                raise ImproperlyConfigured(
+                    f"{donor} cannot compose duplicate extension base {base.__module__}.{base.__name__}."
+                )
+            seen.add(base)
+            if not base._meta.abstract:
+                raise ImproperlyConfigured(
+                    f"{donor} cannot compose non-abstract extension base {base.__module__}.{base.__name__}."
+                )
+            if not issubclass(cls, base):
+                raise ImproperlyConfigured(
+                    f"{donor} cannot compose its own body ahead of {base.__module__}.{base.__name__}; "
+                    "the donor must inherit every contributed base."
+                )
 
     @property
     def public_id(self) -> str:
@@ -773,3 +834,32 @@ def _is_contributed_extension_base(value: type) -> bool:
     model = cast(type[models.Model], value)
     meta = model._meta
     return bool(meta.abstract)
+
+
+def _is_inherited_abstract_field_member(model: type[models.Model], name: str) -> bool:
+    """Return whether ``name`` is Django plumbing copied from an abstract base field."""
+
+    for base in model.__mro__[1:]:
+        if base is models.Model or not issubclass(base, models.Model) or not hasattr(base, "_meta"):
+            continue
+        abstract_base = cast(type[models.Model], base)
+        if abstract_base._meta.abstract and name in _abstract_field_member_names(abstract_base):
+            return True
+    return False
+
+
+def _abstract_field_member_names(model: type[models.Model]) -> frozenset[str]:
+    """Return class-dict names Django contributes for ``model``'s local fields."""
+
+    names: set[str] = set()
+    for field in (*model._meta.local_fields, *model._meta.local_many_to_many):
+        names.add(field.name)
+        attname = getattr(field, "attname", None)
+        if isinstance(attname, str):
+            names.add(attname)
+        if getattr(field, "choices", None):
+            names.add(f"get_{field.name}_display")
+        if isinstance(field, models.DateField) and not field.null:
+            names.add(f"get_next_by_{field.name}")
+            names.add(f"get_previous_by_{field.name}")
+    return frozenset(names)
