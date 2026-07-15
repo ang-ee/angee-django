@@ -37,9 +37,10 @@ const options = parseOptions(process.argv.slice(2));
 const webRoot = resolveFromCwd(options["web-root"] ?? ".");
 const runtimeDir = resolveFromCwd(options.runtime ?? "../runtime");
 const manifest = readManifest(runtimeDir);
+const addonSources = addonSourceDirectories(runtimeDir, webRoot, manifest);
 const externalEntries = Array.isArray(manifest.codegen) ? manifest.codegen : [];
 const djangoSchemas = schemaNamesFor(runtimeDir);
-const documentRoots = documentRootsFor(webRoot, manifest);
+const documentRoots = documentRootsFor(webRoot, manifest, addonSources);
 
 // Django Angee schemas: client preset + authored operation documents, composed
 // as createApp schemas. Their SDL is the GraphQLSdl-owned runtime/schemas tree.
@@ -55,7 +56,7 @@ for (const entry of externalEntries) {
   const documents = documentRoots.map((root) => `${root}/**/${entry.documents}`);
   await runCodegen(entry.schema, schemaPath, runtimeDir, documents, entry.types === true);
 }
-emitAppModule(runtimeDir, webRoot, manifest, djangoSchemas);
+emitAppModule(runtimeDir, manifest, djangoSchemas, addonSources);
 
 function parseOptions(args) {
   const parsed = {};
@@ -103,10 +104,44 @@ function schemaNamesFor(runtimeDir) {
     .sort();
 }
 
-function documentRootsFor(webRoot, manifest) {
+function addonSourceDirectories(runtimeDir, webRoot, manifest) {
+  const packages = Array.isArray(manifest.addonPackages) ? manifest.addonPackages : [];
+  return new Map(
+    packages.map((pkg) => [pkg.package, addonSourceDirectory(runtimeDir, webRoot, pkg)]),
+  );
+}
+
+function addonSourceDirectory(runtimeDir, webRoot, pkg) {
+  const sourceRoot = typeof pkg.sourceRoot === "string" ? pkg.sourceRoot : "src";
+  const candidates = [];
+  if (typeof pkg.root === "string" && pkg.root.length > 0) {
+    candidates.push(path.resolve(runtimeDir, "web", pkg.root, sourceRoot));
+  }
+  candidates.push(path.resolve(webRoot, "node_modules", pkg.package, sourceRoot));
+  const uniqueCandidates = [...new Set(candidates)];
+  const sourceDir = uniqueCandidates.find((candidate) =>
+    ADDON_ENTRY_EXTENSIONS.some((extension) =>
+      existsSync(path.join(candidate, `index${extension}`)),
+    ),
+  );
+  if (!sourceDir) {
+    const expected = uniqueCandidates
+      .map((candidate) => `${candidate}/index.{ts,tsx,js,jsx}`)
+      .join(" or ");
+    throw new Error(`Missing web addon entry for ${pkg.package}: expected ${expected}`);
+  }
+  return sourceDir;
+}
+
+function documentRootsFor(webRoot, manifest, addonSources) {
   const roots = Array.isArray(manifest.documentRoots) ? manifest.documentRoots : [];
   return roots
     .flatMap((entry) => {
+      const addonSource =
+        entry?.kind === "package" && typeof entry.package === "string"
+          ? addonSources.get(entry.package)
+          : undefined;
+      if (addonSource) return [slash(addonSource)];
       if (!entry || typeof entry.path !== "string" || entry.path.length === 0) {
         return [];
       }
@@ -121,15 +156,12 @@ function schemaIsLive(sdlPath) {
   return buildSchema(readFileSync(sdlPath, "utf8")).getSubscriptionType() != null;
 }
 
-function emitAppModule(runtimeDir, webRoot, manifest, schemaNames) {
+function emitAppModule(runtimeDir, manifest, schemaNames, addonSources) {
   const addonPackages = Array.isArray(manifest.addonPackages) ? manifest.addonPackages : [];
-  // `runtime/web/app.ts` lives outside the web package's module-resolution
-  // scope, so addon packages are imported by their on-disk entry under the web
-  // package's node_modules. The path is derived from the real --web-root (not a
-  // fixed constant), so a project that relocates its web package still resolves.
-  const webRel = slash(path.relative(path.join(runtimeDir, "web"), webRoot));
+  // `runtime/web/app.ts` imports the concrete source directory selected from the
+  // settings-derived manifest root or the host node_modules fallback.
   const addonImports = addonPackages.map((pkg, index) => {
-    const entry = addonEntryImport(webRoot, webRel, pkg);
+    const entry = addonEntryImport(runtimeDir, addonSources.get(pkg.package));
     return `import addon${index} from ${JSON.stringify(entry)};`;
   });
   const schemaImports = [];
@@ -171,16 +203,13 @@ function emitAppModule(runtimeDir, webRoot, manifest, schemaNames) {
   );
 }
 
-function addonEntryImport(webRoot, webRel, pkg) {
-  const sourceRoot = typeof pkg.sourceRoot === "string" ? pkg.sourceRoot : "src";
-  const entryBase = path.join(webRoot, "node_modules", pkg.package, sourceRoot, "index");
+function addonEntryImport(runtimeDir, sourceDir) {
+  const entryBase = path.join(sourceDir, "index");
   const extension = ADDON_ENTRY_EXTENSIONS.find((candidate) => existsSync(`${entryBase}${candidate}`));
-  if (!extension) {
-    throw new Error(
-      `Missing web addon entry for ${pkg.package}: expected ${entryBase}.{ts,tsx,js,jsx}`,
-    );
-  }
-  return `${webRel}/node_modules/${pkg.package}/${sourceRoot}/index${extension}`;
+  const relative = slash(
+    path.relative(path.join(runtimeDir, "web"), `${entryBase}${extension}`),
+  );
+  return relative.startsWith(".") ? relative : `./${relative}`;
 }
 
 async function runCodegen(name, schemaPath, runtimeDir, documents, types) {
