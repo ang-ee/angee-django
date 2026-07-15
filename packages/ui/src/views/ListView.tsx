@@ -505,12 +505,14 @@ function ListViewContent<TRow extends Row = Row>({
         hasNext: surface.list.hasNext,
       };
     }
-    // Group-level pager: the surface reports the level-0 group total; Pager
-    // derives hasPrev/hasNext from page/total.
+    // Group-level pager: `_groups` may not report an exact total, so preserve
+    // the surface's explicit window-navigation state for Pager.
     return {
-      total: surface.list.total ?? 0,
+      total: surface.list.total,
       page: surface.list.page,
       pageSize: surface.list.pageSize,
+      hasPrev: surface.list.hasPrev,
+      hasNext: surface.list.hasNext,
     };
   }, [
     groupedListMode,
