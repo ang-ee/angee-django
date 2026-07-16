@@ -152,12 +152,12 @@ def test_lone_document_media_is_an_attachment_part() -> None:
 def test_reconciler_tick_owns_both_the_schedule_and_the_expiry() -> None:
     """The 'expires of one tick' invariant holds because both derive from one owner."""
 
-    from angee.messaging_integrate_whatsapp.autoconfig import SETTINGS
-    from angee.messaging_integrate_whatsapp.backend import SESSION_START_EXPIRES
-    from angee.messaging_integrate_whatsapp.constants import ENSURE_SESSIONS_TASK, RECONCILER_INTERVAL
+    from angee.integrate.autoconfig import SETTINGS
+    from angee.integrate.constants import ENSURE_SESSIONS_TASK, RECONCILER_INTERVAL, SESSION_START_EXPIRES
 
     assert SESSION_START_EXPIRES == RECONCILER_INTERVAL
-    beat = SETTINGS["CELERY_BEAT_SCHEDULE:append"][ENSURE_SESSIONS_TASK]
+    beat_schedule = cast(dict[str, dict[str, Any]], SETTINGS["CELERY_BEAT_SCHEDULE:append"])
+    beat = beat_schedule[ENSURE_SESSIONS_TASK]
     assert beat["task"] == ENSURE_SESSIONS_TASK
     assert beat["schedule"] == RECONCILER_INTERVAL
 
@@ -167,28 +167,21 @@ def test_reconciler_tick_owns_both_the_schedule_and_the_expiry() -> None:
 
 import threading  # noqa: E402
 import time  # noqa: E402
-from typing import Any, ClassVar  # noqa: E402
+from typing import Any, ClassVar, cast  # noqa: E402
 
 import pytest  # noqa: E402
 from django.core.management import call_command  # noqa: E402
 from django.db import connection  # noqa: E402
 from rebac import system_context  # noqa: E402
 
+from angee.integrate import tasks as tasks_module  # noqa: E402
+from angee.integrate.constants import RUN_SESSION_TASK  # noqa: E402
+from angee.integrate.live import PairingState, SessionLoggedOut  # noqa: E402
 from angee.integrate.locks import bridge_advisory_lock  # noqa: E402
 from angee.integrate.models import IntegrationLifecycle, IntegrationRuntimeStatus  # noqa: E402
 from angee.integrate.sync import BridgeProgressReporter  # noqa: E402
-from angee.messaging_integrate_whatsapp import backend as backend_module  # noqa: E402
 from angee.messaging_integrate_whatsapp import session as session_module  # noqa: E402
-from angee.messaging_integrate_whatsapp import tasks as tasks_module  # noqa: E402
-from angee.messaging_integrate_whatsapp.backend import (  # noqa: E402
-    RUN_SESSION_TASK,
-    SESSION_QUEUE,
-)
-from angee.messaging_integrate_whatsapp.client import (  # noqa: E402
-    PairingState,
-    SessionLoggedOut,
-    whatsapp_account_lock_key,
-)
+from angee.messaging_integrate_whatsapp.constants import SESSION_QUEUE  # noqa: E402
 from angee.messaging_integrate_whatsapp.session import WhatsAppSession  # noqa: E402
 from angee.tasks.locks import task_lock_is_held  # noqa: E402
 from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration  # noqa: E402
@@ -199,7 +192,7 @@ WHATSAPP_TEST_MODELS = (*MESSAGING_TEST_MODELS, Channel)
 
 
 @pytest.fixture
-def whatsapp_tables(settings: Any, tmp_path: Any) -> Any:
+def whatsapp_tables(settings: Any, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     """Create the concrete messaging tables plus the Channel child.
 
     Also points ``ANGEE_DATA_DIR`` (a composed default absent from the bare
@@ -208,6 +201,7 @@ def whatsapp_tables(settings: Any, tmp_path: Any) -> Any:
     """
 
     settings.ANGEE_DATA_DIR = str(tmp_path / "data")
+    monkeypatch.setattr("angee.integrate.tasks.bridge_models", lambda _base: (Channel,))
     created_models = _create_missing_tables(WHATSAPP_TEST_MODELS)
     call_command("rebac", "sync", verbosity=0)
     try:
@@ -310,9 +304,10 @@ class FakeWhatsAppClient:
         self.stopped.set()
 
     def download_any(self, payload: Any) -> bytes:
-        if type(self).media is None:
+        media = type(self).media
+        if media is None:
             raise OSError("media expired")
-        return type(self).media
+        return media
 
 
 def _run_session(channel: Any, *, script: tuple[Any, ...], stop_event: threading.Event | None = None) -> str:
@@ -329,6 +324,12 @@ def _run_session(channel: Any, *, script: tuple[Any, ...], stop_event: threading
     with system_context(reason="test whatsapp session run"), bridge_advisory_lock(channel) as acquired:
         assert acquired
         return session.run()
+
+
+def _run_session_task(channel: Any) -> dict[str, Any]:
+    """Run the generic live-session task for one WhatsApp channel."""
+
+    return tasks_module.run_bridge_session(channel._meta.label_lower, channel.pk)
 
 
 def _await(predicate: Any, *, timeout: float = 10.0) -> None:
@@ -377,9 +378,7 @@ def test_session_pairs_ingests_and_stops_cooperatively(whatsapp_tables: Any) -> 
         def action(_client: Any) -> None:
             _await(lambda: _pairing_state() == state)
             if state == PairingState.PAIRED:
-                assert task_lock_is_held(
-                    whatsapp_account_lock_key("4917000001@s.whatsapp.net")
-                )
+                assert task_lock_is_held(channel.backend.account_lock_key("4917000001@s.whatsapp.net"))
             seen.append(dict(Channel._base_manager.get(pk=channel.pk).sync_progress))
 
         return action
@@ -419,47 +418,6 @@ def test_session_pairs_ingests_and_stops_cooperatively(whatsapp_tables: Any) -> 
 
 
 @pytest.mark.django_db(transaction=True)
-def test_session_wake_honors_persisted_stop_desire(whatsapp_tables: Any) -> None:
-    """The bounded wake reads the base-owned desire — a stop ends the session."""
-
-    channel = _whatsapp_channel()
-    session = WhatsAppSession(
-        channel,
-        reporter=BridgeProgressReporter(channel),
-        stop_event=threading.Event(),
-    )
-    with system_context(reason="test whatsapp desire check"), bridge_advisory_lock(channel) as acquired:
-        assert acquired
-        assert session._still_wanted() is True
-        row = Channel._base_manager.get(pk=channel.pk)
-        row.subscription_state["desired"] = Channel.LiveState.STOPPED
-        row.save(update_fields=["subscription_state", "updated_at"])
-        assert session._still_wanted() is False
-        assert session.pairing == PairingState.STOPPED
-
-
-@pytest.mark.django_db(transaction=True)
-def test_session_wake_honors_paused_lifecycle(whatsapp_tables: Any) -> None:
-    """A generic pause stops a live WhatsApp session and retains its identity."""
-
-    channel = _whatsapp_channel()
-    with system_context(reason="test whatsapp pause setup"):
-        channel.merge_subscription_state(own_jid="4917000001@s.whatsapp.net")
-        channel.pause()
-    session = WhatsAppSession(
-        channel,
-        reporter=BridgeProgressReporter(channel),
-        stop_event=threading.Event(),
-    )
-    with system_context(reason="test whatsapp pause check"), bridge_advisory_lock(
-        channel
-    ) as acquired:
-        assert acquired
-        assert session._still_wanted() is False
-        assert session.pairing == PairingState.PAUSED
-
-
-@pytest.mark.django_db(transaction=True)
 def test_session_media_failure_lands_marker_not_loss(whatsapp_tables: Any) -> None:
     """An expired media download degrades to the marker part; the row still lands."""
 
@@ -467,8 +425,10 @@ def test_session_media_failure_lands_marker_not_loss(whatsapp_tables: Any) -> No
     stop_event = threading.Event()
     FakeWhatsAppClient.media = None
     media_event = _message_event(stanza="IMG01", chat_user="4917000002", sender_user="4917000002", text="")
-    media_event.Message = _Namespace(
-        imageMessage=_Namespace(mimetype="image/jpeg", fileName="IMG_1.jpg", caption="look")
+    setattr(
+        media_event,
+        "Message",
+        _Namespace(imageMessage=_Namespace(mimetype="image/jpeg", fileName="IMG_1.jpg", caption="look")),
     )
 
     def finish(_client: Any) -> None:
@@ -489,35 +449,12 @@ def test_session_media_failure_lands_marker_not_loss(whatsapp_tables: Any) -> No
 
 
 @pytest.mark.django_db(transaction=True)
-def test_session_worker_shutdown_exits_within_one_wake(whatsapp_tables: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A warm worker shutdown ends an idle session without waiting on the socket."""
-
-    monkeypatch.setattr(session_module, "WAKE_SECONDS", 0.05)
-    channel = _whatsapp_channel()
-    stop_event = threading.Event()
-    stop_event.set()
-    state = _run_session(channel, script=(), stop_event=stop_event)
-    assert state == PairingState.STOPPED
-
-
-@pytest.mark.django_db(transaction=True)
-def test_session_lost_lock_exits_for_clean_restart(whatsapp_tables: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A dropped advisory lock ends the session instead of racing a duplicate."""
-
-    monkeypatch.setattr(session_module, "WAKE_SECONDS", 0.05)
-    monkeypatch.setattr(session_module, "bridge_is_locked", lambda _bridge: False)
-    channel = _whatsapp_channel()
-    state = _run_session(channel, script=())
-    assert state == PairingState.STARTING
-
-
-@pytest.mark.django_db(transaction=True)
 def test_session_logged_out_raises_for_explicit_reset(whatsapp_tables: Any) -> None:
     """A phone-side unlink surfaces as SessionLoggedOut — no silent re-pairing."""
 
     channel = _whatsapp_channel()
     script = (lambda client: client.event.handlers["LoggedOut"](client, _Namespace()),)
-    with pytest.raises(SessionLoggedOut):
+    with pytest.raises(SessionLoggedOut, match="The linked phone removed this device"):
         _run_session(channel, script=script)
 
 
@@ -529,7 +466,7 @@ def test_channel_live_lifecycle_persists_desire_and_dispatches(
 
     sent: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "angee.messaging_integrate_whatsapp.backend.enqueue_task",
+        "angee.integrate.impl.enqueue_task",
         lambda name, *, kwargs, queue=None, expires=None, **_: sent.append(
             {"name": name, "kwargs": kwargs, "queue": queue, "expires": expires}
         ),
@@ -540,7 +477,12 @@ def test_channel_live_lifecycle_persists_desire_and_dispatches(
     channel.refresh_from_db()
     assert channel.subscription_state["desired"] == Channel.LiveState.LIVE
     assert sent == [
-        {"name": RUN_SESSION_TASK, "kwargs": {"channel_id": channel.pk}, "queue": SESSION_QUEUE, "expires": 60.0}
+        {
+            "name": RUN_SESSION_TASK,
+            "kwargs": {"model_label": channel._meta.label_lower, "pk": channel.pk},
+            "queue": SESSION_QUEUE,
+            "expires": 60.0,
+        }
     ]
     with system_context(reason="test stop live"):
         channel.stop_live()
@@ -553,12 +495,12 @@ def test_run_session_task_gates_on_desire_and_kind(whatsapp_tables: Any) -> None
     """The task exits without connecting for foreign or not-live-desired channels."""
 
     channel = make_integration("whatsapp", model=Channel, backend_class="whatsapp")
-    result = tasks_module.run_session(channel.pk)
+    result = _run_session_task(channel)
     assert result["skipped"] and result["reason"] == "not-live-desired"
 
     manual = make_integration("manualchan", model=Channel, backend_class="manual")
-    result = tasks_module.run_session(manual.pk)
-    assert result["skipped"] and result["reason"] == "not-a-whatsapp-channel"
+    result = tasks_module.run_bridge_session(manual._meta.label_lower, manual.pk)
+    assert result["skipped"] and result["reason"] == "not-live-capable"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -575,7 +517,7 @@ def test_run_session_task_records_logged_out_on_runtime_status_and_leaves_the_li
     """
 
     # `connect` resolves the concrete Channel at import, so it loads after it.
-    from angee.messaging_integrate_whatsapp.client import session_store_path
+    from angee.integrate.live import session_store_path
     from angee.messaging_integrate_whatsapp.connect import whatsapp_pairing
 
     channel = _whatsapp_channel()
@@ -587,7 +529,7 @@ def test_run_session_task_records_logged_out_on_runtime_status_and_leaves_the_li
     monkeypatch.setattr(WhatsAppSession, "client_class", FakeWhatsAppClient)
     FakeWhatsAppClient.script = (lambda client: client.event.handlers["LoggedOut"](client, _Namespace()),)
 
-    result = tasks_module.run_session(channel.pk)
+    result = _run_session_task(channel)
     assert result == {"ok": False, "logged_out": True}
     channel.refresh_from_db()
     assert channel.subscription_state["desired"] == Channel.LiveState.STOPPED
@@ -600,8 +542,8 @@ def test_run_session_task_records_logged_out_on_runtime_status_and_leaves_the_li
     assert whatsapp_pairing(channel).state == PairingState.LOGGED_OUT
 
     sent: list[str] = []
-    monkeypatch.setattr(backend_module, "enqueue_task", lambda name, **_: sent.append(name))
-    tasks_module.ensure_sessions()
+    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda name, **_: sent.append(name))
+    tasks_module.ensure_bridge_sessions()
     assert sent == []
 
 
@@ -626,14 +568,14 @@ def test_resume_clears_the_runtime_error_so_the_reconciler_re_arms(
 
     channel = _whatsapp_channel()
     sent: list[str] = []
-    monkeypatch.setattr(backend_module, "enqueue_task", lambda name, **_: sent.append(name))
+    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda name, **_: sent.append(name))
     with system_context(reason="test whatsapp handshake failure"):
         channel.record_sync_error(SessionLoggedOut("The linked phone removed this device."), now=datetime.now(UTC))
         channel.backend.release_account(desired=Channel.LiveState.STOPPED)
     channel.refresh_from_db()
     assert channel.lifecycle == IntegrationLifecycle.CONNECTED
     assert channel.runtime_status == IntegrationRuntimeStatus.ERROR
-    assert tasks_module.ensure_sessions() == {"ok": True, "dispatched": 0}
+    assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 0}
 
     resume_whatsapp_pairing(channel)
 
@@ -642,7 +584,7 @@ def test_resume_clears_the_runtime_error_so_the_reconciler_re_arms(
     assert channel.subscription_state["desired"] == Channel.LiveState.LIVE
     # The repair's own dispatch, then the reconciler's — the row is reachable
     # again rather than depending on that single enqueue surviving.
-    assert tasks_module.ensure_sessions() == {"ok": True, "dispatched": 1}
+    assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 1}
     assert sent == [RUN_SESSION_TASK, RUN_SESSION_TASK]
 
 
@@ -709,7 +651,7 @@ def test_duplicate_pairing_rejects_new_session_and_removes_only_its_store(
 ) -> None:
     """A second channel cannot ingest one account; the established owner is untouched."""
 
-    from angee.messaging_integrate_whatsapp.client import session_store_path
+    from angee.integrate.live import session_store_path
 
     owner = _whatsapp_channel("whatsapp-duplicate-owner")
     rejected = _whatsapp_channel()
@@ -729,13 +671,11 @@ def test_duplicate_pairing_rejects_new_session_and_removes_only_its_store(
 
     monkeypatch.setattr(WhatsAppSession, "client_class", FakeWhatsAppClient)
     FakeWhatsAppClient.script = (
-        lambda client: client.event.handlers["PairStatus"](
-            client, _Namespace(ID=_jid("4917000001"))
-        ),
+        lambda client: client.event.handlers["PairStatus"](client, _Namespace(ID=_jid("4917000001"))),
         lambda client: client.stopped.set(),
     )
 
-    result = tasks_module.run_session(rejected.pk)
+    result = _run_session_task(rejected)
 
     assert result == {"ok": False, "duplicate_account": True}
     owner.refresh_from_db()
@@ -785,8 +725,8 @@ def test_duplicate_pairing_keeps_the_retained_store_across_repeated_attempts(
     # Imported here rather than at module scope: connect.py resolves the concrete
     # Channel at import time, and this file's registry only carries it once
     # tests.test_messaging_graphql has been imported above.
+    from angee.integrate.live import session_store_path
     from angee.messaging_integrate_whatsapp import connect as connect_module
-    from angee.messaging_integrate_whatsapp.client import session_store_path
 
     resumed = _whatsapp_channel()
     claimant = _whatsapp_channel("whatsapp-later-claimant")
@@ -801,13 +741,11 @@ def test_duplicate_pairing_keeps_the_retained_store_across_repeated_attempts(
 
     monkeypatch.setattr(WhatsAppSession, "client_class", FakeWhatsAppClient)
     FakeWhatsAppClient.script = (
-        lambda client: client.event.handlers["PairStatus"](
-            client, _Namespace(ID=_jid("4917000001"))
-        ),
+        lambda client: client.event.handlers["PairStatus"](client, _Namespace(ID=_jid("4917000001"))),
         lambda client: client.stopped.set(),
     )
 
-    result = tasks_module.run_session(resumed.pk)
+    result = _run_session_task(resumed)
 
     assert result == {"ok": False, "duplicate_account": True}
     resumed.refresh_from_db()
@@ -821,10 +759,10 @@ def test_duplicate_pairing_keeps_the_retained_store_across_repeated_attempts(
     # this store?" from the row's claim reads this attempt as a never-claimed
     # channel and wipes the credential the first one kept. The store owns that
     # fact, so every attempt answers it the same way.
-    monkeypatch.setattr(backend_module, "enqueue_task", lambda name, **_: None)
+    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda name, **_: None)
     connect_module.resume_whatsapp_pairing(resumed)
 
-    assert tasks_module.run_session(resumed.pk) == {"ok": False, "duplicate_account": True}
+    assert _run_session_task(resumed) == {"ok": False, "duplicate_account": True}
     assert (resumed_store / "session.db").read_bytes() == b"the device credential disconnect retained"
 
 
@@ -854,54 +792,20 @@ def test_generic_disconnect_stops_the_session_and_survives_a_reconciler_tick(
     assert channel.subscription_state["desired"] == Channel.LiveState.LIVE
 
     sent: list[str] = []
-    monkeypatch.setattr(backend_module, "enqueue_task", lambda name, **_: sent.append(name))
-    assert tasks_module.ensure_sessions() == {"ok": True, "dispatched": 0}
+    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda name, **_: sent.append(name))
+    assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 0}
     assert sent == []
 
-    result = tasks_module.run_session(channel.pk)
+    result = _run_session_task(channel)
     assert result["skipped"] and result["reason"] == "not-connected"
 
-    with system_context(reason="test whatsapp generic disconnect wake"), bridge_advisory_lock(
-        channel
-    ) as acquired:
+    with system_context(reason="test whatsapp generic disconnect wake"), bridge_advisory_lock(channel) as acquired:
         assert acquired
         assert session._still_wanted() is False
         assert session.pairing == PairingState.STOPPED
 
     channel.refresh_from_db()
     assert channel.lifecycle == "disconnected"
-
-
-@pytest.mark.django_db(transaction=True)
-def test_void_pairing_keeps_a_store_the_vendor_client_never_released(
-    whatsapp_tables: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A store is wiped only on a proven exit; an unconfirmed one is left to reset.
-
-    ``join(timeout=…)`` returns whether or not the Go call unwound, so without
-    the liveness check the wipe would run against a store the cgo client still
-    holds open — half-deleting it while ``ignore_errors`` swallowed every error.
-    """
-
-    from angee.messaging_integrate_whatsapp.client import session_store_path
-
-    channel = _whatsapp_channel()
-    store = session_store_path(channel)
-    store.mkdir(parents=True, exist_ok=True)
-    (store / "session.db").write_bytes(b"still-open")
-
-    session = WhatsAppSession(
-        channel,
-        reporter=BridgeProgressReporter(channel),
-        stop_event=threading.Event(),
-    )
-    assert session.store_released is False
-    session.discard_store()
-    assert (store / "session.db").read_bytes() == b"still-open"
-
-    session.store_released = True
-    session.discard_store()
-    assert not store.exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -932,70 +836,6 @@ def test_shutdown_reports_whether_the_vendor_connection_unwound(
         wedged.set()
         connection.join(timeout=10)
     assert session._shutdown(connection) is True
-
-
-@pytest.mark.django_db(transaction=True)
-def test_ensure_sessions_redispatches_connected_channels_with_a_one_tick_expiry(
-    whatsapp_tables: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The reconciler re-enqueues connected channels with a one-tick expiry.
-
-    It dispatches without touching the row when the axes already agree.
-    ``start_live`` has no dirty check — it takes a row lock, writes, and publishes
-    ``channelChanged`` — so reconciling unconditionally would bump ``updated_at``
-    and broadcast a no-op edit for every healthy channel every 60 seconds.
-    """
-
-    channel = _whatsapp_channel()
-    channel.refresh_from_db()
-    settled_at = channel.updated_at
-    sent: list[dict[str, Any]] = []
-    monkeypatch.setattr(
-        backend_module,
-        "enqueue_task",
-        lambda name, *, kwargs, queue=None, expires=None, **_: sent.append(
-            {"name": name, "kwargs": kwargs, "queue": queue, "expires": expires}
-        ),
-    )
-    result = tasks_module.ensure_sessions()
-    assert result["dispatched"] == 1
-    assert sent == [
-        {"name": RUN_SESSION_TASK, "kwargs": {"channel_id": channel.pk}, "queue": SESSION_QUEUE, "expires": 60.0}
-    ]
-    channel.refresh_from_db()
-    assert channel.updated_at == settled_at
-
-
-@pytest.mark.django_db(transaction=True)
-def test_ensure_sessions_reconciles_the_live_desire_to_a_connected_lifecycle(
-    whatsapp_tables: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A channel connected by its int_ sqid gets a live desire and a session.
-
-    ``markIntegrationConnected`` reaches every Integration child generically and
-    declares the lifecycle only — it cannot know this addon has a second axis to
-    set. Without the reconciler closing that direction the channel would sit
-    CONNECTED forever with no session and nothing to ever dispatch one, while the
-    pairing dialog reported PAIRED off its retained JID.
-    """
-
-    channel = _whatsapp_channel()
-    with system_context(reason="test whatsapp generic connect"):
-        channel.merge_subscription_state(own_jid="4917000001@s.whatsapp.net")
-        channel.stop_live()
-        channel.disconnect()
-        # The generic action: a bare lifecycle transition, no live desire.
-        channel.connect()
-    channel.refresh_from_db()
-    assert channel.subscription_state["desired"] == Channel.LiveState.STOPPED
-
-    sent: list[str] = []
-    monkeypatch.setattr(backend_module, "enqueue_task", lambda name, **_: sent.append(name))
-    assert tasks_module.ensure_sessions() == {"ok": True, "dispatched": 1}
-
-    channel.refresh_from_db()
-    assert channel.subscription_state["desired"] == Channel.LiveState.LIVE
-    assert sent == [RUN_SESSION_TASK]
 
 
 # --- (c) the backup importer over synthesized ChatStorage fixtures ---
@@ -1041,9 +881,7 @@ def _build_backup(tmp_path: Path, *, encrypted: bool = False) -> Path:
     def place(relative: str, content: bytes, *, in_manifest: bool = True) -> None:
         file_id = _manifest_file_id(relative)
         if in_manifest:
-            manifest.execute(
-                "INSERT INTO Files VALUES (?, ?, ?, 1)", (file_id, WHATSAPP_DOMAIN, relative)
-            )
+            manifest.execute("INSERT INTO Files VALUES (?, ?, ?, 1)", (file_id, WHATSAPP_DOMAIN, relative))
         blob = backup / file_id[:2] / file_id
         blob.parent.mkdir(exist_ok=True)
         blob.write_bytes(content)

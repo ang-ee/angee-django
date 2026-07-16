@@ -40,11 +40,22 @@ def test_enqueue_task_sends_named_task(monkeypatch: Any) -> None:
     eta = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
 
     enqueue_task("workflows.advance", kwargs={"run_id": 1}, eta=eta, queue="default")
-    enqueue_task("whatsapp.run_session", kwargs={"channel_id": 1}, queue="whatsapp", expires=60.0)
+    enqueue_task(
+        "integrate.run_bridge_session",
+        kwargs={"model_label": "messaging.channel", "pk": 1},
+        queue="whatsapp",
+        expires=60.0,
+    )
 
     assert calls == [
         ("workflows.advance", {"run_id": 1}, eta, "default", None),
-        ("whatsapp.run_session", {"channel_id": 1}, None, "whatsapp", 60.0),
+        (
+            "integrate.run_bridge_session",
+            {"model_label": "messaging.channel", "pk": 1},
+            None,
+            "whatsapp",
+            60.0,
+        ),
     ]
 
 

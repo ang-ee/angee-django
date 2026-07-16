@@ -1,33 +1,8 @@
-"""WhatsApp identity + mapping rules — the one owner both ingest paths share.
+"""WhatsApp identity and mapping rules shared by live and backup ingest.
 
-Everything that decides *which row a WhatsApp message converges on* lives here,
-consumed by the live session (:mod:`.client`) and the backup importer
-(:mod:`.backup`) alike:
-
-- **Bare JID** — ``user@server`` lowercased with device/agent suffixes stripped
-  (``4917….3:12@s.whatsapp.net`` → ``4917…@s.whatsapp.net``). Live events carry
-  device-qualified JIDs, a device backup carries bare ones; normalizing both
-  sides is what lets them meet.
-- **External id** — ``<bare chat JID>/<stanza id>``. Stanza ids are only unique
-  per chat, so the chat scope is embedded (the ``ParsedMessage.external_id``
-  contract). A stanza-less backup row falls back to its producer's
-  ``fallback_id`` under the same chat scope (``<chat>/ios:<pk>``) — idempotent
-  across re-imports, deliberately forfeiting live convergence (there is no wire
-  id to converge on). Quoted-reply references compose the same form, so a reply
-  threads to the row either path landed.
-- **Handles** — ``platform="whatsapp"``, ``external_id`` = the bare JID (the
-  stable identity), ``value`` = the E.164 phone when the JID user part is a
-  phone number, else the bare JID.
-- **Threads** — one per chat: ``ParsedThread(external_id=<bare chat JID>)``
-  (the base namespaces the key), ``group``/``direct`` from the JID server,
-  title from the chat's display name.
-- **Media discipline** (IMAP's "mail is never dropped" mirror): a media item
-  whose bytes could not be fetched lands as a text marker part instead of
-  dropping the message or failing the batch.
-
-Producers translate their wire shapes (neonize events, ChatStorage rows) into
-the neutral :class:`ChatMessage`; :func:`parsed_message` is the single mapping
-onto the messaging seam.
+Bare JID normalization makes device-qualified live events converge with backup
+rows; external ids are chat-scoped stanza ids; handles keep the bare JID as the
+stable identity and expose a phone value only when derivable.
 """
 
 from __future__ import annotations
@@ -35,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedThread
+from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedThread, body_part
 
 PLATFORM = "whatsapp"
 GROUP_SERVERS = ("g.us", "broadcast")
@@ -43,8 +18,6 @@ INDIVIDUAL_SERVER = "s.whatsapp.net"
 
 DIRECTION_INBOUND = "inbound"
 DIRECTION_OUTBOUND = "outbound"
-
-INLINE_MEDIA_PREFIXES = ("image/", "video/", "audio/")
 
 
 def bare_jid(jid: str) -> str:
@@ -106,7 +79,7 @@ def external_id(chat_jid: str, stanza_id: str) -> str:
 
 @dataclass(frozen=True)
 class MediaItem:
-    """One media payload on a message; ``content=None`` means the fetch failed."""
+    """One media payload; ``content=None`` means the fetch failed."""
 
     mime: str = "application/octet-stream"
     name: str = ""
@@ -115,13 +88,7 @@ class MediaItem:
 
 @dataclass(frozen=True)
 class ChatMessage:
-    """The neutral WhatsApp message shape both producers translate into.
-
-    ``stanza_id`` is the wire message id; a producer with none (a backup row
-    predating stanza ids) sets ``fallback_id`` to a source-stable local id
-    (e.g. ``ios:<row pk>``) instead. ``group`` may be left ``None`` to derive
-    from the chat JID's server. ``metadata`` carries the lossless envelope.
-    """
+    """The WhatsApp message DTO both live and backup producers emit."""
 
     chat_jid: str
     stanza_id: str = ""
@@ -136,35 +103,6 @@ class ChatMessage:
     quoted_stanza_id: str = ""
     media: tuple[MediaItem, ...] = ()
     metadata: dict = field(default_factory=dict)
-
-
-def _media_part(item: MediaItem) -> ParsedPart:
-    """Return the part for one media item — a marker part when bytes are missing."""
-
-    if item.content is None:
-        label = item.name or item.mime
-        return ParsedPart(type="text/plain", role="body", text=f"[media unavailable: {label}]")
-    inline = item.mime.startswith(INLINE_MEDIA_PREFIXES)
-    return ParsedPart(
-        type=item.mime,
-        disposition="inline" if inline else "attachment",
-        name=item.name,
-        content=item.content,
-    )
-
-
-def _body(message: ChatMessage) -> ParsedPart | None:
-    """Build the recursive body tree: bare text, one media part, or a mixed root."""
-
-    parts: list[ParsedPart] = []
-    if message.text:
-        parts.append(ParsedPart(type="text/plain", role="body", text=message.text))
-    parts.extend(_media_part(item) for item in message.media)
-    if not parts:
-        return None
-    if len(parts) == 1:
-        return parts[0]
-    return ParsedPart(type="multipart/mixed", children=tuple(parts))
 
 
 def parsed_message(message: ChatMessage) -> ParsedMessage:
@@ -185,6 +123,6 @@ def parsed_message(message: ChatMessage) -> ParsedMessage:
             modality="group" if group else "direct",
             title=message.chat_name,
         ),
-        body=_body(message),
+        body=body_part(message.text, message.media),
         metadata={"chat_jid": chat, **message.metadata},
     )

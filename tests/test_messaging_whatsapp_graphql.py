@@ -9,8 +9,11 @@ import pytest
 from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.integrate import live as live_module
+from angee.integrate.constants import RUN_SESSION_TASK
+from angee.integrate.live import session_store_path
 from angee.integrate.models import IntegrationRuntimeStatus
-from angee.messaging_integrate_whatsapp.backend import RUN_SESSION_TASK, SESSION_QUEUE
+from angee.messaging_integrate_whatsapp.constants import SESSION_QUEUE
 from tests.conftest import SchemaAddon, Vendor, execute_schema, make_integration
 from tests.conftest import result_data as _data
 from tests.test_messaging_graphql import (
@@ -38,7 +41,7 @@ def whatsapp_graphql(
         Vendor.objects.create(slug="whatsapp", display_name="WhatsApp")
     sent: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "angee.messaging_integrate_whatsapp.backend.enqueue_task",
+        "angee.integrate.impl.enqueue_task",
         lambda name, *, kwargs, queue=None, expires=None, **_: sent.append(
             {"name": name, "kwargs": kwargs, "queue": queue, "expires": expires}
         ),
@@ -72,7 +75,7 @@ def test_connect_whatsapp_channel_starts_pairing(whatsapp_graphql: list[dict[str
     assert whatsapp_graphql == [
         {
             "name": RUN_SESSION_TASK,
-            "kwargs": {"channel_id": saved.pk},
+            "kwargs": {"model_label": saved._meta.label_lower, "pk": saved.pk},
             "queue": SESSION_QUEUE,
             "expires": 60.0,
         }
@@ -95,8 +98,6 @@ def test_disconnect_stops_and_releases_ownership_but_retains_pairing(
     whatsapp_graphql: list[dict[str, Any]],
 ) -> None:
     """Disconnect retains a reusable store/JID while moving to disconnected."""
-
-    from angee.messaging_integrate_whatsapp.client import session_store_path
 
     admin = _platform_admin("msg-wa-disconnect-admin")
     payload = _mutate(admin, _CONNECT_MUTATION, {"name": "To unlink"})["connect_whatsapp_channel"]
@@ -122,13 +123,10 @@ def test_reset_pairing_wipes_store_and_restarts(
 ) -> None:
     """Reset stops the session, wipes the device store, and re-dispatches pairing."""
 
-    from angee.messaging_integrate_whatsapp import connect as connect_module
-    from angee.messaging_integrate_whatsapp.client import session_store_path
-
     # Reset is destructive and proves the session released its store through the
     # bridge lock, so it requires a lock backend that can see another process's
     # session at all. Tests run on the SQLite/process-local floor.
-    monkeypatch.setattr(connect_module, "task_locks_are_cross_process", lambda: True)
+    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda: True)
     admin = _platform_admin("msg-wa-reset-admin")
     payload = _mutate(admin, _CONNECT_MUTATION, {"name": "Re-pair"})["connect_whatsapp_channel"]
     with system_context(reason="test.messaging.whatsapp.reset.seed"):
@@ -164,10 +162,7 @@ def test_reset_pairing_refuses_on_a_process_local_lock_backend(
     bounded wait would return at once and hand a live store to ``rmtree``.
     """
 
-    from angee.messaging_integrate_whatsapp import connect as connect_module
-    from angee.messaging_integrate_whatsapp.client import session_store_path
-
-    assert connect_module.task_locks_are_cross_process() is False
+    assert live_module.task_locks_are_cross_process() is False
     admin = _platform_admin("msg-wa-reset-blind-admin")
     payload = _mutate(admin, _CONNECT_MUTATION, {"name": "Blind reset"})["connect_whatsapp_channel"]
     with system_context(reason="test.messaging.whatsapp.reset.blind.seed"):
@@ -188,12 +183,8 @@ def test_resume_pairing_is_idempotent_and_preserves_the_device_store(
 ) -> None:
     """An existing channel can resume without destructive re-pairing."""
 
-    from angee.messaging_integrate_whatsapp.client import session_store_path
-
     admin = _platform_admin("msg-wa-resume-admin")
-    payload = _mutate(admin, _CONNECT_MUTATION, {"name": "Reconnect"})[
-        "connect_whatsapp_channel"
-    ]
+    payload = _mutate(admin, _CONNECT_MUTATION, {"name": "Reconnect"})["connect_whatsapp_channel"]
     with system_context(reason="test.messaging.whatsapp.resume.seed"):
         channel = Channel.objects.get(sqid=payload["id"])
     store = session_store_path(channel) / "session.db"

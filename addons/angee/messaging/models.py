@@ -446,9 +446,7 @@ class ThreadedModelMixin(models.Model):
         """
 
         if not self.can_post():
-            raise PermissionDenied(
-                f"Posting on {self._meta.label} requires {self.thread_post_access!r} access."
-            )
+            raise PermissionDenied(f"Posting on {self._meta.label} requires {self.thread_post_access!r} access.")
         message = self._message_system_post(
             body=body,
             attachments=attachments,
@@ -683,9 +681,7 @@ class ThreadedModelMixin(models.Model):
             if latest is not None:
                 add(latest.created_by_id, reason="Recent message author", source="recent_message_author")
                 for notification in (
-                    notification_model._base_manager.filter(message=latest)
-                    .select_related("user")
-                    .order_by("pk")
+                    notification_model._base_manager.filter(message=latest).select_related("user").order_by("pk")
                 ):
                     add(notification.user, reason="Recent message recipient", source="recent_message_recipient")
 
@@ -881,6 +877,7 @@ class Channel(Bridge):
     runtime = True
     extends = "integrate.Integration"
     integration_kind_label = "Channel"
+    live_impl_field = "backend_class"
 
     backend_class = ImplClassField(
         base_class=ChannelBackend,
@@ -904,18 +901,6 @@ class Channel(Bridge):
 
         backend_class = cast("type[ChannelBackend]", self.resolve_impl("backend_class"))
         return backend_class(self)
-
-    class LiveState(models.TextChoices):
-        """Desired live-ingest state persisted in ``subscription_state["desired"]``.
-
-        The base owns this vocabulary: :meth:`start_live`/:meth:`stop_live` write
-        it, a live backend's session loop and its reconciler read it. Stopping is
-        cooperative — a running session notices ``STOPPED`` and exits; nothing
-        force-kills it.
-        """
-
-        LIVE = "live", "Live"
-        STOPPED = "stopped", "Stopped"
 
     def start_live(self) -> None:
         """Mark this channel live-desired, then dispatch the backend's live ingest.
@@ -1034,12 +1019,9 @@ class Channel(Bridge):
 
         landed = 0
         failures: list[tuple[str, Exception]] = []
-        with ThreadPoolExecutor(
-            max_workers=parallelism, thread_name_prefix=f"channel-{self.pk}-sync"
-        ) as pool:
+        with ThreadPoolExecutor(max_workers=parallelism, thread_name_prefix=f"channel-{self.pk}-sync") as pool:
             futures = {
-                pool.submit(copy_context().run, self._drain_partition, name, deadline): name
-                for name in partitions
+                pool.submit(copy_context().run, self._drain_partition, name, deadline): name for name in partitions
             }
             for future in as_completed(futures):
                 name = futures[future]
@@ -1077,9 +1059,7 @@ class Channel(Bridge):
             # pool thread would otherwise leak to GC under persistent CONN_MAX_AGE.
             connections.close_all()
 
-    def _drain(
-        self, backend: ChannelBackend, *, partition: str | None = None, deadline: float | None = None
-    ) -> int:
+    def _drain(self, backend: ChannelBackend, *, partition: str | None = None, deadline: float | None = None) -> int:
         """Drain one backend batch by batch and ingest each.
 
         The batch/drain contract lives on :meth:`ChannelBackend.fetch_messages`;
@@ -1121,9 +1101,7 @@ class Channel(Bridge):
                     reporter.report(
                         str(self.SyncStage.SYNCING),
                         message="Ingested message batch",
-                        details=self._sync_details(
-                            backend, partition=partition, landed=landed, batch_size=len(batch)
-                        ),
+                        details=self._sync_details(backend, partition=partition, landed=landed, batch_size=len(batch)),
                     )
             else:
                 # Budget reached with the source not yet drained: the cursor is
@@ -1132,17 +1110,13 @@ class Channel(Bridge):
                     reporter.report(
                         str(self.SyncStage.SYNCING),
                         message="Sync time budget reached; resuming next run",
-                        details=self._sync_details(
-                            backend, partition=partition, landed=landed, budget_exhausted=True
-                        ),
+                        details=self._sync_details(backend, partition=partition, landed=landed, budget_exhausted=True),
                     )
         finally:
             backend.close()
         return landed
 
-    def _sync_details(
-        self, backend: ChannelBackend, *, partition: str | None, **extra: Any
-    ) -> dict[str, Any]:
+    def _sync_details(self, backend: ChannelBackend, *, partition: str | None, **extra: Any) -> dict[str, Any]:
         """Return one progress-report detail payload, merged over the stored details."""
 
         details: dict[str, Any] = {}
@@ -1165,12 +1139,7 @@ class Channel(Bridge):
         if not path or value is None:
             return
         with transaction.atomic():
-            row = (
-                type(self)
-                .objects.sudo(reason="messaging.channel.cursor_slice")
-                .lock_if_supported()
-                .get(pk=self.pk)
-            )
+            row = type(self).objects.sudo(reason="messaging.channel.cursor_slice").lock_if_supported().get(pk=self.pk)
             cursor = row.cursor if isinstance(row.cursor, dict) else {}
             node = cursor
             for key in path[:-1]:
@@ -1888,9 +1857,7 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         if self.thread_id is None:
             return None
         attachment = (
-            apps.get_model("messaging", "ThreadAttachment")
-            ._base_manager.filter(thread_id=self.thread_id)
-            .first()
+            apps.get_model("messaging", "ThreadAttachment")._base_manager.filter(thread_id=self.thread_id).first()
         )
         if attachment is None:
             return None

@@ -297,7 +297,7 @@ Rules that follow from the layering:
   the closed set as an `enum.StrEnum` exposed with `@strawberry.enum` and type the
   field as it; the member value stays the serialized/stored token and the
   upper-case member name is the wire value
-  (`messaging_integrate_whatsapp.client.PairingState` is the reference). Keep the
+  (`angee.integrate.live.PairingState` is the reference). Keep the
   enum next to the vocabulary it names, not in `schema.py`, when a worker-side
   owner must return it without importing the console schema.
 - **Integration implementations are concrete integration children.** The
@@ -493,7 +493,7 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   the holder must exit for a clean reconciler restart instead of racing a
   duplicate against shared state. The reconciler enqueues with `expires=` of one
   tick so a saturated or absent worker never accumulates a backlog
-  (`messaging_integrate_whatsapp/session.py` + `tasks.py` is the reference).
+  (`angee.integrate.session` + `angee.integrate.tasks` are the references).
 - **Run every changed test module standalone.** A full suite's file order can
   leak concrete test models into the shared registry and mask a missing
   registration; a broad run does not replace the direct module run.
@@ -538,8 +538,8 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   and drive its own axis from it, rather than select on its own axis and trust
   something else to have set it. A child's runtime guards must equally honour the
   lifecycle itself — test the one state that runs, not the one state you happen
-  to stop on. `messaging_integrate_whatsapp/tasks.py` is the reference:
-  `ensure_sessions` selects CONNECTED and reconciles the live desire to it, and
+  to stop on. `angee.integrate.tasks` is the reference:
+  `ensure_bridge_sessions` selects CONNECTED and reconciles the live desire to it, and
   gates on `runtime_status` so a known-broken handshake is not redispatched
   forever. Reconcile only when the axes disagree: the write has no dirty check and
   publishes a subscription event, so an unconditional one broadcasts a no-op edit

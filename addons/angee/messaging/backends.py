@@ -16,10 +16,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from angee.integrate.http import HttpClientMixin
-from angee.integrate.impl import BridgeImpl
+from angee.integrate.impl import BridgeImpl, LiveBridgeImpl
+
+INLINE_MEDIA_PREFIXES = ("image/", "video/", "audio/")
 
 
 @dataclass(frozen=True)
@@ -113,6 +115,42 @@ class ParsedMessage:
     metadata: dict = field(default_factory=dict)
 
 
+def media_part(item: Any) -> ParsedPart:
+    """Return one media part, preserving failed downloads as visible marker text.
+
+    A media item with ``content=None`` is never dropped: it becomes a
+    ``[media unavailable: ...]`` body marker so the message remains loss-aware.
+    """
+
+    mime = str(getattr(item, "mime", "") or "application/octet-stream")
+    name = str(getattr(item, "name", "") or "")
+    content = getattr(item, "content", None)
+    if content is None:
+        label = name or mime
+        return ParsedPart(type="text/plain", role="body", text=f"[media unavailable: {label}]")
+    inline = mime.startswith(INLINE_MEDIA_PREFIXES)
+    return ParsedPart(
+        type=mime,
+        disposition="inline" if inline else "attachment",
+        name=name,
+        content=content,
+    )
+
+
+def body_part(text: str = "", media: Any = ()) -> ParsedPart | None:
+    """Build a recursive body tree: bare text, one media part, or a mixed root."""
+
+    parts: list[ParsedPart] = []
+    if text:
+        parts.append(ParsedPart(type="text/plain", role="body", text=text))
+    parts.extend(media_part(item) for item in media)
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+    return ParsedPart(type="multipart/mixed", children=tuple(parts))
+
+
 class ChannelBackend(BridgeImpl, HttpClientMixin):
     """Abstract backend that fetches and parses a message source.
 
@@ -190,6 +228,27 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
         desired-state and a live backend's session notices it cooperatively, so
         most backends need nothing here. The default is a no-op.
         """
+
+
+class LiveChannelBackend(LiveBridgeImpl, ChannelBackend):
+    """Channel backend whose messages arrive through a long-lived live session."""
+
+    category = "channel"
+    label = "Live Channel"
+    icon = "inbox"
+
+    media_item_class: ClassVar[type[Any] | None] = None
+    """DTO class used to attach downloaded media to a queued live message."""
+
+    def fetch_messages(self) -> list[ParsedMessage]:
+        """Return nothing — a live channel ingests from its session, never a poll."""
+
+        return []
+
+    def parse_live_message(self, message: Any) -> ParsedMessage:
+        """Map one queued live message DTO onto the neutral messaging seam."""
+
+        raise NotImplementedError("LiveChannelBackend subclasses must implement parse_live_message().")
 
 
 class ManualChannelBackend(ChannelBackend):

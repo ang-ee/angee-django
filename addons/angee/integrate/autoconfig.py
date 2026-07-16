@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+from angee.integrate.constants import ENSURE_SESSIONS_TASK, RECONCILER_INTERVAL
+
 SETTINGS = {
     "CELERY_BEAT_SCHEDULE:append": {
         "integrate.sync_due_bridges": {
             "task": "integrate.sync_due_bridges",
             "schedule": 60.0,
+        },
+        ENSURE_SESSIONS_TASK: {
+            "task": ENSURE_SESSIONS_TASK,
+            "schedule": RECONCILER_INTERVAL,
         },
     },
     # OAuth connection substrate. Host-provided OAuth client registrations (secrets

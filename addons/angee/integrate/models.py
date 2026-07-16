@@ -611,6 +611,7 @@ class ExternalAccountManager(AngeeManager.from_queryset(ExternalAccountQuerySet)
             except UserModel.DoesNotExist:
                 return None
 
+
 class ExternalAccount(SqidMixin, AuditMixin, AngeeModel):
     """A user's identity at a provider, shared by principals through REBAC grants.
 
@@ -1377,11 +1378,7 @@ class IntegrationManager(AngeeManager):
             if not child_model._meta.can_migrate(connection):
                 continue
             kind = child_model.integration_kind_value()
-            count += (
-                parent.filter(pk__in=child_model._base_manager.values("pk"))
-                .exclude(kind=kind)
-                .update(kind=kind)
-            )
+            count += parent.filter(pk__in=child_model._base_manager.values("pk")).exclude(kind=kind).update(kind=kind)
         return count
 
 
@@ -1396,6 +1393,9 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     """
 
     runtime = True
+
+    Lifecycle = IntegrationLifecycle
+    """Expose the lifecycle vocabulary off the row for callers that cannot import this module."""
 
     sqid_prefix = "int_"
     integration_kind_label = "Integration"
@@ -1711,6 +1711,20 @@ class Bridge(AngeeModel):
         COMPLETED = "completed", "Completed"
         FAILED = "failed", "Failed"
 
+    class LiveState(models.TextChoices):
+        """Desired live-ingest state persisted in ``subscription_state["desired"]``.
+
+        The base owns this vocabulary: bridge start/stop methods write it, and a
+        live implementation's session loop and reconciler read it. Stopping is
+        cooperative - a running session notices ``STOPPED`` and exits.
+        """
+
+        LIVE = "live", "Live"
+        STOPPED = "stopped", "Stopped"
+
+    live_impl_field: ClassVar[str] = "impl_class"
+    """Name the ImplClassField that selects this bridge's runtime implementation."""
+
     config = models.JSONField(default=dict, blank=True)
     """Bridge-scoped settings interpreted by the selected backend."""
     cursor = models.JSONField(default=dict, blank=True)
@@ -1741,6 +1755,13 @@ class Bridge(AngeeModel):
         abstract = True
 
     @property
+    def live_impl(self) -> IntegrationImpl:
+        """Return this bridge's selected runtime implementation."""
+
+        impl_class = cast(type[IntegrationImpl], self.resolve_impl(self.live_impl_field))
+        return impl_class(self)
+
+    @property
     def is_syncing(self) -> bool:
         """Return whether a worker currently holds this bridge's live sync lock."""
 
@@ -1769,11 +1790,7 @@ class Bridge(AngeeModel):
         """
 
         stage = str(self.sync_stage)
-        if (
-            stage in self.LIVE_SYNC_STAGES
-            and task_locks_are_cross_process()
-            and not self.is_syncing
-        ):
+        if stage in self.LIVE_SYNC_STAGES and task_locks_are_cross_process() and not self.is_syncing:
             return str(self.SyncStage.FAILED)
         return stage
 
@@ -2109,6 +2126,7 @@ class VcsBridge(Bridge):
         repository_model = apps.get_model("integrate", "Repository")
         return repository_model.objects.reconcile(self, self.backend.ls_repos(org=org))
 
+
 class RepositoryManager(AngeeManager):
     """Manager owning the upsert/reconcile of repository rows from a host listing."""
 
@@ -2331,10 +2349,7 @@ class TemplateManager(AngeeManager):
         now = timezone.now()
         with system_context(reason="integrate.template.sync"), transaction.atomic():
             self.bulk_create(
-                [
-                    self._row_from_descriptor(source, descriptor, now=now)
-                    for descriptor in descriptors_by_path.values()
-                ],
+                [self._row_from_descriptor(source, descriptor, now=now) for descriptor in descriptors_by_path.values()],
                 update_conflicts=True,
                 unique_fields=["source", "path"],
                 update_fields=["name", "kind", "inputs", "updated_at"],

@@ -30,7 +30,6 @@ Row writes specific to WhatsApp belong to the row's selected backend
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from django.apps import apps
@@ -38,16 +37,10 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from rebac import system_context
 
-from angee.integrate.locks import bridge_is_locked
+from angee.integrate.live import await_session_exit, reset_session_store
 from angee.integrate.models import IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.messaging_integrate_whatsapp.backend import WhatsAppChannelBackend
-from angee.messaging_integrate_whatsapp.client import (
-    STOP_JOIN_SECONDS,
-    WAKE_SECONDS,
-    WhatsappPairingType,
-    reset_session_store,
-)
-from angee.tasks.locks import task_locks_are_cross_process
+from angee.messaging_integrate_whatsapp.client import WhatsappPairingType
 
 Channel = apps.get_model("messaging", "Channel")
 Vendor = apps.get_model("integrate", "Vendor")
@@ -55,14 +48,6 @@ Vendor = apps.get_model("integrate", "Vendor")
 _WHATSAPP_SLUG = WhatsAppChannelBackend.key
 """This addon's one name — the seeded vendor catalogue slug and the channel
 backend registry key are the same fact spelled once."""
-
-SESSION_EXIT_TIMEOUT = WAKE_SECONDS + STOP_JOIN_SECONDS + 20.0
-"""How long pairing reset waits for a stopping session to release its lock.
-
-Bounded above the worst-case cooperative stop: one wake to notice the persisted
-desire (``WAKE_SECONDS``) plus the vendor connection's unwind
-(``STOP_JOIN_SECONDS`` — a WhatsApp WebSocket close can be slow), with headroom.
-Below this the wait could reject a session that is stopping cleanly."""
 
 
 def create_whatsapp_channel(user: Any, *, name: str) -> Any:
@@ -144,7 +129,7 @@ def reset_whatsapp_pairing(channel: Any) -> None:
     _require_whatsapp(channel)
     with system_context(reason="messaging_integrate_whatsapp.reset_pairing"):
         channel.stop_live()
-        _await_session_exit(channel)
+        await_session_exit(channel)
         reset_session_store(channel)
         channel.backend.mark_disconnected(clear_identity=True)
     resume_whatsapp_pairing(channel)
@@ -160,40 +145,6 @@ def whatsapp_pairing(channel: Any) -> WhatsappPairingType:
 
     _require_whatsapp(channel)
     return channel.backend.pairing()
-
-
-def _await_session_exit(channel: Any, *, timeout: float | None = None) -> None:
-    """Wait for the session's advisory lock to clear before touching its store.
-
-    An unlinked-but-open SQLite store keeps being written — the wipe would
-    silently not happen — so a session that outlives the bounded wait fails the
-    operation loudly instead.
-
-    Refuses outright on a process-local lock backend. ``bridge_is_locked`` can
-    only see another process's session when the lock backend is cross-process
-    (``angee.tasks.locks.LockBackend.cross_process``); on the SQLite/dev floor it
-    answers ``False`` for a session a worker is holding right now. Deriving "no
-    session is running" from a probe that cannot see one would make this wait
-    return immediately and hand a live store to ``rmtree``, so the destructive
-    reset is declined rather than run on an unproven store.
-    """
-
-    if not task_locks_are_cross_process():
-        raise ImproperlyConfigured(
-            "Resetting WhatsApp pairing needs a cross-process task lock backend to prove the "
-            "live session released its store; this deployment's lock backend is process-local "
-            "(the SQLite/dev floor). Reset from a Postgres-backed deployment, or — if the "
-            "retained device store is still usable — re-pair without wiping it by "
-            "disconnecting and reconnecting the channel (markIntegrationDisconnected then "
-            "markIntegrationConnected), which clears the runtime error and starts a session."
-        )
-    deadline = time.monotonic() + (SESSION_EXIT_TIMEOUT if timeout is None else timeout)
-    while bridge_is_locked(channel):
-        if time.monotonic() >= deadline:
-            raise TimeoutError(
-                "The live WhatsApp session is still running; try again once it has stopped."
-            )
-        time.sleep(0.5)
 
 
 def _require_whatsapp(channel: Any) -> None:

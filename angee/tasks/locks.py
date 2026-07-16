@@ -121,7 +121,13 @@ class _PostgresAdvisoryLockHandle:
 
 
 class PostgresAdvisoryLockBackend:
-    """Postgres session-level advisory lock backend."""
+    """Postgres session-level advisory lock backend.
+
+    Session-level advisory locks are connection-scoped. Deployments using this
+    backend must connect directly to Postgres or use session pooling; pgbouncer
+    transaction pooling silently breaks both ``is_held`` liveness probes and the
+    lock-liveness checks that depend on them.
+    """
 
     cross_process = True
 

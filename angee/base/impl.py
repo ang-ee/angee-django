@@ -251,6 +251,11 @@ class ImplClassField(TextChoicesField):
 
         return resolve_impl_class(self.registry_setting, self.key_for(key), cast(type, self.base_class))
 
+    def registered_keys(self) -> tuple[str, ...]:
+        """Return this field's configured implementation keys in deterministic order."""
+
+        return tuple(sorted(self._registry()))
+
     def resolve_for(self, instance: models.Model) -> type:
         """Return the impl class selected by this field on ``instance``."""
 
