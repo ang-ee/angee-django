@@ -32,6 +32,8 @@ export interface RelationFieldProps {
   readOnly?: boolean;
   /** Accessible name for the trigger; the selected value is appended to it. */
   "aria-label"?: string;
+  id?: string;
+  "aria-describedby"?: string;
   /**
    * When set, the popover offers a "Create …" row for the typed query whenever
    * it matches no option — the searchable, in-place create affordance.
@@ -65,6 +67,8 @@ export function RelationField({
   searchPlaceholder,
   readOnly,
   "aria-label": ariaLabel,
+  "aria-describedby": ariaDescribedBy,
+  id,
   onCreate,
   onOpenChange,
 }: RelationFieldProps): ReactElement {
@@ -90,9 +94,11 @@ export function RelationField({
       }}
     >
       <PopoverTrigger
+        id={id}
         className={TRIGGER_CLASS}
         disabled={readOnly}
         aria-label={triggerLabel}
+        aria-describedby={ariaDescribedBy}
       >
         <span className={cn("min-w-0 flex-1 truncate", !selected && "text-fg-muted")}>
           {selected ? selected.label : (placeholder ?? t("relation.placeholder"))}

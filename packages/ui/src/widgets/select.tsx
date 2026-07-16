@@ -21,6 +21,7 @@ function SelectEdit({
   const selected = canonicalOptionValue(field?.options, value) ?? value ?? "";
   return (
     <Select
+      {...field?.controlProps}
       value={selected}
       options={field?.options ?? []}
       readOnly={readOnly}

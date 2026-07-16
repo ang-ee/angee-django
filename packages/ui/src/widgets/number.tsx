@@ -19,6 +19,7 @@ function IntegerEdit({
       step={1}
       snapOnStep
       inputProps={{
+        ...field?.controlProps,
         "aria-label": widgetLabel(field, "Integer"),
         inputMode: "numeric",
       }}
@@ -41,6 +42,7 @@ function FloatEdit({
       readOnly={readOnly}
       step={0.01}
       inputProps={{
+        ...field?.controlProps,
         "aria-label": widgetLabel(field, "Decimal number"),
         inputMode: "decimal",
       }}

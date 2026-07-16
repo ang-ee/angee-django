@@ -95,6 +95,13 @@ export interface WidgetField {
    * currency from the record without re-deriving it.
    */
   currencyField?: string;
+  /** DOM association supplied by a descriptor-form owner for its actual control. */
+  controlProps?: WidgetControlProps;
+}
+
+export interface WidgetControlProps {
+  id: string;
+  "aria-describedby"?: string;
 }
 
 export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {

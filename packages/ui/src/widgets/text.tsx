@@ -12,6 +12,7 @@ function TextEdit({
 }: WidgetRenderProps<string>): ReactElement {
   return (
     <Input
+      {...field?.controlProps}
       value={value ?? ""}
       readOnly={readOnly}
       aria-label={widgetLabel(field, "Text")}
