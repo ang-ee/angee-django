@@ -1,8 +1,9 @@
-"""WhatsApp identity and mapping rules shared by live and backup ingest.
+"""WhatsApp DTO-carrying parser shared by live and backup ingest.
 
 Bare JID normalization makes device-qualified live events converge with backup
 rows; external ids are chat-scoped stanza ids; handles keep the bare JID as the
-stable identity and expose a phone value only when derivable.
+stable identity and expose a phone value only when derivable. Unlike Telegram's
+identity-only mapping, this parser owns the DTO also produced by ``backup.py``.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedThread, body_part
+from angee.messaging.backends import MediaItem, ParsedHandle, ParsedMessage, ParsedThread, body_part
 
 PLATFORM = "whatsapp"
 GROUP_SERVERS = ("g.us", "broadcast")
@@ -75,15 +76,6 @@ def external_id(chat_jid: str, stanza_id: str) -> str:
     """Compose the chat-scoped idempotency key both ingest paths converge on."""
 
     return f"{bare_jid(chat_jid)}/{stanza_id}"
-
-
-@dataclass(frozen=True)
-class MediaItem:
-    """One media payload; ``content=None`` means the fetch failed."""
-
-    mime: str = "application/octet-stream"
-    name: str = ""
-    content: bytes | None = None
 
 
 @dataclass(frozen=True)

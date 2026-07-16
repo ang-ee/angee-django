@@ -141,30 +141,60 @@ export function MutationDialog<
       size={size}
       placement={placement}
     >
-      {fields.map((field) => {
-        const readOnly =
-          field.readOnly || field.readOnlyWhen?.(values) || submitting;
-        return (
-          <FieldRoot key={field.name}>
-            <FieldLabel required={field.required}>
-              {field.label ?? field.name}
-            </FieldLabel>
-            <FieldDescriptorControl
-              field={field}
-              value={values[field.name]}
-              readOnly={readOnly}
-              onChange={(next) =>
-                setValues((current) => ({ ...current, [field.name]: next }))
-              }
-            />
-            {field.description ? (
-              <FieldDescription>{field.description}</FieldDescription>
-            ) : null}
-          </FieldRoot>
-        );
-      })}
+      {fields.map((field) => (
+        <MutationDialogFieldRow
+          key={field.name}
+          field={field}
+          value={values[field.name]}
+          readOnly={
+            field.readOnly || field.readOnlyWhen?.(values) || submitting
+          }
+          onChange={(next) =>
+            setValues((current) => ({ ...current, [field.name]: next }))
+          }
+        />
+      ))}
       <ErrorBanner description={error} />
     </DialogForm>
+  );
+}
+
+function MutationDialogFieldRow({
+  field,
+  value,
+  readOnly,
+  onChange,
+}: {
+  field: MutationDialogField;
+  value: unknown;
+  readOnly?: boolean;
+  onChange: (value: unknown) => void;
+}): React.ReactElement {
+  const generatedId = React.useId();
+  const controlId = `mutation-field-${generatedId}`;
+  const descriptionId = field.description
+    ? `${controlId}-description`
+    : undefined;
+
+  return (
+    <FieldRoot>
+      <FieldLabel htmlFor={controlId} required={field.required}>
+        {field.label ?? field.name}
+      </FieldLabel>
+      <FieldDescriptorControl
+        field={field}
+        value={value}
+        readOnly={readOnly}
+        controlProps={{
+          id: controlId,
+          ...(descriptionId ? { "aria-describedby": descriptionId } : {}),
+        }}
+        onChange={onChange}
+      />
+      {field.description ? (
+        <FieldDescription id={descriptionId}>{field.description}</FieldDescription>
+      ) : null}
+    </FieldRoot>
   );
 }
 

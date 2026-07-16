@@ -152,6 +152,11 @@ def test_live_console_import_path_stays_vendor_free() -> None:
         "angee.messaging_integrate_whatsapp.backend",
         "angee.messaging_integrate_whatsapp.connect",
         "angee.messaging_integrate_whatsapp.schema",
+        "angee.messaging_integrate_telegram.backend",
+        "angee.messaging_integrate_telegram.identity",
+        "angee.messaging_integrate_telegram.connect",
+        "angee.messaging_integrate_telegram.schema",
+        "angee.messaging_integrate_telegram.autoconfig",
     )
     closure = _import_closure(console_entries)
     assert not any(name == prefix or name.startswith(f"{prefix}.") for name in closure for prefix in forbidden)

@@ -258,6 +258,7 @@ class Handle(SqidMixin, AuditMixin, AngeeModel):
 
         EMAIL = "email", "Email"
         PHONE = "phone", "Phone"
+        TELEGRAM = "telegram", "Telegram"
         WHATSAPP = "whatsapp", "WhatsApp"
         YOUTUBE = "youtube", "YouTube"
         FACEBOOK = "facebook", "Facebook"
@@ -763,9 +764,9 @@ class RelationshipKind(SqidMixin, AuditMixin, AngeeModel):
         party_model = apps.get_model("parties", "Party")
         concrete_by_pk = {
             row["pk"]: row
-            for row in party_model._base_manager.filter(
-                pk__in={end.pk for _field, _required, end in checked}
-            ).values("pk", *sorted(relation_names))
+            for row in party_model._base_manager.filter(pk__in={end.pk for _field, _required, end in checked}).values(
+                "pk", *sorted(relation_names)
+            )
         }
         errors: dict[str, str] = {}
         for field, required, end in checked:

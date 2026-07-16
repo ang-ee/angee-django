@@ -2,6 +2,7 @@ import * as React from "react";
 
 import {
   useResolvedWidget,
+  type WidgetControlProps,
   type WidgetField,
 } from "../widgets";
 import {
@@ -14,6 +15,7 @@ export interface FieldDescriptorControlProps {
   value: unknown;
   readOnly?: boolean;
   onChange?: (value: unknown) => void;
+  controlProps?: WidgetControlProps;
 }
 
 /**
@@ -26,6 +28,7 @@ export function FieldDescriptorControl({
   value,
   readOnly,
   onChange,
+  controlProps,
 }: FieldDescriptorControlProps): React.ReactElement {
   const widget = useResolvedWidget(fieldWidgetId(field)) ?? fallbackWidget();
   const Component = readOnly ? widget.read : (widget.edit ?? widget.read);
@@ -34,6 +37,7 @@ export function FieldDescriptorControl({
     label: field.label,
     options: field.options,
     placeholder: field.placeholder,
+    controlProps,
     ...(field.currencyField ? { currencyField: field.currencyField } : {}),
   };
   return (
@@ -55,12 +59,15 @@ function fallbackWidget() {
       value,
       onChange,
       readOnly,
+      field,
     }: {
       value?: unknown;
       onChange?: (value: string) => void;
       readOnly?: boolean;
+      field?: WidgetField;
     }) => (
       <input
+        {...field?.controlProps}
         className="h-9 w-full rounded-6 border border-border bg-sheet px-3 text-13 text-fg"
         value={String(value ?? "")}
         readOnly={readOnly}

@@ -26,6 +26,7 @@ function Many2OneEdit({
   );
   return (
     <RelationField
+      {...field?.controlProps}
       value={selected}
       onChange={(next) => onChange?.(next)}
       options={options}

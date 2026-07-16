@@ -35,6 +35,7 @@ export {
 
 export type {
   WidgetDefinition,
+  WidgetControlProps,
   WidgetField,
   WidgetOption,
   WidgetRenderProps,

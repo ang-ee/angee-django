@@ -53,12 +53,11 @@ class LiveChannelSession(LiveSession):
     def _with_media(self, message: Any, payload: Any) -> Any:
         """Resolve queued media facts through the implementation's declared DTO class."""
 
-        facts = message.metadata.pop("_media_facts", ())
+        metadata = dict(message.metadata)
+        facts = metadata.pop("_media_facts", ())
         if not facts:
             return message
         media_item_class = self.live_impl.media_item_class
-        if media_item_class is None:
-            raise NotImplementedError(f"{type(self.live_impl).__name__} must define media_item_class for live media.")
         media = tuple(
             media_item_class(
                 mime=getattr(fact, "mime", "application/octet-stream"),
@@ -67,4 +66,9 @@ class LiveChannelSession(LiveSession):
             )
             for fact in facts
         )
+        return self._attach_media(replace(message, metadata=metadata), media)
+
+    def _attach_media(self, message: Any, media: tuple[Any, ...]) -> Any:
+        """Attach resolved media to the default vendor DTO shape."""
+
         return replace(message, media=media)

@@ -336,6 +336,52 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(@types/node@26.0.1)(happy-dom@20.10.6)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0))
 
+  addons/angee/messaging_integrate_telegram/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../angee/web/app
+      '@angee/integrate':
+        specifier: workspace:*
+        version: link:../../integrate/web
+      '@angee/messaging':
+        specifier: workspace:*
+        version: link:../../messaging/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../angee/web/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../angee/web/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.16
+        version: 1.170.16(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.9(@types/node@26.0.1)(happy-dom@20.10.6)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0))
+
   addons/angee/messaging_integrate_whatsapp/web:
     dependencies:
       '@angee/app':
@@ -1213,6 +1259,9 @@ importers:
       '@angee/messaging-integrate-imap':
         specifier: workspace:*
         version: link:../../../addons/angee/messaging_integrate_imap/web
+      '@angee/messaging-integrate-telegram':
+        specifier: workspace:*
+        version: link:../../../addons/angee/messaging_integrate_telegram/web
       '@angee/messaging-integrate-whatsapp':
         specifier: workspace:*
         version: link:../../../addons/angee/messaging_integrate_whatsapp/web

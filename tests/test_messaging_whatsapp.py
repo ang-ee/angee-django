@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from angee.messaging.backends import MediaItem
 from angee.messaging_integrate_whatsapp.parser import (
     ChatMessage,
-    MediaItem,
     bare_jid,
     external_id,
     handle_for_jid,

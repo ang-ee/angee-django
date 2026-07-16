@@ -498,6 +498,48 @@ def test_integrate_lifecycle_values_migration_applies_on_the_legacy_marker_value
     assert all(operation.reversible for operation in module.Migration.operations)
 
 
+def _credential_kind_state(choices: tuple[tuple[str, str], ...], *, include_kind: bool = True) -> ProjectState:
+    """Return a minimal historical Credential state for kind-choice guards."""
+
+    fields: list[tuple[str, models.Field]] = [("id", models.AutoField(primary_key=True))]
+    if include_kind:
+        fields.append(("kind", models.CharField(choices=choices, max_length=32)))
+    state = ProjectState()
+    state.add_model(ModelState("integrate", "Credential", fields))
+    return state
+
+
+def test_integrate_credential_app_keys_migration_guards_the_choice_transition() -> None:
+    """APP_KEYS alters only the complete legacy Credential kind vocabulary."""
+
+    try:
+        module = importlib.import_module("angee.integrate.runtime_migrations.credential_app_keys")
+    except ModuleNotFoundError:
+        pytest.fail("The integrate credential_app_keys migration is not implemented.")
+    legacy = _credential_kind_state(module.LEGACY_CHOICES)
+    current = _credential_kind_state(module.CURRENT_CHOICES)
+    extended = _credential_kind_state((*module.CURRENT_CHOICES, ("future", "Future")))
+    extended_legacy = _credential_kind_state((*module.LEGACY_CHOICES, ("future", "Future")))
+    partial = _credential_kind_state(module.LEGACY_CHOICES[:-1])
+
+    assert module.applies(ProjectState()) is False
+    assert module.applies(legacy) is True
+    assert module.applies(current) is False
+    assert module.applies(extended) is False
+    with pytest.raises(ImproperlyConfigured, match="partial Credential kind transition"):
+        module.applies(extended_legacy)
+    with pytest.raises(ImproperlyConfigured, match="partial Credential kind transition"):
+        module.applies(partial)
+    with pytest.raises(ImproperlyConfigured, match="Credential without kind"):
+        module.applies(_credential_kind_state((), include_kind=False))
+
+    migrated = module.Migration("probe", "integrate").mutate_state(legacy)
+    field = migrated.models["integrate", "credential"].fields["kind"]
+    assert tuple(field.choices) == module.CURRENT_CHOICES
+    assert isinstance(module.Migration.operations[0], migrations.AlterField)
+    assert len(module.Migration.operations) == 1
+
+
 @pytest.mark.django_db(transaction=True)
 def test_integrate_lifecycle_values_migration_rewrites_existing_rows() -> None:
     module = importlib.import_module("angee.integrate.runtime_migrations.integration_lifecycle_values")

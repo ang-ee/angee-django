@@ -19,6 +19,7 @@
     "@angee/knowledge": "workspace:*",
     "@angee/messaging": "workspace:*",
     "@angee/messaging-integrate-imap": "workspace:*",
+    "@angee/messaging-integrate-telegram": "workspace:*",
     "@angee/messaging-integrate-whatsapp": "workspace:*",
     "@angee/metadata": "workspace:*",
     "@angee/nexus": "workspace:*",

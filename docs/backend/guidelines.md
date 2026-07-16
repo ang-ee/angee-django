@@ -494,6 +494,12 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   duplicate against shared state. The reconciler enqueues with `expires=` of one
   tick so a saturated or absent worker never accumulates a backlog
   (`angee.integrate.session` + `angee.integrate.tasks` are the references).
+- **An asyncio vendor SDK owns its loop on the live session's connection thread.**
+  Create and run that loop where the vendor connects; the task thread remains the
+  only persistence owner. When task-thread work must call an async vendor hook
+  (for example, downloading media during ingest), schedule the coroutine with
+  `asyncio.run_coroutine_threadsafe` onto that owning loop and wait with a finite
+  timeout. Never create a second loop around a coroutine bound to the live client.
 - **Run every changed test module standalone.** A full suite's file order can
   leak concrete test models into the shared registry and mask a missing
   registration; a broad run does not replace the direct module run.

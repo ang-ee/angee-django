@@ -8,7 +8,6 @@ from angee.messaging_integrate_whatsapp.client import DuplicateAccountRejected
 from angee.messaging_integrate_whatsapp.constants import SESSION_QUEUE
 from angee.messaging_integrate_whatsapp.parser import (
     ChatMessage,
-    MediaItem,
     bare_jid,
     parsed_message,
     phone_for_jid,
@@ -24,7 +23,6 @@ class WhatsAppChannelBackend(LiveChannelBackend):
     session_queue = SESSION_QUEUE
     session_class = "angee.messaging_integrate_whatsapp.session.WhatsAppSession"
     state_identity_key = "own_jid"
-    media_item_class = MediaItem
 
     def normalize_account_id(self, raw: str) -> str:
         """Return WhatsApp's durable bare-JID account identity."""

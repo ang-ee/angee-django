@@ -5,6 +5,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -107,6 +108,14 @@ class FakeLiveChannelBackend(LiveChannelBackend):
         """Pass already-neutral fake messages through unchanged."""
 
         return message
+
+
+@dataclass(frozen=True)
+class _QueuedLiveMessage:
+    """Vendor-shaped queued DTO for the default media-attachment hook."""
+
+    metadata: dict[str, Any] = field(default_factory=dict)
+    media: tuple[Any, ...] = ()
 
 
 @pytest.fixture
@@ -875,6 +884,38 @@ def test_live_channel_session_owns_message_ingest(live_tables: Any) -> None:
 
     assert Message._base_manager.filter(external_id="fake/message-1").exists()
     assert session.landed == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_live_channel_media_resolution_copies_metadata_and_uses_shared_item(
+    live_tables: Any,
+) -> None:
+    """The base resolves facts without mutating a frozen DTO's shared metadata."""
+
+    from angee.integrate.sync import BridgeProgressReporter
+    from angee.messaging import backends as messaging_backends
+    from angee.messaging.session import LiveChannelSession
+
+    assert hasattr(messaging_backends, "MediaItem")
+    media_item_class = messaging_backends.MediaItem
+    channel = _live_channel("fake-live-media-owner")
+    session = LiveChannelSession(
+        channel,
+        reporter=BridgeProgressReporter(channel),
+        stop_event=threading.Event(),
+    )
+    fact = media_item_class(mime="image/jpeg", name="photo.jpg")
+    original_metadata = {"_media_facts": (fact,), "kept": "value"}
+    queued = _QueuedLiveMessage(metadata=original_metadata)
+    session._download = lambda payload: b"downloaded" if payload == "wire" else None
+
+    resolved = session._with_media(queued, "wire")
+
+    assert FakeLiveChannelBackend.media_item_class is media_item_class
+    assert queued.metadata is original_metadata
+    assert queued.metadata == {"_media_facts": (fact,), "kept": "value"}
+    assert resolved.metadata == {"kept": "value"}
+    assert resolved.media == (media_item_class(mime="image/jpeg", name="photo.jpg", content=b"downloaded"),)
 
 
 @pytest.mark.django_db(transaction=True)

@@ -31,7 +31,8 @@ from typing import Any
 from django.apps import apps
 from rebac import system_context
 
-from angee.messaging_integrate_whatsapp.parser import ChatMessage, MediaItem, bare_jid, parsed_message
+from angee.messaging.backends import MediaItem
+from angee.messaging_integrate_whatsapp.parser import ChatMessage, bare_jid, parsed_message
 
 WHATSAPP_DOMAIN = "AppDomainGroup-group.net.whatsapp.WhatsApp.shared"
 CHAT_STORAGE_PATH = "ChatStorage.sqlite"

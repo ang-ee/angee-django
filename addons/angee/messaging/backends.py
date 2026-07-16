@@ -14,7 +14,7 @@ write path. ``messaging_integrate_imap`` contributes the ``imap`` backend; the
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, ClassVar
 
@@ -69,6 +69,15 @@ class ParsedPart:
 
 
 @dataclass(frozen=True)
+class MediaItem:
+    """One resolved media payload; ``content=None`` preserves a failed fetch."""
+
+    mime: str = "application/octet-stream"
+    name: str = ""
+    content: bytes | None = None
+
+
+@dataclass(frozen=True)
 class ParsedThread:
     """The conversation a chat message belongs to, named by the source.
 
@@ -114,6 +123,11 @@ class ParsedMessage:
     body: ParsedPart | None = None
     metadata: dict = field(default_factory=dict)
 
+    def with_media(self, media: tuple[MediaItem, ...]) -> ParsedMessage:
+        """Return this neutral message with resolved media merged into its body."""
+
+        return replace(self, body=body_part(media=media, body=self.body))
+
 
 def media_part(item: Any) -> ParsedPart:
     """Return one media part, preserving failed downloads as visible marker text.
@@ -137,10 +151,15 @@ def media_part(item: Any) -> ParsedPart:
     )
 
 
-def body_part(text: str = "", media: Any = ()) -> ParsedPart | None:
-    """Build a recursive body tree: bare text, one media part, or a mixed root."""
+def body_part(
+    text: str = "",
+    media: Any = (),
+    *,
+    body: ParsedPart | None = None,
+) -> ParsedPart | None:
+    """Build or extend a recursive body tree with text and resolved media."""
 
-    parts: list[ParsedPart] = []
+    parts: list[ParsedPart] = [body] if body is not None else []
     if text:
         parts.append(ParsedPart(type="text/plain", role="body", text=text))
     parts.extend(media_part(item) for item in media)
@@ -237,7 +256,7 @@ class LiveChannelBackend(LiveBridgeImpl, ChannelBackend):
     label = "Live Channel"
     icon = "inbox"
 
-    media_item_class: ClassVar[type[Any] | None] = None
+    media_item_class: ClassVar[type[MediaItem]] = MediaItem
     """DTO class used to attach downloaded media to a queued live message."""
 
     def fetch_messages(self) -> list[ParsedMessage]:

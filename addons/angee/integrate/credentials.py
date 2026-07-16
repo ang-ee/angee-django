@@ -1,9 +1,8 @@
 """Credential kind registry for connection secrets.
 
-This registry is the seam for future credential kinds such as ``vault_ref``:
-add a new ``CredentialKindHandler`` subclass that owns that material shape and
-call ``register_handler()``. The ``Credential`` model stores only the common
-columns and delegates kind-specific behavior here.
+Handlers are open through ``register_handler()``; the values a ``Credential``
+row may store remain the closed :class:`CredentialKind` vocabulary. The model
+stores only common columns and delegates kind-specific behavior here.
 """
 
 from __future__ import annotations
@@ -26,6 +25,7 @@ class CredentialKind(models.TextChoices):
     STATIC_TOKEN = "static_token", "Static Token"
     SSH_KEY = "ssh_key", "SSH Key"
     BASIC_AUTH = "basic_auth", "Basic Auth"
+    APP_KEYS = "app_keys", "App Keys"
 
 
 class CredentialKindHandler:
@@ -270,7 +270,31 @@ class BasicAuthCredentialHandler(CredentialKindHandler):
         """Basic-auth credentials do not expire through a refresh flow."""
 
 
+class AppKeysCredentialHandler(CredentialKindHandler):
+    """Handler for an external application's public id and private secret."""
+
+    kind = "app_keys"
+    material_field = "app_secret"
+    material_fields = ("app_id", "app_secret")
+
+    def validate(self, material: dict[str, Any]) -> None:
+        """Require both halves of an external application registration."""
+
+        if not material.get("app_id") or not material.get("app_secret"):
+            raise ValueError("app_keys credential material requires app_id and app_secret.")
+
+    def auth_headers(self, credential: Any) -> dict[str, str]:
+        """Return no HTTP headers because application keys parameterize a client library."""
+
+        del credential
+        return {}
+
+    def refresh(self, credential: Any) -> None:
+        """Application registrations do not expire through a refresh flow."""
+
+
 register_handler(OAuthCredentialHandler())
 register_handler(StaticTokenCredentialHandler())
 register_handler(SshKeyCredentialHandler())
 register_handler(BasicAuthCredentialHandler())
+register_handler(AppKeysCredentialHandler())

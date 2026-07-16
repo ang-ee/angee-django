@@ -12,6 +12,11 @@ name = "integration_lifecycle_values"
 app_label = "integrate"
 module = "runtime_migrations.integration_lifecycle_values"
 
+[[migrations]]
+name = "credential_app_keys"
+app_label = "integrate"
+module = "runtime_migrations.credential_app_keys"
+
 [resources]
 master = [
   { path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" },

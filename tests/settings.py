@@ -29,6 +29,7 @@ INSTALLED_APPS = [
     "angee.uom",
     "angee.messaging",
     "angee.messaging_integrate_whatsapp",
+    "angee.messaging_integrate_telegram",
     "angee.spaces",
     "angee.nexus",
     "angee.posts",
@@ -121,6 +122,7 @@ ANGEE_DIRECTORY_BACKEND_CLASSES = {
 ANGEE_CHANNEL_BACKEND_CLASSES = {
     "manual": "angee.messaging.backends.ManualChannelBackend",
     "imap": "angee.messaging_integrate_imap.backend.ImapChannelBackend",
+    "telegram": "angee.messaging_integrate_telegram.backend.TelegramChannelBackend",
     "whatsapp": "angee.messaging_integrate_whatsapp.backend.WhatsAppChannelBackend",
     "fake_live": "tests.pairing_backend.FakePairingBackend",
 }
@@ -137,9 +139,7 @@ ANGEE_OAUTH_PROVIDER_TYPES = {
     "generic_oidc": "angee.iam_integrate_oidc.providers.GenericOidc",
     "google": "angee.iam_integrate_oidc.providers.GoogleType",
 }
-ANGEE_CREDENTIAL_DISCONNECT_GUARDS = (
-    "angee.iam_integrate_oidc.identity.guard_last_sign_in_disconnect",
-)
+ANGEE_CREDENTIAL_DISCONNECT_GUARDS = ("angee.iam_integrate_oidc.identity.guard_last_sign_in_disconnect",)
 # Bare tests run Django's per-process LocMem cache. Production OAuth redirects
 # must use a shared cache; tests opt in explicitly so the state guard remains loud.
 ANGEE_INTEGRATE_ALLOW_LOCAL_OAUTH_STATE_CACHE = True

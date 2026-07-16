@@ -348,6 +348,8 @@ export type SelectProps = Omit<
     contentClassName?: string;
     "aria-label"?: string;
     "aria-labelledby"?: string;
+    id?: string;
+    "aria-describedby"?: string;
     onValueChange?: (
       value: string,
       eventDetails: SelectRootChangeEventDetails,
@@ -366,6 +368,8 @@ export const Select = function Select({
   readOnly = false,
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledBy,
+  "aria-describedby": ariaDescribedBy,
+  id,
   onValueChange,
   ...props
 }: SelectProps) {
@@ -391,12 +395,14 @@ export const Select = function Select({
       {...props}
     >
       <SelectTrigger
+        id={id}
         size={size}
         invalid={invalid}
         readOnly={readOnly}
         className={className}
         aria-label={ariaLabel}
         aria-labelledby={ariaLabelledBy}
+        aria-describedby={ariaDescribedBy}
       >
         <SelectValue>
           {(selected) => selectedLabel(selected, labels, placeholder)}

@@ -17,6 +17,7 @@ function EmailEdit({
 }: WidgetRenderProps<string>): ReactElement {
   return (
     <Input
+      {...field?.controlProps}
       type="email"
       value={value ?? ""}
       readOnly={readOnly}
@@ -41,6 +42,7 @@ function UrlEdit({
 }: WidgetRenderProps<string>): ReactElement {
   return (
     <Input
+      {...field?.controlProps}
       type="url"
       value={value ?? ""}
       readOnly={readOnly}
@@ -75,6 +77,7 @@ function PhoneEdit({
 }: WidgetRenderProps<string>): ReactElement {
   return (
     <Input
+      {...field?.controlProps}
       type="tel"
       value={value ?? ""}
       readOnly={readOnly}
@@ -99,6 +102,7 @@ function PasswordEdit({
 }: WidgetRenderProps<string>): ReactElement {
   return (
     <Input
+      {...field?.controlProps}
       type="password"
       value={value ?? ""}
       readOnly={readOnly}
