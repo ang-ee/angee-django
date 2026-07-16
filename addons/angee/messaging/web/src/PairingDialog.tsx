@@ -11,6 +11,9 @@ import {
   DialogRoot,
   DialogTitle,
   ErrorBanner,
+  FieldControl,
+  FieldLabel,
+  FieldRoot,
   Glyph,
   useActionResultMutation,
   useRecordChromeActionMutation,
@@ -39,7 +42,12 @@ type PairingState = PairingSnapshot["state"];
  */
 const PAIRING_BODY: Record<
   PairingState,
-  (pairing: PairingSnapshot, t: MessagingT, instruction: string) => React.ReactNode
+  (
+    pairing: PairingSnapshot,
+    t: MessagingT,
+    instruction: string,
+    passwordPrompt: React.ReactNode,
+  ) => React.ReactNode
 > = {
   STARTING: (_pairing, t) => <p>{t("channel.pairing.starting")}</p>,
   // The QR arrives a beat after the state does; until it lands this still reads
@@ -58,6 +66,8 @@ const PAIRING_BODY: Record<
     ) : (
       <p>{t("channel.pairing.starting")}</p>
     ),
+  AWAITING_PASSWORD: (_pairing, _t, _instruction, passwordPrompt) =>
+    passwordPrompt,
   PAIRED: (pairing, t) => (
     <p>
       {t("channel.pairing.paired")}
@@ -175,6 +185,8 @@ export function PairingDialog({
   onClose: () => void;
 }): React.ReactElement | null {
   const t = useMessagingT();
+  const passwordId = React.useId();
+  const [password, setPassword] = React.useState("");
   // No schema is named here: this dialog opens from a channel record's verb slot
   // *and* from the channel list's toolbar, and both hooks resolve the active data
   // provider from ambient context. Hardcoding one was wrong in both places.
@@ -194,62 +206,116 @@ export function PairingDialog({
     "resume_channel_pairing",
     { invalidateModels: [CHANNEL_MODEL] },
   );
+  const [submitPassword, submitState] =
+    useActionResultMutation<ActionFieldName>("submit_channel_password", {
+      invalidateModels: [CHANNEL_MODEL],
+    });
   if (channelId === null) return null;
   // `PairingState` is a StrEnum: the read wire value is the upper-case member
   // name, not the lower-case token the session serializes into its report.
   const pairing: PairingSnapshot = data?.channel_pairing ?? {
     state: "STARTING",
     qr: "",
+    message: "",
     account_label: "",
     duplicate_channel_name: "",
   };
+  const passwordPrompt = (
+    <>
+      <p>{pairing.message || t("channel.pairing.passwordPrompt")}</p>
+      <FieldRoot>
+        <FieldLabel htmlFor={passwordId} required>
+          {t("channel.pairing.passwordLabel")}
+        </FieldLabel>
+        <FieldControl
+          id={passwordId}
+          name="password"
+          type="password"
+          autoComplete="current-password"
+          required
+          disabled={submitState.fetching}
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+        />
+      </FieldRoot>
+    </>
+  );
+  const close = (): void => {
+    setPassword("");
+    onClose();
+  };
+  const submit = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault();
+    if (!password || submitState.fetching) return;
+    const value = password;
+    try {
+      await submitPassword(channelId, { password: value });
+    } finally {
+      setPassword("");
+    }
+  };
   return (
-    <DialogRoot open onOpenChange={(next) => (next ? undefined : onClose())}>
+    <DialogRoot open onOpenChange={(next) => (next ? undefined : close())}>
       <DialogPortal>
         <DialogBackdrop />
         <DialogContent>
-          <DialogTitle>{t("channel.pairing.title")}</DialogTitle>
-          {/* The body swaps live as channelChanged refetches; announce transitions. */}
-          <DialogBody aria-live="polite">
-            {error ? (
-              <ErrorBanner description={error.message} />
-            ) : (
-              (PAIRING_BODY[pairing.state] ?? PAIRING_BODY.STARTING)(
-                pairing,
-                t,
-                instruction,
-              )
-            )}
-          </DialogBody>
-          <DialogFooter>
-            {NEEDS_REPAIR.includes(pairing.state) || resetState.fetching ? (
-              <Button
-                variant="primary"
-                size="sm"
-                disabled={resetState.fetching}
-                onClick={() => {
-                  void resetPairing(channelId);
-                }}
-              >
-                {t("channel.pairing.repair")}
+          <form onSubmit={(event) => void submit(event)}>
+            <DialogTitle>{t("channel.pairing.title")}</DialogTitle>
+            {/* The body swaps live as channelChanged refetches; announce transitions. */}
+            <DialogBody aria-live="polite">
+              {error ? (
+                <ErrorBanner description={error.message} />
+              ) : (
+                (PAIRING_BODY[pairing.state] ?? PAIRING_BODY.STARTING)(
+                  pairing,
+                  t,
+                  instruction,
+                  passwordPrompt,
+                )
+              )}
+            </DialogBody>
+            <DialogFooter>
+              {pairing.state === "AWAITING_PASSWORD" || submitState.fetching ? (
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  disabled={!password || submitState.fetching}
+                >
+                  {t("channel.pairing.passwordSubmit")}
+                </Button>
+              ) : null}
+              {NEEDS_REPAIR.includes(pairing.state) || resetState.fetching ? (
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  disabled={resetState.fetching}
+                  onClick={() => {
+                    void resetPairing(channelId);
+                  }}
+                >
+                  {t("channel.pairing.repair")}
+                </Button>
+              ) : null}
+              {CAN_RESUME.includes(pairing.state) || resumeState.fetching ? (
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  disabled={resumeState.fetching}
+                  onClick={() => {
+                    void resume(channelId);
+                  }}
+                >
+                  {t("channel.pairing.resume")}
+                </Button>
+              ) : null}
+              <Button type="button" variant="ghost" size="sm" onClick={close}>
+                {t("channel.pairing.done")}
               </Button>
-            ) : null}
-            {CAN_RESUME.includes(pairing.state) || resumeState.fetching ? (
-              <Button
-                variant="primary"
-                size="sm"
-                disabled={resumeState.fetching}
-                onClick={() => {
-                  void resume(channelId);
-                }}
-              >
-                {t("channel.pairing.resume")}
-              </Button>
-            ) : null}
-            <Button variant="ghost" size="sm" onClick={onClose}>
-              {t("channel.pairing.done")}
-            </Button>
-          </DialogFooter>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </DialogPortal>
     </DialogRoot>

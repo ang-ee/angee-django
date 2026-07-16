@@ -58,6 +58,7 @@ export {
   useAngeeResourceSave,
   useAngeeRevisions,
   type ActionMutate,
+  type ActionArguments,
   type AngeeListBatchEntry,
   type AngeeListBatchScope,
   type DialectDocumentOptions,

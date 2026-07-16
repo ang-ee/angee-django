@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import queue
 import threading
+import time
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -42,6 +44,55 @@ class FakeLiveSession(LiveSession):
 
     def _handle(self, kind: str, payload: Any) -> bool:
         return self._still_wanted()
+
+
+class PasswordInputSession(FakeLiveSession):
+    """Fake vendor thread that requests one password and reports sign-in success."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.received_password: str | None = None
+        self.password_received = threading.Event()
+
+    def _connect(self) -> None:
+        self.received_password = self.request_password("Enter the account password.")
+        self.password_received.set()
+        if self.received_password is not None:
+            self.events.put(("paired", "account-1"))
+            self.events.put(("disconnected", None))
+            self._stopping.wait(timeout=1)
+
+    def _shutdown(self, connection: threading.Thread) -> bool:
+        connection.join(timeout=0.5)
+        return not connection.is_alive()
+
+
+class RePromptingPasswordInputSession(FakeLiveSession):
+    """Fake vendor that rejects one password before accepting the next round."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.received_passwords: list[str | None] = []
+        self.first_password_received = threading.Event()
+        self.second_password_received = threading.Event()
+
+    def _connect(self) -> None:
+        first = self.request_password("Enter the account password.")
+        self.received_passwords.append(first)
+        self.first_password_received.set()
+        if first is None:
+            return
+        second = self.request_password("Wrong password, try again.")
+        self.received_passwords.append(second)
+        self.second_password_received.set()
+        if second is not None:
+            self.events.put(("paired", "account-1"))
+            self.events.put(("disconnected", None))
+            self._stopping.wait(timeout=1)
+
+    def _shutdown(self, connection: threading.Thread) -> bool:
+        connection.join(timeout=0.5)
+        return not connection.is_alive()
 
 
 class FakeLiveChannelBackend(LiveChannelBackend):
@@ -93,6 +144,17 @@ def _live_channel(slug: str = "fake-live") -> Any:
         channel.subscription_state["desired"] = Channel.LiveState.LIVE
         channel.save(update_fields=["subscription_state", "updated_at"])
     return channel
+
+
+def _wait_until(predicate: Any, *, timeout: float = 1.0) -> None:
+    """Wait until a cross-thread session assertion becomes true."""
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.01)
+    assert predicate()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -177,6 +239,384 @@ def test_live_session_worker_shutdown_exits_within_one_wake(live_tables: Any, mo
     with system_context(reason="test live worker shutdown"), bridge_advisory_lock(channel) as acquired:
         assert acquired
         assert session.run() == PairingState.STOPPED
+
+
+@pytest.mark.django_db(transaction=True)
+def test_live_session_hands_off_submitted_password_and_consumes_it_once(
+    live_tables: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The task thread delivers encrypted material to the waiting vendor thread once."""
+
+    from angee.integrate import session as session_module
+    from angee.integrate.sync import BridgeProgressReporter
+    from angee.messaging.connect import submit_channel_password
+
+    monkeypatch.setattr(session_module, "AWAITING_PASSWORD_WAKE_SECONDS", 0.01)
+    channel = _live_channel("fake-live-password")
+    session = PasswordInputSession(
+        channel,
+        reporter=BridgeProgressReporter(channel),
+        stop_event=threading.Event(),
+    )
+    password = "one-use-secret"
+    submitted_material: list[str] = []
+
+    def submit_password() -> None:
+        _wait_until(lambda: session.pairing is PairingState.AWAITING_PASSWORD)
+        with system_context(reason="test live password operator"):
+            operator_channel = type(channel).objects.get(pk=channel.pk)
+            submit_channel_password(operator_channel, password)
+            submitted_material.append(operator_channel.credential.reveal()["password"])
+
+    operator_thread = threading.Thread(target=submit_password, daemon=True)
+
+    with system_context(reason="test live password handoff"), bridge_advisory_lock(channel) as acquired:
+        assert acquired
+        session_credential = channel.credential
+        assert "password" not in session_credential.reveal()
+        operator_thread.start()
+        outcome = session.run()
+        operator_thread.join(timeout=1)
+        assert not operator_thread.is_alive()
+        assert channel.subscription_state["awaiting"] == ""
+        assert channel.sync_progress["details"]["pairing"] == {
+            "state": PairingState.PAIRED,
+            "own_id": "account-1",
+            "account_label": "account-1",
+        }
+        assert submitted_material == [password]
+        assert session.password_received.is_set()
+        assert session.received_password == password
+
+    assert outcome is PairingState.PAIRED
+    with system_context(reason="test live password handoff verify"):
+        fresh_credential = type(session_credential).objects.get(pk=session_credential.pk)
+        assert "password" not in fresh_credential.reveal()
+        observer = type(channel).objects.get(pk=channel.pk)
+        assert password not in str(observer.subscription_state)
+        assert password not in str(observer.sync_progress)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_live_session_reports_the_non_secret_password_prompt(live_tables: Any) -> None:
+    """The awaiting report carries the vendor prompt but never a password value."""
+
+    from angee.integrate.sync import BridgeProgressReporter
+
+    channel = _live_channel("fake-live-password-prompt")
+    session = FakeLiveSession(
+        channel,
+        reporter=BridgeProgressReporter(channel),
+        stop_event=threading.Event(),
+    )
+
+    with system_context(reason="test live password prompt"):
+        session._mark_awaiting_password("Enter the account password.")
+
+    assert channel.subscription_state["awaiting"] == "password"
+    assert channel.sync_progress["details"]["pairing"] == {
+        "state": PairingState.AWAITING_PASSWORD,
+        "message": "Enter the account password.",
+    }
+
+
+@pytest.mark.django_db(transaction=True)
+def test_credential_update_material_merges_stale_writers_and_deletes_none(live_tables: Any) -> None:
+    """Credential material edits re-read under lock and encode through one owner."""
+
+    channel = _live_channel("fake-live-material-merge")
+    with system_context(reason="test credential material merge"):
+        first = channel.credential
+        second = type(first).objects.get(pk=first.pk)
+        original = first.reveal()
+
+        first.update_material(password="round-1")
+        second.update_material(other_transient="preserved")
+
+        fresh = type(first).objects.get(pk=first.pk)
+        assert fresh.reveal() == {
+            **original,
+            "other_transient": "preserved",
+            "password": "round-1",
+        }
+        assert fresh.material == type(fresh).encode_material(fresh.reveal())
+
+        second.update_material(password=None)
+
+        fresh = type(first).objects.get(pk=first.pk)
+        assert fresh.reveal() == {**original, "other_transient": "preserved"}
+        assert "password" not in fresh.reveal()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_password_rearm_scrubs_stale_material_and_queued_answers(live_tables: Any) -> None:
+    """A new prompt round invalidates both persisted and in-memory old answers."""
+
+    from angee.integrate.sync import BridgeProgressReporter
+
+    channel = _live_channel("fake-live-password-rearm")
+    channel.credential.update_material(password="abandoned-secret")
+    session = FakeLiveSession(
+        channel,
+        reporter=BridgeProgressReporter(channel),
+        stop_event=threading.Event(),
+    )
+    session.inputs.put("late-answer")
+    session._password_delivered = True
+
+    with system_context(reason="test live password rearm"):
+        session._mark_awaiting_password("Try again.")
+
+    with pytest.raises(queue.Empty):
+        session.inputs.get_nowait()
+    assert session._password_delivered is False
+    with system_context(reason="test live password rearm verify"):
+        fresh_credential = type(channel.credential).objects.get(pk=channel.credential_id)
+        assert "password" not in fresh_credential.reveal()
+    assert "abandoned-secret" not in str(channel.subscription_state)
+    assert "late-answer" not in str(channel.sync_progress)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_live_session_end_discards_queued_password_answers(live_tables: Any) -> None:
+    """A stopped session cannot leave an answer queued for a later session round."""
+
+    from angee.integrate.sync import BridgeProgressReporter
+
+    channel = _live_channel("fake-live-password-end")
+    stop_event = threading.Event()
+    stop_event.set()
+    session = FakeLiveSession(
+        channel,
+        reporter=BridgeProgressReporter(channel),
+        stop_event=stop_event,
+    )
+    session.inputs.put("late-answer")
+    session._password_delivered = True
+
+    with system_context(reason="test live password end"), bridge_advisory_lock(channel) as acquired:
+        assert acquired
+        assert session.run() is PairingState.STOPPED
+
+    with pytest.raises(queue.Empty):
+        session.inputs.get_nowait()
+    assert session._password_delivered is False
+
+
+@pytest.mark.django_db(transaction=True)
+def test_second_round_resubmit_delivers_the_new_password(
+    live_tables: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rejected first password cannot satisfy the vendor's second prompt."""
+
+    from angee.integrate import session as session_module
+    from angee.integrate.sync import BridgeProgressReporter
+    from angee.messaging.connect import submit_channel_password
+
+    monkeypatch.setattr(session_module, "AWAITING_PASSWORD_WAKE_SECONDS", 0.01)
+    channel = _live_channel("fake-live-password-round2")
+    with system_context(reason="test second password round load"):
+        channel = type(channel).objects.get(pk=channel.pk)
+    session = RePromptingPasswordInputSession(
+        channel,
+        reporter=BridgeProgressReporter(channel),
+        stop_event=threading.Event(),
+    )
+    operator_failures: list[BaseException] = []
+
+    def submit_both_rounds() -> None:
+        try:
+            _wait_until(
+                lambda: (
+                    session.pairing is PairingState.AWAITING_PASSWORD
+                    and channel.sync_progress.get("details", {}).get("pairing", {}).get("message")
+                    == "Enter the account password."
+                )
+            )
+            with system_context(reason="test first password operator"):
+                first_operator_channel = type(channel).objects.get(pk=channel.pk)
+                submit_channel_password(first_operator_channel, "wrong-password-1")
+            assert session.first_password_received.wait(timeout=0.5)
+            _wait_until(
+                lambda: (
+                    channel.sync_progress.get("details", {}).get("pairing", {}).get("message")
+                    == "Wrong password, try again."
+                )
+            )
+            with system_context(reason="test second password operator"):
+                second_operator_channel = type(channel).objects.get(pk=channel.pk)
+                submit_channel_password(second_operator_channel, "correct-password-2")
+                assert second_operator_channel.credential.reveal()["password"] == "correct-password-2"
+        except BaseException as error:  # noqa: BLE001 — surface operator-thread failures.
+            operator_failures.append(error)
+
+    operator_thread = threading.Thread(target=submit_both_rounds, daemon=True)
+
+    with system_context(reason="test second password round"), bridge_advisory_lock(channel) as acquired:
+        assert acquired
+        operator_thread.start()
+        outcome = session.run()
+        operator_thread.join(timeout=1)
+        assert not operator_thread.is_alive()
+
+    assert operator_failures == []
+    assert outcome is PairingState.PAIRED
+    assert session.received_passwords == ["wrong-password-1", "correct-password-2"]
+    with system_context(reason="test second password round verify"):
+        fresh_channel = type(channel).objects.get(pk=channel.pk)
+        assert "password" not in fresh_channel.credential.reveal()
+        assert "wrong-password-1" not in str(fresh_channel.subscription_state)
+        assert "correct-password-2" not in str(fresh_channel.subscription_state)
+        assert "wrong-password-1" not in str(fresh_channel.sync_progress)
+        assert "correct-password-2" not in str(fresh_channel.sync_progress)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_missing_credential_at_password_delivery_is_a_latched_session_outcome(
+    live_tables: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A credential removed after prompting ends and latches instead of raising."""
+
+    from angee.integrate import session as session_module
+    from angee.integrate import tasks as tasks_module
+    from angee.integrate.sync import BridgeProgressReporter
+
+    monkeypatch.setattr(session_module, "AWAITING_PASSWORD_WAKE_SECONDS", 0.01)
+    channel = _live_channel("fake-live-password-missing-credential")
+    session = PasswordInputSession(
+        channel,
+        reporter=BridgeProgressReporter(channel),
+        stop_event=threading.Event(),
+    )
+    operator_failures: list[BaseException] = []
+
+    def remove_credential_and_signal_ready() -> None:
+        try:
+            _wait_until(lambda: session.pairing is PairingState.AWAITING_PASSWORD)
+            with system_context(reason="test remove password credential"):
+                operator_channel = type(channel).objects.get(pk=channel.pk)
+                operator_channel.credential = None
+                operator_channel.save(update_fields=["credential", "updated_at"])
+                operator_channel.merge_subscription_state(awaiting="")
+        except BaseException as error:  # noqa: BLE001 — surface operator-thread failures.
+            operator_failures.append(error)
+
+    operator_thread = threading.Thread(target=remove_credential_and_signal_ready, daemon=True)
+    with system_context(reason="test missing password credential"), bridge_advisory_lock(channel) as acquired:
+        assert acquired
+        operator_thread.start()
+        outcome = session.run()
+        operator_thread.join(timeout=1)
+        assert not operator_thread.is_alive()
+
+    assert operator_failures == []
+    assert outcome is PairingState.STOPPED
+    with system_context(reason="test missing password credential verify"):
+        fresh_channel = type(channel).objects.get(pk=channel.pk)
+        assert fresh_channel.runtime_status == IntegrationRuntimeStatus.ERROR
+        assert fresh_channel.sync_stage == fresh_channel.SyncStage.FAILED
+        assert fresh_channel.sync_progress["details"]["pairing"]["state"] == PairingState.STOPPED
+        assert "live bridge has no credential" in fresh_channel.sync_error.lower()
+    assert "live bridge has no credential" in caplog.text.lower()
+    assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 0}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_missing_password_at_consume_time_reports_and_rearms(
+    live_tables: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A readiness marker without material re-prompts and latches without raising."""
+
+    from angee.integrate import session as session_module
+    from angee.integrate import tasks as tasks_module
+    from angee.integrate.sync import BridgeProgressReporter
+
+    monkeypatch.setattr(session_module, "AWAITING_PASSWORD_WAKE_SECONDS", 0.01)
+    channel = _live_channel("fake-live-password-missing-material")
+    stop_event = threading.Event()
+    session = PasswordInputSession(
+        channel,
+        reporter=BridgeProgressReporter(channel),
+        stop_event=stop_event,
+    )
+    operator_failures: list[BaseException] = []
+
+    def signal_ready_without_material() -> None:
+        try:
+            _wait_until(lambda: session.pairing is PairingState.AWAITING_PASSWORD)
+            with system_context(reason="test signal missing password material"):
+                operator_channel = type(channel).objects.get(pk=channel.pk)
+                operator_channel.merge_subscription_state(awaiting="")
+            _wait_until(lambda: channel.runtime_status == IntegrationRuntimeStatus.ERROR)
+            stop_event.set()
+        except BaseException as error:  # noqa: BLE001 — surface operator-thread failures.
+            operator_failures.append(error)
+            stop_event.set()
+
+    operator_thread = threading.Thread(target=signal_ready_without_material, daemon=True)
+    with system_context(reason="test missing password material"), bridge_advisory_lock(channel) as acquired:
+        assert acquired
+        operator_thread.start()
+        outcome = session.run()
+        operator_thread.join(timeout=1)
+        assert not operator_thread.is_alive()
+
+    assert operator_failures == []
+    assert outcome is PairingState.STOPPED
+    with system_context(reason="test missing password material verify"):
+        fresh_channel = type(channel).objects.get(pk=channel.pk)
+        assert fresh_channel.runtime_status == IntegrationRuntimeStatus.ERROR
+        assert fresh_channel.sync_stage == fresh_channel.SyncStage.FAILED
+        assert fresh_channel.subscription_state["awaiting"] == "password"
+        assert fresh_channel.sync_progress["details"]["pairing"] == {
+            "state": PairingState.AWAITING_PASSWORD,
+            "message": "The submitted password was unavailable. Enter the bridge password again.",
+        }
+        assert "no submitted password" in fresh_channel.sync_error.lower()
+    assert "no submitted password" in caplog.text.lower()
+    assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 0}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_live_session_stop_while_awaiting_password_exits_without_input(
+    live_tables: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A persisted stop request unwinds a vendor thread blocked on password input."""
+
+    from angee.integrate import session as session_module
+    from angee.integrate.sync import BridgeProgressReporter
+
+    monkeypatch.setattr(session_module, "AWAITING_PASSWORD_WAKE_SECONDS", 0.01)
+    channel = _live_channel("fake-live-password-stop")
+    session = PasswordInputSession(
+        channel,
+        reporter=BridgeProgressReporter(channel),
+        stop_event=threading.Event(),
+    )
+    connection_thread = threading.Thread(target=session._connect, daemon=True)
+
+    with system_context(reason="test live password stop"), bridge_advisory_lock(channel) as acquired:
+        assert acquired
+        connection_thread.start()
+        assert session._drain_once() is True
+        assert session.pairing == PairingState.AWAITING_PASSWORD
+
+        channel.merge_subscription_state(desired=Channel.LiveState.STOPPED)
+        assert session._drain_once() is False
+        assert session.pairing == PairingState.STOPPED
+
+    assert session._shutdown(connection_thread) is True
+    assert session.password_received.is_set()
+    assert session.received_password is None
+    channel.credential.refresh_from_db()
+    assert "password" not in channel.credential.reveal()
 
 
 @pytest.mark.django_db(transaction=True)

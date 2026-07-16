@@ -256,7 +256,8 @@ function buildOperationDocuments(name, runtimeDir) {
   const sdlPath = path.join(runtimeDir, "schemas", `${name}.graphql`);
   const metadataPath = path.join(runtimeDir, "schemas", `${name}.metadata.json`);
   const outPath = path.join(runtimeDir, "gql", name, "actions.ts");
-  const names = actionFields(sdlPath);
+  const actions = actionFields(sdlPath);
+  const names = actions.map((action) => action.name);
   const aggregateResources = aggregateFields(metadataPath);
   const deletePreviewResources = deletePreviewFields(metadataPath);
   const groupResources = groupFields(metadataPath);
@@ -278,9 +279,9 @@ function buildOperationDocuments(name, runtimeDir) {
   const saveUnion = saveResources.length > 0
     ? saveResources.map((resource) => JSON.stringify(resource.modelLabel)).join(" | ")
     : "never";
-  const documents = names.map((field) => {
-    const ast = JSON.stringify(actionDocument(field), null, 2);
-    return `  ${JSON.stringify(field)}: ${ast} as ActionDocument<${JSON.stringify(field)}>,`;
+  const documents = actions.map((action) => {
+    const ast = JSON.stringify(actionDocument(action), null, 2);
+    return `  ${JSON.stringify(action.name)}: ${ast} as ActionDocument<${JSON.stringify(action.name)}>,`;
   });
   const aggregateDocuments = aggregateResources.map((resource) => {
     const ast = JSON.stringify(
@@ -310,7 +311,7 @@ function buildOperationDocuments(name, runtimeDir) {
     `// Generated from runtime/schemas/${name}.graphql - do not edit by hand.`,
     "// Run `pnpm codegen` to regenerate.",
     "//",
-    "// Mutation fields shaped `<field>(id: ID!): ActionResult` plus authored",
+    "// Mutation fields shaped `<field>(id: ID!, ...required scalars): ActionResult` plus authored",
     "// aggregate, group, delete-preview, and revision operation documents.",
     "",
     "import type { TypedDocumentNode } from \"@graphql-typed-document-node/core\";",
@@ -322,7 +323,7 @@ function buildOperationDocuments(name, runtimeDir) {
     "  validation_errors: Record<string, string[]> | null;",
     "}",
     "",
-    "export interface ActionVariables {",
+    "export interface ActionVariables extends Record<string, unknown> {",
     "  id: string;",
     "}",
     "",
@@ -488,16 +489,30 @@ function actionFields(sdlPath) {
   const mutation = schema.getMutationType();
   if (!mutation) return [];
   const fields = mutation.getFields();
+  const scalarTypes = new Set(["Boolean!", "Float!", "ID!", "Int!", "String!"]);
   return Object.keys(fields)
-    .filter((name) => {
+    .flatMap((name) => {
       const field = fields[name];
-      if (field.args.length !== 1) return false;
-      const arg = field.args[0];
-      if (arg.name !== "id" || String(arg.type) !== "ID!") return false;
       const returned = getNamedType(field.type);
-      return returned instanceof GraphQLObjectType && returned.name === "ActionResult";
+      if (!(returned instanceof GraphQLObjectType) || returned.name !== "ActionResult") {
+        return [];
+      }
+      if (!field.args.some((arg) => arg.name === "id" && String(arg.type) === "ID!")) {
+        return [];
+      }
+      if (
+        field.args.some(
+          (arg) => arg.defaultValue !== undefined || !scalarTypes.has(String(arg.type)),
+        )
+      ) {
+        return [];
+      }
+      return [{
+        name,
+        args: field.args.map((arg) => ({ name: arg.name, type: String(arg.type) })),
+      }];
     })
-    .sort();
+    .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function deletePreviewFields(metadataPath) {
@@ -731,13 +746,19 @@ function nonEmptyString(value) {
   return typeof value === "string" && value !== "" ? value : null;
 }
 
-function actionDocument(field) {
+function actionDocument(action) {
   // The full in-band ActionResult surface: `id` lets the client deep-link to a
   // record the verb created, and `validation_errors` carries the field-keyed
   // (or non-field) domain-failure reasons the settle owner surfaces.
+  const variables = action.args
+    .map((arg) => `$${assertGraphQLName(arg.name)}: ${arg.type}`)
+    .join(", ");
+  const argumentsList = action.args
+    .map((arg) => `${assertGraphQLName(arg.name)}: $${assertGraphQLName(arg.name)}`)
+    .join(", ");
   return parse(
-    `mutation ${actionOperationName(field)}($id: ID!) { ` +
-      `${field}(id: $id) { ok message id validation_errors } }`,
+    `mutation ${actionOperationName(action.name)}(${variables}) { ` +
+      `${action.name}(${argumentsList}) { ok message id validation_errors } }`,
     { noLocation: true },
   );
 }

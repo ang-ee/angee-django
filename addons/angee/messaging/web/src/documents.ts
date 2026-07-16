@@ -23,6 +23,7 @@ export const ChannelPairing = graphql(`
     channel_pairing(id: $id) {
       state
       qr
+      message
       account_label
       duplicate_channel_name
     }

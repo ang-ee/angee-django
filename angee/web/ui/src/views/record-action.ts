@@ -1,5 +1,9 @@
 import * as React from "react";
-import { runActionResult, useActionMutation } from "@angee/refine";
+import {
+  runActionResult,
+  useActionMutation,
+  type ActionArguments,
+} from "@angee/refine";
 import { useResourceInvalidates } from "@angee/metadata";
 
 import {
@@ -119,10 +123,13 @@ export interface UseActionResultMutationOptions {
   dataProviderName?: string;
 }
 
-export type ActionResultMutation = (id: string) => Promise<void>;
+export type ActionResultMutation = (
+  id: string,
+  arguments_?: ActionArguments,
+) => Promise<void>;
 
 /**
- * Fire one generated single-id `ActionResult` mutation and settle its outcome.
+ * Fire one generated id-targeted `ActionResult` mutation and settle its outcome.
  *
  * The ceremony a non-`<Action>` verb needs: resolve the mutated model labels'
  * refine `invalidates` through `@angee/metadata`'s {@link useResourceInvalidates},
@@ -150,8 +157,10 @@ export function useActionResultMutation<TField extends string = string>(
   });
   const settle = useActionResultRun();
   const run = React.useCallback<ActionResultMutation>(
-    async (id) => {
-      await settle(() => mutate(id));
+    async (id, arguments_) => {
+      await settle(() =>
+        arguments_ === undefined ? mutate(id) : mutate(id, arguments_),
+      );
     },
     [mutate, settle],
   );

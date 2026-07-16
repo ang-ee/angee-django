@@ -88,6 +88,8 @@ def run_bridge_session(model_label: str, pk: Any) -> dict[str, Any]:
                 if state == PairingState.DUPLICATE_ACCOUNT:
                     _record_duplicate_account(bridge, session=session)
                     return {"ok": False, "duplicate_account": True}
+                if session.outcome_error is not None:
+                    return {"ok": False, "session_error": True, "state": state}
                 reporter.report(bridge.SyncStage.IDLE, details={"pairing": {"state": state}})
         return {"ok": True, "state": state, "items": session.landed}
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.views.decorators.debug import sensitive_variables
 from rebac import system_context
 
 from angee.integrate.impl import LiveBridgeImpl
@@ -28,6 +29,25 @@ def resume_channel_pairing(channel: Any) -> None:
         channel.start_live()
 
 
+@sensitive_variables("password", "material")
+def submit_channel_password(channel: Any, password: str) -> None:
+    """Store one transient account password and signal that it is ready."""
+
+    _live_impl(channel)
+    if not password:
+        raise ValueError("A channel password is required.")
+    with system_context(reason="messaging.submit_channel_password"):
+        channel.refresh_from_db()
+        if channel.subscription_state.get("awaiting") != "password":
+            raise ValueError("This channel is not awaiting a password.")
+        credential = channel.credential
+        if credential is None:
+            raise ValueError("This channel has no credential for password input.")
+        credential.update_material(password=password)
+        # See ``LiveSession._mark_awaiting_password`` for the awaiting tri-state.
+        channel.merge_subscription_state(awaiting="")
+
+
 def reset_channel_pairing(channel: Any) -> None:
     """Stop a live channel, wipe its released session store, and restart pairing."""
 
@@ -35,6 +55,9 @@ def reset_channel_pairing(channel: Any) -> None:
     with system_context(reason="messaging.reset_channel_pairing"):
         channel.stop_live()
         await_session_exit(channel)
+        channel.refresh_from_db(fields=["credential"])
+        if channel.credential is not None:
+            channel.credential.update_material(password=None)
         reset_session_store(channel)
         impl.mark_disconnected(clear_identity=True)
     resume_channel_pairing(channel)

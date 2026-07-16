@@ -89,6 +89,23 @@ describe("useActionMutation", () => {
     ]);
   });
 
+  test("forwards a required scalar argument beside the target id", async () => {
+    const { result } = renderHook(() => useActionMutation("run_probe"), {
+      wrapper: ConsoleProvider,
+    });
+
+    await act(async () => {
+      await result.current[0]("chn_1", { password: "one-use-secret" });
+    });
+
+    expect(mutationMock.calls).toEqual([
+      {
+        dataProviderName: "console",
+        values: { id: "chn_1", password: "one-use-secret" },
+      },
+    ]);
+  });
+
   test("resolves a domain failure in-band and skips invalidation", async () => {
     mutationMock.response = {
       ok: false,

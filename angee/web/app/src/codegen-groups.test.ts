@@ -19,6 +19,14 @@ afterEach(() => {
 });
 
 describe("group operation codegen", () => {
+  test("derives an ActionResult mutation with one required scalar argument", () => {
+    const generated = generateActions(METADATA);
+
+    expect(generated).toContain('"submit_channel_password"');
+    expect(generated.match(/"value": "password"/g)).toHaveLength(3);
+    expect(generated).toContain('"value": "String"');
+  });
+
   test("selects the exact count root with matching having", () => {
     const generated = generateActions(METADATA);
     expect(generated).toContain("having?: Record<string, unknown>;");
@@ -93,7 +101,17 @@ function generateActions(metadata: unknown): string {
 }
 
 const SDL = `
-  schema { query: Query }
+  schema { query: Query mutation: Mutation }
+  type Mutation {
+    submit_channel_password(id: ID!, password: String!): ActionResult!
+  }
+  type ActionResult {
+    ok: Boolean!
+    message: String!
+    id: ID
+    validation_errors: JSON
+  }
+  scalar JSON
   type Query {
     notes_groups(
       group_by: [NoteGroupBySpec!]!

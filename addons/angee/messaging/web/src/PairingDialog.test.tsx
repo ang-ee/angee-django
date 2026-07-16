@@ -18,10 +18,12 @@ const mocks = vi.hoisted(() => ({
   pairing: {
     state: "STARTING",
     qr: "",
+    message: "",
     account_label: "",
     duplicate_channel_name: "",
   } as PairingSnapshot,
   queryError: null as Error | null,
+  queryVariables: null as Record<string, unknown> | null,
   queryOptions: null as { dataProviderName?: string; models?: readonly string[] } | null,
   // `useActionResultMutation` (the `@angee/ui` owner) maps invalidation, fires the
   // verb and settles its outcome; these tests assert what the dialog declares to
@@ -35,12 +37,15 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@angee/refine", () => ({
   useAuthoredQuery: (
     _document: unknown,
-    _variables: unknown,
+    variables: Record<string, unknown>,
     options: { dataProviderName?: string; models?: readonly string[] },
   ) => {
+    mocks.queryVariables = variables;
     mocks.queryOptions = options;
     return {
-      data: mocks.queryError ? undefined : { channel_pairing: mocks.pairing },
+      data: mocks.queryError ? undefined : {
+        channel_pairing: mocks.pairing,
+      },
       fetching: false,
       error: mocks.queryError,
       refetch: () => undefined,
@@ -86,6 +91,11 @@ vi.mock("@angee/ui", () => ({
   ErrorBanner: ({ description }: { description?: React.ReactNode }) => (
     <div role="alert">{description}</div>
   ),
+  FieldRoot: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  FieldLabel: ({ children, ...props }: React.LabelHTMLAttributes<HTMLLabelElement>) => (
+    <label {...props}>{children}</label>
+  ),
+  FieldControl: (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} />,
 }));
 
 vi.mock("./i18n", async (importOriginal) => {
@@ -113,10 +123,12 @@ describe("PairingDialog", () => {
     mocks.pairing = {
       state: "STARTING",
       qr: "",
+      message: "",
       account_label: "",
       duplicate_channel_name: "",
     };
     mocks.queryError = null;
+    mocks.queryVariables = null;
     mocks.queryOptions = null;
     mocks.actions.clear();
     mocks.actionOptions.clear();
@@ -145,6 +157,7 @@ describe("PairingDialog", () => {
 
     expect(mocks.queryOptions?.dataProviderName).toBeUndefined();
     expect(mocks.queryOptions?.models).toEqual(["messaging.Channel"]);
+    expect(mocks.queryVariables).toEqual({ id: "chn_1" });
   });
 
   test("declares the channel model both lifecycle verbs move", () => {
@@ -153,7 +166,11 @@ describe("PairingDialog", () => {
     mocks.pairing.state = "LOGGED_OUT";
     render(<PairingDialog channelId="chn_1" instruction="Scan in the vendor app." onClose={() => undefined} />);
 
-    for (const field of ["reset_channel_pairing", "resume_channel_pairing"]) {
+    for (const field of [
+      "reset_channel_pairing",
+      "resume_channel_pairing",
+      "submit_channel_password",
+    ]) {
       expect(mocks.actionOptions.get(field)?.invalidateModels).toEqual([
         "messaging.Channel",
       ]);
@@ -207,6 +224,7 @@ describe("PairingDialog", () => {
     for (const [state, copy] of [
       ["STARTING", "Starting the pairing session…"],
       ["AWAITING_SCAN", "Scan in the vendor app."],
+      ["AWAITING_PASSWORD", "Account password"],
       ["PAIRED", "Linked! Messages are syncing. (Account One)"],
       ["PAUSED", "This channel connection is paused."],
       ["LOGGED_OUT", "This account unlinked the session."],
@@ -220,6 +238,7 @@ describe("PairingDialog", () => {
       mocks.pairing = {
         state,
         qr: state === "AWAITING_SCAN" ? "data:image/png;base64,qr" : "",
+        message: "",
         account_label: state === "PAIRED" ? "Account One" : "",
         duplicate_channel_name:
           state === "DUPLICATE_ACCOUNT" ? "Existing channel" : "",
@@ -229,8 +248,39 @@ describe("PairingDialog", () => {
     }
   });
 
+  test("submits one password with the vendor message and clears local state", async () => {
+    mocks.pairing = {
+      ...mocks.pairing,
+      state: "AWAITING_PASSWORD" as PairingSnapshot["state"],
+      message: "Your account requires its cloud password.",
+    };
+    render(<PairingDialog channelId="chn_1" instruction="Scan in the vendor app." onClose={() => undefined} />);
+
+    expect(screen.getByText("Your account requires its cloud password.")).toBeTruthy();
+    const input = screen.getByLabelText("Account password") as HTMLInputElement;
+    expect(input.type).toBe("password");
+    expect(input.autocomplete).toBe("current-password");
+
+    fireEvent.change(input, { target: { value: "one-use-secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit password" }));
+
+    await waitFor(() =>
+      expect(mocks.actions.get("submit_channel_password")).toHaveBeenCalledWith(
+        "chn_1",
+        { password: "one-use-secret" },
+      ),
+    );
+    await waitFor(() => expect(input.value).toBe(""));
+  });
+
   test("reads as starting until the QR for an awaiting-scan session lands", () => {
-    mocks.pairing = { state: "AWAITING_SCAN", qr: "", account_label: "", duplicate_channel_name: "" };
+    mocks.pairing = {
+      state: "AWAITING_SCAN",
+      qr: "",
+      message: "",
+      account_label: "",
+      duplicate_channel_name: "",
+    };
     render(<PairingDialog channelId="chn_1" instruction="Scan in the vendor app." onClose={() => undefined} />);
 
     expect(screen.getByText(/Starting the pairing session/)).toBeTruthy();
@@ -286,6 +336,7 @@ describe("ChannelPairingAction", () => {
     mocks.pairing = {
       state: "STARTING",
       qr: "",
+      message: "",
       account_label: "",
       duplicate_channel_name: "",
     };
@@ -325,6 +376,7 @@ describe("ChannelPairingAction", () => {
     mocks.pairing = {
       state: "AWAITING_SCAN",
       qr: "data:image/png;base64,qr",
+      message: "",
       account_label: "",
       duplicate_channel_name: "",
     };

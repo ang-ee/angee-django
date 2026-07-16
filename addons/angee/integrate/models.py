@@ -940,7 +940,7 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
         update_values = handler.upsert_fields(material)
         update_values.update(_validated_manager_values(self.model, fields, allowed=self.caller_fields))
         update_values["status"] = CredentialStatus.ACTIVE
-        material_value = json.dumps(material, sort_keys=True, separators=(",", ":"))
+        material_value = self.model.encode_material(material)
         operation_values = {"kind": handler.kind, "material": material_value}
         return operation_values, update_values
 
@@ -1081,6 +1081,36 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
         """Return decrypted material through the kind handler."""
 
         return self.handler.reveal(self)
+
+    @staticmethod
+    def encode_material(material: Mapping[str, Any]) -> str:
+        """Encode credential material into its deterministic encrypted-field payload."""
+
+        return json.dumps(dict(material), sort_keys=True, separators=(",", ":"))
+
+    def update_material(self, **changes: Any) -> None:
+        """Merge encrypted material changes under a row lock; ``None`` deletes.
+
+        Credential material may be edited concurrently by operator and worker
+        processes holding separately-loaded instances. Re-read the row under the
+        same authoritative lock canon as :meth:`Bridge.merge_subscription_state`
+        so one key's consume-once edit cannot clobber another writer's material.
+        Kind handlers validate required keys at credential creation; transient
+        extra keys remain permitted here.
+        """
+
+        with system_context(reason="integrate.credential.material"):
+            with transaction.atomic():
+                row: Credential = type(self).objects.lock_if_supported().get(pk=self.pk)
+                material = dict(row.reveal())
+                for key, value in changes.items():
+                    if value is None:
+                        material.pop(key, None)
+                    else:
+                        material[key] = value
+                row.material = self.encode_material(material)  # type: ignore[assignment]  # EncryptedField descriptor unmodeled by django-stubs
+                row.save(update_fields=["material", "updated_at"])
+            self.refresh_from_db(fields=["material", "updated_at"])
 
     def auth_headers(self) -> dict[str, str]:
         """Return authorization headers through the kind handler."""
@@ -1969,6 +1999,8 @@ class Bridge(AngeeModel):
     def merge_subscription_state(self, **values: Any) -> dict[str, Any]:
         """Merge sub-keys into ``subscription_state`` under a row lock; return it.
 
+        This method merges only — a key can never be removed; consumed markers
+        settle to a sentinel value defined by their owning flow.
         ``subscription_state`` has disjoint owners — the operator writes
         ``desired`` (start/stop), a live session writes its own pairing facts —
         that may write concurrently from separately-loaded instances. A full

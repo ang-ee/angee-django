@@ -128,8 +128,8 @@ TanStack apply the URL-owned filter object to in-memory rows.
   `documents.public.ts` (or vice versa) fails codegen loudly against the wrong
   schema. Keep valibot only to narrow a `JSON`-scalar field the schema leaves
   opaque (parse, do not assert).
-- **Single-id action mutations are derived, not authored.** For a
-  `<field>(id: ID!): ActionResult` mutation, call
+- **Record-targeted action mutations are derived, not authored.** For a
+  `<field>(id: ID!, ...required scalar arguments): ActionResult` mutation, call
   `useActionMutation<ActionFieldName>("field")` from `@angee/ui` in headless
   rendered-view code, or
   `useRecordActionMutation<ActionFieldName>("field")` for a rendered

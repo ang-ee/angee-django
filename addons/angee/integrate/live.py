@@ -23,6 +23,9 @@ from angee.tasks.locks import task_locks_are_cross_process
 WAKE_SECONDS = 20.0
 """Upper bound between live-session desired-state / shutdown / lock checks."""
 
+AWAITING_PASSWORD_WAKE_SECONDS = 1.0
+"""Deliberate 1 Hz wake while awaiting a password; bounded by operator action."""
+
 STOP_JOIN_SECONDS = 30.0
 """How long a stopping live session waits for the vendor connection to unwind."""
 
@@ -40,6 +43,7 @@ class PairingState(enum.StrEnum):
 
     STARTING = "starting"
     AWAITING_SCAN = "awaiting_scan"
+    AWAITING_PASSWORD = "awaiting_password"
     PAIRED = "paired"
     PAUSED = "paused"
     LOGGED_OUT = "logged_out"
@@ -62,6 +66,7 @@ class PairingProjection:
 
     state: PairingState
     qr: str = ""
+    message: str = ""
     own_id: str = ""
     account_label: str = ""
     duplicate_channel_id: str = ""

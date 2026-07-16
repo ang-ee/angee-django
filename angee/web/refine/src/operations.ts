@@ -142,7 +142,7 @@ export interface ActionOutcome {
   validationErrors?: Record<string, readonly string[]>;
 }
 
-/** Variables for a mutation shaped `<field>(id: ID!): ActionResult`. */
+/** Variables for an action mutation targeted by `id` with optional extra arguments. */
 export interface ByIdVariables extends Record<string, unknown> {
   id: string;
 }

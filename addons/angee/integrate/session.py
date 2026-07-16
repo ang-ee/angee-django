@@ -19,8 +19,10 @@ from pathlib import Path
 from typing import Any
 
 import qrcode
+from django.utils import timezone
 
 from angee.integrate.live import (
+    AWAITING_PASSWORD_WAKE_SECONDS,
     STOP_JOIN_SECONDS,
     WAKE_SECONDS,
     PairingState,
@@ -55,6 +57,7 @@ class LiveSession:
         self.reporter = reporter
         self.stop_event = stop_event
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
+        self.inputs: queue.Queue[str] = queue.Queue()
         self.client: Any = None
         self.live_impl = self.bridge.live_impl
         self.pairing = PairingState.STARTING
@@ -65,6 +68,9 @@ class LiveSession:
         self.duplicate_error: Exception | None = None
         self._account_locks = ExitStack()
         self._account_id = ""
+        self._password_delivered = False
+        self.outcome_error: Exception | None = None
+        self._stopping = threading.Event()
 
     def run(self) -> PairingState:
         """Connect and drain events until stopped, logged out, disconnected, or unlocked."""
@@ -88,8 +94,12 @@ class LiveSession:
                 if not connection.is_alive():
                     raise ConnectionError(f"{self.live_impl.label} connection ended unexpectedly.")
         finally:
-            self.store_released = self._shutdown(connection)
-            self._account_locks.close()
+            self._stopping.set()
+            try:
+                self.store_released = self._shutdown(connection)
+            finally:
+                self._discard_inputs()
+                self._account_locks.close()
         if self.pairing == PairingState.LOGGED_OUT:
             raise self.live_impl.logged_out_error()
         return self.pairing
@@ -140,15 +150,22 @@ class LiveSession:
     def _drain_once(self) -> bool:
         """Handle queued events for up to one wake; return whether to keep running."""
 
+        wake_seconds = (
+            AWAITING_PASSWORD_WAKE_SECONDS if self.pairing is PairingState.AWAITING_PASSWORD else WAKE_SECONDS
+        )
         try:
-            kind, payload = self.events.get(timeout=WAKE_SECONDS)
+            kind, payload = self.events.get(timeout=wake_seconds)
         except queue.Empty:
             return self._still_wanted()
         if kind == "qr":
             self.pairing = PairingState.AWAITING_SCAN
             self._report(PairingState.AWAITING_SCAN, qr=_qr_data_uri(payload))
+        elif kind == "awaiting_password":
+            if not self._mark_awaiting_password(payload):
+                return False
         elif kind == "paired":
-            return self._mark_paired(payload)
+            keep_running = self._mark_paired(payload)
+            return self._clear_delivered_password() and keep_running
         elif kind == "logged_out":
             self.pairing = PairingState.LOGGED_OUT
             self._report(PairingState.LOGGED_OUT)
@@ -183,7 +200,139 @@ class LiveSession:
                 self.bridge.sqid,
             )
             return False
+        return self._deliver_password_if_ready()
+
+    def request_password(self, message: str = "") -> str | None:
+        """Ask the task thread for one account password, or return ``None`` on stop.
+
+        ``message`` is a non-secret, operator-visible prompt from the vendor.
+        Vendor connections call this from their own thread. The queue wait stays
+        bounded by the short awaiting-password wake so a task-thread stop decision
+        can unwind a vendor blocked here without outliving cooperative shutdown.
+        """
+
+        prompt = str(message or "")
+        self.events.put(("awaiting_password", prompt))
+        stopped_states = {
+            PairingState.PAUSED,
+            PairingState.LOGGED_OUT,
+            PairingState.STOPPED,
+            PairingState.DUPLICATE_ACCOUNT,
+        }
+        while not self._stopping.is_set() and not self.stop_event.is_set():
+            try:
+                return self.inputs.get(timeout=AWAITING_PASSWORD_WAKE_SECONDS)
+            except queue.Empty:
+                if self.pairing in stopped_states:
+                    return None
+        return None
+
+    def _mark_awaiting_password(self, message: str) -> bool:
+        """Scrub the old round and arm the awaiting-password tri-state.
+
+        ``awaiting`` is absent before any prompt, ``"password"`` while this
+        round is armed, and ``""`` after its answer is submitted or consumed.
+        The merge-only state owner keeps the sentinel; a new round explicitly
+        overwrites it after invalidating persisted and queued old answers.
+        """
+
+        credential = self._fresh_credential()
+        if credential is None:
+            return self._terminal_password_failure(ValueError("This live bridge has no credential for password input."))
+        self._arm_password_round(message, credential=credential)
         return True
+
+    def _arm_password_round(self, message: str, *, credential: Any) -> None:
+        """Invalidate old answers, persist the armed marker, and report the prompt."""
+
+        self._discard_inputs()
+        credential.update_material(password=None)
+        self.bridge.merge_subscription_state(awaiting="password")
+        self.pairing = PairingState.AWAITING_PASSWORD
+        self._report(
+            PairingState.AWAITING_PASSWORD,
+            **({"message": message} if message else {}),
+        )
+
+    def _deliver_password_if_ready(self) -> bool:
+        """Consume the submitted arm of the awaiting-password tri-state.
+
+        ``awaiting`` is absent before the first prompt, ``"password"`` while
+        armed, and ``""`` after submit/consume. Delivery always refreshes the
+        credential relation so a long-lived bridge instance cannot reuse an FK
+        object whose encrypted material predates the operator's write.
+        """
+
+        if self.pairing is not PairingState.AWAITING_PASSWORD or self._password_delivered:
+            return True
+        if self.bridge.subscription_state.get("awaiting") != "":
+            return True
+        credential = self._fresh_credential()
+        if credential is None:
+            return self._terminal_password_failure(ValueError("This live bridge has no credential for password input."))
+        password = credential.reveal().get("password")
+        if not isinstance(password, str) or not password:
+            error = ValueError("The live bridge credential has no submitted password.")
+            logger.error(
+                "%s session for bridge %s could not consume password input: %s",
+                self.live_impl.label,
+                self.bridge.sqid,
+                error,
+            )
+            self._arm_password_round(
+                "The submitted password was unavailable. Enter the bridge password again.",
+                credential=credential,
+            )
+            self.bridge.record_sync_error(error, now=timezone.now())
+            self.outcome_error = error
+            return True
+        self._password_delivered = True
+        self.inputs.put(password)
+        return True
+
+    def _clear_delivered_password(self) -> bool:
+        """Consume the transient password after the vendor reports successful sign-in."""
+
+        if not self._password_delivered:
+            return True
+        credential = self._fresh_credential()
+        if credential is None:
+            return self._terminal_password_failure(ValueError("This live bridge has no credential for password input."))
+        credential.update_material(password=None)
+        self._password_delivered = False
+        return True
+
+    def _fresh_credential(self) -> Any | None:
+        """Reload and return the bridge credential, replacing Django's FK cache."""
+
+        self.bridge.refresh_from_db(fields=["credential"])
+        return self.bridge.credential
+
+    def _terminal_password_failure(self, error: Exception) -> bool:
+        """Report a safe runtime failure and end this session without raising."""
+
+        logger.error(
+            "%s session for bridge %s cannot continue password input: %s",
+            self.live_impl.label,
+            self.bridge.sqid,
+            error,
+        )
+        self.outcome_error = error
+        self.pairing = PairingState.STOPPED
+        self._discard_inputs()
+        self._report(PairingState.STOPPED)
+        self.bridge.record_sync_error(error, now=timezone.now())
+        return False
+
+    def _discard_inputs(self) -> None:
+        """Discard queued password answers and reset delivery for a new round/end."""
+
+        while True:
+            try:
+                self.inputs.get_nowait()
+            except queue.Empty:
+                break
+        self._password_delivered = False
 
     def _report(self, state: PairingState, **pairing: Any) -> None:
         """Persist pairing + progress; each save streams over the bridge change feed."""
@@ -218,6 +367,7 @@ class LiveSession:
         self.pairing = PairingState.PAIRED
         self._report(PairingState.PAIRED)
         self.bridge.report_status(IntegrationRuntimeStatus.OK)
+        self.outcome_error = None
         return True
 
     def _mark_duplicate(self) -> bool:

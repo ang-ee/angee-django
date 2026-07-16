@@ -16,6 +16,7 @@ import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
+from django.views.decorators.debug import sensitive_variables
 from rebac import PermissionDenied
 from strawberry import auto
 
@@ -100,6 +101,15 @@ class MessagingPairingMutation:
         with action_target(Channel, id, reason="messaging.graphql.resume_channel_pairing") as channel:
             connect.resume_channel_pairing(channel)
         return ActionResult(ok=True, message="Channel connection started.")
+
+    @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
+    @sensitive_variables("password", "material")
+    def submit_channel_password(self, id: PublicID, password: str) -> ActionResult:
+        """Submit one consume-once account password to the live channel session."""
+
+        with action_target(Channel, id, reason="messaging.graphql.submit_channel_password") as channel:
+            connect.submit_channel_password(channel, password)
+        return ActionResult(ok=True, message="Password submitted.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
     def reset_channel_pairing(self, id: PublicID) -> ActionResult:

@@ -273,6 +273,7 @@ class LiveBridgeImpl(BridgeImpl):
         return PairingProjection(
             state=state,
             qr=str(report.get("qr") or "") if state is PairingState.AWAITING_SCAN else "",
+            message=str(report.get("message") or "") if state is PairingState.AWAITING_PASSWORD else "",
             own_id=own_id,
             account_label=self.account_label(own_id) if own_id else "",
             duplicate_channel_id="" if duplicate is None else str(duplicate.sqid),
@@ -295,7 +296,11 @@ class LiveBridgeImpl(BridgeImpl):
             return PairingState.PAUSED
         if lifecycle is type(self.bridge).Lifecycle.DISCONNECTED:
             return PairingState.STOPPED
-        if reported is PairingState.LOGGED_OUT or reported is PairingState.DUPLICATE_ACCOUNT:
+        if reported in (
+            PairingState.AWAITING_PASSWORD,
+            PairingState.LOGGED_OUT,
+            PairingState.DUPLICATE_ACCOUNT,
+        ):
             return reported
         if identity:
             return PairingState.PAIRED
