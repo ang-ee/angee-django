@@ -551,7 +551,7 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   reads the target, so a CONNECTED+ERROR row repaired by a verb that only declares
   CONNECTED clears nothing and gets exactly the one dispatch the verb enqueues
   directly; lose that (worker down, queue saturated, a restart) and the row is
-  skipped forever. `resume_whatsapp_pairing` reports OK unconditionally for this
+  skipped forever. `resume_channel_pairing` reports OK unconditionally for this
   reason. Keep the gate on the shared `runtime_status` rather than a private
   health key: a private one is a further axis the generic verbs cannot clear, so
   it reintroduces the same latch on the generic path.

@@ -11,7 +11,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import {
   authoredQueryMeta,
-  authoredQueryReadsAnyModel,
+  invalidateAuthoredQueries,
 } from "../query-invalidation";
 import {
   useStableArray,
@@ -214,12 +214,7 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
         ...invalidates.map((target) => invalidate(target)),
         ...(invalidateModelLabels.length > 0
           ? [
-              queryClient.invalidateQueries({
-                predicate: (query) =>
-                  authoredQueryReadsAnyModel(query.meta, invalidateModelLabels),
-                type: "all",
-                refetchType: "active",
-              }),
+              invalidateAuthoredQueries(queryClient, invalidateModelLabels),
             ]
           : []),
       ]);

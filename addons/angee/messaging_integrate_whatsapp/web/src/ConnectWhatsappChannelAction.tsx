@@ -1,4 +1,5 @@
 import { useAuthoredMutation } from "@angee/refine";
+import { CHANNEL_MODEL, PairingDialog } from "@angee/messaging";
 import * as React from "react";
 import {
   Button,
@@ -7,9 +8,7 @@ import {
   type MutationDialogField,
 } from "@angee/ui";
 
-import { CHANNEL_MODEL } from "./channel";
 import { ConnectWhatsappChannel } from "./documents";
-import { PairingDialog } from "./PairingDialog";
 import { useMessagingWhatsappT } from "./i18n";
 
 /** Button + two-step dialog contributed into the messaging channel toolbar slot. */
@@ -56,6 +55,7 @@ export function ConnectWhatsappChannelAction(): React.ReactElement {
       />
       <PairingDialog
         channelId={pairingChannelId}
+        instruction={t("channel.whatsapp.scan")}
         onClose={() => setPairingChannelId(null)}
       />
     </>

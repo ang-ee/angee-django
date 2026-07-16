@@ -38,11 +38,11 @@ describe("WhatsappDisconnectAction", () => {
     mocks.declared.length = 0;
   });
 
-  test("uses the WhatsApp teardown mutation for connected accounts", () => {
+  test("uses messaging's generic teardown mutation for connected accounts", () => {
     render(<WhatsappDisconnectAction />);
 
     const button = screen.getByRole("button", { name: "channel.whatsapp.disconnect" });
-    expect(button.dataset.field).toBe("disconnect_whatsapp_channel");
+    expect(button.dataset.field).toBe("disconnect_channel");
     expect(button.dataset.variant).toBe("danger");
   });
 

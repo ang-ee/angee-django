@@ -2,19 +2,23 @@ import { defineBaseAddon } from "@angee/app";
 import {
   INTEGRATION_DISCONNECT_ACTION_ID,
   INTEGRATION_RESUME_ACTION_ID,
+  integrationLifecycleIs,
+  type IntegrationLifecycleToken,
 } from "@angee/integrate";
-import { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "@angee/messaging";
+import {
+  CHANNEL_MODEL,
+  ChannelPairingAction,
+  MESSAGING_CHANNEL_TOOLBAR_SLOT,
+} from "@angee/messaging";
 import { formViewRecordActionsSlot } from "@angee/ui";
 
-import { CHANNEL_MODEL, WHATSAPP_BACKEND } from "./channel";
 import { ConnectWhatsappChannelAction } from "./ConnectWhatsappChannelAction";
-import {
-  WHATSAPP_CONNECT_ACTION_ID,
-  WHATSAPP_PAIRING_ACTION_ID,
-  WhatsappConnectionAction,
-} from "./WhatsappConnectionAction";
 import { WhatsappDisconnectAction } from "./WhatsappDisconnectAction";
 import { enMessagingWhatsappMessages } from "./i18n";
+
+export const WHATSAPP_CONNECT_ACTION_ID = "messaging-integrate-whatsapp.connect";
+export const WHATSAPP_PAIRING_ACTION_ID = "messaging-integrate-whatsapp.pairing";
+export const WHATSAPP_BACKEND = "whatsapp";
 
 // The record-verb slot key for a channel this addon's backend owns. `messaging`
 // owns `messaging.Channel`, so contributing there would displace integrate's
@@ -23,6 +27,18 @@ import { enMessagingWhatsappMessages } from "./i18n";
 const whatsappChannelActions = formViewRecordActionsSlot(
   CHANNEL_MODEL,
   WHATSAPP_BACKEND,
+);
+const whatsappPairingAction = (
+  lifecycle: IntegrationLifecycleToken,
+  labelKey: string,
+  resumeOnOpen?: boolean,
+) => (
+  <ChannelPairingAction
+    labelKey={labelKey}
+    instructionKey="channel.whatsapp.scan"
+    {...(resumeOnOpen ? { resumeOnOpen: true } : {})}
+    when={integrationLifecycleIs(lifecycle)}
+  />
 );
 
 const messagingIntegrateWhatsapp = defineBaseAddon({
@@ -45,32 +61,27 @@ const messagingIntegrateWhatsapp = defineBaseAddon({
       sequence: 20,
       content: <ConnectWhatsappChannelAction />,
     },
-    // Connecting a channel is a QR pairing, not a flag flip, so it has no shared
-    // default to specialize and carries this addon's own id.
     {
       slot: whatsappChannelActions,
       id: WHATSAPP_CONNECT_ACTION_ID,
       sequence: 10,
-      content: <WhatsappConnectionAction lifecycle="disconnected" />,
+      content: whatsappPairingAction(
+        "disconnected",
+        "channel.pairing.connect",
+        true,
+      ),
     },
-    // A logged-out or duplicate-rejected channel keeps its CONNECTED lifecycle, so
-    // the disconnected and paused entries never reach it — this is the console's
-    // only way into the dialog that offers the repair for exactly those states.
     {
       slot: whatsappChannelActions,
       id: WHATSAPP_PAIRING_ACTION_ID,
-      // Shares Connect's sequence: the two gate on opposite lifecycles, so they
-      // never render together, and each leads the cluster on the row it serves.
       sequence: 10,
-      content: <WhatsappConnectionAction lifecycle="connected" />,
+      content: whatsappPairingAction("connected", "channel.pairing.status"),
     },
-    // These two carry integrate's ids, so each replaces the inherited verb for a
-    // WhatsApp channel only — the vendor owns those two transitions.
     {
       slot: whatsappChannelActions,
       id: INTEGRATION_RESUME_ACTION_ID,
       sequence: 12,
-      content: <WhatsappConnectionAction lifecycle="paused" />,
+      content: whatsappPairingAction("paused", "channel.pairing.resume", true),
     },
     {
       slot: whatsappChannelActions,

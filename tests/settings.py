@@ -122,6 +122,7 @@ ANGEE_CHANNEL_BACKEND_CLASSES = {
     "manual": "angee.messaging.backends.ManualChannelBackend",
     "imap": "angee.messaging_integrate_imap.backend.ImapChannelBackend",
     "whatsapp": "angee.messaging_integrate_whatsapp.backend.WhatsAppChannelBackend",
+    "fake_live": "tests.pairing_backend.FakePairingBackend",
 }
 # Feed backends a ``posts.Feed`` may select (posts' autoconfig normally
 # contributes these). ``stub`` returns canned posts queued by the posts tests.

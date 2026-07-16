@@ -2,10 +2,9 @@ import * as React from "react";
 import { Action, Column, ResourceList, Field, Form, Group, List, SlotOutlet, useRecordActionMutation, useSlot } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
+import { CHANNEL_MODEL } from "./documents";
 import { useMessagingT } from "./i18n";
 import { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
-
-const MODEL = "messaging.Channel";
 
 /**
  * Connected message channels. Channels are created through bespoke connect flows
@@ -17,8 +16,8 @@ export function ChannelsPage(): React.ReactElement {
   const [sync] = useRecordActionMutation<ActionFieldName>("sync_integration");
   const toolbarEntries = useSlot(MESSAGING_CHANNEL_TOOLBAR_SLOT);
   return (
-    <ResourceList resource={MODEL} placement="inline" routed hideCreate toolbarActions={<SlotOutlet entries={toolbarEntries} />}>
-      <List resource={MODEL}>
+    <ResourceList resource={CHANNEL_MODEL} placement="inline" routed hideCreate toolbarActions={<SlotOutlet entries={toolbarEntries} />}>
+      <List resource={CHANNEL_MODEL}>
         <Column field="display_name" header={t("channel.name")} />
         <Column field="lifecycle" widget="statusBadge" />
         <Column field="runtime_status" widget="colorDot" />
@@ -28,7 +27,7 @@ export function ChannelsPage(): React.ReactElement {
         <Column field="last_sync_items" />
         <Column field="last_sync_completed_at" />
       </List>
-      <Form resource={MODEL}>
+      <Form resource={CHANNEL_MODEL}>
         <Field name="display_name" title readOnly />
         <Field name="lifecycle" readOnly />
         <Field name="runtime_status" readOnly />

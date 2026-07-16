@@ -1,5 +1,8 @@
 import { graphql, type DocumentType } from "@angee/gql/console";
 
+/** The model every messaging-owned channel surface binds to. */
+export const CHANNEL_MODEL = "messaging.Channel";
+
 // The models a record thread reads: the live-refresh keys for the thread/activity
 // queries and the invalidation set every chatter mutation republishes. One owner,
 // shared by both chatter panes.
@@ -13,6 +16,18 @@ export const READ_MODELS = [
   "messaging.Reaction",
   "messaging.MessageStar",
 ] as const;
+
+/** Reopenable live-channel pairing state; updates ride channelChanged. */
+export const ChannelPairing = graphql(`
+  query ChannelPairing($id: ID!) {
+    channel_pairing(id: $id) {
+      state
+      qr
+      account_label
+      duplicate_channel_name
+    }
+  }
+`);
 
 // One owner for the record-feed message selection: the four operations that
 // return a full chatter message (the thread read + post/update/delete payloads)

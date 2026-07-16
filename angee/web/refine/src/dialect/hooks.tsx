@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import {
   useCustom,
   useCustomMutation,
@@ -49,7 +49,8 @@ import {
   useOperationDocuments,
 } from "../operation-documents";
 import { useActiveDataProviderName } from "./data-provider-context";
-import { stableKey } from "../stable-deps";
+import { invalidateAuthoredQueries } from "../query-invalidation";
+import { stableKey, useStableArray } from "../stable-deps";
 
 type Row = Record<string, unknown>;
 type InvalidateParams = Parameters<ReturnType<typeof useInvalidate>>[0];
@@ -157,6 +158,8 @@ export type ActionMutate = (id: string) => Promise<ActionOutcome | undefined>;
 
 export interface UseActionMutationOptions {
   dataProviderName?: string;
+  /** Angee model labels whose authored reads this action moves. */
+  invalidateModels?: readonly string[];
   /** Refine invalidation calls this action should trigger after success. */
   invalidates?: readonly InvalidateParams[];
 }
@@ -575,8 +578,9 @@ export function useAngeeRevisions(
  * still pins callers to real action fields, while refine owns execution state.
  * The mutate resolves the in-band `ActionOutcome` (`ok`, `message`, and the
  * created record's `id` when the verb returns one) so callers settle success,
- * failure, and deep-linking from one value; registered `invalidates` run only
- * when the outcome is not a domain failure.
+ * failure, and deep-linking from one value; registered resource invalidations
+ * and authored-read model invalidations run only when the outcome is not a
+ * domain failure.
  */
 export function useActionMutation<TField extends string = string>(
   field: TField,
@@ -592,7 +596,9 @@ export function useActionMutation<TField extends string = string>(
     options.dataProviderName ?? activeDataProviderName ?? "default";
   const operationDocuments = useOperationDocuments();
   const invalidate = useInvalidate();
+  const invalidateModels = useStableArray(options.invalidateModels ?? []);
   const invalidates = options.invalidates ?? EMPTY_INVALIDATIONS;
+  const queryClient = useQueryClient();
   const run = useCustomMutation<BaseRecord, HttpError, ByIdVariables>();
   const mutate = useCallback<ActionMutate>(
     async (id) => {
@@ -618,9 +624,12 @@ export function useActionMutation<TField extends string = string>(
       // failed write never refreshes caches (the same posture as the authored
       // hooks' errorFrom gating).
       if (!outcome || outcome.ok) {
-        await Promise.all(
-          invalidates.map((target) => invalidate(target)),
-        );
+        await Promise.all([
+          ...invalidates.map((target) => invalidate(target)),
+          ...(invalidateModels.length > 0
+            ? [invalidateAuthoredQueries(queryClient, invalidateModels)]
+            : []),
+        ]);
       }
       return outcome;
     },
@@ -628,8 +637,10 @@ export function useActionMutation<TField extends string = string>(
       dataProviderName,
       field,
       invalidate,
+      invalidateModels,
       invalidates,
       operationDocuments,
+      queryClient,
       run.mutateAsync,
     ],
   );

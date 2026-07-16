@@ -1,3 +1,5 @@
+import type { QueryClient } from "@tanstack/react-query";
+
 import { recordValue } from "./dialect/wire";
 
 export function authoredQueryMeta(
@@ -14,4 +16,16 @@ export function authoredQueryReadsAnyModel(
   if (!Array.isArray(models)) return false;
   const wanted = new Set(modelLabels);
   return models.some((model) => typeof model === "string" && wanted.has(model));
+}
+
+/** Refetch every active authored read registered against one of the moved models. */
+export function invalidateAuthoredQueries(
+  queryClient: QueryClient,
+  modelLabels: readonly string[],
+): Promise<void> {
+  return queryClient.invalidateQueries({
+    predicate: (query) => authoredQueryReadsAnyModel(query.meta, modelLabels),
+    type: "all",
+    refetchType: "active",
+  });
 }

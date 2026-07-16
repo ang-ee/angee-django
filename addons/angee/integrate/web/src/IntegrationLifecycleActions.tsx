@@ -19,12 +19,21 @@ export const INTEGRATION_PAUSE_ACTION_ID = "integrate.lifecycle.pause";
 export const INTEGRATION_RESUME_ACTION_ID = "integrate.lifecycle.resume";
 export const INTEGRATION_DISCONNECT_ACTION_ID = "integrate.lifecycle.disconnect";
 
+/** Lifecycle tokens owned by integrate's transition vocabulary. */
+export const INTEGRATION_LIFECYCLE_TOKENS = [
+  "connected",
+  "paused",
+  "disconnected",
+] as const;
+export type IntegrationLifecycleToken =
+  (typeof INTEGRATION_LIFECYCLE_TOKENS)[number];
+
 // These mirror the `source=` sets declared on the model's `@transition`s
 // (`Integration.pause`, `.connect`, `.disconnect`). The declaration is the owner
 // and this copy drifts silently if it changes; both collapse into one fact once
 // an action registry emits each transition's source set into the metadata
 // artifact — the seam `integrate/schema.py` anticipates for these same verbs.
-const isConnected = lifecycleIs("connected");
+const isConnected = integrationLifecycleIs("connected");
 
 /**
  * Rows the shared Disconnect reaches — integrate's lifecycle vocabulary, exported
@@ -119,8 +128,9 @@ export function integrationLifecycle(record: Row): string {
   return optionToken(record.lifecycle);
 }
 
-function lifecycleIs(
-  expected: string,
+/** Return a record-chrome predicate using integrate's lifecycle token owner. */
+export function integrationLifecycleIs(
+  expected: IntegrationLifecycleToken,
 ): (context: ConditionalMutationButtonContext) => boolean {
   return ({ record }) => integrationLifecycle(record) === expected;
 }

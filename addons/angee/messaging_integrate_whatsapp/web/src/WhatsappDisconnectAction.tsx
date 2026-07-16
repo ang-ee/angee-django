@@ -11,16 +11,15 @@ import { useMessagingWhatsappT } from "./i18n";
  * WhatsApp channel only — every other channel (IMAP) keeps integrate's own.
  *
  * It gates on the same lifecycle set as the verb it replaces, and keeps a confirm:
- * `disconnect_whatsapp_channel` does strictly more than the flag flip it
- * specializes — it tears the live session down — so it must not be the cheaper
- * click of the two.
+ * messaging's `disconnect_channel` tears the live session down while retaining
+ * reusable pairing material, so the vendor-worded confirmation remains here.
  */
 export function WhatsappDisconnectAction(): React.ReactElement | null {
   const t = useMessagingWhatsappT();
 
   return (
     <ConditionalMutationButton
-      field="disconnect_whatsapp_channel"
+      field="disconnect_channel"
       label={t("channel.whatsapp.disconnect")}
       variant="danger"
       when={isConnectedOrPaused}

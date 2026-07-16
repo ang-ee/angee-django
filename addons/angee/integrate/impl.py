@@ -19,7 +19,7 @@ from rebac import system_context
 from angee.base.impl import ImplBase
 from angee.integrate.connect import enabled_oauth_client_from_hint
 from angee.integrate.constants import RUN_SESSION_TASK, SESSION_START_EXPIRES
-from angee.integrate.live import PairingState, SessionLoggedOut
+from angee.integrate.live import PairingProjection, PairingState, SessionLoggedOut
 from angee.tasks.enqueue import enqueue_task
 from angee.tasks.locks import LockKey, task_lock
 
@@ -261,10 +261,23 @@ class LiveBridgeImpl(BridgeImpl):
             .order_by("pk")
         )
 
-    def pairing(self) -> Any:
-        """Project pairing state for a console surface."""
+    def pairing(self) -> PairingProjection:
+        """Project durable identity plus the latest transient pairing report."""
 
-        raise NotImplementedError("Live bridge backends must project pairing().")
+        report = self._pairing_report()
+        reported = PairingState.from_report(report.get("state"))
+        raw_identity = self.bridge.subscription_state.get(self.state_identity_key) or report.get("own_id") or ""
+        own_id = self.normalize_account_id(str(raw_identity))
+        state = self._pairing_state(reported=reported, identity=own_id)
+        duplicate = self._duplicate_owner(own_id) if state is PairingState.DUPLICATE_ACCOUNT else None
+        return PairingProjection(
+            state=state,
+            qr=str(report.get("qr") or "") if state is PairingState.AWAITING_SCAN else "",
+            own_id=own_id,
+            account_label=self.account_label(own_id) if own_id else "",
+            duplicate_channel_id="" if duplicate is None else str(duplicate.sqid),
+            duplicate_channel_name="" if duplicate is None else str(duplicate.display_name),
+        )
 
     def _pairing_report(self) -> Mapping[str, Any]:
         """Return the live session's last pairing report off ``sync_progress``."""
@@ -312,7 +325,7 @@ class LiveBridgeImpl(BridgeImpl):
     def pairing_report_identity(self, own_id: str) -> dict[str, str]:
         """Return identity fields added to a transient pairing report."""
 
-        return {self.state_identity_key: own_id}
+        return {"own_id": own_id, "account_label": self.account_label(own_id)}
 
     def duplicate_account_error(self) -> Exception:
         """Return the runtime error recorded for a duplicate account rejection."""

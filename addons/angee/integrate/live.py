@@ -56,6 +56,18 @@ class PairingState(enum.StrEnum):
             return None
 
 
+@strawberry.type(name="Pairing")
+class PairingProjection:
+    """Vendor-neutral pairing state projected by a live bridge implementation."""
+
+    state: PairingState
+    qr: str = ""
+    own_id: str = ""
+    account_label: str = ""
+    duplicate_channel_id: str = ""
+    duplicate_channel_name: str = ""
+
+
 class SessionLoggedOut(Exception):
     """The linked account removed this live session and needs explicit reset."""
 

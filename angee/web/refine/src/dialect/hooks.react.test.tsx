@@ -16,6 +16,12 @@ const mutationMock = vi.hoisted(() => ({
   }>,
   response: { ok: true, message: "Done" } as Record<string, unknown>,
   invalidate: vi.fn(async () => {}),
+  invalidateQueries: vi.fn(async (_options: unknown) => {}),
+}));
+
+vi.mock("@tanstack/react-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
+  useQueryClient: () => ({ invalidateQueries: mutationMock.invalidateQueries }),
 }));
 
 vi.mock("@refinedev/core", () => ({
@@ -42,6 +48,7 @@ beforeEach(() => {
   mutationMock.calls = [];
   mutationMock.response = { ok: true, message: "Done" };
   mutationMock.invalidate.mockClear();
+  mutationMock.invalidateQueries.mockClear();
 });
 
 const ACTION_DOCUMENT = "mutation Probe { run_probe(id: $id) { ok message } }";
@@ -109,6 +116,7 @@ describe("useActionMutation", () => {
       validationErrors: { __all__: ["You are not allowed to modify this order."] },
     });
     expect(mutationMock.invalidate).not.toHaveBeenCalled();
+    expect(mutationMock.invalidateQueries).not.toHaveBeenCalled();
   });
 
   test("carries the created record id and invalidates on success", async () => {
@@ -128,6 +136,35 @@ describe("useActionMutation", () => {
 
     expect(outcome).toEqual({ ok: true, message: "Created.", id: "tr_9" });
     expect(mutationMock.invalidate).toHaveBeenCalledTimes(1);
+  });
+
+  test("invalidates authored reads registered against a moved model", async () => {
+    const { result } = renderHook(
+      () =>
+        useActionMutation("run_probe", {
+          invalidateModels: ["messaging.Channel"],
+        }),
+      { wrapper: ConsoleProvider },
+    );
+
+    await act(async () => {
+      await result.current[0]("chn_1");
+    });
+
+    expect(mutationMock.invalidateQueries).toHaveBeenCalledOnce();
+    const options = mutationMock.invalidateQueries.mock.calls[0]?.[0] as {
+      predicate: (query: { meta: unknown }) => boolean;
+      refetchType: string;
+      type: string;
+    };
+    expect(options.type).toBe("all");
+    expect(options.refetchType).toBe("active");
+    expect(
+      options.predicate({ meta: { angeeModels: ["messaging.Channel"] } }),
+    ).toBe(true);
+    expect(
+      options.predicate({ meta: { angeeModels: ["messaging.Thread"] } }),
+    ).toBe(false);
   });
 
   test("an explicit dataProviderName option still wins over the active schema", async () => {

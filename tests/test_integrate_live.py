@@ -14,6 +14,7 @@ from rebac import system_context
 
 from angee.integrate.live import PairingState
 from angee.integrate.locks import bridge_advisory_lock
+from angee.integrate.models import IntegrationRuntimeStatus
 from angee.integrate.session import LiveSession
 from angee.messaging.backends import LiveChannelBackend, ParsedMessage, ParsedPart, ParsedThread
 from angee.tasks.locks import task_lock_is_held
@@ -310,6 +311,35 @@ def test_ensure_bridge_sessions_reconciles_live_desire_and_routes_to_session_que
     ]
 
 
+@pytest.mark.django_db(transaction=True)
+def test_ensure_bridge_sessions_latches_runtime_error_until_resume(
+    live_tables: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed handshake stays quiet until the operator's resume clears it."""
+
+    from angee.integrate import tasks as tasks_module
+    from angee.messaging.connect import resume_channel_pairing
+
+    sent: list[str] = []
+    monkeypatch.setattr(
+        "angee.integrate.impl.enqueue_task",
+        lambda name, **_: sent.append(name),
+    )
+    channel = _live_channel("fake-live-runtime-error")
+    with system_context(reason="test live runtime error latch"):
+        channel.runtime_status = IntegrationRuntimeStatus.ERROR
+        channel.save(update_fields=["runtime_status", "updated_at"])
+
+    assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 0}
+    assert sent == []
+
+    resume_channel_pairing(channel)
+
+    channel.refresh_from_db()
+    assert channel.runtime_status == IntegrationRuntimeStatus.OK
+    assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 1}
+
+
 def test_live_backend_holds_account_lock_key() -> None:
     """The account-scoped lock namespace follows the backend key."""
 
@@ -334,6 +364,23 @@ def test_bridge_owns_live_contracts_and_resolves_one_live_impl(live_tables: Any)
     assert channel.live_impl_field == "backend_class"
     assert isinstance(channel.live_impl, FakeLiveChannelBackend)
     assert session_store_path(channel).parts[-2:] == ("whatsapp", str(channel.sqid))
+
+
+@pytest.mark.django_db(transaction=True)
+def test_live_backend_projects_neutral_pairing_fields(live_tables: Any) -> None:
+    """The base projection exposes no vendor-shaped identity fields."""
+
+    from angee.integrate.live import PairingProjection
+
+    channel = _live_channel("fake-live-pairing")
+    with system_context(reason="test neutral live pairing projection"):
+        channel.merge_subscription_state(own_id="account-1")
+
+    assert channel.live_impl.pairing() == PairingProjection(
+        state=PairingState.PAIRED,
+        own_id="account-1",
+        account_label="account-1",
+    )
 
 
 @pytest.mark.django_db(transaction=True)

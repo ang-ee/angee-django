@@ -6,23 +6,10 @@ credential (whatsmeow's device pairing under ``ANGEE_DATA_DIR`` — no
 ``integrate.Credential`` row exists for a WhatsApp channel). Base ``messaging``
 owns the neutral ``Channel`` model and the list/detail surface.
 
-This module owns the operator's *intent*: every action here declares what the
-operator asked for and dispatches: the lifecycle is that declared intent, so
-asking to pair connects the row and the live desire follows it. Whether pairing
-has actually succeeded is runtime state the session reports, never the
-lifecycle. Connecting is two-phase: the channel row commits first, then
-``start_live`` persists the live desire and enqueues the session task — the QR
-code reaches the console through ``sync_progress`` on the ``channelChanged``
-subscription. Disconnect persists the stopped/disconnected intent immediately
-and lets the live session exit cooperatively while retaining its store. Pairing
-reset is the destructive operation, so it waits (bounded) for the session's
-advisory lock to clear before deleting that store — and refuses outright where
-that lock cannot see another process's session at all.
-
-These are the addon's action boundary, so they take an operator-named record and
-must re-assert what the row's ``backend_class`` guarantees everywhere below
-them: ``_require_whatsapp`` is that assertion, and it lives here rather than on
-the backend the guarantee already selected.
+Connecting is two-phase: the channel row commits first, then messaging's generic
+pairing service declares the live intent and dispatches the session task. This
+addon retains the vendor-named create/connect facade; generic pairing lifecycle
+verbs stay with messaging.
 
 Row writes specific to WhatsApp belong to the row's selected backend
 (:class:`~.backend.WhatsAppChannelBackend`), not here.
@@ -37,10 +24,9 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from rebac import system_context
 
-from angee.integrate.live import await_session_exit, reset_session_store
-from angee.integrate.models import IntegrationLifecycle, IntegrationRuntimeStatus
+from angee.integrate.models import IntegrationLifecycle
+from angee.messaging.connect import resume_channel_pairing
 from angee.messaging_integrate_whatsapp.backend import WhatsAppChannelBackend
-from angee.messaging_integrate_whatsapp.client import WhatsappPairingType
 
 Channel = apps.get_model("messaging", "Channel")
 Vendor = apps.get_model("integrate", "Vendor")
@@ -76,7 +62,8 @@ def connect_whatsapp_channel(user: Any, *, name: str) -> Any:
     """Create a WhatsApp channel, declare it connected, and start its pairing session.
 
     The row commits disconnected so a failed resume leaves no half-connected
-    channel behind; :func:`resume_whatsapp_pairing` then declares the intent.
+    channel behind; :func:`angee.messaging.connect.resume_channel_pairing` then
+    declares the intent.
     The session task lands on the dedicated ``whatsapp`` queue; without that
     worker (the stack input not enabled) the start simply expires and the
     channel keeps reporting the ``starting`` pairing state until the
@@ -84,74 +71,8 @@ def connect_whatsapp_channel(user: Any, *, name: str) -> Any:
     """
 
     channel = create_whatsapp_channel(user, name=name)
-    resume_whatsapp_pairing(channel)
+    resume_channel_pairing(channel)
     return channel
-
-
-def resume_whatsapp_pairing(channel: Any) -> None:
-    """Declare this channel connected, clear its runtime error, and resume pairing.
-
-    The one path that turns "the operator wants this channel connected" into
-    lifecycle intent, from a paused channel, a disconnected one with a retained
-    device store, or a never-paired one. The identity claim deliberately owns no
-    part of this: a live session proves *which account* is linked, it does not
-    get to decide that a connection was wanted.
-
-    The runtime error is cleared here, at the verb, rather than as a side effect
-    of the lifecycle edge: ``set_lifecycle`` returns early when the row already
-    reads CONNECTED, so a CONNECTED+ERROR row — a logout or a rejected duplicate
-    the operator is retrying — would keep the ERROR that makes ``ensure_sessions``
-    skip it, and this repair declaration would buy exactly one dispatch. Clearing
-    it is the operator saying "try this again"; ``report_status`` owns exactly
-    those fields and is idempotent on an already-healthy row.
-    """
-
-    _require_whatsapp(channel)
-    with system_context(reason="messaging_integrate_whatsapp.resume"):
-        channel.refresh_from_db()
-        channel.set_lifecycle(IntegrationLifecycle.CONNECTED)
-        channel.report_status(IntegrationRuntimeStatus.OK)
-        channel.start_live()
-
-
-def disconnect_whatsapp_channel(channel: Any) -> None:
-    """Stop and release the account immediately while retaining its device store."""
-
-    _require_whatsapp(channel)
-    with system_context(reason="messaging_integrate_whatsapp.disconnect"):
-        channel.stop_live()
-        channel.backend.mark_disconnected(clear_identity=False)
-
-
-def reset_whatsapp_pairing(channel: Any) -> None:
-    """Wipe the linked device and restart pairing — the way back from logged-out."""
-
-    _require_whatsapp(channel)
-    with system_context(reason="messaging_integrate_whatsapp.reset_pairing"):
-        channel.stop_live()
-        await_session_exit(channel)
-        reset_session_store(channel)
-        channel.backend.mark_disconnected(clear_identity=True)
-    resume_whatsapp_pairing(channel)
-
-
-def whatsapp_pairing(channel: Any) -> WhatsappPairingType:
-    """Return the console's pairing projection for one WhatsApp channel.
-
-    The projection itself belongs to the row's backend, which owns both the
-    durable identity and the transient report it merges; this is the addon's
-    action boundary, symmetric with the mutations above.
-    """
-
-    _require_whatsapp(channel)
-    return channel.backend.pairing()
-
-
-def _require_whatsapp(channel: Any) -> None:
-    """Reject records outside this addon's backend boundary."""
-
-    if str(channel.backend_class) != _WHATSAPP_SLUG:
-        raise ValueError("This action requires a WhatsApp channel.")
 
 
 def _whatsapp_vendor() -> Any:

@@ -20,12 +20,16 @@ from rebac import PermissionDenied
 from strawberry import auto
 
 from angee.base.models import instance_from_public_id
+from angee.graphql.actions import ActionResult, action_target, resolve_action_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.iam.permissions import request_from_info
+from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, request_from_info
 from angee.iam.schema import UserType
+from angee.integrate.live import PairingProjection
 from angee.integrate.schema import BridgeSyncStatusMixin, IntegrationLabelMixin, IntegrationType
+from angee.messaging import connect
 from angee.messaging.managers import message_subtype_options
 from angee.messaging.models import ThreadedModelMixin
 from angee.parties.schema import HandleType
@@ -67,6 +71,51 @@ class ChannelType(IntegrationLabelMixin, BridgeSyncStatusMixin, AngeeNode):
     sync_progress: strawberry.scalars.JSON
     created_at: auto
     updated_at: auto
+
+
+@strawberry.type
+class MessagingPairingQuery:
+    """Admin pairing state for live message channels."""
+
+    @strawberry.field(permission_classes=ADMIN_PERMISSION_CLASSES)
+    def channel_pairing(self, id: PublicID) -> PairingProjection:
+        """Return pairing state in the caller's channel scope."""
+
+        channel = resolve_action_target(
+            Channel,
+            id,
+            reason="messaging.graphql.channel_pairing",
+        )
+        return connect.channel_pairing(channel)
+
+
+@strawberry.type
+class MessagingPairingMutation:
+    """Admin lifecycle verbs for live message-channel pairing."""
+
+    @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
+    def resume_channel_pairing(self, id: PublicID) -> ActionResult:
+        """Resume retained pairing material or start a new pairing session."""
+
+        with action_target(Channel, id, reason="messaging.graphql.resume_channel_pairing") as channel:
+            connect.resume_channel_pairing(channel)
+        return ActionResult(ok=True, message="Channel connection started.")
+
+    @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
+    def reset_channel_pairing(self, id: PublicID) -> ActionResult:
+        """Wipe released pairing material and restart with a fresh session."""
+
+        with action_target(Channel, id, reason="messaging.graphql.reset_channel_pairing") as channel:
+            connect.reset_channel_pairing(channel)
+        return ActionResult(ok=True, message="Pairing reset; link the channel again.")
+
+    @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
+    def disconnect_channel(self, id: PublicID) -> ActionResult:
+        """Stop the live session while retaining reusable pairing material."""
+
+        with action_target(Channel, id, reason="messaging.graphql.disconnect_channel") as channel:
+            connect.disconnect_channel(channel)
+        return ActionResult(ok=True, message="Disconnected channel.")
 
 
 @strawberry_django.type(Fragment)
@@ -1535,6 +1584,7 @@ _RESOURCE_TYPES = [
 
 _MESSAGING_SCHEMA_BUCKET = {
     "query": [
+        MessagingPairingQuery,
         MessagingQuery,
         _CHANNEL_RESOURCE.query,
         _MESSAGE_RESOURCE.query,
@@ -1542,6 +1592,7 @@ _MESSAGING_SCHEMA_BUCKET = {
         _PART_RESOURCE.query,
     ],
     "mutation": [
+        MessagingPairingMutation,
         MessagingMutation,
         _CHANNEL_RESOURCE.mutation,
         _MESSAGE_RESOURCE.mutation,
@@ -1550,6 +1601,7 @@ _MESSAGING_SCHEMA_BUCKET = {
     ],
     "types": [
         ChannelType,
+        PairingProjection,
         ThreadType,
         ThreadAttachmentType,
         ThreadFollowerType,

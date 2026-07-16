@@ -3,17 +3,20 @@ import {
   INTEGRATION_DISCONNECT_ACTION_ID,
   INTEGRATION_RESUME_ACTION_ID,
 } from "@angee/integrate";
-import { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "@angee/messaging";
-import { formViewRecordActionsSlot } from "@angee/ui";
+import { CHANNEL_MODEL, MESSAGING_CHANNEL_TOOLBAR_SLOT } from "@angee/messaging";
+import {
+  formViewRecordActionsSlot,
+  type RecordChromeContext,
+} from "@angee/ui";
 import type * as React from "react";
 import { describe, expect, test } from "vitest";
 
-import { CHANNEL_MODEL, WHATSAPP_BACKEND } from "./channel";
-import messagingIntegrateWhatsapp from "./index";
 import {
   WHATSAPP_CONNECT_ACTION_ID,
   WHATSAPP_PAIRING_ACTION_ID,
-} from "./WhatsappConnectionAction";
+  WHATSAPP_BACKEND,
+  default as messagingIntegrateWhatsapp,
+} from "./index";
 
 describe("messaging_integrate_whatsapp addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
@@ -60,20 +63,55 @@ describe("messaging_integrate_whatsapp addon manifest", () => {
     ]);
   });
 
-  test("reaches a connected channel, the only state its repair is offered in", () => {
+  test("registers generic lifecycle actions with its vendor instruction", () => {
     // The gap this guards: `_pairing_state` reports LOGGED_OUT/DUPLICATE_ACCOUNT
     // only while the lifecycle is CONNECTED (the worker reports runtime state; it
     // does not overwrite the operator's intent), and the dialog offering the
-    // `resetWhatsappPairing` repair for those two states opens from here. Gate every
+    // `reset_channel_pairing` repair for those two states opens from here. Gate every
     // entry on disconnected/paused and the documented repair has no console path.
-    const lifecycles = (messagingIntegrateWhatsapp.slots ?? [])
+    const pairingActions = (messagingIntegrateWhatsapp.slots ?? [])
       .filter((entry) => entry.slot === formViewRecordActionsSlot(CHANNEL_MODEL, WHATSAPP_BACKEND))
       .map((entry) => {
-        const content = entry.content as React.ReactElement<{ lifecycle?: string }>;
-        return content.props.lifecycle;
+        const content = entry.content as React.ReactElement<{
+          instructionKey?: string;
+          labelKey?: string;
+          resumeOnOpen?: boolean;
+          when?: (context: RecordChromeContext) => boolean;
+        }>;
+        return content.props;
       });
 
-    expect(lifecycles).toContain("connected");
+    expect(pairingActions.slice(0, 3).map((props) => props.labelKey)).toEqual([
+      "channel.pairing.connect",
+      "channel.pairing.status",
+      "channel.pairing.resume",
+    ]);
+    expect(pairingActions.slice(0, 3).map((props) => props.instructionKey)).toEqual([
+      "channel.whatsapp.scan",
+      "channel.whatsapp.scan",
+      "channel.whatsapp.scan",
+    ]);
+    expect(pairingActions.slice(0, 3).map((props) => props.resumeOnOpen)).toEqual([
+      true,
+      undefined,
+      true,
+    ]);
+    for (const [lifecycle, expected] of [
+      ["DISCONNECTED", [true, false, false]],
+      ["CONNECTED", [false, true, false]],
+      ["PAUSED", [false, false, true]],
+    ] as const) {
+      const context: RecordChromeContext = {
+        resource: CHANNEL_MODEL,
+        dataProviderName: "console",
+        canonicalResource: "integrate.Integration",
+        recordId: "chn_1",
+        record: { lifecycle },
+      };
+      expect(
+        pairingActions.slice(0, 3).map((props) => props.when?.(context)),
+      ).toEqual(expected);
+    }
   });
 
   test("contributes nothing at the bare channel-model key", () => {
