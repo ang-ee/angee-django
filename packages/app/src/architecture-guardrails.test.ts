@@ -27,6 +27,7 @@ const CRITICAL_OWNER_EXPORTS: Record<string, RegExp> = {
   resourcePageRoutes: /\bresourcePageRoutes\b/g,
   expectValidBaseAddon: /\bexpectValidBaseAddon\b/g,
   MutationDialog: /\bMutationDialog\b/g,
+  PairingDialog: /\bPairingDialog\b/g,
   ScopedExplorerPane: /\bScopedExplorerPane\b/g,
   PrimaryPanePublisher: /\bPrimaryPanePublisher\b/g,
   useLatestRef: /\buseLatestRef\b/g,
@@ -242,6 +243,7 @@ function isOwnerDefinitionFile(name: string, file: string): boolean {
   if (name === "resourcePageRoutes") return file.endsWith("define-base-addon.ts");
   if (name === "expectValidBaseAddon") return file.endsWith("testing.tsx");
   if (name === "MutationDialog") return file.endsWith("MutationDialog.tsx");
+  if (name === "PairingDialog") return file.endsWith("PairingDialog.tsx");
   if (name === "ScopedExplorerPane") return file.endsWith("ScopedExplorerPane.tsx");
   if (name === "PrimaryPanePublisher") return file.endsWith("primary-pane-context.tsx");
   if (name === "useLatestRef") return file.endsWith("use-latest-ref.ts");

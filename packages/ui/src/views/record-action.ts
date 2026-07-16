@@ -79,6 +79,9 @@ export function useRecordActionMutation<TField extends string = string>(
 ): [RecordAction, { fetching: boolean; error: Error | null }] {
   const invalidates = useResourceInvalidates(options?.invalidateModels);
   const [mutate, state] = useActionMutation<TField>(field, {
+    ...(options?.invalidateModels !== undefined
+      ? { invalidateModels: options.invalidateModels }
+      : {}),
     invalidates,
   });
   const settleOptions = React.useMemo<ActionResultRunOptions | null>(() => {
@@ -140,6 +143,9 @@ export function useActionResultMutation<TField extends string = string>(
   const invalidates = useResourceInvalidates(options.invalidateModels);
   const [mutate, state] = useActionMutation<TField>(field, {
     ...(dataProviderName !== undefined ? { dataProviderName } : {}),
+    ...(options.invalidateModels !== undefined
+      ? { invalidateModels: options.invalidateModels }
+      : {}),
     invalidates,
   });
   const settle = useActionResultRun();

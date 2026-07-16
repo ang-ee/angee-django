@@ -157,6 +157,7 @@ describe("record action helpers", () => {
     expect(dataMocks.useActionMutation).toHaveBeenCalledWith(
       "refresh_source",
       {
+        invalidateModels: ["agents.Skill"],
         invalidates: [
           {
             dataProviderName: "console",
@@ -247,6 +248,7 @@ describe("useRecordChromeActionMutation", () => {
 
     expect(dataMocks.useActionMutation).toHaveBeenCalledWith("pause_integration", {
       dataProviderName: "console",
+      invalidateModels: ["messaging.Channel", "integrate.Integration"],
       invalidates: [
         { dataProviderName: "console", invalidates: ["list"], resource: "messaging.Channel" },
         { dataProviderName: "console", invalidates: ["list"], resource: "integrate.Integration" },
@@ -267,6 +269,7 @@ describe("useRecordChromeActionMutation", () => {
     expect(dataMocks.useActionMutation).toHaveBeenCalledWith(
       "pause_integration",
       expect.objectContaining({
+        invalidateModels: ["integrate.Integration"],
         invalidates: [
           { dataProviderName: "console", invalidates: ["list"], resource: "integrate.Integration" },
         ],
@@ -276,14 +279,19 @@ describe("useRecordChromeActionMutation", () => {
 
   test("adds a third model the verb also writes", () => {
     renderHook(() =>
-      useRecordChromeActionMutation("disconnect_whatsapp_channel", {
+      useRecordChromeActionMutation("disconnect_channel", {
         invalidateModels: ["messaging.Thread"],
       }),
     );
 
     expect(dataMocks.useActionMutation).toHaveBeenCalledWith(
-      "disconnect_whatsapp_channel",
+      "disconnect_channel",
       expect.objectContaining({
+        invalidateModels: [
+          "messaging.Channel",
+          "integrate.Integration",
+          "messaging.Thread",
+        ],
         invalidates: [
           { dataProviderName: "console", invalidates: ["list"], resource: "messaging.Channel" },
           { dataProviderName: "console", invalidates: ["list"], resource: "integrate.Integration" },
