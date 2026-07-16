@@ -149,12 +149,18 @@ export interface UseAngeeResourceSaveResult {
 }
 
 /**
- * Fire a single-id action and resolve its in-band `ActionOutcome` (`undefined`
- * when the transport returned no payload). A domain failure resolves as
+ * Fire an id-targeted action, optionally with extra required scalar arguments,
+ * and resolve its in-band `ActionOutcome` (`undefined` when the transport
+ * returned no payload). A domain failure resolves as
  * `ok=false` rather than throwing — project through `runActionResult` where the
  * caller wants the legacy throw-on-failure/success-message contract.
  */
-export type ActionMutate = (id: string) => Promise<ActionOutcome | undefined>;
+export type ActionArguments = Readonly<Record<string, unknown>>;
+
+export type ActionMutate = (
+  id: string,
+  arguments_?: ActionArguments,
+) => Promise<ActionOutcome | undefined>;
 
 export interface UseActionMutationOptions {
   dataProviderName?: string;
@@ -573,7 +579,7 @@ export function useAngeeRevisions(
 }
 
 /**
- * Run a single-id backend action mutation through refine's custom mutation
+ * Run an id-targeted backend action mutation through refine's custom mutation
  * owner. The generated `ActionFieldName` union from `@angee/gql/<schema>/actions`
  * still pins callers to real action fields, while refine owns execution state.
  * The mutate resolves the in-band `ActionOutcome` (`ok`, `message`, and the
@@ -601,8 +607,9 @@ export function useActionMutation<TField extends string = string>(
   const queryClient = useQueryClient();
   const run = useCustomMutation<BaseRecord, HttpError, ByIdVariables>();
   const mutate = useCallback<ActionMutate>(
-    async (id) => {
-      const request = actionRequest(field, { id }, {
+    async (id, arguments_ = {}) => {
+      const variables = { ...arguments_, id };
+      const request = actionRequest(field, variables, {
         dataProviderName,
         document: operationDocument(
           operationDocuments,
@@ -614,7 +621,7 @@ export function useActionMutation<TField extends string = string>(
       const response = await run.mutateAsync({
         url: "",
         method: "post",
-        values: { id },
+        values: variables,
         dataProviderName: request.dataProviderName,
         meta: request.meta,
       });

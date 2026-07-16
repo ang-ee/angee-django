@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { ActionContext } from "./page";
 import {
   recordActionId,
+  useActionResultMutation,
   useRecordAction,
   useRecordActionMutation,
   useRecordChromeActionMutation,
@@ -169,6 +170,21 @@ describe("record action helpers", () => {
     );
     expect(dataMocks.mutate).toHaveBeenCalledWith("src_1");
     expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  test("settles and forwards action arguments beside the record id", async () => {
+    const { result } = renderHook(() =>
+      useActionResultMutation("submit_channel_password"),
+    );
+
+    await act(async () => {
+      await result.current[0]("chn_1", { password: "one-use-secret" });
+    });
+
+    expect(dataMocks.mutate).toHaveBeenCalledWith("chn_1", {
+      password: "one-use-secret",
+    });
+    expect(dataMocks.settle).toHaveBeenCalledOnce();
   });
 
   test("settles id-returning record mutations through the action-result owner", async () => {
