@@ -1724,16 +1724,37 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         query = SearchQuery(strip_null_bytes(term or "").strip(), config=_SEARCH_CONFIG)
         return cast(MessageQuerySet, self.filter(parts__fragment__search=query))
 
-    def involving_party(self, party: Any) -> MessageQuerySet:
-        """Return messages any of ``party``'s resolved handles participated in.
+    def involving_parties(self, parties: Any) -> MessageQuerySet:
+        """Return messages any of ``parties``' resolved handles participated in.
 
-        The person-timeline read: participants are Handle-keyed and ``Handle.party``
-        is the resolution-materialised owner, so one join answers "every message
-        exchanged with this party across channels". Distinct because one message may
-        carry the same party on several handles (from + cc).
+        Timeline reads pass either a lazy actor-scoped Party queryset (a circle
+        subtree) or a concrete iterable (one party). Participants are Handle-keyed
+        and ``Handle.party`` is the resolution-materialised owner, so one join
+        answers "every message exchanged with these parties across channels".
+        Distinct because one message may carry several matching handles.
         """
 
-        return cast(MessageQuerySet, self.filter(participants__handle__party=party).distinct())
+        handle_model = apps.get_model("parties", "Handle")
+        participant_model = apps.get_model("messaging", "Participant")
+        visible_handle_ids = (
+            handle_model.objects.all()
+            .scoped_for_aggregate()
+            .filter(party__in=parties)
+            .values("pk")
+        )
+        visible_message_ids = (
+            participant_model.objects.all()
+            .scoped_for_aggregate()
+            .filter(
+                handle_id__in=models.Subquery(visible_handle_ids),
+                message_id__isnull=False,
+            )
+            .values("message_id")
+        )
+        return cast(
+            MessageQuerySet,
+            self.filter(pk__in=models.Subquery(visible_message_ids)),
+        )
 
 
 class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: ignore[misc]
@@ -1808,18 +1829,18 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             .first()
         )
 
-    def timeline_for_party(
+    def timeline_for_parties(
         self,
-        party: Any,
+        parties: Any,
         *,
         search: str = "",
         limit: int = 50,
         before: Any | None = None,
     ) -> tuple[list[Any], int]:
-        """Return one newest-first page of the cross-channel feed exchanged with ``party``.
+        """Return one newest-first page exchanged with any of ``parties``.
 
-        The person-timeline read: inbox messages (record chatter stays behind its
-        record gate) whose participants resolve to ``party``. Unlike
+        The party-timeline read: inbox messages (record chatter stays behind its
+        record gate) whose participants resolve to the supplied Party collection. Unlike
         :meth:`for_record` this stays ACTOR-scoped — there is no record-level gate
         in front of it, so per-row REBAC is the authorization — and therefore adds
         no ``select_related`` over guarded relations (the GraphQL read path resolves
@@ -1831,8 +1852,9 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         limit = max(1, min(int(limit or 50), 200))
         queryset = (
             self.all()
+            .apply_ambient_scope()
             .inbox()
-            .involving_party(party)
+            .involving_parties(parties)
             .annotate(_order_at=_MESSAGE_ORDER_ANNOTATION)
         )
         search = strip_null_bytes(search or "").strip()
@@ -1849,6 +1871,23 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         else:
             page = list(queryset.order_by(*descending)[:limit])
         return sorted(page, key=_message_chronological_key), count
+
+    def timeline_for_party(
+        self,
+        party: Any,
+        *,
+        search: str = "",
+        limit: int = 50,
+        before: Any | None = None,
+    ) -> tuple[list[Any], int]:
+        """Return one party's timeline through the plural collection owner."""
+
+        return self.timeline_for_parties(
+            (party,),
+            search=search,
+            limit=limit,
+            before=before,
+        )
 
     def post_to_thread(
         self,
