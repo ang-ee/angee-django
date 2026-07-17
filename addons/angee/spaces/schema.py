@@ -9,6 +9,7 @@ import strawberry_django
 from django.apps import apps
 from strawberry import auto
 
+from angee.graphql.actions import authorized_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     aggregate_queryset,
@@ -20,6 +21,7 @@ from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.messaging.schema import FragmentType
 from angee.parties.schema import PartyType
+from angee.spaces.models import Membership as MembershipSource
 
 Group = apps.get_model("spaces", "Group")
 Membership = apps.get_model("spaces", "Membership")
@@ -74,6 +76,27 @@ class SpaceThreadType(AngeeNode):
 @strawberry.type
 class SpacesMembershipMutation:
     """Human decisions on suggested roster rows."""
+
+    @strawberry.mutation
+    def add_space_membership(
+        self,
+        info: strawberry.Info,
+        group_id: strawberry.ID,
+        party_id: strawberry.ID,
+        role: MembershipSource.MembershipRole,
+    ) -> SpaceMembershipType:
+        """Add or confirm one party in a writable group at the selected role."""
+
+        group = authorized_action_target(info, Group, group_id, "write")
+        party = Party.objects.all().apply_ambient_scope().from_public_id(str(party_id))
+        if party is None:
+            raise ValueError("party not found")
+        membership = Membership.objects.add_confirmed(
+            group=group,
+            party=party,
+            role=role,
+        )
+        return cast(SpaceMembershipType, membership)
 
     @strawberry.mutation
     def confirm_membership(

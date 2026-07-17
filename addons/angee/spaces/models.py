@@ -25,7 +25,7 @@ concurrent saves can interleave and the last committed writer's state wins.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -45,7 +45,7 @@ from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin, HierarchyMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.parties.mixins import ScoredLinkMixin
-from angee.spaces.managers import GroupManager
+from angee.spaces.managers import GroupManager, MembershipManager
 
 PUBLIC_READER_RELATION = "reader"
 """Wildcard-subject relation opening a public group to authenticated actors."""
@@ -105,7 +105,7 @@ class Group(HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
         instance._loaded_visibility = (
             instance.visibility if "visibility" in field_names else _NEVER_LOADED
         )
-        return instance
+        return cast(Group, instance)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the group and reconcile its public-reader tuple atomically."""
@@ -178,6 +178,7 @@ class Membership(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
         related_name="space_memberships",
     )
     role = StateField(choices_enum=MembershipRole, default=MembershipRole.MEMBER)
+    objects = MembershipManager()
     granted_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -218,7 +219,7 @@ class Membership(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
             if all(name in field_names for name in _MEMBERSHIP_RECONCILE_FIELDS)
             else _NEVER_LOADED
         )
-        return instance
+        return cast(Membership, instance)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the row and reconcile its confirmed role relationship atomically.
@@ -326,7 +327,7 @@ class Membership(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
 
         if user_id is None:
             return None
-        user_model = self._meta.get_field("granted_user").remote_field.model
+        user_model = cast(Any, self._meta.get_field("granted_user")).remote_field.model
         user = user_model._base_manager.filter(pk=user_id).first()
         return None if user is None else to_subject_ref(user)
 
