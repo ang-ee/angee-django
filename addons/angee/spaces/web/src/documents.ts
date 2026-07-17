@@ -16,7 +16,7 @@ export const AddSpaceMembership = graphql(`
 `);
 
 export const UpdateSpaceMembershipRole = graphql(`
-  mutation UpdateSpaceMembershipRole($id: String!, $role: MembershipRole!) {
+  mutation UpdateSpaceMembershipRole($id: String!, $role: String!) {
     update_space_memberships_by_pk(
       pk_columns: { id: $id }
       _set: { role: $role }
