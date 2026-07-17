@@ -1,5 +1,29 @@
 import type { ModelFieldMetadata, ModelMetadata } from "./artifact";
 
+/**
+ * A to-one relation the node projects as a bare `ID` scalar rather than a nested
+ * object (`relationObject: false`): the wire carries the related row's public id
+ * as a leaf, so a detail/form query selects it directly instead of emitting a
+ * sub-selection the `ID` scalar would reject.
+ */
+export function isScalarIdRelation(field: ModelFieldMetadata): boolean {
+  return field.kind === "scalar" && field.scalar === "ID" && Boolean(field.relationTarget);
+}
+
+/**
+ * Is this field a to-one relation, whichever way the node projects it?
+ *
+ * The projection is a wire detail — an object sub-selection or a bare `ID` leaf —
+ * not a different kind of fact. Both shapes name the same related model, carry the
+ * same relation filter, and group by the same identity axis, so anything reasoning
+ * about *relation-ness* must ask this rather than test `kind === "relation"` and
+ * silently drop every scalar-id relation.
+ */
+export function isToOneRelationField(field: ModelFieldMetadata | undefined): boolean {
+  if (!field) return false;
+  return field.kind === "relation" || isScalarIdRelation(field);
+}
+
 const SCALAR_WIDGET: Readonly<Record<string, string>> = {
   Boolean: "switch",
   Int: "integer",

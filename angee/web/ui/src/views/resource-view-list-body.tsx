@@ -33,6 +33,7 @@ import {
   groupDimensionForGroup,
   groupExtractionForGroup,
   looksLikeDateField,
+  relationFilterForRelation,
   resourceFieldPathToSnake,
 } from "@angee/metadata";
 import { format } from "date-fns";
@@ -1188,7 +1189,7 @@ function groupLabelKey(
 ): string | undefined {
   const field = group.aggregateField;
   if (!field) return undefined;
-  return metadata?.fields[field]?.relationFilter?.labelKey;
+  return relationFilterForRelation(field, metadata)?.labelKey;
 }
 
 export function bucketValueLabels(

@@ -75,6 +75,31 @@ export function groupExtractionForGroup(
   return extraction;
 }
 
+/**
+ * Is `field` a relation's label axis rather than a dimension of its own?
+ *
+ * A resource groups by a relation (`sender`, keyed by its public id) and carries
+ * the related row's name along as a second wire axis (`sender__display_name`) so
+ * a bucket renders "Alice" instead of a sqid — the backend pairs the two in
+ * `relationAxes[].labelAxis` and refuses a label axis without its relation axis.
+ * The label axis is therefore an accessory to that relation group, never a group
+ * a caller selects: the backend declares no bucket filter for it, so grouping by
+ * it directly would produce buckets that cannot drill down. Ask the backend which
+ * axes are labels rather than reading `__` out of the path.
+ */
+export function isRelationLabelAxis(
+  field: string,
+  metadata: ModelMetadata | null,
+): boolean {
+  const snakeField = resourceFieldPathToSnake(field);
+  return (metadata?.resource?.relationAxes ?? []).some(
+    (axis) =>
+      axis.labelAxis != null &&
+      (axis.labelAxis === field ||
+        resourceFieldPathToSnake(axis.labelAxis) === snakeField),
+  );
+}
+
 export function groupAllowedByResource(
   group: ResourceGroupSpec,
   metadata: ModelMetadata | null,
@@ -91,7 +116,12 @@ export function groupAllowedByResource(
   const dimension =
     resourceGroupDimensionForField(aggregateField, metadata) ??
     resourceGroupDimensionForField(group.field, metadata);
-  if (dimension) return groupByFields.includes(dimension.field);
+  if (dimension) {
+    // The group would query this dimension as its own axis; a label axis only
+    // ever rides along with the relation group it labels (`aggregateField`).
+    if (isRelationLabelAxis(dimension.field, metadata)) return false;
+    return groupByFields.includes(dimension.field);
+  }
   const aggregateSnake = resourceFieldPathToSnake(aggregateField);
   const fieldSnake = resourceFieldPathToSnake(group.field);
   return groupByFields.some((field) =>

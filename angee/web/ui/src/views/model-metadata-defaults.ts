@@ -3,7 +3,7 @@ import type {
   ModelRelationFilterMetadata,
   SchemaFieldMetadata,
 } from "@angee/metadata";
-import { defaultWidgetForModelField } from "@angee/metadata";
+import { defaultWidgetForModelField, isToOneRelationField } from "@angee/metadata";
 import type { ReactNode } from "react";
 import type { ModelFieldMetadata } from "@angee/metadata";
 
@@ -68,20 +68,8 @@ export function relationFieldInfo(
   schemaMetadata: SchemaFieldMetadata,
 ): RelationFieldInfo | null {
   const field = modelMetadata?.fields[fieldName];
-  if (!field || (field.kind !== "relation" && !isScalarIdRelation(field))) return null;
+  if (!field || !isToOneRelationField(field)) return null;
   return resolveRelationTarget(field, schemaMetadata);
-}
-
-/**
- * A to-one relation the node projects as a bare `ID` scalar (`kind: "scalar"`,
- * `scalar: "ID"`, carrying a `relationTarget`). The backend classifies a
- * Any FK projected as `ID!` rather than a nested object is classified this way,
- * with a `select` scalar-id widget — so the detail/form query selects it as a
- * leaf instead of emitting a sub-selection the wire `ID` rejects, while the
- * relation picker still resolves through the relation metadata.
- */
-export function isScalarIdRelation(field: ModelFieldMetadata): boolean {
-  return field.kind === "scalar" && field.scalar === "ID" && Boolean(field.relationTarget);
 }
 
 /**
