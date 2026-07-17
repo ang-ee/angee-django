@@ -5,4 +5,4 @@ name = "angee.workflows_integrate"
 description = "Archive extraction workflow steps for integration-owned ingest surfaces"
 keywords = ["workflows", "integrate", "archives"]
 category = "Workflows"
-depends_on = ["angee.workflows", "angee.integrate", "angee.storage"]
+depends_on = ["angee.workflows", "angee.storage"]

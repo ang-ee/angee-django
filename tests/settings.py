@@ -18,6 +18,7 @@ INSTALLED_APPS = [
     "angee.agents",
     "angee.workflows",
     "angee.workflows_agents",
+    "angee.workflows_integrate",
     "angee.knowledge",
     "angee.mcp",
     "angee.storage",
@@ -101,6 +102,12 @@ ANGEE_WORKFLOW_STEP_CLASSES = {
     "gate": "angee.workflows.steps.GateStep",
     "map": "angee.workflows.steps.MapStep",
     "agent": "angee.workflows_agents.steps.AgentStepImpl",
+    "archive_probe": "angee.workflows_integrate.steps.ArchiveProbeStepImpl",
+    "archive_gate": "angee.workflows_integrate.steps.ArchiveGateStepImpl",
+    "archive_execute": "angee.workflows_integrate.steps.ArchiveExecuteStepImpl",
+}
+ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES = {
+    "fixture_archive": "tests.test_workflows_integrate.FixtureArchiveExtractor",
 }
 ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES = {
     "lexical": "angee.knowledge.retrieval.LexicalRetrievalBackend",

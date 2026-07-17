@@ -500,6 +500,11 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   (for example, downloading media during ingest), schedule the coroutine with
   `asyncio.run_coroutine_threadsafe` onto that owning loop and wait with a finite
   timeout. Never create a second loop around a coroutine bound to the live client.
+- **A gate whose assignee is the run owner must not also set that owner as
+  requester.** The decision `act` permission is `(assignee − requester) +
+  admin` (separation of duties), so `requester == assignee` locks the owner
+  out of their own decision. Leave `requester` unset when the assignee
+  defaults to the run creator.
 - **Run every changed test module standalone.** A full suite's file order can
   leak concrete test models into the shared registry and mask a missing
   registration; a broad run does not replace the direct module run.

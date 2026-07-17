@@ -30,6 +30,7 @@ from rebac.resources import to_object_ref
 from rebac.types import RelationshipTuple
 
 from angee.base.actors import actor_user_id
+from angee.base.models import instance_from_public_id, read_scoped_queryset
 from angee.tasks.enqueue import enqueue_task
 from angee.workflows.models import JoinRule, RunStatus, StepRunStatus, Verdict, WorkflowStatus
 from angee.workflows.steps import DecisionSpec, MapStep, StepResult, TransientStepError
@@ -295,7 +296,7 @@ def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = Non
             return DecisionAttemptResult(locked)
         _ensure_sequential_turn(locked)
         try:
-            resolution = _validate_resolution(locked, payload)
+            resolution = _validate_resolution(locked, payload, actor=actor_ref)
         except ValidationError as error:
             _record_invalid_resolution(locked, error)
             validation_error = error
@@ -588,7 +589,7 @@ def _ensure_sequential_turn(decision: Any) -> None:
         raise ValidationError({"decision": "Sequential decisions must resolve in priority order."})
 
 
-def _validate_resolution(decision: Any, payload: Any) -> dict[str, Any]:
+def _validate_resolution(decision: Any, payload: Any, *, actor: Any = None) -> dict[str, Any]:
     """Validate a decision resolution against its step-owned schema."""
 
     resolution = payload if payload is not None else {}
@@ -599,7 +600,7 @@ def _validate_resolution(decision: Any, payload: Any) -> dict[str, Any]:
     if schema is None:
         return dict(resolution)
     if isinstance(schema, dict):
-        return _validate_mapping_schema(schema, resolution)
+        return _validate_mapping_schema(schema, resolution, actor=actor)
     if hasattr(schema, "model_validate"):
         try:
             parsed = schema.model_validate(resolution)
@@ -622,7 +623,12 @@ def _schema_for_decision(decision: Any) -> Any | None:
     return getattr(impl_class, "decision_schema", None)
 
 
-def _validate_mapping_schema(schema: dict[str, Any], resolution: dict[str, Any]) -> dict[str, Any]:
+def _validate_mapping_schema(
+    schema: dict[str, Any],
+    resolution: dict[str, Any],
+    *,
+    actor: Any = None,
+) -> dict[str, Any]:
     """Validate a JSON-authored decision schema through a pydantic model."""
 
     if not schema:
@@ -635,7 +641,92 @@ def _validate_mapping_schema(schema: dict[str, Any], resolution: dict[str, Any])
         parsed = model.model_validate(resolution)
     except PydanticValidationError as error:
         raise _resolution_validation_error(error) from error
-    return cast(dict[str, Any], parsed.model_dump(exclude_none=False))
+    validated = cast(dict[str, Any], parsed.model_dump(exclude_none=False))
+    _validate_relation_fields(schema, validated, actor)
+    return validated
+
+
+def _validate_relation_fields(schema: dict[str, Any], resolution: dict[str, Any], actor: Any) -> None:
+    """Re-check every submitted relation id against the resolving actor's access.
+
+    Decision resolution is the only point that still holds the acting subject —
+    the execute worker runs detached with no actor — so the ``relation`` facts a
+    schema declares are enforced here: the id must address a row of the declared
+    resource that ``actor`` may ``write``, checked through the model's own
+    REBAC-scoped manager. Models without a REBAC row policy degrade to an
+    existence check.
+    """
+
+    errors: dict[str, list[str]] = {}
+    _collect_relation_errors(schema, resolution, actor, path="", errors=errors)
+    if errors:
+        raise ValidationError(errors)
+
+
+def _collect_relation_errors(
+    schema: dict[str, Any],
+    value: Any,
+    actor: Any,
+    *,
+    path: str,
+    errors: dict[str, list[str]],
+) -> None:
+    """Walk one object schema level and collect relation failures by dotted path."""
+
+    properties = schema.get("properties")
+    if not isinstance(properties, dict) or not isinstance(value, dict):
+        return
+    for field_name, spec in properties.items():
+        if not isinstance(spec, dict):
+            continue
+        field_path = f"{path}.{field_name}" if path else str(field_name)
+        field_value = value.get(field_name)
+        relation = spec.get("relation")
+        if isinstance(relation, dict):
+            message = _relation_error(relation, field_value, actor)
+            if message:
+                errors.setdefault(field_path, []).append(message)
+            continue
+        field_type = spec.get("type")
+        items = spec.get("items")
+        if field_type == "object":
+            _collect_relation_errors(spec, field_value, actor, path=field_path, errors=errors)
+        elif field_type == "array" and isinstance(items, dict) and isinstance(field_value, list):
+            item_relation = items.get("relation")
+            for index, item in enumerate(field_value):
+                item_path = f"{field_path}.{index}"
+                if isinstance(item_relation, dict):
+                    message = _relation_error(item_relation, item, actor)
+                    if message:
+                        errors.setdefault(item_path, []).append(message)
+                    continue
+                _collect_relation_errors(items, item, actor, path=item_path, errors=errors)
+
+
+def _relation_error(relation: dict[str, Any], value: Any, actor: Any) -> str | None:
+    """Return the field error for one submitted relation id, or None when valid.
+
+    Unknown ids, wrong-model ids, and ids the actor may not write share one
+    message so the response does not disclose which records exist.
+    """
+
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        return "Relation value must be a record id."
+    resource = str(relation.get("resource") or "")
+    app_label, separator, model_name = resource.partition(".")
+    if not separator:
+        return "Relation resource must be an app_label.Model string."
+    try:
+        model = apps.get_model(app_label, model_name)
+    except (LookupError, ValueError):
+        return f"Relation resource {resource!r} is not installed."
+    scoped = read_scoped_queryset(model, actor, action="write")
+    instance = instance_from_public_id(model, value, queryset=scoped)
+    if instance is None:
+        return "Relation value must reference a record you can write."
+    return None
 
 
 def _resolution_validation_error(error: PydanticValidationError) -> ValidationError:

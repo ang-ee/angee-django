@@ -22,7 +22,7 @@ from rebac import system_context
 from rebac.actors import to_subject_ref
 
 from angee.base.impl import ImplBase, impl_registry, resolve_impl_class
-from angee.workflows.steps import DecisionSpec, GateStep, StepImpl, StepResult
+from angee.workflows.steps import DecisionSpec, StepImpl, StepResult, positive_int
 
 ARCHIVE_EXTRACTOR_CLASSES_SETTING = "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES"
 """Settings mapping from stable archive extractor keys to trusted class paths."""
@@ -37,6 +37,10 @@ class ArchiveExecutionReporter:
     The current engine has one durable progress primitive: the step heartbeat.
     Extractors call :meth:`heartbeat` during long ingest work; richer progress
     remains an engine concern rather than vendor state hidden in this addon.
+    The wrapper is a deliberate capability-narrowing boundary: vendor extractor
+    code receives only this reporter, never the ``StepImpl``/``step_run``
+    surface — ``mark_failed``, ``resume_state``, and the engine verbs stay
+    workflow-owned.
     """
 
     step: StepImpl
@@ -64,7 +68,12 @@ class ArchiveExtractor(ImplBase, ABC):
 
     @abstractmethod
     def recognizes(self, file: Any) -> bool:
-        """Return whether ``file`` is an archive this extractor owns."""
+        """Return whether ``file`` is an archive this extractor owns.
+
+        Recognition must read only a bounded header/prefix of ``file`` — the
+        probe invokes every registered extractor against the same file, so a
+        full-body read amplifies storage I/O by the registry size.
+        """
 
         raise NotImplementedError
 
@@ -133,8 +142,13 @@ class ArchiveProbeStepImpl(StepImpl):
         )
 
 
-class ArchiveGateStepImpl(GateStep):
-    """Suspend for a fixed-row extractor-to-target mapping decision."""
+class ArchiveGateStepImpl(StepImpl):
+    """Suspend for a fixed-row extractor-to-target mapping decision.
+
+    v1 renders one shared rows template, so every recognized extractor must
+    declare the same target resource; heterogeneous archives route down the
+    ``failed`` edge until per-resource row grouping ships.
+    """
 
     key = "archive_gate"
     label = "Map archive targets"
@@ -144,19 +158,29 @@ class ArchiveGateStepImpl(GateStep):
     def validate_config(cls, config: Any) -> None:
         """Validate optional decision action, assignee, and attempt settings."""
 
-        StepImpl.validate_config(config)
+        super().validate_config(config)
         if "action" in config and not str(config.get("action") or "").strip():
             raise ValidationError({"config": "Archive gate action must be a non-empty string."})
         if "assignee" in config and not str(config.get("assignee") or "").strip():
             raise ValidationError({"config": "Archive gate assignee must be a non-empty subject ref."})
-        _max_attempts(config.get("max_attempts", 3))
+        positive_int(config.get("max_attempts", 3), "Archive gate max_attempts")
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Author the mapping form from probe output and suspend one decision."""
 
         del now
         proposals = _input_proposals(step_run.input)
-        target_resource = _shared_target_resource(proposals)
+        target_resources = sorted({proposal["target_resource"] for proposal in proposals})
+        if len(target_resources) != 1:
+            return StepResult.done(
+                output={
+                    "proposals": proposals,
+                    "target_resources": target_resources,
+                    "unsupported": "Archive mapping rows require one shared target resource.",
+                },
+                outcome="failed",
+            )
+        target_resource = target_resources[0]
         config = dict(step_run.step.config)
         assignee = str(config.get("assignee") or _run_owner_subject(step_run.run))
         mappings = [
@@ -174,7 +198,7 @@ class ArchiveGateStepImpl(GateStep):
                     assignees=(assignee,),
                     action=str(config.get("action") or "map-archive"),
                     payload={"mappings": mappings},
-                    max_attempts=_max_attempts(config.get("max_attempts", 3)),
+                    max_attempts=positive_int(config.get("max_attempts", 3), "Archive gate max_attempts"),
                     decision_schema=_mapping_form_schema(target_resource),
                 ),
             ),
@@ -293,10 +317,9 @@ def _input_proposals(value: Any) -> list[dict[str, str]]:
             "label": str(value_proposal.get("label") or ""),
             "target_resource": str(value_proposal.get("target_resource") or ""),
         }
-        extractor = archive_extractor_class(proposal["extractor"])
-        expected = _proposal(extractor)
-        if proposal != expected:
-            raise ValidationError({"input": f"Archive proposal {index + 1} does not match its extractor."})
+        # The proposal content is trusted same-run probe output; resolving the
+        # key still guards against registry drift between probe and gate.
+        _registered_extractor(proposal["extractor"], owner="input")
         if proposal["extractor"] in seen:
             raise ValidationError({"input": f"Archive extractor {proposal['extractor']!r} is proposed twice."})
         seen.add(proposal["extractor"])
@@ -306,20 +329,13 @@ def _input_proposals(value: Any) -> list[dict[str, str]]:
     return proposals
 
 
-def _shared_target_resource(proposals: list[dict[str, str]]) -> str:
-    """Return the one relation resource the v1 static rows template can render."""
+def _registered_extractor(key: str, *, owner: str) -> type[ArchiveExtractor]:
+    """Resolve ``key`` for input validation, keying registry drift as input errors."""
 
-    resources = {proposal["target_resource"] for proposal in proposals}
-    if len(resources) != 1:
-        raise ValidationError(
-            {
-                "input": (
-                    "Archive mapping rows require one shared target resource; "
-                    "the v1 rows relation template cannot vary by row."
-                )
-            }
-        )
-    return next(iter(resources))
+    try:
+        return archive_extractor_class(key)
+    except ImproperlyConfigured as error:
+        raise ValidationError({owner: f"Archive extractor {key!r} is not registered."}) from error
 
 
 def _mapping_form_schema(target_resource: str) -> dict[str, Any]:
@@ -374,18 +390,6 @@ def _run_owner_subject(run: Any) -> str:
     return str(to_subject_ref(owner))
 
 
-def _max_attempts(value: Any) -> int:
-    """Return a positive archive mapping decision attempt cap."""
-
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError) as error:
-        raise ValidationError({"config": "Archive gate max_attempts must be an integer."}) from error
-    if parsed < 1:
-        raise ValidationError({"config": "Archive gate max_attempts must be positive."})
-    return parsed
-
-
 def _prepared_mappings(value: Any) -> list[dict[str, str]]:
     """Load completed decision resolutions and return verified map items."""
 
@@ -421,7 +425,7 @@ def _prepared_mappings(value: Any) -> list[dict[str, str]]:
             target_pk = str(resolved.get("target") or "")
             if extractor_key != str(expected.get("extractor") or "") or label != str(expected.get("label") or ""):
                 raise ValidationError({"input": "Archive mapping resolution changed a proposed extractor."})
-            extractor = archive_extractor_class(extractor_key)
+            extractor = _registered_extractor(extractor_key, owner="input")
             if label != extractor.display_label():
                 raise ValidationError({"input": "Archive mapping resolution has stale extractor metadata."})
             if not target_pk:
