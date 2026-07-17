@@ -83,6 +83,16 @@ const markdownPreviewWidget = lazyWidget(
   () => import("./markdown").then((m) => m.markdownPreviewWidget),
   { edit: true, cell: true },
 );
+/**
+ * Thin registry bridge to the view-owned fixed-N `rows` composer. Its controlled
+ * array-of-objects value edits in place, cells use the shared descriptor/relation
+ * path, and validation follows dotted cell paths. Variable-N `useFieldArray`
+ * document lines remain owned by `EditableLines`.
+ */
+const rowsWidget = lazyWidget(
+  () => import("../views/RowsField").then((m) => m.rowsWidget),
+  { edit: true },
+);
 
 export const defaultWidgets = {
   text: textWidget,
@@ -117,6 +127,7 @@ export const defaultWidgets = {
   themePicker: themePickerWidget,
   many2one: many2oneWidget,
   many2many: many2manyWidget,
+  rows: rowsWidget,
 } satisfies WidgetMap;
 
 export function useResolvedWidget(

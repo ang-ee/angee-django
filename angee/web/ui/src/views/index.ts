@@ -21,12 +21,13 @@ export {
   type RelationCreateConfig,
 } from "./RelationPicker";
 export {
-  DescriptorFieldControl,
+  LabeledDescriptorField,
   MutationDialog,
   type MutationDialogField,
   type MutationDialogProps,
   type MutationDialogRelation,
 } from "./MutationDialog";
+export { RowsField, type RowsValue } from "./RowsField";
 export {
   deserializeFormSpec,
   formSpecInitialValues,

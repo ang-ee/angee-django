@@ -72,6 +72,35 @@ export function validationErrorMap(
 }
 
 /**
+ * Re-scope the descendant-message strings returned by
+ * {@link useDottedPathFieldErrors} to one nested dotted path. Exact messages
+ * lose their path prefix; deeper descendants retain it for another nested
+ * owner. Matching keeps the owner's exact-or-dot-boundary rule.
+ */
+export function messagesForDottedPath(
+  messages: readonly string[],
+  path: string,
+): readonly string[] {
+  const exactPrefix = `${path}: `;
+  const descendantPrefix = `${path}.`;
+  return messages.flatMap((message) => {
+    if (message.startsWith(exactPrefix)) {
+      return [message.slice(exactPrefix.length)];
+    }
+    return message.startsWith(descendantPrefix) ? [message] : [];
+  });
+}
+
+/** Direct messages from a scoped list, excluding its dotted descendants. */
+export function directDottedPathMessages(
+  messages: readonly string[],
+  path: string,
+): readonly string[] {
+  const descendantPrefix = `${path}.`;
+  return messages.filter((message) => !message.startsWith(descendantPrefix));
+}
+
+/**
  * Own a field-to-messages map whose keys may address nested values with dotted
  * paths. A field binds its exact key and descendants, editing it clears the
  * same boundary, and keys belonging to no rendered field fold into one form

@@ -86,8 +86,6 @@ export interface WidgetField {
   label?: ReactNode;
   options?: readonly WidgetOption[];
   placeholder?: string;
-  /** Nested descriptor data consumed by the registry's `rows` widget. */
-  rowTemplate?: readonly WidgetField[];
   /** Explicit `value → Tone` map (from `<Column tone>`) for status widgets. */
   tone?: Record<string, Tone>;
   /**
@@ -104,12 +102,15 @@ export interface WidgetField {
 export interface WidgetControlProps {
   id: string;
   "aria-describedby"?: string;
+  "aria-required"?: boolean;
 }
 
 export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {
   value?: TValue | null;
   row?: TRow;
   field?: WidgetField;
+  /** Validation messages scoped to this widget's descriptor field. */
+  messages?: readonly string[];
   readOnly?: boolean;
   onChange?: (value: TValue) => void;
 }

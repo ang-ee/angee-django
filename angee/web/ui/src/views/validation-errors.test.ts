@@ -4,10 +4,38 @@ import { act, renderHook } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 
 import {
+  directDottedPathMessages,
+  messagesForDottedPath,
   useDottedPathFieldErrors,
   validationErrorMap,
   validationErrorsFromError,
 } from "./validation-errors";
+
+describe("dotted path message scoping", () => {
+  const messages = [
+    "rows.0.target: Choose a target",
+    "rows.0.config.name: Enter a name",
+    "rows.1.target: Choose another target",
+  ];
+
+  test("binds exact and descendant messages at dot boundaries", () => {
+    expect(messagesForDottedPath(messages, "rows.0.target")).toEqual([
+      "Choose a target",
+    ]);
+    expect(messagesForDottedPath(messages, "rows.0.config")).toEqual([
+      "rows.0.config.name: Enter a name",
+    ]);
+  });
+
+  test("keeps only direct messages for the owning field summary", () => {
+    expect(
+      directDottedPathMessages(
+        ["Rows are invalid", ...messages],
+        "rows",
+      ),
+    ).toEqual(["Rows are invalid"]);
+  });
+});
 
 describe("validationErrorMap", () => {
   test("parses a JSON field-to-messages map without changing dotted paths", () => {

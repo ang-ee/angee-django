@@ -16,10 +16,12 @@ import type { DialogPlacement, DialogSize } from "../ui/dialog";
 import { useUiT } from "../i18n";
 import { relationValueId } from "../widgets/types";
 import { FieldDescriptorControl } from "./field-descriptor-control";
+import type { FormSpecFieldDescriptor } from "./form-spec";
 import { relationFieldInfoForResource } from "./model-metadata-defaults";
 import { RelationPicker, type RelationCreateConfig } from "./RelationPicker";
 import { useRelationOptions } from "./relation-options";
 import type { FieldDescriptor } from "./page";
+import { directDottedPathMessages } from "./validation-errors";
 
 /** What a dialog field needs to offer (and optionally create) a related row. */
 export interface MutationDialogRelation {
@@ -180,7 +182,7 @@ export function MutationDialog<
       placement={placement}
     >
       {fields.map((field) => (
-        <DescriptorFieldControl
+        <LabeledDescriptorField
           key={field.name}
           field={field}
           value={values[field.name]}
@@ -197,33 +199,54 @@ export function MutationDialog<
   );
 }
 
-export function DescriptorFieldControl({
+/**
+ * Field chrome for one descriptor: label, description, invalid state, and
+ * messages around the bare registry-rendering {@link FieldDescriptorControl}.
+ */
+export function LabeledDescriptorField({
   field,
   value,
   readOnly,
   messages = [],
+  showLabel = true,
+  showDescription = true,
   onChange,
 }: {
-  field: MutationDialogField;
+  field: MutationDialogField & {
+    rowTemplate?: readonly FormSpecFieldDescriptor[];
+  };
   value: unknown;
   readOnly?: boolean;
   messages?: readonly string[];
+  showLabel?: boolean;
+  showDescription?: boolean;
   onChange: (value: unknown) => void;
 }): React.ReactElement {
   const generatedId = React.useId();
   const controlId = `mutation-field-${generatedId}`;
-  const descriptionId = field.description
+  const isRowsField = field.rowTemplate !== undefined;
+  const displayedMessages = isRowsField
+    ? directDottedPathMessages(messages, field.name)
+    : messages;
+  const descriptionId = showDescription && field.description
     ? `${controlId}-description`
     : undefined;
-  const errorId = messages.length > 0 ? `${controlId}-error` : undefined;
+  const errorId = displayedMessages.length > 0
+    ? `${controlId}-error`
+    : undefined;
   const describedBy =
     [descriptionId, errorId].filter(Boolean).join(" ") || undefined;
 
   return (
-    <FieldRoot invalid={messages.length > 0}>
-      <FieldLabel htmlFor={controlId} required={field.required}>
-        {field.label ?? field.name}
-      </FieldLabel>
+    <FieldRoot invalid={displayedMessages.length > 0}>
+      {showLabel ? (
+        <FieldLabel
+          htmlFor={isRowsField ? undefined : controlId}
+          required={field.required}
+        >
+          {field.label ?? field.name}
+        </FieldLabel>
+      ) : null}
       {field.relation ? (
         <MutationDialogRelationControl
           controlId={controlId}
@@ -238,20 +261,22 @@ export function DescriptorFieldControl({
         <FieldDescriptorControl
           field={field}
           value={value}
+          messages={messages}
           readOnly={readOnly}
           controlProps={{
             id: controlId,
             ...(describedBy ? { "aria-describedby": describedBy } : {}),
+            ...(field.required ? { "aria-required": true } : {}),
           }}
           onChange={onChange}
         />
       )}
-      {field.description ? (
+      {showDescription && field.description ? (
         <FieldDescription id={descriptionId}>{field.description}</FieldDescription>
       ) : null}
-      {messages.length > 0 ? (
+      {displayedMessages.length > 0 ? (
         <FieldError id={errorId} match>
-          {messages.join(", ")}
+          {displayedMessages.join(", ")}
         </FieldError>
       ) : null}
     </FieldRoot>
@@ -262,7 +287,8 @@ export function DescriptorFieldControl({
  * One dialog field rendered as a relation picker: the offered rows come from the
  * related resource's list root (narrowed by the field's `filters`), and "Create …"
  * opens the field's own create form. The option query is deferred until the
- * popover first opens, so a dialog that is never touched never fetches.
+ * popover first opens, except that an existing bare-id value eagerly fetches its
+ * label. A dialog with an empty untouched relation still performs no work.
  */
 function MutationDialogRelationControl({
   controlId,
@@ -287,8 +313,12 @@ function MutationDialogRelationControl({
     () => relationFieldInfoForResource(relation.resource, model),
     [relation.resource, model],
   );
+  const selectedValue = relationValueId(value);
   const { list, options } = useRelationOptions(info, {
-    enabled: opened,
+    // FormView can thread a selectedOption from its folded detail row. Dialog
+    // descriptors carry bare ids, so a filled value eagerly loads the small
+    // option set to resolve its label before the picker is opened.
+    enabled: opened || Boolean(selectedValue),
     ...(relation.labelField ? { labelField: relation.labelField } : {}),
     ...(relation.filters ? { filters: relation.filters } : {}),
   });
@@ -303,6 +333,7 @@ function MutationDialogRelationControl({
         controlProps={{
           id: controlId,
           ...(describedBy ? { "aria-describedby": describedBy } : {}),
+          ...(field.required ? { "aria-required": true } : {}),
         }}
         onChange={onChange}
       />
@@ -311,13 +342,14 @@ function MutationDialogRelationControl({
   return (
     <RelationPicker
       id={controlId}
-      value={relationValueId(value)}
+      value={selectedValue}
       onChange={onChange}
       options={options}
       readOnly={readOnly}
       placeholder={field.placeholder}
       aria-label={typeof field.label === "string" ? field.label : field.name}
       aria-describedby={describedBy}
+      aria-required={field.required || undefined}
       {...(relation.create ? { create: relation.create } : {})}
       onCreated={() => list.refetch()}
       onOpenChange={(open) => {

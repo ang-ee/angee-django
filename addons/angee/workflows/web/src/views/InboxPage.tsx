@@ -7,7 +7,7 @@ import {
 import {
   Badge,
   Button,
-  DescriptorFieldControl,
+  LabeledDescriptorField,
   EmptyState,
   ErrorBanner,
   FieldDescription,
@@ -217,7 +217,7 @@ function FormSpecDecisionResolution({
         {t("inbox.resolution")}
       </h3>
       {fields.map((field) => (
-        <DescriptorFieldControl
+        <LabeledDescriptorField
           key={field.name}
           field={field}
           value={values[field.name]}

@@ -95,6 +95,8 @@ const HANDLE_CLASS =
  * resource's field metadata (a relation picker, a quantity/number input, or the money
  * widget by its registered key). Add / duplicate / remove maintain the set; drag
  * maintains order (the `position` column is derived from row order at save, not typed).
+ * Server-computed fixed-N array values use `RowsField` instead; it has no
+ * `useFieldArray` lifecycle or add/remove/reorder affordances.
  * Section/note pseudo-rows and matrix entry are deferred.
  */
 export function EditableLines({

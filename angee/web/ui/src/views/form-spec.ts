@@ -31,7 +31,7 @@ export type FormSpecRelationCreate = Pick<RelationCreateConfig, "resource">;
  * `widget`/`label`/`description`/`placeholder`, `readOnly`, JSON `defaultValue`,
  * string-labelled `options`, and the pure-data `relation` config. A property's
  * key becomes the descriptor's `name`; no function-valued extension is admitted.
- * The `rows` widget id is a deliberate forward reference registered next slice.
+ * Arrays of objects resolve to the registered fixed-N `rows` view composer.
  */
 export interface FormSpecFieldDescriptor extends MutationDialogField {
   rowTemplate?: readonly FormSpecFieldDescriptor[];

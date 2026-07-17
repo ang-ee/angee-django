@@ -6,10 +6,6 @@ import {
   formSpecInitialValues,
 } from "./form-spec";
 
-const rowsWidget = {
-  read: () => null,
-};
-
 describe("deserializeFormSpec", () => {
   test("maps the recursive backend schema and its data-only UI extensions", () => {
     const fields = deserializeFormSpec(
@@ -61,7 +57,7 @@ describe("deserializeFormSpec", () => {
           },
         },
       },
-      { ...defaultWidgets, rows: rowsWidget },
+      defaultWidgets,
     );
 
     expect(fields).toEqual([
@@ -218,7 +214,7 @@ describe("formSpecInitialValues", () => {
           },
         },
       },
-      { ...defaultWidgets, rows: rowsWidget },
+      defaultWidgets,
     );
 
     expect(
