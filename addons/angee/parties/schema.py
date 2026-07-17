@@ -8,6 +8,7 @@ contact is created as a person or an organisation and deleted through the party
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, cast
 
 import strawberry
@@ -85,6 +86,12 @@ class PersonType(AngeeNode):
     folder: "ContactFolderType | None"
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(only=["id"])
+    def circle_names(self) -> list[str]:
+        """Return manager-prefetched, actor-visible circle names as chip values."""
+
+        return cast("list[str]", Person.objects.circle_names_for(cast(Any, self)))
 
     @strawberry_django.field(only=["user_id"])
     def user(self) -> strawberry.ID | None:
@@ -218,6 +225,12 @@ class CircleType(AngeeNode):
     created_at: auto
     updated_at: auto
 
+    @strawberry_django.field(only=["id"])
+    def member_count(self) -> int:
+        """Return the manager-annotated distinct subtree member count."""
+
+        return int(getattr(self, "_member_count", 0))
+
 
 @strawberry_django.type(CircleMember)
 class CircleMemberType(AngeeNode):
@@ -277,6 +290,28 @@ class DuplicatePartyCandidateType:
     normalized_value: str
 
 
+@strawberry.enum
+class PeopleWorkbenchScope(Enum):
+    """The bounded smart-view vocabulary for the People workbench."""
+
+    ALL = "all"
+    UNASSIGNED = "unassigned"
+    TO_REVIEW = "to_review"
+    CIRCLE = "circle"
+
+
+@strawberry.type
+class PeopleWorkbenchType:
+    """Circle navigation, smart counts, and the selected people row scope."""
+
+    circles: list[CircleType]
+    all_count: int
+    unassigned_count: int
+    to_review_count: int
+    filtered_ids: list[strawberry.ID] | None
+    truncated: bool
+
+
 @strawberry.type
 class PartiesReviewQuery:
     """Bounded read surfaces for party search and human review queues."""
@@ -295,6 +330,49 @@ class PartiesReviewQuery:
         """Return actor-visible people whose display name contains ``query``."""
 
         return cast("list[PersonType]", Person.objects.search_display_name(query, limit=limit))
+
+    @strawberry.field
+    def people_workbench(
+        self,
+        scope: PeopleWorkbenchScope = PeopleWorkbenchScope.ALL,
+        circle: strawberry.ID | None = None,
+        limit: int = 1000,
+    ) -> PeopleWorkbenchType:
+        """Return actor-scoped People navigation and the selected scope's ids."""
+
+        people = Person.objects.all().scoped_for_aggregate().canonical()
+        filtered = None
+        if scope is PeopleWorkbenchScope.UNASSIGNED:
+            filtered = people.unassigned()
+        elif scope is PeopleWorkbenchScope.TO_REVIEW:
+            filtered = people.to_review()
+        elif scope is PeopleWorkbenchScope.CIRCLE:
+            selected = Circle.objects.all().from_public_id(str(circle or ""))
+            if selected is None:
+                raise ValueError("circle not found")
+            filtered = people.in_circle(selected)
+
+        bounded_limit = max(1, min(int(limit), 1000))
+        filtered_values = (
+            list(filtered.values_list("sqid", flat=True)[: bounded_limit + 1])
+            if filtered is not None
+            else []
+        )
+        return PeopleWorkbenchType(
+            circles=cast(
+                "list[CircleType]",
+                list(Circle.objects.all().with_member_counts().select_related("parent")),
+            ),
+            all_count=people.count(),
+            unassigned_count=people.unassigned().count(),
+            to_review_count=people.to_review().count(),
+            filtered_ids=(
+                [strawberry.ID(str(value)) for value in filtered_values[:bounded_limit]]
+                if filtered is not None
+                else None
+            ),
+            truncated=len(filtered_values) > bounded_limit,
+        )
 
 
 @strawberry.type
@@ -476,6 +554,7 @@ _PERSON_RESOURCE = hasura_model_resource(
     ],
     delete=False,
     field_id_decode={"folder": public_pk_decoder(Folder)},
+    get_queryset=lambda info: Person.objects.all().with_circle_names(),
 )
 _ORGANIZATION_RESOURCE = hasura_model_resource(
     OrganizationType,
@@ -584,6 +663,7 @@ _CIRCLE_RESOURCE = hasura_model_resource(
     updatable=["name", "description", "color", "icon", "position", "parent"],
     field_id_decode={"parent": public_pk_decoder(Circle)},
     write_backend=AngeeHasuraWriteBackend(Circle, public_id_fields=("parent",)),
+    get_queryset=lambda info: Circle.objects.all().with_member_counts(),
 )
 _CIRCLE_MEMBER_RESOURCE = hasura_model_resource(
     CircleMemberType,
@@ -743,6 +823,8 @@ _PARTIES_SCHEMA_BUCKET = {
         CircleMemberType,
         MergeVetoType,
         DuplicatePartyCandidateType,
+        PeopleWorkbenchScope,
+        PeopleWorkbenchType,
         RelationshipKindType,
         PartyRelationshipType,
         DirectoryType,

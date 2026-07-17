@@ -29,6 +29,14 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
+from phonenumbers import (
+    NumberParseException,
+    PhoneNumberFormat,
+    format_number,
+    is_possible_number,
+    is_valid_number,
+    parse,
+)
 from rebac import PermissionDenied, system_context
 from rebac.managers import RebacManager
 
@@ -467,7 +475,11 @@ class Handle(SqidMixin, AuditMixin, AngeeModel):
 
         Every platform strips surrounding whitespace and lowercases. Email keeps
         that rule and additionally collapses dots and plus-tags in Gmail local
-        parts for both ``gmail.com`` and ``googlemail.com`` domains.
+        parts for both ``gmail.com`` and ``googlemail.com`` domains. Phone and
+        WhatsApp values parse without an assumed region and format as E.164; values
+        require a leading country code and must be possible and valid. Anything
+        unparseable, invalid, or region-unknown falls back to its digits so
+        punctuation still does not fork the same contact point.
         """
 
         normalized = (value or "").strip().lower()
@@ -476,7 +488,25 @@ class Handle(SqidMixin, AuditMixin, AngeeModel):
             if domain in ("gmail.com", "googlemail.com"):
                 local = local.split("+", 1)[0].replace(".", "")
             return f"{local}@{domain}"
+        if platform in (cls.Platform.PHONE, cls.Platform.WHATSAPP):
+            try:
+                number = parse(normalized, None)
+            except NumberParseException:
+                number = None
+            if (
+                number is not None
+                and is_possible_number(number)
+                and is_valid_number(number)
+            ):
+                return format_number(number, PhoneNumberFormat.E164)
+            return "".join(character for character in normalized if character.isdigit())
         return normalized
+
+    @staticmethod
+    def normalize_display_name(value: str) -> str:
+        """Return the comparison key used by cross-platform display-name pooling."""
+
+        return " ".join((value or "").split()).casefold()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the handle while keeping ``normalized_value`` in lockstep."""

@@ -8,8 +8,9 @@ describe("parties addon manifest", () => {
     expect(() => expectValidBaseAddon(parties)).not.toThrow();
   });
 
-  test("registers the people, organization, circle, relationship, handle, review, merge, and directory pages", () => {
+  test("registers the overview, people, organization, circle, relationship, handle, review, merge, and directory pages", () => {
     expect((parties.routes ?? []).map((route) => route.name)).toEqual([
+      "parties.overview",
       "parties.people",
       "parties.people.record",
       "parties.organizations",
@@ -29,6 +30,7 @@ describe("parties addon manifest", () => {
 
   test("registers review under the parties menu", () => {
     const menu = (parties.menus ?? []).find((item) => item.id === "parties");
+    expect(menu?.children?.[0]?.route).toBe("parties.overview");
     expect(menu?.children?.map((item) => item.route)).toContain("parties.review");
   });
 });

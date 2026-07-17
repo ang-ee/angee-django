@@ -1,6 +1,38 @@
 import * as React from "react";
-import { Action, Column, ResourceList, Facet, Field, Form, Group, ListView, List, type ActionDescriptor, type ListColumn, type RecordPanelContext, type RecordTabDescriptor, type StringIdRow } from "@angee/ui";
-import { useNavigate } from "@tanstack/react-router";
+import { useAuthoredQuery } from "@angee/refine";
+import {
+  Action,
+  Alert,
+  Column,
+  Facet,
+  Field,
+  Form,
+  Group,
+  List,
+  ListView,
+  LoadingPanel,
+  PrimaryPanePublisher,
+  ResourceList,
+  SectionEyebrow,
+  TreeView,
+  errorMessage,
+  useAuthoredResourceMutation,
+  useLatestRef,
+  useToast,
+  type ActionDescriptor,
+  type DndPayload,
+  type ListColumn,
+  type RecordPanelContext,
+  type RecordTabDescriptor,
+  type StringIdRow,
+} from "@angee/ui";
+import { useNavigate, useSearch } from "@tanstack/react-router";
+import { PersonCirclesList } from "./CircleMembershipList";
+import {
+  AddCircleMember,
+  CIRCLE_MEMBER_INVALIDATES,
+  PeopleWorkbench,
+} from "./documents";
 import { IdentityTab } from "./IdentityTab";
 import { usePartiesT } from "./i18n";
 import { partyMergePath } from "./routes";
@@ -70,14 +102,6 @@ function PartyRelatedTab({
       emptyContent={emptyContent}
     />
   );
-}
-
-function circleMembershipColumns(t: ReturnType<typeof usePartiesT>): readonly ListColumn<RelatedRow>[] {
-  return [
-    { field: "circle.name", header: t("person.circleName") },
-    { field: "source" },
-    { field: "confidence" },
-  ];
 }
 
 /**
@@ -168,15 +192,7 @@ function personRecordTabs(
     {
       id: "circles",
       label: t("person.tabs.circles"),
-      render: (context) => (
-        <PartyRelatedTab
-          {...context}
-          resource="parties.CircleMember"
-          fields={["id", "circle.name", "source", "confidence"]}
-          columns={circleMembershipColumns(t)}
-          emptyContent={t("person.empty.circles")}
-        />
-      ),
+      render: ({ recordId }) => <PersonCirclesList personId={recordId} />,
     },
     {
       id: "relationships",
@@ -253,15 +269,35 @@ function peopleForm(
 }
 
 /**
- * People (the person-kind contacts): full create/edit/list/detail, browsable by
- * folder. The folder navigation comes from the shared model-driven list: the
- * visible `folder.name` relation column plus generated metadata supplies the
- * relation facet/group affordances. The detail carries the contact's handles,
- * addresses, and affiliations as tabs.
+ * People (the person-kind contacts): a circle/smart-view workbench around the
+ * shared create/edit/list/detail surface. The primary pane owns scope selection
+ * and circle drops; the list keeps its generated folder facet and generic record
+ * behavior. Detail tabs carry identity, circle, relationship, address, and
+ * affiliation collections.
  */
 export function PeoplePage(): React.ReactElement {
   const t = usePartiesT();
   const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as Readonly<Record<string, unknown>>;
+  const toast = useToast();
+  const scope = React.useMemo(
+    () => peopleScopeFromSearch(search),
+    [search.peopleCircle, search.peopleScope],
+  );
+  const variables = React.useMemo(
+    () => ({
+      scope: scope.kind,
+      circle: scope.kind === "CIRCLE" ? scope.circleId : null,
+    }),
+    [scope],
+  );
+  const workbench = useAuthoredQuery(PeopleWorkbench, variables, {
+    models: CIRCLE_MEMBER_INVALIDATES,
+  });
+  const [addCircleMember] = useAuthoredResourceMutation(AddCircleMember, {
+    invalidateModels: CIRCLE_MEMBER_INVALIDATES,
+  });
+  const dropRef = useLatestRef({ addCircleMember, t, toast });
   const tabs = React.useMemo(() => personRecordTabs(t), [t]);
   const mergeSubmit = React.useCallback<NonNullable<ActionDescriptor["submit"]>>(
     async (values, context) => {
@@ -279,17 +315,185 @@ export function PeoplePage(): React.ReactElement {
     },
     [navigate, t],
   );
-  return (
-    <ResourceList resource={MODEL} placement="inline" routed recordTabs={tabs}>
-      <List resource={MODEL}>
-        <Facet field="folder" label={t("person.folder")} labelField="name" />
-        <Column field="display_name" />
-        <Column field="folder.name" header={t("person.folder")} />
-        <Column field="given_name" />
-        <Column field="family_name" />
-        <Column field="created_at" />
-      </List>
-      {peopleForm(t, mergeSubmit)}
-    </ResourceList>
+  const circles = React.useMemo<readonly CircleTreeRow[]>(
+    () =>
+      (workbench.data?.people_workbench.circles ?? []).map((circle) => ({
+        id: circle.id,
+        name: circle.name,
+        icon: circle.icon,
+        memberCount: circle.member_count,
+        parentId: circle.parent?.id ?? "",
+      })),
+    [workbench.data?.people_workbench.circles],
   );
+  const smartViews = React.useMemo<readonly SmartViewRow[]>(
+    () => [
+      {
+        id: "ALL",
+        name: t("people.smart.all"),
+        count: workbench.data?.people_workbench.all_count ?? 0,
+      },
+      {
+        id: "UNASSIGNED",
+        name: t("people.smart.unassigned"),
+        count: workbench.data?.people_workbench.unassigned_count ?? 0,
+      },
+      {
+        id: "TO_REVIEW",
+        name: t("people.smart.toReview"),
+        count: workbench.data?.people_workbench.to_review_count ?? 0,
+      },
+    ],
+    [t, workbench.data?.people_workbench],
+  );
+  const selectSmartView = React.useCallback(
+    (row: SmartViewRow) => {
+      void navigate({
+        search: (current) => ({
+          ...current,
+          peopleScope: row.id === "ALL" ? undefined : row.id,
+          peopleCircle: undefined,
+        }),
+      });
+    },
+    [navigate],
+  );
+  const selectCircle = React.useCallback(
+    (row: CircleTreeRow) => {
+      void navigate({
+        search: (current) => ({
+          ...current,
+          peopleScope: "CIRCLE",
+          peopleCircle: row.id,
+        }),
+      });
+    },
+    [navigate],
+  );
+  const dropPerson = React.useCallback(
+    (circleId: string, payload: DndPayload) => {
+      const party = String((payload.data as { id?: unknown }).id ?? "");
+      if (!party) return;
+      void dropRef.current.addCircleMember({ circle: circleId, party }).catch((cause) => {
+        dropRef.current.toast.danger({
+          title: dropRef.current.t("circle.membership.addError"),
+          description: errorMessage(
+            cause,
+            dropRef.current.t("circle.membership.addError"),
+          ),
+        });
+      });
+    },
+    [dropRef],
+  );
+  const primaryPane = React.useMemo(
+    () => (
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-3">
+        <section>
+          <SectionEyebrow as="h2" spacing="menu">
+            {t("people.smart.heading")}
+          </SectionEyebrow>
+          <TreeView<SmartViewRow>
+            rows={smartViews}
+            label="name"
+            badge="count"
+            selectedId={scope.kind === "CIRCLE" ? undefined : scope.kind}
+            onSelect={selectSmartView}
+          />
+        </section>
+        <section className="flex min-h-0 flex-col">
+          <SectionEyebrow as="h2" spacing="menu">
+            {t("people.circles.heading")}
+          </SectionEyebrow>
+          {workbench.fetching && circles.length === 0 ? (
+            <LoadingPanel message={t("people.circles.loading")} density="inline" />
+          ) : (
+            <TreeView<CircleTreeRow>
+              rows={circles}
+              parent="parentId"
+              label="name"
+              badge="memberCount"
+              icon="icon"
+              selectedId={scope.kind === "CIRCLE" ? scope.circleId : undefined}
+              onSelect={selectCircle}
+              dropAccept={PERSON_DND}
+              onNodeDrop={dropPerson}
+              emptyContent={t("people.circles.empty")}
+            />
+          )}
+        </section>
+        {workbench.data?.people_workbench.truncated ? (
+          <Alert tone="warning">{t("people.smart.truncated")}</Alert>
+        ) : null}
+      </div>
+    ),
+    [circles, dropPerson, scope, selectCircle, selectSmartView, smartViews, t, workbench.data?.people_workbench.truncated, workbench.fetching],
+  );
+  const filteredIds = workbench.data?.people_workbench.filtered_ids;
+  const baseFilter =
+    scope.kind === "ALL"
+      ? undefined
+      : { id: { inList: workbench.fetching ? [] : (filteredIds ?? []) } };
+  return (
+    <>
+      <PrimaryPanePublisher node={primaryPane} />
+      <ResourceList<PersonRow>
+        resource={MODEL}
+        placement="inline"
+        routed
+        recordTabs={tabs}
+        baseFilter={baseFilter}
+        draggableRow={personDragPayload}
+      >
+        <List resource={MODEL}>
+          <Facet field="folder" label={t("person.folder")} labelField="name" />
+          <Column field="display_name" />
+          <Column field="circle_names" header={t("people.circles.heading")} />
+          <Column field="folder.name" header={t("person.folder")} />
+          <Column field="given_name" />
+          <Column field="family_name" />
+          <Column field="created_at" />
+        </List>
+        {peopleForm(t, mergeSubmit)}
+      </ResourceList>
+    </>
+  );
+}
+
+const PERSON_DND = "parties.person";
+
+type PeopleScope =
+  | { kind: "ALL" | "UNASSIGNED" | "TO_REVIEW" }
+  | { kind: "CIRCLE"; circleId: string };
+
+function peopleScopeFromSearch(search: Readonly<Record<string, unknown>>): PeopleScope {
+  if (search.peopleScope === "CIRCLE" && typeof search.peopleCircle === "string") {
+    return { kind: "CIRCLE", circleId: search.peopleCircle };
+  }
+  if (search.peopleScope === "UNASSIGNED" || search.peopleScope === "TO_REVIEW") {
+    return { kind: search.peopleScope };
+  }
+  return { kind: "ALL" };
+}
+
+interface PersonRow extends StringIdRow {
+  display_name?: string;
+}
+
+interface SmartViewRow extends Record<string, unknown> {
+  id: "ALL" | "UNASSIGNED" | "TO_REVIEW";
+  name: string;
+  count: number;
+}
+
+interface CircleTreeRow extends Record<string, unknown> {
+  id: string;
+  name: string;
+  icon: string;
+  memberCount: number;
+  parentId: string;
+}
+
+function personDragPayload(row: PersonRow): DndPayload {
+  return { type: PERSON_DND, data: { id: row.id } };
 }

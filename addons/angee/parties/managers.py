@@ -14,6 +14,9 @@ converges instead of duplicating. The sync runs under ``system_context``, so
 from __future__ import annotations
 
 import mimetypes
+import re
+from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from itertools import combinations
 from typing import TYPE_CHECKING, Any, Self, cast
@@ -21,19 +24,62 @@ from typing import TYPE_CHECKING, Any, Self, cast
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Q, Subquery
+from django.db.models import Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, Value
+from django.db.models.functions import Coalesce
+from phonenumbers import PhoneNumberMatcher
 from rebac import PermissionDenied, current_actor, system_context
 
 from angee.base.mixins import HierarchyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.parties.mixins import LinkSource
 
 if TYPE_CHECKING:
     from angee.parties.backends import ParsedContact
 
 
+_SIGNATURE_PHONE_CANDIDATE = re.compile(r"(?<!\w)\+?\d(?:[\d \t()./\-]*\d)?(?!\w)")
+
+
 class CircleQuerySet(HierarchyQuerySet, AngeeQuerySet):
     """Circle read scopes: the hierarchy subtree vocabulary over the Angee base."""
+
+    def with_member_counts(self) -> Self:
+        """Annotate each circle with its distinct-party count across its subtree."""
+
+        circle_model = apps.get_model("parties", "Circle")
+        circle_member_model = apps.get_model("parties", "CircleMember")
+        person_model = apps.get_model("parties", "Person")
+        visible_person_ids = (
+            person_model.objects.all().scoped_for_aggregate().canonical().values("pk")
+        )
+        visible_subtree_circle_ids = (
+            circle_model.objects.all()
+            .scoped_for_aggregate()
+            .filter(
+                created_by_id=OuterRef(OuterRef("created_by_id")),
+                path__startswith=OuterRef(OuterRef("path")),
+            )
+            .values("pk")
+        )
+        subtree_count = (
+            circle_member_model.objects.all()
+            .scoped_for_aggregate()
+            .filter(
+                circle_id__in=Subquery(visible_subtree_circle_ids),
+                party_id__in=Subquery(visible_person_ids),
+            )
+            .order_by()
+            .values("circle__created_by_id")
+            .annotate(total=Count("party_id", distinct=True))
+            .values("total")[:1]
+        )
+        return self.annotate(
+            _member_count=Coalesce(
+                Subquery(subtree_count, output_field=IntegerField()),
+                Value(0),
+            ),
+        )
 
 
 class CircleManager(AngeeManager.from_queryset(CircleQuerySet)):  # type: ignore[misc]
@@ -51,6 +97,31 @@ class HandleQuerySet(AngeeQuerySet):
 
 class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore[misc]
     """Factory + upsert for handles (the contact-point write path)."""
+
+    def renormalize_phone_values(self) -> int:
+        """Repair stored phone comparison values after normalization rules change.
+
+        The pass is idempotent and collision-safe because ``normalized_value`` is a
+        comparison projection rather than a uniqueness key: equal E.164 results are
+        deliberately retained on their distinct source handles for duplicate review.
+        """
+
+        phone_platforms = (self.model.Platform.PHONE, self.model.Platform.WHATSAPP)
+        changed = 0
+        for handle in self.filter(platform__in=phone_platforms).only(
+            "id",
+            "platform",
+            "value",
+            "normalized_value",
+            "updated_at",
+        ):
+            normalized = self.model.normalize_value(handle.platform, handle.value)
+            if handle.normalized_value == normalized:
+                continue
+            handle.normalized_value = normalized
+            handle.save(update_fields=["normalized_value", "updated_at"])
+            changed += 1
+        return changed
 
     def upsert(self, *, platform: str, value: str, created_by_id: Any = None, **fields: Any) -> Any:
         """Get-or-create a handle on the identity it actually has, refreshing display fields.
@@ -277,12 +348,16 @@ class PartyHandleManager(AngeeManager):
         Three branches, all leaving links unconfirmed for review and never
         duplicating an existing pair: indexed normalized twins contribute distinct
         candidate parties (the first at ``1.0``, competing parties at ``0.3``);
-        otherwise an email whose domain matches a tracked
+        otherwise an email whose non-generic domain matches a tracked
         :attr:`Organization.domain` contributes a rule suggestion at ``0.4``;
-        otherwise no-op. Returns the strongest created/existing link, or ``None``.
+        otherwise no-op. Both branches stay inside ``handle.created_by``'s audit
+        partition, and public mailbox-provider domains never imply organization
+        membership. Returns the strongest created/existing link, or ``None``.
         """
 
         if handle.party_id is not None:
+            return None
+        if handle.created_by_id is None:
             return None
         handle_model = apps.get_model("parties", "Handle")
         twins = (
@@ -290,6 +365,8 @@ class PartyHandleManager(AngeeManager):
                 platform=handle.platform,
                 normalized_value=handle.normalized_value,
                 party__isnull=False,
+                created_by_id=handle.created_by_id,
+                party__created_by_id=handle.created_by_id,
             )
             .exclude(pk=handle.pk)
             .select_related("party")
@@ -315,7 +392,14 @@ class PartyHandleManager(AngeeManager):
         if handle.platform == handle_model.Platform.EMAIL and "@" in handle.normalized_value:
             domain = handle.normalized_value.rsplit("@", 1)[1]
             organization_model = apps.get_model("parties", "Organization")
-            org = organization_model.objects.filter(domain__iexact=domain).first() if domain else None
+            org = (
+                organization_model.objects.filter(
+                    created_by_id=handle.created_by_id,
+                    domain__iexact=domain,
+                ).first()
+                if domain and domain not in GENERIC_EMAIL_DOMAINS
+                else None
+            )
             if org is not None:
                 return self.link(
                     org,
@@ -325,6 +409,164 @@ class PartyHandleManager(AngeeManager):
                     created_by_id=handle.created_by_id,
                 )
         return None
+
+    def suggest_from_signature(
+        self,
+        *,
+        text: str,
+        party_ids: Iterable[Any],
+        fragment_hash: str,
+        owner_id: Any,
+    ) -> int:
+        """Mine one unique signature fragment for weak party-to-phone suggestions.
+
+        ``text`` and its content hash are neutral evidence supplied by the scheduled
+        task; this manager owns phone extraction, Handle creation, link provenance,
+        owner partition, and the durable-pair check. Every mined link records its
+        fragment evidence at ``0.3`` confidence. An existing pair, including a
+        dismissed anti-link, is never changed.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        party_model = apps.get_model("parties", "Party")
+        if owner_id is None:
+            return 0
+        parties = tuple(
+            party_model.objects.filter(
+                pk__in=frozenset(party_ids),
+                created_by_id=owner_id,
+            ).order_by("sqid")
+        )
+        if not parties:
+            return 0
+        created = 0
+        metadata = {
+            "evidence": {
+                "kind": "signature_phone",
+                "fragment_hash": fragment_hash,
+            }
+        }
+        for value in self._signature_phone_values(text, handle_model=handle_model):
+            handle = handle_model.objects.upsert(
+                platform=handle_model.Platform.PHONE,
+                value=value,
+                created_by_id=owner_id,
+            )
+            if handle.created_by_id != owner_id:
+                # Handles are globally unique by source identity. Evidence owned by
+                # one directory must never attach another owner's pre-existing row.
+                continue
+            for party in parties:
+                created += self._suggest(
+                    party,
+                    handle,
+                    confidence=0.3,
+                    metadata=metadata,
+                    created_by_id=party.created_by_id,
+                )
+        return created
+
+    def suggest_from_display_names(self) -> int:
+        """Pool normalized display names per audit owner into weak identity links.
+
+        A resolved handle supplies evidence only to an unresolved handle on another
+        platform. Each distinct candidate party receives one ``0.4`` rule link;
+        existing pairs, including dismissed links, remain untouched.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        created = 0
+        owner_ids = (
+            handle_model.objects.exclude(created_by_id=None)
+            .exclude(display_name="")
+            .values_list("created_by_id", flat=True)
+            .distinct()
+        )
+        for owner_id in owner_ids:
+            handles = tuple(
+                handle_model.objects.filter(created_by_id=owner_id)
+                .exclude(display_name="")
+                .select_related("party")
+                .order_by("sqid")
+            )
+            pools: defaultdict[str, list[Any]] = defaultdict(list)
+            for handle in handles:
+                normalized_name = handle_model.normalize_display_name(handle.display_name)
+                if normalized_name:
+                    pools[normalized_name].append(handle)
+
+            for handle in handles:
+                if handle.party_id is not None:
+                    continue
+                normalized_name = handle_model.normalize_display_name(handle.display_name)
+                seen_parties: set[Any] = set()
+                for candidate in pools.get(normalized_name, ()):
+                    if (
+                        candidate.party_id is None
+                        or candidate.party.created_by_id != owner_id
+                        or candidate.platform == handle.platform
+                        or candidate.party_id in seen_parties
+                    ):
+                        continue
+                    seen_parties.add(candidate.party_id)
+                    created += self._suggest(
+                        candidate.party,
+                        handle,
+                        confidence=0.4,
+                        metadata={
+                            "evidence": {
+                                "kind": "display_name",
+                                "normalized_display_name": normalized_name,
+                                "source_handle": str(candidate.sqid),
+                            }
+                        },
+                        created_by_id=owner_id,
+                    )
+        return created
+
+    def _suggest(
+        self,
+        party: Any,
+        handle: Any,
+        *,
+        confidence: float,
+        metadata: dict[str, Any],
+        created_by_id: Any,
+    ) -> int:
+        """Create one unconfirmed rule link, or skip its durable existing pair."""
+
+        _, created = self.get_or_create(
+            party=party,
+            handle=handle,
+            defaults={
+                "confidence": confidence,
+                "source": LinkSource.RULE,
+                "metadata": metadata,
+                "created_by_id": created_by_id,
+            },
+        )
+        if not created:
+            return 0
+        self.resolve(handle)
+        return 1
+
+    @staticmethod
+    def _signature_phone_values(text: str, *, handle_model: Any) -> tuple[str, ...]:
+        """Return deterministic canonical phone values mined from signature text."""
+
+        values = {
+            handle_model.normalize_value(
+                handle_model.Platform.PHONE,
+                match.raw_string,
+            )
+            for match in PhoneNumberMatcher(text or "", None)
+        }
+        for match in _SIGNATURE_PHONE_CANDIDATE.finditer(text or ""):
+            normalized = handle_model.normalize_value(handle_model.Platform.PHONE, match.group())
+            digits = sum(character.isdigit() for character in normalized)
+            if 7 <= digits <= 15:
+                values.add(normalized)
+        return tuple(sorted(values))
 
 
 @dataclass(frozen=True, slots=True)
@@ -437,6 +679,95 @@ class PartyQuerySet(AngeeQuerySet):
 
         return self.filter(merged_into__isnull=True)
 
+    def with_circle_names(self) -> Self:
+        """Prefetch actor-visible circle names for generic chip rendering.
+
+        A scoped prefetch is portable across the supported database floor and,
+        unlike a reverse-join aggregate, independently applies both the membership
+        and circle row policies before projecting names.
+        """
+
+        circle_model = apps.get_model("parties", "Circle")
+        circle_member_model = apps.get_model("parties", "CircleMember")
+        visible_circle_ids = (
+            circle_model.objects.all().scoped_for_aggregate().values("pk")
+        )
+        visible_memberships = (
+            circle_member_model.objects.all()
+            .scoped_for_aggregate()
+            .filter(circle_id__in=Subquery(visible_circle_ids))
+            .select_related("circle")
+            .order_by("circle__name", "sqid")
+        )
+        return self.prefetch_related(
+            Prefetch(
+                "circle_members",
+                queryset=visible_memberships,
+                to_attr="_angee_visible_circle_members",
+            )
+        )
+
+    def unassigned(self) -> Self:
+        """Return canonical parties with no actor-visible circle membership."""
+
+        circle_model = apps.get_model("parties", "Circle")
+        circle_member_model = apps.get_model("parties", "CircleMember")
+        visible_circle_ids = (
+            circle_model.objects.all().scoped_for_aggregate().values("pk")
+        )
+        visible_membership = (
+            circle_member_model.objects.all()
+            .scoped_for_aggregate()
+            .filter(
+                party_id=OuterRef("pk"),
+                circle_id__in=Subquery(visible_circle_ids),
+            )
+        )
+        return self.canonical().annotate(
+            _has_visible_circle=Exists(visible_membership),
+        ).filter(_has_visible_circle=False)
+
+    def to_review(self) -> Self:
+        """Return canonical parties with an undecided low-confidence handle link."""
+
+        party_handle_model = apps.get_model("parties", "PartyHandle")
+        visible_review_link = (
+            party_handle_model.objects.all()
+            .scoped_for_aggregate()
+            .filter(
+                party_id=OuterRef("pk"),
+                confidence__lt=0.5,
+                is_confirmed=False,
+                is_dismissed=False,
+            )
+        )
+        return self.canonical().annotate(
+            _has_visible_review_link=Exists(visible_review_link),
+        ).filter(_has_visible_review_link=True)
+
+    def in_circle(self, circle: Any) -> Self:
+        """Return canonical parties in ``circle`` or any of its descendants."""
+
+        circle_model = apps.get_model("parties", "Circle")
+        circle_member_model = apps.get_model("parties", "CircleMember")
+        subtree_ids = (
+            circle_model.objects.all()
+            .subtree_of(circle)
+            .scoped_for_aggregate()
+            .values("pk")
+        )
+        visible_subtree_membership = (
+            circle_member_model.objects.all()
+            .scoped_for_aggregate()
+            .filter(
+                party_id=OuterRef("pk"),
+                circle_id__in=Subquery(subtree_ids),
+            )
+        )
+        return self.canonical().annotate(
+            _in_visible_circle_subtree=Exists(visible_subtree_membership),
+        ).filter(_in_visible_circle_subtree=True)
+
     def members_of(self, organization: Any) -> Self:
         """Return the parties whose relationships name ``organization`` as counterparty.
 
@@ -459,16 +790,21 @@ class PartyQuerySet(AngeeQuerySet):
         :class:`~angee.parties.models.MergeVeto` removes it from the queue.
         """
 
-        bounded = max(0, min(int(limit), 100))
+        bounded = max(0, min(int(limit), 101))
         if bounded == 0:
             return []
 
         handle_model = apps.get_model("parties", "Handle")
         merge_veto_model = apps.get_model("parties", "MergeVeto")
         visible_party_ids = self.canonical().scoped_for_aggregate().values("pk")
-        handles = handle_model.objects.all().scoped_for_aggregate().filter(
-            party_id__in=Subquery(visible_party_ids),
-        ).exclude(normalized_value="")
+        handles = (
+            handle_model.objects.all()
+            .scoped_for_aggregate()
+            .filter(
+                party_id__in=Subquery(visible_party_ids),
+            )
+            .exclude(normalized_value="")
+        )
         shared_handles = list(
             handles.values("platform", "normalized_value")
             .annotate(party_count=Count("party_id", distinct=True))
@@ -492,11 +828,7 @@ class PartyQuerySet(AngeeQuerySet):
         ):
             parties_by_handle.setdefault((platform, normalized_value), []).append(party_id)
 
-        candidate_party_ids = {
-            party_id
-            for party_ids in parties_by_handle.values()
-            for party_id in party_ids
-        }
+        candidate_party_ids = {party_id for party_ids in parties_by_handle.values() for party_id in party_ids}
         forbidden = merge_veto_model.objects.forbidden_pairs(candidate_party_ids)
         pairs: list[tuple[str, Any, Any]] = []
         seen: set[tuple[Any, Any]] = set()
@@ -513,14 +845,9 @@ class PartyQuerySet(AngeeQuerySet):
                 break
 
         paired_party_ids = {
-            party_id
-            for _normalized_value, party_a_id, party_b_id in pairs
-            for party_id in (party_a_id, party_b_id)
+            party_id for _normalized_value, party_a_id, party_b_id in pairs for party_id in (party_a_id, party_b_id)
         }
-        parties = {
-            party.pk: party
-            for party in self.canonical().filter(pk__in=paired_party_ids)
-        }
+        parties = {party.pk: party for party in self.canonical().filter(pk__in=paired_party_ids)}
         return [
             DuplicatePartyCandidate(
                 left=parties[party_a_id],
@@ -539,6 +866,35 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
     inherit the parent's concrete default manager), so the Person-per-user factory
     :meth:`for_user` lives here.
     """
+
+    def circle_names_for(self, party: Any) -> list[str]:
+        """Return one party's actor-visible circle names through the fast projection.
+
+        Resource reads install :meth:`PartyQuerySet.with_circle_names`; alternate
+        authored paths fall back to the same independently scoped membership and
+        circle collections instead of silently presenting an empty list.
+        """
+
+        prefetched = getattr(party, "_angee_visible_circle_members", None)
+        if prefetched is not None:
+            return list(dict.fromkeys(membership.circle.name for membership in prefetched))
+
+        circle_model = apps.get_model("parties", "Circle")
+        circle_member_model = apps.get_model("parties", "CircleMember")
+        visible_circle_ids = (
+            circle_model.objects.all().scoped_for_aggregate().values("pk")
+        )
+        return list(
+            circle_member_model.objects.all()
+            .scoped_for_aggregate()
+            .filter(
+                party_id=party.pk,
+                circle_id__in=Subquery(visible_circle_ids),
+            )
+            .order_by("circle__name")
+            .values_list("circle__name", flat=True)
+            .distinct()
+        )
 
     def for_user(self, user: Any) -> Any:
         """Return the :class:`Person` linked to ``user``, get-or-created on the ``user`` O2O.
@@ -563,6 +919,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         bounded = max(1, min(int(limit), 100))
         return list(
             self.canonical()
+            .with_circle_names()
             .filter(display_name__icontains=query.strip())
             .order_by("display_name", "sqid")[:bounded]
         )
@@ -578,10 +935,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         merge_veto_model = apps.get_model("parties", "MergeVeto")
         with transaction.atomic():
             locked = {
-                party.pk: party
-                for party in self.lock_if_supported()
-                .filter(pk__in=(into.pk, source.pk))
-                .order_by("pk")
+                party.pk: party for party in self.lock_if_supported().filter(pk__in=(into.pk, source.pk)).order_by("pk")
             }
             if into.pk not in locked or source.pk not in locked:
                 raise ValidationError("One of the parties no longer exists.")
