@@ -1,0 +1,56 @@
+_meta:
+  model: workflows.Step
+rows:
+  - xref: archive_import_probe
+    fields:
+      workflow: messaging_integrate_whatsapp.archive_import
+      key: probe
+      name: Probe archive
+      step_class: archive_probe
+      config: {}
+      is_entry: true
+      position: {x: 0, y: 0}
+  - xref: archive_import_gate
+    fields:
+      workflow: messaging_integrate_whatsapp.archive_import
+      key: gate
+      name: Map archive targets
+      step_class: archive_gate
+      config: {}
+      join_rule: all_success
+      is_entry: false
+      position: {x: 280, y: 0}
+  - xref: archive_import_prepare
+    fields:
+      workflow: messaging_integrate_whatsapp.archive_import
+      key: prepare
+      name: Prepare archive mappings
+      step_class: archive_execute
+      config:
+        mode: prepare
+      join_rule: all_success
+      is_entry: false
+      position: {x: 560, y: 0}
+  - xref: archive_import_map
+    fields:
+      workflow: messaging_integrate_whatsapp.archive_import
+      key: map
+      name: Import mapped archives
+      step_class: map
+      config:
+        target_step: execute_unit
+        items: input
+      join_rule: all_success
+      is_entry: false
+      position: {x: 840, y: 0}
+  - xref: archive_import_execute_unit
+    fields:
+      workflow: messaging_integrate_whatsapp.archive_import
+      key: execute_unit
+      name: Execute archive import
+      step_class: archive_execute
+      config:
+        mode: unit
+      join_rule: all_success
+      is_entry: false
+      position: {x: 840, y: 180}

@@ -10,6 +10,10 @@ from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.utils.dateparse import parse_datetime
 from rebac import system_context
 
+from angee.messaging_integrate_whatsapp.backend import WhatsAppChannelBackend
+from angee.messaging_integrate_whatsapp.backup import BackupError, import_backup
+from angee.messaging_integrate_whatsapp.connect import create_whatsapp_channel
+
 
 class Command(BaseCommand):
     """Parse an unencrypted iPhone backup and land its chats on one channel.
@@ -56,8 +60,6 @@ class Command(BaseCommand):
     def handle(self, *args: Any, **options: Any) -> None:
         """Resolve the channel, open the backup, and drive the batched import."""
 
-        from angee.messaging_integrate_whatsapp.backup import BackupError, BackupImporter, open_chat_storage
-
         del args
         since = None
         if options["since"]:
@@ -66,33 +68,24 @@ class Command(BaseCommand):
                 raise CommandError("--since must be an ISO-8601 instant with a timezone.")
         channel = self._channel(options)
         try:
-            chat_storage = open_chat_storage(options["backup_dir"])
-        except BackupError as error:
-            raise CommandError(str(error)) from error
-        try:
-            importer = BackupImporter(
+            total = import_backup(
                 channel,
-                chat_storage,
+                options["backup_dir"],
                 own_jid=options["own_jid"],
                 chats=tuple(options["chat"]),
                 since=since,
                 limit=options["limit"],
                 batch_size=options["batch_size"],
                 dry_run=options["dry_run"],
+                on_batch=lambda done: self.stdout.write(f"{done} message(s) processed…"),
             )
-            total = importer.run(
-                on_batch=lambda done: self.stdout.write(f"{done} message(s) processed…")
-            )
-        finally:
-            chat_storage.close()  # also closes the backup manifest connection
+        except BackupError as error:
+            raise CommandError(str(error)) from error
         verb = "Parsed" if options["dry_run"] else "Imported"
         self.stdout.write(self.style.SUCCESS(f"{verb} {total} message(s) into {channel.display_name}."))
 
     def _channel(self, options: dict[str, Any]) -> Any:
         """Resolve the target channel from ``--channel`` or create one for ``--create``."""
-
-        from angee.messaging_integrate_whatsapp.backend import WhatsAppChannelBackend
-        from angee.messaging_integrate_whatsapp.connect import create_whatsapp_channel
 
         if options["channel"] and options["create"]:
             raise CommandError("Pass either --channel or --create, not both.")

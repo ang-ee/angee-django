@@ -1,0 +1,10 @@
+_meta:
+  model: workflows.Workflow
+rows:
+  - xref: archive_import
+    fields:
+      name: Archive import
+      description: Recognize an uploaded archive, confirm its target, and import it through the owning integration.
+      subject_declaration: storage.file
+      max_steps: 1000
+      budget: {}

@@ -1,0 +1,21 @@
+_meta:
+  model: workflows.Edge
+rows:
+  - xref: archive_import_probe_to_gate
+    fields:
+      workflow: messaging_integrate_whatsapp.archive_import
+      source: messaging_integrate_whatsapp.archive_import_probe
+      target: messaging_integrate_whatsapp.archive_import_gate
+      condition: recognized
+  - xref: archive_import_gate_to_prepare
+    fields:
+      workflow: messaging_integrate_whatsapp.archive_import
+      source: messaging_integrate_whatsapp.archive_import_gate
+      target: messaging_integrate_whatsapp.archive_import_prepare
+      condition: completed
+  - xref: archive_import_prepare_to_map
+    fields:
+      workflow: messaging_integrate_whatsapp.archive_import
+      source: messaging_integrate_whatsapp.archive_import_prepare
+      target: messaging_integrate_whatsapp.archive_import_map
+      condition: prepared

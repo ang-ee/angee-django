@@ -23,9 +23,9 @@ import hashlib
 import mimetypes
 import plistlib
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from django.apps import apps
@@ -40,6 +40,10 @@ CHAT_STORAGE_PATH = "ChatStorage.sqlite"
 CORE_DATA_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
 
 _SKIPPED_MESSAGE_TYPES = (6, 14)  # group-system events and revoked messages
+_SQLITE_HEADER = b"SQLite format 3\x00"
+
+SQLITE_HEADER_LENGTH = len(_SQLITE_HEADER)
+"""Bytes a bounded chat-store header check reads — never the store body."""
 
 
 class BackupError(Exception):
@@ -80,13 +84,55 @@ class IosBackup:
         ``sha1(domain-relativePath)`` id backups omit manifest rows for.
         """
 
+        blob = self.path / self.blob_relative_path(domain, relative_path)
+        return blob if blob.exists() else None
+
+    def blob_relative_path(self, domain: str, relative_path: str) -> PurePosixPath:
+        """Return the fanout-relative blob location — the layout's single owner.
+
+        iOS backups shard blobs as ``<fileID[:2]>/<fileID>``; every consumer
+        (filesystem or archive member lookup) composes this instead of
+        re-deriving the fanout.
+        """
+
+        file_id = self.blob_id(domain, relative_path)
+        return PurePosixPath(file_id[:2], file_id)
+
+    def blob_id(self, domain: str, relative_path: str) -> str:
+        """Return one file's manifest id or its deterministic fallback id."""
+
         row = self._manifest.execute(
             "SELECT fileID FROM Files WHERE domain = ? AND relativePath = ?",
             (domain, relative_path),
         ).fetchone()
-        file_id = row[0] if row else hashlib.sha1(f"{domain}-{relative_path}".encode()).hexdigest()
-        blob = self.path / file_id[:2] / file_id
-        return blob if blob.exists() else None
+        return str(row[0]) if row else hashlib.sha1(f"{domain}-{relative_path}".encode()).hexdigest()
+
+    def chat_storage_path(self) -> Path | None:
+        """Return WhatsApp's manifest-resolved chat-store blob, when present."""
+
+        return self.blob_path(WHATSAPP_DOMAIN, CHAT_STORAGE_PATH)
+
+    def has_chat_storage(self) -> bool:
+        """Return whether the manifest-resolved chat store has a SQLite header.
+
+        Recognition intentionally reads only SQLite's fixed 16-byte header;
+        parsing messages remains :class:`ChatStorage`'s execution-time job.
+        """
+
+        store = self.chat_storage_path()
+        if store is None:
+            return False
+        try:
+            with store.open("rb") as stream:
+                return self.is_chat_storage_header(stream.read(len(_SQLITE_HEADER)))
+        except OSError:
+            return False
+
+    @staticmethod
+    def is_chat_storage_header(value: bytes) -> bool:
+        """Return whether ``value`` begins with SQLite's fixed file header."""
+
+        return value.startswith(_SQLITE_HEADER)
 
     def read(self, domain: str, relative_path: str) -> bytes | None:
         """Return one backed-up file's bytes, or ``None`` when absent."""
@@ -103,7 +149,7 @@ class ChatStorage:
 
     def __init__(self, backup: IosBackup) -> None:
         self.backup = backup
-        store = backup.blob_path(WHATSAPP_DOMAIN, CHAT_STORAGE_PATH)
+        store = backup.chat_storage_path()
         if store is None:
             # Close the backup's manifest connection we can no longer own.
             backup.close()
@@ -299,3 +345,39 @@ def open_chat_storage(backup_dir: Path | str) -> ChatStorage:
     """Open the WhatsApp chat store inside one backup directory."""
 
     return ChatStorage(IosBackup(backup_dir))
+
+
+def import_backup(
+    channel: Any,
+    backup_dir: Path | str,
+    *,
+    own_jid: str = "",
+    chats: tuple[str, ...] = (),
+    since: datetime | None = None,
+    limit: int | None = None,
+    batch_size: int = 500,
+    dry_run: bool = False,
+    on_batch: Callable[[int], None] | None = None,
+) -> int:
+    """Open and import one backup through :class:`BackupImporter`.
+
+    This is the shared importer facade for the management command and workflow
+    extractor. It owns the chat-store lifetime so every client closes both
+    SQLite connections on success or failure.
+    """
+
+    chat_storage = open_chat_storage(backup_dir)
+    try:
+        importer = BackupImporter(
+            channel,
+            chat_storage,
+            own_jid=own_jid,
+            chats=chats,
+            since=since,
+            limit=limit,
+            batch_size=batch_size,
+            dry_run=dry_run,
+        )
+        return importer.run(on_batch=on_batch)
+    finally:
+        chat_storage.close()
