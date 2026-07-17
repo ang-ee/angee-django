@@ -24,6 +24,7 @@ import type { ResourceListSnapshot } from "./resource-view-surface";
 import type { ColumnDescriptor, FacetDescriptor } from "./page";
 import type { Occurrence } from "./CalendarView";
 import type { AnyCalendarWindowSource } from "./use-calendar-window";
+import type { DndPayload } from "../lib/dnd";
 
 /**
  * The calendar kind's data declaration. The windowed-collection surface fetches
@@ -115,6 +116,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   onListStateChange?: (state: ResourceListSnapshot<TRow>) => void;
   /** Optional href for a row, used when rows should render as links. */
   rowHref?: (row: TRow) => string;
+  /** Native cross-pane drag payload for each record row, including grouped rows. */
+  draggableRow?: (row: TRow) => DndPayload | null;
   /** Controls rendered in the toolbar's leading slot, beside the filter — e.g. a
    * "Connect" button for a list whose rows come from a connect flow. */
   toolbarActions?: ReactNode;

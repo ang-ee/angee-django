@@ -174,6 +174,8 @@ export interface ResourceListProps<TRow extends Row = Row> {
    * create) — e.g. provisioning and chat panels. See `FormView.recordTabs`. */
   recordTabs?: FormViewProps["recordTabs"];
   rowHref?: (row: TRow) => string;
+  /** Native cross-pane drag payload forwarded to supported record-row renderers. */
+  draggableRow?: ListViewProps<TRow>["draggableRow"];
   /** Controls rendered in the list toolbar's leading slot (e.g. a connect button),
    * forwarded to the list. The owning-level alternative to a `ControlBand` sibling. */
   toolbarActions?: ListViewProps<TRow>["toolbarActions"];
@@ -400,6 +402,7 @@ function ResourceListBody<TRow extends Row = Row>({
   recordTabs,
   toolbarActions,
   cardActions,
+  draggableRow,
   className,
 }: ResourceListBodyProps<TRow>): React.ReactElement {
   const resolvedRecordId = recordController.recordId;
@@ -435,6 +438,7 @@ function ResourceListBody<TRow extends Row = Row>({
     rowHref: resolvedRowHref,
     toolbarActions,
     cardActions,
+    draggableRow,
     laneSource,
     ...(declarations.list
       ? listElementRenderProps(declarations.list.props)
