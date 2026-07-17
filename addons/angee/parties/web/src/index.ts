@@ -62,6 +62,12 @@ const parties = defineBaseAddon({
       layout: "console",
       component: lazyRouteComponent(() => import("./ReviewPage"), "ReviewPage"),
     },
+    {
+      name: "parties.merge",
+      path: "/parties/merge/$left/$right",
+      layout: "console",
+      component: lazyRouteComponent(() => import("./MergePage"), "MergePage"),
+    },
     ...resourcePageRoutes("parties.directories", "/parties/directories", lazyRouteComponent(() => import("./DirectoriesPage"), "DirectoriesPage"), "parties.Directory"),
   ],
   menus: partiesMenu,

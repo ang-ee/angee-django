@@ -1,7 +1,9 @@
 import * as React from "react";
-import { Column, ResourceList, Facet, Field, Form, Group, ListView, List, type ListColumn, type RecordPanelContext, type RecordTabDescriptor, type StringIdRow } from "@angee/ui";
+import { Action, Column, ResourceList, Facet, Field, Form, Group, ListView, List, type ActionDescriptor, type ListColumn, type RecordPanelContext, type RecordTabDescriptor, type StringIdRow } from "@angee/ui";
+import { useNavigate } from "@tanstack/react-router";
 import { IdentityTab } from "./IdentityTab";
 import { usePartiesT } from "./i18n";
+import { partyMergePath } from "./routes";
 
 const MODEL = "parties.Person";
 
@@ -210,7 +212,10 @@ function personRecordTabs(
   ];
 }
 
-function peopleForm(t: ReturnType<typeof usePartiesT>): React.ReactElement {
+function peopleForm(
+  t: ReturnType<typeof usePartiesT>,
+  mergeSubmit: NonNullable<ActionDescriptor["submit"]>,
+): React.ReactElement {
   return (
     <Form resource={MODEL}>
       <Field name="display_name" title />
@@ -228,6 +233,21 @@ function peopleForm(t: ReturnType<typeof usePartiesT>): React.ReactElement {
         <Field name="folder" label={t("person.folder")} readOnly />
       </Group>
       <Field name="notes" />
+      <Action
+        id="merge-into"
+        label={t("person.action.merge")}
+        args={[
+          {
+            name: "otherParty",
+            argKind: "relation",
+            resource: "parties.Party",
+            label: t("person.action.mergeOther"),
+            description: t("person.action.mergeOther.description"),
+          },
+        ]}
+        visibleWhen={() => true}
+        submit={mergeSubmit}
+      />
     </Form>
   );
 }
@@ -241,7 +261,24 @@ function peopleForm(t: ReturnType<typeof usePartiesT>): React.ReactElement {
  */
 export function PeoplePage(): React.ReactElement {
   const t = usePartiesT();
+  const navigate = useNavigate();
   const tabs = React.useMemo(() => personRecordTabs(t), [t]);
+  const mergeSubmit = React.useCallback<NonNullable<ActionDescriptor["submit"]>>(
+    async (values, context) => {
+      const recordId = typeof context.record?.id === "string" ? context.record.id : "";
+      const otherId = typeof values.otherParty === "string" ? values.otherParty : "";
+      if (!recordId || !otherId || recordId === otherId) {
+        return {
+          ok: false,
+          message: t("person.action.mergeRequired"),
+          validationErrors: { otherParty: [t("person.action.mergeRequired")] },
+        };
+      }
+      await navigate({ to: partyMergePath(recordId, otherId) });
+      return { ok: true, message: "" };
+    },
+    [navigate, t],
+  );
   return (
     <ResourceList resource={MODEL} placement="inline" routed recordTabs={tabs}>
       <List resource={MODEL}>
@@ -252,7 +289,7 @@ export function PeoplePage(): React.ReactElement {
         <Column field="family_name" />
         <Column field="created_at" />
       </List>
-      {peopleForm(t)}
+      {peopleForm(t, mergeSubmit)}
     </ResourceList>
   );
 }

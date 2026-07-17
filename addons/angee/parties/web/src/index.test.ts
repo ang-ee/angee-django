@@ -8,7 +8,7 @@ describe("parties addon manifest", () => {
     expect(() => expectValidBaseAddon(parties)).not.toThrow();
   });
 
-  test("registers the people, organization, circle, relationship, handle, review, and directory pages", () => {
+  test("registers the people, organization, circle, relationship, handle, review, merge, and directory pages", () => {
     expect((parties.routes ?? []).map((route) => route.name)).toEqual([
       "parties.people",
       "parties.people.record",
@@ -21,6 +21,7 @@ describe("parties addon manifest", () => {
       "parties.handles",
       "parties.handles.record",
       "parties.review",
+      "parties.merge",
       "parties.directories",
       "parties.directories.record",
     ]);
