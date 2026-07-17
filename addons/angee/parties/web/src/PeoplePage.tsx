@@ -62,22 +62,8 @@ const addressColumns: readonly ListColumn<RelatedRow>[] = [
   { field: "country" },
 ];
 
-function affiliationColumns(t: ReturnType<typeof usePartiesT>): readonly ListColumn<RelatedRow>[] {
-  return [
-    {
-      field: "organization_name",
-      header: t("person.affiliationOrganization"),
-      render: (row) => <span className="font-medium text-fg">{String(row.organization_name ?? "")}</span>,
-    },
-    { field: "title" },
-    { field: "role" },
-    { field: "department" },
-  ];
-}
-
 /**
- * One related collection on the Person detail — the person's handles, addresses,
- * or affiliations — a local-scoped ListView filtered to this party, the same
+ * One related collection on the Person detail — the person's handles or addresses — a local-scoped ListView filtered to this party, the same
  * shared list primitive the routed pages use (toolbar/empty/error affordances).
  */
 function PartyRelatedTab({
@@ -212,19 +198,6 @@ function personRecordTabs(
         />
       ),
     },
-    {
-      id: "affiliations",
-      label: t("person.tabs.affiliations"),
-      render: (context) => (
-        <PartyRelatedTab
-          {...context}
-          resource="parties.Affiliation"
-          fields={["id", "organization_name", "title", "role", "department"]}
-          columns={affiliationColumns(t)}
-          emptyContent={t("person.empty.affiliations")}
-        />
-      ),
-    },
   ];
 }
 
@@ -272,8 +245,8 @@ function peopleForm(
  * People (the person-kind contacts): a circle/smart-view workbench around the
  * shared create/edit/list/detail surface. The primary pane owns scope selection
  * and circle drops; the list keeps its generated folder facet and generic record
- * behavior. Detail tabs carry identity, circle, relationship, address, and
- * affiliation collections.
+ * behavior. Detail tabs carry identity, circle, relationship, and address
+ * collections.
  */
 export function PeoplePage(): React.ReactElement {
   const t = usePartiesT();
