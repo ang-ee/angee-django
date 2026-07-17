@@ -363,7 +363,12 @@ def test_telegram_backend_registration_and_pairing_projection(telegram_tables: A
     autoconfig = _telegram_module("autoconfig")
     backend_module = _telegram_module("backend")
     assert autoconfig.SETTINGS == {
-        "ANGEE_CHANNEL_BACKEND_CLASSES.telegram": ("angee.messaging_integrate_telegram.backend.TelegramChannelBackend")
+        "ANGEE_CHANNEL_BACKEND_CLASSES.telegram": (
+            "angee.messaging_integrate_telegram.backend.TelegramChannelBackend"
+        ),
+        "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES.telegram_takeout": (
+            "angee.messaging_integrate_telegram.extractor.TelegramTakeoutExtractor"
+        ),
     }
     assert backend_module.TelegramChannelBackend.session_queue == "telegram"
 

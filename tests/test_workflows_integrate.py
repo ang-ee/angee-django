@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import io
+import stat
+import zipfile
 from collections.abc import Iterator
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
 import pytest
@@ -13,6 +16,7 @@ from rebac import system_context
 
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
+from angee.workflows_integrate import archives
 from angee.workflows_integrate.autoconfig import SETTINGS as WORKFLOWS_INTEGRATE_SETTINGS
 from angee.workflows_integrate.steps import ArchiveExecutionReporter, ArchiveExtractor
 from tests.conftest import STORAGE_TEST_MODELS, Backend, Drive, File
@@ -41,6 +45,93 @@ _HETEROGENEOUS_EXTRACTORS = {
     "fixture_archive": "tests.test_workflows_integrate.FixtureArchiveExtractor",
     "hetero_archive": "tests.test_workflows_integrate.HeteroArchiveExtractor",
 }
+
+
+def test_archive_member_names_reject_root_traversal() -> None:
+    """The bridge rejects archive paths that escape their extraction root."""
+
+    with pytest.raises(archives.ArchiveError, match="escapes its archive root"):
+        archives.safe_member_name("../outside.txt")
+
+
+def test_archive_entries_reject_duplicate_normalized_members() -> None:
+    """The bridge rejects ambiguous ZIPs instead of choosing one duplicate."""
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive, pytest.warns(UserWarning):
+        archive.writestr("bundle/item.txt", "first")
+        archive.writestr("bundle/item.txt", "second")
+    buffer.seek(0)
+
+    with zipfile.ZipFile(buffer) as archive:
+        with pytest.raises(archives.ArchiveError, match="repeats member"):
+            archives.archive_entries(archive)
+
+
+def test_archive_extraction_rejects_symbolic_links(tmp_path: Path) -> None:
+    """The bridge never follows or materializes a ZIP symbolic link."""
+
+    buffer = io.BytesIO()
+    link = zipfile.ZipInfo("bundle/link")
+    link.external_attr = (stat.S_IFLNK | 0o777) << 16
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(link, "target.txt")
+    buffer.seek(0)
+
+    with zipfile.ZipFile(buffer) as archive:
+        entries = archives.archive_entries(archive)
+        with pytest.raises(archives.ArchiveError, match="symbolic link"):
+            archives.extract_archive(archive, tmp_path, entries=entries)
+
+
+def test_bounded_reader_rejects_reads_beyond_its_budget() -> None:
+    """Every archive probe fails closed before exceeding its declared budget."""
+
+    reader = archives.BoundedReader(io.BytesIO(b"four"), limit=3)
+
+    with pytest.raises(archives.ArchiveError, match="bounded read budget"):
+        reader.read(4)
+
+
+def test_archive_subtree_selection_keeps_only_the_declared_parent() -> None:
+    """Subtree selection cannot stage sibling exports from the same ZIP."""
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("chosen/result.json", "{}")
+        archive.writestr("chosen/media/photo.jpg", b"photo")
+        archive.writestr("sibling/secret.txt", "secret")
+    buffer.seek(0)
+
+    with zipfile.ZipFile(buffer) as archive:
+        selected = archives.subtree_entries(
+            archives.archive_entries(archive),
+            PurePosixPath("chosen"),
+        )
+
+    assert set(selected) == {
+        "chosen/media/photo.jpg",
+        "chosen/result.json",
+    }
+
+
+def test_stage_subtree_rejects_declared_content_above_the_shared_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The staging owner enforces one cap for every vendor extractor."""
+
+    monkeypatch.setattr(archives, "EXTRACT_DECLARED_LIMIT", 3)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("bundle/result.json", "four")
+    buffer.seek(0)
+
+    with zipfile.ZipFile(buffer) as archive:
+        with (
+            pytest.raises(archives.ArchiveError, match="supported extraction size"),
+            archives.stage_subtree(archive, PurePosixPath("bundle")),
+        ):
+            pass
 
 
 class FixtureArchiveIngest:
