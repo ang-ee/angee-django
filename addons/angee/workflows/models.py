@@ -122,11 +122,21 @@ def _save_workflow_status(instance: models.Model, source: Any, target: Any) -> N
         del workflow._allow_immutable_status_save
 
 
-class WorkflowQuerySet(AngeeQuerySet[Any]):
-    """QuerySet owning subject declaration discovery."""
+#: Statuses that participate in version currency: a newer ARCHIVED row
+#: supersedes older PUBLISHED rows, retiring the whole lineage.
+_CURRENCY_STATUSES = (WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED)
 
-    def for_subject_declaration(self, subject_declaration: str) -> Self:
-        """Return current published workflows accepting ``subject_declaration``."""
+
+class WorkflowQuerySet(AngeeQuerySet[Any]):
+    """QuerySet owning subject declaration discovery and version currency."""
+
+    def current_published(self) -> Self:
+        """Return rows that are the current published version of their lineage.
+
+        The currency rule's single owner: a row survives when it is PUBLISHED
+        and no ``_CURRENCY_STATUSES`` sibling in the same lineage is newer by
+        ``(version, pk)`` — so a newer ARCHIVED row retires the lineage.
+        """
 
         workflow_model = cast(Any, self.model)
         newer_version = (
@@ -134,7 +144,7 @@ class WorkflowQuerySet(AngeeQuerySet[Any]):
             .sudo(reason="workflows.subject_declaration.current")
             .filter(
                 published_from_id=models.OuterRef("published_from_id"),
-                status__in=[WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED],
+                status__in=_CURRENCY_STATUSES,
             )
             .filter(
                 models.Q(version__gt=models.OuterRef("version"))
@@ -143,12 +153,19 @@ class WorkflowQuerySet(AngeeQuerySet[Any]):
         )
         return cast(
             Self,
-            self.filter(status=WorkflowStatus.PUBLISHED)
-            .filter(~models.Exists(newer_version))
+            self.filter(status=WorkflowStatus.PUBLISHED).filter(~models.Exists(newer_version)),
+        )
+
+    def for_subject_declaration(self, subject_declaration: str) -> Self:
+        """Return current published workflows accepting ``subject_declaration``."""
+
+        declaration = subject_declaration.strip().lower()
+        return cast(
+            Self,
+            self.current_published()
             .filter(
-                models.Q(subject_declaration__isnull=True)
-                | models.Q(subject_declaration="")
-                | models.Q(subject_declaration__iexact=subject_declaration)
+                models.Q(subject_declaration="")
+                | models.Q(subject_declaration=declaration)
             )
             .order_by("name", "version", "pk"),
         )
@@ -158,11 +175,15 @@ class WorkflowManager(AngeeManager.from_queryset(WorkflowQuerySet)):  # type: ig
     """Manager owning workflow lineage lookups."""
 
     def current_published_for(self, workflow: Any) -> Any | None:
-        """Return the latest published version for ``workflow``'s lineage."""
+        """Return the latest published version for ``workflow``'s lineage.
+
+        Composes the same ``_CURRENCY_STATUSES`` rule ``current_published``
+        owns, scoped to one explicit lineage pool.
+        """
 
         head = workflow if getattr(workflow, "published_from_id", None) is None else workflow.published_from
         latest = (
-            self.filter(status__in=[WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED])
+            self.filter(status__in=_CURRENCY_STATUSES)
             .filter(models.Q(pk=head.pk) | models.Q(published_from=head))
             .order_by("-version", "-pk")
             .first()
@@ -255,23 +276,40 @@ class Workflow(AuditMixin, AngeeDataModel):
         """Archive a published workflow version."""
 
     def clean(self) -> None:
-        """Validate lineage-owned workflow links."""
+        """Validate lineage-owned workflow links and normalize the subject declaration."""
 
         super().clean()
         if self.error_workflow_id is not None and self.error_workflow.published_from_id is not None:
             raise ValidationError({"error_workflow": "Error workflow must point to a workflow lineage head."})
+        # Mirror Trigger.event_model_label: store the canonical label_lower form
+        # and reject labels that resolve to no installed model.
+        self.subject_declaration = self.subject_declaration.strip().lower()
+        if self.subject_declaration:
+            try:
+                apps.get_model(self.subject_declaration)
+            except (LookupError, ValueError) as error:
+                raise ValidationError(
+                    {
+                        "subject_declaration": (
+                            f"Subject declaration {self.subject_declaration!r} is not an installed model label."
+                        )
+                    }
+                ) from error
 
     def validate_subject_declaration(self, subject: Any) -> None:
         """Raise when ``subject`` does not satisfy this workflow's subject declaration."""
 
         if not self.subject_declaration:
             return
-        subject_label = getattr(getattr(subject, "_meta", None), "label", "")
-        if subject_label.lower() != self.subject_declaration.lower():
+        if subject is None:
+            raise ValidationError(
+                {"subject": f"Subject declaration {self.subject_declaration!r} requires a subject."}
+            )
+        if subject._meta.label_lower != self.subject_declaration:
             raise ValidationError(
                 {
                     "subject": (
-                        f"Subject model {subject_label or None!r} does not satisfy "
+                        f"Subject model {subject._meta.label!r} does not satisfy "
                         f"subject declaration {self.subject_declaration!r}."
                     )
                 }

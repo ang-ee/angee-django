@@ -486,7 +486,7 @@ class WorkflowSubjectDeclarationQuery:
         if scoped is None:
             return []
         workflows = cast(Any, scoped).for_subject_declaration(subject_declaration)
-        return cast(list[WorkflowType], list(workflows))
+        return cast(list[WorkflowType], workflows)
 
 
 @strawberry.type
@@ -674,7 +674,12 @@ schemas = {
 
 
 def _resolve_subject(ref: WorkflowObjectRefInput | None, *, actor: Any) -> models.Model | None:
-    """Resolve an optional subject declaration through the actor's read scope."""
+    """Resolve an optional run subject through the actor's write scope.
+
+    Starting a workflow operates on the record — its steps may mutate the
+    subject elevated — so the subject requires ``write``, matching the
+    decision-resolution relation re-check (`engine._relation_error`).
+    """
 
     if ref is None:
         return None
@@ -682,7 +687,7 @@ def _resolve_subject(ref: WorkflowObjectRefInput | None, *, actor: Any) -> model
         model = cast(type[models.Model], apps.get_model(ref.subject_declaration))
     except (LookupError, ValueError) as error:
         raise ValidationError({"subject": "Run workflow subject declaration is not installed."}) from error
-    queryset = read_scoped_queryset(model, actor)
+    queryset = read_scoped_queryset(model, actor, action="write")
     if queryset is None:
         queryset = model._default_manager.all()
     subject = instance_for_id(model, ref.id, queryset=queryset)

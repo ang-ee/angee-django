@@ -83,6 +83,9 @@ def start(
 
         version.validate_subject_declaration(subject)
         subject_content_type, subject_object_id = _subject_gfk(subject)
+        # Manual starts (no trigger, no explicit dedup_key) are deliberately not
+        # deduplicated — dedup is a trigger concern; the launch UI guards
+        # double-submit and repeated manual runs are legitimate.
         run_dedup_key = dedup_key or _dedup_key(trigger, subject_content_type, subject_object_id)
         owner_id = _owner_id(actor=actor, trigger=trigger, workflow=version)
 

@@ -46,7 +46,7 @@ vi.mock("./i18n", () => ({
   useSpacesT: () => (key: string) => key,
 }));
 
-import { SpacesPage } from "./SpacesPage";
+import { SpacesPage, membershipRole, membershipRoleWireValue } from "./SpacesPage";
 
 describe("SpacesPage", () => {
   beforeEach(() => {
@@ -54,6 +54,13 @@ describe("SpacesPage", () => {
     pageMocks.listViews = [];
     pageMocks.columnFields = [];
     pageMocks.recordHrefResources = [];
+  });
+
+  test("membership role narrows to the enum and lowercases for the _set write", () => {
+    expect(membershipRole("MODERATOR")).toBe("MODERATOR");
+    expect(membershipRole("bogus")).toBe("MEMBER");
+    expect(membershipRoleWireValue("OWNER")).toBe("owner");
+    expect(membershipRoleWireValue(undefined)).toBe("member");
   });
 
   test("composes the group resource and scoped roster/thread primitives", () => {

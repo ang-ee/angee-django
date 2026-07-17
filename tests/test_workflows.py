@@ -226,9 +226,38 @@ def test_workflows_for_subject_declaration_filters_resource_and_rebac(workflow_t
 
     assert [(row["name"], row["subject_declaration"]) for row in visible] == [
         ("Any subject", ""),
-        ("Matching", Workflow._meta.label),
+        ("Matching", Workflow._meta.label_lower),
     ]
     assert hidden == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_for_subject_declaration_returns_only_current_versions(workflow_tables: None) -> None:
+    """Version currency holds set-wide: newest published wins, a newer archive retires."""
+
+    with system_context(reason="test workflows subject declaration currency"):
+        owner = User.objects.create_user(username="workflow-currency-owner")
+        draft, _first = _published_workflow(
+            name="Currency",
+            subject_declaration=Workflow._meta.label,
+            owner=owner,
+        )
+        second = draft.publish()
+
+        current = [
+            row.pk
+            for row in Workflow.objects.for_subject_declaration(Workflow._meta.label)
+            if row.published_from_id == draft.pk
+        ]
+        assert current == [second.pk]
+
+        second.archive()
+        retired = [
+            row
+            for row in Workflow.objects.for_subject_declaration(Workflow._meta.label)
+            if row.published_from_id == draft.pk
+        ]
+        assert retired == []
 
 
 @pytest.mark.django_db(transaction=True)
@@ -279,6 +308,58 @@ def test_start_workflow_run_starts_subject_and_enforces_rebac(
     assert run.workflow == published
     assert run.subject == subject
     assert run.created_by == owner
+
+
+@pytest.mark.django_db(transaction=True)
+def test_start_workflow_run_requires_access_to_the_subject(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """The subject gate refuses foreign records independently of the workflow gate."""
+
+    del workflow_engine_tables, no_workflow_queue
+    schema = _console_schema()
+    owner = User.objects.create_user(username="workflow-subject-owner")
+    outsider = User.objects.create_user(username="workflow-subject-outsider")
+    _, published = _published_workflow(
+        name="Start elsewhere",
+        subject_declaration=Workflow._meta.label,
+        owner=owner,
+    )
+    with system_context(reason="test workflows foreign subject"):
+        foreign = Workflow.objects.create(
+            name="Foreign subject",
+            created_by=outsider,
+            updated_by=outsider,
+        )
+    mutation = """
+      mutation RunWorkflow($workflow: ID!, $subjectDeclaration: String!, $subjectId: ID!) {
+        start_workflow_run(
+          workflow: $workflow
+          subject: { subject_declaration: $subjectDeclaration, id: $subjectId }
+        ) {
+          ok
+          validation_errors
+        }
+      }
+    """
+    refused = result_data(
+        execute_schema(
+            schema,
+            mutation,
+            {
+                "workflow": published.sqid,
+                "subjectDeclaration": Workflow._meta.label,
+                "subjectId": foreign.sqid,
+            },
+            user=owner,
+        )
+    )["start_workflow_run"]
+
+    assert refused["ok"] is False
+    assert refused["validation_errors"]["subject"]
+    with system_context(reason="test workflows foreign subject count"):
+        assert WorkflowRun.objects.count() == 0
 
 
 @pytest.mark.django_db(transaction=True)

@@ -37,8 +37,17 @@ type MembershipRow = StringIdRow;
 type SpaceThreadRow = StringIdRow;
 
 /** Narrow a dialog value onto the wire's MembershipRole enum, defaulting MEMBER. */
-function membershipRole(value: unknown): "OWNER" | "MODERATOR" | "MEMBER" {
+export function membershipRole(value: unknown): "OWNER" | "MODERATOR" | "MEMBER" {
   return value === "OWNER" || value === "MODERATOR" ? value : "MEMBER";
+}
+
+/**
+ * Lowercase wire value for the update `_set` surface: the writable String
+ * takes the lowercase model value (the read/write casing asymmetry pitfall),
+ * unlike the add mutation's real enum which takes the uppercase name.
+ */
+export function membershipRoleWireValue(value: unknown): string {
+  return membershipRole(value).toLowerCase();
 }
 
 function threadColumns(
@@ -225,7 +234,7 @@ function GroupRosterTab({ recordId, ...context }: RecordPanelContext): React.Rea
         onSubmit={(values) =>
           updateRole({
             id: roleRow?.id ?? "",
-            role: String(values.role ?? "MEMBER"),
+            role: membershipRoleWireValue(values.role),
           })
         }
         onSubmitted={() => setRoleRow(null)}
