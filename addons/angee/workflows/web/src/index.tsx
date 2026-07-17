@@ -2,6 +2,7 @@ import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute } from "@angee
 import type { BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import {
+  ArrowUpRight,
   CheckCircle2,
   GitBranch,
   Inbox,
@@ -84,6 +85,7 @@ const workflows = defineBaseAddon({
     "workflow-cancel": XCircle,
     "workflow-approve": CheckCircle2,
     "workflow-reject": XCircle,
+    "workflow-escalate": ArrowUpRight,
     "workflow-step": Waypoints,
   },
 });

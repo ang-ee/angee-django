@@ -42,7 +42,10 @@ export const enWorkflowsMessages: Record<string, string> = {
   "inbox.resolution": "Resolution payload",
   "inbox.complete": "Complete",
   "inbox.reject": "Reject",
+  "inbox.escalate": "Escalate",
   "inbox.actionFailed": "Decision failed.",
+  "inbox.invalidFormSpec": "This decision form could not be rendered.",
+  "inbox.invalidValidationErrors": "Decision validation errors have an invalid shape.",
   "json.label": "JSON",
   "json.invalid": "Invalid JSON",
 };

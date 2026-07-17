@@ -50,12 +50,14 @@ export interface RelationEditConfig {
 }
 
 export interface RelationPickerProps {
+  id?: string;
   value?: string | null;
   onChange?: (value: string) => void;
   options: readonly RelationOption[];
   placeholder?: string;
   searchPlaceholder?: string;
   "aria-label"?: string;
+  "aria-describedby"?: string;
   readOnly?: boolean;
   /**
    * Enables the in-place "Create …" affordance: when the typed query matches no
@@ -101,12 +103,14 @@ type DialogState =
  * — all without leaving the parent surface.
  */
 export function RelationPicker({
+  id,
   value,
   onChange,
   options,
   placeholder,
   searchPlaceholder,
   "aria-label": ariaLabel,
+  "aria-describedby": ariaDescribedBy,
   readOnly,
   create,
   onCreated,
@@ -126,12 +130,14 @@ export function RelationPicker({
       <div className="flex min-w-0 items-center gap-1">
         <div className="min-w-0 flex-1">
           <RelationField
+            id={id}
             value={value}
             onChange={onChange}
             options={options}
             placeholder={placeholder}
             searchPlaceholder={searchPlaceholder}
             aria-label={ariaLabel}
+            aria-describedby={ariaDescribedBy}
             readOnly={readOnly}
             onCreate={create ? (query) => setDialog({ mode: "create", query }) : undefined}
             onOpenChange={onOpenChange}

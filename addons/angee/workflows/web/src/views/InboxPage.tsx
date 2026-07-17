@@ -1,17 +1,28 @@
 import * as React from "react";
-import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import {
+  useAuthoredMutation,
+  useAuthoredQuery,
+  type DocumentVariables,
+} from "@angee/refine";
 import {
   Badge,
   Button,
+  DescriptorFieldControl,
   EmptyState,
   ErrorBanner,
   FieldDescription,
   FieldLabel,
   FieldRoot,
   Glyph,
+  LazyBoundary,
   LoadingPanel,
   RowsListView,
   Textarea,
+  formSpecInitialValues,
+  useDottedPathFieldErrors,
+  useFormSpecFields,
+  validationErrorMap,
+  type DottedPathFieldErrorMap,
   type ListColumn,
 } from "@angee/ui";
 
@@ -25,8 +36,9 @@ import { JsonBlock } from "./JsonBlock";
 
 const DECISION_MODEL = "workflows.Decision";
 const INBOX_LIMIT = 100;
-type DecisionVerb = "COMPLETE" | "REJECT";
-
+type DecisionVerb = DocumentVariables<
+  typeof DecideWorkflowDecisionDocument
+>["verdict"];
 interface DecisionRow extends Record<string, unknown> {
   id: string;
   workflow: string;
@@ -105,18 +117,6 @@ function DecisionResolutionPanel({
   onResolved: () => void;
 }): React.ReactElement {
   const t = useWorkflowsT();
-  const payloadId = React.useId();
-  const [payload, setPayload] = React.useState("{}");
-  const [error, setError] = React.useState<string | null>(null);
-  // Correct as-is: PendingWorkflowDecisionsDocument is an authored query keyed by DECISION_MODEL.
-  const [decide, decideState] = useAuthoredMutation(DecideWorkflowDecisionDocument, {
-    dataProviderName: "public",
-    invalidateModels: [DECISION_MODEL],
-  });
-  React.useEffect(() => {
-    setPayload("{}");
-    setError(null);
-  }, [decision?.id]);
 
   if (!decision) {
     return (
@@ -128,25 +128,6 @@ function DecisionResolutionPanel({
         />
       </div>
     );
-  }
-
-  const current = decision;
-
-  async function resolve(verdict: DecisionVerb): Promise<void> {
-    setError(null);
-    let parsed: unknown;
-    try {
-      parsed = parseJsonPayload(payload, t("json.invalid"));
-    } catch (parseError) {
-      setError(parseError instanceof Error ? parseError.message : t("inbox.actionFailed"));
-      return;
-    }
-    try {
-      await decide({ decision: current.id, verdict, payload: parsed });
-      onResolved();
-    } catch (mutationError) {
-      setError(mutationError instanceof Error ? mutationError.message : t("inbox.actionFailed"));
-    }
   }
 
   const title = decisionStepTitle(decision);
@@ -173,43 +154,241 @@ function DecisionResolutionPanel({
           </h3>
           <JsonBlock value={decision.payload} />
         </section>
-        <FieldRoot>
-          <FieldLabel htmlFor={payloadId}>
-            {t("inbox.resolution")}
-          </FieldLabel>
-          <Textarea
-            id={payloadId}
-            rows={8}
-            value={payload}
-            invalid={Boolean(error)}
-            onChange={(event) => setPayload(event.target.value)}
-          />
-          <FieldDescription>{t("json.label")}</FieldDescription>
-        </FieldRoot>
-        <ErrorBanner description={error ?? decideState.error?.message ?? null} />
-        <div className="flex flex-wrap justify-end gap-2">
-          <Button
-            type="button"
-            variant="secondary"
-            loading={decideState.fetching}
-            onClick={() => void resolve("REJECT")}
+        {decision.decision_schema == null ? (
+          <JsonDecisionResolution decision={decision} onResolved={onResolved} />
+        ) : (
+          <LazyBoundary
+            pending={null}
+            fallback={
+              <ErrorBanner description={t("inbox.invalidFormSpec")} />
+            }
+            resetKey={decision.id}
           >
-            <Glyph name="workflow-reject" />
-            {t("inbox.reject")}
-          </Button>
-          <Button
-            type="button"
-            variant="primary"
-            loading={decideState.fetching}
-            onClick={() => void resolve("COMPLETE")}
-          >
-            <Glyph name="workflow-approve" />
-            {t("inbox.complete")}
-          </Button>
-        </div>
+            <FormSpecDecisionResolution
+              decision={decision}
+              onResolved={onResolved}
+            />
+          </LazyBoundary>
+        )}
       </div>
     </aside>
   );
+}
+
+function FormSpecDecisionResolution({
+  decision,
+  onResolved,
+}: {
+  decision: PendingWorkflowDecision;
+  onResolved: () => void;
+}): React.ReactElement {
+  const t = useWorkflowsT();
+  const fields = useFormSpecFields(decision.decision_schema);
+  const [values, setValues] = React.useState<Record<string, unknown>>(() =>
+    formSpecInitialValues(fields, decision.payload),
+  );
+  const fieldNames = React.useMemo(
+    () => fields.map((field) => field.name),
+    [fields],
+  );
+  const validationErrors = useDottedPathFieldErrors(fieldNames);
+  const [error, setError] = React.useState<string | null>(null);
+  const resolution = useDecisionResolver(onResolved);
+
+  async function resolve(verdict: DecisionVerb): Promise<void> {
+    setError(null);
+    validationErrors.clear();
+    try {
+      validationErrors.replace(
+        await resolution.resolve(decision.id, verdict, values),
+      );
+    } catch (mutationError) {
+      setError(
+        mutationError instanceof Error
+          ? mutationError.message
+          : t("inbox.actionFailed"),
+      );
+    }
+  }
+
+  return (
+    <section className="space-y-3">
+      <h3 className="text-xs font-semibold text-fg-muted">
+        {t("inbox.resolution")}
+      </h3>
+      {fields.map((field) => (
+        <DescriptorFieldControl
+          key={field.name}
+          field={field}
+          value={values[field.name]}
+          readOnly={field.readOnly || resolution.fetching}
+          messages={validationErrors.messagesFor(field.name)}
+          onChange={(value) => {
+            validationErrors.clearField(field.name);
+            setValues((current) => ({ ...current, [field.name]: value }));
+          }}
+        />
+      ))}
+      <ErrorBanner
+        description={
+          error ?? resolution.error?.message ?? validationErrors.formSummary
+        }
+      />
+      <DecisionVerdictButtons
+        fetching={resolution.fetching}
+        onResolve={resolve}
+      />
+    </section>
+  );
+}
+
+function JsonDecisionResolution({
+  decision,
+  onResolved,
+}: {
+  decision: PendingWorkflowDecision;
+  onResolved: () => void;
+}): React.ReactElement {
+  const t = useWorkflowsT();
+  const payloadId = React.useId();
+  const [payload, setPayload] = React.useState("{}");
+  const validationErrors = useDottedPathFieldErrors();
+  const [error, setError] = React.useState<string | null>(null);
+  const resolution = useDecisionResolver(onResolved);
+  const validationError = validationErrors.formSummary;
+
+  async function resolve(verdict: DecisionVerb): Promise<void> {
+    setError(null);
+    validationErrors.clear();
+    let parsed: unknown;
+    try {
+      parsed = parseJsonPayload(payload, t("json.invalid"));
+    } catch (parseError) {
+      setError(
+        parseError instanceof Error
+          ? parseError.message
+          : t("inbox.actionFailed"),
+      );
+      return;
+    }
+    try {
+      validationErrors.replace(
+        await resolution.resolve(decision.id, verdict, parsed),
+      );
+    } catch (mutationError) {
+      setError(
+        mutationError instanceof Error
+          ? mutationError.message
+          : t("inbox.actionFailed"),
+      );
+    }
+  }
+
+  return (
+    <section className="space-y-3">
+      <FieldRoot invalid={Boolean(error || validationError)}>
+        <FieldLabel htmlFor={payloadId}>
+          {t("inbox.resolution")}
+        </FieldLabel>
+        <Textarea
+          id={payloadId}
+          rows={8}
+          value={payload}
+          invalid={Boolean(error || validationError)}
+          onChange={(event) => {
+            validationErrors.clear();
+            setPayload(event.target.value);
+          }}
+        />
+        <FieldDescription>{t("json.label")}</FieldDescription>
+      </FieldRoot>
+      <ErrorBanner
+        description={error ?? resolution.error?.message ?? validationError}
+      />
+      <DecisionVerdictButtons
+        fetching={resolution.fetching}
+        onResolve={resolve}
+      />
+    </section>
+  );
+}
+
+function DecisionVerdictButtons({
+  fetching,
+  onResolve,
+}: {
+  fetching: boolean;
+  onResolve: (verdict: DecisionVerb) => void | Promise<void>;
+}): React.ReactElement {
+  const t = useWorkflowsT();
+  return (
+    <div className="flex flex-wrap justify-end gap-2">
+      <Button
+        type="button"
+        variant="ghost"
+        loading={fetching}
+        onClick={() => void onResolve("ESCALATE")}
+      >
+        <Glyph name="workflow-escalate" />
+        {t("inbox.escalate")}
+      </Button>
+      <Button
+        type="button"
+        variant="secondary"
+        loading={fetching}
+        onClick={() => void onResolve("REJECT")}
+      >
+        <Glyph name="workflow-reject" />
+        {t("inbox.reject")}
+      </Button>
+      <Button
+        type="button"
+        variant="primary"
+        loading={fetching}
+        onClick={() => void onResolve("COMPLETE")}
+      >
+        <Glyph name="workflow-approve" />
+        {t("inbox.complete")}
+      </Button>
+    </div>
+  );
+}
+
+function useDecisionResolver(onResolved: () => void): {
+  resolve: (
+    decision: string,
+    verdict: DecisionVerb,
+    payload: unknown,
+  ) => Promise<DottedPathFieldErrorMap>;
+  fetching: boolean;
+  error: Error | null;
+} {
+  const t = useWorkflowsT();
+  // PendingWorkflowDecisionsDocument is an authored query keyed by DECISION_MODEL.
+  const [decide, state] = useAuthoredMutation(DecideWorkflowDecisionDocument, {
+    dataProviderName: "public",
+    invalidateModels: [DECISION_MODEL],
+    shouldInvalidate: (data) => data?.decide.validation_errors == null,
+  });
+  const resolve = React.useCallback(
+    async (
+      decision: string,
+      verdict: DecisionVerb,
+      payload: unknown,
+    ): Promise<DottedPathFieldErrorMap> => {
+      const data = await decide({ decision, verdict, payload });
+      const wireErrors = data?.decide.validation_errors;
+      const parsedErrors = validationErrorMap(wireErrors);
+      if (wireErrors != null && parsedErrors === null) {
+        throw new Error(t("inbox.invalidValidationErrors"));
+      }
+      const errors = parsedErrors ?? {};
+      if (Object.keys(errors).length === 0) onResolved();
+      return errors;
+    },
+    [decide, onResolved, t],
+  );
+  return { resolve, fetching: state.fetching, error: state.error };
 }
 
 function decisionRows(
@@ -241,6 +420,10 @@ function parseJsonPayload(value: string, invalidMessage: string): unknown {
   try {
     return JSON.parse(trimmed) as unknown;
   } catch (error) {
-    throw new Error(error instanceof Error && error.message ? `${invalidMessage}: ${error.message}` : invalidMessage);
+    throw new Error(
+      error instanceof Error && error.message
+        ? `${invalidMessage}: ${error.message}`
+        : invalidMessage,
+    );
   }
 }
