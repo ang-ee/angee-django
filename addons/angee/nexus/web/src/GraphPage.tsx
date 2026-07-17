@@ -105,7 +105,8 @@ export function GraphPage(): React.ReactElement {
   const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId) ?? null;
   const setSearch = React.useCallback(
     (patch: Record<string, unknown>) => {
-      void navigate({ search: (current) => ({ ...current, ...patch }) });
+      // Untyped navigation: the router glue's `as never` idiom (refine router canon).
+      void navigate({ search: ((current: Record<string, unknown>) => ({ ...current, ...patch })) as never });
     },
     [navigate],
   );
@@ -231,7 +232,7 @@ function Inspector({
                 </div>
               );
             })}
-            {nodes.length === 2 && selectedParties.length === 2 ? (
+            {nodes.length === 2 && selectedParties[0] && selectedParties[1] ? (
               <Button asChild variant="primary">
                 <Link to={partyMergePath(selectedParties[0].id, selectedParties[1].id)}>{t("graph.merge")}</Link>
               </Button>

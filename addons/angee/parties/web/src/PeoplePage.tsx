@@ -321,12 +321,13 @@ export function PeoplePage(): React.ReactElement {
   );
   const selectSmartView = React.useCallback(
     (row: SmartViewRow) => {
+      // Untyped navigation: the router glue's `as never` idiom (refine router canon).
       void navigate({
-        search: (current) => ({
+        search: ((current: Record<string, unknown>) => ({
           ...current,
           peopleScope: row.id === "ALL" ? undefined : row.id,
           peopleCircle: undefined,
-        }),
+        })) as never,
       });
     },
     [navigate],
@@ -334,11 +335,11 @@ export function PeoplePage(): React.ReactElement {
   const selectCircle = React.useCallback(
     (row: CircleTreeRow) => {
       void navigate({
-        search: (current) => ({
+        search: ((current: Record<string, unknown>) => ({
           ...current,
           peopleScope: "CIRCLE",
           peopleCircle: row.id,
-        }),
+        })) as never,
       });
     },
     [navigate],

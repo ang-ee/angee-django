@@ -112,7 +112,7 @@ export const PartiesOverview = graphql(`
 `);
 
 export const PartyMergeComparison = graphql(`
-  query PartyMergeComparison($left: ID!, $right: ID!) {
+  query PartyMergeComparison($left: String!, $right: String!) {
     left: parties_by_pk(id: $left) {
       id
       display_name

@@ -33,6 +33,13 @@ vi.mock("@angee/ui", () => ({
     pageMocks.recordHrefResources.push(resource);
     return (id: string) => `/routed/${encodeURIComponent(id)}`;
   },
+  Button: ({ children }: { children?: React.ReactNode }) => <button>{children}</button>,
+  Glyph: () => null,
+  MutationDialog: () => null,
+  errorMessage: (error: unknown) => String(error),
+  useAuthoredResourceMutation: () => [vi.fn(), { fetching: false, error: null }],
+  useConfirm: () => vi.fn(async () => true),
+  useToast: () => ({ toast: vi.fn(), success: vi.fn(), error: vi.fn() }),
 }));
 
 vi.mock("./i18n", () => ({

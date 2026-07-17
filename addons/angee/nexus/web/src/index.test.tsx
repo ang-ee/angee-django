@@ -8,8 +8,9 @@ describe("nexus addon manifest", () => {
     expect(() => expectValidBaseAddon(nexus)).not.toThrow();
   });
 
-  test("registers the derived ties and human cadence resource pages", () => {
+  test("registers the graph explorer and the ties/cadence resource pages", () => {
     expect((nexus.routes ?? []).map((route) => route.name)).toEqual([
+      "nexus.graph",
       "nexus.ties",
       "nexus.ties.record",
       "nexus.cadences",
@@ -23,10 +24,11 @@ describe("nexus addon manifest", () => {
     // intelligence layer over it. Every item hangs off the rail parties owns.
     const menus = nexus.menus ?? [];
     expect(menus.map((item) => item.route)).toEqual([
+      "nexus.graph",
       "nexus.ties",
       "nexus.cadences",
     ]);
-    expect(menus.map((item) => item.parentId)).toEqual(["parties", "parties"]);
+    expect(menus.map((item) => item.parentId)).toEqual(["parties", "parties", "parties"]);
     expect(menus.some((item) => item.children)).toBe(false);
   });
 

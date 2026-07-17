@@ -73,6 +73,9 @@ const parties = defineBaseAddon({
       name: "parties.merge",
       path: "/parties/merge/$left/$right",
       layout: "console",
+      // Param-bearing routes must name their chrome parent (the review queue is
+      // the merge flow's home per its breadcrumb).
+      parent: "parties.review",
       component: lazyRouteComponent(() => import("./MergePage"), "MergePage"),
     },
     ...resourcePageRoutes("parties.directories", "/parties/directories", lazyRouteComponent(() => import("./DirectoriesPage"), "DirectoriesPage"), "parties.Directory"),
