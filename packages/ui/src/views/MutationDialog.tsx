@@ -6,7 +6,12 @@ import { errorMessage } from "../feedback";
 import { DialogForm } from "../fragments/DialogForm";
 import { ErrorBanner } from "../fragments/ErrorBanner";
 import { Button } from "../ui/button";
-import { FieldDescription, FieldLabel, FieldRoot } from "../ui/field";
+import {
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+  FieldRoot,
+} from "../ui/field";
 import type { DialogPlacement, DialogSize } from "../ui/dialog";
 import { useUiT } from "../i18n";
 import { relationValueId } from "../widgets/types";
@@ -175,7 +180,7 @@ export function MutationDialog<
       placement={placement}
     >
       {fields.map((field) => (
-        <MutationDialogFieldRow
+        <DescriptorFieldControl
           key={field.name}
           field={field}
           value={values[field.name]}
@@ -192,15 +197,17 @@ export function MutationDialog<
   );
 }
 
-function MutationDialogFieldRow({
+export function DescriptorFieldControl({
   field,
   value,
   readOnly,
+  messages = [],
   onChange,
 }: {
   field: MutationDialogField;
   value: unknown;
   readOnly?: boolean;
+  messages?: readonly string[];
   onChange: (value: unknown) => void;
 }): React.ReactElement {
   const generatedId = React.useId();
@@ -208,14 +215,19 @@ function MutationDialogFieldRow({
   const descriptionId = field.description
     ? `${controlId}-description`
     : undefined;
+  const errorId = messages.length > 0 ? `${controlId}-error` : undefined;
+  const describedBy =
+    [descriptionId, errorId].filter(Boolean).join(" ") || undefined;
 
   return (
-    <FieldRoot>
+    <FieldRoot invalid={messages.length > 0}>
       <FieldLabel htmlFor={controlId} required={field.required}>
         {field.label ?? field.name}
       </FieldLabel>
       {field.relation ? (
         <MutationDialogRelationControl
+          controlId={controlId}
+          describedBy={describedBy}
           field={field}
           relation={field.relation}
           value={value}
@@ -229,13 +241,18 @@ function MutationDialogFieldRow({
           readOnly={readOnly}
           controlProps={{
             id: controlId,
-            ...(descriptionId ? { "aria-describedby": descriptionId } : {}),
+            ...(describedBy ? { "aria-describedby": describedBy } : {}),
           }}
           onChange={onChange}
         />
       )}
       {field.description ? (
         <FieldDescription id={descriptionId}>{field.description}</FieldDescription>
+      ) : null}
+      {messages.length > 0 ? (
+        <FieldError id={errorId} match>
+          {messages.join(", ")}
+        </FieldError>
       ) : null}
     </FieldRoot>
   );
@@ -248,12 +265,16 @@ function MutationDialogFieldRow({
  * popover first opens, so a dialog that is never touched never fetches.
  */
 function MutationDialogRelationControl({
+  controlId,
+  describedBy,
   field,
   relation,
   value,
   readOnly,
   onChange,
 }: {
+  controlId: string;
+  describedBy?: string;
   field: MutationDialogField;
   relation: MutationDialogRelation;
   value: unknown;
@@ -279,18 +300,24 @@ function MutationDialogRelationControl({
         field={field}
         value={value}
         readOnly={readOnly}
+        controlProps={{
+          id: controlId,
+          ...(describedBy ? { "aria-describedby": describedBy } : {}),
+        }}
         onChange={onChange}
       />
     );
   }
   return (
     <RelationPicker
+      id={controlId}
       value={relationValueId(value)}
       onChange={onChange}
       options={options}
       readOnly={readOnly}
       placeholder={field.placeholder}
       aria-label={typeof field.label === "string" ? field.label : field.name}
+      aria-describedby={describedBy}
       {...(relation.create ? { create: relation.create } : {})}
       onCreated={() => list.refetch()}
       onOpenChange={(open) => {
@@ -313,15 +340,31 @@ function initialDialogValues(
 }
 
 /**
- * The empty starting value for a dialog field, by its widget shape (list widgets
- * start `[]`, switches `false`, everything else `""`). MutationDialog owns the
- * dialog value ceremony; the typed-args action form seeds through the same rule.
+ * The empty starting value for a descriptor field. Collection and object schema
+ * kinds keep their JSON shape, numeric/unknown schema kinds avoid the empty
+ * string rejected by Strawberry, switches/booleans start false, and remaining
+ * scalar controls start `""`.
  */
 export function emptyValueForField(
   field: Pick<FieldDescriptor, "widget" | "kind">,
 ): unknown {
-  if (field.widget === "tagInput") return [];
-  if (field.kind === "switch" || field.widget === "switch") return false;
+  if (field.kind === "array" || field.widget === "tagInput") return [];
+  if (field.kind === "object") return {};
+  if (
+    field.kind === "boolean" ||
+    field.kind === "switch" ||
+    field.widget === "switch"
+  ) {
+    return false;
+  }
+  if (
+    field.kind === "integer" ||
+    field.kind === "number" ||
+    field.kind === "any"
+  ) {
+    if (field.widget === "select") return "";
+    return null;
+  }
   return "";
 }
 

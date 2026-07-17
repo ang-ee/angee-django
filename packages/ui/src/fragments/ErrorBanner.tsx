@@ -21,6 +21,7 @@ export const ErrorBanner = React.forwardRef<HTMLDivElement, ErrorBannerProps>(
       description,
       dismissLabel = "Dismiss",
       onDismiss,
+      role,
       title,
       ...props
     },
@@ -53,6 +54,7 @@ export const ErrorBanner = React.forwardRef<HTMLDivElement, ErrorBannerProps>(
         className={className}
         tone="danger"
         format="banner"
+        role={role ?? "alert"}
         title={title}
         {...props}
       >

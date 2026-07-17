@@ -21,11 +21,20 @@ export {
   type RelationCreateConfig,
 } from "./RelationPicker";
 export {
+  DescriptorFieldControl,
   MutationDialog,
   type MutationDialogField,
   type MutationDialogProps,
   type MutationDialogRelation,
 } from "./MutationDialog";
+export {
+  deserializeFormSpec,
+  formSpecInitialValues,
+  useFormSpecFields,
+  type FormSpecFieldDescriptor,
+  type FormSpecFieldType,
+  type FormSpecRelationCreate,
+} from "./form-spec";
 export {
   ActionFormDialog,
   type ActionFormDialogProps,
@@ -35,6 +44,14 @@ export {
   type UseActionFormOptions,
   type UseActionFormResult,
 } from "./use-action-form";
+export {
+  useDottedPathFieldErrors,
+  validationErrorMap,
+  validationErrorsFromError,
+  type DottedPathFieldErrorMap,
+  type DottedPathFieldErrors,
+  type ValidationErrors,
+} from "./validation-errors";
 export {
   FieldDescriptorControl,
   type FieldDescriptorControlProps,

@@ -86,6 +86,8 @@ export interface WidgetField {
   label?: ReactNode;
   options?: readonly WidgetOption[];
   placeholder?: string;
+  /** Nested descriptor data consumed by the registry's `rows` widget. */
+  rowTemplate?: readonly WidgetField[];
   /** Explicit `value → Tone` map (from `<Column tone>`) for status widgets. */
   tone?: Record<string, Tone>;
   /**

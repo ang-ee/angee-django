@@ -11,7 +11,7 @@ import {
 } from "./page";
 
 export interface FieldDescriptorControlProps {
-  field: FieldDescriptor;
+  field: FieldDescriptor & { rowTemplate?: readonly WidgetField[] };
   value: unknown;
   readOnly?: boolean;
   onChange?: (value: unknown) => void;
@@ -38,6 +38,7 @@ export function FieldDescriptorControl({
     options: field.options,
     placeholder: field.placeholder,
     controlProps,
+    ...(field.rowTemplate ? { rowTemplate: field.rowTemplate } : {}),
     ...(field.currencyField ? { currencyField: field.currencyField } : {}),
   };
   return (

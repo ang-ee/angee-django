@@ -5,7 +5,11 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider } from "../runtime";
 import { defaultWidgets } from "../widgets";
-import { MutationDialog } from "./MutationDialog";
+import {
+  DescriptorFieldControl,
+  MutationDialog,
+  emptyValueForField,
+} from "./MutationDialog";
 
 describe("MutationDialog", () => {
   afterEach(cleanup);
@@ -42,5 +46,37 @@ describe("MutationDialog", () => {
     expect(input.getAttribute("aria-describedby")?.split(" ")).toContain(
       description.id,
     );
+  });
+
+  test("binds server messages to the matching shared field control", () => {
+    render(
+      <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+        <DescriptorFieldControl
+          field={{ name: "title", label: "Title" }}
+          value=""
+          messages={["This field is required."]}
+          onChange={vi.fn()}
+        />
+      </AppRuntimeProvider>,
+    );
+
+    const input = screen.getByLabelText("Title");
+    const message = screen.getByText("This field is required.");
+
+    expect(input.getAttribute("aria-describedby")?.split(" ")).toContain(
+      message.id,
+    );
+    expect(message.closest('[data-invalid=""]')).not.toBeNull();
+  });
+
+  test("uses schema-safe empty values for descriptor field kinds", () => {
+    expect(emptyValueForField({ kind: "integer" })).toBeNull();
+    expect(emptyValueForField({ kind: "number" })).toBeNull();
+    expect(emptyValueForField({ kind: "any" })).toBeNull();
+    expect(emptyValueForField({ kind: "array" })).toEqual([]);
+    expect(emptyValueForField({ kind: "object" })).toEqual({});
+    expect(emptyValueForField({ kind: "boolean" })).toBe(false);
+    expect(emptyValueForField({ kind: "any", widget: "select" })).toBe("");
+    expect(emptyValueForField({ kind: "string" })).toBe("");
   });
 });

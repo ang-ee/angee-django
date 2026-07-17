@@ -265,6 +265,26 @@ describe("RelationPicker edit affordance", () => {
     expect(screen.queryByRole("button", { name: "Edit record" })).toBeNull();
   });
 
+  test("passes field accessibility ids to the relation trigger", () => {
+    renderPicker(
+      <RelationPicker
+        id="decision-target"
+        value="client-1"
+        options={options}
+        aria-label="OAuth Client"
+        aria-describedby="decision-target-error"
+      />,
+    );
+
+    const trigger = screen.getByRole("button", {
+      name: "OAuth Client: Acme OAuth",
+    });
+    expect(trigger.id).toBe("decision-target");
+    expect(trigger.getAttribute("aria-describedby")).toBe(
+      "decision-target-error",
+    );
+  });
+
   test("opens the selected record in an edit dialog", async () => {
     renderPicker(
       <RelationPicker

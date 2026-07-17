@@ -1,6 +1,69 @@
+// @vitest-environment happy-dom
+
+import { act, renderHook } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 
-import { validationErrorsFromError } from "./validation-errors";
+import {
+  useDottedPathFieldErrors,
+  validationErrorMap,
+  validationErrorsFromError,
+} from "./validation-errors";
+
+describe("validationErrorMap", () => {
+  test("parses a JSON field-to-messages map without changing dotted paths", () => {
+    expect(
+      validationErrorMap({
+        "review.approved": ["Field required"],
+        "rows.0.target": ["Input should be an integer"],
+      }),
+    ).toEqual({
+      "review.approved": ["Field required"],
+      "rows.0.target": ["Input should be an integer"],
+    });
+  });
+
+  test("rejects a malformed JSON error map", () => {
+    expect(validationErrorMap({ title: "Required" })).toBeNull();
+  });
+});
+
+describe("useDottedPathFieldErrors", () => {
+  test("binds and clears exact dotted descendants and summarizes unmatched keys", () => {
+    const fieldNames = ["review", "rows"];
+    const { result } = renderHook(() =>
+      useDottedPathFieldErrors(fieldNames),
+    );
+
+    act(() =>
+      result.current.replace({
+        review: ["Review is invalid"],
+        "review.approved": ["Field required"],
+        "rows.0.target": ["Choose a target"],
+        rowsExtra: ["Must remain unmatched"],
+      }),
+    );
+
+    expect(result.current.messagesFor("review")).toEqual([
+      "Review is invalid",
+      "review.approved: Field required",
+    ]);
+    expect(result.current.messagesFor("rows")).toEqual([
+      "rows.0.target: Choose a target",
+    ]);
+    expect(result.current.formSummary).toBe(
+      "rowsExtra: Must remain unmatched",
+    );
+
+    act(() => result.current.clearField("review"));
+    expect(result.current.messagesFor("review")).toEqual([]);
+    expect(result.current.messagesFor("rows")).toEqual([
+      "rows.0.target: Choose a target",
+    ]);
+
+    act(() => result.current.clear());
+    expect(result.current.formSummary).toBeNull();
+  });
+});
 
 describe("validationErrorsFromError", () => {
   test("splits a structured extension into field and form messages", () => {
