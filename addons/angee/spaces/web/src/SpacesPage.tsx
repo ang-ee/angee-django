@@ -36,6 +36,11 @@ const MODEL = "spaces.Group";
 type MembershipRow = StringIdRow;
 type SpaceThreadRow = StringIdRow;
 
+/** Narrow a dialog value onto the wire's MembershipRole enum, defaulting MEMBER. */
+function membershipRole(value: unknown): "OWNER" | "MODERATOR" | "MEMBER" {
+  return value === "OWNER" || value === "MODERATOR" ? value : "MEMBER";
+}
+
 function threadColumns(
   t: ReturnType<typeof useSpacesT>,
 ): readonly ListColumn<SpaceThreadRow>[] {
@@ -202,7 +207,7 @@ function GroupRosterTab({ recordId, ...context }: RecordPanelContext): React.Rea
           add({
             group: recordId,
             party: String(values.party ?? ""),
-            role: String(values.role ?? "MEMBER"),
+            role: membershipRole(values.role),
           })
         }
       />
