@@ -1829,13 +1829,28 @@ class Bridge(AngeeModel):
 
         return record_lock_key(self._meta.label_lower, self.pk, "sync")
 
+    def _sync_marker(self, **values: Any) -> dict[str, Any]:
+        """Return ``sync_progress`` with this run's marker keys set, others kept.
+
+        ``sync_progress`` has disjoint owners: the scheduler writes the lifecycle
+        marker (``stage``/``queued_at``/``started_at``), while a progress reporter
+        writes ``details`` — a live session's pairing report lives there, and it is
+        the QR the operator is currently looking at. Replacing the whole dict drops
+        it, so a marker merges the way
+        :class:`~angee.integrate.sync.BridgeProgressReporter` already does and sets
+        only the keys it owns.
+        """
+
+        existing = self.sync_progress if isinstance(self.sync_progress, Mapping) else {}
+        return {**existing, **values}
+
     def mark_sync_started(self, *, now: datetime) -> None:
         """Persist the start timestamp for one scheduler sync attempt."""
 
         self.last_sync_started_at = now
         self.sync_stage = self.SyncStage.SYNCING
         self.sync_error = ""
-        self.sync_progress = {"stage": self.SyncStage.SYNCING, "started_at": now.isoformat()}
+        self.sync_progress = self._sync_marker(stage=self.SyncStage.SYNCING, started_at=now.isoformat())
         with transaction.atomic():
             self.save(
                 update_fields=[
@@ -1866,7 +1881,7 @@ class Bridge(AngeeModel):
 
         self.sync_stage = self.SyncStage.QUEUED
         self.sync_error = ""
-        self.sync_progress = {"stage": self.SyncStage.QUEUED, "queued_at": now.isoformat()}
+        self.sync_progress = self._sync_marker(stage=self.SyncStage.QUEUED, queued_at=now.isoformat())
         with transaction.atomic():
             self.save(update_fields=["sync_error", "sync_progress", "sync_stage", "updated_at"])
 
@@ -1885,6 +1900,36 @@ class Bridge(AngeeModel):
         if self.sync_stage != self.SyncStage.QUEUED or not isinstance(self.sync_progress, Mapping):
             return False
         return self.sync_progress.get("queued_at") == timestamp.isoformat()
+
+    def release_sync_queue(self, *, now: datetime) -> bool:
+        """Release a queue claim this run declined; return whether it was still ours.
+
+        A declined run is terminal for its queue token — the work is not happening.
+        Leaving the row ``QUEUED`` makes the stale-queue recovery in
+        ``angee.integrate.scheduler`` re-queue it every ``_QUEUED_RECOVERY_SECONDS``
+        forever, because that recovery exists to repair a *lost* enqueue and cannot
+        tell one from a declined run. So the task that declines the work is the one
+        that clears the claim.
+
+        Guarded by the queue token and re-read under a row lock: whoever holds the
+        sync lock may already have moved this row on (a concurrent
+        :meth:`mark_sync_started`), and the decliner must never overwrite the
+        holder's stage. Mirrors :meth:`merge_subscription_state`.
+        """
+
+        with transaction.atomic():
+            row = (
+                type(self)
+                .objects.sudo(reason="integrate.bridge.release_sync_queue")
+                .lock_if_supported()
+                .get(pk=self.pk)
+            )
+            if not row.sync_queue_token_matches(now):
+                return False
+            row.sync_stage = row.SyncStage.IDLE
+            row.save(update_fields=["sync_stage", "updated_at"])
+        self.sync_stage = self.SyncStage.IDLE
+        return True
 
     def record_sync(self, result: int, *, now: datetime) -> None:
         """Persist one successful scheduler sync result and healthy status report."""

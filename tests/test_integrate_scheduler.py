@@ -14,12 +14,13 @@ from rebac import system_context
 
 from angee.integrate import queue as integrate_queue
 from angee.integrate import scheduler as integrate_scheduler
+from angee.integrate import sync_runner as integrate_sync_runner
 from angee.integrate import tasks as integrate_tasks
 from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.integrate.registry import bridge_models
 from angee.integrate.scheduler import enqueue_due_bridges, run_due_bridges
-from angee.integrate.sync import current_bridge_progress
+from angee.integrate.sync import BridgeProgressReporter, current_bridge_progress
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
@@ -293,6 +294,79 @@ def test_bridge_progress_reporter_persists_progress_payload(scheduler_tables: No
     assert bridge.sync_progress["stage"] == Bridge.SyncStage.COMPLETED
     assert bridge.sync_progress["details"] == {"items": 3, "source": "fixture"}
     assert bridge.sync_progress["message"] == "Scanning vendor rows"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_declined_sync_run_releases_its_queue_claim(scheduler_tables: None) -> None:
+    """A run that cannot take the lock clears its own claim, so recovery stops.
+
+    The stale-queue sweep exists to repair a *lost* enqueue and cannot tell one from
+    a declined run, so a claim left behind is re-queued every recovery window
+    forever — which is what a live session's permanently-held lock produced.
+    """
+
+    del scheduler_tables
+    now = timezone.now()
+    with system_context(reason="test integrate scheduler setup"):
+        bridge = make_integration("declined-run", model=SchedulerBridge)
+        bridge.mark_sync_queued(now=now)
+
+    # Hold the lock the way a live session does, then let a sync run decline.
+    with bridge_advisory_lock(bridge):
+        result = integrate_sync_runner.run_bridge_sync_job(
+            bridge._meta.label_lower, bridge.pk, now.isoformat()
+        )
+
+    assert result == {"ok": True, "items": 0, "skipped": True}
+    with system_context(reason="test integrate scheduler verify"):
+        bridge.refresh_from_db()
+    assert bridge.sync_stage == Bridge.SyncStage.IDLE
+
+
+@pytest.mark.django_db(transaction=True)
+def test_declined_sync_run_never_clears_the_holder_stage(scheduler_tables: None) -> None:
+    """The decliner releases only its own token — never a holder's live stage."""
+
+    del scheduler_tables
+    now = timezone.now()
+    with system_context(reason="test integrate scheduler setup"):
+        bridge = make_integration("declined-stale", model=SchedulerBridge)
+        bridge.mark_sync_queued(now=now)
+        # The holder moved the row on; this run's token is no longer current.
+        bridge.mark_sync_started(now=now + timedelta(seconds=1))
+
+    assert bridge.release_sync_queue(now=now) is False
+
+    with system_context(reason="test integrate scheduler verify"):
+        bridge.refresh_from_db()
+    assert bridge.sync_stage == Bridge.SyncStage.SYNCING
+
+
+@pytest.mark.django_db(transaction=True)
+def test_sync_markers_keep_a_reporters_details(scheduler_tables: None) -> None:
+    """Queueing a sync must not drop a live session's pairing report.
+
+    ``sync_progress`` has disjoint owners: the scheduler owns the lifecycle marker,
+    a reporter owns ``details``. Replacing the dict dropped the QR the operator was
+    looking at when Sync was pressed mid-pairing.
+    """
+
+    del scheduler_tables
+    now = timezone.now()
+    with system_context(reason="test integrate scheduler setup"):
+        bridge = make_integration("marker-merge", model=SchedulerBridge)
+        BridgeProgressReporter(bridge).report(
+            Bridge.SyncStage.SYNCING, details={"pairing": {"state": "awaiting_scan", "qr": "data:png"}}
+        )
+
+        bridge.mark_sync_queued(now=now)
+        assert bridge.sync_progress["details"]["pairing"]["qr"] == "data:png"
+        assert bridge.sync_progress["stage"] == Bridge.SyncStage.QUEUED
+        assert bridge.sync_progress["queued_at"] == now.isoformat()
+
+        bridge.mark_sync_started(now=now)
+        assert bridge.sync_progress["details"]["pairing"]["qr"] == "data:png"
+        assert bridge.sync_progress["stage"] == Bridge.SyncStage.SYNCING
 
 
 @pytest.mark.django_db(transaction=True)

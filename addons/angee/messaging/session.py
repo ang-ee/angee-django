@@ -58,11 +58,15 @@ class LiveChannelSession(LiveSession):
         if not facts:
             return message
         media_item_class = self.live_impl.media_item_class
+        # One payload carries one download: `_download` resolves the *payload*, not the
+        # fact, so fetching per fact would re-fetch the same bytes from the vendor once
+        # per fact and pay its rate limit for each.
+        content = self._download(payload)
         media = tuple(
             media_item_class(
                 mime=getattr(fact, "mime", "application/octet-stream"),
                 name=getattr(fact, "name", ""),
-                content=self._download(payload),
+                content=content,
             )
             for fact in facts
         )

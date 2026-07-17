@@ -31,6 +31,10 @@ def run_bridge_sync_job(
             return {"ok": True, "items": 0, "skipped": True, "stale": True}
         with bridge_advisory_lock(bridge) as acquired:
             if not acquired:
+                # The holder owns this bridge; this run declines. Clear our own queue
+                # claim so the stale-queue recovery stops re-queuing a row nobody will
+                # ever pick up — a live session holds the lock for its whole life.
+                bridge.release_sync_queue(now=now)
                 return {"ok": True, "items": 0, "skipped": True}
             items = bridge.run_sync(now=now)
     return {"ok": True, "items": items, "skipped": False}
