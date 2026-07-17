@@ -43,6 +43,7 @@ Directory = apps.get_model("parties", "Directory")
 Folder = apps.get_model("parties", "Folder")
 Circle = apps.get_model("parties", "Circle")
 CircleMember = apps.get_model("parties", "CircleMember")
+MergeVeto = apps.get_model("parties", "MergeVeto")
 RelationshipKind = apps.get_model("parties", "RelationshipKind")
 Relationship = apps.get_model("parties", "Relationship")
 
@@ -63,8 +64,8 @@ class PartyType(AuthoredRefMixin, AngeeNode):
     party_handles: list["PartyHandleType"]
     addresses: list["AddressType"]
     circle_members: list["CircleMemberType"]
-    relationships: list["RelationshipType"]
-    inbound_relationships: list["RelationshipType"]
+    relationships: list["PartyRelationshipType"]
+    inbound_relationships: list["PartyRelationshipType"]
 
 
 @strawberry_django.type(Person)
@@ -110,6 +111,7 @@ class HandleType(AngeeNode):
 
     platform: auto
     value: auto
+    normalized_value: auto
     external_id: auto
     display_name: auto
     label: auto
@@ -228,6 +230,16 @@ class CircleMemberType(AngeeNode):
     created_at: auto
 
 
+@strawberry_django.type(MergeVeto)
+class MergeVetoType(AngeeNode):
+    """GraphQL projection of a durable canonical keep-separate pair."""
+
+    party_a: PartyType | None
+    party_b: PartyType | None
+    created_at: auto
+    updated_at: auto
+
+
 @strawberry_django.type(RelationshipKind)
 class RelationshipKindType(AngeeNode):
     """GraphQL projection of a relationship-vocabulary kind."""
@@ -241,7 +253,7 @@ class RelationshipKindType(AngeeNode):
 
 
 @strawberry_django.type(Relationship)
-class RelationshipType(AngeeNode):
+class PartyRelationshipType(AngeeNode):
     """GraphQL projection of a typed party edge (anchor viewpoint)."""
 
     party: PartyType | None
@@ -257,8 +269,37 @@ class RelationshipType(AngeeNode):
 
 
 @strawberry.type
+class DuplicatePartyCandidateType:
+    """Two actor-visible parties sharing one deterministic normalized handle."""
+
+    left: PartyType
+    right: PartyType
+    normalized_value: str
+
+
+@strawberry.type
+class PartiesReviewQuery:
+    """Bounded read surfaces for party search and human review queues."""
+
+    @strawberry.field
+    def duplicate_party_candidates(self, limit: int = 50) -> list[DuplicatePartyCandidateType]:
+        """Return canonical party pairs that share a handle and have no merge veto."""
+
+        return cast(
+            "list[DuplicatePartyCandidateType]",
+            Party.objects.all().duplicate_candidates(limit=limit),
+        )
+
+    @strawberry.field
+    def search_parties(self, query: str, limit: int = 20) -> list[PersonType]:
+        """Return actor-visible people whose display name contains ``query``."""
+
+        return cast("list[PersonType]", Person.objects.search_display_name(query, limit=limit))
+
+
+@strawberry.type
 class PartiesIdentityMutation:
-    """Human decisions on party↔handle identity claims."""
+    """Human decisions on party identity claims and duplicate records."""
 
     @strawberry.mutation
     def confirm_party_handle(self, info: strawberry.Info, id: strawberry.ID) -> PartyHandleType:
@@ -279,6 +320,38 @@ class PartiesIdentityMutation:
             raise ValueError("party handle link not found")
         link.dismiss()
         return cast(PartyHandleType, link)
+
+    @strawberry.mutation
+    def merge_parties(
+        self,
+        into_id: strawberry.ID,
+        from_id: strawberry.ID,
+        field_overrides: strawberry.scalars.JSON | None = None,
+    ) -> PartyType:
+        """Merge one writable party into another through the model-owned transaction."""
+
+        survivor = Party.objects.all().from_public_id(str(into_id))
+        source = Party.objects.all().from_public_id(str(from_id))
+        if survivor is None or source is None:
+            raise ValueError("party not found")
+        return cast(
+            PartyType,
+            Party.objects.merge(
+                into=survivor,
+                source=source,
+                field_overrides=field_overrides,
+            ),
+        )
+
+    @strawberry.mutation
+    def veto_merge(self, a_id: strawberry.ID, b_id: strawberry.ID) -> MergeVetoType:
+        """Persist the durable keep-separate decision for two writable parties."""
+
+        party_a = Party.objects.all().from_public_id(str(a_id))
+        party_b = Party.objects.all().from_public_id(str(b_id))
+        if party_a is None or party_b is None:
+            raise ValueError("party not found")
+        return cast(MergeVetoType, MergeVeto.objects.veto(party_a, party_b))
 
 
 @strawberry.type
@@ -530,6 +603,20 @@ _CIRCLE_MEMBER_RESOURCE = hasura_model_resource(
     },
     write_backend=AngeeHasuraWriteBackend(CircleMember, public_id_fields=("circle", "party")),
 )
+_MERGE_VETO_RESOURCE = hasura_model_resource(
+    MergeVetoType,
+    model=MergeVeto,
+    name="merge_vetoes",
+    filterable=["id", "party_a", "party_b", "created_at", "updated_at"],
+    sortable=["party_a", "party_b", "created_at", "updated_at"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    field_id_decode={
+        "party_a": public_pk_decoder(Party),
+        "party_b": public_pk_decoder(Party),
+    },
+)
 _RELATIONSHIP_KIND_RESOURCE = hasura_model_resource(
     RelationshipKindType,
     model=RelationshipKind,
@@ -542,9 +629,9 @@ _RELATIONSHIP_KIND_RESOURCE = hasura_model_resource(
     updatable=["name", "inverse_name", "category", "party_kind", "other_party_kind"],
 )
 _RELATIONSHIP_RESOURCE = hasura_model_resource(
-    RelationshipType,
+    PartyRelationshipType,
     model=Relationship,
-    name="relationships",
+    name="party_relationships",
     filterable=["id", "party", "other_party", "kind", "source", "started_at", "ended_at", "created_at"],
     sortable=["kind", "source", "started_at", "created_at"],
     aggregatable=["id"],
@@ -603,6 +690,7 @@ _RESOURCE_TYPES = [
     *_ADDRESS_RESOURCE.types,
     *_CIRCLE_RESOURCE.types,
     *_CIRCLE_MEMBER_RESOURCE.types,
+    *_MERGE_VETO_RESOURCE.types,
     *_RELATIONSHIP_KIND_RESOURCE.types,
     *_RELATIONSHIP_RESOURCE.types,
     *_CONTACT_FOLDER_RESOURCE.types,
@@ -612,6 +700,7 @@ _RESOURCE_TYPES = [
 
 _PARTIES_SCHEMA_BUCKET = {
     "query": [
+        PartiesReviewQuery,
         _PARTY_RESOURCE.query,
         _PERSON_RESOURCE.query,
         _ORGANIZATION_RESOURCE.query,
@@ -620,6 +709,7 @@ _PARTIES_SCHEMA_BUCKET = {
         _ADDRESS_RESOURCE.query,
         _CIRCLE_RESOURCE.query,
         _CIRCLE_MEMBER_RESOURCE.query,
+        _MERGE_VETO_RESOURCE.query,
         _RELATIONSHIP_KIND_RESOURCE.query,
         _RELATIONSHIP_RESOURCE.query,
         _CONTACT_FOLDER_RESOURCE.query,
@@ -636,6 +726,7 @@ _PARTIES_SCHEMA_BUCKET = {
         _ADDRESS_RESOURCE.mutation,
         _CIRCLE_RESOURCE.mutation,
         _CIRCLE_MEMBER_RESOURCE.mutation,
+        _MERGE_VETO_RESOURCE.mutation,
         _RELATIONSHIP_KIND_RESOURCE.mutation,
         _RELATIONSHIP_RESOURCE.mutation,
         _CONTACT_FOLDER_RESOURCE.mutation,
@@ -650,8 +741,10 @@ _PARTIES_SCHEMA_BUCKET = {
         AddressType,
         CircleType,
         CircleMemberType,
+        MergeVetoType,
+        DuplicatePartyCandidateType,
         RelationshipKindType,
-        RelationshipType,
+        PartyRelationshipType,
         DirectoryType,
         ContactFolderType,
         *_RESOURCE_TYPES,
@@ -671,6 +764,7 @@ schemas = {
             changes(Directory, field="directoryChanged"),
             changes(Circle, field="circleChanged"),
             changes(CircleMember, field="circleMemberChanged"),
+            changes(MergeVeto, field="mergeVetoChanged"),
             changes(Relationship, field="relationshipChanged"),
         ],
     },

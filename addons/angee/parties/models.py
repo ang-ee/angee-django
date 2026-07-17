@@ -22,7 +22,8 @@ is a typed, directed party↔party edge whose vocabulary
 
 from __future__ import annotations
 
-from typing import Any, cast
+from collections.abc import Mapping
+from typing import Any, ClassVar, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -40,6 +41,7 @@ from angee.parties.backends import DirectoryBackend
 from angee.parties.managers import (
     CircleManager,
     HandleManager,
+    MergeVetoManager,
     PartyHandleManager,
     PartyManager,
 )
@@ -99,6 +101,21 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
     """Free-text "how I know them" note (vCard has no property for this)."""
 
     objects = PartyManager()
+
+    _merge_scalar_fields: ClassVar[tuple[str, ...]] = (
+        "display_name",
+        "notes",
+        "first_met_note",
+    )
+    _person_merge_scalar_fields: ClassVar[tuple[str, ...]] = (
+        "name_prefix",
+        "given_name",
+        "additional_name",
+        "family_name",
+        "name_suffix",
+        "nickname",
+        "birthday",
+    )
 
     class Meta:
         """Django model options for the party source model."""
@@ -160,6 +177,56 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
             party = party.merged_into
         return party
 
+    def apply_merge_field_overrides(self, source: Party, field_overrides: Any) -> None:
+        """Apply the allow-listed scalar overrides selected for a merge survivor.
+
+        Common human fields live on ``Party``. Person-only name and birthday
+        fields are accepted only when both endpoints materialize a ``Person``
+        child; the child owns coercion and persistence for those columns.
+        """
+
+        if field_overrides is None:
+            return
+        if not isinstance(field_overrides, Mapping):
+            raise ValidationError({"field_overrides": "Expected an object of field values."})
+
+        both_people = self.concrete_kind == "person" and source.concrete_kind == "person"
+        allowed = set(self._merge_scalar_fields)
+        if both_people:
+            allowed.update(self._person_merge_scalar_fields)
+        unknown = set(field_overrides) - allowed
+        if unknown:
+            names = ", ".join(sorted(str(name) for name in unknown))
+            raise ValidationError({"field_overrides": f"Unsupported merge field(s): {names}."})
+
+        self._apply_merge_scalar_values(field_overrides, self._merge_scalar_fields)
+        if both_people and any(name in field_overrides for name in self._person_merge_scalar_fields):
+            person_model = apps.get_model("parties", "Person")
+            person = person_model.objects.filter(pk=self.pk).first()
+            if person is None or not person.has_access("write"):
+                raise PermissionDenied("write access to the surviving person is required")
+            person.sudo(reason="parties.merge.person_field_overrides")
+            person._apply_merge_scalar_values(field_overrides, self._person_merge_scalar_fields)
+
+    def _apply_merge_scalar_values(
+        self,
+        field_overrides: Mapping[Any, Any],
+        field_names: tuple[str, ...],
+    ) -> None:
+        """Coerce and save this row's selected merge fields through Django fields."""
+
+        dirty: list[str] = []
+        for name in field_names:
+            if name not in field_overrides:
+                continue
+            field = cast(models.Field[Any, Any], self._meta.get_field(name))
+            value = field.clean(field_overrides[name], self)
+            if getattr(self, name) != value:
+                setattr(self, name, value)
+                dirty.append(name)
+        if dirty:
+            self.save(update_fields=[*dirty, "updated_at"])
+
     def merge_into(self, target: Party) -> Party:
         """Atomically merge this party into ``target`` and return the terminal target.
 
@@ -220,6 +287,68 @@ class Person(AngeeModel):
         abstract = True
         rebac_resource_type = "parties/person"
         rebac_id_attr = "sqid"
+
+
+class MergeVeto(SqidMixin, AuditMixin, AngeeModel):
+    """A durable decision that two canonically ordered parties must stay separate."""
+
+    runtime = True
+    sqid_prefix = "mvt_"
+
+    party_a = models.ForeignKey(
+        "parties.Party",
+        on_delete=models.CASCADE,
+        related_name="merge_vetoes_as_a",
+    )
+    party_b = models.ForeignKey(
+        "parties.Party",
+        on_delete=models.CASCADE,
+        related_name="merge_vetoes_as_b",
+    )
+
+    objects = MergeVetoManager()
+
+    class Meta:
+        """Django model options for the canonical keep-separate pair."""
+
+        abstract = True
+        ordering = ("party_a", "party_b", "sqid")
+        rebac_resource_type = "parties/merge_veto"
+        rebac_id_attr = "sqid"
+        constraints = (
+            models.CheckConstraint(
+                condition=models.Q(party_a__lt=models.F("party_b")),
+                name="ck_merge_veto_party_order",
+            ),
+            models.UniqueConstraint(
+                fields=("party_a", "party_b"),
+                name="uq_merge_veto_party_pair",
+            ),
+        )
+
+    def __str__(self) -> str:
+        """Return the canonical pair for Django displays."""
+
+        return f"merge-veto:{self.party_a_id}<->{self.party_b_id}"
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Persist the veto in canonical primary-key order."""
+
+        party_a_id = getattr(self, "party_a_id", None)
+        party_b_id = getattr(self, "party_b_id", None)
+        if party_a_id is not None and party_b_id is not None and party_a_id > party_b_id:
+            party_a = self._state.fields_cache.pop("party_a", None)
+            party_b = self._state.fields_cache.pop("party_b", None)
+            self.party_a_id = party_b_id
+            self.party_b_id = party_a_id
+            if party_b is not None:
+                self.party_a = party_b
+            if party_a is not None:
+                self.party_b = party_a
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None:
+                kwargs["update_fields"] = {*update_fields, "party_a", "party_b"}
+        super().save(*args, **kwargs)
 
 
 class Organization(AngeeModel):

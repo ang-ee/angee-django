@@ -41,6 +41,7 @@ PARTIES_TEST_MODELS = (
     messaging_models.Folder,
     messaging_models.Party,
     Organization,
+    messaging_models.MergeVeto,
     messaging_models.Handle,
     Address,
     Circle,
@@ -209,7 +210,7 @@ def test_public_resource_metadata_converts_related_parties_surfaces() -> None:
     assert address.create_fields[0] == "party"
 
     relationship = resources["parties.Relationship"]
-    assert relationship.roots.list_name == "relationships"
+    assert relationship.roots.list_name == "party_relationships"
     assert relationship.create_fields[:2] == ("party", "other_party")
 
     folder = resources["parties.Folder"]

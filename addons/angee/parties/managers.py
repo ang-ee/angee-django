@@ -14,12 +14,15 @@ converges instead of duplicating. The sync runs under ``system_context``, so
 from __future__ import annotations
 
 import mimetypes
+from dataclasses import dataclass
+from itertools import combinations
 from typing import TYPE_CHECKING, Any, Self, cast
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db import transaction
-from rebac import system_context
+from django.db import IntegrityError, transaction
+from django.db.models import Count, Q, Subquery
+from rebac import PermissionDenied, current_actor, system_context
 
 from angee.base.mixins import HierarchyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
@@ -324,6 +327,103 @@ class PartyHandleManager(AngeeManager):
         return None
 
 
+@dataclass(frozen=True, slots=True)
+class DuplicatePartyCandidate:
+    """One deterministic duplicate candidate and the normalized handle it shares."""
+
+    left: Any
+    right: Any
+    normalized_value: str
+
+
+class MergeVetoManager(AngeeManager):
+    """Own canonical keep-separate pair lookup and creation."""
+
+    def forbids(self, a: Any, b: Any) -> bool:
+        """Return whether the canonical pair ``a``/``b`` has a durable veto."""
+
+        party_a_id, party_b_id = self._ordered_ids(a, b)
+        with system_context(reason="parties.merge_veto.forbids"):
+            return self.model._base_manager.filter(
+                party_a_id=party_a_id,
+                party_b_id=party_b_id,
+            ).exists()
+
+    def forbidden_pairs(self, party_ids: set[Any]) -> set[tuple[Any, Any]]:
+        """Return vetoed canonical pairs whose two endpoints are in ``party_ids``."""
+
+        if not party_ids:
+            return set()
+        with system_context(reason="parties.merge_veto.forbidden_pairs"):
+            rows = self.model._base_manager.filter(
+                party_a_id__in=party_ids,
+                party_b_id__in=party_ids,
+            ).values_list("party_a_id", "party_b_id")
+            return set(rows)
+
+    def veto(self, a: Any, b: Any) -> Any:
+        """Persist the canonical keep-separate fact after locking both writable parties.
+
+        The pair lock is the same lock, in the same order, that :meth:`PartyManager.merge`
+        takes. A simultaneous merge and veto therefore serialize around the human
+        identity decision instead of both committing after independent checks.
+        """
+
+        party_a_id, party_b_id = self._ordered_ids(a, b)
+        actor = current_actor()
+        party_model = apps.get_model("parties", "Party")
+        with transaction.atomic():
+            locked = {
+                party.pk: party
+                for party in party_model.objects.lock_if_supported()
+                .filter(pk__in=(party_a_id, party_b_id))
+                .order_by("pk")
+            }
+            if party_a_id not in locked or party_b_id not in locked:
+                raise ValidationError("One of the parties no longer exists.")
+            party_a = locked[party_a_id]
+            party_b = locked[party_b_id]
+            if party_a.merged_into_id is not None or party_b.merged_into_id is not None:
+                raise ValidationError("Only canonical parties can be kept separate.")
+            if not party_a.has_access("write") or not party_b.has_access("write"):
+                raise PermissionDenied("write access to both parties is required")
+
+            with system_context(reason="parties.merge_veto.lookup"):
+                existing = self.model._base_manager.filter(
+                    party_a_id=party_a_id,
+                    party_b_id=party_b_id,
+                ).first()
+            if existing is not None:
+                return existing.with_actor(actor) if actor is not None else existing
+
+            verified_actor = self.check_create()
+            veto = self.model(party_a_id=party_a_id, party_b_id=party_b_id)
+            veto.full_clean(validate_unique=False, validate_constraints=False)
+            veto.sudo(reason="parties.merge_veto.create")
+            try:
+                with transaction.atomic():
+                    veto.save()
+            except IntegrityError:
+                # Retain idempotence on databases without row-level pair locks.
+                with system_context(reason="parties.merge_veto.concurrent_lookup"):
+                    veto = self.model._base_manager.get(
+                        party_a_id=party_a_id,
+                        party_b_id=party_b_id,
+                    )
+            return veto.with_actor(verified_actor)
+
+    @staticmethod
+    def _ordered_ids(a: Any, b: Any) -> tuple[Any, Any]:
+        """Return saved, distinct party primary keys in canonical order."""
+
+        if a.pk is None or b.pk is None:
+            raise ValidationError("Both parties must be saved.")
+        if a.pk == b.pk:
+            raise ValidationError("A party cannot be kept separate from itself.")
+        party_a_id, party_b_id = sorted((a.pk, b.pk))
+        return party_a_id, party_b_id
+
+
 class PartyQuerySet(AngeeQuerySet):
     """Party read scopes: canonical (unmerged) rows and organisation membership."""
 
@@ -351,6 +451,86 @@ class PartyQuerySet(AngeeQuerySet):
             relationships__ended_at__isnull=True,
         ).distinct()
 
+    def duplicate_candidates(self, *, limit: int = 50) -> list[DuplicatePartyCandidate]:
+        """Return bounded actor-visible party pairs sharing a normalized handle.
+
+        Candidate order is deterministic by normalized value then primary-key pair.
+        A pair appears once even if it shares several handles, and any durable
+        :class:`~angee.parties.models.MergeVeto` removes it from the queue.
+        """
+
+        bounded = max(0, min(int(limit), 100))
+        if bounded == 0:
+            return []
+
+        handle_model = apps.get_model("parties", "Handle")
+        merge_veto_model = apps.get_model("parties", "MergeVeto")
+        visible_party_ids = self.canonical().scoped_for_aggregate().values("pk")
+        handles = handle_model.objects.all().scoped_for_aggregate().filter(
+            party_id__in=Subquery(visible_party_ids),
+        ).exclude(normalized_value="")
+        shared_handles = list(
+            handles.values("platform", "normalized_value")
+            .annotate(party_count=Count("party_id", distinct=True))
+            .filter(party_count__gt=1)
+            .order_by("normalized_value", "platform")
+            .values_list("platform", "normalized_value")[:bounded]
+        )
+        if not shared_handles:
+            return []
+
+        shared_filter = Q()
+        for platform, normalized_value in shared_handles:
+            shared_filter |= Q(platform=platform, normalized_value=normalized_value)
+
+        parties_by_handle: dict[tuple[str, str], list[Any]] = {}
+        for platform, normalized_value, party_id in (
+            handles.filter(shared_filter)
+            .values_list("platform", "normalized_value", "party_id")
+            .distinct()
+            .order_by("normalized_value", "platform", "party_id")
+        ):
+            parties_by_handle.setdefault((platform, normalized_value), []).append(party_id)
+
+        candidate_party_ids = {
+            party_id
+            for party_ids in parties_by_handle.values()
+            for party_id in party_ids
+        }
+        forbidden = merge_veto_model.objects.forbidden_pairs(candidate_party_ids)
+        pairs: list[tuple[str, Any, Any]] = []
+        seen: set[tuple[Any, Any]] = set()
+        for (_platform, normalized_value), party_ids in parties_by_handle.items():
+            for party_a_id, party_b_id in combinations(party_ids, 2):
+                pair = (party_a_id, party_b_id)
+                if pair in seen or pair in forbidden:
+                    continue
+                seen.add(pair)
+                pairs.append((normalized_value, *pair))
+                if len(pairs) >= bounded:
+                    break
+            if len(pairs) >= bounded:
+                break
+
+        paired_party_ids = {
+            party_id
+            for _normalized_value, party_a_id, party_b_id in pairs
+            for party_id in (party_a_id, party_b_id)
+        }
+        parties = {
+            party.pk: party
+            for party in self.canonical().filter(pk__in=paired_party_ids)
+        }
+        return [
+            DuplicatePartyCandidate(
+                left=parties[party_a_id],
+                right=parties[party_b_id],
+                normalized_value=normalized_value,
+            )
+            for normalized_value, party_a_id, party_b_id in pairs
+            if party_a_id in parties and party_b_id in parties
+        ]
+
 
 class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[misc]
     """Factory for parties, including the idempotent directory-sync ingest.
@@ -376,6 +556,45 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             defaults={"display_name": _user_display_name(user), "created_by_id": user.pk},
         )
         return person
+
+    def search_display_name(self, query: str, *, limit: int = 20) -> list[Any]:
+        """Return a bounded actor-visible people list filtered by display name."""
+
+        bounded = max(1, min(int(limit), 100))
+        return list(
+            self.canonical()
+            .filter(display_name__icontains=query.strip())
+            .order_by("display_name", "sqid")[:bounded]
+        )
+
+    def merge(self, *, into: Any, source: Any, field_overrides: Any = None) -> Any:
+        """Merge ``source`` into ``into`` with vetted scalar overrides in one transaction."""
+
+        if into.pk is None or source.pk is None:
+            raise ValidationError("Both parties must be saved before merging.")
+        if into.pk == source.pk:
+            raise ValidationError("A party cannot be merged into itself.")
+
+        merge_veto_model = apps.get_model("parties", "MergeVeto")
+        with transaction.atomic():
+            locked = {
+                party.pk: party
+                for party in self.lock_if_supported()
+                .filter(pk__in=(into.pk, source.pk))
+                .order_by("pk")
+            }
+            if into.pk not in locked or source.pk not in locked:
+                raise ValidationError("One of the parties no longer exists.")
+            survivor = locked[into.pk]
+            merged = locked[source.pk]
+            if survivor.merged_into_id is not None or merged.merged_into_id is not None:
+                raise ValidationError("Only canonical parties can be merged.")
+            if not survivor.has_access("write") or not merged.has_access("write"):
+                raise PermissionDenied("write access to both parties is required")
+            if merge_veto_model.objects.forbids(survivor, merged):
+                raise ValidationError("These parties have been marked to stay separate.")
+            survivor.apply_merge_field_overrides(merged, field_overrides)
+            return merged.merge_into(survivor)
 
     def identity_for_user_id(self, user_id: Any) -> Any | None:
         """Return the existing Person party linked to ``user_id`` without creating one."""
