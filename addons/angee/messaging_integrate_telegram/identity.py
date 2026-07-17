@@ -49,14 +49,21 @@ def handle_for_peer(peer: Any | None, *, fallback_id: object = "") -> ParsedHand
 
 
 def thread_modality(*, is_private: bool, is_group: bool, is_channel: bool) -> str:
-    """Return direct/group/channel while keeping Telegram megagroups as groups."""
+    """Return a ``Thread.Modality`` value, keeping Telegram megagroups as groups.
+
+    Telegram's chat types are not the thread vocabulary: a broadcast channel is a
+    one-to-many feed, whose structural shape messaging names ``public_thread``.
+    Returning Telegram's own ``channel`` noun rejects the whole ingest — the
+    modality column is a real enum — so the mapping onto messaging's vocabulary
+    lands here, at the adapter that knows both.
+    """
 
     if is_private:
         return "direct"
     if is_group:
         return "group"
     if is_channel:
-        return "channel"
+        return "public_thread"
     return "group"
 
 

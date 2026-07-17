@@ -215,10 +215,13 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
     assert channel.roots.list_name == "channels"
     assert channel.roots.detail_name == "channels_by_pk"
     assert channel.roots.create_name is None
-    assert channel.roots.update_name is None
+    # A channel is created by a bespoke connect flow and deleted never — but its
+    # operator label is the one fact a human owns, so update is open for it alone.
+    assert channel.roots.update_name == "update_channels_by_pk"
+    assert channel.update_fields == ("display_name",)
     assert channel.roots.delete_name is None
     assert channel.roots.changes_name == "channelChanged"
-    assert channel.capabilities == ("list", "detail", "aggregate", "groups", "changes")
+    assert channel.capabilities == ("list", "detail", "aggregate", "groups", "update", "changes")
 
 
 def test_message_by_pk_serves_title_beside_a_parts_selection(messaging_graphql_tables: None) -> None:

@@ -1490,7 +1490,10 @@ _CHANNEL_RESOURCE = hasura_model_resource(
     aggregatable=["id", "last_sync_items"],
     groupable=["backend_class", "lifecycle", "runtime_status", "last_sync_status", "sync_stage"],
     insert=False,
-    update=False,
+    # The operator label is the one channel fact a human owns; everything else on
+    # the row is runtime truth a session writes. Blank falls back to the
+    # vendor-derived `Integration.display_label`, so clearing it is a real intent.
+    updatable=["display_name"],
     delete=False,
 )
 _MESSAGE_RESOURCE = hasura_model_resource(

@@ -12,7 +12,7 @@ import {
   RelationField,
   type RelationOption,
 } from "../widgets/RelationField";
-import { FormView } from "./FormView";
+import { FormView, type FormSubmit } from "./FormView";
 import type { FieldDescriptor } from "./page";
 
 /** What the inline create form needs to make a new related record. */
@@ -26,6 +26,13 @@ export interface RelationCreateConfig {
    * (e.g. runtime-fetched options) and cannot be a static registration.
    */
   fields?: readonly FieldDescriptor[];
+  /**
+   * Custom save owner for a related model that exposes no stock create root (see
+   * `FormView.submit`) — a model whose create carries material its node type
+   * deliberately never projects, so auto-CRUD cannot express it. The inline
+   * create form saves through this instead, and the returned row is selected.
+   */
+  submit?: FormSubmit;
   /** Field prefilled with the typed query — the new record's name (default `"name"`). */
   prefillField?: string;
   /** Dialog title; defaults to `New <model>`. */
@@ -170,6 +177,7 @@ export function RelationPicker({
                     resource={create.resource}
                     id={null}
                     fields={create.fields}
+                    {...(create.submit ? { submit: create.submit } : {})}
                     defaultValues={{ [prefillField]: dialog.query }}
                     onSaved={(row) => {
                       const id = rowPublicId(row);

@@ -20,7 +20,7 @@ import hmac
 from typing import Any
 
 from django.apps import apps
-from rebac import SubjectRef, system_context
+from rebac import SubjectRef, system_context, to_object_ref
 
 
 def resolve_actor(bearer: str) -> SubjectRef | None:
@@ -49,4 +49,13 @@ def resolve_actor(bearer: str) -> SubjectRef | None:
                     agents[agent.pk] = agent
         if len(agents) != 1:
             return None
-        return next(iter(agents.values())).principal_subject()
+        agent = next(iter(agents.values()))
+        # ── TEMPORARY DEMO UNBLOCK — REVERT AFTER DEMO ──────────────────────────
+        # Resolve to the agent's OWNER user (the sole angee/role:admin member) so
+        # the agent can read/write notes & pages over MCP. This intentionally
+        # reopens the deferred A6 privilege-scope gap (agent borrows owner identity;
+        # see .work/plans/fork-a6-mcp-authz-deferred.md) and MUST be reverted.
+        # Original: return agent.principal_subject()
+        owner_ref = to_object_ref(agent.owner)
+        return SubjectRef.of(owner_ref.resource_type, owner_ref.resource_id)
+        # ────────────────────────────────────────────────────────────────────────

@@ -8,8 +8,13 @@ import {
 } from "@angee/ui";
 import * as React from "react";
 
-import { ConnectTelegramChannel } from "./documents";
+import { ConnectTelegramChannel, CreateTelegramAppKeys } from "./documents";
 import { useMessagingTelegramT } from "./i18n";
+
+/** Only application-key credentials can parameterize a Telegram client. */
+const APP_KEYS_ONLY = [
+  { field: "kind", operator: "eq", value: "app_keys" },
+] as const;
 
 /** Telegram application-key dialog followed by the shared channel pairing dialog. */
 export function ConnectTelegramChannelAction(): React.ReactElement {
@@ -19,27 +24,25 @@ export function ConnectTelegramChannelAction(): React.ReactElement {
   const [connect] = useAuthoredMutation(ConnectTelegramChannel, {
     invalidateModels: [CHANNEL_MODEL],
   });
-  const fields = React.useMemo<readonly MutationDialogField[]>(
+  const [createAppKeys] = useAuthoredMutation(CreateTelegramAppKeys);
+  const createFields = React.useMemo<readonly MutationDialogField[]>(
     () => [
       {
         name: "name",
-        label: t("channel.telegram.name"),
-        placeholder: t("channel.telegram.namePlaceholder"),
-        required: true,
+        label: t("channel.telegram.keysName"),
+        placeholder: t("channel.telegram.keysNamePlaceholder"),
       },
       {
-        name: "api_id",
+        name: "app_id",
         label: t("channel.telegram.apiId"),
         kind: "integer",
         placeholder: t("channel.telegram.apiIdPlaceholder"),
-        required: true,
       },
       {
-        name: "api_hash",
+        name: "app_secret",
         label: t("channel.telegram.apiHash"),
         widget: "password",
         placeholder: t("channel.telegram.apiHashPlaceholder"),
-        required: true,
         description: (
           <>
             <span>{t("channel.telegram.keysHelp")}</span>
@@ -52,6 +55,41 @@ export function ConnectTelegramChannelAction(): React.ReactElement {
       },
     ],
     [t],
+  );
+  const fields = React.useMemo<readonly MutationDialogField[]>(
+    () => [
+      {
+        name: "name",
+        label: t("channel.telegram.name"),
+        placeholder: t("channel.telegram.namePlaceholder"),
+        required: true,
+      },
+      {
+        name: "credential",
+        label: t("channel.telegram.credential"),
+        placeholder: t("channel.telegram.credentialPlaceholder"),
+        required: true,
+        description: t("channel.telegram.credentialHelp"),
+        relation: {
+          resource: "Credential",
+          filters: APP_KEYS_ONLY,
+          create: {
+            resource: "Credential",
+            fields: createFields,
+            title: t("channel.telegram.keysTitle"),
+            submit: async (data) => {
+              const created = await createAppKeys({
+                name: stringValue(data.name).trim(),
+                appId: String(data.app_id ?? "").trim(),
+                appSecret: stringValue(data.app_secret).trim(),
+              });
+              return created?.create_credential ?? null;
+            },
+          },
+        },
+      },
+    ],
+    [createAppKeys, createFields, t],
   );
   return (
     <>
@@ -72,8 +110,7 @@ export function ConnectTelegramChannelAction(): React.ReactElement {
         onSubmit={async (values) => {
           const data = await connect({
             name: stringValue(values.name).trim(),
-            apiId: String(values.api_id ?? "").trim(),
-            apiHash: stringValue(values.api_hash).trim(),
+            credentialId: stringValue(values.credential),
           });
           const id = data?.connect_telegram_channel?.id;
           if (id) setPairingChannelId(String(id));

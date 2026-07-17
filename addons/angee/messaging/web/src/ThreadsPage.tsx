@@ -34,6 +34,7 @@ export function ThreadsPage(): React.ReactElement {
       <List resource={MODEL}>
         <Facet field="channel" label={t("threads.channel")} labelField="display_name" />
         <Column field="title.text" header={t("threads.title")} />
+        <Column field="channel.vendor.display_name" header={t("threads.channelType")} />
         <Column field="modality" />
         <Column field="message_count" header={t("threads.messageCount")} />
         <Column field="last_message_at" />

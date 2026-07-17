@@ -7,6 +7,13 @@ export const enMessagingTelegramMessages: Record<string, string> = {
     "Link a Telegram account with application keys and a QR code.",
   "channel.telegram.name": "Name",
   "channel.telegram.namePlaceholder": "Personal Telegram",
+  "channel.telegram.credential": "Application keys",
+  "channel.telegram.credentialPlaceholder": "Select or create application keys",
+  "channel.telegram.credentialHelp":
+    "One Telegram application registration works for any number of accounts, so keys are shared across channels.",
+  "channel.telegram.keysTitle": "New Telegram application keys",
+  "channel.telegram.keysName": "Name",
+  "channel.telegram.keysNamePlaceholder": "My Telegram application",
   "channel.telegram.apiId": "API ID",
   "channel.telegram.apiIdPlaceholder": "123456",
   "channel.telegram.apiHash": "API hash",

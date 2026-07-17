@@ -24,6 +24,7 @@ from telethon.errors import (
 from angee.integrate.live import STOP_JOIN_SECONDS
 from angee.messaging.backends import ParsedMessage
 from angee.messaging.session import INGEST_CHUNK, LiveChannelSession
+from angee.messaging_integrate_telegram.connect import telegram_app_keys
 from angee.messaging_integrate_telegram.identity import parsed_message
 
 logger = logging.getLogger(__name__)
@@ -76,14 +77,7 @@ class TelegramSession(LiveChannelSession):
         credential = self._fresh_credential()
         if credential is None:
             raise ValueError("This Telegram channel has no application-key credential.")
-        material = credential.reveal()
-        try:
-            api_id = int(str(material.get("app_id") or ""))
-        except ValueError as exc:
-            raise ValueError("The Telegram credential has an invalid app_id.") from exc
-        api_hash = str(material.get("app_secret") or "")
-        if not api_id or not api_hash:
-            raise ValueError("The Telegram credential requires app_id and app_secret.")
+        api_id, api_hash = telegram_app_keys(credential)
         client = self.client_class(
             session=str(store.with_suffix("")),
             api_id=api_id,

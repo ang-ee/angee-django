@@ -118,6 +118,7 @@ export const enMessagingMessages: Record<string, string> = {
   // ThreadsPage — the threads list + detail.
   "threads.tabConversation": "Conversation",
   "threads.title": "Title",
+  "threads.channelType": "Channel",
   "threads.channel": "Channel",
   "threads.messageCount": "Messages",
   "threads.groupAbout": "About",
@@ -153,6 +154,7 @@ export const enMessagingMessages: Record<string, string> = {
   "messages.tabContent": "Content",
   "messages.sender": "Sender",
   "messages.thread": "Thread",
+  "messages.channelType": "Channel",
   "messages.groupEnvelope": "Envelope",
   "messages.hide": "Hide",
   "messages.remove": "Remove",

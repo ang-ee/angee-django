@@ -24,6 +24,7 @@ export {
   MutationDialog,
   type MutationDialogField,
   type MutationDialogProps,
+  type MutationDialogRelation,
 } from "./MutationDialog";
 export {
   ActionFormDialog,

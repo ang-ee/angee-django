@@ -28,7 +28,8 @@ export function ChannelsPage(): React.ReactElement {
         <Column field="last_sync_completed_at" />
       </List>
       <Form resource={CHANNEL_MODEL}>
-        <Field name="display_name" title readOnly />
+        {/* The one channel fact a human owns; the rest of this form is runtime truth. */}
+        <Field name="display_name" title />
         <Field name="lifecycle" readOnly />
         <Field name="runtime_status" readOnly />
         <Field name="backend_class" readOnly />

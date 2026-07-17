@@ -6,6 +6,7 @@ import {
 import {
   useList,
   type BaseRecord,
+  type CrudFilter,
   type HttpError,
   } from "@refinedev/core";
 import {
@@ -29,6 +30,13 @@ export interface RelationOptionsConfig {
   pageSize?: number;
   enabled?: boolean;
   sort?: boolean;
+  /**
+   * Server-side filters narrowing which related rows are offered — for a
+   * relation whose target holds more kinds of row than the field accepts (e.g.
+   * only `app_keys` credentials). Omitted, the picker offers every row the
+   * resource's own queryset exposes.
+   */
+  filters?: readonly CrudFilter[];
 }
 
 export interface RelationOptionsList {
@@ -47,6 +55,7 @@ export function useRelationOptions(
 ): RelationOptionsResult {
   const {
     enabled = true,
+    filters,
     labelField: optionLabelField,
     pageSize = RELATION_OPTION_LIMIT,
     sort = false,
@@ -66,6 +75,7 @@ export function useRelationOptions(
       currentPage: 1,
       pageSize: pageSize ?? DEFAULT_PAGE_SIZE,
     },
+    ...(filters ? { filters: [...filters] } : {}),
     meta: { fields },
     queryOptions: {
       enabled: enabled && relation !== null && resource !== null,

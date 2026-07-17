@@ -13,6 +13,7 @@ from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
+from django.apps import apps
 from django.core.management import call_command
 from django.db import connection
 from rebac import system_context
@@ -24,6 +25,7 @@ from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import IntegrationRuntimeStatus
 from angee.integrate.sync import BridgeProgressReporter
 from angee.messaging.connect import submit_channel_password
+from angee.messaging.models import Thread
 from tests.conftest import (
     SchemaAddon,
     Vendor,
@@ -44,6 +46,8 @@ from tests.test_messaging_graphql import (
 )
 
 TELEGRAM_TEST_MODELS = (*MESSAGING_TEST_MODELS, Channel)
+
+Credential = apps.get_model("integrate", "Credential")
 
 
 def _identity() -> ModuleType:
@@ -153,7 +157,8 @@ def test_telegram_account_label_preference_order(phone: str, username: str, expe
         (True, False, False, "direct"),
         (False, True, False, "group"),
         (False, True, True, "group"),
-        (False, False, True, "channel"),
+        (False, False, True, "public_thread"),
+        (False, False, False, "group"),
     ],
 )
 def test_telegram_thread_modality(
@@ -162,7 +167,7 @@ def test_telegram_thread_modality(
     is_channel: bool,
     expected: str,
 ) -> None:
-    """Megagroups remain groups while broadcast channels keep channel modality."""
+    """Megagroups remain groups; a broadcast channel maps onto the public-thread shape."""
 
     identity = _identity()
 
@@ -174,6 +179,10 @@ def test_telegram_thread_modality(
         )
         == expected
     )
+    # The vocabulary belongs to Thread, not to Telegram: modality is a real enum
+    # column, so a value the owner rejects fails the whole account's ingest — not
+    # just the one chat. Pinning the string alone is what let `channel` ship.
+    assert expected in Thread.Modality.values
 
 
 def test_telegram_message_maps_directly_to_the_neutral_ingest_shape() -> None:
@@ -256,21 +265,38 @@ def test_app_keys_credential_kind_owns_the_application_pair() -> None:
     assert handler.auth_headers(SimpleNamespace()) == {}
 
 
+def _app_keys_credential(
+    user: Any,
+    *,
+    app_id: str = "123456",
+    app_secret: str = "telegram-api-hash",
+    name: str = "Telegram application",
+) -> Any:
+    """Create one app-keys credential the way integrate's create mutation does."""
+
+    with system_context(reason="test.messaging.telegram.credential.seed"):
+        return Credential.objects.create_local_credential(
+            user,
+            kind=CredentialKind.APP_KEYS,
+            name=name,
+            material={"app_id": app_id, "app_secret": app_secret},
+        )
+
+
 @pytest.mark.django_db(transaction=True)
-def test_create_telegram_channel_attaches_owner_app_keys(telegram_tables: Any) -> None:
-    """One channel owns one owner-attached app-key credential with generic material names."""
+def test_create_telegram_channel_shares_one_selected_app_keys_credential(
+    telegram_tables: Any,
+) -> None:
+    """Channels select an app-key credential; one registration serves many accounts."""
 
     connect = _telegram_module("connect")
     admin = _platform_admin("msg-telegram-connect-admin")
     with system_context(reason="test.messaging.telegram.vendor.seed"):
         Vendor.objects.create(slug="telegram", display_name="Telegram")
+    credential = _app_keys_credential(admin)
 
-    channel = connect.create_telegram_channel(
-        admin,
-        name="Ada Telegram",
-        api_id="123456",
-        api_hash="telegram-api-hash",
-    )
+    channel = connect.create_telegram_channel(admin, name="Ada Telegram", credential=credential)
+    second = connect.create_telegram_channel(admin, name="Work Telegram", credential=credential)
 
     with system_context(reason="test.messaging.telegram.connect.verify"):
         channel.refresh_from_db()
@@ -280,37 +306,54 @@ def test_create_telegram_channel_attaches_owner_app_keys(telegram_tables: Any) -
         assert channel.backend_class == "telegram"
         assert channel.lifecycle == "connected"
         assert channel.subscription_state["desired"] == Channel.LiveState.LIVE
-        assert channel.credential.user_id == admin.pk
-        assert channel.credential.kind == CredentialKind.APP_KEYS
-        assert channel.credential.name == f"Telegram - Ada Telegram ({channel.sqid})"
-        assert channel.credential.reveal() == {
-            "app_id": "123456",
-            "app_secret": "telegram-api-hash",
-        }
+        # Telegram's api_id identifies the application, not a phone number, so a
+        # second account reuses the same registration instead of copying it.
+        assert channel.credential_id == credential.pk
+        assert second.credential_id == credential.pk
+        assert Credential._base_manager.count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_telegram_channel_rejects_non_integer_api_id_before_persisting(
+def test_create_telegram_channel_rejects_an_invalid_app_id_before_persisting(
     telegram_tables: Any,
 ) -> None:
-    """A malformed API id fails at the mutation boundary without partial rows."""
+    """A malformed api_id fails before the channel row exists, not at pair time."""
 
     connect = _telegram_module("connect")
     admin = _platform_admin("msg-telegram-invalid-api-id-admin")
     with system_context(reason="test.messaging.telegram.invalid_api_id.seed"):
         Vendor.objects.create(slug="telegram", display_name="Telegram")
+    credential = _app_keys_credential(admin, app_id="not-an-integer")
 
-    with pytest.raises(ValueError, match="API ID must be an integer"):
-        connect.create_telegram_channel(
-            admin,
-            name="Invalid Telegram",
-            api_id="not-an-integer",
-            api_hash="telegram-api-hash",
-        )
+    with pytest.raises(ValueError, match="invalid app_id"):
+        connect.create_telegram_channel(admin, name="Invalid Telegram", credential=credential)
 
     with system_context(reason="test.messaging.telegram.invalid_api_id.verify"):
         assert Channel._base_manager.filter(display_name="Invalid Telegram").count() == 0
-        assert connect.Credential._base_manager.count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_telegram_channel_rejects_a_credential_of_another_kind(
+    telegram_tables: Any,
+) -> None:
+    """Only an application registration can parameterize a Telegram client."""
+
+    connect = _telegram_module("connect")
+    admin = _platform_admin("msg-telegram-wrong-kind-admin")
+    with system_context(reason="test.messaging.telegram.wrong_kind.seed"):
+        Vendor.objects.create(slug="telegram", display_name="Telegram")
+        token = Credential.objects.create_local_credential(
+            admin,
+            kind=CredentialKind.STATIC_TOKEN,
+            name="Not application keys",
+            material={"api_key": "nope"},
+        )
+
+    with pytest.raises(ValueError, match="app-keys credential"):
+        connect.create_telegram_channel(admin, name="Wrong Kind", credential=token)
+
+    with system_context(reason="test.messaging.telegram.wrong_kind.verify"):
+        assert Channel._base_manager.filter(display_name="Wrong Kind").count() == 0
 
 
 @pytest.mark.django_db(transaction=True)
@@ -352,11 +395,12 @@ def test_telegram_backend_registration_and_pairing_projection(telegram_tables: A
 
 @pytest.mark.django_db(transaction=True)
 def test_connect_telegram_channel_mutation_dispatches_to_the_service(telegram_tables: Any) -> None:
-    """The vendor mutation keeps api_id/api_hash nouns and returns the shared Channel."""
+    """The vendor mutation selects a credential by id and returns the shared Channel."""
 
     admin = _platform_admin("msg-telegram-graphql-admin")
     with system_context(reason="test.messaging.telegram.graphql.seed"):
         Vendor.objects.create(slug="telegram", display_name="Telegram")
+    credential = _app_keys_credential(admin)
     telegram_schema = _telegram_module("schema")
     addons = [
         SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
@@ -373,8 +417,8 @@ def test_connect_telegram_channel_mutation_dispatches_to_the_service(telegram_ta
     result = execute_schema(
         schema,
         """
-        mutation ConnectTelegram($name: String!, $apiId: String!, $apiHash: String!) {
-          connect_telegram_channel(name: $name, api_id: $apiId, api_hash: $apiHash) {
+        mutation ConnectTelegram($name: String!, $credentialId: ID!) {
+          connect_telegram_channel(name: $name, credential_id: $credentialId) {
             id
             display_name
             backend_class
@@ -384,8 +428,7 @@ def test_connect_telegram_channel_mutation_dispatches_to_the_service(telegram_ta
         """,
         {
             "name": "Ada Telegram",
-            "apiId": "123456",
-            "apiHash": "telegram-api-hash",
+            "credentialId": str(credential.sqid),
         },
         request=_request(admin),
     )
@@ -591,8 +634,7 @@ def test_telegram_session_rotates_qr_accepts_password_and_claims_account(
     channel = connect.create_telegram_channel(
         admin,
         name="Ada Telegram",
-        api_id="123456",
-        api_hash="telegram-api-hash",
+        credential=_app_keys_credential(admin),
     )
     reports: list[dict[str, Any]] = []
     real_reporter = BridgeProgressReporter(channel)
@@ -701,8 +743,7 @@ def test_telegram_connect_failure_latches_runtime_error_and_stops_redispatch(
     channel = connect.create_telegram_channel(
         admin,
         name="Broken Telegram",
-        api_id="123456",
-        api_hash="wrong-api-hash",
+        credential=_app_keys_credential(admin, app_secret="wrong-api-hash"),
     )
 
     result = tasks_module.run_bridge_session(channel._meta.label_lower, channel.pk)
@@ -744,8 +785,7 @@ def test_telegram_revoked_authorization_reaches_logged_out_release(
     channel = connect.create_telegram_channel(
         admin,
         name="Revoked Telegram",
-        api_id="123456",
-        api_hash="telegram-api-hash",
+        credential=_app_keys_credential(admin),
     )
     if existing_store:
         store = session_store_path(channel)
@@ -777,8 +817,7 @@ def test_telegram_password_wait_runs_off_the_vendor_event_loop(
     channel = connect.create_telegram_channel(
         admin,
         name="Password Telegram",
-        api_id="123456",
-        api_hash="telegram-api-hash",
+        credential=_app_keys_credential(admin),
     )
     session = session_module.TelegramSession(
         channel,
@@ -856,8 +895,7 @@ def test_telegram_qr_rotation_cap_reports_stopped_and_exits(
     channel = connect.create_telegram_channel(
         admin,
         name="QR Cap Telegram",
-        api_id="123456",
-        api_hash="telegram-api-hash",
+        credential=_app_keys_credential(admin),
     )
 
     class ExpiringQr:
@@ -952,8 +990,7 @@ def test_telegram_authorized_session_retries_history_until_seeded_once(
     channel = connect.create_telegram_channel(
         admin,
         name="History Telegram",
-        api_id="123456",
-        api_hash="telegram-api-hash",
+        credential=_app_keys_credential(admin),
     )
     session = session_module.TelegramSession(
         channel,
@@ -1013,8 +1050,7 @@ def test_telegram_initial_history_lands_caption_and_media_marker_through_ingest(
     channel = connect.create_telegram_channel(
         admin,
         name="History Ingest Telegram",
-        api_id="123456",
-        api_hash="telegram-api-hash",
+        credential=_app_keys_credential(admin),
     )
     wire = _message(
         id=44,
@@ -1085,8 +1121,7 @@ def test_telegram_client_session_path_derives_from_the_passed_store(
     channel = connect.create_telegram_channel(
         admin,
         name="Store Telegram",
-        api_id="123456",
-        api_hash="telegram-api-hash",
+        credential=_app_keys_credential(admin),
     )
     session = session_module.TelegramSession(
         channel,

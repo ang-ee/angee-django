@@ -183,6 +183,10 @@ export function MessagesPage(): React.ReactElement {
           render={messageSenderName}
         />
         <Column field="thread.title.text" header={t("messages.thread")} />
+        {/* The channel FK targets the Integration parent (a Channel or a posts
+            Feed), so the vendor — not the channel's own backend_class — is the
+            projected fact that names the platform for every row. */}
+        <Column field="channel.vendor.display_name" header={t("messages.channelType")} />
         <Column field="status" widget="statusBadge" />
         <Column field="sent_at" />
       </List>
