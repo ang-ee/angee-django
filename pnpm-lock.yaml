@@ -246,6 +246,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../angee/web/app
+      '@angee/parties':
+        specifier: workspace:*
+        version: link:../../parties/web
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../angee/web/refine
@@ -467,6 +470,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../angee/web/app
+      '@angee/parties':
+        specifier: workspace:*
+        version: link:../../parties/web
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../angee/web/refine
