@@ -24,6 +24,7 @@ import type {
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
+import type { DndPayload } from "../lib/dnd";
 import { CountBadge } from "../ui/badge";
 import { Pager } from "../ui/pager";
 import {
@@ -86,6 +87,7 @@ export interface GroupedListBodyProps<TRow extends Row> {
   interactive: boolean;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
+  draggableRow?: (row: TRow) => DndPayload | null;
   onListStateChange?: (state: ResourceListSnapshot<TRow>) => void;
   emptyContent: ListEmptyContent;
   fetching: boolean;
@@ -109,6 +111,7 @@ export function GroupedListBody<TRow extends Row>({
   interactive,
   rowHref,
   onRowClick,
+  draggableRow,
   onListStateChange,
   emptyContent,
   fetching,
@@ -207,6 +210,7 @@ export function GroupedListBody<TRow extends Row>({
                       interactive={interactive}
                       rowHref={rowHref}
                       onRowClick={onRowClick}
+                      draggableRow={draggableRow}
                       onRecordOpen={handleRecordOpen}
                       onToggleGroup={toggleGroup}
                       onPageChange={setScopePage}
@@ -260,6 +264,7 @@ function GroupedItemRow<TRow extends Row>({
   interactive,
   rowHref,
   onRowClick,
+  draggableRow,
   onRecordOpen,
   onToggleGroup,
   onPageChange,
@@ -274,6 +279,7 @@ function GroupedItemRow<TRow extends Row>({
   interactive: boolean;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
+  draggableRow?: (row: TRow) => DndPayload | null;
   onRecordOpen: (row: TRow) => void;
   onToggleGroup: (key: string) => void;
   onPageChange: (key: string, page: number) => void;
@@ -298,6 +304,7 @@ function GroupedItemRow<TRow extends Row>({
           interactive={interactive}
           rowHref={rowHref}
           onRowClick={onRowClick}
+          draggableRow={draggableRow}
           onRecordOpen={onRecordOpen}
         />
       );
