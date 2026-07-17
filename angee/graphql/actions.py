@@ -50,6 +50,24 @@ class ActionResult:
     existing row leaves it ``None``.
     """
 
+    @staticmethod
+    def validation_error_map(
+        error: ValidationError | None,
+        *,
+        camel_case_keys: bool = True,
+    ) -> JSON | None:
+        """Project field-keyed validation messages with caller-selected key casing."""
+
+        if error is None or not hasattr(error, "error_dict"):
+            return None
+        field_errors: dict[str, list[str]] = {}
+        for field, messages in error.message_dict.items():
+            key = field
+            if camel_case_keys and field != NON_FIELD_ERRORS:
+                key = to_camel_case(field)
+            field_errors[key] = list(messages)
+        return cast(JSON, field_errors) if field_errors else None
+
     @classmethod
     def from_error(cls, error: Exception, summary: str) -> ActionResult:
         """Return a failed result from a caught exception.
@@ -64,13 +82,9 @@ class ActionResult:
         text is never leaked into it.
         """
 
-        if isinstance(error, ValidationError) and hasattr(error, "error_dict"):
-            field_errors: dict[str, list[str]] = {}
-            for field, messages in error.message_dict.items():
-                key = field if field == NON_FIELD_ERRORS else to_camel_case(field)
-                field_errors[key] = list(messages)
-            if field_errors:
-                return cls(ok=False, message=summary, validation_errors=cast(JSON, field_errors))
+        validation_errors = cls.validation_error_map(error) if isinstance(error, ValidationError) else None
+        if validation_errors is not None:
+            return cls(ok=False, message=summary, validation_errors=validation_errors)
         return cls(ok=False, message=summary)
 
 

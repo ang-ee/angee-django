@@ -1188,6 +1188,7 @@ class Decision(AuditMixin, AngeeDataModel):
     """One awaited resolution slot for a suspended step-run."""
 
     runtime = True
+    _form_schema_state_attribute = "_workflows_form_schema_state"
 
     sqid_prefix = "wdc_"
     step_run = models.ForeignKey("workflows.StepRun", on_delete=models.CASCADE, related_name="decisions")
@@ -1230,6 +1231,31 @@ class Decision(AuditMixin, AngeeDataModel):
         """Return whether this decision has a terminal verdict."""
 
         return self.verdict in Verdict.TERMINAL
+
+    @classmethod
+    def form_schema_annotation(cls) -> dict[str, Any]:
+        """Return the narrow ORM projection consumed by :attr:`form_schema`."""
+
+        return {cls._form_schema_state_attribute: models.F("step_run__resume_state")}
+
+    @property
+    def form_schema(self) -> dict[str, Any] | None:
+        """Return the enforced JSON-authored form schema, excluding Python model schemas."""
+
+        state = getattr(self, self._form_schema_state_attribute, None)
+        if not isinstance(state, dict):
+            state = self.step_run.resume_state
+        if not isinstance(state, dict):
+            return None
+        schemas = state.get("_decision_schemas", {})
+        if isinstance(schemas, dict) and str(self.pk) in schemas:
+            schema = schemas[str(self.pk)]
+            return dict(schema) if isinstance(schema, dict) and schema else None
+        gate = state.get("gate")
+        if isinstance(gate, dict):
+            schema = gate.get("decision_schema")
+            return dict(schema) if isinstance(schema, dict) and schema else None
+        return None
 
     @transition(verdict, source=Verdict.PENDING, target=Verdict.COMPLETED, on_success=save_state)
     def mark_completed(self, *, resolution: Any = None, resolved_by: str = "") -> None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import traceback
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Literal, cast
 
@@ -43,6 +44,14 @@ DECISION_VERBS: dict[str, Verdict] = {
     "reject": VERDICT_REJECTED,
     "escalate": VERDICT_ESCALATED,
 }
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionAttemptResult:
+    """Outcome of one authorized decision attempt and any shape validation failure."""
+
+    decision: Any
+    validation_error: ValidationError | None = None
 
 
 def start(
@@ -263,8 +272,8 @@ def reap(*, now: datetime | None = None) -> dict[str, int]:
     return {"reaped": len(run_ids)}
 
 
-def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = None) -> Any:
-    """Resolve one pending decision as an actor after checking ``act``."""
+def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = None) -> DecisionAttemptResult:
+    """Attempt one actor-authorized resolution and return its validation outcome."""
 
     target = _verdict_for_verb(verdict)
     actor_ref = _actor_ref(actor)
@@ -275,6 +284,7 @@ def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = Non
     _check_decision_act(current, actor_ref)
 
     run_id: int | None = None
+    validation_error: ValidationError | None = None
     with system_context(reason="workflows.engine.decide"), transaction.atomic():
         locked = (
             decision_model.objects.lock_if_supported()
@@ -282,19 +292,20 @@ def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = Non
             .get(pk=decision_id)
         )
         if locked.verdict != VERDICT_PENDING:
-            return locked
+            return DecisionAttemptResult(locked)
         _ensure_sequential_turn(locked)
         try:
             resolution = _validate_resolution(locked, payload)
         except ValidationError as error:
             _record_invalid_resolution(locked, error)
+            validation_error = error
             run_id = locked.step_run.run_id
         else:
             locked.resolve(target, resolution=resolution, resolved_by=str(actor_ref))
             _apply_decision_policy(locked.step_run)
             run_id = locked.step_run.run_id
         transaction.on_commit(lambda run_id=run_id: enqueue_advance(cast(int, run_id)))
-    return locked
+    return DecisionAttemptResult(locked, validation_error)
 
 
 def escalate_decision(decision_id: int, attempt: int, *, now: datetime | None = None) -> dict[str, int]:
@@ -455,20 +466,14 @@ def _suspend_step_run(step_run: Any, result: StepResult) -> None:
 
     resume_state = dict(result.resume_state or {})
     decisions = tuple(result.decisions)
-    if decisions:
-        resume_state["_decision_specs"] = {
-            str(index): dict(spec.decision_schema) for index, spec in enumerate(decisions) if spec.decision_schema
-        }
-    step_run.mark_waiting(resume_state=resume_state)
-    for index, spec in enumerate(decisions):
+    decision_schemas: dict[str, dict[str, Any]] = {}
+    for spec in decisions:
         decision = _create_decision(step_run, spec)
         if spec.decision_schema:
-            state = dict(step_run.resume_state)
-            schemas = dict(state.get("_decision_schemas", {}))
-            schemas[str(decision.pk)] = dict(spec.decision_schema)
-            state["_decision_schemas"] = schemas
-            step_run.resume_state = state
-            step_run.save(update_fields=["resume_state", "updated_at"])
+            decision_schemas[str(decision.pk)] = dict(spec.decision_schema)
+    if decision_schemas:
+        resume_state["_decision_schemas"] = decision_schemas
+    step_run.mark_waiting(resume_state=resume_state)
 
 
 def _create_decision(step_run: Any, spec: DecisionSpec) -> Any:
@@ -599,7 +604,7 @@ def _validate_resolution(decision: Any, payload: Any) -> dict[str, Any]:
         try:
             parsed = schema.model_validate(resolution)
         except PydanticValidationError as error:
-            raise ValidationError({"payload": str(error)}) from error
+            raise _resolution_validation_error(error) from error
         dumped = parsed.model_dump()
         return cast(dict[str, Any], dumped)
     return dict(resolution)
@@ -608,12 +613,9 @@ def _validate_resolution(decision: Any, payload: Any) -> dict[str, Any]:
 def _schema_for_decision(decision: Any) -> Any | None:
     """Return the resolution schema owned by the suspended step."""
 
-    schemas = dict(decision.step_run.resume_state.get("_decision_schemas", {}))
-    if str(decision.pk) in schemas:
-        return schemas[str(decision.pk)]
-    gate = decision.step_run.resume_state.get("gate")
-    if isinstance(gate, dict) and isinstance(gate.get("decision_schema"), dict):
-        return gate["decision_schema"]
+    form_schema = decision.form_schema
+    if form_schema is not None:
+        return form_schema
     if decision.step_run.step_id is None:
         return None
     impl_class = decision.step_run.step.resolve_impl("step_class")
@@ -627,25 +629,42 @@ def _validate_mapping_schema(schema: dict[str, Any], resolution: dict[str, Any])
         return dict(resolution)
     if schema.get("type", "object") != "object":
         raise ValidationError({"payload": "Decision schema root type must be object."})
+    # Human-paced decisions rebuild per attempt; memoize by schema-dict hash before bulk or programmatic reuse.
+    model = _mapping_schema_model(schema, name="DecisionResolution")
+    try:
+        parsed = model.model_validate(resolution)
+    except PydanticValidationError as error:
+        raise _resolution_validation_error(error) from error
+    return cast(dict[str, Any], parsed.model_dump(exclude_none=False))
+
+
+def _resolution_validation_error(error: PydanticValidationError) -> ValidationError:
+    """Translate pydantic failures into field-keyed Django validation errors."""
+
+    field_errors: dict[str, list[str]] = {}
+    for detail in error.errors(include_url=False):
+        field = ".".join(str(component) for component in detail["loc"]) or "payload"
+        field_errors.setdefault(field, []).append(str(detail["msg"]))
+    return ValidationError(field_errors)
+
+
+def _mapping_schema_model(schema: dict[str, Any], *, name: str) -> Any:
+    """Compile one object schema and its nested properties into a pydantic model."""
+
     required = set(schema.get("required", ()))
     properties = schema.get("properties", {})
     if not isinstance(properties, dict):
         raise ValidationError({"payload": "Decision schema properties must be an object."})
     fields: dict[str, tuple[Any, Any]] = {}
-    for name, spec in properties.items():
+    for field_name, spec in properties.items():
         field_schema = spec if isinstance(spec, dict) else {}
         annotation = _annotation_for_field_schema(field_schema)
-        default = ... if name in required else None
-        fields[str(name)] = (annotation, default)
-    for name in required:
-        fields.setdefault(str(name), (Any, ...))
+        default = ... if field_name in required else None
+        fields[str(field_name)] = (annotation, default)
+    for field_name in required:
+        fields.setdefault(str(field_name), (Any, ...))
     model_factory = cast(Any, create_model)
-    model = model_factory("DecisionResolution", **fields)
-    try:
-        parsed = model.model_validate(resolution)
-    except PydanticValidationError as error:
-        raise ValidationError({"payload": str(error)}) from error
-    return cast(dict[str, Any], parsed.model_dump(exclude_none=False))
+    return model_factory(name, **fields)
 
 
 def _annotation_for_field_schema(schema: dict[str, Any]) -> Any:
@@ -656,13 +675,20 @@ def _annotation_for_field_schema(schema: dict[str, Any]) -> Any:
     if "enum" in schema and isinstance(schema["enum"], list):
         return Literal.__getitem__(tuple(schema["enum"]))
     field_type = schema.get("type", "any")
+    if field_type == "object":
+        if isinstance(schema.get("properties"), dict):
+            return _mapping_schema_model(schema, name="DecisionResolutionObject")
+        return dict[str, Any]
+    if field_type == "array":
+        items = schema.get("items")
+        if isinstance(items, dict):
+            return list.__class_getitem__(_annotation_for_field_schema(items))
+        return list[Any]
     return {
         "string": str,
         "integer": int,
         "number": float,
         "boolean": bool,
-        "object": dict[str, Any],
-        "array": list[Any],
         "any": Any,
     }.get(str(field_type), Any)
 

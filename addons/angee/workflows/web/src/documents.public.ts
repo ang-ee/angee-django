@@ -17,6 +17,7 @@ export const PendingWorkflowDecisionsDocument = graphql(`
       max_attempts
       expires_at
       escalate_at
+      decision_schema
       workflow_name
       step_name
       created_at
@@ -32,10 +33,13 @@ export const DecideWorkflowDecisionDocument = graphql(`
     $payload: JSON
   ) {
     decide(decision: $decision, verdict: $verdict, payload: $payload) {
-      id
-      verdict
-      resolution
-      updated_at
+      decision {
+        id
+        verdict
+        resolution
+        updated_at
+      }
+      validation_errors
     }
   }
 `);

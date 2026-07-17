@@ -9,7 +9,9 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.db import connection
 from django.test import RequestFactory
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import PermissionDenied, app_settings, system_context, to_subject_ref
 from rebac.models import active_relationship_model
@@ -224,6 +226,66 @@ def test_invalid_resolution_reopens_then_fails_at_max_attempts(
     assert "Decision resolution failed validation" in gate.error
 
 
+def test_nested_decision_schema_validates_objects_and_array_rows_before_round_trip(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """Nested object and row schemas validate recursively before resolution persists."""
+
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="wdc-nested-schema-assignee")
+    decision_schema = {
+        "type": "object",
+        "required": ["review", "rows"],
+        "properties": {
+            "review": {
+                "type": "object",
+                "required": ["approved"],
+                "properties": {"approved": {"type": "boolean"}},
+            },
+            "rows": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["target", "mode"],
+                    "properties": {
+                        "target": {"type": "integer"},
+                        "mode": {"enum": ["append", "replace"]},
+                    },
+                },
+            },
+        },
+    }
+    workflow = workflow_with_steps(
+        name="Nested schema gate",
+        steps=(
+            {
+                "key": "gate",
+                "step_class": "gate",
+                "config": _gate_config([assignee], None, [], decision_schema=decision_schema),
+            },
+        ),
+        edges=(),
+    )
+    decision = _decision_for(_open_gate_run(workflow), "gate")
+
+    engine.decide(
+        decision,
+        "complete",
+        payload={"review": {"approved": "not-a-boolean"}, "rows": [{"target": "nope", "mode": "merge"}]},
+        actor=assignee,
+    )
+    decision.refresh_from_db()
+    assert decision.verdict == workflow_models.Verdict.PENDING
+    assert decision.attempts == 1
+
+    resolution = {"review": {"approved": True}, "rows": [{"target": 7, "mode": "append"}]}
+    engine.decide(decision, "complete", payload=resolution, actor=assignee)
+    decision.refresh_from_db()
+    assert decision.verdict == workflow_models.Verdict.COMPLETED
+    assert decision.resolution == resolution
+
+
 def test_escalation_timeout_writes_tuple_and_routes_escalated(
     workflow_gate_tables: None,
     no_workflow_queue: None,
@@ -386,9 +448,138 @@ def test_public_schema_decision_projection_excludes_step_run_journal(
     assert "type DecisionType" in sdl
     decision_section = sdl.split("type DecisionType", 1)[1].split("type ", 1)[0]
     assert "step_run" not in decision_section
+    assert "resume_state" not in decision_section
+    assert "decision_schema" in decision_section
+    assert "decisionSchema" not in decision_section
     assert "workflow_name" in decision_section
     assert "step_name" in decision_section
     assert "StepRunType" not in sdl
+
+
+def test_decision_schema_is_exposed_narrowly_on_public_and_console_decisions(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """Both projections expose the enforced JSON form schema, or null."""
+
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="wdc-schema-reader")
+    admin = _platform_admin("wdc-schema-admin")
+    decision_schema = {
+        "type": "object",
+        "required": ["approved"],
+        "properties": {"approved": {"type": "boolean"}},
+    }
+    workflow = workflow_with_steps(
+        name="Schema delivery gate",
+        steps=(
+            {
+                "key": "gate",
+                "step_class": "gate",
+                "config": _gate_config([assignee], None, [], decision_schema=decision_schema),
+            },
+        ),
+        edges=(),
+    )
+    schema_decision = _decision_for(_open_gate_run(workflow), "gate")
+    schema_less_decision = _opened_decision([assignee], None)
+    with system_context(reason="test workflows legacy gate schema"):
+        state = dict(schema_decision.step_run.resume_state)
+        state.pop("_decision_schemas")
+        schema_decision.step_run.resume_state = state
+        schema_decision.step_run.save(update_fields=["resume_state", "updated_at"])
+
+    invalid = engine.decide(schema_decision, "complete", payload={}, actor=assignee)
+    assert invalid.validation_error is not None
+    query = """
+        query DecisionSchema($id: String!) {
+          workflow_decisions_by_pk(id: $id) {
+            decision_schema
+          }
+        }
+    """
+
+    public = _schema("public")
+    public_schema = result_data(
+        _execute(public, query, {"id": str(schema_decision.sqid)}, user=assignee)
+    )
+    public_schema_less = result_data(
+        _execute(public, query, {"id": str(schema_less_decision.sqid)}, user=assignee)
+    )
+    console_schema = result_data(
+        _execute(_schema("console"), query, {"id": str(schema_decision.sqid)}, user=admin)
+    )
+    console_schema_less = result_data(
+        _execute(_schema("console"), query, {"id": str(schema_less_decision.sqid)}, user=admin)
+    )
+
+    assert public_schema["workflow_decisions_by_pk"]["decision_schema"] == decision_schema
+    assert public_schema_less["workflow_decisions_by_pk"]["decision_schema"] is None
+    assert console_schema["workflow_decisions_by_pk"]["decision_schema"] == decision_schema
+    assert console_schema_less["workflow_decisions_by_pk"]["decision_schema"] is None
+
+
+def test_public_decision_schema_query_count_stays_flat_for_three_rows(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """Decision form-schema projection carries its relation in the parent query."""
+
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="wdc-schema-query-reader")
+    decision_schema = {
+        "type": "object",
+        "properties": {"approved": {"type": "boolean"}},
+    }
+
+    def open_decisions(count: int, name: str) -> None:
+        workflow = workflow_with_steps(
+            name=name,
+            steps=(
+                {
+                    "key": "gate",
+                    "step_class": "gate",
+                    "config": _gate_config(
+                        [assignee] * count,
+                        None,
+                        [],
+                        decision_schema=decision_schema,
+                    ),
+                },
+            ),
+            edges=(),
+        )
+        _open_gate_run(workflow)
+
+    public = _schema("public")
+    query = """
+        query DecisionSchemas {
+          workflow_decisions(limit: 10, order_by: [{ created_at: asc }]) {
+            decision_schema
+            workflow_name
+            step_name
+          }
+        }
+    """
+    open_decisions(1, "One schema query row")
+    with CaptureQueriesContext(connection) as one_row:
+        one_data = result_data(_execute(public, query, user=assignee))
+
+    open_decisions(2, "Two more schema query rows")
+    with CaptureQueriesContext(connection) as three_rows:
+        three_data = result_data(_execute(public, query, user=assignee))
+
+    assert len(one_data["workflow_decisions"]) == 1
+    assert len(three_data["workflow_decisions"]) == 3
+    assert {row["workflow_name"] for row in three_data["workflow_decisions"]} == {
+        "One schema query row",
+        "Two more schema query rows",
+    }
+    assert {row["step_name"] for row in three_data["workflow_decisions"]} == {"Gate"}
+    assert len(three_rows.captured_queries) == len(one_row.captured_queries)
+    assert "rebac_permissionauditevent" not in " ".join(
+        query["sql"].lower() for query in three_rows.captured_queries
+    )
 
 
 def test_public_decide_mutation_uses_actor_scoped_act_permission(
@@ -405,8 +596,11 @@ def test_public_decide_mutation_uses_actor_scoped_act_permission(
     mutation = """
         mutation Decide($decision: ID!, $verdict: DecisionVerb!, $payload: JSON) {
           decide(decision: $decision, verdict: $verdict, payload: $payload) {
-            verdict
-            resolution
+            decision {
+              verdict
+              resolution
+            }
+            validation_errors
           }
         }
     """
@@ -416,7 +610,157 @@ def test_public_decide_mutation_uses_actor_scoped_act_permission(
     assert denied.errors is not None
 
     data = result_data(_execute(public, mutation, variables, user=assignee))
-    assert data["decide"] == {"verdict": "COMPLETED", "resolution": {"ok": True}}
+    assert data["decide"] == {
+        "decision": {"verdict": "COMPLETED", "resolution": {"ok": True}},
+        "validation_errors": None,
+    }
+
+
+def test_public_decide_returns_dotted_field_errors_and_reopens_the_decision(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """Invalid input returns field-keyed validation errors and preserves retry state."""
+
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="wdc-gql-validation-assignee")
+    decision_schema = {
+        "type": "object",
+        "required": ["review", "rows"],
+        "properties": {
+            "review": {
+                "type": "object",
+                "required": ["approved"],
+                "properties": {"approved": {"type": "boolean"}},
+            },
+            "rows": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["target"],
+                    "properties": {"target": {"type": "integer"}},
+                },
+            },
+        },
+    }
+    workflow = workflow_with_steps(
+        name="Validation payload gate",
+        steps=(
+            {
+                "key": "gate",
+                "step_class": "gate",
+                "config": _gate_config([assignee], None, [], decision_schema=decision_schema),
+            },
+        ),
+        edges=(),
+    )
+    decision = _decision_for(_open_gate_run(workflow), "gate")
+    mutation = """
+        mutation Decide($decision: ID!, $verdict: DecisionVerb!, $payload: JSON) {
+          decide(decision: $decision, verdict: $verdict, payload: $payload) {
+            decision {
+              verdict
+              attempts
+            }
+            validation_errors
+          }
+        }
+    """
+    variables = {
+        "decision": str(decision.sqid),
+        "verdict": "COMPLETE",
+        "payload": {"review": {}, "rows": [{"target": "not-an-integer"}]},
+    }
+
+    data = result_data(_execute(_schema("public"), mutation, variables, user=assignee))
+
+    assert data["decide"]["decision"] == {"verdict": "PENDING", "attempts": 1}
+    assert data["decide"]["validation_errors"].keys() == {
+        "review.approved",
+        "rows.0.target",
+    }
+    assert all(messages for messages in data["decide"]["validation_errors"].values())
+    decision.refresh_from_db()
+    assert decision.verdict == workflow_models.Verdict.PENDING
+    assert decision.attempts == 1
+
+
+def test_public_decide_checks_act_permission_before_resolution_shape(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """A denied actor cannot exercise schema validation or consume an attempt."""
+
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="wdc-gql-order-assignee")
+    stranger = User.objects.create_user(username="wdc-gql-order-stranger")
+    decision_schema = {
+        "type": "object",
+        "required": ["approved"],
+        "properties": {"approved": {"type": "boolean"}},
+    }
+    workflow = workflow_with_steps(
+        name="Permission-first gate",
+        steps=(
+            {
+                "key": "gate",
+                "step_class": "gate",
+                "config": _gate_config([assignee], None, [], decision_schema=decision_schema),
+            },
+        ),
+        edges=(),
+    )
+    decision = _decision_for(_open_gate_run(workflow), "gate")
+    mutation = """
+        mutation Decide($decision: ID!, $verdict: DecisionVerb!, $payload: JSON) {
+          decide(decision: $decision, verdict: $verdict, payload: $payload) {
+            decision { verdict }
+            validation_errors
+          }
+        }
+    """
+    variables = {"decision": str(decision.sqid), "verdict": "COMPLETE", "payload": {}}
+
+    denied = _execute(_schema("public"), mutation, variables, user=stranger)
+
+    assert denied.errors is not None
+    assert denied.errors[0].extensions["code"] == "PERMISSION_DENIED"
+    decision.refresh_from_db()
+    assert decision.verdict == workflow_models.Verdict.PENDING
+    assert decision.attempts == 0
+
+
+def test_public_decide_accepts_escalate_end_to_end(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """The public enum, resolver, engine, and model accept an escalate verdict."""
+
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="wdc-gql-escalate-assignee")
+    workflow = _workflow_with_gate_routes(policy="one_done", assignees=[assignee])
+    run = _open_gate_run(workflow)
+    decision = _decision_for(run, "gate")
+    mutation = """
+        mutation Escalate($decision: ID!) {
+          decide(decision: $decision, verdict: ESCALATE) {
+            decision { verdict }
+            validation_errors
+          }
+        }
+    """
+
+    data = result_data(
+        _execute(_schema("public"), mutation, {"decision": str(decision.sqid)}, user=assignee)
+    )
+
+    assert data["decide"] == {
+        "decision": {"verdict": "ESCALATED"},
+        "validation_errors": None,
+    }
+    decision.refresh_from_db()
+    assert decision.verdict == workflow_models.Verdict.ESCALATED
+    assert _step_run(run, "gate").outcome == "escalated"
 
 
 def _workflow_with_gate_routes(

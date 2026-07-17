@@ -124,6 +124,22 @@ def test_action_result_from_error_maps_field_validation_errors() -> None:
     }
 
 
+def test_action_result_validation_error_map_can_preserve_authored_paths() -> None:
+    """The shared projection can keep decision-schema paths verbatim."""
+
+    error = ValidationError(
+        {
+            "review.approved": ["Field required."],
+            "rows.0.target": ["Input should be a valid integer."],
+        }
+    )
+
+    assert ActionResult.validation_error_map(error, camel_case_keys=False) == {
+        "review.approved": ["Field required."],
+        "rows.0.target": ["Input should be a valid integer."],
+    }
+
+
 def test_action_result_from_error_keeps_non_field_errors_at_form_level() -> None:
     """A ``NON_FIELD_ERRORS`` key is preserved so it surfaces at form level, not mangled."""
 

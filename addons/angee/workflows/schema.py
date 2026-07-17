@@ -30,6 +30,30 @@ WorkflowRun = apps.get_model("workflows", "WorkflowRun")
 StepRun = apps.get_model("workflows", "StepRun")
 Decision = apps.get_model("workflows", "Decision")
 
+_PROJECTED_STEP_ID = "_workflows_step_id"
+_PROJECTED_STEP_WORKFLOW_NAME = "_workflows_step_workflow_name"
+_PROJECTED_RUN_WORKFLOW_NAME = "_workflows_run_workflow_name"
+_PROJECTED_STEP_NAME = "_workflows_step_name"
+_PROJECTED_STEP_KEY = "_workflows_step_key"
+_PROJECTED_SYSTEM_KIND = "_workflows_system_kind"
+_PROJECTED_STEP_RUN_ID = "_workflows_step_run_id"
+
+
+def _decision_schema(root: Any) -> JSON | None:
+    """Return the model-owned JSON form schema without exposing its journal."""
+
+    return cast(JSON | None, cast(Any, root).form_schema)
+
+
+def _decision_schema_field() -> Any:
+    """Return the optimized decision form-schema GraphQL field."""
+
+    return strawberry_django.field(
+        resolver=_decision_schema,
+        only=["id"],
+        annotate=cast(Any, Decision).form_schema_annotation(),
+    )
+
 
 @strawberry.enum
 class DecisionVerb(Enum):
@@ -154,6 +178,8 @@ class DecisionType(AngeeNode):
     created_at: auto
     updated_at: auto
 
+    decision_schema: JSON | None = _decision_schema_field()
+
 
 @strawberry_django.type(Decision, name="DecisionType")
 class PublicDecisionType(AngeeNode):
@@ -172,25 +198,79 @@ class PublicDecisionType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry.field
+    decision_schema: JSON | None = _decision_schema_field()
+
+    @strawberry_django.field(
+        only=["id"],
+        annotate={
+            _PROJECTED_STEP_ID: models.F("step_run__step_id"),
+            _PROJECTED_STEP_WORKFLOW_NAME: models.F("step_run__step__workflow__name"),
+            _PROJECTED_RUN_WORKFLOW_NAME: models.F("step_run__run__workflow__name"),
+        },
+    )
     def workflow_name(self) -> str:
         """Return the workflow display name without exposing the StepRun journal."""
 
-        with system_context(reason="workflows.graphql.public_decision.workflow_name"):
-            step_run = cast(Any, self).step_run
-            if step_run.step_id is not None:
-                return str(step_run.step.workflow.name)
-            return str(step_run.run.workflow.name)
+        if getattr(self, _PROJECTED_STEP_ID) is not None:
+            return str(getattr(self, _PROJECTED_STEP_WORKFLOW_NAME))
+        return str(getattr(self, _PROJECTED_RUN_WORKFLOW_NAME))
 
-    @strawberry.field
+    @strawberry_django.field(
+        only=["id"],
+        annotate={
+            _PROJECTED_STEP_ID: models.F("step_run__step_id"),
+            _PROJECTED_STEP_NAME: models.F("step_run__step__name"),
+            _PROJECTED_STEP_KEY: models.F("step_run__step__key"),
+            _PROJECTED_SYSTEM_KIND: models.F("step_run__system_kind"),
+            _PROJECTED_STEP_RUN_ID: models.F("step_run_id"),
+        },
+    )
     def step_name(self) -> str:
         """Return the step display name without exposing the StepRun journal."""
 
-        with system_context(reason="workflows.graphql.public_decision.step_name"):
-            step_run = cast(Any, self).step_run
-            if step_run.step_id is not None:
-                return str(step_run.step.name or step_run.step.key)
-            return str(step_run.system_kind or step_run.pk)
+        if getattr(self, _PROJECTED_STEP_ID) is not None:
+            return str(getattr(self, _PROJECTED_STEP_NAME) or getattr(self, _PROJECTED_STEP_KEY))
+        return str(getattr(self, _PROJECTED_SYSTEM_KIND) or getattr(self, _PROJECTED_STEP_RUN_ID))
+
+
+@strawberry.type(name="DecisionResolutionPayload")
+class PublicDecisionResolutionPayload:
+    """Public decision state plus in-band validation errors from one attempt."""
+
+    decision: PublicDecisionType
+    validation_errors: JSON | None = None
+
+    @classmethod
+    def from_result(cls, result: engine.DecisionAttemptResult) -> PublicDecisionResolutionPayload:
+        """Return the public payload for an engine-owned decision attempt."""
+
+        return cls(
+            decision=cast(PublicDecisionType, result.decision),
+            validation_errors=ActionResult.validation_error_map(
+                result.validation_error,
+                camel_case_keys=False,
+            ),
+        )
+
+
+@strawberry.type(name="DecisionResolutionPayload")
+class ConsoleDecisionResolutionPayload:
+    """Console decision state plus in-band validation errors from one attempt."""
+
+    decision: DecisionType
+    validation_errors: JSON | None = None
+
+    @classmethod
+    def from_result(cls, result: engine.DecisionAttemptResult) -> ConsoleDecisionResolutionPayload:
+        """Return the console payload for an engine-owned decision attempt."""
+
+        return cls(
+            decision=cast(DecisionType, result.decision),
+            validation_errors=ActionResult.validation_error_map(
+                result.validation_error,
+                camel_case_keys=False,
+            ),
+        )
 
 
 @strawberry.input
@@ -400,12 +480,13 @@ class PublicDecisionMutation:
         decision: PublicID,
         verdict: DecisionVerb,
         payload: JSON | None = None,
-    ) -> PublicDecisionType:
+    ) -> PublicDecisionResolutionPayload:
         """Resolve one pending decision as the signed-in session actor."""
 
         actor = session_user(info)
         target = resolve_action_target(Decision, decision, reason="workflows.graphql.decide")
-        return cast(PublicDecisionType, engine.decide(target, verdict.value, payload=payload, actor=actor))
+        result = engine.decide(target, verdict.value, payload=payload, actor=actor)
+        return PublicDecisionResolutionPayload.from_result(result)
 
 
 @strawberry.type
@@ -419,12 +500,13 @@ class ConsoleDecisionMutation:
         decision: PublicID,
         verdict: DecisionVerb,
         payload: JSON | None = None,
-    ) -> DecisionType:
+    ) -> ConsoleDecisionResolutionPayload:
         """Resolve one pending decision as the signed-in session actor."""
 
         actor = session_user(info)
         target = resolve_action_target(Decision, decision, reason="workflows.graphql.decide")
-        return cast(DecisionType, engine.decide(target, verdict.value, payload=payload, actor=actor))
+        result = engine.decide(target, verdict.value, payload=payload, actor=actor)
+        return ConsoleDecisionResolutionPayload.from_result(result)
 
 
 @strawberry.type
