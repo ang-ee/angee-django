@@ -1,4 +1,6 @@
 import * as React from "react";
+import { useModelMetadata } from "@angee/metadata";
+import type { CrudFilter } from "@refinedev/core";
 
 import { errorMessage } from "../feedback";
 import { DialogForm } from "../fragments/DialogForm";
@@ -7,14 +9,45 @@ import { Button } from "../ui/button";
 import { FieldDescription, FieldLabel, FieldRoot } from "../ui/field";
 import type { DialogPlacement, DialogSize } from "../ui/dialog";
 import { useUiT } from "../i18n";
+import { relationValueId } from "../widgets/types";
 import { FieldDescriptorControl } from "./field-descriptor-control";
+import { relationFieldInfoForResource } from "./model-metadata-defaults";
+import { RelationPicker, type RelationCreateConfig } from "./RelationPicker";
+import { useRelationOptions } from "./relation-options";
 import type { FieldDescriptor } from "./page";
+
+/** What a dialog field needs to offer (and optionally create) a related row. */
+export interface MutationDialogRelation {
+  /** Related model label, e.g. `"Credential"`. */
+  resource: string;
+  /** Field shown as the option label; defaults to the model's record representation. */
+  labelField?: string;
+  /**
+   * Server-side filters narrowing which rows are offered — for a target holding
+   * more kinds of row than this field accepts (see `useRelationOptions`).
+   */
+  filters?: readonly CrudFilter[];
+  /**
+   * Enables the in-place "Create …" affordance. Unlike a form's auto-wired
+   * relation field, a dialog states this explicitly: the dialog is not a model
+   * form, so there is no metadata to derive creatability from.
+   */
+  create?: RelationCreateConfig;
+}
 
 export interface MutationDialogField extends FieldDescriptor {
   /** Client-side gate for simple mutation dialogs. Server validation remains authoritative. */
   required?: boolean;
   /** Disable editing for this field against the current dialog values. */
   readOnlyWhen?: (values: Record<string, unknown>) => boolean;
+  /**
+   * Render this field as a searchable relation picker over `relation.resource`
+   * instead of through the widget registry; the value is the selected row's
+   * public id. The dialog analog of a form's `many2one` field — but it only
+   * selects and creates, offering neither the pencil nor the follow arrow, since
+   * a dialog must not navigate away from itself mid-edit.
+   */
+  relation?: MutationDialogRelation;
 }
 
 export interface MutationDialogProps<
@@ -181,20 +214,89 @@ function MutationDialogFieldRow({
       <FieldLabel htmlFor={controlId} required={field.required}>
         {field.label ?? field.name}
       </FieldLabel>
-      <FieldDescriptorControl
-        field={field}
-        value={value}
-        readOnly={readOnly}
-        controlProps={{
-          id: controlId,
-          ...(descriptionId ? { "aria-describedby": descriptionId } : {}),
-        }}
-        onChange={onChange}
-      />
+      {field.relation ? (
+        <MutationDialogRelationControl
+          field={field}
+          relation={field.relation}
+          value={value}
+          readOnly={readOnly}
+          onChange={onChange}
+        />
+      ) : (
+        <FieldDescriptorControl
+          field={field}
+          value={value}
+          readOnly={readOnly}
+          controlProps={{
+            id: controlId,
+            ...(descriptionId ? { "aria-describedby": descriptionId } : {}),
+          }}
+          onChange={onChange}
+        />
+      )}
       {field.description ? (
         <FieldDescription id={descriptionId}>{field.description}</FieldDescription>
       ) : null}
     </FieldRoot>
+  );
+}
+
+/**
+ * One dialog field rendered as a relation picker: the offered rows come from the
+ * related resource's list root (narrowed by the field's `filters`), and "Create …"
+ * opens the field's own create form. The option query is deferred until the
+ * popover first opens, so a dialog that is never touched never fetches.
+ */
+function MutationDialogRelationControl({
+  field,
+  relation,
+  value,
+  readOnly,
+  onChange,
+}: {
+  field: MutationDialogField;
+  relation: MutationDialogRelation;
+  value: unknown;
+  readOnly?: boolean;
+  onChange: (value: unknown) => void;
+}): React.ReactElement {
+  const [opened, setOpened] = React.useState(false);
+  const model = useModelMetadata(relation.resource);
+  const info = React.useMemo(
+    () => relationFieldInfoForResource(relation.resource, model),
+    [relation.resource, model],
+  );
+  const { list, options } = useRelationOptions(info, {
+    enabled: opened,
+    ...(relation.labelField ? { labelField: relation.labelField } : {}),
+    ...(relation.filters ? { filters: relation.filters } : {}),
+  });
+  if (!info) {
+    // Metadata not yet loaded / the resource exposes no list root: fall back to
+    // the descriptor's own widget rather than render a picker with no options.
+    return (
+      <FieldDescriptorControl
+        field={field}
+        value={value}
+        readOnly={readOnly}
+        onChange={onChange}
+      />
+    );
+  }
+  return (
+    <RelationPicker
+      value={relationValueId(value)}
+      onChange={onChange}
+      options={options}
+      readOnly={readOnly}
+      placeholder={field.placeholder}
+      aria-label={typeof field.label === "string" ? field.label : field.name}
+      {...(relation.create ? { create: relation.create } : {})}
+      onCreated={() => list.refetch()}
+      onOpenChange={(open) => {
+        if (open) setOpened(true);
+      }}
+    />
   );
 }
 
