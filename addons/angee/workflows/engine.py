@@ -64,7 +64,12 @@ def start(
     parent_step_run: Any = None,
     dedup_key: str | None = None,
 ) -> Any:
-    """Start the current published version for ``workflow`` and enqueue advancement."""
+    """Start the current published version after validating its subject declaration.
+
+    An empty subject declaration accepts any subject for backwards compatibility.
+    A declared workflow raises ``ValidationError`` before creating a run when the
+    subject's concrete model differs.
+    """
 
     workflow_model = _model("Workflow")
     run_model = _model("WorkflowRun")
@@ -76,6 +81,7 @@ def start(
         if version.status != WorkflowStatus.PUBLISHED:
             raise ValidationError({"workflow": "Workflow runs must pin a published version."})
 
+        version.validate_subject_declaration(subject)
         subject_content_type, subject_object_id = _subject_gfk(subject)
         run_dedup_key = dedup_key or _dedup_key(trigger, subject_content_type, subject_object_id)
         owner_id = _owner_id(actor=actor, trigger=trigger, workflow=version)

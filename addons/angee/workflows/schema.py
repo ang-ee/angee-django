@@ -8,12 +8,19 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.db import models
-from rebac import system_context
 from strawberry import auto
 from strawberry.scalars import JSON
 
-from angee.graphql.actions import ActionResult, action_target, resolve_action_target
+from angee.base.models import read_scoped_queryset
+from angee.graphql.actions import (
+    ActionResult,
+    action_guard,
+    action_target,
+    authorized_action_target,
+    resolve_action_target,
+)
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, instance_for_id
 from angee.graphql.node import AngeeNode
@@ -70,6 +77,7 @@ class WorkflowType(AngeeNode):
 
     name: auto
     description: auto
+    subject_declaration: auto
     status: auto
     version: auto
     published_from: "WorkflowType | None"
@@ -277,8 +285,7 @@ class ConsoleDecisionResolutionPayload:
 class WorkflowObjectRefInput:
     """Generic subject reference for starting a workflow run."""
 
-    app_label: str
-    model: str
+    subject_declaration: str
     id: PublicID
 
 
@@ -286,12 +293,21 @@ _WORKFLOW_RESOURCE = hasura_model_resource(
     WorkflowType,
     model=Workflow,
     name="workflows",
-    filterable=["id", "name", "status", "version", "published_from", "error_workflow", "updated_at"],
+    filterable=[
+        "id",
+        "name",
+        "subject_declaration",
+        "status",
+        "version",
+        "published_from",
+        "error_workflow",
+        "updated_at",
+    ],
     sortable=["name", "status", "version", "created_at", "updated_at"],
     aggregatable=["id", "version", "max_steps"],
     groupable=["status", "updated_at"],
-    insertable=["name", "description", "error_workflow", "max_steps", "budget"],
-    updatable=["name", "description", "error_workflow", "max_steps", "budget"],
+    insertable=["name", "description", "subject_declaration", "error_workflow", "max_steps", "budget"],
+    updatable=["name", "description", "subject_declaration", "error_workflow", "max_steps", "budget"],
     field_id_decode={
         "published_from": public_pk_decoder(Workflow),
         "error_workflow": public_pk_decoder(Workflow),
@@ -454,6 +470,26 @@ _PUBLIC_DECISION_RESOURCE = hasura_model_resource(
 
 
 @strawberry.type
+class WorkflowSubjectDeclarationQuery:
+    """Actor-scoped workflow discovery for one record resource."""
+
+    @strawberry.field
+    def workflows_for_subject_declaration(
+        self,
+        info: strawberry.Info,
+        subject_declaration: str,
+    ) -> list[WorkflowType]:
+        """Return current workflows the actor may start for this subject declaration."""
+
+        actor = session_user(info)
+        scoped = read_scoped_queryset(cast(type[models.Model], Workflow), actor, action="write")
+        if scoped is None:
+            return []
+        workflows = cast(Any, scoped).for_subject_declaration(subject_declaration)
+        return cast(list[WorkflowType], list(workflows))
+
+
+@strawberry.type
 class WorkflowActionMutation:
     """Console actions for workflow definition lifecycle."""
 
@@ -513,7 +549,8 @@ class ConsoleDecisionMutation:
 class WorkflowRunActionMutation:
     """Console actions for workflow run lifecycle."""
 
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @strawberry.mutation
+    @action_guard("Run workflow failed.")
     def start_workflow_run(
         self,
         info: strawberry.Info,
@@ -522,16 +559,14 @@ class WorkflowRunActionMutation:
     ) -> ActionResult:
         """Start the current published version of a workflow lineage."""
 
-        target = resolve_action_target(Workflow, workflow, reason="workflows.graphql.start_workflow_run")
-        try:
-            run = engine.start(
-                target,
-                subject=_resolve_subject(subject),
-                actor=getattr(info.context.request, "user", None),
-            )
-        except Exception as error:  # noqa: BLE001 - domain start failures return action results.
-            return ActionResult(ok=False, message=f"Start failed: {error}")
-        return ActionResult(ok=True, message=f"Started workflow run {run.sqid}.")
+        actor = session_user(info)
+        target = authorized_action_target(info, Workflow, workflow, "write")
+        run = engine.start(
+            target,
+            subject=_resolve_subject(subject, actor=actor),
+            actor=actor,
+        )
+        return ActionResult(ok=True, message=f"Started workflow run {run.sqid}.", id=run.sqid)
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def cancel_workflow_run(self, run: PublicID) -> ActionResult:
@@ -609,6 +644,7 @@ schemas = {
     },
     "console": {
         "query": [
+            WorkflowSubjectDeclarationQuery,
             _WORKFLOW_RESOURCE.query,
             _STEP_RESOURCE.query,
             _EDGE_RESOURCE.query,
@@ -637,11 +673,19 @@ schemas = {
 """GraphQL contributions installed by the workflows addon."""
 
 
-def _resolve_subject(ref: WorkflowObjectRefInput | None) -> models.Model | None:
-    """Resolve an optional generic subject reference from GraphQL input."""
+def _resolve_subject(ref: WorkflowObjectRefInput | None, *, actor: Any) -> models.Model | None:
+    """Resolve an optional subject declaration through the actor's read scope."""
 
     if ref is None:
         return None
-    model = apps.get_model(ref.app_label, ref.model)
-    with system_context(reason="workflows.graphql.subject"):
-        return cast(models.Model | None, instance_for_id(cast(type[models.Model], model), ref.id))
+    try:
+        model = cast(type[models.Model], apps.get_model(ref.subject_declaration))
+    except (LookupError, ValueError) as error:
+        raise ValidationError({"subject": "Run workflow subject declaration is not installed."}) from error
+    queryset = read_scoped_queryset(model, actor)
+    if queryset is None:
+        queryset = model._default_manager.all()
+    subject = instance_for_id(model, ref.id, queryset=queryset)
+    if subject is None:
+        raise ValidationError({"subject": "Run workflow subject was not found."})
+    return cast(models.Model, subject)

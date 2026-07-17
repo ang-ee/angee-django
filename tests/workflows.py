@@ -165,6 +165,7 @@ def no_workflow_queue(monkeypatch: pytest.MonkeyPatch) -> None:
 def workflow_with_steps(
     *,
     name: str = "Engine",
+    subject_declaration: str = "",
     max_steps: int = 1000,
     budget: dict[str, Any] | None = None,
     steps: tuple[dict[str, Any], ...],
@@ -173,7 +174,12 @@ def workflow_with_steps(
     """Create and publish a workflow definition graph."""
 
     with system_context(reason="test workflows definition"):
-        draft = Workflow.objects.create(name=name, max_steps=max_steps, budget=budget or {})
+        draft = Workflow.objects.create(
+            name=name,
+            subject_declaration=subject_declaration,
+            max_steps=max_steps,
+            budget=budget or {},
+        )
         by_key = {}
         for index, spec in enumerate(steps):
             by_key[spec["key"]] = Step.objects.create(

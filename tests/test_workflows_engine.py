@@ -101,6 +101,60 @@ def test_two_step_run_completes_end_to_end(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_start_accepts_matching_and_empty_subject_declarations(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """A subject declaration accepts its model while an empty declaration accepts any subject."""
+
+    del workflow_engine_tables, no_workflow_queue
+    declared = workflow_with_steps(
+        name="Declared subject",
+        subject_declaration=Workflow._meta.label,
+        steps=({"key": "start", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    unrestricted = workflow_with_steps(
+        name="Unrestricted subject",
+        steps=({"key": "start", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    with system_context(reason="test workflows subject declaration subjects"):
+        workflow_subject = Workflow.objects.create(name="Workflow subject")
+        step_subject = Step.objects.get(workflow=declared, key="start")
+
+    declared_run = engine.start(declared, subject=workflow_subject, actor=None)
+    unrestricted_run = engine.start(unrestricted, subject=step_subject, actor=None)
+
+    assert declared_run.subject == workflow_subject
+    assert unrestricted_run.subject == step_subject
+
+
+@pytest.mark.django_db(transaction=True)
+def test_start_rejects_subject_outside_subject_declaration(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """A declared workflow rejects a subject whose concrete model differs."""
+
+    del workflow_engine_tables, no_workflow_queue
+    workflow = workflow_with_steps(
+        subject_declaration=Workflow._meta.label,
+        steps=({"key": "start", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    with system_context(reason="test workflows wrong subject declaration"):
+        wrong_subject = Step.objects.get(workflow=workflow, key="start")
+        before = WorkflowRun.objects.count()
+
+    with pytest.raises(ValidationError, match="subject declaration"):
+        engine.start(workflow, subject=wrong_subject, actor=None)
+
+    with system_context(reason="test workflows rejected subject run count"):
+        assert WorkflowRun.objects.count() == before
+
+
+@pytest.mark.django_db(transaction=True)
 def test_crash_replay_does_not_reexecute_completed_steps(
     workflow_engine_tables: None,
     no_workflow_queue: None,

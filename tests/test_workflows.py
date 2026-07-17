@@ -17,7 +17,7 @@ from angee.workflows.models import (
     WorkflowStatus,
 )
 from tests.conftest import SchemaAddon, execute_schema, result_data
-from tests.workflows import Edge, Step, Trigger, Workflow
+from tests.workflows import Edge, Step, Trigger, Workflow, WorkflowRun
 
 User = get_user_model()
 pytest_plugins = ("tests.workflows",)
@@ -41,6 +41,34 @@ def _platform_admin(username: str) -> Any:
     admin = User.objects.create_superuser(username=username, email=f"{username}@example.com", password="admin")
     grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
     return admin
+
+
+def _console_schema() -> Any:
+    """Build the workflows console schema against the concrete test models."""
+
+    importlib.import_module("tests.test_workflows_engine")
+    workflows_schema = importlib.import_module("angee.workflows.schema")
+    return GraphQLSchemas(
+        [
+            SchemaAddon(
+                {"console": {key: tuple(workflows_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}}
+            )
+        ]
+    ).build("console")
+
+
+def _published_workflow(*, name: str, subject_declaration: str, owner: Any) -> tuple[Workflow, Workflow]:
+    """Seed one actor-owned workflow lineage and publish its first version."""
+
+    with system_context(reason="test workflows subject declaration definition"):
+        draft = Workflow.objects.create(
+            name=name,
+            subject_declaration=subject_declaration,
+            created_by=owner,
+            updated_by=owner,
+        )
+        create_entry(draft)
+        return draft, draft.publish()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -131,15 +159,7 @@ def test_console_can_publish_workflow(workflow_tables: None) -> None:
     # Building the console schema resolves the whole runtime model family; the
     # concrete test classes live in test_workflows_engine (function-level import
     # because that module imports this one for the definition models).
-    importlib.import_module("tests.test_workflows_engine")
-    workflows_schema = importlib.import_module("angee.workflows.schema")
-    schema = GraphQLSchemas(
-        [
-            SchemaAddon(
-                {"console": {key: tuple(workflows_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}}
-            )
-        ]
-    ).build("console")
+    schema = _console_schema()
     with system_context(reason="test workflows graphql publish"):
         workflow = create_workflow()
         create_entry(workflow)
@@ -162,6 +182,103 @@ def test_console_can_publish_workflow(workflow_tables: None) -> None:
     with system_context(reason="test workflows graphql publish result"):
         published = Workflow.objects.get(published_from=workflow)
     assert published.status == WorkflowStatus.PUBLISHED
+
+
+@pytest.mark.django_db(transaction=True)
+def test_workflows_for_subject_declaration_filters_resource_and_rebac(workflow_tables: None) -> None:
+    """The subject declaration resolver returns only current workflows the actor may start."""
+
+    del workflow_tables
+    schema = _console_schema()
+    owner = User.objects.create_user(username="workflow-subject-owner")
+    outsider = User.objects.create_user(username="workflow-subject-outsider")
+    other_owner = User.objects.create_user(username="workflow-subject-other-owner")
+    _published_workflow(name="Matching", subject_declaration=Workflow._meta.label, owner=owner)
+    _published_workflow(name="Any subject", subject_declaration="", owner=owner)
+    _published_workflow(name="Wrong resource", subject_declaration=Step._meta.label, owner=owner)
+    _published_workflow(name="Hidden matching", subject_declaration=Workflow._meta.label, owner=other_owner)
+
+    query = """
+      query WorkflowsForSubjectDeclaration($subjectDeclaration: String!) {
+        workflows_for_subject_declaration(subject_declaration: $subjectDeclaration) {
+          id
+          name
+          subject_declaration
+        }
+      }
+    """
+    visible = result_data(
+        execute_schema(
+            schema,
+            query,
+            {"subjectDeclaration": Workflow._meta.label},
+            user=owner,
+        )
+    )["workflows_for_subject_declaration"]
+    hidden = result_data(
+        execute_schema(
+            schema,
+            query,
+            {"subjectDeclaration": Workflow._meta.label},
+            user=outsider,
+        )
+    )["workflows_for_subject_declaration"]
+
+    assert [(row["name"], row["subject_declaration"]) for row in visible] == [
+        ("Any subject", ""),
+        ("Matching", Workflow._meta.label),
+    ]
+    assert hidden == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_start_workflow_run_starts_subject_and_enforces_rebac(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """The Run workflow mutation starts for an owner and refuses another actor."""
+
+    del workflow_engine_tables, no_workflow_queue
+    schema = _console_schema()
+    owner = User.objects.create_user(username="workflow-start-owner")
+    outsider = User.objects.create_user(username="workflow-start-outsider")
+    subject, published = _published_workflow(
+        name="Start on workflow",
+        subject_declaration=Workflow._meta.label,
+        owner=owner,
+    )
+    mutation = """
+      mutation RunWorkflow($workflow: ID!, $subjectDeclaration: String!, $subjectId: ID!) {
+        start_workflow_run(
+          workflow: $workflow
+          subject: { subject_declaration: $subjectDeclaration, id: $subjectId }
+        ) {
+          ok
+          message
+          validation_errors
+          id
+        }
+      }
+    """
+    variables = {
+        "workflow": published.sqid,
+        "subjectDeclaration": Workflow._meta.label,
+        "subjectId": subject.sqid,
+    }
+
+    started = result_data(execute_schema(schema, mutation, variables, user=owner))["start_workflow_run"]
+    refused = result_data(execute_schema(schema, mutation, variables, user=outsider))["start_workflow_run"]
+
+    assert started["ok"] is True
+    assert started["id"]
+    assert refused["ok"] is False
+    assert refused["validation_errors"]["__all__"]
+    with system_context(reason="test workflows start mutation result"):
+        run = WorkflowRun.objects.get(sqid=started["id"])
+        assert WorkflowRun.objects.count() == 1
+    assert run.workflow == published
+    assert run.subject == subject
+    assert run.created_by == owner
 
 
 @pytest.mark.django_db(transaction=True)

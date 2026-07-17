@@ -28,7 +28,7 @@ from rebac import system_context
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin
-from angee.base.models import AngeeDataModel, AngeeManager
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import RecordRefMixin
 from angee.base.transitions import StateTransitions, save_state, transition
 from angee.workflows.steps import (
@@ -122,7 +122,39 @@ def _save_workflow_status(instance: models.Model, source: Any, target: Any) -> N
         del workflow._allow_immutable_status_save
 
 
-class WorkflowManager(AngeeManager):
+class WorkflowQuerySet(AngeeQuerySet[Any]):
+    """QuerySet owning subject declaration discovery."""
+
+    def for_subject_declaration(self, subject_declaration: str) -> Self:
+        """Return current published workflows accepting ``subject_declaration``."""
+
+        workflow_model = cast(Any, self.model)
+        newer_version = (
+            workflow_model.objects
+            .sudo(reason="workflows.subject_declaration.current")
+            .filter(
+                published_from_id=models.OuterRef("published_from_id"),
+                status__in=[WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED],
+            )
+            .filter(
+                models.Q(version__gt=models.OuterRef("version"))
+                | models.Q(version=models.OuterRef("version"), pk__gt=models.OuterRef("pk"))
+            )
+        )
+        return cast(
+            Self,
+            self.filter(status=WorkflowStatus.PUBLISHED)
+            .filter(~models.Exists(newer_version))
+            .filter(
+                models.Q(subject_declaration__isnull=True)
+                | models.Q(subject_declaration="")
+                | models.Q(subject_declaration__iexact=subject_declaration)
+            )
+            .order_by("name", "version", "pk"),
+        )
+
+
+class WorkflowManager(AngeeManager.from_queryset(WorkflowQuerySet)):  # type: ignore[misc]
     """Manager owning workflow lineage lookups."""
 
     def current_published_for(self, workflow: Any) -> Any | None:
@@ -148,6 +180,7 @@ class Workflow(AuditMixin, AngeeDataModel):
     sqid_prefix = "wfl_"
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True)
+    subject_declaration = models.CharField(max_length=200, blank=True, default="")
     status = StateField(choices_enum=WorkflowStatus, default=WorkflowStatus.DRAFT)
     version = models.PositiveIntegerField(default=0)
     published_from = models.ForeignKey(
@@ -228,6 +261,22 @@ class Workflow(AuditMixin, AngeeDataModel):
         if self.error_workflow_id is not None and self.error_workflow.published_from_id is not None:
             raise ValidationError({"error_workflow": "Error workflow must point to a workflow lineage head."})
 
+    def validate_subject_declaration(self, subject: Any) -> None:
+        """Raise when ``subject`` does not satisfy this workflow's subject declaration."""
+
+        if not self.subject_declaration:
+            return
+        subject_label = getattr(getattr(subject, "_meta", None), "label", "")
+        if subject_label.lower() != self.subject_declaration.lower():
+            raise ValidationError(
+                {
+                    "subject": (
+                        f"Subject model {subject_label or None!r} does not satisfy "
+                        f"subject declaration {self.subject_declaration!r}."
+                    )
+                }
+            )
+
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the workflow after enforcing immutability and model validation."""
 
@@ -258,12 +307,15 @@ class Workflow(AuditMixin, AngeeDataModel):
             published = type(self)(
                 name=draft.name,
                 description=draft.description,
+                subject_declaration=draft.subject_declaration,
                 status=WorkflowStatus.DRAFT,
                 version=version,
                 published_from=draft,
                 error_workflow=draft.error_workflow,
                 max_steps=draft.max_steps,
                 budget=copy.deepcopy(draft.budget),
+                created_by_id=draft.created_by_id,
+                updated_by_id=draft.updated_by_id,
             )
             published.save()
             draft._copy_definition_to(published)
@@ -321,6 +373,7 @@ class Workflow(AuditMixin, AngeeDataModel):
             "workflow": {
                 "name": self.name,
                 "description": self.description,
+                "subject_declaration": self.subject_declaration,
                 "error_workflow_id": self.error_workflow_id,
                 "max_steps": self.max_steps,
                 "budget": copy.deepcopy(self.budget),

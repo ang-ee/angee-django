@@ -100,6 +100,39 @@ export const StartWorkflowRunDocument = graphql(`
   }
 `);
 
+export const WorkflowsForSubjectDeclarationDocument = graphql(`
+  query WorkflowsForSubjectDeclaration($subjectDeclaration: String!) {
+    workflows_for_subject_declaration(
+      subject_declaration: $subjectDeclaration
+    ) {
+      id
+      name
+      subject_declaration
+    }
+  }
+`);
+
+export const RunWorkflowDocument = graphql(`
+  mutation RunWorkflow(
+    $workflow: ID!
+    $subjectDeclaration: String!
+    $subjectId: ID!
+  ) {
+    start_workflow_run(
+      workflow: $workflow
+      subject: {
+        subject_declaration: $subjectDeclaration
+        id: $subjectId
+      }
+    ) {
+      ok
+      message
+      validation_errors
+      id
+    }
+  }
+`);
+
 export const CancelWorkflowRunDocument = graphql(`
   mutation CancelWorkflowRun($id: ID!) {
     cancel_workflow_run(run: $id) {

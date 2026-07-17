@@ -13,6 +13,8 @@ export const enWorkflowsMessages: Record<string, string> = {
   "form.publish": "Publish",
   "form.start": "Start run",
   "form.cancel": "Cancel run",
+  "runWorkflow.label": "Run workflow",
+  "runWorkflow.failed": "Run workflow failed.",
   "tabs.canvas": "Canvas",
   "tabs.triggers": "Triggers",
   "tabs.timeline": "Timeline",

@@ -1,5 +1,5 @@
 import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute } from "@angee/app";
-import type { BaseMenuItem } from "@angee/ui";
+import { FORM_VIEW_RECORD_CHROME_SLOT, type BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import {
   ArrowUpRight,
@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { enWorkflowsMessages } from "./i18n";
+import { RunWorkflowMenu } from "./RunWorkflowMenu";
 
 const WORKFLOWS_ID = "workflows";
 
@@ -75,6 +76,14 @@ const workflows = defineBaseAddon({
   routes: workflowsRoutes,
   menus: workflowsMenu,
   i18n: { workflows: enWorkflowsMessages },
+  slots: [
+    {
+      slot: FORM_VIEW_RECORD_CHROME_SLOT,
+      id: "workflows.run-workflow",
+      sequence: 50,
+      content: <RunWorkflowMenu />,
+    },
+  ],
   icons: {
     workflow: GitBranch,
     "workflow-canvas": Network,
