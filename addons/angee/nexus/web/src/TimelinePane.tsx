@@ -1,4 +1,5 @@
 import * as React from "react";
+import { type DocumentType } from "@angee/gql/console";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   Avatar,
@@ -11,46 +12,56 @@ import {
   avatarInitials,
 } from "@angee/ui";
 
-import { PartyTimeline } from "./documents";
+import { NexusTimeline } from "./documents";
 import { useNexusT } from "./i18n";
 
 const PAGE_SIZE = 30;
 
-interface TimelineMessage {
-  id: string;
-  preview?: string | null;
-  platform?: string | null;
-  direction?: string | null;
-  sent_at?: string | null;
-  created_at?: string | null;
-  sender?: { id: string; display_name?: string | null; value?: string | null } | null;
-  thread?: { id: string; title?: { text?: string | null } | null } | null;
-}
+type TimelinePayload = NonNullable<
+  DocumentType<typeof NexusTimeline>["party_timeline"]
+>;
+type TimelineMessage = TimelinePayload["messages"][number];
+type TimelineDirection = NonNullable<TimelineMessage["direction"]>;
 
 function orderAt(message: TimelineMessage): string {
   return message.sent_at ?? message.created_at ?? "";
 }
 
-function directionTone(direction: string | undefined | null): "success" | "info" | "neutral" {
-  if (direction === "outbound") return "success";
-  if (direction === "inbound") return "info";
-  return "neutral";
+function directionPresentation(
+  direction: TimelineDirection,
+): {
+  tone: "success" | "info" | "neutral";
+  key: "timeline.inbound" | "timeline.outbound" | "timeline.internal";
+} {
+  if (direction === "OUTBOUND") return { tone: "success", key: "timeline.outbound" };
+  if (direction === "INBOUND") return { tone: "info", key: "timeline.inbound" };
+  return { tone: "neutral", key: "timeline.internal" };
 }
 
-/**
- * The merged cross-channel feed exchanged with one party: keyset pages accumulate
- * locally (newest first; "Load older" extends the window), each row carrying its
- * provenance — platform, direction, thread title — so a WhatsApp ping and a mail
- * thread read as what they are.
- */
-export function TimelinePane({ partyId }: { partyId: string }): React.ReactElement {
+type TimelinePaneProps =
+  | { partyId: string; circleId?: never }
+  | { circleId: string; partyId?: never };
+
+/** The merged cross-channel feed for one party or the members of a circle subtree. */
+export function TimelinePane(props: TimelinePaneProps): React.ReactElement {
   const t = useNexusT();
+  const circleId = "circleId" in props ? props.circleId : undefined;
+  const partyId = "partyId" in props ? props.partyId : undefined;
+  const circle = typeof circleId === "string";
+  const scopeId = (circle ? circleId : partyId) ?? "";
   const [before, setBefore] = React.useState<string | undefined>(undefined);
   const [rows, setRows] = React.useState<readonly TimelineMessage[]>([]);
   const { data, fetching, error } = useAuthoredQuery(
-    PartyTimeline,
-    { partyId, before: before ?? null, limit: PAGE_SIZE, search: "" },
-    { models: ["messaging.Message", "parties.PartyHandle"] },
+    NexusTimeline,
+    {
+      partyId: scopeId,
+      circleId: scopeId,
+      circle,
+      before: before ?? null,
+      limit: PAGE_SIZE,
+      search: "",
+    },
+    { models: ["messaging.Message", "parties.PartyHandle", "parties.CircleMember"] },
   );
 
   // Pages accumulate by message id: the query returns one window; older windows
@@ -58,9 +69,9 @@ export function TimelinePane({ partyId }: { partyId: string }): React.ReactEleme
   React.useEffect(() => {
     setRows([]);
     setBefore(undefined);
-  }, [partyId]);
+  }, [scopeId]);
   React.useEffect(() => {
-    const page = data?.party_timeline?.messages ?? [];
+    const page = (circle ? data?.circle_timeline : data?.party_timeline)?.messages ?? [];
     if (page.length === 0) return;
     setRows((existing) => {
       const byId = new Map(existing.map((row) => [row.id, row]));
@@ -69,9 +80,9 @@ export function TimelinePane({ partyId }: { partyId: string }): React.ReactEleme
         orderAt(a) < orderAt(b) ? 1 : orderAt(a) > orderAt(b) ? -1 : b.id.localeCompare(a.id),
       );
     });
-  }, [data]);
+  }, [circle, data]);
 
-  const total = data?.party_timeline?.count ?? 0;
+  const total = (circle ? data?.circle_timeline : data?.party_timeline)?.count ?? 0;
   const oldest = rows.at(-1);
   const exhausted = rows.length >= total;
 
@@ -80,7 +91,12 @@ export function TimelinePane({ partyId }: { partyId: string }): React.ReactEleme
     return <EmptyState icon="triangle-alert" title={error.message} />;
   }
   if (rows.length === 0) {
-    return <EmptyState icon="comments" title={t("timeline.empty")} />;
+    return (
+      <EmptyState
+        icon="comments"
+        title={t(circle ? "timeline.circleEmpty" : "timeline.empty")}
+      />
+    );
   }
 
   return (
@@ -93,6 +109,9 @@ export function TimelinePane({ partyId }: { partyId: string }): React.ReactEleme
           const author =
             message.sender?.display_name || message.sender?.value || "—";
           const title = message.thread?.title?.text ?? "";
+          const direction = message.direction
+            ? directionPresentation(message.direction)
+            : null;
           return (
             <li key={message.id} className="flex gap-2.5 rounded-6 px-2 py-2 hover:bg-sheet-2">
               <Avatar size="sm">
@@ -102,9 +121,9 @@ export function TimelinePane({ partyId }: { partyId: string }): React.ReactEleme
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-13 font-medium">{author}</span>
                   {message.platform ? <Tag tone="neutral">{message.platform}</Tag> : null}
-                  {message.direction ? (
-                    <Tag tone={directionTone(message.direction)}>
-                      {t(`timeline.${message.direction}` as "timeline.inbound")}
+                  {direction ? (
+                    <Tag tone={direction.tone}>
+                      {t(direction.key)}
                     </Tag>
                   ) : null}
                   <RelativeTime value={orderAt(message)} className="text-2xs text-fg-subtle" />

@@ -20,6 +20,7 @@ from angee.parties.schema import PartyType
 Tie = apps.get_model("nexus", "Tie")
 Cadence = apps.get_model("nexus", "Cadence")
 Party = apps.get_model("parties", "Party")
+Circle = apps.get_model("parties", "Circle")
 Message = apps.get_model("messaging", "Message")
 
 
@@ -92,10 +93,29 @@ class PartyNexusExtension:
 
 @strawberry.type
 class PartyTimelinePayload:
-    """One newest-first page of a party's cross-channel timeline."""
+    """One newest-first page of a party collection's cross-channel timeline."""
 
     messages: list[MessageType]
     count: int
+
+
+@strawberry.type
+class PartyGraphPayload:
+    """A bounded, actor-visible party graph rooted at one party or circle."""
+
+    nodes: strawberry.scalars.JSON
+    edges: strawberry.scalars.JSON
+    truncated: bool
+
+
+@strawberry.type
+class NexusOverviewPayload:
+    """Viewer-relative fading ties and cadences due during the local day."""
+
+    fading_ties: list[TieType]
+    fading_count: int
+    due_cadences: list[CadenceType]
+    due_count: int
 
 
 @strawberry.type
@@ -106,11 +126,83 @@ class NexusQuery:
     def party_network(self, party_id: strawberry.ID) -> list[TieType]:
         """Return actor-visible derived edges touching one readable party."""
 
-        party = Party.objects.all().from_public_id(str(party_id))
+        party = Party.objects.all().apply_ambient_scope().from_public_id(str(party_id))
         if party is None:
             raise ValueError("party not found")
         edges = Tie.objects.around_party(party).apply_ambient_scope()
         return cast("list[TieType]", list(edges))
+
+    @strawberry.field
+    def party_graph(
+        self,
+        root_id: strawberry.ID | None = None,
+        circle_id: strawberry.ID | None = None,
+        lenses: list[str] | None = None,
+        depth: int = 1,
+        limit: int = 60,
+    ) -> PartyGraphPayload:
+        """Delegate a bounded actor-scoped graph traversal to the Tie collection."""
+
+        if (root_id is None) == (circle_id is None):
+            raise ValueError("party_graph requires exactly one root_id or circle_id")
+        party = (
+            Party.objects.all().apply_ambient_scope().from_public_id(str(root_id))
+            if root_id is not None
+            else None
+        )
+        circle = (
+            Circle.objects.all().apply_ambient_scope().from_public_id(str(circle_id))
+            if circle_id is not None
+            else None
+        )
+        if root_id is not None and party is None:
+            raise ValueError("party not found")
+        if circle_id is not None and circle is None:
+            raise ValueError("circle not found")
+        graph = Tie.objects.party_graph(
+            root=party,
+            circle=circle,
+            lenses=lenses,
+            depth=depth,
+            limit=limit,
+        )
+        return PartyGraphPayload(
+            nodes=cast(strawberry.scalars.JSON, list(graph.nodes)),
+            edges=cast(strawberry.scalars.JSON, list(graph.edges)),
+            truncated=graph.truncated,
+        )
+
+    @strawberry.field
+    def nexus_overview(self, peek_limit: int = 6) -> NexusOverviewPayload:
+        """Return bounded relationship health relative to the authenticated user."""
+
+        user_id = _viewer_user_id()
+        if user_id is None:
+            return NexusOverviewPayload(
+                fading_ties=[],
+                fading_count=0,
+                due_cadences=[],
+                due_count=0,
+            )
+        viewer = Party.objects.identity_for_user_id(user_id)
+        if viewer is None:
+            return NexusOverviewPayload(
+                fading_ties=[],
+                fading_count=0,
+                due_cadences=[],
+                due_count=0,
+            )
+        overview = Tie.objects.overview_for(
+            viewer,
+            user_id=user_id,
+            peek_limit=peek_limit,
+        )
+        return NexusOverviewPayload(
+            fading_ties=cast("list[TieType]", list(overview.fading_ties)),
+            fading_count=overview.fading_count,
+            due_cadences=cast("list[CadenceType]", list(overview.due_cadences)),
+            due_count=overview.due_count,
+        )
 
     @strawberry.field
     def party_timeline(
@@ -123,11 +215,34 @@ class NexusQuery:
     ) -> PartyTimelinePayload:
         """Delegate one actor-scoped timeline page to messaging's collection owner."""
 
-        party = Party.objects.all().from_public_id(str(party_id))
+        party = Party.objects.all().apply_ambient_scope().from_public_id(str(party_id))
         if party is None:
             raise ValueError("party not found")
-        messages, count = Message.objects.timeline_for_party(
-            party,
+        messages, count = Message.objects.timeline_for_parties(
+            (party,),
+            search=search,
+            before=str(before) if before is not None else None,
+            limit=limit,
+        )
+        return PartyTimelinePayload(messages=cast("list[MessageType]", messages), count=count)
+
+    @strawberry.field
+    def circle_timeline(
+        self,
+        info: strawberry.Info,
+        circle_id: strawberry.ID,
+        search: str = "",
+        before: strawberry.ID | None = None,
+        limit: int = 50,
+    ) -> PartyTimelinePayload:
+        """Return messages involving members of a readable circle subtree."""
+
+        circle = Circle.objects.all().apply_ambient_scope().from_public_id(str(circle_id))
+        if circle is None:
+            raise ValueError("circle not found")
+        parties = Party.objects.all().apply_ambient_scope().in_circle(circle)
+        messages, count = Message.objects.timeline_for_parties(
+            parties,
             search=search,
             before=str(before) if before is not None else None,
             limit=limit,
@@ -177,6 +292,8 @@ _NEXUS_SCHEMA_BUCKET = {
         TieType,
         CadenceType,
         PartyTimelinePayload,
+        PartyGraphPayload,
+        NexusOverviewPayload,
         *_TIE_RESOURCE.types,
         *_CADENCE_RESOURCE.types,
     ],

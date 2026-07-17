@@ -26,6 +26,7 @@ dependencies = [
   "pydantic>=2.13",
   "croniter>=6.0",
   "python-dateutil>=2.9",
+  "phonenumbers>=9.0",
   "pyjwt[crypto]>=2.12",
   "pyyaml>=6",
   # Comment/format-preserving YAML round-trip: the AddonInstaller's settings.yaml

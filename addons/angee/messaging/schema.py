@@ -28,7 +28,7 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, request_from_info
 from angee.iam.schema import UserType
-from angee.integrate.live import PairingProjection
+from angee.integrate.live import PairingProjection, PairingState
 from angee.integrate.schema import BridgeSyncStatusMixin, IntegrationLabelMixin, IntegrationType
 from angee.messaging import connect
 from angee.messaging.managers import message_subtype_options
@@ -72,6 +72,15 @@ class ChannelType(IntegrationLabelMixin, BridgeSyncStatusMixin, AngeeNode):
     sync_progress: strawberry.scalars.JSON
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field
+    def pairing_state(self) -> PairingState | None:
+        """Return the live bridge's actual pairing state, or null for poll channels."""
+
+        try:
+            return connect.channel_pairing(cast(Any, self)).state
+        except ValueError:
+            return None
 
 
 @strawberry.type

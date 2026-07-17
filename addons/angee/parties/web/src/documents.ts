@@ -4,7 +4,7 @@
 // (ResourceList reads the SDL) and sync is the single-id `sync_integration` action, so
 // neither needs a document here.
 
-import { graphql } from "@angee/gql/console";
+import { graphql, type DocumentType } from "@angee/gql/console";
 
 // Identity decisions: the two verbs of the review flow. Confirming sets full
 // confidence + manual source and re-resolves the handle; dismissing writes the
@@ -17,6 +17,235 @@ export const PARTY_HANDLE_DECISION_INVALIDATES = [
   "parties.Party",
   "parties.Person",
 ] as const;
+
+export const PARTY_MERGE_INVALIDATES = [
+  "parties.Party",
+  "parties.Person",
+  "parties.Organization",
+  "parties.Handle",
+  "parties.CircleMember",
+  "parties.Relationship",
+  "parties.MergeVeto",
+] as const;
+
+export const CIRCLE_MEMBER_INVALIDATES = [
+  "parties.CircleMember",
+  "parties.Circle",
+  "parties.Party",
+  "parties.Person",
+] as const;
+
+export const PeopleWorkbench = graphql(`
+  query PeopleWorkbench($scope: PeopleWorkbenchScope!, $circle: ID) {
+    people_workbench(scope: $scope, circle: $circle) {
+      all_count
+      unassigned_count
+      to_review_count
+      filtered_ids
+      truncated
+      circles {
+        id
+        name
+        icon
+        member_count
+        parent {
+          id
+        }
+      }
+    }
+  }
+`);
+
+export const AddCircleMember = graphql(`
+  mutation AddCircleMember($circle: ID!, $party: ID!) {
+    insert_circle_members_one(object: { circle: $circle, party: $party }) {
+      id
+    }
+  }
+`);
+
+export const RemoveCircleMember = graphql(`
+  mutation RemoveCircleMember($id: String!) {
+    delete_circle_members_by_pk(id: $id) {
+      id
+    }
+  }
+`);
+
+export const PartiesOverview = graphql(`
+  query PartiesOverview($duplicateLimit: Int = 100) {
+    contacts: people_aggregate {
+      aggregate {
+        count
+      }
+    }
+    organizations: organizations_aggregate {
+      aggregate {
+        count
+      }
+    }
+    unresolved_handles: handles_aggregate(where: { party: { _is_null: true } }) {
+      aggregate {
+        count
+      }
+    }
+    review_queue: party_handles_aggregate(
+      where: {
+        confidence: { _lt: 0.5 }
+        is_confirmed: { _eq: false }
+        is_dismissed: { _eq: false }
+      }
+    ) {
+      aggregate {
+        count
+      }
+    }
+    duplicate_party_candidates(limit: $duplicateLimit) {
+      left {
+        id
+      }
+      right {
+        id
+      }
+    }
+  }
+`);
+
+export const PartyMergeComparison = graphql(`
+  query PartyMergeComparison($left: ID!, $right: ID!) {
+    left: parties_by_pk(id: $left) {
+      id
+      display_name
+      notes
+      first_met_note
+      handles {
+        id
+        platform
+        value
+        normalized_value
+        label
+        is_preferred
+      }
+      circle_members {
+        id
+        circle {
+          id
+          name
+        }
+      }
+      relationships {
+        id
+      }
+      inbound_relationships {
+        id
+      }
+    }
+    right: parties_by_pk(id: $right) {
+      id
+      display_name
+      notes
+      first_met_note
+      handles {
+        id
+        platform
+        value
+        normalized_value
+        label
+        is_preferred
+      }
+      circle_members {
+        id
+        circle {
+          id
+          name
+        }
+      }
+      relationships {
+        id
+      }
+      inbound_relationships {
+        id
+      }
+    }
+    left_person: people_by_pk(id: $left) {
+      id
+      name_prefix
+      given_name
+      additional_name
+      family_name
+      name_suffix
+      nickname
+      birthday
+      folder {
+        id
+        name
+      }
+    }
+    right_person: people_by_pk(id: $right) {
+      id
+      name_prefix
+      given_name
+      additional_name
+      family_name
+      name_suffix
+      nickname
+      birthday
+      folder {
+        id
+        name
+      }
+    }
+  }
+`);
+
+export const DuplicatePartyCandidates = graphql(`
+  query DuplicatePartyCandidates($limit: Int = 50) {
+    duplicate_party_candidates(limit: $limit) {
+      normalized_value
+      left {
+        id
+        display_name
+      }
+      right {
+        id
+        display_name
+      }
+    }
+  }
+`);
+
+export const PartyReviewCounts = graphql(`
+  query PartyReviewCounts {
+    party_handles_aggregate(
+      where: {
+        confidence: { _lt: 0.5 }
+        is_confirmed: { _eq: false }
+        is_dismissed: { _eq: false }
+      }
+    ) {
+      aggregate {
+        count
+      }
+    }
+  }
+`);
+
+export const MergeParties = graphql(`
+  mutation MergeParties($intoId: ID!, $fromId: ID!, $fieldOverrides: JSON) {
+    merge_parties(into_id: $intoId, from_id: $fromId, field_overrides: $fieldOverrides) {
+      id
+      display_name
+    }
+  }
+`);
+
+export const VetoMerge = graphql(`
+  mutation VetoMerge($aId: ID!, $bId: ID!) {
+    veto_merge(a_id: $aId, b_id: $bId) {
+      id
+    }
+  }
+`);
 
 export const ConfirmPartyHandle = graphql(`
   mutation ConfirmPartyHandle($id: ID!) {
@@ -56,3 +285,10 @@ export const ConnectCardDavDirectory = graphql(`
     }
   }
 `);
+
+export type MergePartyRecord = NonNullable<
+  DocumentType<typeof PartyMergeComparison>["left"]
+>;
+export type MergePersonRecord = NonNullable<
+  DocumentType<typeof PartyMergeComparison>["left_person"]
+>;

@@ -61,6 +61,8 @@ export interface GraphViewNodeStyle {
 
 export interface GraphViewEdgeStyle {
   stroke?: string;
+  /** Rendered line width; graph consumers can encode edge strength without custom edges. */
+  strokeWidth?: number;
   labelColor?: string;
 }
 
@@ -107,6 +109,8 @@ export interface GraphViewProps<
   ) => void;
   onConnect?: (edge: GraphViewConnection) => void;
   onNodeSelect?: (node: GraphViewNode<TNodeKind, TNodeMeta> | null) => void;
+  /** Full current selection for graph actions that require more than one node. */
+  onNodesSelect?: (nodes: readonly GraphViewNode<TNodeKind, TNodeMeta>[]) => void;
   onEdgeSelect?: (edge: GraphViewEdge<TEdgeKind, TEdgeMeta> | null) => void;
 }
 
@@ -137,6 +141,7 @@ type RenderEdge<
 
 const DEFAULT_EDGE_STYLE: Required<GraphViewEdgeStyle> = {
   stroke: "var(--border-strong)",
+  strokeWidth: 1,
   labelColor: "var(--text-muted)",
 };
 const EMPTY_EDGE_STYLES = {} as Readonly<Partial<Record<string, GraphViewEdgeStyle>>>;
@@ -170,6 +175,7 @@ export function GraphView<
   onNodeDragEnd,
   onConnect,
   onNodeSelect,
+  onNodesSelect,
   onEdgeSelect,
 }: GraphViewProps<
   TNodeKind,
@@ -211,7 +217,7 @@ export function GraphView<
         fitViewOptions={fitViewOptions}
         nodesDraggable={nodesDraggable}
         nodesConnectable={Boolean(onConnect)}
-        elementsSelectable={Boolean(onNodeSelect || onEdgeSelect)}
+        elementsSelectable={Boolean(onNodeSelect || onNodesSelect || onEdgeSelect)}
         onNodeClick={
           onNodeClick
             ? (_, node) => onNodeClick(node.data.node)
@@ -240,9 +246,10 @@ export function GraphView<
             : undefined
         }
         onSelectionChange={
-          onNodeSelect || onEdgeSelect
+          onNodeSelect || onNodesSelect || onEdgeSelect
             ? ({ nodes: selectedNodes, edges: selectedEdges }) => {
                 onNodeSelect?.(selectedNodes[0]?.data.node ?? null);
+                onNodesSelect?.(selectedNodes.map((node) => node.data.node));
                 onEdgeSelect?.(selectedEdges[0]?.data?.edge ?? null);
               }
             : undefined
@@ -310,7 +317,7 @@ function toReactFlowEdge<
     data: { edge },
     label: edge.label,
     markerEnd: { type: MarkerType.ArrowClosed },
-    style: { stroke: style.stroke },
+    style: { stroke: style.stroke, strokeWidth: style.strokeWidth },
     labelStyle: { fill: style.labelColor, fontSize: 11 },
   };
 }

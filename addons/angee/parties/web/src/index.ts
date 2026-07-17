@@ -1,7 +1,7 @@
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { type BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
-import { AtSign, Building2, CircleDot, Contact, HeartHandshake, UserCheck, Users } from "lucide-react";
+import { AtSign, Building2, CircleDot, Contact, HeartHandshake, LayoutDashboard, UserCheck, Users } from "lucide-react";
 import { enPartiesMessages } from "./i18n";
 
 // One rail root ("Parties") whose children are the People and Organizations
@@ -12,6 +12,7 @@ const partiesMenu: readonly BaseMenuItem[] = [
     label: "Parties",
     icon: "parties",
     children: [
+      { id: "parties.overview", label: "Overview", route: "parties.overview", icon: "overview" },
       { id: "parties.people", label: "People", route: "parties.people", icon: "parties" },
       {
         id: "parties.organizations",
@@ -41,6 +42,12 @@ const partiesMenu: readonly BaseMenuItem[] = [
 const parties = defineBaseAddon({
   id: "parties",
   routes: [
+    {
+      name: "parties.overview",
+      path: "/parties",
+      layout: "console",
+      component: lazyRouteComponent(() => import("./OverviewPage"), "OverviewPage"),
+    },
     ...resourcePageRoutes("parties.people", "/parties/people", lazyRouteComponent(() => import("./PeoplePage"), "PeoplePage"), "parties.Person"),
     ...resourcePageRoutes(
       "parties.organizations",
@@ -62,11 +69,18 @@ const parties = defineBaseAddon({
       layout: "console",
       component: lazyRouteComponent(() => import("./ReviewPage"), "ReviewPage"),
     },
+    {
+      name: "parties.merge",
+      path: "/parties/merge/$left/$right",
+      layout: "console",
+      component: lazyRouteComponent(() => import("./MergePage"), "MergePage"),
+    },
     ...resourcePageRoutes("parties.directories", "/parties/directories", lazyRouteComponent(() => import("./DirectoriesPage"), "DirectoriesPage"), "parties.Directory"),
   ],
   menus: partiesMenu,
   icons: {
     parties: Users,
+    overview: LayoutDashboard,
     organization: Building2,
     "address-book": Contact,
     handle: AtSign,
@@ -76,5 +90,8 @@ const parties = defineBaseAddon({
   },
   i18n: { parties: enPartiesMessages },
 });
+
+export { PARTIES_OVERVIEW_SLOT } from "./slots";
+export { partyMergePath } from "./routes";
 
 export default parties;

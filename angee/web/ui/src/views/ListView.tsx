@@ -155,6 +155,7 @@ function ListViewBody<TRow extends Row = Row>({
   onRowClick,
   onListStateChange,
   rowHref,
+  draggableRow,
   toolbarActions,
   cardActions,
   renderCard,
@@ -369,6 +370,7 @@ function ListViewBody<TRow extends Row = Row>({
       onRowClick={onRowClick}
       onListStateChange={onListStateChange}
       rowHref={rowHref}
+      draggableRow={draggableRow}
       toolbarActions={toolbarActions}
       cardActions={cardActions}
       renderCard={renderCard}
@@ -454,6 +456,7 @@ interface ListViewContentProps<TRow extends Row> {
   onRowClick: ListViewProps<TRow>["onRowClick"];
   onListStateChange: ListViewProps<TRow>["onListStateChange"];
   rowHref: ListViewProps<TRow>["rowHref"];
+  draggableRow: ListViewProps<TRow>["draggableRow"];
   toolbarActions: ListViewProps<TRow>["toolbarActions"];
   cardActions: ListViewProps<TRow>["cardActions"];
   renderCard: ListViewProps<TRow>["renderCard"];
@@ -485,6 +488,7 @@ function ListViewContent<TRow extends Row = Row>({
   onRowClick,
   onListStateChange,
   rowHref,
+  draggableRow,
   toolbarActions,
   cardActions,
   renderCard,
@@ -664,6 +668,7 @@ function ListViewContent<TRow extends Row = Row>({
           interactive={interactive}
           rowHref={rowHref}
           onRowClick={onRowClick}
+          draggableRow={draggableRow}
           onListStateChange={onListStateChange}
           emptyContent={emptyContent}
           fetching={surface.list.fetching}
@@ -709,6 +714,7 @@ function ListViewContent<TRow extends Row = Row>({
           onRowClick={onRowClick}
           emptyContent={emptyContent}
           fetching={surface.list.fetching}
+          draggableRow={draggableRow}
         />
       ) : (
         <FlatListBody
@@ -729,6 +735,7 @@ function ListViewContent<TRow extends Row = Row>({
           onRowClick={onRowClick}
           emptyContent={emptyContent}
           fetching={surface.list.fetching}
+          draggableRow={draggableRow}
         />
       )}
     </ResourceListFrame>

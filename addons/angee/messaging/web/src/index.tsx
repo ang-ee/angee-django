@@ -1,9 +1,11 @@
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
+import { PARTIES_OVERVIEW_SLOT } from "@angee/parties";
 import { type BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { Inbox, Mail, MessagesSquare, Send } from "lucide-react";
 
 import { enMessagingMessages } from "./i18n";
+import { MessagingOverviewContribution } from "./MessagingOverviewContribution";
 import { RecordActivityPane } from "./RecordActivityPane";
 import { RecordChatterPane } from "./RecordChatterPane";
 
@@ -60,6 +62,14 @@ const messaging = defineBaseAddon({
       label: "Activity",
       icon: "activity",
       render: (context) => <RecordActivityPane context={context} />,
+    },
+  ],
+  slots: [
+    {
+      slot: PARTIES_OVERVIEW_SLOT,
+      id: "messaging.channel-health",
+      sequence: 30,
+      content: <MessagingOverviewContribution />,
     },
   ],
 });

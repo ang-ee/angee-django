@@ -187,6 +187,19 @@ export const enMessagingMessages: Record<string, string> = {
   "activity.errorSchedule": "Could not schedule activity.",
   "activity.errorComplete": "Could not complete activity.",
   "activity.errorCancel": "Could not cancel activity.",
+  "overview.channels.title": "Channel health",
+  "overview.channels.empty": "No messaging channels are connected.",
+  "overview.channels.neverSynced": "Never synced",
+  "overview.channels.needsAttention": "Needs attention",
+  "overview.channels.paired": "Paired",
+  "overview.channels.loggedOut": "Logged out",
+  "overview.channels.paused": "Paused",
+  "overview.channels.duplicate": "Duplicate account",
+  "overview.channels.awaitingScan": "Awaiting scan",
+  "overview.channels.awaitingPassword": "Awaiting password",
+  "overview.channels.starting": "Starting",
+  "overview.channels.stopped": "Stopped",
+  "overview.channels.notApplicable": "Polling channel",
 };
 
 // A translator bound to the `messaging` namespace: resolves against the host

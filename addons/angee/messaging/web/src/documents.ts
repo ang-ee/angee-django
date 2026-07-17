@@ -30,6 +30,26 @@ export const ChannelPairing = graphql(`
   }
 `);
 
+/** Bounded health summary for the Parties overview contribution. */
+export const MessagingChannelHealth = graphql(`
+  query MessagingChannelHealth($limit: Int!) {
+    channels(order_by: [{ display_name: asc }], limit: $limit) {
+      id
+      display_name
+      backend_class
+      pairing_state
+      last_sync_status
+      last_sync_completed_at
+      sync_error
+    }
+    channels_aggregate {
+      aggregate {
+        count
+      }
+    }
+  }
+`);
+
 // One owner for the record-feed message selection: the four operations that
 // return a full chatter message (the thread read + post/update/delete payloads)
 // spread this fragment instead of repeating the field set. `can_edit`/`can_delete`
