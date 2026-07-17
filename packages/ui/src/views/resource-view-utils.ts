@@ -4,7 +4,10 @@ import {
   groupAllowedByResource,
   groupSupportedByResource,
   isClientRowModel,
+  isRelationLabelAxis,
+  isToOneRelationField,
   looksLikeDateField,
+  relationFilterForRelation,
   resourceGroupDimensionForField,
   supportsChoiceFacet as metadataSupportsChoiceFacet,
   type ModelFieldMetadata,
@@ -51,9 +54,16 @@ export function buildGroupOptions<TRow extends Row>(
 ): readonly ResourceToolbarGroupOption[] {
   const options: ResourceToolbarGroupOption[] = [];
   const seen = new Set<string>();
+  // One relation is one group, however it was reached — a declared default, its
+  // own `groupByFields` entry, or a column naming its label path all resolve to
+  // the same `aggregateField`, so the first spelling wins and the rest collapse.
+  const seenRelations = new Set<string>();
   const addOption = (option: ResourceToolbarGroupOption) => {
     if (seen.has(option.id)) return;
+    const relation = option.group.aggregateField;
+    if (relation && seenRelations.has(relation)) return;
     seen.add(option.id);
+    if (relation) seenRelations.add(relation);
     options.push(option);
   };
 
@@ -72,6 +82,14 @@ export function buildGroupOptions<TRow extends Row>(
     });
   }
 
+  // A column that names a relation's label path owns that relation's option — its
+  // header names it. The groupByFields pass only fills in relations no column
+  // reaches (a view need not carry a column to group by a declared relation).
+  const columnRelations = new Set(
+    columns
+      .map((column) => relationGroupForFieldPath(column.field, metadata)?.aggregateField)
+      .filter((relation): relation is string => relation != null),
+  );
   const resourceGroupByFields = metadata?.resource?.groupByFields ?? [];
   const groupAliases = metadata?.resource?.groupAliases ?? [];
   const aliasedAggregateFields = new Set(
@@ -98,7 +116,26 @@ export function buildGroupOptions<TRow extends Row>(
     const field = metadata.fields[fieldName];
     const dimension = resourceGroupDimensionForField(fieldName, metadata);
     if (!field && !dimension) continue;
-    if (field?.kind === "relation") continue;
+    // A to-one relation groups by its identity, labelled by the label axis it
+    // carries — however the node projects it (object or bare `ID`).
+    const relationGroup = relationGroupForRelationField(fieldName, metadata);
+    if (relationGroup) {
+      if (!columnRelations.has(fieldName)) {
+        addOption({
+          id: fieldName,
+          label: fieldLabel(fieldName, field),
+          group: relationGroup,
+          type: "value",
+        });
+      }
+      continue;
+    }
+    // A relation the resource declares no filter for cannot be grouped by
+    // identity, and its raw id is not a group a reader wants.
+    if (isToOneRelationField(field)) continue;
+    // A relation's label axis is not a group of its own — it rides along with the
+    // relation group above, which is the one that can drill down.
+    if (isRelationLabelAxis(fieldName, metadata)) continue;
     const type = dateGroupType(fieldName, field) ? "date" : "value";
     addOption({
       id: fieldName,
@@ -161,20 +198,37 @@ function relationGroupOptionForColumn<TRow extends Row>(
   };
 }
 
+/**
+ * The group that buckets rows by one to-one relation: the resource's declared
+ * relation filter owns the axis (`aggregateField`) and its identity key
+ * (`aggregateKey`), so a bucket drills down through the relation's public id.
+ */
+function relationGroupForRelationField(
+  relationField: string,
+  metadata: ModelMetadata | null,
+): ResourceViewGroup | null {
+  // The declared relation filter is the proof: the resource only carries one for
+  // a relation its `relationAxes` name, whichever way the node projects the FK —
+  // or whether it projects it at all.
+  const filter = relationFilterForRelation(relationField, metadata);
+  if (!filter?.aggregateKey) return null;
+  return {
+    field: relationField,
+    aggregateField: filter.field,
+    aggregateKey: filter.aggregateKey,
+  };
+}
+
 function relationGroupForFieldPath(
   fieldPath: string,
   metadata: ModelMetadata | null,
 ): ResourceViewGroup | null {
   const [relationField, labelField, ...rest] = fieldPath.split(".");
   if (!relationField || !labelField || rest.length > 0) return null;
-  const field = metadata?.fields[relationField];
-  const filter = field?.relationFilter;
-  if (field?.kind !== "relation" || !filter?.aggregateKey) return null;
-  return {
-    field: fieldPath,
-    aggregateField: filter.field,
-    aggregateKey: filter.aggregateKey,
-  };
+  const group = relationGroupForRelationField(relationField, metadata);
+  // The caller named the relation by its label path; keep that as the display
+  // field, the axis it groups on is the relation either way.
+  return group ? { ...group, field: fieldPath } : null;
 }
 
 function relationGroupLabel(
@@ -185,7 +239,7 @@ function relationGroupLabel(
   const [relationField, labelField, ...rest] = group.field.split(".");
   if (!relationField || !labelField || rest.length > 0) return null;
   const field = metadata?.fields[relationField];
-  return field?.kind === "relation" ? fieldLabel(relationField, field) : null;
+  return isToOneRelationField(field) ? fieldLabel(relationField, field) : null;
 }
 
 export function resolveResourceViewGroup(

@@ -10,6 +10,7 @@ import {
   buildFilterOptions,
   buildGroupOptions,
   resolveResourceViewGroup,
+  validResourceViewGroupStack,
 } from "./resource-view-utils";
 import {
   columnsWithMetadataDefaults,
@@ -57,6 +58,82 @@ const NOTE_METADATA: ModelMetadata = {
     aggregateFields: ["id", "wordCount"],
     groupByFields: ["status", "updatedAt", "createdAt"],
     relationAxes: [],
+  },
+};
+
+// A resource that groups by a relation and carries the related row's name along
+// as that relation's label axis — the shape every `x`/`x__display_name` groupable
+// pair emits.
+const MESSAGE_METADATA: ModelMetadata = {
+  typeName: "MessageType",
+  fields: {
+    sender: {
+      name: "sender",
+      kind: "relation",
+      label: "Sender",
+      relationFilter: {
+        field: "sender",
+        mode: "lookup",
+        lookup: "sqid",
+        aggregateKey: "sender_id",
+        labelKey: "sender__display_name",
+      },
+    },
+    status: { name: "status", kind: "enum", values: [{ value: "SENT" }] },
+  },
+  resource: {
+    schemaName: "public",
+    modelLabel: "messaging.Message",
+    appLabel: "messaging",
+    modelName: "message",
+    publicIdField: "sqid",
+    roots: {},
+    typeNames: { node: "MessageType" },
+    capabilities: ["list", "aggregate", "groups"],
+    filterFields: ["sender", "status"],
+    orderFields: ["sentAt"],
+    aggregateFields: ["id"],
+    groupByFields: ["sender", "sender__display_name", "status"],
+    groupDimensions: [
+      {
+        field: "sender",
+        input: "SENDER",
+        key: "sender_id",
+        kind: "relation",
+        scalar: "ID",
+        filter: {
+          kind: "equality",
+          field: "sender",
+          valueKey: "sender_id",
+          lookup: "sqid",
+        },
+      },
+      // The backend declares no bucket filter for a label axis: it is not a
+      // dimension a caller may group by on its own.
+      {
+        field: "sender__display_name",
+        input: "SENDER__DISPLAY_NAME",
+        key: "sender__display_name",
+        kind: "column",
+        scalar: "String",
+      },
+      {
+        field: "status",
+        input: "STATUS",
+        key: "status",
+        kind: "column",
+        scalar: "String",
+        filter: { kind: "equality", field: "status", valueKey: "status" },
+      },
+    ],
+    relationAxes: [
+      {
+        field: "sender",
+        modelLabel: "messaging.Handle",
+        publicIdField: "sqid",
+        labelAxis: "sender__display_name",
+      },
+    ],
   },
 };
 
@@ -720,5 +797,72 @@ describe("relation column read expansion", () => {
       schema,
     );
     expect(rendered?.field).toBe("product");
+  });
+});
+
+describe("relation label axes are not groups of their own", () => {
+  // The inbox reaches the sender's name through `sender.party.display_name`, so
+  // no column names the relation's own label path.
+  const columns: readonly ColumnDescriptor<Row>[] = [
+    { field: "sender.party.display_name" },
+    { field: "status" },
+  ];
+
+  test("the picker offers the relation group, never its label axis", () => {
+    const options = buildGroupOptions(columns, MESSAGE_METADATA, null);
+
+    expect(options.map((option) => option.id)).not.toContain(
+      "sender__display_name",
+    );
+    // The relation group carries the label axis, so its buckets still read
+    // "Alice" — and drill down through the relation's own bucket filter.
+    expect(options).toContainEqual({
+      id: "sender",
+      label: "Sender",
+      group: {
+        field: "sender",
+        aggregateField: "sender",
+        aggregateKey: "sender_id",
+      },
+      type: "value",
+    });
+  });
+
+  test("a column naming the relation's label path still owns the option", () => {
+    const options = buildGroupOptions(
+      [{ field: "sender.displayName", header: "From" }],
+      MESSAGE_METADATA,
+      null,
+    );
+    const ids = options.map((option) => option.id);
+    expect(ids).toContain("sender.displayName");
+    expect(ids).not.toContain("sender");
+  });
+
+  test("a stale ?group= naming the label axis is dropped, not rendered", () => {
+    expect(
+      validResourceViewGroupStack(
+        [{ field: "sender__display_name" }],
+        MESSAGE_METADATA,
+      ),
+    ).toEqual([]);
+    expect(
+      validResourceViewGroupStack([{ field: "status" }], MESSAGE_METADATA),
+    ).toEqual([{ field: "status" }]);
+  });
+
+  test("the relation group itself stays valid", () => {
+    expect(
+      validResourceViewGroupStack(
+        [{ field: "sender.displayName" }],
+        MESSAGE_METADATA,
+      ),
+    ).toEqual([
+      {
+        field: "sender.displayName",
+        aggregateField: "sender",
+        aggregateKey: "sender_id",
+      },
+    ]);
   });
 });

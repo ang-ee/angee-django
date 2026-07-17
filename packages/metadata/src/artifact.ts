@@ -429,10 +429,12 @@ function modelFieldMetadataFromResourceField(
   field: DataResourceFieldMetadata,
   resource: DataResourceMetadata,
 ): ModelFieldMetadata {
-  const relationFilter =
-    field.kind === "relation"
-      ? relationFilterFromResourceField(field, resource)
-      : undefined;
+  // `relationAxes` is the owner of which fields are to-one relations, and
+  // `relationFilterFromResourceField` already returns undefined for anything it
+  // does not name. Gating on `kind` here instead would drop every relation the
+  // node projects as a bare `ID` scalar (see `isScalarIdRelation`), leaving it
+  // with no filter, no identity axis, and buckets labelled by raw public id.
+  const relationFilter = relationFilterFromResourceField(field, resource);
   const relationTarget = relationTargetForField(field, resource);
   return {
     ...baseModelFieldMetadata(field, relationTarget),
@@ -553,21 +555,32 @@ function relationFilterFromResourceField(
     candidate.field === field.name ||
     candidate.field === snakeFieldName(field.name)
   );
-  if (!axis) return undefined;
+  return axis ? relationFilterForAxis(axis, resource, field.name) : undefined;
+}
+
+/**
+ * The filter/identity/label contract of one relation axis.
+ *
+ * The axis owns the relation: its public-id lookup, the identity dimension a
+ * bucket drills down on, and the label axis a bucket renders. `fieldName` only
+ * widens the name candidates for a node that projects the relation under its own
+ * spelling — the axis alone is enough, because a node need not expose the FK at
+ * all (a curated node may project `provider_slug` and hide `oauth_client`).
+ */
+function relationFilterForAxis(
+  axis: DataResourceRelationAxisMetadata,
+  resource: DataResourceMetadata,
+  fieldName?: string,
+): ModelRelationFilterMetadata | undefined {
+  const names = fieldName && fieldName !== axis.field ? [axis.field, fieldName] : [axis.field];
   const filterField = firstIncluded(resource.filterFields, [
-    axis.field,
-    field.name,
-    `${axis.field}_id`,
-    `${field.name}_id`,
-    `${axis.field}Id`,
-    `${field.name}Id`,
+    ...names,
+    ...names.map((name) => `${name}_id`),
+    ...names.map((name) => `${name}Id`),
   ]);
   if (!filterField) return undefined;
   const identityDimension = resource.groupDimensions?.find((dimension) =>
-    dimension.field === axis.field ||
-    dimension.field === field.name ||
-    dimension.key === axis.field ||
-    dimension.key === field.name
+    names.includes(dimension.field) || names.includes(dimension.key)
   );
   return {
     field: filterField,
@@ -576,6 +589,22 @@ function relationFilterFromResourceField(
     ...(identityDimension?.key ? { aggregateKey: identityDimension.key } : {}),
     ...(axis.labelAxis ? { labelKey: axis.labelAxis } : {}),
   };
+}
+
+/**
+ * The relation contract for one relation field, asked of the resource rather than
+ * of the node's field list — so a relation the node does not project still groups
+ * by its identity and renders its label instead of a raw public id.
+ */
+export function relationFilterForRelation(
+  relationField: string,
+  metadata: ModelMetadata | null,
+): ModelRelationFilterMetadata | undefined {
+  const onField = metadata?.fields[relationField]?.relationFilter;
+  if (onField) return onField;
+  const resource = metadata?.resource;
+  const axis = resource?.relationAxes.find((candidate) => candidate.field === relationField);
+  return axis && resource ? relationFilterForAxis(axis, resource) : undefined;
 }
 
 function firstIncluded(
