@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider } from "../runtime";
 import { defaultWidgets } from "../widgets";
 import {
-  DescriptorFieldControl,
+  LabeledDescriptorField,
   MutationDialog,
   emptyValueForField,
 } from "./MutationDialog";
@@ -51,7 +51,7 @@ describe("MutationDialog", () => {
   test("binds server messages to the matching shared field control", () => {
     render(
       <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-        <DescriptorFieldControl
+        <LabeledDescriptorField
           field={{ name: "title", label: "Title" }}
           value=""
           messages={["This field is required."]}

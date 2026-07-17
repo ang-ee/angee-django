@@ -58,6 +58,7 @@ export interface RelationPickerProps {
   searchPlaceholder?: string;
   "aria-label"?: string;
   "aria-describedby"?: string;
+  "aria-required"?: boolean;
   readOnly?: boolean;
   /**
    * Enables the in-place "Create …" affordance: when the typed query matches no
@@ -111,6 +112,7 @@ export function RelationPicker({
   searchPlaceholder,
   "aria-label": ariaLabel,
   "aria-describedby": ariaDescribedBy,
+  "aria-required": ariaRequired,
   readOnly,
   create,
   onCreated,
@@ -138,6 +140,7 @@ export function RelationPicker({
             searchPlaceholder={searchPlaceholder}
             aria-label={ariaLabel}
             aria-describedby={ariaDescribedBy}
+            aria-required={ariaRequired}
             readOnly={readOnly}
             onCreate={create ? (query) => setDialog({ mode: "create", query }) : undefined}
             onOpenChange={onOpenChange}

@@ -3,16 +3,26 @@ import * as React from "react";
 import {
   useResolvedWidget,
   type WidgetControlProps,
+  type WidgetDefinition,
   type WidgetField,
+  type WidgetRenderProps,
 } from "../widgets";
 import {
   fieldWidgetId,
   type FieldDescriptor,
 } from "./page";
+import type { FormSpecFieldDescriptor } from "./form-spec";
+
+type DescriptorWidgetField = WidgetField & {
+  rowTemplate?: readonly FormSpecFieldDescriptor[];
+};
 
 export interface FieldDescriptorControlProps {
-  field: FieldDescriptor & { rowTemplate?: readonly WidgetField[] };
+  field: FieldDescriptor & {
+    rowTemplate?: readonly FormSpecFieldDescriptor[];
+  };
   value: unknown;
+  messages?: readonly string[];
   readOnly?: boolean;
   onChange?: (value: unknown) => void;
   controlProps?: WidgetControlProps;
@@ -26,13 +36,14 @@ export interface FieldDescriptorControlProps {
 export function FieldDescriptorControl({
   field,
   value,
+  messages,
   readOnly,
   onChange,
   controlProps,
 }: FieldDescriptorControlProps): React.ReactElement {
   const widget = useResolvedWidget(fieldWidgetId(field)) ?? fallbackWidget();
   const Component = readOnly ? widget.read : (widget.edit ?? widget.read);
-  const widgetField: WidgetField = {
+  const widgetField: DescriptorWidgetField = {
     name: field.name,
     label: field.label,
     options: field.options,
@@ -45,15 +56,16 @@ export function FieldDescriptorControl({
     <Component
       value={value}
       field={widgetField}
+      messages={messages}
       readOnly={readOnly}
       onChange={onChange}
     />
   );
 }
 
-function fallbackWidget() {
+function fallbackWidget(): WidgetDefinition {
   return {
-    read: ({ value }: { value?: unknown }) => (
+    read: ({ value }: WidgetRenderProps) => (
       <span className="text-13 text-fg">{String(value ?? "")}</span>
     ),
     edit: ({
@@ -61,12 +73,7 @@ function fallbackWidget() {
       onChange,
       readOnly,
       field,
-    }: {
-      value?: unknown;
-      onChange?: (value: string) => void;
-      readOnly?: boolean;
-      field?: WidgetField;
-    }) => (
+    }: WidgetRenderProps) => (
       <input
         {...field?.controlProps}
         className="h-9 w-full rounded-6 border border-border bg-sheet px-3 text-13 text-fg"

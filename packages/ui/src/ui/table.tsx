@@ -29,29 +29,42 @@ export const tableVariants = tv({
       true: { head: "sticky top-0 z-sticky-cell" },
       false: "",
     },
+    density: {
+      comfortable: "",
+      compact: {
+        head: "h-8 px-2 text-2xs",
+        cell: "h-8 px-2 py-1.5 text-2xs",
+      },
+    },
   },
   defaultVariants: {
     interactive: false,
     selected: false,
     sticky: false,
+    density: "comfortable",
   },
 });
 
 export type TableRecipeProps = VariantProps<typeof tableVariants>;
+export type TableDensity = NonNullable<TableRecipeProps["density"]>;
+
+const TableDensityContext = React.createContext<TableDensity>("comfortable");
 
 export type TableProps = React.TableHTMLAttributes<HTMLTableElement> & {
   className?: string;
-};
+} & Pick<TableRecipeProps, "density">;
 
 export const Table = React.forwardRef<HTMLTableElement, TableProps>(
-  function Table({ className, ...props }, ref) {
-    const styles = tableVariants();
+  function Table({ className, density = "comfortable", ...props }, ref) {
+    const styles = tableVariants({ density });
     return (
-      <table
-        ref={ref}
-        className={styles.table({ className })}
-        {...props}
-      />
+      <TableDensityContext.Provider value={density}>
+        <table
+          ref={ref}
+          className={styles.table({ className })}
+          {...props}
+        />
+      </TableDensityContext.Provider>
     );
   },
 );
@@ -123,7 +136,8 @@ export const TableHead = React.forwardRef<
   HTMLTableCellElement,
   TableHeadProps
 >(function TableHead({ className, sticky = false, ...props }, ref) {
-  const styles = tableVariants({ sticky });
+  const density = React.useContext(TableDensityContext);
+  const styles = tableVariants({ sticky, density });
   return <th ref={ref} className={styles.head({ className })} {...props} />;
 });
 TableHead.displayName = "TableHead";
@@ -136,7 +150,8 @@ export const TableCell = React.forwardRef<
   HTMLTableCellElement,
   TableCellProps
 >(function TableCell({ className, ...props }, ref) {
-  const styles = tableVariants();
+  const density = React.useContext(TableDensityContext);
+  const styles = tableVariants({ density });
   return <td ref={ref} className={styles.cell({ className })} {...props} />;
 });
 TableCell.displayName = "TableCell";
