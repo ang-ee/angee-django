@@ -480,6 +480,14 @@ data through REBAC, never a queryset bypass.
 
 Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 
+- **`.values_list(...).distinct()` must clear the model's default ordering.**
+  `Meta.ordering` columns silently join the DISTINCT projection, so a
+  single-column `values_list("owner_id").distinct()` returns one row per
+  *source row*, not per owner — a loop over it repeats its whole body once per
+  row (a 4-hour beat tick that should take a second, live-measured). Append
+  `.order_by()` (or order only by the selected columns) before `.distinct()`
+  on every values/values_list distinct read.
+
 - **A long-lived Celery task needs the three-check wake loop.** A session task
   that outlives the tick (a live chat connection) runs on a dedicated queue's
   threads-pool worker — the threads pool enforces **no** time limits, so queue

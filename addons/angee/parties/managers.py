@@ -480,6 +480,10 @@ class PartyHandleManager(AngeeManager):
             handle_model.objects.exclude(created_by_id=None)
             .exclude(display_name="")
             .values_list("created_by_id", flat=True)
+            # Clear the model's default ordering: its columns silently join the
+            # DISTINCT, yielding one "distinct owner" PER HANDLE — the pass then
+            # repeats its full per-owner sweep tens of thousands of times.
+            .order_by()
             .distinct()
         )
         for owner_id in owner_ids:
