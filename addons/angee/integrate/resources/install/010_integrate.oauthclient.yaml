@@ -57,21 +57,18 @@
   manual_redirect_uri: https://platform.claude.com/oauth/code/callback
   loopback_redirect_path: /callback
   token_request_format: json
+  # Claude Code's setup-token flow requests this one-year lifetime only for an
+  # inference-only authorization grant. Anthropic rejects the lifetime when any
+  # profile, session, hosted-MCP, or file-upload scope is included.
+  token_params:
+    expires_in: 31536000
   is_enabled: true
   supports_pkce: true
   supports_refresh: true
   scopes_catalogue:
-    - user:profile
     - user:inference
-    - user:sessions:claude_code
-    - user:mcp_servers
-    - user:file_upload
   default_scopes:
-    - user:profile
     - user:inference
-    - user:sessions:claude_code
-    - user:mcp_servers
-    - user:file_upload
   authorize_params:
     code: "true"
   external_id_claim: account.uuid

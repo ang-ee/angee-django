@@ -345,10 +345,12 @@ class OAuthClient(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         return self._string_mapping(self.authorize_params)
 
     @property
-    def token_param_values(self) -> dict[str, str]:
-        """Return configured provider-specific token-exchange parameters."""
+    def token_param_values(self) -> dict[str, Any]:
+        """Return provider token parameters while preserving JSON scalar types."""
 
-        return self._string_mapping(self.token_params)
+        if not isinstance(self.token_params, Mapping):
+            return {}
+        return {str(key): item for key, item in self.token_params.items() if item is not None}
 
     def resolve_connect_redirect(self, proposed_redirect_uri: str) -> tuple[str, str]:
         """Return the ``(redirect_uri, mode)`` this client uses to connect from a browser.

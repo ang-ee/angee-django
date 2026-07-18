@@ -102,6 +102,15 @@ def complete_account_connect(
     claims = protocol.fetch_userinfo(str(tokens.get("access_token", "") or ""))
     external_id = oauth_client.external_id_from_claims(claims)
     if not external_id:
+        # Restricted tokens may be unable to call userinfo. Anthropic's one-year
+        # inference-only exchange returns the stable ``account`` mapping in the
+        # token response instead, so use that provider-authenticated metadata as
+        # a fallback without persisting it as credential secret material.
+        token_claims = protocol.token_response_claims
+        external_id = oauth_client.external_id_from_claims(token_claims)
+        if external_id:
+            claims = {**token_claims, **claims}
+    if not external_id:
         raise OAuthFlowError(EXTERNAL_ACCOUNT_RESOLUTION_FAILED, 400)
     return complete_external_account_link(
         oauth_client,

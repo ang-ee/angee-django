@@ -139,6 +139,9 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     assert personal["token_endpoint"] == "https://platform.claude.com/v1/oauth/token"
     assert personal["userinfo_endpoint"] == "https://api.anthropic.com/api/oauth/profile"
     assert personal["token_request_format"] == "json"
+    assert personal["token_params"] == {"expires_in": 31536000}
+    assert personal["scopes_catalogue"] == ["user:inference"]
+    assert personal["default_scopes"] == ["user:inference"]
     assert personal["external_id_claim"] == "account.uuid"
     assert personal["email_claim"] == "account.email_address"
     assert "client_secret" not in personal

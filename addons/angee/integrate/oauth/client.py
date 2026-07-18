@@ -50,6 +50,11 @@ logger = logging.getLogger(__name__)
 # returns is dropped. ``credentials.py`` reads access_token/expires_in/scope and
 # the refresh token, and the OIDC layer reads id_token.
 _TOKEN_MATERIAL_KEYS = ("access_token", "refresh_token", "id_token", "expires_in", "scope")
+# Some OAuth providers return stable account metadata with the token response.
+# It is not credential material, but it can identify an account when a restricted
+# access token cannot call the provider's userinfo endpoint (Anthropic's long-lived
+# inference-only token is one such case).
+_TOKEN_RESPONSE_IDENTITY_KEYS = ("account", "organization")
 
 
 class OAuthClientProtocol:
@@ -62,6 +67,13 @@ class OAuthClientProtocol:
         # Test seam: an injected httpx transport (e.g. ``httpx.MockTransport``) used
         # by the per-row session and the JSON shim. ``None`` dials for real.
         self._transport: httpx.BaseTransport | None = None
+        self._token_response_claims: dict[str, Any] = {}
+
+    @property
+    def token_response_claims(self) -> dict[str, Any]:
+        """Return non-secret identity metadata carried by the last token response."""
+
+        return dict(self._token_response_claims)
 
     def authorize_url(
         self,
@@ -170,7 +182,13 @@ class OAuthClientProtocol:
         """
 
         token_endpoint = self._endpoint("token_endpoint")
+        self._token_response_claims = {}
         extra = _param_values(self.oauth_client, "token_param_values")
+        if grant_type == "refresh_token":
+            # Anthropic permits a custom lifetime only on its inference-only
+            # authorization-code exchange. Claude Code does not repeat it when
+            # refreshing, and the token endpoint rejects it on other grants.
+            extra.pop("expires_in", None)
         if self._uses_json_token_request():
             return self._json_token_request(token_endpoint, grant_type, grant, extra)
         return self._authlib_token_request(token_endpoint, grant_type, grant, extra)
@@ -185,7 +203,7 @@ class OAuthClientProtocol:
         endpoint: str,
         grant_type: str,
         grant: Mapping[str, Any],
-        extra: Mapping[str, str],
+        extra: Mapping[str, Any],
     ) -> dict[str, Any]:
         """Run the standard (form-encoded) grant through Authlib's OAuth2 client."""
 
@@ -216,14 +234,16 @@ class OAuthClientProtocol:
             raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400) from exc
         finally:
             session.close()
-        return _token_material(dict(token))
+        response = dict(token)
+        self._token_response_claims = _token_response_identity_claims(response)
+        return _token_material(response)
 
     def _json_token_request(
         self,
         endpoint: str,
         grant_type: str,
         grant: Mapping[str, Any],
-        extra: Mapping[str, str],
+        extra: Mapping[str, Any],
     ) -> dict[str, Any]:
         """POST a non-standard JSON token body (provider quirk Authlib does not emit)."""
 
@@ -254,6 +274,7 @@ class OAuthClientProtocol:
             client.close()
         if not isinstance(data, dict):
             raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400)
+        self._token_response_claims = _token_response_identity_claims(data)
         return _token_material(data)
 
     def _session(self) -> OAuth2Client:
@@ -304,7 +325,7 @@ class OAuthClientProtocol:
         """Return the shared authorize query parameters (OIDC adds ``nonce``/``openid``)."""
 
         query: dict[str, str] = {
-            **_param_values(self.oauth_client, "authorize_param_values"),
+            **_string_param_values(self.oauth_client, "authorize_param_values"),
             "client_id": str(getattr(self.oauth_client, "client_id", "")),
             "redirect_uri": redirect_uri,
             "response_type": "code",
@@ -344,8 +365,17 @@ def _outbound_kwargs(transport: httpx.BaseTransport | None) -> dict[str, Any]:
     }
 
 
-def _param_values(oauth_client: object, property_name: str) -> dict[str, str]:
-    """Return provider-specific params exposed by an OAuth client property."""
+def _param_values(oauth_client: object, property_name: str) -> dict[str, Any]:
+    """Return provider-specific JSON/form params without changing scalar types."""
+
+    value = getattr(oauth_client, property_name, {})
+    if isinstance(value, Mapping):
+        return {str(key): item for key, item in value.items() if item is not None}
+    return {}
+
+
+def _string_param_values(oauth_client: object, property_name: str) -> dict[str, str]:
+    """Return provider-specific URL parameters as strings."""
 
     value = getattr(oauth_client, property_name, {})
     if isinstance(value, Mapping):
@@ -395,6 +425,16 @@ def _token_material(response: Mapping[str, Any]) -> dict[str, Any]:
     if not tokens.get("access_token"):
         raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400)
     return tokens
+
+
+def _token_response_identity_claims(response: Mapping[str, Any]) -> dict[str, Any]:
+    """Return allow-listed, non-secret identity mappings from a token response."""
+
+    return {
+        key: dict(value)
+        for key in _TOKEN_RESPONSE_IDENTITY_KEYS
+        if isinstance((value := response.get(key)), Mapping)
+    }
 
 
 def _response_body(response: httpx.Response) -> Any:

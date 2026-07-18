@@ -236,6 +236,10 @@ def test_exchange_code_posts_json_body_with_pkce() -> None:
             json={
                 "access_token": "access-token",
                 "refresh_token": "refresh-token",
+                "account": {
+                    "uuid": "account-uuid",
+                    "email_address": "person@example.com",
+                },
                 "ignored": "not-token-material",
             },
         )
@@ -243,7 +247,7 @@ def test_exchange_code_posts_json_body_with_pkce() -> None:
     oauth_client = _stub_oauth_client(
         supports_pkce=True,
         token_request_format="json",
-        token_param_values={"audience": "https://api.example"},
+        token_param_values={"audience": "https://api.example", "expires_in": 31536000},
     )
     protocol = OAuthClientProtocol(oauth_client)
     protocol._transport = httpx.MockTransport(handler)
@@ -256,6 +260,12 @@ def test_exchange_code_posts_json_body_with_pkce() -> None:
     )
 
     assert tokens == {"access_token": "access-token", "refresh_token": "refresh-token"}
+    assert protocol.token_response_claims == {
+        "account": {
+            "uuid": "account-uuid",
+            "email_address": "person@example.com",
+        },
+    }
     assert captured["url"] == "https://issuer.example/oauth/token"
     assert captured["ua"] == oauth_protocol.USER_AGENT
     assert captured["fields"] == {
@@ -264,6 +274,7 @@ def test_exchange_code_posts_json_body_with_pkce() -> None:
         "client_secret": "secret",
         "code": "auth-code",
         "code_verifier": "verifier",
+        "expires_in": 31536000,
         "grant_type": "authorization_code",
         "redirect_uri": "https://app.example/callback",
         "state": "state-token",
@@ -280,7 +291,10 @@ def test_refresh_token_posts_refresh_grant() -> None:
         captured["fields"] = json.loads(request.content)
         return httpx.Response(200, json={"access_token": "new-access", "refresh_token": "rotated", "expires_in": 7200})
 
-    oauth_client = _stub_oauth_client(token_request_format="json")
+    oauth_client = _stub_oauth_client(
+        token_request_format="json",
+        token_param_values={"audience": "https://api.example", "expires_in": 31536000},
+    )
     protocol = OAuthClientProtocol(oauth_client)
     protocol._transport = httpx.MockTransport(handler)
 
@@ -289,6 +303,7 @@ def test_refresh_token_posts_refresh_grant() -> None:
     assert tokens == {"access_token": "new-access", "refresh_token": "rotated", "expires_in": 7200}
     assert captured["url"] == "https://issuer.example/oauth/token"
     assert captured["fields"] == {
+        "audience": "https://api.example",
         "client_id": "oidc-client",
         "client_secret": "secret",
         "grant_type": "refresh_token",
@@ -953,6 +968,72 @@ def test_complete_account_connect_links_oauth_userinfo_claims_and_credential(
     assert credential.user_id == link_user.pk
     assert credential.external_account_id == account.pk
     assert credential.reveal()["access_token"] == "oauth-access"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_complete_account_connect_falls_back_to_token_response_account(
+    oidc_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Restricted tokens can resolve an account without userinfo scope."""
+
+    link_user = get_user_model().objects.create_user(
+        username="oauth-token-account",
+        email="local@example.com",
+    )
+    oauth_client = _oauth_client(
+        slug="token-account",
+        oidc=False,
+        external_id_claim="account.uuid",
+        email_claim="account.email_address",
+        display_name_claim="account.display_name",
+    )
+    state_token, _record = oauth_state.issue(
+        oauth_client,
+        "https://app.example/oauth/callback",
+        user_id=str(link_user.pk),
+        flow=oauth_state.StateFlow.CONNECT,
+    )
+
+    def exchange_code(self: OAuthClientProtocol, **kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        self._token_response_claims = {
+            "account": {
+                "uuid": "anthropic-account-uuid",
+                "email_address": "subscriber@example.com",
+            },
+        }
+        return {
+            "access_token": "long-lived-access",
+            "expires_in": 31536000,
+            "scope": "user:inference",
+        }
+
+    monkeypatch.setattr(OAuthClientProtocol, "exchange_code", exchange_code)
+    monkeypatch.setattr(OAuthClientProtocol, "fetch_userinfo", lambda self, access_token: {})
+
+    result = complete_account_connect(
+        oauth_client,
+        code="code",
+        state_token=state_token,
+        redirect_uri="https://app.example/oauth/callback",
+    )
+
+    result.account.refresh_from_db()
+    assert result.account.external_id == "anthropic-account-uuid"
+    assert result.account.email == "subscriber@example.com"
+    assert result.account.display_name == "subscriber@example.com"
+    assert result.claims == {
+        "account": {
+            "uuid": "anthropic-account-uuid",
+            "email_address": "subscriber@example.com",
+        },
+    }
+    assert result.credential.reveal() == {
+        "access_token": "long-lived-access",
+        "expires_in": 31536000,
+        "scope": "user:inference",
+    }
 
 
 @pytest.mark.django_db(transaction=True)
