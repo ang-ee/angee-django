@@ -489,6 +489,12 @@ class PartyHandleManager(AngeeManager):
                 .select_related("party")
                 .order_by("sqid")
             )
+            # The durable-pair check reads once per owner, not once per pair:
+            # steady state re-proposes tens of thousands of existing links, and a
+            # get_or_create probe for each is the pass's dominant cost.
+            existing_pairs = set(
+                self.filter(handle__created_by_id=owner_id).values_list("party_id", "handle_id")
+            )
             pools: defaultdict[str, list[Any]] = defaultdict(list)
             for handle in handles:
                 normalized_name = handle_model.normalize_display_name(handle.display_name)
@@ -509,6 +515,9 @@ class PartyHandleManager(AngeeManager):
                     ):
                         continue
                     seen_parties.add(candidate.party_id)
+                    if (candidate.party_id, handle.pk) in existing_pairs:
+                        continue
+                    existing_pairs.add((candidate.party_id, handle.pk))
                     created += self._suggest(
                         candidate.party,
                         handle,
