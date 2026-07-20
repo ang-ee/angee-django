@@ -11,6 +11,7 @@ from rebac import system_context
 
 from angee.agents.models import RuntimeStatus, SessionStatus, TurnStatus
 from angee.workflows import engine
+from angee.workflows.models import RunStatus
 
 
 def start_session(agent: Any, *, owner: Any, context: dict[str, Any]) -> Any:
@@ -61,20 +62,32 @@ def post_message(session: Any, text: str) -> Any:
         if locked.status == SessionStatus.CLOSED:
             raise ValidationError({"session": "This agent session is closed."})
         run = run_for(locked)
-        if run.awaiting_decision():
-            raise ValidationError({"session": "Resolve the pending tool approval before sending another message."})
-        next_index = int(locked.turns.aggregate(last=models.Max("index"))["last"] or 0) + 1
-        turn = turn_model.objects.create(
-            session=locked,
-            index=next_index,
-            prompt=prompt,
-            created_by_id=locked.owner_id,
-            updated_by_id=locked.owner_id,
-        )
-        if not locked.title:
-            locked.title = prompt[:200]
-            locked.save(update_fields=["title", "updated_at"])
-        run_id = run.pk
+        if run.status in RunStatus.TERMINAL:
+            # The engine can no longer execute turns for this run (canceled,
+            # reaped, or failed before the exhaustion conversion existed).
+            # Reconcile the projection so the UI stops reusing the session —
+            # committed here, the refusal raises after the transaction.
+            locked.close()
+            run_id = None
+        else:
+            if run.awaiting_decision():
+                raise ValidationError(
+                    {"session": "Resolve the pending tool approval before sending another message."}
+                )
+            next_index = int(locked.turns.aggregate(last=models.Max("index"))["last"] or 0) + 1
+            turn = turn_model.objects.create(
+                session=locked,
+                index=next_index,
+                prompt=prompt,
+                created_by_id=locked.owner_id,
+                updated_by_id=locked.owner_id,
+            )
+            if not locked.title:
+                locked.title = prompt[:200]
+                locked.save(update_fields=["title", "updated_at"])
+            run_id = run.pk
+    if run_id is None:
+        raise ValidationError({"session": "This agent session has ended. Start a new session."})
     engine.deliver(run_id)
     return turn
 

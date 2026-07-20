@@ -16,6 +16,7 @@ import pytest
 from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
@@ -541,6 +542,31 @@ def test_retrying_running_turn_discards_partial_updates(
     assert resumed is False
     assert turn.status == TurnStatus.RUNNING
     assert turn.updates == []
+
+
+def test_post_message_on_terminal_run_closes_session_and_refuses(
+    workflows_agents_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """A session whose run ended terminally self-heals to CLOSED on the next post.
+
+    The UI reuses the latest non-CLOSED session; a run that died (cancel, reap,
+    pre-exhaustion-fix failure) would otherwise pin an unusable session forever.
+    """
+
+    del workflows_agents_tables, no_workflow_queue
+
+    owner, agent = _ready_session_agent("terminal-run")
+    _session_workflow()
+    session = sessions.start_session(agent, owner=owner, context={})
+    with system_context(reason="test terminal run seed"):
+        run = sessions.run_for(session)
+        run.status_transitions.force_state(run, workflow_models.RunStatus.FAILED, reason="test terminal run")
+
+    with pytest.raises(ValidationError, match="has ended"):
+        sessions.post_message(session, "hello?")
+    session.refresh_from_db()
+    assert session.status == SessionStatus.CLOSED
 
 
 def test_transient_exhaustion_fails_turn_and_parks_session(
