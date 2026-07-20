@@ -543,6 +543,53 @@ def test_retrying_running_turn_discards_partial_updates(
     assert turn.updates == []
 
 
+def test_transient_exhaustion_fails_turn_and_parks_session(
+    workflows_agents_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A spent retry budget becomes a failed TURN on a parked run, never a failed run.
+
+    Regression for the first real-data smoke: a provider 429 raised
+    ``TransientStepError`` past the step's retry budget, the engine journaled
+    the step failed, and the whole session run died with the turn stuck
+    RUNNING and no error text anywhere.
+    """
+
+    del workflows_agents_tables, no_workflow_queue
+    from angee.agents_runtime_pydantic.runtime import PydanticAIRuntime
+
+    owner, agent = _ready_session_agent("retry-exhaustion")
+    _session_workflow()
+    session = sessions.start_session(agent, owner=owner, context={})
+    sessions.post_message(session, "hi")
+    with system_context(reason="test exhaustion run"):
+        run = sessions.run_for(session)
+    step_run = advance_once(run)[0]
+
+    class RateLimitedRunner:
+        def run_turn(self, session: Any, turn: Any, **kwargs: Any) -> TurnOutcome:
+            raise TransientStepError("status_code: 429, rate_limit_error")
+
+    monkeypatch.setattr(PydanticAIRuntime, "session_runner", lambda self: RateLimitedRunner())
+    # Default step policy is max_attempts=1: this execution is the final
+    # attempt, so the impl converts instead of re-raising to the engine.
+    engine.execute(step_run.pk)
+    engine.advance(run.pk)
+
+    step_run.refresh_from_db()
+    run.refresh_from_db()
+    session.refresh_from_db()
+    assert run.status == workflow_models.RunStatus.WAITING
+    assert step_run.status == workflow_models.StepRunStatus.WAITING
+    assert session.status == SessionStatus.ERROR
+    assert "429" in (session.last_error or "")
+    with system_context(reason="test exhaustion verify"):
+        turn = AgentTurn.objects.get(session=session, index=1)
+        assert turn.status == TurnStatus.FAILED
+        assert "429" in turn.error
+
+
 def test_in_process_provision_and_teardown_leave_no_orphaned_waiting_run(
     workflows_agents_tables: None,
     no_workflow_queue: None,

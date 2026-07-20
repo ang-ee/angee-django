@@ -7,6 +7,14 @@ rows:
       key: session
       name: Agent session
       step_class: agent_session
-      config: {}
+      # Transient provider errors (429/5xx/timeouts) retry with backoff; the
+      # step impl converts the final attempt into a failed TURN (session
+      # survives) instead of letting engine exhaustion fail the run.
+      config:
+        retry:
+          max_attempts: 3
+          backoff:
+            wait: 15
+            exponential_wait: 30
       is_entry: true
       position: {x: 0, y: 0}

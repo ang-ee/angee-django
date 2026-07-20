@@ -27,7 +27,13 @@ from angee.agents.backends import InferenceRequest, InferenceResponse
 from angee.agents.models import SessionStatus, TurnStatus
 from angee.agents.runners import TurnOutcome
 from angee.workflows.models import RunStatus, StepRunStatus, Verdict
-from angee.workflows.steps import DecisionSpec, StepImpl, StepResult, TransientStepError
+from angee.workflows.steps import (
+    DecisionSpec,
+    StepImpl,
+    StepResult,
+    TransientStepError,
+    retry_policy_from_config,
+)
 from angee.workflows_agents.sessions import close_session
 
 AGENT_STEP_JOURNAL_MAX_BYTES = 4096
@@ -163,10 +169,20 @@ class AgentSessionStepImpl(StepImpl):
                     emit=sink,
                     heartbeat=lambda: self.heartbeat(step_run),
                 )
-        except TransientStepError:
-            raise
+        except TransientStepError as error:
+            # A transient raise hands the retry to the engine — but retry
+            # exhaustion there fails the whole run, and a session must survive
+            # a failed turn. Re-raise only while the step's retry budget has
+            # attempts left; the last attempt becomes a failed turn outcome.
+            if _attempts_remaining(step_run):
+                raise
+            outcome = TurnOutcome(
+                kind="failed",
+                error=str(error),
+                replay_state=session.replay_state,
+            )
         except Exception as error:  # noqa: BLE001 - provider/runtime failures become turn outcomes.
-            if _is_retryable_provider_error(error):
+            if _is_retryable_provider_error(error) and _attempts_remaining(step_run):
                 raise TransientStepError(str(error)) from error
             outcome = TurnOutcome(
                 kind="failed",
@@ -370,6 +386,19 @@ def _approval_decisions(session: Any, requests: list[dict[str, Any]]) -> tuple[D
         )
         for index, request in enumerate(requests)
     )
+
+
+def _attempts_remaining(step_run: Any) -> bool:
+    """Return whether the step's declared retry budget has attempts left.
+
+    ``step_run.attempt`` counts executions (the engine's ``record_attempt``
+    runs once per claim), and the budget is the step config's ``retry`` policy
+    — the same one the engine's exhaustion path consults, so the impl converts
+    the final attempt into a turn outcome instead of letting the engine fail
+    the run.
+    """
+
+    return step_run.attempt < retry_policy_from_config(step_run.step.config).max_attempts
 
 
 def _park_session() -> StepResult:

@@ -157,6 +157,46 @@ def agents_console_tables(transactional_db: Any) -> Iterator[None]:
                     schema_editor.delete_model(model)
 
 
+def test_agent_hasura_insert_accepts_enum_member_names(agents_console_tables: None) -> None:
+    """A console read→write round-trip posts choices columns by member NAME.
+
+    Reads project ``TextChoices`` enums serialized by name (``"PYDANTIC"``)
+    while the Hasura insert input carries ``String``; the write backend
+    translates the name onto the stored value so the console's create form —
+    which sources its vocabulary from the read surface — can insert what it
+    read. Regression for the first console-created agent failing full_clean
+    with ``"PYDANTIC" must be a subclass of AgentRuntimeImpl``.
+    """
+
+    admin = _platform_admin("agt-enum-admin")
+    console = _schema()
+
+    created = _data(
+        _execute(
+            console,
+            """
+            mutation CreateAgent($owner: ID!) {
+              insert_agents_one(
+                object: {name: "InProcess", owner: $owner, runtime_class: "PYDANTIC", lifecycle: "DRAFT"}
+              ) {
+                id
+                runtime_class
+                lifecycle
+              }
+            }
+            """,
+            {"owner": str(admin.sqid)},
+            user=admin,
+        )
+    )["insert_agents_one"]
+    assert created["runtime_class"] == "PYDANTIC"
+    assert created["lifecycle"] == "DRAFT"
+    with system_context(reason="test.agents.enum_wire.verify"):
+        row = Agent.objects.get(name="InProcess")
+        assert row.runtime_class == "pydantic"
+        assert row.lifecycle == "draft"
+
+
 def test_agent_hasura_insert_update_and_delete(agents_console_tables: None) -> None:
     """Agent row writes use the generated Hasura mutation roots."""
 

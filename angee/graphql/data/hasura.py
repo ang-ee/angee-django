@@ -434,7 +434,7 @@ class AngeeHasuraWriteBackend:
         for key, value in data.items():
             related_model = field_models.get(key)
             if related_model is None:
-                out[key] = value
+                out[key] = _choices_wire_value(owner_model, key, value)
                 continue
             try:
                 field = owner_model._meta.get_field(key)
@@ -455,6 +455,33 @@ class AngeeHasuraWriteBackend:
             if instance is not None:
                 relationships[key] = (instance,)
         return out, relationships
+
+
+def _choices_wire_value(owner_model: type[models.Model], name: str, value: Any) -> Any:
+    """Translate a read-side enum member name onto the choices value it stores.
+
+    Hasura insert/patch inputs carry choices columns as ``String`` while the
+    read surface projects the ``TextChoices`` enum serialized by member name,
+    so a console read→write round-trip posts the NAME (``"PYDANTIC"``) where
+    the column stores the value (``"pydantic"``). Accept the member name
+    alongside the stored value; a string that is neither passes through for
+    ``full_clean`` to reject. A value that is itself a valid stored value is
+    never remapped, even when it collides with another member's name.
+    """
+
+    if not isinstance(value, str):
+        return value
+    try:
+        field = owner_model._meta.get_field(name)
+    except FieldDoesNotExist:
+        return value
+    enum = getattr(field, "choices_enum", None)
+    if enum is None:
+        return value
+    member = enum.__members__.get(value)
+    if member is None or value in enum._value2member_map_:
+        return value
+    return member.value
 
 
 def public_pk_decoder(model: type[models.Model]) -> Callable[[Any], Any]:
