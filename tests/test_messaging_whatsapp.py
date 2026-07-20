@@ -812,10 +812,13 @@ from django.core.management import CommandError  # noqa: E402
 from angee.messaging_integrate_whatsapp.backup import (  # noqa: E402
     CORE_DATA_EPOCH,
     WHATSAPP_DOMAIN,
+    WHATSAPP_SMB_DOMAIN,
     BackupError,
     BackupImporter,
     IosBackup,
+    import_backup,
     open_chat_storage,
+    whatsapp_domains,
 )
 from tests.test_messaging import Handle, _storage_drive  # noqa: E402
 
@@ -823,14 +826,18 @@ _OWN_JID = "4917000001@s.whatsapp.net"
 _DM_DATE = 700000000.5  # Core Data seconds — the epoch-conversion pin
 
 
-def _manifest_file_id(relative: str) -> str:
+def _manifest_file_id(relative: str, domain: str = WHATSAPP_DOMAIN) -> str:
     import hashlib
 
-    return hashlib.sha1(f"{WHATSAPP_DOMAIN}-{relative}".encode()).hexdigest()
+    return hashlib.sha1(f"{domain}-{relative}".encode()).hexdigest()
 
 
-def _build_backup(tmp_path: Path, *, encrypted: bool = False) -> Path:
-    """Synthesize an iPhone backup with two WhatsApp chats and media blobs."""
+def _build_backup(tmp_path: Path, *, domain: str = WHATSAPP_DOMAIN, encrypted: bool = False) -> Path:
+    """Synthesize an iPhone backup with two WhatsApp chats and media blobs.
+
+    ``domain`` selects the app domain the store and media land under — personal
+    WhatsApp by default, the business (SMB) domain for the two-account case.
+    """
 
     backup = tmp_path / "backup"
     backup.mkdir()
@@ -840,9 +847,9 @@ def _build_backup(tmp_path: Path, *, encrypted: bool = False) -> Path:
     manifest.execute("CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT, flags INTEGER)")
 
     def place(relative: str, content: bytes, *, in_manifest: bool = True) -> None:
-        file_id = _manifest_file_id(relative)
+        file_id = _manifest_file_id(relative, domain)
         if in_manifest:
-            manifest.execute("INSERT INTO Files VALUES (?, ?, ?, 1)", (file_id, WHATSAPP_DOMAIN, relative))
+            manifest.execute("INSERT INTO Files VALUES (?, ?, ?, 1)", (file_id, domain, relative))
         blob = backup / file_id[:2] / file_id
         blob.parent.mkdir(exist_ok=True)
         blob.write_bytes(content)
@@ -996,6 +1003,35 @@ def test_encrypted_backup_fails_loudly(whatsapp_tables: Any, tmp_path: Any) -> N
     backup = _build_backup(tmp_path, encrypted=True)
     with pytest.raises(BackupError, match="encrypted"):
         IosBackup(backup)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_backup_import_routes_business_smb_domain(whatsapp_tables: Any, tmp_path: Any) -> None:
+    """A WhatsApp Business (SMB) backup is discovered and imported on its own domain.
+
+    Business installs as a separate app under a distinct domain: the default
+    personal read must not see it, discovery must report exactly the SMB store,
+    and a domain-scoped import must land its chats into the business channel.
+    """
+
+    business = make_integration("whatsapp", model=Channel, backend_class="whatsapp")
+    with system_context(reason="test whatsapp smb drive"):
+        _storage_drive(tmp_path / "drive", owner=business.owner)
+    backup = _build_backup(tmp_path, domain=WHATSAPP_SMB_DOMAIN)
+
+    probe = IosBackup(backup)
+    try:
+        assert whatsapp_domains(probe) == (WHATSAPP_SMB_DOMAIN,)
+    finally:
+        probe.close()
+
+    # The default personal read finds no store in a business-only backup.
+    with pytest.raises(BackupError):
+        open_chat_storage(backup)
+
+    total = import_backup(business, backup, domain=WHATSAPP_SMB_DOMAIN, own_jid=_OWN_JID)
+    assert total == 6
+    assert Message._base_manager.count() == 6
 
 
 @pytest.mark.django_db(transaction=True)

@@ -11,7 +11,12 @@ from django.utils.dateparse import parse_datetime
 from rebac import system_context
 
 from angee.messaging_integrate_whatsapp.backend import WhatsAppChannelBackend
-from angee.messaging_integrate_whatsapp.backup import BackupError, import_backup
+from angee.messaging_integrate_whatsapp.backup import (
+    WHATSAPP_DOMAIN,
+    WHATSAPP_SMB_DOMAIN,
+    BackupError,
+    import_backup,
+)
 from angee.messaging_integrate_whatsapp.connect import create_whatsapp_channel
 
 
@@ -37,6 +42,11 @@ class Command(BaseCommand):
             help="Create a disconnected WhatsApp channel with this name instead of --channel.",
         )
         parser.add_argument("--owner", help="Owner username for --create.")
+        parser.add_argument(
+            "--business",
+            action="store_true",
+            help="Import the WhatsApp Business (SMB) store instead of personal WhatsApp.",
+        )
         parser.add_argument(
             "--own-jid",
             default="",
@@ -71,6 +81,7 @@ class Command(BaseCommand):
             total = import_backup(
                 channel,
                 options["backup_dir"],
+                domain=WHATSAPP_SMB_DOMAIN if options["business"] else WHATSAPP_DOMAIN,
                 own_jid=options["own_jid"],
                 chats=tuple(options["chat"]),
                 since=since,

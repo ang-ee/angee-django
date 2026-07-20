@@ -35,7 +35,15 @@ from angee.messaging.backends import MediaItem
 from angee.messaging_integrate_whatsapp.parser import ChatMessage, bare_jid, parsed_message
 
 WHATSAPP_DOMAIN = "AppDomainGroup-group.net.whatsapp.WhatsApp.shared"
+WHATSAPP_SMB_DOMAIN = "AppDomainGroup-group.net.whatsapp.WhatsAppSMB.shared"
 CHAT_STORAGE_PATH = "ChatStorage.sqlite"
+
+WHATSAPP_DOMAINS: tuple[str, ...] = (WHATSAPP_DOMAIN, WHATSAPP_SMB_DOMAIN)
+"""Both WhatsApp app domains an iPhone backup may carry — personal then business.
+
+WhatsApp (personal) and WhatsApp Business (SMB) install as separate iOS apps,
+each with its own app-group domain and its own ``ChatStorage.sqlite``, so a
+device with both accounts backs up two independent stores."""
 
 CORE_DATA_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
 
@@ -107,19 +115,19 @@ class IosBackup:
         ).fetchone()
         return str(row[0]) if row else hashlib.sha1(f"{domain}-{relative_path}".encode()).hexdigest()
 
-    def chat_storage_path(self) -> Path | None:
-        """Return WhatsApp's manifest-resolved chat-store blob, when present."""
+    def chat_storage_path(self, domain: str = WHATSAPP_DOMAIN) -> Path | None:
+        """Return one WhatsApp app domain's manifest-resolved chat-store blob."""
 
-        return self.blob_path(WHATSAPP_DOMAIN, CHAT_STORAGE_PATH)
+        return self.blob_path(domain, CHAT_STORAGE_PATH)
 
-    def has_chat_storage(self) -> bool:
-        """Return whether the manifest-resolved chat store has a SQLite header.
+    def has_chat_storage(self, domain: str = WHATSAPP_DOMAIN) -> bool:
+        """Return whether ``domain``'s manifest-resolved chat store has a SQLite header.
 
         Recognition intentionally reads only SQLite's fixed 16-byte header;
         parsing messages remains :class:`ChatStorage`'s execution-time job.
         """
 
-        store = self.chat_storage_path()
+        store = self.chat_storage_path(domain)
         if store is None:
             return False
         try:
@@ -147,9 +155,10 @@ class IosBackup:
 class ChatStorage:
     """Reader over WhatsApp's ``ChatStorage.sqlite`` inside an :class:`IosBackup`."""
 
-    def __init__(self, backup: IosBackup) -> None:
+    def __init__(self, backup: IosBackup, *, domain: str = WHATSAPP_DOMAIN) -> None:
         self.backup = backup
-        store = backup.chat_storage_path()
+        self.domain = domain
+        store = backup.chat_storage_path(domain)
         if store is None:
             # Close the backup's manifest connection we can no longer own.
             backup.close()
@@ -263,9 +272,9 @@ class ChatStorage:
         if not media_path:
             return None
         relative = str(media_path)
-        content = self.backup.read(WHATSAPP_DOMAIN, relative)
+        content = self.backup.read(self.domain, relative)
         if content is None:
-            content = self.backup.read(WHATSAPP_DOMAIN, f"Message/{relative}")
+            content = self.backup.read(self.domain, f"Message/{relative}")
         name = Path(relative).name
         mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
         del media_title  # ZTITLE names albums/captions handled by ZTEXT already
@@ -341,16 +350,29 @@ class BackupImporter:
         return total
 
 
-def open_chat_storage(backup_dir: Path | str) -> ChatStorage:
-    """Open the WhatsApp chat store inside one backup directory."""
+def open_chat_storage(backup_dir: Path | str, *, domain: str = WHATSAPP_DOMAIN) -> ChatStorage:
+    """Open one WhatsApp app domain's chat store inside one backup directory."""
 
-    return ChatStorage(IosBackup(backup_dir))
+    return ChatStorage(IosBackup(backup_dir), domain=domain)
+
+
+def whatsapp_domains(backup: IosBackup) -> tuple[str, ...]:
+    """Return the WhatsApp app domains whose chat store ``backup`` carries.
+
+    Personal and business (SMB) install as separate apps, so a device with both
+    accounts yields two independent stores. Recognition reads only each store's
+    fixed SQLite header, never its body — the caller maps each domain to its own
+    :class:`~messaging.Channel`.
+    """
+
+    return tuple(domain for domain in WHATSAPP_DOMAINS if backup.has_chat_storage(domain))
 
 
 def import_backup(
     channel: Any,
     backup_dir: Path | str,
     *,
+    domain: str = WHATSAPP_DOMAIN,
     own_jid: str = "",
     chats: tuple[str, ...] = (),
     since: datetime | None = None,
@@ -359,14 +381,16 @@ def import_backup(
     dry_run: bool = False,
     on_batch: Callable[[int], None] | None = None,
 ) -> int:
-    """Open and import one backup through :class:`BackupImporter`.
+    """Open and import one WhatsApp app domain's backup through :class:`BackupImporter`.
 
     This is the shared importer facade for the management command and workflow
     extractor. It owns the chat-store lifetime so every client closes both
-    SQLite connections on success or failure.
+    SQLite connections on success or failure. ``domain`` selects the personal or
+    business (SMB) store; the two accounts import independently into their own
+    channels.
     """
 
-    chat_storage = open_chat_storage(backup_dir)
+    chat_storage = open_chat_storage(backup_dir, domain=domain)
     try:
         importer = BackupImporter(
             channel,
