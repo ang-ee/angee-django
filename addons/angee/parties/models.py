@@ -983,8 +983,13 @@ class Relationship(SqidMixin, AuditMixin, AngeeModel):
         on_delete=models.SET_NULL,
         related_name="inbound_relationships",
     )
-    other_name = models.CharField(max_length=256, blank=True, default="")
-    """Free-text counterparty when the relative is not a tracked party."""
+    other_name = models.TextField(blank=True, default="")
+    """Free-text counterparty when the relative is not a tracked party.
+
+    Unbounded free text like its sibling ``title``/``notes``: a synced vCard
+    ``ORG`` can legitimately list many affiliated entities in one value, which a
+    fixed ``varchar`` truncates or rejects.
+    """
 
     kind = models.ForeignKey(
         "parties.RelationshipKind",
