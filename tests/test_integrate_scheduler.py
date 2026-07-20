@@ -370,6 +370,44 @@ def test_sync_markers_keep_a_reporters_details(scheduler_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_progress_report_during_queued_stage_keeps_the_queue_marker(scheduler_tables: None) -> None:
+    """A report firing while the row is QUEUED must not clobber the queue claim.
+
+    The scheduler owns the ``QUEUED`` stage/marker; a reporter owns ``details``.
+    A progress report arriving mid-queue (a live session publishing a pairing QR
+    after Sync was pressed) merges its details without demoting the stage or
+    dropping ``queued_at`` — otherwise the stale-queue recovery cannot tell a
+    genuine queue claim from a run that has already advanced, and re-queues it
+    forever. This pins the locked-merge guard in ``BridgeProgressReporter``.
+    """
+
+    del scheduler_tables
+    now = timezone.now()
+    with system_context(reason="test integrate scheduler setup"):
+        bridge = make_integration("queued-report", model=SchedulerBridge)
+        bridge.mark_sync_queued(now=now)
+
+        payload = BridgeProgressReporter(bridge).report(
+            Bridge.SyncStage.SYNCING,
+            message="Scanning vendor rows",
+            details={"items": 3},
+        )
+
+    assert payload["stage"] == Bridge.SyncStage.QUEUED
+    assert payload["queued_at"] == now.isoformat()
+    assert payload["details"] == {"items": 3}
+    assert bridge.sync_stage == Bridge.SyncStage.QUEUED
+
+    with system_context(reason="test integrate scheduler verify"):
+        bridge.refresh_from_db()
+    assert bridge.sync_stage == Bridge.SyncStage.QUEUED
+    assert bridge.sync_progress["stage"] == Bridge.SyncStage.QUEUED
+    assert bridge.sync_progress["queued_at"] == now.isoformat()
+    assert bridge.sync_progress["details"] == {"items": 3}
+    assert bridge.sync_progress["message"] == "Scanning vendor rows"
+
+
+@pytest.mark.django_db(transaction=True)
 def test_bridge_is_syncing_uses_live_lock_state(scheduler_tables: None) -> None:
     """The live lock is separate from durable stage telemetry."""
 
