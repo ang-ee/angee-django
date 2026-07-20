@@ -27,6 +27,7 @@ import {
   Filter,
   availableResourceViewKinds,
   resourceViewGroupsEqual,
+  stableSerialize,
   type ResourceViewDefaultGroups,
   type ResourceViewGroup,
   type ResourceViewKind,
@@ -77,7 +78,10 @@ import { useBulkDelete } from "./useBulkDelete";
 import { useAggregateOperation } from "./resource-operations";
 import { useResourceToolbarProps } from "./resource-toolbar-props";
 
-export type { ResourceListSnapshot } from "./resource-view-surface";
+export type {
+  ListViewNavigationScope,
+  ResourceListSnapshot,
+} from "./resource-view-surface";
 export type {
   ColumnAlign,
   ListColumn,
@@ -105,13 +109,36 @@ function ListViewFrame<TRow extends Row = Row>(
 ): React.ReactElement {
   const resourceView = useResourceViewMaybe();
   const scope = props.scope ?? "inherit";
+  const navigationScope = props.navigationScope;
+  const resolvedProps = navigationScope
+    ? {
+        ...props,
+        baseFilter:
+          navigationScope.filter as ListViewProps<TRow>["baseFilter"],
+        order: navigationScope.order as ListViewProps<TRow>["order"],
+        pageSize: navigationScope.pageSize,
+      }
+    : props;
   const initialState = React.useMemo(
     () => ({
-      pageSize: props.pageSize,
+      page: navigationScope?.page,
+      pageSize: resolvedProps.pageSize,
       view: props.defaultView,
     }),
-    [props.defaultView, props.pageSize],
+    [navigationScope?.page, props.defaultView, resolvedProps.pageSize],
   );
+  if (navigationScope) {
+    return (
+      <ResourceViewProvider
+        key={stableSerialize(navigationScope)}
+        initialState={initialState}
+        resource={props.resource}
+        scope="local"
+      >
+        <ListViewBound {...resolvedProps} />
+      </ResourceViewProvider>
+    );
+  }
   // A local-scoped list (an embedded related list on a detail panel) owns its own
   // view state instead of inheriting — and fighting over — the surrounding route
   // data view. The default "inherit" keeps the routed-page behaviour unchanged.
@@ -124,7 +151,7 @@ function ListViewFrame<TRow extends Row = Row>(
       resource={props.resource}
       scope={scope === "local" ? "local" : "route"}
     >
-      <ListViewBound {...props} />
+      <ListViewBound {...resolvedProps} />
     </ResourceViewProvider>
   );
 }
@@ -157,6 +184,7 @@ function ListViewBody<TRow extends Row = Row>({
   rowHref,
   draggableRow,
   toolbarActions,
+  bulkActions,
   cardActions,
   renderCard,
   emptyContent,
@@ -267,7 +295,15 @@ function ListViewBody<TRow extends Row = Row>({
   ]);
   React.useEffect(() => {
     if (!activeDefaultGroup) {
+      const previousDefault = handledDefaultGroupRef.current;
       handledDefaultGroupRef.current = null;
+      if (
+        previousDefault
+        && resourceView.state.group
+        && resourceViewGroupsEqual(resourceView.state.group, previousDefault)
+      ) {
+        resourceView.setGroup(null);
+      }
       return;
     }
     if (
@@ -372,6 +408,7 @@ function ListViewBody<TRow extends Row = Row>({
       rowHref={rowHref}
       draggableRow={draggableRow}
       toolbarActions={toolbarActions}
+      bulkActions={bulkActions}
       cardActions={cardActions}
       renderCard={renderCard}
       emptyContent={resolvedEmptyContent}
@@ -458,6 +495,7 @@ interface ListViewContentProps<TRow extends Row> {
   rowHref: ListViewProps<TRow>["rowHref"];
   draggableRow: ListViewProps<TRow>["draggableRow"];
   toolbarActions: ListViewProps<TRow>["toolbarActions"];
+  bulkActions: ListViewProps<TRow>["bulkActions"];
   cardActions: ListViewProps<TRow>["cardActions"];
   renderCard: ListViewProps<TRow>["renderCard"];
   emptyContent: ListEmptyContent;
@@ -490,6 +528,7 @@ function ListViewContent<TRow extends Row = Row>({
   rowHref,
   draggableRow,
   toolbarActions,
+  bulkActions,
   cardActions,
   renderCard,
   emptyContent,
@@ -623,8 +662,15 @@ function ListViewContent<TRow extends Row = Row>({
       selection={{
         count: surface.selectedIds.size,
         onClear: resourceView.clearSelectedIds,
-        onDelete: bulkDelete.canDelete ? bulkDelete.deleteInitiate : undefined,
-        deletePending: bulkDelete.isPending,
+        onDelete:
+          !bulkActions && bulkDelete.canDelete
+            ? bulkDelete.deleteInitiate
+            : undefined,
+        deletePending: !bulkActions && bulkDelete.isPending,
+        actions:
+          bulkActions && surface.selectedIds.size > 0
+            ? bulkActions(surface.selectedIds, resourceView.clearSelectedIds)
+            : undefined,
       }}
       error={groupedListMode ? null : surface.list.error}
       loadingFooter={

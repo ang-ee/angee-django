@@ -19,7 +19,11 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { ToastProvider } from "../feedback";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
-import { useResourceViewSurface } from "./resource-view-surface";
+import {
+  useGroupedResourceViewSurface,
+  useResourceViewSurface,
+  type ResourceListSnapshot,
+} from "./resource-view-surface";
 import type { ColumnDescriptor } from "./page";
 
 const tableMocks = vi.hoisted(() => ({
@@ -122,6 +126,24 @@ vi.mock("@tanstack/react-virtual", () => ({
   }),
 }));
 
+// The grouped surface's server-grouped data hooks are stubbed empty: the emit it
+// publishes (the navigation scope) is independent of the group data, and empty
+// batches keep the render model trivial without a Refine/react-query provider.
+vi.mock("@angee/refine", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/refine")>();
+  return {
+    ...actual,
+    useAngeeAggregate: () => ({
+      aggregate: null,
+      fetching: false,
+      error: null,
+      refetch: vi.fn(),
+    }),
+    useAngeeGroupByBatch: () => new Map(),
+    useAngeeListBatch: () => new Map(),
+  };
+});
+
 afterEach(() => {
   cleanup();
   tableMocks.activeFilters = [];
@@ -170,6 +192,51 @@ function SurfaceProbe(): React.ReactElement {
   );
 }
 
+describe("useGroupedResourceViewSurface", () => {
+  test("publishes a snapshot carrying its own scope so the record pager never keeps a stale flat scope", () => {
+    const onListStateChange = vi.fn();
+    const filter = { drive: { exact: "drive-a" }, is_trashed: { exact: false } };
+    render(
+      <ToastProvider>
+        <ResourceViewProvider resource="notes.Note" scope="local">
+          <GroupedProbe filter={filter} onListStateChange={onListStateChange} />
+        </ResourceViewProvider>
+      </ToastProvider>,
+    );
+
+    // The flat surface emits on mount; the grouped surface must too, or the pager
+    // hook retains whatever flat (single-folder) snapshot was last published.
+    expect(onListStateChange).toHaveBeenCalled();
+    const snapshot = onListStateChange.mock.calls.at(-1)?.[0] as
+      | ResourceListSnapshot<Row>
+      | undefined;
+    // Empty rows (the grouped render stream owns the visible records) but a
+    // non-null scope carrying the grouped filter — the signal the pager replays.
+    expect(snapshot?.rows).toEqual([]);
+    expect(snapshot?.navigationScope?.filter).toEqual(filter);
+  });
+});
+
+function GroupedProbe({
+  filter,
+  onListStateChange,
+}: {
+  filter: Record<string, unknown>;
+  onListStateChange: (state: ResourceListSnapshot<Row>) => void;
+}): React.ReactElement {
+  const resourceView = useResourceView();
+  useGroupedResourceViewSurface({
+    resource: "notes.Note",
+    columns: NOTE_COLUMNS,
+    filter,
+    resourceView,
+    modelMetadata: NOTE_METADATA,
+    groupStack: [{ field: "status" }],
+    onListStateChange,
+  });
+  return <div />;
+}
+
 const NOTE_COLUMNS: readonly ColumnDescriptor<Row>[] = [
   { field: "title", header: "Title" },
 ];
@@ -210,7 +277,10 @@ const NOTE_RESOURCE: DataResourceMetadata = {
   filterFields: ["status"],
   orderFields: [],
   aggregateFields: [],
-  groupByFields: [],
+  groupByFields: ["status"],
+  groupDimensions: [
+    { field: "status", input: "status", key: "status", kind: "column", scalar: "String" },
+  ],
   relationAxes: [],
 };
 

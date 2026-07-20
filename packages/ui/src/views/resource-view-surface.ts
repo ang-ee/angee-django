@@ -372,6 +372,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   modelMetadata = null,
   groupStack,
   laneSource,
+  onListStateChange,
 }: UseResourceViewSurfaceProps<TRow>): ResourceViewSurface<TRow> {
   const t = useUiT();
   useSyncPageSize(resourceView, pageSize);
@@ -475,6 +476,12 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       emptyGroupMessage: t("list.emptyGroup"),
       emptySubgroupsMessage: t("list.emptySubgroups"),
       emptyValueLabel: t("list.emptyValue"),
+      emptyRelationLabel: (field) =>
+        t("list.emptyRelation", {
+          relation: (
+            modelMetadata?.fields[field]?.label ?? groupFieldLabel(field)
+          ).toLocaleLowerCase(),
+        }),
       allRecordsLabel: t("list.allRecords"),
     }),
     [
@@ -622,7 +629,25 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       statePageSize,
     ],
   );
-  const listState = useResourceRowsSnapshot<TRow>(list);
+  const navigationScope = React.useMemo<ListViewNavigationScope>(
+    () => ({
+      filter: mergedFilter,
+      order: sortOrder,
+      page: list.page,
+      pageSize: list.pageSize,
+    }),
+    [list.page, list.pageSize, mergedFilter, sortOrder],
+  );
+  const listState = useResourceRowsSnapshot<TRow>(list, navigationScope);
+  // Publish the snapshot like the flat surface: rows are empty here (the grouped
+  // render stream owns the visible records), but the non-null `navigationScope`
+  // carries the folded scope's own filter/order. Without this, a record pager
+  // built by `useListRecordNavigation` would retain a stale flat snapshot when a
+  // grouped scope (e.g. storage's default folder-grouped "All files") becomes
+  // active; a hidden replay list then pages the folded scope, not a prior folder.
+  React.useEffect(() => {
+    onListStateChange?.(listState);
+  }, [listState, onListStateChange]);
 
   return {
     list,
@@ -850,7 +875,16 @@ export function useResourceViewSurface<TRow extends Row = Row>({
       }),
     [boardLaneState.fetching, resourceView, rows, tableResult.refineCore],
   );
-  const listState = useResourceRowsSnapshot<TRow>(list);
+  const navigationScope = React.useMemo<ListViewNavigationScope>(
+    () => ({
+      filter: mergedFilter,
+      order: sortOrder,
+      page: list.page,
+      pageSize: list.pageSize,
+    }),
+    [list.page, list.pageSize, mergedFilter, sortOrder],
+  );
+  const listState = useResourceRowsSnapshot<TRow>(list, navigationScope);
   React.useEffect(() => {
     onListStateChange?.(listState);
   }, [listState, onListStateChange]);
@@ -1937,6 +1971,7 @@ interface GroupedRenderParams {
   emptyGroupMessage: string;
   emptySubgroupsMessage: string;
   emptyValueLabel: string;
+  emptyRelationLabel: (field: string) => string;
   allRecordsLabel: string;
 }
 
@@ -1974,6 +2009,7 @@ function buildGroupedRenderModel<TRow extends Row>(
     emptyGroupMessage,
     emptySubgroupsMessage,
     emptyValueLabel,
+    emptyRelationLabel,
     allRecordsLabel,
   } = params;
   const groupScopes: GroupByBatchScope[] = [];
@@ -2134,6 +2170,7 @@ function buildGroupedRenderModel<TRow extends Row>(
         modelMetadata,
         allRecordsLabel,
         emptyValueLabel,
+        emptyRelationLabel,
       );
       items.push({
         kind: "groupHeader",
@@ -2179,9 +2216,16 @@ function bucketLabel(
   metadata: ModelMetadata | null,
   allRecordsLabel: string,
   emptyValueLabel: string,
+  emptyRelationLabel: (field: string) => string,
 ): string {
   if (!group) return allRecordsLabel;
-  const [label] = bucketValueLabels(bucket, [group], metadata, emptyValueLabel);
+  const [label] = bucketValueLabels(
+    bucket,
+    [group],
+    metadata,
+    emptyValueLabel,
+    emptyRelationLabel,
+  );
   return label ?? allRecordsLabel;
 }
 

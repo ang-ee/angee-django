@@ -11,6 +11,13 @@ export interface UseScopedTreeExplorerOptions<TRoot, TTreeRow extends { id: stri
   getRootLabel: (root: TRoot) => string;
   getTreeRows: (rootId: string) => readonly TTreeRow[];
   selectedId?: string | null;
+  /**
+   * Notified whenever {@link ScopedTreeExplorerController.setSelectedId} runs.
+   * Pair it with a controlled `selectedId` to keep the selection in an external
+   * owner (e.g. the URL search params); with the uncontrolled default it fires
+   * alongside the internal state update.
+   */
+  onSelectedIdChange?: (selectedId: string | null) => void;
   defaultSelectedId?: string | null;
   selectedRootId?: string | null;
   isSelectedIdValid?: (
@@ -47,6 +54,7 @@ export function useScopedTreeExplorer<
   getRootLabel,
   getTreeRows,
   selectedId,
+  onSelectedIdChange,
   defaultSelectedId = null,
   selectedRootId = null,
   isSelectedIdValid,
@@ -111,9 +119,23 @@ export function useScopedTreeExplorer<
   const handleSetRootId = useCallback(
     (nextRootId: string) => {
       setPinnedRootId(nextRootId);
-      setLocalSelectedId(defaultSelectedId);
+      // Reset the selection through the same ownership split as the write seam
+      // below: uncontrolled updates local state; controlled notifies its external
+      // owner (local state is dead there — the store, not this hook, is the truth).
+      if (ownsSelection) setLocalSelectedId(defaultSelectedId);
+      else onSelectedIdChange?.(defaultSelectedId);
     },
-    [defaultSelectedId],
+    [defaultSelectedId, onSelectedIdChange, ownsSelection],
+  );
+  // The single selection-write seam: a controlled owner (selectedId passed)
+  // only gets notified — its store, not local state, is the source of truth;
+  // the uncontrolled default updates local state and notifies any observer.
+  const handleSetSelectedId = useCallback(
+    (nextSelectedId: string | null) => {
+      if (ownsSelection) setLocalSelectedId(nextSelectedId);
+      onSelectedIdChange?.(nextSelectedId);
+    },
+    [onSelectedIdChange, ownsSelection],
   );
 
   return useMemo(
@@ -125,7 +147,7 @@ export function useScopedTreeExplorer<
       treeRows,
       selectedId: effectiveSelectedId,
       selectedRow,
-      setSelectedId: setLocalSelectedId,
+      setSelectedId: handleSetSelectedId,
     }),
     [
       root,
@@ -135,6 +157,7 @@ export function useScopedTreeExplorer<
       treeRows,
       effectiveSelectedId,
       selectedRow,
+      handleSetSelectedId,
     ],
   );
 }

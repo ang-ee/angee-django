@@ -11,9 +11,15 @@ export {
   type ListEmptyContent,
   type ListEmptyState,
   type ListColumn,
+  type ListViewNavigationScope,
   type ResourceListSnapshot,
   type ColumnAlign,
 } from "./ListView";
+export {
+  useListRecordNavigation,
+  type UseListRecordNavigationOptions,
+  type UseListRecordNavigationResult,
+} from "./use-list-record-navigation";
 export { RowsListView, type RowsListViewProps } from "./RowsListView";
 export {
   RelationPicker,

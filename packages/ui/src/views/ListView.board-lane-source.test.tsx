@@ -181,7 +181,11 @@ describe("ListView board laneSource", () => {
 
     await waitFor(() => {
       expect(harness.boardProps?.resourceView.state.groupStack).toEqual([
-        { field: "stage" },
+        {
+          field: "stage",
+          aggregateField: "stage",
+          aggregateKey: "stage",
+        },
       ]);
     });
   });

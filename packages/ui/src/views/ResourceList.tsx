@@ -37,7 +37,6 @@ import {
   type ListViewNavigationScope,
 } from "./resource-view-surface";
 import {
-  stableSerialize,
   type ResourceViewDefaultGroups,
   type ResourceViewGroup,
   type ResourceViewKind,
@@ -60,6 +59,7 @@ import {
   type GroupDescriptor,
 } from "./page";
 import { RecordPager, type RecordNavigation } from "./RecordPager";
+import { useListRecordNavigation } from "./use-list-record-navigation";
 
 /** Where the open record's form renders relative to the list. */
 export type ResourceRecordPlacement = "inline" | "drawer";
@@ -451,49 +451,27 @@ function ResourceListBody<TRow extends Row = Row>({
       : {}),
   };
   const resourceView = useResourceView();
-  const [listState, setListState] =
-    React.useState<ResourceListSnapshot<TRow> | null>(null);
-  const [recordNavigationScope, setRecordNavigationScope] =
-    React.useState<ListViewNavigationScope | null>(null);
-  const [pendingNavigation, setPendingNavigation] =
-    React.useState<PendingRecordNavigation | null>(null);
   // The calendar's range-select seeds the create form; it lives here (the create
   // owner) so quick-create rides the same routed-create seam as the "New" button.
   const [quickCreateDefaults, setQuickCreateDefaults] =
     React.useState<Record<string, unknown> | undefined>(undefined);
-  const listStateRef = React.useRef<ResourceListSnapshot<TRow> | null>(null);
 
   // A record is open when an id is selected or a create was requested.
   const open = hasRecordSurface && (resolvedCreating || resolvedRecordId != null);
   const editId = resolvedCreating ? null : resolvedRecordId ?? null;
-  // Group defaults are forwarded to ListView, the single grouped-capable
-  // resource-list surface.
-  const handleListStateChange = React.useCallback(
-    (next: ResourceListSnapshot<TRow>) => {
-      const current = listStateRef.current;
-      if (shouldRetainListStateForRecordNavigation({
-        current,
-        next,
-        recordId: !resolvedCreating ? resolvedRecordId : null,
-      })) {
-        return;
-      }
-      listStateRef.current = next;
-      setListState((current) =>
-        listStatesEqual(current, next) ? current : next,
-      );
-      setRecordNavigationScope((current) =>
-        navigationScopesEqual(current, next.navigationScope ?? null)
-          ? current
-          : (next.navigationScope ?? null),
-      );
-    },
-    [resolvedCreating, resolvedRecordId],
-  );
+  const {
+    listState,
+    navigationScope: recordNavigationScope,
+    navigation: recordNavigation,
+    onListStateChange: handleListStateChange,
+  } = useListRecordNavigation<TRow>({
+    recordId:
+      open && !resolvedCreating ? resolvedRecordId : null,
+    ...(handleSelectRecord ? { onSelect: handleSelectRecord } : {}),
+    onSetPage: resourceView.setPage,
+  });
   React.useEffect(() => {
     if (open) return;
-    setRecordNavigationScope(null);
-    setPendingNavigation(null);
     setQuickCreateDefaults(undefined);
   }, [open]);
 
@@ -534,55 +512,6 @@ function ResourceListBody<TRow extends Row = Row>({
       if (id !== null) handleSelectRecord?.(id);
     },
     [handleSelectRecord],
-  );
-
-  React.useEffect(() => {
-    if (!pendingNavigation || !listState || listState.fetching) return;
-    if (pendingNavigation.page !== listState.page) return;
-
-    const target =
-      pendingNavigation.edge === "first"
-        ? listState.rows[0]
-        : listState.rows[listState.rows.length - 1];
-    const targetId = rowPublicId(target);
-    if (targetId) {
-      setPendingNavigation(null);
-      handleSelectRecord?.(targetId);
-    } else if (listState.rows.length === 0) {
-      setPendingNavigation(null);
-    }
-  }, [handleSelectRecord, listState, pendingNavigation]);
-
-  const setRecordNavigationPage = React.useCallback(
-    (page: number) => {
-      if (recordNavigationScope) {
-        setRecordNavigationScope((current) =>
-          current ? { ...current, page } : current,
-        );
-        return;
-      }
-      resourceView.setPage(page);
-    },
-    [resourceView.setPage, recordNavigationScope],
-  );
-
-  const recordNavigation = React.useMemo(
-    () =>
-      buildRecordNavigation({
-        creating: resolvedCreating,
-        listState,
-        recordId: resolvedRecordId,
-        onSelect: handleSelectRecord,
-        setPage: setRecordNavigationPage,
-        setPendingNavigation,
-      }),
-    [
-      handleSelectRecord,
-      listState,
-      resolvedCreating,
-      resolvedRecordId,
-      setRecordNavigationPage,
-    ],
   );
 
   const recordDeleteIds = React.useMemo<ReadonlySet<string>>(
@@ -958,11 +887,6 @@ function elementTypeName(type: unknown): string {
 const listDeclarationCache = new WeakMap<object, unknown>();
 const formDeclarationCache = new WeakMap<object, ResourceFormDeclaration>();
 
-interface PendingRecordNavigation {
-  page: number;
-  edge: "first" | "last";
-}
-
 function ListStateProbe<TRow extends Row>({
   list: ListComponent,
   resource,
@@ -983,9 +907,7 @@ function ListStateProbe<TRow extends Row>({
       resource={resource}
       columns={columns}
       {...listRenderProps}
-      baseFilter={navigationScope?.filter ?? listRenderProps.baseFilter}
-      order={navigationScope?.order ?? listRenderProps.order}
-      pageSize={navigationScope?.pageSize ?? listRenderProps.pageSize}
+      {...(navigationScope ? { navigationScope } : {})}
       onListStateChange={onListStateChange}
     />
   );
@@ -996,22 +918,7 @@ function ListStateProbe<TRow extends Row>({
     // which stacked a phantom filter/group bar above every open record.
     <ControlBandProvider host={undefined}>
       <div hidden aria-hidden="true">
-        {navigationScope ? (
-          <ResourceViewProvider
-            key={navigationScopeKey(navigationScope)}
-            scope="local"
-            resource={resource}
-            initialState={{
-              filter: navigationScope.filter ?? {},
-              page: navigationScope.page,
-              pageSize: navigationScope.pageSize,
-            }}
-          >
-            {content}
-          </ResourceViewProvider>
-        ) : (
-          content
-        )}
+        {content}
       </div>
     </ControlBandProvider>
   );
@@ -1071,140 +978,4 @@ function RecordSmartButtons({
       ))}
     </div>
   );
-}
-
-function buildRecordNavigation<TRow extends Row>({
-  creating,
-  listState,
-  recordId,
-  onSelect,
-  setPage,
-  setPendingNavigation,
-}: {
-  creating: boolean;
-  listState: ResourceListSnapshot<TRow> | null;
-  recordId?: string | null;
-  onSelect?: (id: string | null) => void;
-  setPage: (page: number) => void;
-  setPendingNavigation: React.Dispatch<
-    React.SetStateAction<PendingRecordNavigation | null>
-  >;
-}): RecordNavigation | null {
-  if (creating || typeof recordId !== "string" || !listState) return null;
-  const index = listState.rows.findIndex((row) => rowPublicId(row) === recordId);
-  if (index < 0) {
-    // The open record isn't in the loaded slice (e.g. a grouped list or a deep
-    // record). Keep the pager visible with the filtered total; page-local
-    // Prev/Next can't resolve neighbors here, so they stay disabled.
-    return { total: listState.total ?? listState.rows.length };
-  }
-
-  const current = (listState.page - 1) * listState.pageSize + index + 1;
-  const total = listState.total ?? Math.max(current, listState.rows.length);
-  const prevId = rowPublicId(listState.rows[index - 1]);
-  const nextId = rowPublicId(listState.rows[index + 1]);
-  const canPrevPage = listState.hasPrev && listState.page > 1;
-  const canNextPage =
-    listState.hasNext &&
-    (listState.total === undefined || current < listState.total);
-
-  return {
-    current,
-    total,
-    onPrev:
-      onSelect && prevId
-        ? () => onSelect(prevId)
-        : onSelect && canPrevPage
-          ? () => {
-              const page = Math.max(1, listState.page - 1);
-              setPendingNavigation({ page, edge: "last" });
-              setPage(page);
-            }
-          : undefined,
-    onNext:
-      onSelect && nextId
-        ? () => onSelect(nextId)
-        : onSelect && canNextPage
-          ? () => {
-              const page = listState.page + 1;
-              setPendingNavigation({ page, edge: "first" });
-              setPage(page);
-            }
-          : undefined,
-  };
-}
-
-function listStatesEqual<TRow extends Row>(
-  left: ResourceListSnapshot<TRow> | null,
-  right: ResourceListSnapshot<TRow>,
-): boolean {
-  if (!left) return false;
-  return (
-    rowIdsEqual(left.rows, right.rows) &&
-    left.total === right.total &&
-    left.page === right.page &&
-    left.pageSize === right.pageSize &&
-    left.pageCount === right.pageCount &&
-    left.hasNext === right.hasNext &&
-    left.hasPrev === right.hasPrev &&
-    left.fetching === right.fetching &&
-    navigationScopesEqual(
-      left.navigationScope ?? null,
-      right.navigationScope ?? null,
-    )
-  );
-}
-
-function shouldRetainListStateForRecordNavigation<TRow extends Row>({
-  current,
-  next,
-  recordId,
-}: {
-  current: ResourceListSnapshot<TRow> | null;
-  next: ResourceListSnapshot<TRow>;
-  recordId?: string | null;
-}): boolean {
-  if (!recordId || !current || !next.fetching) return false;
-  if (!listStateHasRecord(current, recordId)) return false;
-  return !listStateHasRecord(next, recordId);
-}
-
-function listStateHasRecord<TRow extends Row>(
-  state: ResourceListSnapshot<TRow>,
-  recordId: string,
-): boolean {
-  return state.rows.some((row) => rowPublicId(row) === recordId);
-}
-
-function navigationScopesEqual(
-  left: ListViewNavigationScope | null,
-  right: ListViewNavigationScope | null,
-): boolean {
-  if (left === right) return true;
-  if (!left || !right) return false;
-  return (
-    left.page === right.page &&
-    left.pageSize === right.pageSize &&
-    stableSerialize(left.filter ?? null) ===
-      stableSerialize(right.filter ?? null) &&
-    stableSerialize(left.order ?? null) ===
-      stableSerialize(right.order ?? null)
-  );
-}
-
-function navigationScopeKey(scope: ListViewNavigationScope): string {
-  return stableSerialize({
-    filter: scope.filter ?? null,
-    order: scope.order ?? null,
-    page: scope.page,
-    pageSize: scope.pageSize,
-  });
-}
-
-function rowIdsEqual(
-  left: readonly Row[],
-  right: readonly Row[],
-): boolean {
-  if (left.length !== right.length) return false;
-  return left.every((row, index) => rowPublicId(row) === rowPublicId(right[index]));
 }
