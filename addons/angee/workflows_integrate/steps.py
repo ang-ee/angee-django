@@ -55,24 +55,31 @@ class ArchiveExecutionReporter:
 class ArchiveExtractor(ImplBase, ABC):
     """Base contract for a settings-registered archive extractor.
 
-    Subclasses declare a stable :attr:`key`, a human :attr:`label`, and
-    ``target_resource`` as an ``app_label.Model`` string. ``recognizes(file)``
-    returns a real :class:`bool` — confidence scores and truthy substitutes are
-    not accepted. ``execute(file, target_pk, reporter)`` must land content via
-    the target domain's own idempotent ingest API and return JSON-safe journal
-    output. Vendor parsing and target-domain identity rules stay on the concrete
+    Subclasses declare a stable :attr:`key`, a human :attr:`label`,
+    ``target_resource`` as an ``app_label.Model`` string, and
+    ``subject_resource`` — the storage container kind the run subject is, a
+    ``storage.File`` (an archive to open) or a ``storage.Drive`` (a mounted tree
+    to inspect). ``recognizes(subject)`` returns a real :class:`bool` —
+    confidence scores and truthy substitutes are not accepted.
+    ``execute(subject, target_pk, reporter)`` must land content via the target
+    domain's own idempotent ingest API and return JSON-safe journal output.
+    Vendor parsing and target-domain identity rules stay on the concrete
     extractor and its owning addon.
     """
 
     target_resource: ClassVar[str] = ""
+    subject_resource: ClassVar[str] = "storage.File"
 
     @abstractmethod
-    def recognizes(self, file: Any) -> bool:
-        """Return whether ``file`` is an archive this extractor owns.
+    def recognizes(self, subject: Any) -> bool:
+        """Return whether ``subject`` is a container this extractor owns.
 
-        Recognition must read only a bounded header/prefix of ``file`` — the
-        probe invokes every registered extractor against the same file, so a
-        full-body read amplifies storage I/O by the registry size.
+        ``subject`` is the run subject named by :attr:`subject_resource`. The
+        probe only invokes extractors whose ``subject_resource`` matches the run
+        subject, so a file extractor never sees a drive. Recognition must stay
+        bounded: read only a header/prefix of a file, or a metadata lookup plus a
+        bounded manifest probe of a drive — the probe runs every matching
+        extractor against the same subject.
         """
 
         raise NotImplementedError
@@ -80,11 +87,11 @@ class ArchiveExtractor(ImplBase, ABC):
     @abstractmethod
     def execute(
         self,
-        file: Any,
+        subject: Any,
         target_pk: str,
         reporter: ArchiveExecutionReporter,
     ) -> Any:
-        """Idempotently ingest ``file`` into ``target_pk`` and return journal output."""
+        """Idempotently ingest ``subject`` into ``target_pk`` and return journal output."""
 
         raise NotImplementedError
 
@@ -125,10 +132,13 @@ class ArchiveProbeStepImpl(StepImpl):
         """Return stable extractor proposals or the routable ``failed`` outcome."""
 
         del now
-        file = _subject_file(step_run)
+        subject = _subject_container(step_run)
+        subject_resource = subject._meta.label
         proposals: list[dict[str, str]] = []
         for extractor_class in archive_extractor_classes():
-            recognized = extractor_class().recognizes(file)
+            if extractor_class.subject_resource != subject_resource:
+                continue
+            recognized = extractor_class().recognizes(subject)
             if not isinstance(recognized, bool):
                 raise TypeError(
                     f"{extractor_class.__name__}.recognizes() must return bool, "
@@ -238,12 +248,12 @@ class ArchiveExecuteStepImpl(StepImpl):
         if mode == "prepare":
             return StepResult.done(output=_prepared_mappings(step_run.input), outcome="prepared")
 
-        file = _subject_file(step_run)
+        subject = _subject_container(step_run)
         extractor_key, target_pk = _mapping_unit(step_run.input)
         extractor_class = archive_extractor_class(extractor_key)
         reporter = ArchiveExecutionReporter(step=self, step_run=step_run)
         reporter.heartbeat(at=now)
-        result = extractor_class().execute(file, target_pk, reporter)
+        result = extractor_class().execute(subject, target_pk, reporter)
         return StepResult.done(
             output={
                 "extractor": extractor_key,
@@ -264,21 +274,28 @@ def _validate_extractor_declaration(key: str, extractor: type[ArchiveExtractor])
         )
     if not extractor.display_label().strip():
         raise ImproperlyConfigured(f"Archive extractor {key!r} must declare a display label.")
-    target_resource = str(extractor.target_resource or "")
-    app_label, separator, model_name = target_resource.partition(".")
+    _validate_resource_label(key, "target_resource", extractor.target_resource)
+    _validate_resource_label(key, "subject_resource", extractor.subject_resource)
+
+
+def _validate_resource_label(key: str, attr: str, value: str) -> None:
+    """Validate one ``app_label.Model`` extractor attribute is installed and canonical."""
+
+    label = str(value or "")
+    app_label, separator, model_name = label.partition(".")
     if not separator or not app_label or not model_name or "." in model_name:
         raise ImproperlyConfigured(
-            f"Archive extractor {key!r} target_resource must be an app_label.Model string."
+            f"Archive extractor {key!r} {attr} must be an app_label.Model string."
         )
     try:
         model = apps.get_model(app_label, model_name)
     except LookupError as error:
         raise ImproperlyConfigured(
-            f"Archive extractor {key!r} target_resource {target_resource!r} is not installed."
+            f"Archive extractor {key!r} {attr} {label!r} is not installed."
         ) from error
-    if model._meta.label != target_resource:
+    if model._meta.label != label:
         raise ImproperlyConfigured(
-            f"Archive extractor {key!r} target_resource must use canonical label {model._meta.label!r}."
+            f"Archive extractor {key!r} {attr} must use canonical label {model._meta.label!r}."
         )
 
 
@@ -292,13 +309,16 @@ def _proposal(extractor: type[ArchiveExtractor]) -> dict[str, str]:
     }
 
 
-def _subject_file(step_run: Any) -> Any:
-    """Return the run's storage file subject or reject the workflow definition."""
+def _subject_container(step_run: Any) -> Any:
+    """Return the run's storage File or Drive subject, or reject the definition."""
 
     file_model = apps.get_model("storage", "File")
+    drive_model = apps.get_model("storage", "Drive")
     subject = step_run.run.subject
-    if subject is None or not isinstance(subject, file_model):
-        raise ValidationError({"subject": "Archive workflow runs require a storage.File subject."})
+    if subject is None or not isinstance(subject, (file_model, drive_model)):
+        raise ValidationError(
+            {"subject": "Archive workflow runs require a storage.File or storage.Drive subject."}
+        )
     return subject
 
 

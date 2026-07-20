@@ -126,20 +126,11 @@ def test_whatsapp_iphone_backup_execute_delegates_to_backup_importer_owner(
 
     target = "int_confirmed"
     channel = SimpleNamespace(sqid=target)
-    filters: list[dict[str, str]] = []
-
-    class _ChannelQuery:
-        def filter(self, **kwargs: str) -> _ChannelQuery:
-            filters.append(kwargs)
-            return self
-
-        def first(self) -> Any:
-            return channel
-
-    channel_model = SimpleNamespace(_base_manager=_ChannelQuery())
+    resolved: list[str] = []
     monkeypatch.setattr(
-        "angee.messaging_integrate_whatsapp.extractor.apps.get_model",
-        lambda app_label, model_name: channel_model,
+        extractor_module,
+        "confirmed_whatsapp_channel",
+        lambda sqid: resolved.append(sqid) or channel,
     )
     calls: list[dict[str, Any]] = []
 
@@ -169,7 +160,7 @@ def test_whatsapp_iphone_backup_execute_delegates_to_backup_importer_owner(
         reporter,
     )
 
-    assert filters == [{"sqid": target, "backend_class": "whatsapp"}]
+    assert resolved == [target]
     assert calls == [{"channel": channel, "manifest": True}]
     assert heartbeats == [True]
     assert result == {"channel": target, "imported": 4}
@@ -201,6 +192,9 @@ def test_archive_import_resource_loads_published_valid_graph(
         "resources/install/100_workflows.workflow.yaml",
         "resources/install/101_workflows.step.yaml",
         "resources/install/102_workflows.edge.yaml",
+        "resources/install/110_workflows.workflow.yaml",
+        "resources/install/111_workflows.step.yaml",
+        "resources/install/112_workflows.edge.yaml",
     )
 
     result = WhatsAppResourceLedger.objects.load_addons(
@@ -208,7 +202,9 @@ def test_archive_import_resource_loads_published_valid_graph(
         tiers=[AbstractResource.Tier.INSTALL],
     )
 
-    assert result.loaded == 10
+    # Both the archive (file) and backup (drive) workflow graphs load: two
+    # workflows, ten steps, six edges, and one published version.
+    assert result.loaded == 19
 
     # Re-loading the install tier must be a no-op: no duplicate rows and no
     # second published version minted by publish-on-load.
@@ -252,6 +248,24 @@ def test_archive_import_resource_loads_published_valid_graph(
             step.full_clean()
         for edge in edges:
             edge.full_clean()
+
+    with system_context(reason="test whatsapp backup workflow fixture"):
+        backup_draft = Workflow._base_manager.get(
+            name="Backup import", published_from__isnull=True
+        )
+        backup_published = Workflow.objects.current_published_for(backup_draft)
+        assert backup_published is not None
+        assert backup_published.subject_declaration == "storage.drive"
+        assert {
+            step.key: str(getattr(step.step_class, "value", step.step_class))
+            for step in backup_published.steps.all()
+        } == {
+            "probe": "archive_probe",
+            "gate": "archive_gate",
+            "prepare": "archive_execute",
+            "map": "map",
+            "execute_unit": "archive_execute",
+        }
 
 
 def _minimal_backup_layout(

@@ -5,7 +5,7 @@ name = "angee.messaging_integrate_whatsapp"
 description = "WhatsApp sync — pairs a linked device by QR code and pulls chats into messaging threads and messages"
 keywords = ["whatsapp", "chat", "sync"]
 category = "Integration"
-depends_on = ["angee.messaging", "angee.integrate", "angee.parties", "angee.workflows_integrate"]
+depends_on = ["angee.messaging", "angee.integrate", "angee.parties", "angee.storage", "angee.workflows_integrate"]
 
 [resources]
 master = [{ path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" }]
@@ -13,4 +13,7 @@ install = [
   { path = "resources/install/100_workflows.workflow.yaml", publish = true },
   { path = "resources/install/101_workflows.step.yaml", depends_on = "resources/install/100_workflows.workflow.yaml" },
   { path = "resources/install/102_workflows.edge.yaml", depends_on = "resources/install/101_workflows.step.yaml" },
+  { path = "resources/install/110_workflows.workflow.yaml", publish = true },
+  { path = "resources/install/111_workflows.step.yaml", depends_on = "resources/install/110_workflows.workflow.yaml" },
+  { path = "resources/install/112_workflows.edge.yaml", depends_on = "resources/install/111_workflows.step.yaml" },
 ]

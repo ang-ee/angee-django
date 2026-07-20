@@ -8,12 +8,8 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, cast
 
-from django.apps import apps
-from django.core.exceptions import ValidationError
-from rebac import system_context
-
 from angee.messaging_integrate_whatsapp import backup
-from angee.messaging_integrate_whatsapp.backend import WhatsAppChannelBackend
+from angee.messaging_integrate_whatsapp.backend import confirmed_whatsapp_channel
 from angee.workflows_integrate.archives import (
     ArchiveError,
     BoundedReader,
@@ -68,7 +64,7 @@ class WhatsAppIphoneBackupExtractor(ArchiveExtractor):
     ) -> dict[str, Any]:
         """Import through the existing backup importer into the confirmed channel."""
 
-        channel = _confirmed_channel(target_pk)
+        channel = confirmed_whatsapp_channel(target_pk)
         total = _import_archive(file, channel=channel, reporter=reporter)
         return {"channel": str(channel.sqid), "imported": total}
 
@@ -147,17 +143,3 @@ def _joined_member(parent: PurePosixPath, *parts: str) -> str:
 
     prefix = () if str(parent) == "." else parent.parts
     return PurePosixPath(*prefix, *parts).as_posix()
-
-
-def _confirmed_channel(target_pk: str) -> Any:
-    """Return the confirmed WhatsApp channel named by its public sqid."""
-
-    channel_model = apps.get_model("messaging", "Channel")
-    with system_context(reason="messaging_integrate_whatsapp.archive_import.channel"):
-        channel = channel_model._base_manager.filter(
-            sqid=target_pk,
-            backend_class=WhatsAppChannelBackend.key,
-        ).first()
-    if channel is None:
-        raise ValidationError({"target": f"No WhatsApp channel {target_pk!r}."})
-    return channel

@@ -9,5 +9,13 @@ SETTINGS = {
     "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES.whatsapp_iphone_backup": (
         "angee.messaging_integrate_whatsapp.extractor.WhatsAppIphoneBackupExtractor"
     ),
+    # Mounted iPhone-backup drives: one extractor per WhatsApp app domain so a
+    # two-account backup maps personal and business to their own channels.
+    "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES.whatsapp_iphone_mount": (
+        "angee.messaging_integrate_whatsapp.mount_extractor.WhatsAppPersonalMountExtractor"
+    ),
+    "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES.whatsapp_smb_iphone_mount": (
+        "angee.messaging_integrate_whatsapp.mount_extractor.WhatsAppBusinessMountExtractor"
+    ),
 }
 """Django settings contributed when the WhatsApp channel addon is installed."""

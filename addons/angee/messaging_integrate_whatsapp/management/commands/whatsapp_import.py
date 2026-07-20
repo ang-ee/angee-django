@@ -66,6 +66,11 @@ class Command(BaseCommand):
             action="store_true",
             help="Parse and count without writing anything.",
         )
+        parser.add_argument(
+            "--resume",
+            action="store_true",
+            help="Skip each chat's already-imported prefix (advance an interrupted import).",
+        )
 
     def handle(self, *args: Any, **options: Any) -> None:
         """Resolve the channel, open the backup, and drive the batched import."""
@@ -88,6 +93,7 @@ class Command(BaseCommand):
                 limit=options["limit"],
                 batch_size=options["batch_size"],
                 dry_run=options["dry_run"],
+                resume=options["resume"],
                 on_batch=lambda done: self.stdout.write(f"{done} message(s) processed…"),
             )
         except BackupError as error:

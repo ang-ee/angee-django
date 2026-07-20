@@ -1035,6 +1035,80 @@ def test_backup_import_routes_business_smb_domain(whatsapp_tables: Any, tmp_path
 
 
 @pytest.mark.django_db(transaction=True)
+def test_mount_backup_extractor_reuses_importer_per_domain(
+    whatsapp_tables: Any, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mount extractor resolves a reference drive's backup root and imports per domain.
+
+    Recognition is per WhatsApp app domain, execution reuses the directory
+    importer against the drive's on-disk backup root, and a re-run converges
+    idempotently rather than duplicating.
+    """
+
+    from types import SimpleNamespace
+
+    from angee.messaging_integrate_whatsapp import mount_extractor
+
+    mount_root = tmp_path / "mnt"
+    mount_root.mkdir()
+    backup_dir = _build_backup(mount_root)  # -> mount_root/backup/Manifest.db + blobs
+    manifest_path = backup_dir / "Manifest.db"
+    fake_manifest = SimpleNamespace(
+        storage=SimpleNamespace(path=lambda name: str(manifest_path)),
+        storage_path="backup/Manifest.db",
+    )
+    monkeypatch.setattr(mount_extractor, "_manifest_file", lambda drive: fake_manifest)
+    drive = object()  # the resolved manifest row stands in for a real drive lookup
+
+    channel = make_integration("whatsapp", model=Channel, backend_class="whatsapp")
+    with system_context(reason="test whatsapp mount media drive"):
+        _storage_drive(tmp_path / "media", owner=channel.owner)
+    reporter = SimpleNamespace(heartbeat=lambda *args, **kwargs: None)
+
+    assert mount_extractor.WhatsAppPersonalMountExtractor().recognizes(drive) is True
+    assert mount_extractor.WhatsAppBusinessMountExtractor().recognizes(drive) is False
+
+    result = mount_extractor.WhatsAppPersonalMountExtractor().execute(drive, channel.sqid, reporter)
+    assert result == {"channel": str(channel.sqid), "domain": WHATSAPP_DOMAIN, "imported": 6}
+    assert Message._base_manager.count() == 6
+
+    # Re-running resumes: each of the two chats re-flows only its watermark row
+    # (idempotent), so the count converges rather than duplicating.
+    again = mount_extractor.WhatsAppPersonalMountExtractor().execute(drive, channel.sqid, reporter)
+    assert again["imported"] == 2
+    assert Message._base_manager.count() == 6
+
+
+@pytest.mark.django_db(transaction=True)
+def test_backup_import_resume_advances_past_imported_prefix(
+    whatsapp_tables: Any, tmp_path: Any
+) -> None:
+    """A resumed import skips each chat's imported prefix and advances to completion.
+
+    The failure a resume must avoid: a history larger than one task window would
+    otherwise restart from the first message every run and never reach new rows.
+    Per-chat watermarks skip already-imported messages in SQL (no media re-read),
+    so the second pass lands the remainder instead of redoing the first.
+    """
+
+    channel = make_integration("whatsapp", model=Channel, backend_class="whatsapp")
+    with system_context(reason="test whatsapp resume drive"):
+        _storage_drive(tmp_path / "drive", owner=channel.owner)
+    backup = _build_backup(tmp_path)
+
+    # A first pass interrupted after two messages, as the task soft-time-limit does.
+    assert import_backup(channel, backup, own_jid=_OWN_JID, limit=2) == 2
+    assert Message._base_manager.count() == 2
+
+    # Resume: the first message sits below its chat's watermark and is skipped;
+    # only the watermark row (idempotent) and newer rows re-flow, and the history
+    # advances to complete rather than restarting.
+    processed = import_backup(channel, backup, own_jid=_OWN_JID, resume=True)
+    assert processed == 5
+    assert Message._base_manager.count() == 6
+
+
+@pytest.mark.django_db(transaction=True)
 def test_whatsapp_import_command_dry_run_counts(whatsapp_tables: Any, tmp_path: Any) -> None:
     """The thin command wires the importer; --dry-run parses without writing."""
 

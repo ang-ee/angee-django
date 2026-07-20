@@ -1,0 +1,10 @@
+_meta:
+  model: workflows.Workflow
+rows:
+  - xref: backup_import
+    fields:
+      name: Backup import
+      description: Recognize a mounted device-backup drive, confirm its target channels, and import each account through the owning integration.
+      subject_declaration: storage.drive
+      max_steps: 1000
+      budget: {}
