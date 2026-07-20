@@ -20,8 +20,11 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.toolsets.function import FunctionToolset
 
-from angee.agents.runtimes import ANTHROPIC_OAUTH_BETA_HEADER
-from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
+from angee.agents.runtimes import ANTHROPIC_OAUTH_CLIENT_HEADERS
+from angee.agents_integrate_anthropic.backend import (
+    AnthropicInferenceBackend,
+    _OAuthMessagesTransport,
+)
 from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
 from angee.agents_runtime_pydantic.acp import updates_for_event
 from angee.agents_runtime_pydantic.runner import PydanticAISessionRunner, _usage_limits
@@ -60,11 +63,14 @@ def test_anthropic_async_client_keeps_override_and_oauth_beta_header(monkeypatch
 
     AnthropicInferenceBackend(provider).async_client(credential=override)
 
+    assert len(captured) == 1
+    http_client = captured[0].pop("http_client")
+    assert isinstance(http_client._transport, _OAuthMessagesTransport)
     assert captured == [
         {
             "auth_token": "agent-oauth",
             "base_url": "https://anthropic.example",
-            "default_headers": {"anthropic-beta": ANTHROPIC_OAUTH_BETA_HEADER},
+            "default_headers": dict(ANTHROPIC_OAUTH_CLIENT_HEADERS),
         }
     ]
     assert override.freshened == 1

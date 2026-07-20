@@ -562,7 +562,11 @@ def test_anthropic_backend_uses_auth_token_for_oauth_credentials(
     assert model.chat([{"role": "user", "content": "Ping"}]).text == "pong"
     assert _FakeAnthropicClient.instances[-1].kwargs == {
         "auth_token": "oauth-token",
-        "default_headers": {"anthropic-beta": "oauth-2025-04-20"},
+        "default_headers": {
+            "anthropic-beta": "oauth-2025-04-20,claude-code-20250219",
+            "user-agent": "claude-cli/1.0.130 (external, cli)",
+            "x-app": "cli",
+        },
     }
 
 

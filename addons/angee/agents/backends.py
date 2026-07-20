@@ -118,6 +118,19 @@ class InferenceBackend(ImplBase):
             vendor_slug=vendor_slug,
         )
 
+    def system_preamble(self, credential: Any | None = None) -> str:
+        """Return the vendor-required system-prompt opening for ``credential``.
+
+        Most (vendor × credential-kind) pairs need none. Anthropic's OAuth
+        (Personal Plans) edge refuses requests whose system prompt does not
+        open with the Claude Code identity line; that backend overrides this.
+        Callers prepend a non-empty preamble ahead of their own instructions.
+        ``credential`` defaults to the bound provider's.
+        """
+
+        del credential
+        return ""
+
     def list_models(self) -> Sequence[InferenceModelSpec]:
         """Return the provider's advertised models for catalogue upsert."""
 

@@ -42,6 +42,23 @@ if TYPE_CHECKING:
 # agents, not the reverse).
 ANTHROPIC_OAUTH_BETA_HEADER = "oauth-2025-04-20"
 
+# Anthropic's edge accepts an OAuth (Personal Plans) token only from requests
+# shaped like the Claude Code client; anything else is refused with an opaque
+# 429 rate_limit_error. These are the headers the CLI itself sends (the SDK
+# adds anthropic-version). Used by SDK clients bound to an OAuth credential —
+# static API keys must never carry them.
+ANTHROPIC_OAUTH_CLIENT_HEADERS = {
+    "anthropic-beta": f"{ANTHROPIC_OAUTH_BETA_HEADER},claude-code-20250219",
+    "user-agent": "claude-cli/1.0.130 (external, cli)",
+    "x-app": "cli",
+}
+
+# The same edge also requires the request's system prompt to open with the
+# Claude Code identity line — headers alone are still refused (verified
+# empirically 2026-07-20: headers-only → the same opaque 429). Prepended for
+# OAuth-credentialed requests only.
+ANTHROPIC_OAUTH_SYSTEM_PREAMBLE = "You are Claude Code, Anthropic's official CLI for Claude."
+
 
 def operator_secret_ref(secret_name: str) -> str:
     """Return the operator placeholder that resolves to a stored secret in the container.

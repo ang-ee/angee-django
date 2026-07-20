@@ -46,7 +46,17 @@ class SDKInferenceBackend(InferenceBackend):
             raise RuntimeError(
                 f"Install the `{self.sdk_package_name}` package to use the {self.label} async client."
             ) from error
-        return client_class(**self._client_kwargs(credential=credential))
+        return client_class(**self._async_client_kwargs(credential=credential))
+
+    def _async_client_kwargs(self, *, credential: Any | None = None) -> dict[str, Any]:
+        """Return async SDK client constructor kwargs; defaults to the sync set.
+
+        The override seam for vendor facts that differ between the sync and
+        async clients — e.g. an async ``http_client`` whose transport reshapes
+        requests a credential kind requires.
+        """
+
+        return self._client_kwargs(credential=credential)
 
     def _client_kwargs(self, *, credential: Any | None = None) -> dict[str, Any]:
         """Return common SDK client constructor kwargs."""

@@ -176,8 +176,15 @@ export function useSessionRuntime(
     onCancel,
     convertMessage,
   });
-  const runtimeError = error ?? latest.error?.message ?? turns.error?.message ?? displayedSession?.last_error ?? null;
-  const status: AcpStatus = runtimeError
+  // Transport failures (start mutation, reads) disable the composer; a
+  // domain error on the session (a failed turn's last_error) only shows the
+  // banner — the session stays writable, and the next claimed turn clears
+  // last_error via mark_running. Disabling on domain errors deadlocks the
+  // session: the recovery message can never be sent. `|| null` because a
+  // fresh session carries last_error="" and an empty banner is not an error.
+  const transportError = error ?? latest.error?.message ?? turns.error?.message ?? null;
+  const runtimeError = transportError ?? (displayedSession?.last_error || null);
+  const status: AcpStatus = transportError
     ? "error"
     : sessionId && displayedSession
       ? displayedSession.status === "CLOSED" ? "closed" : "ready"
