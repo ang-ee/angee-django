@@ -51,7 +51,10 @@ interface AgentChatProps {
 }
 
 export function AgentChat(props: AgentChatProps): React.ReactElement {
-  return props.runtimeClass?.toLowerCase() === "pydantic"
+  if (props.runtimeClass === undefined) {
+    return <div className="h-full min-h-[28rem] bg-sheet" aria-busy="true" />;
+  }
+  return props.runtimeClass === "PYDANTIC"
     ? <SessionAgentChat {...props} />
     : <AcpAgentChat {...props} />;
 }
@@ -86,6 +89,7 @@ function AgentChatContent({
     mcpServers,
     availableCommands,
     imageSupported,
+    recordAttachmentSupported,
     recordAttached,
     attachRecord,
     clearRecord,
@@ -211,12 +215,14 @@ function AgentChatContent({
                 }
                 attachments={
                   <>
-                    <RecordAttachmentChip
-                      attached={recordAttached}
-                      attachRecord={attachRecord}
-                      clearRecord={clearRecord}
-                      renderContext={renderContext}
-                    />
+                    {recordAttachmentSupported ? (
+                      <RecordAttachmentChip
+                        attached={recordAttached}
+                        attachRecord={attachRecord}
+                        clearRecord={clearRecord}
+                        renderContext={renderContext}
+                      />
+                    ) : null}
                     <ComposerPrimitive.Attachments>
                       {() => <ComposerImageAttachment />}
                     </ComposerPrimitive.Attachments>

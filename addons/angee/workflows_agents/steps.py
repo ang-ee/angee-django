@@ -24,8 +24,11 @@ from django.utils import timezone
 from rebac import actor_context, system_context, to_subject_ref
 
 from angee.agents.backends import InferenceRequest, InferenceResponse
+from angee.agents.models import SessionStatus, TurnStatus
 from angee.agents.runners import TurnOutcome
+from angee.workflows.models import RunStatus, StepRunStatus, Verdict
 from angee.workflows.steps import DecisionSpec, StepImpl, StepResult, TransientStepError
+from angee.workflows_agents.sessions import close_session
 
 AGENT_STEP_JOURNAL_MAX_BYTES = 4096
 """Maximum UTF-8 JSON bytes stored in one agent step-run output journal."""
@@ -121,8 +124,9 @@ class AgentSessionStepImpl(StepImpl):
 
     Idle sessions park at :data:`SESSION_PARKED_UNTIL` and wake only through
     ``workflows.engine.deliver``. The update sink flushes ACP payloads at a
-    bounded cadence and refreshes the step heartbeat on every flush, keeping a
-    healthy long turn clear of the workflow reaper.
+    bounded cadence while the runtime refreshes the step heartbeat independently
+    every minute. Worker death mid-turn still fails the whole run in v1; durable
+    mid-turn replay is intentionally deferred.
     """
 
     key = "agent_session"
@@ -136,16 +140,19 @@ class AgentSessionStepImpl(StepImpl):
         del now
         with system_context(reason="workflows_agents.session_step.claim"), transaction.atomic():
             session = _session_for_step(step_run)
-            if _state_value(session.status) == "closed":
-                return StepResult.done(output={"session": session.sqid}, outcome="closed")
-            turn, resumed = _claim_turn(session)
-            if turn is None:
-                if _state_value(session.status) != "idle":
-                    session.mark_idle()
-                return _park_session()
-            deferred_results = _deferred_results(step_run) if resumed else []
+            if session.status != SessionStatus.CLOSED:
+                turn, resumed = _claim_turn(session)
+                if turn is None:
+                    if session.status != SessionStatus.IDLE:
+                        session.mark_idle()
+                    return _park_session()
+                deferred_results = _deferred_results(step_run) if resumed else []
 
-        sink = _TurnUpdateSink(step=self, step_run=step_run, turn=turn)
+        if session.status == SessionStatus.CLOSED:
+            close_session(session)
+            return StepResult.done(output={"session": session.sqid}, outcome="closed")
+
+        sink = _TurnUpdateSink(turn=turn)
         try:
             runner = session.agent.runtime_backend.session_runner()
             with actor_context(session.agent.principal_subject()):
@@ -154,6 +161,7 @@ class AgentSessionStepImpl(StepImpl):
                     turn,
                     deferred_results=deferred_results,
                     emit=sink,
+                    heartbeat=lambda: self.heartbeat(step_run),
                 )
         except TransientStepError:
             raise
@@ -172,10 +180,8 @@ class AgentSessionStepImpl(StepImpl):
 
 @dataclass(slots=True)
 class _TurnUpdateSink:
-    """Bounded ACP update flusher and workflow heartbeat reporter."""
+    """Bounded ACP update flusher."""
 
-    step: StepImpl
-    step_run: Any
     turn: Any
     pending: list[dict[str, Any]] = field(default_factory=list)
     last_flush: float = 0.0
@@ -191,7 +197,7 @@ class _TurnUpdateSink:
             self.flush()
 
     def flush(self) -> None:
-        """Append buffered updates and heartbeat the running step."""
+        """Append buffered updates to the persisted turn."""
 
         if not self.pending:
             return
@@ -203,7 +209,6 @@ class _TurnUpdateSink:
             self.turn.updates = locked.updates
         self.pending.clear()
         self.last_flush = time.monotonic()
-        self.step.heartbeat(self.step_run)
 
 
 def _session_for_step(step_run: Any) -> Any:
@@ -223,7 +228,6 @@ def _session_for_step(step_run: Any) -> Any:
             "agent__model__provider__credential",
             "agent__inference_credential",
         )
-        .prefetch_related("agent__mcp_servers__credential", "agent__mcp_tools")
         .get(pk=subject.pk)
     )
 
@@ -233,12 +237,15 @@ def _claim_turn(session: Any) -> tuple[Any | None, bool]:
 
     active = (
         session.turns.lock_if_supported()
-        .filter(status__in=["running", "awaiting_approval"])
+        .filter(status__in=[TurnStatus.RUNNING, TurnStatus.AWAITING_APPROVAL])
         .order_by("index")
         .first()
     )
-    resumed = active is not None and _state_value(active.status) == "awaiting_approval"
-    turn = active or session.turns.lock_if_supported().filter(status="pending").order_by("index").first()
+    resumed = active is not None and active.status == TurnStatus.AWAITING_APPROVAL
+    if active is not None and active.status == TurnStatus.RUNNING:
+        active.updates = []
+        active.save(update_fields=["updates", "updated_at"])
+    turn = active or session.turns.lock_if_supported().filter(status=TurnStatus.PENDING).order_by("index").first()
     if turn is None:
         return None, False
     turn.mark_running()
@@ -256,8 +263,8 @@ def _deferred_results(step_run: Any) -> list[dict[str, Any]]:
     return [
         {
             **dict(decision.payload or {}),
-            "approved": _state_value(decision.verdict) == "completed",
-            "verdict": _state_value(decision.verdict),
+            "approved": decision.verdict == Verdict.COMPLETED,
+            "verdict": str(decision.verdict),
             "resolution": dict(decision.resolution or {}),
         }
         for decision in decisions
@@ -269,11 +276,27 @@ def _persist_turn_outcome(step_run: Any, session: Any, turn: Any, outcome: TurnO
 
     session_model = type(session)
     turn_model = type(turn)
+    step_run_model = type(step_run)
     run_model = type(step_run.run)
     with system_context(reason="workflows_agents.session_step.persist"), transaction.atomic():
+        locked_run = run_model.objects.lock_if_supported().get(pk=step_run.run_id)
+        locked_step_run = step_run_model.objects.lock_if_supported().get(pk=step_run.pk)
         locked_session = session_model.objects.lock_if_supported().select_related("owner").get(pk=session.pk)
         locked_turn = turn_model.objects.lock_if_supported().get(pk=turn.pk)
-        locked_run = run_model.objects.lock_if_supported().get(pk=step_run.run_id)
+        cancel_requested = bool((locked_step_run.resume_state or {}).get("cancel_requested"))
+        if (
+            locked_step_run.status != StepRunStatus.STARTED
+            or locked_run.status in RunStatus.TERMINAL
+            or cancel_requested
+        ):
+            if locked_turn.status in {
+                TurnStatus.PENDING,
+                TurnStatus.RUNNING,
+                TurnStatus.AWAITING_APPROVAL,
+            }:
+                locked_turn.cancel()
+            return StepResult.done(output={"session": locked_session.sqid}, outcome="canceled")
+
         locked_run.debit_budget(outcome.usage)
         locked_run.refresh_from_db(fields=["budget_spent"])
         locked_session.replay_state = outcome.replay_state
@@ -281,11 +304,11 @@ def _persist_turn_outcome(step_run: Any, session: Any, turn: Any, outcome: TurnO
 
         if outcome.kind == "completed":
             locked_turn.mark_completed(text=outcome.text, usage=outcome.usage)
-            if _state_value(locked_session.status) != "closed":
+            if locked_session.status != SessionStatus.CLOSED:
                 locked_session.mark_idle()
             result = (
                 StepResult.done(output={"session": locked_session.sqid}, outcome="closed")
-                if _state_value(locked_session.status) == "closed"
+                if locked_session.status == SessionStatus.CLOSED
                 else _continue_or_park(locked_session)
             )
         elif outcome.kind == "needs_approval":
@@ -293,7 +316,7 @@ def _persist_turn_outcome(step_run: Any, session: Any, turn: Any, outcome: TurnO
                 locked_turn.mark_failed("The runtime requested approval without any tool calls.")
                 locked_session.mark_error(locked_turn.error)
                 result = _park_session()
-            elif _state_value(locked_session.status) == "closed":
+            elif locked_session.status == SessionStatus.CLOSED:
                 locked_turn.cancel()
                 result = StepResult.done(output={"session": locked_session.sqid}, outcome="closed")
             else:
@@ -310,11 +333,11 @@ def _persist_turn_outcome(step_run: Any, session: Any, turn: Any, outcome: TurnO
                 )
         else:
             locked_turn.mark_failed(outcome.error or "Agent runtime failed.")
-            if _state_value(locked_session.status) != "closed":
+            if locked_session.status != SessionStatus.CLOSED:
                 locked_session.mark_error(locked_turn.error)
             result = (
                 StepResult.done(output={"session": locked_session.sqid}, outcome="closed")
-                if _state_value(locked_session.status) == "closed"
+                if locked_session.status == SessionStatus.CLOSED
                 else _continue_or_park(locked_session)
             )
 
@@ -358,15 +381,9 @@ def _park_session() -> StepResult:
 def _continue_or_park(session: Any) -> StepResult:
     """Keep an already-delivered queued turn due, otherwise park the session."""
 
-    if session.turns.filter(status="pending").exists():
+    if session.turns.filter(status=TurnStatus.PENDING).exists():
         return StepResult.wait(until=timezone.now(), resume_state={})
     return _park_session()
-
-
-def _state_value(value: Any) -> str:
-    """Return a Django TextChoices member's stored value."""
-
-    return str(getattr(value, "value", value))
 
 
 def _render_prompt(template: str, step_run: Any) -> str:

@@ -13,8 +13,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from django.apps import apps
+from django.conf import settings
+from django.utils.module_loading import import_string
 from rebac import system_context
 
+from angee.agents.models import AgentLifecycle
 from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.actions import ActionResult, action_target
 from angee.graphql.ids import PublicID
@@ -172,15 +175,16 @@ def deprovision_agent(id: PublicID) -> ActionResult:
         if agent.runtime_backend.runs_in_process:
             try:
                 agent.mark_deprovisioning()
-                _close_open_sessions(agent)
+                _run_teardown_hooks(agent)
                 agent.mark_deprovisioned()
             except TransitionNotAllowed as error:
                 return ActionResult(ok=False, message=f"Teardown failed: {error}")
             return ActionResult(ok=True, message="Deprovisioned.")
         if not agent.workspace and not agent.service:
             try:
-                if str(agent.lifecycle) == "provisioning":
+                if agent.lifecycle == AgentLifecycle.PROVISIONING:
                     agent.mark_deprovisioning()
+                _run_teardown_hooks(agent)
                 agent.mark_deprovisioned()
             except TransitionNotAllowed as error:
                 return ActionResult(ok=False, message=f"Teardown failed: {error}")
@@ -189,6 +193,7 @@ def deprovision_agent(id: PublicID) -> ActionResult:
         service = agent.service
         try:
             agent.mark_deprovisioning()
+            _run_teardown_hooks(agent)
         except TransitionNotAllowed as error:
             return ActionResult(ok=False, message=f"Teardown failed: {error}")
     daemon = OperatorDaemon.from_settings()
@@ -315,9 +320,9 @@ def _agent_model() -> Any:
     return apps.get_model("agents", "Agent")
 
 
-def _close_open_sessions(agent: Any) -> None:
-    """Close this in-process agent's persisted sessions before deprovisioning."""
+def _run_teardown_hooks(agent: Any) -> None:
+    """Run installed agent teardown hooks in configured order."""
 
-    session_model = apps.get_model("agents", "AgentSession")
-    for session in session_model.objects.lock_if_supported().filter(agent=agent).exclude(status="closed"):
-        session.close()
+    for dotted in settings.ANGEE_AGENT_TEARDOWN_HOOKS:
+        hook = import_string(str(dotted))
+        hook(agent)

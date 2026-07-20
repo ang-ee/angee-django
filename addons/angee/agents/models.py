@@ -932,7 +932,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         # it. This must agree with the readiness gate and the secret sync in the provision
         # flow (both also keyed on ``renders_service``).
         if runtime.renders_service and model is not None and self.inference_secret():
-            credential = self._inference_credential()
+            credential = self.inference_credential_for_runtime()
             backend = getattr(getattr(model, "provider", None), "backend", None)
             if credential is None or backend is None:
                 raise ValueError("Inference auth requires a model provider backend.")
@@ -1055,7 +1055,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         frozen into the provisioned service has its full lifetime ahead of it.
         """
 
-        credential = self._inference_credential()
+        credential = self.inference_credential_for_runtime()
         if credential is None:
             return ""
         credential.ensure_fresh()
@@ -1078,7 +1078,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         runtime = self.runtime_backend
         if not runtime.renders_service:
             return ""
-        credential = self._inference_credential()
+        credential = self.inference_credential_for_runtime()
         if credential is None:
             return ""
         credential.ensure_fresh()
@@ -1098,22 +1098,13 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
 
         if self.model_id is None:
             return True
-        credential = self._inference_credential()
+        credential = self.inference_credential_for_runtime()
         if credential is None or not self.inference_secret():
             return False
         runtime = self.runtime_backend
         return not runtime.renders_service or runtime.supports_credential(credential)
 
-    def resolved_inference_credential(self) -> Any:
-        """Return the live credential an in-process inference backend must use.
-
-        The agent owns the per-agent override rule, so runtimes ask this method
-        instead of re-walking or decoding the model/provider credential chain.
-        """
-
-        return self._inference_credential()
-
-    def _inference_credential(self) -> Any:
+    def inference_credential_for_runtime(self) -> Any:
         """Return the ``integrate.Credential`` backing this agent's inference, or ``None``.
 
         A per-agent ``inference_credential`` override wins (e.g. a connected Anthropic OAuth

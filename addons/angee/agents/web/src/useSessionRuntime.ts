@@ -1,12 +1,14 @@
 /** Persisted-session transport for in-process agent runtimes. */
 
 import * as React from "react";
-import { useExternalStoreRuntime, type AppendMessage, type ThreadMessageLike } from "@assistant-ui/react";
+import { useExternalStoreRuntime, type AppendMessage } from "@assistant-ui/react";
 import type { SessionNotification } from "@agentclientprotocol/sdk";
+import type { DocumentType } from "@angee/gql/console";
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import * as v from "valibot";
 
 import { messageOf } from "./acp-error";
-import { foldIntoLog, type ChatMessage } from "./acp-log";
+import { convertMessage, foldIntoLog, type ChatMessage } from "./acp-log";
 import { emptySession, foldIntoSession } from "./acp-session";
 import {
   AgentSessionTurns,
@@ -19,6 +21,44 @@ import {
 import type { AcpRuntime, AcpStatus } from "./useAcpRuntime";
 
 const SESSION_MODELS = ["agents.AgentSession", "agents.AgentTurn"] as const;
+const EMPTY_MCP_SERVERS = Object.freeze({});
+const EMPTY_TURNS = [] as const;
+
+const TextUpdateSchema = v.object({
+  sessionUpdate: v.picklist(["agent_message_chunk", "agent_thought_chunk"]),
+  content: v.object({ type: v.literal("text"), text: v.string() }),
+});
+const ToolStatusSchema = v.picklist(["pending", "in_progress", "completed", "failed"]);
+const ToolCallSchema = v.object({
+  sessionUpdate: v.literal("tool_call"),
+  toolCallId: v.string(),
+  title: v.string(),
+  status: v.optional(ToolStatusSchema),
+  rawInput: v.optional(v.unknown()),
+  rawOutput: v.optional(v.unknown()),
+});
+const ToolCallUpdateSchema = v.object({
+  sessionUpdate: v.literal("tool_call_update"),
+  toolCallId: v.string(),
+  title: v.optional(v.nullable(v.string())),
+  status: v.optional(v.nullable(ToolStatusSchema)),
+  rawInput: v.optional(v.unknown()),
+  rawOutput: v.optional(v.unknown()),
+});
+const AvailableCommandSchema = v.object({
+  name: v.string(),
+  description: v.string(),
+  input: v.optional(v.nullable(v.object({ hint: v.string() }))),
+});
+const StoredSessionUpdateSchema = v.variant("sessionUpdate", [
+  TextUpdateSchema,
+  ToolCallSchema,
+  ToolCallUpdateSchema,
+  v.object({
+    sessionUpdate: v.literal("available_commands_update"),
+    availableCommands: v.array(AvailableCommandSchema),
+  }),
+]);
 
 export function useSessionRuntime(
   agentId: string,
@@ -31,6 +71,7 @@ export function useSessionRuntime(
   const [recordAttached, setRecordAttached] = React.useState(true);
   const [clearedThrough, setClearedThrough] = React.useState(0);
   const startingRef = React.useRef<string | null>(null);
+  const turnMessagesRef = React.useRef(new Map<string, CachedTurnMessages>());
 
   const latest = useAuthoredQuery(LatestAgentSession, { agentId }, { models: SESSION_MODELS });
   const latestSession = latest.data?.agent_sessions[0];
@@ -41,6 +82,9 @@ export function useSessionRuntime(
     { sessionId: sessionId ?? "" },
     { enabled: sessionId !== undefined, models: SESSION_MODELS },
   );
+  const queriedSession = turns.data?.agent_sessions[0];
+  const displayedSession = queriedSession?.id === sessionId ? queriedSession : undefined;
+  const displayedTurns = displayedSession ? turns.data?.agent_turns ?? EMPTY_TURNS : EMPTY_TURNS;
   const [startSession] = useAuthoredMutation(StartAgentSession, { invalidateModels: SESSION_MODELS });
   const [postMessage] = useAuthoredMutation(PostAgentMessage, { invalidateModels: SESSION_MODELS });
   const [renderPrompt] = useAuthoredMutation(RenderAgentPrompt);
@@ -48,36 +92,45 @@ export function useSessionRuntime(
   React.useEffect(() => {
     setStartedSessionId(null);
     setClearedThrough(0);
+    setPosting(false);
+    setError(null);
     startingRef.current = null;
+    turnMessagesRef.current.clear();
   }, [agentId]);
 
   React.useEffect(() => {
+    let active = true;
     if (initialSessionId !== undefined || latest.fetching || reusableId !== undefined) return;
     if (startingRef.current === agentId) return;
     startingRef.current = agentId;
     void startSession({ agent: agentId, context: view })
       .then((data) => {
         const id = data?.start_agent_session.id;
-        if (id) setStartedSessionId(id);
+        if (active && id) setStartedSessionId(id);
       })
-      .catch((caught) => setError(messageOf(caught, "Failed to start the agent session.")));
+      .catch((caught) => {
+        if (active) setError(messageOf(caught, "Failed to start the agent session."));
+      });
+    return () => {
+      active = false;
+    };
   }, [agentId, initialSessionId, latest.fetching, reusableId, startSession, view]);
 
   const allMessages = React.useMemo(
-    () => transcriptMessages(sessionId ?? "", turns.data?.agent_turns ?? []),
-    [sessionId, turns.data?.agent_turns],
+    () => transcriptMessages(sessionId ?? "", displayedTurns, turnMessagesRef.current),
+    [sessionId, displayedTurns],
   );
   const messages = React.useMemo(() => allMessages.slice(clearedThrough), [allMessages, clearedThrough]);
   const latent = React.useMemo(() => {
     let state = emptySession;
-    for (const turn of turns.data?.agent_turns ?? []) {
+    for (const turn of displayedTurns) {
       for (const raw of jsonArray(turn.updates)) {
         const note = storedNotification(sessionId ?? "", raw);
         if (note) state = foldIntoSession(state, note);
       }
     }
     return state;
-  }, [sessionId, turns.data?.agent_turns]);
+  }, [sessionId, displayedTurns]);
 
   const onNew = React.useCallback(
     async (message: AppendMessage): Promise<void> => {
@@ -96,6 +149,9 @@ export function useSessionRuntime(
     [postMessage, sessionId],
   );
   const clear = React.useCallback(() => setClearedThrough(allMessages.length), [allMessages.length]);
+  const onCancel = React.useCallback(async (): Promise<void> => setPosting(false), []);
+  const attachRecord = React.useCallback((): void => setRecordAttached(true), []);
+  const clearRecord = React.useCallback((): void => setRecordAttached(false), []);
   const reconnect = React.useCallback(() => {
     setClearedThrough(0);
     latest.refetch();
@@ -111,88 +167,75 @@ export function useSessionRuntime(
   }, [agentId, renderPrompt, view]);
 
   const runtime = useExternalStoreRuntime({
-    isRunning: posting || latestSession?.status === "RUNNING",
+    isRunning: posting || displayedSession?.status === "RUNNING",
     messages,
     onNew,
-    onCancel: async () => setPosting(false),
+    onCancel,
     convertMessage,
   });
-  const status: AcpStatus = error
+  const runtimeError = error ?? latest.error?.message ?? turns.error?.message ?? displayedSession?.last_error ?? null;
+  const status: AcpStatus = runtimeError
     ? "error"
-    : sessionId
-      ? latestSession?.status === "CLOSED" ? "closed" : "ready"
+    : sessionId && displayedSession
+      ? displayedSession.status === "CLOSED" ? "closed" : "ready"
       : "connecting";
   return {
     runtime,
     status,
-    error: error ?? latest.error?.message ?? turns.error?.message ?? latestSession?.last_error ?? null,
+    error: runtimeError,
     reconnect,
     clear,
-    mcpServers: {},
-    modelHandle: latestSession?.agent.model?.name ?? "",
+    mcpServers: EMPTY_MCP_SERVERS,
+    modelHandle: displayedSession?.agent.model?.name ?? "",
     availableCommands: latent.availableCommands,
     imageSupported: false,
+    recordAttachmentSupported: false,
     recordAttached,
-    attachRecord: () => setRecordAttached(true),
-    clearRecord: () => setRecordAttached(false),
+    attachRecord,
+    clearRecord,
     renderContext,
   };
 }
 
-function transcriptMessages(sessionId: string, turns: readonly StoredTurn[]): ChatMessage[] {
+function transcriptMessages(
+  sessionId: string,
+  turns: readonly StoredTurn[],
+  cache: Map<string, CachedTurnMessages>,
+): ChatMessage[] {
   let messages: ChatMessage[] = [];
+  const currentIds = new Set(turns.map((turn) => turn.id));
+  for (const id of cache.keys()) {
+    if (!currentIds.has(id)) cache.delete(id);
+  }
   for (const turn of turns) {
-    messages = [...messages, { id: `user-${turn.id}`, role: "user", parts: [{ kind: "text", text: turn.prompt }] }];
-    for (const raw of jsonArray(turn.updates)) {
-      const note = storedNotification(sessionId, raw);
-      if (note) messages = foldIntoLog(messages, note);
+    const updates = jsonArray(turn.updates);
+    const cached = cache.get(turn.id);
+    let turnMessages = cached?.updatesLength === updates.length ? cached.messages : undefined;
+    if (turnMessages === undefined) {
+      turnMessages = [{ id: `user-${turn.id}`, role: "user", parts: [{ kind: "text", text: turn.prompt }] }];
+      for (const raw of updates) {
+        const note = storedNotification(sessionId, raw);
+        if (note) turnMessages = foldIntoLog(turnMessages, note);
+      }
+      cache.set(turn.id, { updatesLength: updates.length, messages: turnMessages });
     }
+    messages = [...messages, ...turnMessages];
   }
   return messages;
 }
 
-type StoredTurn = {
-  id: string;
-  prompt: string;
-  updates: unknown;
-};
+type StoredTurn = DocumentType<typeof AgentSessionTurns>["agent_turns"][number];
+
+interface CachedTurnMessages {
+  updatesLength: number;
+  messages: ChatMessage[];
+}
 
 function jsonArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
 function storedNotification(sessionId: string, value: unknown): SessionNotification | null {
-  if (!isObject(value) || typeof value.sessionUpdate !== "string") return null;
-  const kind = value.sessionUpdate;
-  if (kind === "agent_message_chunk" || kind === "agent_thought_chunk") {
-    if (!isObject(value.content) || value.content.type !== "text" || typeof value.content.text !== "string") return null;
-  } else if (kind === "tool_call" || kind === "tool_call_update") {
-    if (typeof value.toolCallId !== "string") return null;
-    if (value.status !== undefined && !["pending", "in_progress", "completed", "failed"].includes(String(value.status))) return null;
-  } else if (kind === "available_commands_update") {
-    if (!Array.isArray(value.availableCommands)) return null;
-  } else {
-    return null;
-  }
-  return { sessionId, update: value } as SessionNotification;
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function convertMessage(message: ChatMessage): ThreadMessageLike {
-  const content = message.parts.map((part) => {
-    if (part.kind === "text") return { type: "text" as const, text: part.text };
-    if (part.kind === "reasoning") return { type: "reasoning" as const, text: part.text };
-    if (part.kind === "image") return { type: "image" as const, image: part.image, filename: part.filename };
-    return {
-      type: "tool-call" as const,
-      toolCallId: part.id,
-      toolName: part.toolName,
-      args: { status: part.status, input: part.input ?? null, result: part.result ?? null, isError: part.isError ?? false },
-      argsText: "",
-    };
-  });
-  return { id: message.id, role: message.role, content: content as ThreadMessageLike["content"] };
+  const parsed = v.safeParse(StoredSessionUpdateSchema, value);
+  return parsed.success ? { sessionId, update: parsed.output } : null;
 }

@@ -42,10 +42,10 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
     async_client_class_path = "anthropic.AsyncAnthropic"
     sdk_package_name = "anthropic"
 
-    def _client_kwargs(self) -> dict[str, Any]:
+    def _client_kwargs(self, *, credential: Any | None = None) -> dict[str, Any]:
         """Return Anthropic SDK kwargs, including the OAuth beta when needed."""
 
-        kwargs = super()._client_kwargs()
+        kwargs = super()._client_kwargs(credential=credential)
         if "auth_token" in kwargs:
             kwargs["default_headers"] = {"anthropic-beta": ANTHROPIC_OAUTH_BETA_HEADER}
         return kwargs

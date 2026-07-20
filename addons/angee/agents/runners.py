@@ -14,6 +14,9 @@ from typing import Any, Literal
 SessionUpdateSink = Callable[[dict[str, Any]], None]
 """Sink for one ACP ``session/update`` payload."""
 
+SessionHeartbeat = Callable[[], None]
+"""Synchronous callback refreshing the workflow-owned execution lease."""
+
 
 @dataclass(frozen=True, slots=True)
 class TurnOutcome:
@@ -37,6 +40,7 @@ class SessionRunner:
         *,
         deferred_results: list[Mapping[str, Any]],
         emit: SessionUpdateSink,
+        heartbeat: SessionHeartbeat,
     ) -> TurnOutcome:
         """Run one turn and return its neutral outcome."""
 

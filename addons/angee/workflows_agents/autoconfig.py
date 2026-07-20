@@ -9,5 +9,8 @@ SETTINGS = {
     # contributions.
     "ANGEE_WORKFLOW_STEP_CLASSES.agent": "angee.workflows_agents.steps.AgentStepImpl",
     "ANGEE_WORKFLOW_STEP_CLASSES.agent_session": "angee.workflows_agents.steps.AgentSessionStepImpl",
+    "ANGEE_AGENT_TEARDOWN_HOOKS:append": [
+        "angee.workflows_agents.sessions.close_agent_sessions",
+    ],
 }
 """Django settings contributed when the workflows-agents addon is installed."""

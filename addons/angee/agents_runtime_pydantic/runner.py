@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
+from contextlib import suppress
 from typing import Any
 
 from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
-from pydantic_core import to_jsonable_python
 from pydantic_ai import Agent, AgentRunResultEvent, DeferredToolRequests, DeferredToolResults
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.usage import UsageLimits
+from pydantic_core import to_jsonable_python
 
 from angee.agents.context import render_view_context
-from angee.agents.runners import SessionRunner, SessionUpdateSink, TurnOutcome
+from angee.agents.runners import SessionHeartbeat, SessionRunner, SessionUpdateSink, TurnOutcome
 from angee.agents_runtime_pydantic.acp import approval_requests, updates_for_event
 from angee.agents_runtime_pydantic.providers import model_for_agent
 from angee.agents_runtime_pydantic.toolsets import toolsets_for_agent
@@ -29,6 +31,7 @@ class PydanticAISessionRunner(SessionRunner):
         *,
         deferred_results: list[Mapping[str, Any]],
         emit: SessionUpdateSink,
+        heartbeat: SessionHeartbeat,
     ) -> TurnOutcome:
         """Bridge the workflow's synchronous task into pydantic-ai's async loop."""
 
@@ -48,6 +51,7 @@ class PydanticAISessionRunner(SessionRunner):
             toolsets=toolsets,
             limits=limits,
             emit=emit,
+            heartbeat=heartbeat,
         )
 
     async def _run_async(
@@ -61,6 +65,7 @@ class PydanticAISessionRunner(SessionRunner):
         toolsets: list[Any],
         limits: UsageLimits,
         emit: SessionUpdateSink,
+        heartbeat: SessionHeartbeat,
     ) -> TurnOutcome:
         agent = Agent(
             model=inference_model,
@@ -69,18 +74,24 @@ class PydanticAISessionRunner(SessionRunner):
             output_type=[str, DeferredToolRequests],
         )
         result = None
-        async with agent.run_stream_events(
-            prompt,
-            message_history=history,
-            deferred_tool_results=deferred,
-            usage_limits=limits,
-        ) as events:
-            async for event in events:
-                if isinstance(event, AgentRunResultEvent):
-                    result = event.result
-                    continue
-                for update in updates_for_event(event):
-                    await database_sync_to_async(emit, thread_sensitive=True)(update)
+        heartbeat_task = asyncio.create_task(_heartbeat_loop(heartbeat))
+        try:
+            async with agent.run_stream_events(
+                prompt,
+                message_history=history,
+                deferred_tool_results=deferred,
+                usage_limits=limits,
+            ) as events:
+                async for event in events:
+                    if isinstance(event, AgentRunResultEvent):
+                        result = event.result
+                        continue
+                    for update in updates_for_event(event):
+                        await database_sync_to_async(emit, thread_sensitive=True)(update)
+        finally:
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat_task
         if result is None:
             raise RuntimeError("pydantic-ai completed without an AgentRunResultEvent.")
 
@@ -119,16 +130,18 @@ def _deferred_tool_results(results: list[Mapping[str, Any]]) -> DeferredToolResu
 
 
 def _usage_limits(agent: Any) -> UsageLimits:
-    """Return conservative per-turn limits from the selected model declaration."""
+    """Return a request-count guard; the workflow ledger owns token spend."""
 
-    model = agent.model
-    output_limit = int(model.max_output_tokens or 0) or None
-    context_limit = int(model.context_window or 0) or None
-    return UsageLimits(
-        request_limit=50,
-        output_tokens_limit=output_limit,
-        total_tokens_limit=context_limit,
-    )
+    del agent
+    return UsageLimits(request_limit=50)
+
+
+async def _heartbeat_loop(heartbeat: SessionHeartbeat) -> None:
+    """Refresh the workflow lease independently of model/tool emissions."""
+
+    while True:
+        await asyncio.sleep(60)
+        await database_sync_to_async(heartbeat, thread_sensitive=True)()
 
 
 def _usage_delta(usage: Any) -> dict[str, int]:

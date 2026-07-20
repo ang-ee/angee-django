@@ -50,7 +50,13 @@ def updates_for_event(event: Any) -> Iterable[dict[str, Any]]:
         elif isinstance(event.delta, ThinkingPartDelta) and event.delta.content_delta:
             yield _text_update("agent_thought_chunk", event.delta.content_delta)
     elif isinstance(event, FunctionToolCallEvent):
-        yield _tool_call(event.part)
+        yield {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": event.part.tool_call_id,
+            "title": event.part.tool_name,
+            "status": "in_progress",
+            "rawInput": _tool_args(event.part),
+        }
     elif isinstance(event, FunctionToolResultEvent):
         failed = isinstance(event.part, RetryPromptPart)
         yield {

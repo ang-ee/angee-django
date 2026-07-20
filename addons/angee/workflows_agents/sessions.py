@@ -5,15 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from django.apps import apps
-from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from rebac import system_context
 
+from angee.agents.models import RuntimeStatus, SessionStatus, TurnStatus
 from angee.workflows import engine
-
-SESSION_WORKFLOW_NAME = "Agent session"
-"""Name of the install-tier workflow that owns persisted agent sessions."""
 
 
 def start_session(agent: Any, *, owner: Any, context: dict[str, Any]) -> Any:
@@ -23,14 +20,15 @@ def start_session(agent: Any, *, owner: Any, context: dict[str, Any]) -> Any:
         raise ValidationError({"agent": "This agent runtime uses container ACP sessions."})
     if agent.owner_id != owner.pk:
         raise ValidationError({"agent": "Only the agent owner can start a session."})
-    if str(agent.runtime_status) != "running":
+    if agent.runtime_status != RuntimeStatus.RUNNING:
         raise ValidationError({"agent": "Provision this agent before starting a session."})
 
     session_model = apps.get_model("agents", "AgentSession")
     workflow_model = apps.get_model("workflows", "Workflow")
     with system_context(reason="workflows_agents.session.start"), transaction.atomic():
         workflow = (
-            workflow_model.objects.filter(name=SESSION_WORKFLOW_NAME, published_from__isnull=True)
+            workflow_model.objects.current_published()
+            .filter(steps__is_entry=True, steps__step_class="agent_session")
             .order_by("pk")
             .first()
         )
@@ -60,10 +58,10 @@ def post_message(session: Any, text: str) -> Any:
     turn_model = apps.get_model("agents", "AgentTurn")
     with system_context(reason="workflows_agents.session.post"), transaction.atomic():
         locked = session_model.objects.lock_if_supported().get(pk=session.pk)
-        if str(locked.status) == "closed":
+        if locked.status == SessionStatus.CLOSED:
             raise ValidationError({"session": "This agent session is closed."})
         run = run_for(locked)
-        if run.step_runs.filter(decisions__verdict="pending").exists():
+        if run.awaiting_decision():
             raise ValidationError({"session": "Resolve the pending tool approval before sending another message."})
         next_index = int(locked.turns.aggregate(last=models.Max("index"))["last"] or 0) + 1
         turn = turn_model.objects.create(
@@ -82,27 +80,43 @@ def post_message(session: Any, text: str) -> Any:
 
 
 def close_session(session: Any) -> Any:
-    """Close a persisted session and wake its workflow step to finish."""
+    """Close a persisted session, expire approvals, and wake its workflow."""
 
     session_model = apps.get_model("agents", "AgentSession")
-    with system_context(reason="workflows_agents.session.close"), transaction.atomic():
-        locked = session_model.objects.lock_if_supported().get(pk=session.pk)
-        if str(locked.status) != "closed":
-            locked.close()
-        run_id = run_for(locked).pk
-    engine.deliver(run_id)
+    with system_context(reason="workflows_agents.session.close"):
+        run = run_for(session)
+        engine.expire_pending_decisions(run, resolved_by="workflows_agents/session_close")
+        with transaction.atomic():
+            locked = session_model.objects.lock_if_supported().get(pk=session.pk)
+            for turn in (
+                locked.turns.lock_if_supported()
+                .filter(status=TurnStatus.AWAITING_APPROVAL)
+                .order_by("index")
+            ):
+                turn.cancel()
+            if locked.status != SessionStatus.CLOSED:
+                locked.close()
+        engine.deliver(run.pk)
     return locked
+
+
+def close_agent_sessions(agent: Any) -> None:
+    """Close every open persisted session through the lifecycle service."""
+
+    session_model = apps.get_model("agents", "AgentSession")
+    with system_context(reason="workflows_agents.session.close_agent_sessions"):
+        sessions = list(
+            session_model.objects.filter(agent=agent).exclude(status=SessionStatus.CLOSED).order_by("pk")
+        )
+    for session in sessions:
+        close_session(session)
 
 
 def run_for(session: Any) -> Any:
     """Return the one workflow run whose generic subject is ``session``."""
 
     run_model = apps.get_model("workflows", "WorkflowRun")
-    content_type = ContentType.objects.get_for_model(session, for_concrete_model=False)
     try:
-        return run_model.objects.get(
-            subject_content_type=content_type,
-            subject_object_id=session.pk,
-        )
+        return run_model.objects.for_subject(session).get()
     except run_model.DoesNotExist as error:
         raise ValidationError({"session": "This agent session has no workflow run."}) from error

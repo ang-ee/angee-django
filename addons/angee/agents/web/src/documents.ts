@@ -178,7 +178,15 @@ export const LatestAgentSession = graphql(`
     ) {
       id
       status
-      context
+    }
+  }
+`);
+
+export const AgentSessionTurns = graphql(`
+  query AgentSessionTurns($sessionId: String!) {
+    agent_sessions(where: { id: { _eq: $sessionId } }, limit: 1) {
+      id
+      status
       last_error
       agent {
         model {
@@ -186,22 +194,13 @@ export const LatestAgentSession = graphql(`
         }
       }
     }
-  }
-`);
-
-export const AgentSessionTurns = graphql(`
-  query AgentSessionTurns($sessionId: String!) {
     agent_turns(
       where: { session: { _eq: $sessionId } }
       order_by: [{ index: asc }]
     ) {
       id
-      index
       prompt
-      status
       updates
-      text
-      error
     }
   }
 `);
@@ -210,9 +209,6 @@ export const StartAgentSession = graphql(`
   mutation StartAgentSession($agent: ID!, $context: JSON!) {
     start_agent_session(agent: $agent, context: $context) {
       id
-      status
-      context
-      last_error
     }
   }
 `);
@@ -221,18 +217,6 @@ export const PostAgentMessage = graphql(`
   mutation PostAgentMessage($session: ID!, $text: String!) {
     post_agent_message(session: $session, text: $text) {
       id
-      index
-      status
-      prompt
-    }
-  }
-`);
-
-export const CloseAgentSession = graphql(`
-  mutation CloseAgentSession($session: ID!) {
-    close_agent_session(session: $session) {
-      id
-      status
     }
   }
 `);

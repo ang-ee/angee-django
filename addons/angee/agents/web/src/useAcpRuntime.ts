@@ -6,7 +6,7 @@
 // re-minted and the socket reconnected when the token nears expiry.
 
 import * as React from "react";
-import { SimpleImageAttachmentAdapter, useExternalStoreRuntime, type AppendMessage, type CompleteAttachment, type ThreadMessageLike, } from "@assistant-ui/react";
+import { SimpleImageAttachmentAdapter, useExternalStoreRuntime, type AppendMessage, type CompleteAttachment, } from "@assistant-ui/react";
 import {
   ClientSideConnection, PROTOCOL_VERSION, type Agent, type AvailableCommand, type Client, type ContentBlock, type McpServer, type NewSessionResponse, type PromptCapabilities, type RequestPermissionRequest, type RequestPermissionResponse, type SessionConfigSelectGroup, type SessionConfigSelectOption, type SessionNotification, } from "@agentclientprotocol/sdk";
 import * as v from "valibot";
@@ -14,7 +14,7 @@ import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
 import { useLatestRef } from "@angee/ui";
 
 import { messageOf } from "./acp-error";
-import { foldIntoLog, type ChatMessage, type ChatPart } from "./acp-log";
+import { convertMessage, foldIntoLog, type ChatMessage, type ChatPart } from "./acp-log";
 import { emptySession, foldIntoSession, type AcpSession } from "./acp-session";
 import { openAcpTransport, type AcpTransport } from "./acp-transport";
 import { type DocumentType } from "@angee/gql/console";
@@ -52,6 +52,8 @@ export interface AcpRuntime {
   /** Whether the agent advertises `promptCapabilities.image` — gates the composer's image
    *  attachment controls (the paperclip + the attachment adapter). */
   imageSupported: boolean;
+  /** Whether toggling send-time record context is meaningful for this transport. */
+  recordAttachmentSupported: boolean;
   /** Whether the user's current view rides along as the leading context block on each send.
    *  Default true; clearing the view-record chip suppresses the context block. */
   recordAttached: boolean;
@@ -307,49 +309,12 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
     modelHandle,
     availableCommands: session.availableCommands,
     imageSupported,
+    recordAttachmentSupported: true,
     recordAttached,
     attachRecord,
     clearRecord,
     renderContext,
   };
-}
-
-/** Convert a stored chat message to the assistant-ui thread shape: each part maps to the
- *  matching assistant-ui content part. Tool input/status/result/isError ride the tool
- *  part's `args` bag (its typed JSON input slot), which the view's `ToolPart` reads. */
-function convertMessage(message: ChatMessage): ThreadMessageLike {
-  const content = message.parts.map((part) => {
-    switch (part.kind) {
-      case "text":
-        return { type: "text" as const, text: part.text };
-      case "reasoning":
-        return { type: "reasoning" as const, text: part.text };
-      case "image":
-        return { type: "image" as const, image: part.image, filename: part.filename };
-      case "tool":
-        return {
-          type: "tool-call" as const,
-          toolCallId: part.id,
-          toolName: part.toolName,
-          args: {
-            status: part.status,
-            input: part.input ?? null,
-            result: part.result ?? null,
-            isError: part.isError ?? false,
-          },
-          argsText: "",
-        };
-      default: {
-        // Exhaustive: a new ChatPart kind must add a case above, or this fails to compile.
-        const exhaustive: never = part;
-        return exhaustive;
-      }
-    }
-  });
-  // The parts map cleanly onto assistant-ui text/reasoning/tool-call content; cast at this
-  // boundary because the tool `args` bag carries `unknown` input/result that the JSON-typed
-  // content part can't infer.
-  return { id: message.id, role: message.role, content: content as ThreadMessageLike["content"] };
 }
 
 /** Build the ACP `Client` handler: stream updates, auto-approve permission prompts. */

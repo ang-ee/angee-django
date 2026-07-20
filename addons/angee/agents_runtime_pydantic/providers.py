@@ -17,7 +17,7 @@ def model_for_agent(agent: Any) -> Any:
     if model is None:
         raise ValueError("An in-process agent requires an inference model.")
     backend = model.provider.backend
-    credential = agent.resolved_inference_credential()
+    credential = agent.inference_credential_for_runtime()
     client = backend.async_client(credential=credential)
     handle = str(model.provider_model_name)
     if backend.key == "anthropic":

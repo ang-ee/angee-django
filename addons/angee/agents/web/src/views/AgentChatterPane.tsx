@@ -112,21 +112,27 @@ export function AgentChatterPane({
     <KeptAliveAgents
       openedIds={openedIds}
       selectedId={selectedId}
-      renderAgent={(id) => (
-        <LazyBoundary pending={<PaneMessage>{t("chat.resolving")}</PaneMessage>}>
-          <AgentChat
-            agentId={id}
-            view={liveView}
-            modelHandle={agents.find((agent) => agent.id === id)?.model?.name ?? resolved.model_handle}
-            runtimeClass={agents.find((agent) => agent.id === id)?.runtime_class ?? resolved.runtime_class}
-            sessionId={id === resolved.agent_id ? resolved.session_id ?? undefined : undefined}
-            agents={agents}
-            selectedAgentId={selectedId ?? undefined}
-            onSelectAgent={handleSelect}
-            fallbackName={resolved.agent_name}
-          />
-        </LazyBoundary>
-      )}
+      renderAgent={(id) => {
+        const rosterAgent = agents.find((agent) => agent.id === id);
+        const runtimeClass = rosterAgent?.runtime_class
+          ?? (id === resolved.agent_id ? resolved.runtime_class : undefined);
+        if (runtimeClass === undefined) return <PaneMessage>{t("chat.resolving")}</PaneMessage>;
+        return (
+          <LazyBoundary pending={<PaneMessage>{t("chat.resolving")}</PaneMessage>}>
+            <AgentChat
+              agentId={id}
+              view={liveView}
+              modelHandle={rosterAgent?.model?.name ?? resolved.model_handle}
+              runtimeClass={runtimeClass}
+              sessionId={id === resolved.agent_id ? resolved.session_id ?? undefined : undefined}
+              agents={agents}
+              selectedAgentId={selectedId ?? undefined}
+              onSelectAgent={handleSelect}
+              fallbackName={resolved.agent_name}
+            />
+          </LazyBoundary>
+        );
+      }}
     />
   );
 }

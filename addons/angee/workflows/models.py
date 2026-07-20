@@ -193,6 +193,26 @@ class WorkflowManager(AngeeManager.from_queryset(WorkflowQuerySet)):  # type: ig
         return latest
 
 
+class WorkflowRunQuerySet(AngeeQuerySet[Any]):
+    """QuerySet owning workflow-run subject lookups."""
+
+    def for_subject(self, subject: Any) -> Self:
+        """Return runs whose generic subject is ``subject``."""
+
+        content_type = ContentType.objects.get_for_model(subject, for_concrete_model=False)
+        return cast(
+            Self,
+            self.filter(
+                subject_content_type=content_type,
+                subject_object_id=subject.pk,
+            ),
+        )
+
+
+class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # type: ignore[misc]
+    """Manager owning workflow-run subject lookups."""
+
+
 class Workflow(AuditMixin, AngeeDataModel):
     """Editable workflow lineage head or immutable published workflow version."""
 
@@ -955,6 +975,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
     subject = GenericForeignKey("subject_content_type", "subject_object_id")
     dedup_key = models.CharField(max_length=255, unique=True, null=True, blank=True)
     wake_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    deliveries = models.PositiveBigIntegerField(default=0)
     steps_taken = models.PositiveIntegerField(default=0)
     budget_spent = models.JSONField(default=dict, blank=True)
     error = models.TextField(blank=True)
@@ -968,7 +989,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         },
     )
 
-    objects = AngeeManager()
+    objects = WorkflowRunManager()
 
     class Meta:
         """Django model options for workflow runs."""
@@ -991,6 +1012,11 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         """Return whether this run has reached a terminal status."""
 
         return self.status in RunStatus.TERMINAL
+
+    def awaiting_decision(self) -> bool:
+        """Return whether this run has an unresolved workflow decision."""
+
+        return self.step_runs.filter(decisions__verdict=Verdict.PENDING).exists()
 
     @transition(status, source=RunStatus.PENDING, target=RunStatus.RUNNING, on_success=save_state)
     def mark_running(self) -> None:
@@ -1107,6 +1133,7 @@ class StepRun(AuditMixin, AngeeDataModel):
     input = models.JSONField(default=dict, blank=True)
     output = models.JSONField(default=dict, blank=True)
     resume_state = models.JSONField(default=dict, blank=True)
+    claimed_deliveries = models.PositiveBigIntegerField(default=0)
     outcome = models.SlugField(max_length=100, blank=True, default="")
     attempt = models.PositiveIntegerField(default=0)
     wait_until = models.DateTimeField(null=True, blank=True, db_index=True)
@@ -1167,11 +1194,12 @@ class StepRun(AuditMixin, AngeeDataModel):
         target=StepRunStatus.STARTED,
         on_success=save_state,
     )
-    def mark_started(self, *, heartbeat_at: Any = None) -> None:
+    def mark_started(self, *, heartbeat_at: Any = None, claimed_deliveries: int = 0) -> None:
         """Claim this row for execution."""
 
         self.heartbeat_at = heartbeat_at
-        self._transition_fields = {"heartbeat_at"}
+        self.claimed_deliveries = claimed_deliveries
+        self._transition_fields = {"heartbeat_at", "claimed_deliveries"}
 
     def record_attempt(self, *, heartbeat_at: Any = None) -> None:
         """Record one implementation invocation for this started row."""
@@ -1271,6 +1299,7 @@ class StepRun(AuditMixin, AngeeDataModel):
         self.input = input if input is not None else {}
         self.output = {}
         self.resume_state = {}
+        self.claimed_deliveries = 0
         self.outcome = ""
         self.attempt = 0
         self.wait_until = None
@@ -1281,6 +1310,7 @@ class StepRun(AuditMixin, AngeeDataModel):
             "input",
             "output",
             "resume_state",
+            "claimed_deliveries",
             "outcome",
             "attempt",
             "wait_until",

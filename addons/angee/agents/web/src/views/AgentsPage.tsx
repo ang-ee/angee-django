@@ -71,7 +71,7 @@ function AgentChatPanel({ agentId }: { agentId: string }): React.ReactElement {
   const runtimeClass = stringField(record, "runtime_class");
   const running =
     agentRuntime(record) === "RUNNING" &&
-    (runtimeClass === "pydantic" || stringField(record, "service") !== "");
+    (runtimeClass === "PYDANTIC" || stringField(record, "service") !== "");
   if (!running) {
     return (
       <Card>

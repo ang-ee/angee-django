@@ -27,7 +27,7 @@ from strawberry.scalars import JSON
 from angee.agents import provisioning
 from angee.agents.autoconfig import SETTINGS as _AGENTS_SETTINGS
 from angee.agents.context import render_view_context
-from angee.agents.models import RuntimeStatus
+from angee.agents.models import RuntimeStatus, SessionStatus
 from angee.base.actors import actor_user_id
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
@@ -58,6 +58,8 @@ Skill = apps.get_model("agents", "Skill")
 MCPServer = apps.get_model("agents", "MCPServer")
 MCPTool = apps.get_model("agents", "MCPTool")
 Agent = apps.get_model("agents", "Agent")
+AgentRuntimeImpl = Agent._meta.get_field("runtime_class").choices_enum
+strawberry.enum(cast(Any, AgentRuntimeImpl))
 AgentSessionModel = apps.get_model("agents", "AgentSession")
 AgentTurn = apps.get_model("agents", "AgentTurn")
 Integration = apps.get_model("integrate", "Integration")
@@ -251,7 +253,7 @@ class AgentChatTarget:
     agent_name: str
     status: str
     model_handle: str
-    runtime_class: str
+    runtime_class: AgentRuntimeImpl  # type: ignore[valid-type]
     session_id: PublicID | None = None
 
 
@@ -676,7 +678,7 @@ class AgentSessionQuery:
         with system_context(reason="agents.graphql.session_for_view"):
             session = (
                 AgentSessionModel.objects.filter(agent=agent, owner_id=owner_id)
-                .exclude(status="closed")
+                .exclude(status=SessionStatus.CLOSED)
                 .order_by("-updated_at")
                 .first()
                 if agent.runtime_backend.runs_in_process
@@ -687,7 +689,7 @@ class AgentSessionQuery:
             agent_name=str(agent.name),
             status=str(agent.runtime_status),
             model_handle=str(agent.service_model_handle()) if model is not None else "",
-            runtime_class=str(agent.runtime_class),
+            runtime_class=agent.runtime_class,
             session_id=PublicID(str(session.sqid)) if session is not None else None,
         )
 

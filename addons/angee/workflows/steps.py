@@ -68,9 +68,9 @@ class StepResult:
 
     ``done(output, outcome)`` completes the step and routes by ``outcome``.
     ``wait(until=...)`` records a durable timer wake. External events use
-    :func:`angee.workflows.engine.deliver`, which wakes the waiting journal row
-    before normal engine advancement claims it. ``suspend()`` pauses the step
-    until an external resolution writes the next journal facts.
+    :func:`angee.workflows.engine.deliver`, whose run-scoped generation prevents
+    a delivery racing with this wait from being lost. ``suspend()`` pauses the
+    step until an external resolution writes the next journal facts.
     """
 
     kind: str

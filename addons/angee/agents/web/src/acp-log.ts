@@ -1,8 +1,8 @@
 // The pure ACP→transcript reducer: folds `session/update` notifications into an
-// immutable message log the chat runtime hands to assistant-ui. Kept free of React
-// and assistant-ui so the streaming/coalescing/tool-upsert rules are unit-testable on
-// their own (see `acp-log.test.ts`); `useAcpRuntime` owns the socket and the store.
+// immutable message log the chat runtime hands to assistant-ui. The conversion boundary
+// lives here too so both ACP transports share one exhaustive ChatPart mapping.
 
+import type { ThreadMessageLike } from "@assistant-ui/react";
 import type { SessionNotification, ToolCallStatus } from "@agentclientprotocol/sdk";
 
 /** One rendered part of a message, in arrival order: streamed assistant text, the agent's
@@ -40,10 +40,53 @@ export function foldIntoLog(log: ChatMessage[], note: SessionNotification): Chat
   const isAssistant = last !== undefined && last.role === "assistant";
   const base: ChatMessage = isAssistant
     ? last
-    : { id: `assistant-${log.length}`, role: "assistant", parts: [] };
+    : { id: assistantMessageId(log, note), role: "assistant", parts: [] };
   const next = applyUpdate(base, note);
   if (next === base) return log;
   return isAssistant ? [...log.slice(0, -1), next] : [...log, next];
+}
+
+/** Derive the assistant id from its turn's user id, keeping re-folds stable. */
+function assistantMessageId(log: ChatMessage[], note: SessionNotification): string {
+  for (let index = log.length - 1; index >= 0; index -= 1) {
+    const message = log[index];
+    if (message?.role === "user") {
+      return `assistant-${message.id.replace(/^user-/, "")}`;
+    }
+  }
+  return `assistant-${note.sessionId}`;
+}
+
+/** Convert one chat message into assistant-ui's thread shape. */
+export function convertMessage(message: ChatMessage): ThreadMessageLike {
+  const content = message.parts.map((part) => {
+    switch (part.kind) {
+      case "text":
+        return { type: "text" as const, text: part.text };
+      case "reasoning":
+        return { type: "reasoning" as const, text: part.text };
+      case "image":
+        return { type: "image" as const, image: part.image, filename: part.filename };
+      case "tool":
+        return {
+          type: "tool-call" as const,
+          toolCallId: part.id,
+          toolName: part.toolName,
+          args: {
+            status: part.status,
+            input: part.input ?? null,
+            result: part.result ?? null,
+            isError: part.isError ?? false,
+          },
+          argsText: "",
+        };
+      default: {
+        const exhaustive: never = part;
+        return exhaustive;
+      }
+    }
+  });
+  return { id: message.id, role: message.role, content: content as ThreadMessageLike["content"] };
 }
 
 /**

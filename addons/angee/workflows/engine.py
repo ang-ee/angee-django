@@ -126,8 +126,10 @@ def start(
 def deliver(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
     """Deliver an external event by waking this run's parked journal rows.
 
-    This is the workflow engine's event-delivery seam. It writes only durable
-    due times under the same short row lock as :func:`advance`; the existing
+    This is the workflow engine's event-delivery seam. Every delivery advances
+    the run-scoped generation under the same short row lock as :func:`advance`,
+    even when no row is waiting. A step that parks after observing an older
+    generation is made immediately due by :func:`execute`; the existing
     advance/execute tasks still own claiming and running implementations.
     """
 
@@ -137,6 +139,8 @@ def deliver(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
     woken = 0
     with system_context(reason="workflows.engine.deliver"), transaction.atomic():
         run = run_model.objects.lock_if_supported().get(pk=run_id)
+        run.deliveries += 1
+        run.save(update_fields=["deliveries", "updated_at"])
         if run.status in RunStatus.TERMINAL:
             return {"woken": 0}
         waiting = list(
@@ -211,11 +215,11 @@ def execute(step_run_id: int, *, now: datetime | None = None) -> dict[str, int]:
         stack = traceback.format_exc()
 
     wait_until: datetime | None = None
-    run_id: int | None = None
+    run_id: int | None = step_run.run_id
     with system_context(reason="workflows.engine.execute.persist"), transaction.atomic():
-        locked = step_run_model.objects.lock_if_supported().select_related("run").get(pk=step_run_id)
-        run_id = locked.run_id
-        if locked.status != StepRunStatus.STARTED or locked.run.status in RunStatus.TERMINAL:
+        locked_run = _model("WorkflowRun").objects.lock_if_supported().get(pk=run_id)
+        locked = step_run_model.objects.lock_if_supported().get(pk=step_run_id)
+        if locked.status != StepRunStatus.STARTED or locked_run.status in RunStatus.TERMINAL:
             return {"executed": 0}
         if error:
             locked.mark_failed(error=error, stacktrace=stack)
@@ -224,8 +228,8 @@ def execute(step_run_id: int, *, now: datetime | None = None) -> dict[str, int]:
         elif result.kind == "done":
             locked.mark_succeeded(output=result.output, outcome=result.outcome)
         elif result.kind == "wait":
-            locked.mark_waiting(until=result.until, resume_state=result.resume_state)
-            wait_until = result.until
+            wait_until = timezone.now() if locked_run.deliveries > locked.claimed_deliveries else result.until
+            locked.mark_waiting(until=wait_until, resume_state=result.resume_state)
         elif result.kind == "suspend":
             _suspend_step_run(locked, result)
         else:
@@ -269,6 +273,23 @@ def cancel(run: Any) -> None:
 
     for child_id in child_ids:
         cancel(child_id)
+
+
+def expire_pending_decisions(run: Any, *, resolved_by: str) -> int:
+    """Expire every pending decision for ``run`` through the engine owner."""
+
+    run_model = _model("WorkflowRun")
+    step_run_model = _model("StepRun")
+    run_id = run.pk if hasattr(run, "pk") else int(run)
+    expired = 0
+    with system_context(reason="workflows.engine.expire_pending_decisions"), transaction.atomic():
+        locked_run = run_model.objects.lock_if_supported().get(pk=run_id)
+        step_runs = step_run_model.objects.lock_if_supported().filter(run=locked_run).order_by("pk")
+        for step_run in step_runs:
+            before = step_run.decisions.filter(verdict=VERDICT_PENDING).count()
+            _expire_pending_decisions(step_run, resolved_by=resolved_by)
+            expired += before
+    return expired
 
 
 def sweep(*, now: datetime | None = None) -> dict[str, int]:
@@ -842,6 +863,9 @@ def _apply_decision_policy(step_run: Any) -> None:
 
     if step_run.status != StepRunStatus.WAITING:
         return
+    # Decision policy is scoped to this suspension's ``_decision_ids``. Keep both
+    # the legacy mark-succeeded path and resume-after-decisions path covered when
+    # changing this shared surface (regression tests follow in the next phase).
     decision_ids = step_run.resume_state.get("_decision_ids")
     queryset = step_run.decisions
     if isinstance(decision_ids, list):
@@ -950,7 +974,7 @@ def _escalation_subjects(decision: Any) -> tuple[str, ...]:
 
 
 def _expire_pending_decisions(step_run: Any, *, resolved_by: str) -> None:
-    """Expire pending decisions attached to a canceled waiting step-run."""
+    """Expire pending decisions attached to one step-run."""
 
     decision_model = _model("Decision")
     pending = decision_model.objects.lock_if_supported().filter(step_run=step_run, verdict=VERDICT_PENDING)
@@ -1014,7 +1038,7 @@ def _expand_map_step(run: Any, step_run: Any, *, timestamp: datetime) -> None:
         target = MapStep.target_step(step_run)
         items = MapStep.items(step_run)
     except ValidationError as error:
-        step_run.mark_started(heartbeat_at=timestamp)
+        step_run.mark_started(heartbeat_at=timestamp, claimed_deliveries=run.deliveries)
         output = {"error": str(error), "total": 0, "successes": 0, "failures": 0}
         step_run.mark_succeeded(output=output, outcome="failed")
         run.steps_taken += 1
@@ -1027,7 +1051,7 @@ def _expand_map_step(run: Any, step_run: Any, *, timestamp: datetime) -> None:
         "target_step_id": target.pk,
         "items": items,
     }
-    step_run.mark_started(heartbeat_at=timestamp)
+    step_run.mark_started(heartbeat_at=timestamp, claimed_deliveries=run.deliveries)
     step_run.resume_state = state
     step_run.save(update_fields=["resume_state", "updated_at"])
     run.steps_taken += 1
@@ -1253,7 +1277,7 @@ def _claim_due_steps(run: Any, *, timestamp: datetime) -> list[int]:
 
     claimed: list[int] = []
     for step_run in due:
-        step_run.mark_started(heartbeat_at=timestamp)
+        step_run.mark_started(heartbeat_at=timestamp, claimed_deliveries=run.deliveries)
         claimed.append(step_run.pk)
     run.steps_taken += len(claimed)
     run.save(update_fields=["steps_taken", "updated_at"])

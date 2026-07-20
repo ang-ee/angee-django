@@ -35,5 +35,8 @@ SETTINGS = {
     # daemon caps it at 24h). The TTL policy lives here, not as a literal in the
     # resolver; mirrors ``ANGEE_OPERATOR_TOKEN_TTL`` for the GraphQL token.
     "ANGEE_AGENT_CHAT_TOKEN_TTL": "2h",
+    # Agent lifecycle teardown is extended by composition addons through explicit
+    # operation hooks, keeping this catalogue independent of workflow services.
+    "ANGEE_AGENT_TEARDOWN_HOOKS": [],
 }
 """Django settings contributed when the agents addon is installed."""
