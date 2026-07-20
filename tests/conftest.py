@@ -56,6 +56,8 @@ from angee.storage.models import FileAttachment as AbstractFileAttachment
 from angee.storage.models import Folder as AbstractFolder
 from angee.storage.models import MimeType as AbstractMimeType
 from angee.storage.models import StorageRole as AbstractStorageRole
+from angee.storage_integrate.models import Mount as AbstractMount
+from angee.storage_integrate.models import MountMode
 
 
 class OAuthClient(AbstractOAuthClient, AbstractOAuthClientOidc):
@@ -211,6 +213,25 @@ class VcsBridge(Integration, AbstractVcsBridge):
         rebac_id_attr = "sqid"
 
 
+class Mount(Integration, AbstractMount):
+    """Concrete storage Mount used by source-addon tests.
+
+    Like :class:`VcsBridge`, the concrete child must be registered before the
+    addon's schema module binds ``apps.get_model`` at import time.  Its REBAC
+    type follows the emitted runtime model so the ``integration_ptr`` relation
+    in ``storage_integrate/permissions.zed`` resolves through the parent row.
+    """
+
+    class Meta(AbstractMount.Meta):
+        """Django model options for the canonical test Mount."""
+
+        abstract = False
+        app_label = "storage_integrate"
+        db_table = "test_storage_integrate_mount"
+        rebac_resource_type = "storage_integrate/mount"
+        rebac_id_attr = "sqid"
+
+
 class Repository(AbstractRepository):
     """Concrete repository used by source-addon tests."""
 
@@ -254,6 +275,9 @@ class Template(AbstractTemplate):
 
 VCS_TEST_MODELS = (VcsBridge, Repository, Source, Template)
 """Concrete VCS inventory models created on demand by VCS test fixtures."""
+
+STORAGE_INTEGRATE_TEST_MODELS = (Mount,)
+"""Concrete Mount model created on demand by storage-integrate tests."""
 
 
 def make_integration(
@@ -521,6 +545,33 @@ class StorageRole(AbstractStorageRole):
 
 STORAGE_TEST_MODELS = (Backend, Drive, Folder, MimeType, File, FileAttachment)
 """Concrete storage models created on demand by storage test fixtures."""
+
+
+def make_mount(
+    slug: str,
+    *,
+    drive: Any,
+    root: Path,
+    mode: MountMode | str = MountMode.REFERENCE,
+    config: dict[str, Any] | None = None,
+    **attrs: Any,
+) -> Mount:
+    """Create a connected local-folder Mount child for source-addon tests."""
+
+    mount_config = {"root": str(root), **dict(config or {})}
+    return cast(
+        Mount,
+        make_integration(
+            slug,
+            backend_class="local_folder",
+            model=Mount,
+            drive=drive,
+            mode=mode,
+            config=mount_config,
+            display_name=attrs.pop("display_name", slug.replace("-", " ").title()),
+            **attrs,
+        ),
+    )
 
 
 class Addon(AbstractAddon, AbstractCatalogProvenance):

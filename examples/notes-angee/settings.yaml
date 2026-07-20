@@ -29,6 +29,7 @@ INSTALLED_APPS:
   - angee.platform
   - angee.platform_integrate_vcs
   - angee.storage
+  - angee.storage_integrate
   - example.notes
 
 ANGEE_ADDON_DIRS:

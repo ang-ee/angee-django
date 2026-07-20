@@ -22,6 +22,7 @@ INSTALLED_APPS = [
     "angee.knowledge",
     "angee.mcp",
     "angee.storage",
+    "angee.storage_integrate",
     "angee.parties",
     "angee.money",
     "angee.scheduling",
@@ -73,7 +74,13 @@ ANGEE_STORAGE_TRASH_TTL_DAYS = 30
 # Bare test settings do not run the composer, so the ImplClassField registries
 # (normally supplied by each addon's autoconfig) are declared explicitly here;
 # the enum field requires each to be non-empty at model-import time.
-ANGEE_STORAGE_BACKEND_CLASSES = {"local": "angee.storage.backends.LocalBackend"}
+ANGEE_STORAGE_BACKEND_CLASSES = {
+    "local": "angee.storage.backends.LocalBackend",
+    "local_folder": "angee.storage_integrate.backends.LocalFolderBackend",
+}
+ANGEE_STORAGE_MOUNT_BACKEND_CLASSES = {
+    "local_folder": "angee.storage_integrate.mounts.LocalFolderMountBackend",
+}
 ANGEE_INTEGRATION_IMPLS = {
     "none": "angee.integrate.impl.NullIntegrationImpl",
 }
