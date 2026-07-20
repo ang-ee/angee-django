@@ -293,9 +293,11 @@ TanStack apply the URL-owned filter object to in-memory rows.
   row models through `useClientResourceViewSurface` over the fetched set for a
   `rowModel:"client"` resource; `RowsListView` remains the
   renderer for the genuinely non-resource in-memory case — the operator-daemon
-  quarantine, and an explorer-scoped collection that is not a Hasura resource
-  (storage's folder-scoped `FileBrowserContent`, which lists a drive's
-  content-addressed files rather than a model resource).
+  quarantine, and an explorer-scoped collection that is not a Hasura resource.
+  Storage's `FileBrowserContent` is the contrasting server-backed example: it
+  composes `List` over `storage.File` with drive/folder base filters and
+  server-side folder grouping because a drive can contain hundreds of thousands
+  of rows.
 - A recipe's icon-button size keys are `iconSm`/`iconMd`/`iconLg` (one spelling
   across recipes). A default `size` is a visual contract — do not flip it without a
   requester (differing defaults like `Switch`/`ToggleGroup` `sm` vs `Toggle` `md`

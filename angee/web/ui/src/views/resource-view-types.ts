@@ -20,7 +20,10 @@ import type {
   ResourceToolbarFilterOption,
   ResourceToolbarGroupOption,
 } from "../toolbars";
-import type { ResourceListSnapshot } from "./resource-view-surface";
+import type {
+  ListViewNavigationScope,
+  ResourceListSnapshot,
+} from "./resource-view-surface";
 import type { ColumnDescriptor, FacetDescriptor } from "./page";
 import type { Occurrence } from "./CalendarView";
 import type { AnyCalendarWindowSource } from "./use-calendar-window";
@@ -114,6 +117,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   onRowClick?: (row: TRow) => void;
   /** Called whenever the loaded list state changes. */
   onListStateChange?: (state: ResourceListSnapshot<TRow>) => void;
+  /** Replay a prior list snapshot while its record surface is open. */
+  navigationScope?: ListViewNavigationScope;
   /** Optional href for a row, used when rows should render as links. */
   rowHref?: (row: TRow) => string;
   /** Native cross-pane drag payload for each record row, including grouped rows. */
@@ -121,6 +126,11 @@ export interface ListViewProps<TRow extends Row = Row> {
   /** Controls rendered in the toolbar's leading slot, beside the filter — e.g. a
    * "Connect" button for a list whose rows come from a connect flow. */
   toolbarActions?: ReactNode;
+  /** Domain bulk actions rendered for the selected ids instead of generic delete. */
+  bulkActions?: (
+    selectedIds: ReadonlySet<string>,
+    clear: () => void,
+  ) => ReactNode;
   /** Optional action content rendered in each board card footer. */
   cardActions?: (row: TRow, context: CardActionContext) => ReactNode;
   /** Optional board card body override — a rich card (description, chips, badges)

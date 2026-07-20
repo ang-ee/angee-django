@@ -8,15 +8,76 @@ import {
   ShellPageTestProviders,
 } from "@angee/app/testing";
 
+// A reactive stand-in for the router's search store: `useSearch` reads it and a
+// functional `navigate({ search })` writes it, so the URL-owned folder scope
+// round-trips exactly as it does in the app.
+const routerState = vi.hoisted(() => {
+  let search: Record<string, unknown> = {};
+  const listeners = new Set<() => void>();
+  return {
+    getSearch: (): Record<string, unknown> => search,
+    setSearch: (next: Record<string, unknown>): void => {
+      search = next;
+      for (const listener of listeners) listener();
+    },
+    subscribe: (listener: () => void): (() => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    reset: (): void => {
+      search = {};
+    },
+  };
+});
+
 const routerMocks = vi.hoisted(() => ({
-  navigate: vi.fn(), params: {} as Record<string, string>, }));
+  navigate: vi.fn(
+    (options?: {
+      search?: (current: Record<string, unknown>) => Record<string, unknown>;
+    }) => {
+      if (options && typeof options.search === "function") {
+        routerState.setSearch(options.search(routerState.getSearch()));
+      }
+    },
+  ),
+  params: {} as Record<string, string>,
+}));
 
 const sdkMocks = vi.hoisted(() => ({
+  folderDrives: [] as string[],
   useAuthoredQuery: vi.fn(), useBreadcrumbLeafLabel: vi.fn(), refetch: {
-    backends: vi.fn(async () => undefined), drives: vi.fn(async () => undefined), files: vi.fn(async () => undefined), folders: vi.fn(async () => undefined), }, }));
+    backends: vi.fn(async () => undefined), drives: vi.fn(async () => undefined), file: vi.fn(async () => undefined), folders: vi.fn(async () => undefined), }, }));
 
-vi.mock("@tanstack/react-router", () => ({
-  useNavigate: () => routerMocks.navigate, useParams: () => routerMocks.params, }));
+vi.mock("@tanstack/react-router", async () => {
+  const { useSyncExternalStore } = await import("react");
+  const useSearchStore = (): Record<string, unknown> =>
+    useSyncExternalStore(
+      routerState.subscribe,
+      routerState.getSearch,
+      routerState.getSearch,
+    );
+  return {
+    useNavigate: () => routerMocks.navigate,
+    useParams: () => routerMocks.params,
+    useSearch: () => useSearchStore(),
+    useRouterState: ({
+      select,
+    }: {
+      select: (state: { location: { searchStr: string } }) => unknown;
+    }) => {
+      const current = useSearchStore();
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(current)) {
+        if (value == null || value === "") continue;
+        params.set(key, String(value));
+      }
+      const query = params.toString();
+      return select({ location: { searchStr: query ? `?${query}` : "" } });
+    },
+  };
+});
 
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
@@ -127,21 +188,60 @@ vi.mock("../data/use-upload", () => ({
   useStorageUpload: () => ({
     clearFinished: vi.fn(), tasks: [], upload: vi.fn(), }), }));
 
-vi.mock("./FileBrowserContent", () => ({
+vi.mock("./FileBrowserContent", async () => {
+  const React = await import("react");
+  return {
   FileBrowserContent: ({
-    rows, uploadTarget, canUpload, }: {
-    rows: readonly { id: string }[];
+    baseFilter, defaultGroup, hidden, onListStateChange, uploadTarget, canUpload, }: {
+    baseFilter: Record<string, { exact: unknown }>;
+    defaultGroup: { field: string } | null;
+    hidden?: boolean;
+    onListStateChange: (state: Record<string, unknown>) => void;
     uploadTarget: { driveId: string; folderId: string | null };
     canUpload: boolean;
-  }) => (
+  }) => {
+    const rows = storageData.files
+      .filter((row) => row.drive === baseFilter.drive?.exact)
+      .filter((row) => row.is_trashed === baseFilter.is_trashed?.exact)
+      .filter((row) =>
+        baseFilter.folder ? row.folder === baseFilter.folder.exact : true,
+      )
+      .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+    const rowsKey = rows.map((row) => row.id).join(",");
+    const filterKey = JSON.stringify(baseFilter);
+    React.useEffect(() => {
+      onListStateChange({
+        rows,
+        total: rows.length,
+        page: 1,
+        pageSize: 50,
+        pageCount: 1,
+        hasNext: false,
+        hasPrev: false,
+        fetching: false,
+        navigationScope: {
+          filter: baseFilter,
+          order: { updated_at: "DESC" },
+          page: 1,
+          pageSize: 50,
+        },
+      });
+    }, [filterKey, onListStateChange, rowsKey]);
+    return (
     <section
       data-testid="file-list"
+      data-hidden={String(Boolean(hidden))}
       data-row-ids={rows.map((row) => row.id).join(", ")}
+      data-group={defaultGroup?.field ?? ""}
+      data-filter={JSON.stringify(baseFilter)}
       data-upload-drive={uploadTarget.driveId}
       data-upload-folder={uploadTarget.folderId ?? ""}
       data-can-upload={String(canUpload)}
     />
-  ), }));
+    );
+  },
+  };
+});
 
 vi.mock("./FileDetail", () => ({
   // The detail is now the file's metadata form only — published into the
@@ -161,7 +261,7 @@ vi.mock("./SelectedFolderControl", () => ({
 import {
   StorageBackends,
   StorageDrives,
-  StorageFiles,
+  StorageFileById,
   StorageFolders,
 } from "../data/documents";
 import { StoragePage } from "./StoragePage";
@@ -181,20 +281,29 @@ let storageData = makeStorageData();
 beforeEach(() => {
   storageData = makeStorageData();
   routerMocks.params = {};
+  routerState.reset();
   routerMocks.navigate.mockClear();
+  sdkMocks.folderDrives.length = 0;
   sdkMocks.useBreadcrumbLeafLabel.mockClear();
   for (const refetch of Object.values(sdkMocks.refetch)) {
     refetch.mockClear();
   }
-  sdkMocks.useAuthoredQuery.mockImplementation((document) => {
+  sdkMocks.useAuthoredQuery.mockImplementation((document, variables) => {
     if (document === StorageDrives) {
       return queryResult("drives", { drives: storageData.drives });
     }
     if (document === StorageFolders) {
-      return queryResult("folders", { folders: storageData.folders });
+      const drive = String((variables as { drive?: string })?.drive ?? "");
+      sdkMocks.folderDrives.push(drive);
+      return queryResult("folders", {
+        folders: storageData.folders.filter((row) => row.drive === drive),
+      });
     }
-    if (document === StorageFiles) {
-      return queryResult("files", { files: storageData.files });
+    if (document === StorageFileById) {
+      const id = String((variables as { id?: string })?.id ?? "");
+      return queryResult("file", {
+        files_by_pk: storageData.files.find((row) => row.id === id) ?? null,
+      });
     }
     if (document === StorageBackends) {
       return queryResult("backends", { backends: storageData.backends });
@@ -223,12 +332,13 @@ describe("StoragePage explorer wiring", () => {
     );
     expect(screen.getByTestId("preview-pane").textContent).toBe("beta.txt");
     expect(sdkMocks.useBreadcrumbLeafLabel).toHaveBeenLastCalledWith("beta.txt");
+    expect(sdkMocks.folderDrives.at(-1)).toBe("drive-b");
   });
 
-  test("detail navigation follows the active file scope", () => {
+  test("detail navigation follows the List snapshot", () => {
+    const view = render(pageTree());
     routerMocks.params = { id: "file-a" };
-
-    render(pageTree());
+    view.rerender(pageTree());
 
     expect(pagerText()).toBe("1 / 2");
     expect(pagerPrev().disabled).toBe(true);
@@ -238,13 +348,14 @@ describe("StoragePage explorer wiring", () => {
 
     expect(routerMocks.navigate).toHaveBeenLastCalledWith({
       to: "/storage/file-a-folder",
+      search: expect.any(Function),
     });
   });
 
-  test("detail navigation steps back and stops at the last file", () => {
+  test("detail navigation steps back and stops at the snapshot edge", () => {
+    const view = render(pageTree());
     routerMocks.params = { id: "file-a-folder" };
-
-    render(pageTree());
+    view.rerender(pageTree());
 
     expect(pagerText()).toBe("2 / 2");
     // The last file in the scope has no next step.
@@ -254,49 +365,105 @@ describe("StoragePage explorer wiring", () => {
 
     expect(routerMocks.navigate).toHaveBeenLastCalledWith({
       to: "/storage/file-a",
+      search: expect.any(Function),
     });
-  });
-
-  test("detail navigation degrades when the open file is out of scope", () => {
-    // A trashed file isn't in the default (All files) scope, so it has no
-    // position in the pager — only the scope total, with paging disabled.
-    storageData = {
-      ...storageData,
-      files: [
-        ...storageData.files,
-        {
-          ...file("file-b-trashed", "old.txt", "drive-b", null, "2025-01-04T00:00:00Z"),
-          is_trashed: true,
-        },
-      ],
-    };
-    routerMocks.params = { id: "file-b-trashed" };
-
-    render(pageTree());
-
-    expect(pagerText()).toBe("/ 1");
-    expect(pagerPrev().disabled).toBe(true);
-    expect(pagerNext().disabled).toBe(true);
   });
 
   test("switching drives resets the folder scope and closes the detail route", () => {
     render(pageTree());
 
     expect(screen.queryByTestId("preview-pane")).toBeNull();
+    expect(fileListAttribute("data-group")).toBe("folder");
+    expect(fileListFilter()).toEqual({
+      drive: { exact: "drive-a" },
+      is_trashed: { exact: false },
+    });
 
     fireEvent.click(screen.getByTestId("tree-row-folder-a"));
 
     expect(treeAttribute("data-selected")).toBe("folder-a");
     expect(fileListAttribute("data-row-ids")).toBe("file-a-folder");
+    expect(fileListAttribute("data-group")).toBe("");
+    expect(fileListFilter()).toEqual({
+      drive: { exact: "drive-a" },
+      is_trashed: { exact: false },
+      folder: { exact: "folder-a" },
+    });
 
     fireEvent.change(screen.getByLabelText("Drive"), {
       target: { value: "drive-b" },
     });
 
-    expect(routerMocks.navigate).toHaveBeenLastCalledWith({ to: "/storage" });
+    expect(routerMocks.navigate).toHaveBeenLastCalledWith({
+      to: "/storage",
+      search: expect.any(Function),
+    });
+    const driveNavigation = routerMocks.navigate.mock.calls.at(-1)?.[0] as {
+      search: (current: Record<string, unknown>) => Record<string, unknown>;
+    };
+    expect(
+      driveNavigation.search({ group: "folder~folder~folder_id" }),
+    ).toEqual({ group: "folder~folder~folder_id" });
     expect(rootPickerValue()).toBe("drive-b");
     expect(treeAttribute("data-selected")).toBe("__all__");
     expect(fileListAttribute("data-row-ids")).toBe("file-b");
+    expect(fileListAttribute("data-group")).toBe("folder");
+    expect(fileListFilter()).toEqual({
+      drive: { exact: "drive-b" },
+      is_trashed: { exact: false },
+    });
+    expect(sdkMocks.folderDrives.at(-1)).toBe("drive-b");
+
+    fireEvent.click(screen.getByTestId("tree-row-__trash__"));
+
+    expect(fileListAttribute("data-group")).toBe("");
+    expect(fileListAttribute("data-can-upload")).toBe("false");
+    expect(fileListFilter()).toEqual({
+      drive: { exact: "drive-b" },
+      is_trashed: { exact: true },
+    });
+  });
+
+  test("selects the folder scope from the `?folder=` URL param on load", () => {
+    routerState.setSearch({ folder: "folder-a" });
+
+    render(pageTree());
+
+    expect(treeAttribute("data-selected")).toBe("folder-a");
+    expect(fileListAttribute("data-row-ids")).toBe("file-a-folder");
+    expect(fileListAttribute("data-group")).toBe("");
+    expect(fileListFilter()).toEqual({
+      drive: { exact: "drive-a" },
+      is_trashed: { exact: false },
+      folder: { exact: "folder-a" },
+    });
+  });
+
+  test("selects the Trash scope from the `?folder=trash` sentinel, keeping group", () => {
+    routerState.setSearch({ folder: "trash", group: "folder~folder~folder_id" });
+
+    render(pageTree());
+
+    expect(treeAttribute("data-selected")).toBe("__trash__");
+    expect(fileListFilter()).toEqual({
+      drive: { exact: "drive-a" },
+      is_trashed: { exact: true },
+    });
+
+    // Selecting All files drops the `folder` param while leaving `group` intact.
+    fireEvent.click(screen.getByTestId("tree-row-__all__"));
+
+    expect(routerMocks.navigate).toHaveBeenLastCalledWith({
+      to: "/storage",
+      search: expect.any(Function),
+    });
+    const allNavigation = routerMocks.navigate.mock.calls.at(-1)?.[0] as {
+      search: (current: Record<string, unknown>) => Record<string, unknown>;
+    };
+    expect(
+      allNavigation.search({ folder: "trash", group: "folder~folder~folder_id" }),
+    ).toEqual({ group: "folder~folder~folder_id" });
+    expect(treeAttribute("data-selected")).toBe("__all__");
   });
 
   test("selects an inline-created drive after the refetched options include it", () => {
@@ -338,6 +505,13 @@ function treeAttribute(name: string): string | null {
 
 function fileListAttribute(name: string): string | null {
   return screen.getByTestId("file-list").getAttribute(name);
+}
+
+function fileListFilter(): Record<string, unknown> {
+  return JSON.parse(fileListAttribute("data-filter") ?? "{}") as Record<
+    string,
+    unknown
+  >;
 }
 
 // The record pager rides the shell control band beside the open file's preview.
@@ -405,7 +579,6 @@ function folder(id: string, name: string, drive: string) {
     name,
     description: "",
     is_virtual: false,
-    smart_kind: null,
     drive,
     parent: null,
   };

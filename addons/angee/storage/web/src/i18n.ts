@@ -97,6 +97,7 @@ export const enStorageMessages: Record<string, string> = {
   "column.type": "Type",
   "column.stage": "Stage",
   "column.size": "Size",
+  "column.count": "Files",
   "column.owner": "Owner",
   "column.modified": "Modified",
 

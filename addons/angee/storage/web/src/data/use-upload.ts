@@ -1,4 +1,6 @@
 import { useAuthoredMutation } from "@angee/refine";
+import { refineResourceName, useModelMetadata } from "@angee/metadata";
+import { useInvalidate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
 import { errorMessage } from "@angee/ui";
@@ -7,6 +9,7 @@ import { useStorageT } from "../i18n";
 import { StorageFileUploadBegin, StorageFileUploadFinalize } from "./documents";
 
 const DEFAULT_MIME = "application/octet-stream";
+const FILE_MODEL = "storage.File";
 
 /**
  * Lowercase SHA-256 hex of a file's bytes — the content address the begin step
@@ -61,8 +64,8 @@ export interface UploadedFile {
 /**
  * The upload protocol as a hook: per file, SHA-256 → `file_upload_begin` →
  * (proxy) `PUT` the bytes → `file_upload_finalize`, with a dedup short-circuit.
- * Each file is a `task` whose status drives the UI; `onUploaded` fires once the
- * batch settles so the caller can refetch.
+ * Each file is a `task` whose status drives the UI; the File resource invalidates
+ * once the batch settles, then `onUploaded` fires.
  */
 export function useStorageUpload(
   options: { onUploaded?: (files: readonly UploadedFile[]) => void } = {},
@@ -71,6 +74,8 @@ export function useStorageUpload(
   const t = useStorageT();
   const [beginUpload] = useAuthoredMutation(StorageFileUploadBegin);
   const [finalizeUpload] = useAuthoredMutation(StorageFileUploadFinalize);
+  const fileResource = useModelMetadata(FILE_MODEL)?.resource ?? null;
+  const invalidate = useInvalidate();
   const [tasks, setTasks] = useState<readonly UploadTask[]>([]);
 
   const patch = useCallback((id: string, next: Partial<UploadTask>) => {
@@ -163,14 +168,21 @@ export function useStorageUpload(
       setTasks((current) => [...current, ...started.map((entry) => entry.task)]);
       void Promise.allSettled(
         started.map((entry) => runOne(entry.task.id, entry.file, target)),
-      ).then((results) => {
+      ).then(async (results) => {
         const uploaded = results
           .map((result) => (result.status === "fulfilled" ? result.value : null))
           .filter((file): file is UploadedFile => file !== null);
+        if (uploaded.length > 0 && fileResource) {
+          await invalidate({
+            resource: refineResourceName(fileResource),
+            dataProviderName: fileResource.schemaName,
+            invalidates: ["list", "many", "detail"],
+          });
+        }
         onUploaded?.(uploaded);
       });
     },
-    [onUploaded, runOne],
+    [fileResource, invalidate, onUploaded, runOne],
   );
 
   const clearFinished = useCallback(() => {

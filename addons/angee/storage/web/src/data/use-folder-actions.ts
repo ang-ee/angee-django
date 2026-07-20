@@ -11,6 +11,7 @@ import { useBusyRun } from "@angee/ui";
 import {
   useModelMetadata,
 } from "@angee/metadata";
+import type { DataResourceMetadata } from "@angee/metadata";
 
 export interface FolderActions {
   busy: boolean;
@@ -37,6 +38,7 @@ export function useFolderActions(
   const { onChanged } = options;
   const metadata = useModelMetadata(FOLDER_MODEL);
   const resource = metadata?.resource ?? null;
+  const fileResource = useModelMetadata(FILE_MODEL)?.resource ?? null;
   const operationDocuments = useOperationDocuments();
   const resourceName = resource ? refineResourceName(resource) : "";
   const fields = refineFieldsFromPaths(["name"]);
@@ -79,6 +81,7 @@ export function useFolderActions(
       run(async () => {
         requireFolderResource(resource);
         await updateFolder.mutateAsync({ id, values: { name } });
+        await invalidateFiles(invalidate, fileResource);
       }),
     remove: (id) =>
       run(async () => {
@@ -90,11 +93,13 @@ export function useFolderActions(
           id,
           invalidates: ["list", "many", "detail"],
         });
+        await invalidateFiles(invalidate, fileResource);
       }),
   };
 }
 
 const FOLDER_MODEL = "storage.Folder";
+const FILE_MODEL = "storage.File";
 
 type RowRecord = BaseRecord & Row;
 
@@ -104,4 +109,18 @@ function requireFolderResource(
   if (!resource) {
     throw new Error(`Resource metadata for "${FOLDER_MODEL}" is not available.`);
   }
+}
+
+async function invalidateFiles(
+  invalidate: ReturnType<typeof useInvalidate>,
+  resource: DataResourceMetadata | null,
+): Promise<void> {
+  if (!resource) {
+    throw new Error(`Resource metadata for "${FILE_MODEL}" is not available.`);
+  }
+  await invalidate({
+    resource: refineResourceName(resource),
+    dataProviderName: resource.schemaName,
+    invalidates: ["list", "many", "detail"],
+  });
 }

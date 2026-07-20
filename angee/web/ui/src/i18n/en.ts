@@ -90,6 +90,7 @@ export const enUiMessages: Record<string, string> = {
   "list.empty": "No records.",
   "list.allRecords": "All records",
   "list.emptyValue": "No value",
+  "list.emptyRelation": "No {relation}",
   "list.unknownValue": "Unknown",
   "list.emptyGroup": "No records in this group.",
   "list.emptySubgroups": "No sub-groups.",

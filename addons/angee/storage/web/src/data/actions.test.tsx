@@ -179,6 +179,24 @@ describe("storage file/folder actions", () => {
     expect(deleteFolder?.calls).toEqual([
       expect.objectContaining({ values: { id: "fld_1", confirm: true } }),
     ]);
+    expect(sdk.invalidations).toEqual([
+      {
+        resource: "files",
+        dataProviderName: "console",
+        invalidates: ["list", "many", "detail"],
+      },
+      {
+        resource: "folders",
+        dataProviderName: "console",
+        id: "fld_1",
+        invalidates: ["list", "many", "detail"],
+      },
+      {
+        resource: "files",
+        dataProviderName: "console",
+        invalidates: ["list", "many", "detail"],
+      },
+    ]);
   });
 });
 

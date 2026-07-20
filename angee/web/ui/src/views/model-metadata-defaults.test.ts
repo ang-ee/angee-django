@@ -865,4 +865,12 @@ describe("relation label axes are not groups of their own", () => {
       },
     ]);
   });
+
+  test("a bare relation default resolves to its id axis plus label axis", () => {
+    expect(resolveResourceViewGroup({ field: "sender" }, MESSAGE_METADATA)).toEqual({
+      field: "sender",
+      aggregateField: "sender",
+      aggregateKey: "sender_id",
+    });
+  });
 });

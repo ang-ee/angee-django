@@ -6,7 +6,21 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 const uploadMocks = vi.hoisted(() => ({
   begin: vi.fn(),
   finalize: vi.fn(),
+  invalidate: vi.fn(async () => undefined),
   useAuthoredMutation: vi.fn(),
+}));
+
+vi.mock("@angee/metadata", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/metadata")>()),
+  refineResourceName: () => "files",
+  useModelMetadata: () => ({
+    resource: { schemaName: "console", modelLabel: "storage.File" },
+  }),
+}));
+
+vi.mock("@refinedev/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@refinedev/core")>()),
+  useInvalidate: () => uploadMocks.invalidate,
 }));
 
 vi.mock("@angee/ui", async (importOriginal) => ({
@@ -36,6 +50,7 @@ describe("useStorageUpload", () => {
   beforeEach(() => {
     uploadMocks.begin.mockReset();
     uploadMocks.finalize.mockReset();
+    uploadMocks.invalidate.mockClear();
     uploadMocks.useAuthoredMutation.mockReset();
     uploadMocks.useAuthoredMutation.mockImplementation((document: unknown) => {
       if (document === StorageFileUploadBegin) return [uploadMocks.begin, {}];
@@ -104,6 +119,11 @@ describe("useStorageUpload", () => {
     expect(onUploaded).toHaveBeenCalledWith([
       { id: "fil_ready", filename: "note.txt" },
     ]);
+    expect(uploadMocks.invalidate).toHaveBeenCalledWith({
+      resource: "files",
+      dataProviderName: "console",
+      invalidates: ["list", "many", "detail"],
+    });
   });
 
   test("passes explicit drive and folder targets through the begin request", async () => {

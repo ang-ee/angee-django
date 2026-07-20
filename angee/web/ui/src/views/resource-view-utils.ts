@@ -251,7 +251,14 @@ export function resolveResourceViewGroup(
   }
   const aliasGroup = groupAliasForField(group.field, metadata);
   if (aliasGroup) return canonicalResourceViewGroup({ ...group, ...aliasGroup }, metadata);
-  const relationGroup = relationGroupForFieldPath(group.field, metadata);
+  const field = metadata?.fields[group.field];
+  const relationGroup =
+    relationGroupForFieldPath(group.field, metadata)
+    ?? (
+      isToOneRelationField(field)
+        ? relationGroupForRelationField(group.field, metadata)
+        : null
+    );
   return canonicalResourceViewGroup(
     relationGroup ? { ...group, ...relationGroup } : group,
     metadata,

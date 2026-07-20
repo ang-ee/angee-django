@@ -31,8 +31,8 @@ export interface FileActions {
 
 /**
  * The single-file lifecycle verbs (trash, restore) over the storage soft-delete
- * mutations. Renames go through the record form's own update; `onChanged` fires
- * after each verb so the caller can refetch.
+ * mutations. Renames go through the record form's own update. Resource caches
+ * invalidate here; `onChanged` lets a caller refresh a separate authored view.
  */
 export function useFileActions(
   options: { onChanged?: () => void } = {},
@@ -76,7 +76,9 @@ export function useFileActions(
       }),
     restore: (id) =>
       run(async () => {
+        requireFileResource(resource);
         await restoreFile({ id });
+        await invalidateFileResource(invalidate, resource, id);
       }),
     move: (id, folder) =>
       run(async () => {
@@ -96,7 +98,9 @@ export function useFileActions(
       }),
     restoreMany: (ids) =>
       run(async () => {
+        requireFileResource(resource);
         for (const id of ids) await restoreFile({ id });
+        await invalidateFileResource(invalidate, resource);
       }),
   };
 }
@@ -118,10 +122,18 @@ async function trashFile({
 }): Promise<void> {
   requireFileResource(resource);
   await deletePreview.mutate({ id, confirm: true });
+  await invalidateFileResource(invalidate, resource, id);
+}
+
+async function invalidateFileResource(
+  invalidate: ReturnType<typeof useInvalidate>,
+  resource: DataResourceMetadata,
+  id?: string,
+): Promise<void> {
   await invalidate({
     resource: refineResourceName(resource),
     dataProviderName: resource.schemaName,
-    id,
+    ...(id ? { id } : {}),
     invalidates: ["list", "many", "detail"],
   });
 }

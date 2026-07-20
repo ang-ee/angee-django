@@ -69,22 +69,21 @@ export const StorageBackends = graphql(`
 `);
 
 export const StorageFolders = graphql(`
-  query StorageFolders($limit: Int, $offset: Int) {
-    folders(limit: $limit, offset: $offset) {
+  query StorageFolders($drive: String!) {
+    folders(where: { drive: { _eq: $drive } }, order_by: [{ name: asc }]) {
       id
       name
       description
       is_virtual
-      smart_kind
       drive
       parent
     }
   }
 `);
 
-export const StorageFiles = graphql(`
-  query StorageFiles($limit: Int, $offset: Int) {
-    files(limit: $limit, offset: $offset) {
+export const StorageFileById = graphql(`
+  query StorageFileById($id: String!) {
+    files_by_pk(id: $id) {
       id
       filename
       title
@@ -107,11 +106,10 @@ export const StorageFiles = graphql(`
   }
 `);
 
-/** A stored file row, as projected by `StorageFiles`. `drive`/`folder` are the
- * parents' public ids. */
+/** A stored file, independently fetched for preview by its public id. */
 export type StorageFile = NonNullable<
-  DocumentType<typeof StorageFiles>["files"]
->[number];
+  DocumentType<typeof StorageFileById>["files_by_pk"]
+>;
 
 /** A folder (tree node) or smart folder, as projected by `StorageFolders`; ids
  * are public sqids. */

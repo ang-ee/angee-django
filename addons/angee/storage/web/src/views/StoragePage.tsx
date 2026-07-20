@@ -1,24 +1,25 @@
 import { useAuthoredQuery } from "@angee/refine";
-import { useCallback, useMemo, type ReactElement } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
+import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
 
 import {
-  Button, buttonVariants, ControlBand, EmptyState, formatSize, Glyph, LoadingPanel, PreviewPane, RecordPager, ScopedExplorerPane, recordPath, SelectionBarAction, SurfaceHeader, TreeView, useBreadcrumbLeafLabel, useChatterContent, useConfirm, useLatestRef, useRouteRecordId, type ChatterTab, type FieldDescriptor, type PreviewFile, type RecordNavigation, type ScopedExplorerController } from "@angee/ui";
+  Button, buttonVariants, ControlBand, EmptyState, formatSize, Glyph, LoadingPanel, PreviewPane, RecordPager, ScopedExplorerPane, recordPath, SelectionBarAction, SurfaceHeader, TreeView, useBreadcrumbLeafLabel, useChatterContent, useConfirm, useLatestRef, useListRecordNavigation, useRouteRecordId, type ChatterTab, type FieldDescriptor, type PreviewFile, type ScopedExplorerController } from "@angee/ui";
 
 import {
   StorageBackends,
   StorageDrives,
-  StorageFiles,
+  StorageFileById,
   StorageFolders,
   type StorageDrive,
   type StorageFile,
 } from "../data/documents";
 import {
   ALL_SCOPE,
+  FOLDER_SCOPE_PARAM,
   STORAGE_FILE_DND,
   TRASH_SCOPE,
-  fileById,
-  fileRows,
+  folderScopeFromSearch,
+  folderScopeToParam,
   folderTreeRows,
   type FileDragData,
   type StorageFileRow,
@@ -33,9 +34,11 @@ import { NewFolderControl } from "./NewFolderControl";
 import { SelectedFolderControl } from "./SelectedFolderControl";
 import { useStorageT } from "../i18n";
 
-// One safety-capped read each of drives/folders/files; the browser scopes the
-// set client-side so the navigator, list, and preview share one fetch.
-const STORAGE_LIST_LIMIT = 500;
+// Drives and backends are small catalogues. Files page through their resource
+// and folders are fetched independently for the active drive.
+const STORAGE_CATALOGUE_LIMIT = 500;
+const FILE_MODEL = "storage.File";
+const ALL_FILES_DEFAULT_GROUP = { field: "folder" } as const;
 
 // Stable field projections for the drive tree roots: module-scope so the
 // explorer's option list keeps a stable identity (the navigator is published
@@ -53,42 +56,84 @@ type StorageExplorerController = ScopedExplorerController<
  * primary pane and an open file's metadata into the chatter's details tab, and
  * renders the scoped file list or the open-file preview as its content (the
  * file's download/trash/restore verbs and the record pager ride the shell's
- * control band). Drives/folders/files load once; the drive switcher and folder
- * tree drive client-side scoping, and a row click opens the file preview route.
+ * control band). The drive switcher scopes the folder tree and server-backed
+ * file list, and a row click opens an independently fetched file preview route.
  */
 export function StoragePage(): ReactElement {
   const t = useStorageT();
-  const variables = useMemo(
-    () => ({ offset: 0, limit: STORAGE_LIST_LIMIT }),
+  const catalogueVariables = useMemo(
+    () => ({ offset: 0, limit: STORAGE_CATALOGUE_LIMIT }),
     [],
   );
-  const drivesQuery = useAuthoredQuery(StorageDrives, variables);
-  const foldersQuery = useAuthoredQuery(StorageFolders, variables);
-  const filesQuery = useAuthoredQuery(StorageFiles, variables);
+  const drivesQuery = useAuthoredQuery(StorageDrives, catalogueVariables);
   // Admin-only catalogue for the inline drive-create form's backend picker.
-  const backendsQuery = useAuthoredQuery(StorageBackends, variables);
+  const backendsQuery = useAuthoredQuery(StorageBackends, catalogueVariables);
 
   const drives = drivesQuery.data?.drives ?? [];
-  const folders = foldersQuery.data?.folders ?? [];
-  const files = filesQuery.data?.files ?? [];
   const backends = backendsQuery.data?.backends ?? [];
 
   // The open file is route state: `/storage/$id` swaps the content to the large
   // preview and the aside to editable metadata; `/storage` is the list.
   const navigate = useNavigate();
+  // The navigator scope (All files / Trash / a folder) lives in the URL beside
+  // the `group` view param, so it is deep-linkable and back/forward works.
+  const search = useSearch({ strict: false }) as Readonly<Record<string, unknown>>;
+  const folderScope = useMemo(() => folderScopeFromSearch(search), [search]);
+  // Write the scope to the address bar (and close any open preview by landing on
+  // the list route), preserving every other param — `group` above all.
+  const selectScope = useCallback(
+    (scope: string | null) => {
+      const folder = folderScopeToParam(scope ?? ALL_SCOPE);
+      void navigate({
+        to: "/storage",
+        // All files is the absent default: drop the `folder` key rather than
+        // writing `undefined`, keeping the address bar clean and every other
+        // param intact — the same typed updater shape as openFileRoute/closeDetail.
+        search: (current: Record<string, unknown>) => {
+          const next = { ...current };
+          if (folder === undefined) delete next[FOLDER_SCOPE_PARAM];
+          else next[FOLDER_SCOPE_PARAM] = folder;
+          return next;
+        },
+      });
+    },
+    [navigate],
+  );
   const openFileId = useRouteRecordId() ?? null;
+  const openFileQuery = useAuthoredQuery(
+    StorageFileById,
+    { id: openFileId ?? "" },
+    { enabled: openFileId !== null, models: [FILE_MODEL] },
+  );
+  const openFile = openFileQuery.data?.files_by_pk ?? null;
+  const [activeDriveId, setActiveDriveId] = useState<string | null>(null);
+  const folderDriveId =
+    openFile?.drive ?? activeDriveId ?? drives[0]?.id ?? "";
+  useEffect(() => {
+    if (openFile?.drive) setActiveDriveId(openFile.drive);
+  }, [openFile?.drive]);
+  const foldersQuery = useAuthoredQuery(
+    StorageFolders,
+    { drive: folderDriveId },
+    { enabled: folderDriveId !== "", models: ["storage.Folder"] },
+  );
+  const folders = foldersQuery.data?.folders ?? [];
   const closeDetail = useCallback(() => {
-    void navigate({ to: "/storage" });
+    void navigate({
+      to: "/storage",
+      search: (current: Record<string, unknown>) => current,
+    });
   }, [navigate]);
 
-  const openFile = useMemo(
-    () => fileById(files, openFileId),
-    [files, openFileId],
-  );
   useBreadcrumbLeafLabel(openFile ? openFile.title || openFile.filename : null);
   const openFileRoute = useCallback(
     (id: string) => {
-      void navigate({ to: recordPath("/storage", id) });
+      // Keep the folder/group scope in the URL across the preview round-trip so
+      // closing the file returns to the same folder.
+      void navigate({
+        to: recordPath("/storage", id),
+        search: (current: Record<string, unknown>) => current,
+      });
     },
     [navigate],
   );
@@ -122,15 +167,13 @@ export function StoragePage(): ReactElement {
     ],
     [backends],
   );
-  const uploads = useStorageUpload({ onUploaded: () => filesQuery.refetch() });
-  const fileActions = useFileActions({ onChanged: () => filesQuery.refetch() });
+  const uploads = useStorageUpload();
+  const refreshOpenFile = useCallback(() => {
+    if (openFileId) openFileQuery.refetch();
+  }, [openFileId, openFileQuery.refetch]);
+  const fileActions = useFileActions({ onChanged: refreshOpenFile });
   const folderActions = useFolderActions({
-    // A folder write can move files (delete falls them back to the root), so
-    // refetch both trees.
-    onChanged: () => {
-      void foldersQuery.refetch();
-      void filesQuery.refetch();
-    },
+    onChanged: foldersQuery.refetch,
   });
   const confirm = useConfirm();
   const { refetch: refetchDrives } = drivesQuery;
@@ -156,7 +199,10 @@ export function StoragePage(): ReactElement {
       placeholder: t("drive.placeholder"),
       searchPlaceholder: t("drive.searchPlaceholder"),
       create: { resource: "Drive", fields: driveCreateFields },
-      onCreated: () => void refetchDrives(),
+      onCreated: (id: string) => {
+        setActiveDriveId(id);
+        void refetchDrives();
+      },
     }),
     [driveCreateFields, refetchDrives, t],
   );
@@ -174,8 +220,9 @@ export function StoragePage(): ReactElement {
             openFileRoute(row.id);
             return;
           }
+          // Writes the scope to the URL (via onSelectedIdChange) and lands on the
+          // list route, closing any open preview.
           controller.setSelectedId(row.id);
-          closeDetail();
         }}
         dropAccept={STORAGE_FILE_DND}
         canDropOnNode={(_nodeId, row) => row.kind !== "file"}
@@ -185,7 +232,7 @@ export function StoragePage(): ReactElement {
         className="min-h-0 flex-1 overflow-auto"
       />
     ),
-    [closeDetail, handleFileDrop, openFile, openFileRoute],
+    [handleFileDrop, openFile, openFileRoute],
   );
   const renderNavigatorFooter = useCallback(
     (controller: StorageExplorerController) => {
@@ -253,17 +300,26 @@ export function StoragePage(): ReactElement {
               children: (
                 <FileDetail
                   file={openFile}
-                  onChanged={() => filesQuery.refetch()}
+                  onChanged={openFileQuery.refetch}
                   compact
                 />
               ),
             },
           ]
         : [],
-    [openFile, t, filesQuery.refetch],
+    [openFile, openFileQuery.refetch, t],
   );
   const chatter = useMemo(() => ({ tabs: detailsTab }), [detailsTab]);
   useChatterContent(chatter);
+  const handleRootChange = useCallback(
+    (rootId: string) => {
+      setActiveDriveId(rootId);
+      // A folder from the old drive is invalid here: reset the scope to All
+      // files (dropping the `folder` param) and close any open preview.
+      selectScope(ALL_SCOPE);
+    },
+    [selectScope],
+  );
 
   return (
     <ScopedExplorerPane<StorageDrive, StorageTreeRow>
@@ -271,14 +327,16 @@ export function StoragePage(): ReactElement {
       getRootId={driveRootId}
       getRootLabel={driveRootLabel}
       getTreeRows={getTreeRows}
+      selectedId={folderScope}
+      onSelectedIdChange={selectScope}
       defaultSelectedId={ALL_SCOPE}
-      selectedRootId={openFile?.drive ?? null}
+      selectedRootId={openFile?.drive ?? activeDriveId}
       isSelectedIdValid={(id, rows) =>
         id === ALL_SCOPE || id === TRASH_SCOPE || rows.some((row) => row.id === id)
       }
       navigatorLabel={t("nav.label")}
       rootPicker={driveRootPicker}
-      onRootChange={closeDetail}
+      onRootChange={handleRootChange}
       renderTree={renderTree}
       renderNavigatorFooter={renderNavigatorFooter}
       loading={drivesQuery.fetching && drives.length === 0}
@@ -301,11 +359,9 @@ export function StoragePage(): ReactElement {
       {(controller) => (
         <StorageExplorerContent
           controller={controller}
-          files={files}
           openFileId={openFileId}
           openFile={openFile}
-          filesFetching={filesQuery.fetching}
-          filesError={filesQuery.error}
+          openFileFetching={openFileQuery.fetching}
           uploads={uploads}
           fileActions={fileActions}
           closeDetail={closeDetail}
@@ -318,22 +374,18 @@ export function StoragePage(): ReactElement {
 
 function StorageExplorerContent({
   controller,
-  files,
   openFileId,
   openFile,
-  filesFetching,
-  filesError,
+  openFileFetching,
   uploads,
   fileActions,
   closeDetail,
   onOpenFile,
 }: {
   controller: StorageExplorerController;
-  files: readonly StorageFile[];
   openFileId: string | null;
   openFile: StorageFile | null;
-  filesFetching: boolean;
-  filesError: Error | null;
+  openFileFetching: boolean;
   uploads: ReturnType<typeof useStorageUpload>;
   fileActions: ReturnType<typeof useFileActions>;
   closeDetail: () => void;
@@ -342,29 +394,43 @@ function StorageExplorerContent({
   const t = useStorageT();
   const driveId = controller.rootId;
   const effectiveScope = controller.selectedId ?? ALL_SCOPE;
-  const rows = useMemo(
-    () => fileRows(files, { driveId, scope: effectiveScope }),
-    [files, driveId, effectiveScope],
+  const baseFilter = useMemo(
+    () =>
+      effectiveScope === TRASH_SCOPE
+        ? {
+            drive: { exact: driveId },
+            is_trashed: { exact: true },
+          }
+        : effectiveScope === ALL_SCOPE
+          ? {
+              drive: { exact: driveId },
+              is_trashed: { exact: false },
+            }
+          : {
+              drive: { exact: driveId },
+              is_trashed: { exact: false },
+              folder: { exact: effectiveScope },
+            },
+    [driveId, effectiveScope],
   );
-  const fileNavigation = useMemo<RecordNavigation | null>(() => {
-    if (!openFileId) return null;
-    const currentIndex = rows.findIndex((row) => row.id === openFileId);
-    const openAt = (index: number): void => {
-      const row = rows[index];
-      if (row) onOpenFile(row.id);
-    };
-    return {
-      total: rows.length,
-      ...(currentIndex >= 0 ? { current: currentIndex + 1 } : {}),
-      ...(currentIndex > 0 ? { onPrev: () => openAt(currentIndex - 1) } : {}),
-      ...(currentIndex >= 0 && currentIndex < rows.length - 1
-        ? { onNext: () => openAt(currentIndex + 1) }
-        : {}),
-    };
-  }, [onOpenFile, openFileId, rows]);
+  const defaultGroup =
+    effectiveScope === ALL_SCOPE ? ALL_FILES_DEFAULT_GROUP : null;
+  const {
+    navigationScope,
+    navigation: fileNavigation,
+    onListStateChange,
+  } = useListRecordNavigation<StorageFileRow>({
+    recordId: openFileId,
+    onSelect: onOpenFile,
+  });
+  // Carry the current scope (folder/group) into the row's detail href so opening
+  // a file — by click, middle-click, or copy-link — keeps the address-bar scope.
+  const searchStr = useRouterState({
+    select: (state) => state.location.searchStr,
+  });
   const rowHref = useCallback(
-    (row: StorageFileRow) => recordPath("/storage", row.id),
-    [],
+    (row: StorageFileRow) => `${recordPath("/storage", row.id)}${searchStr}`,
+    [searchStr],
   );
   // The selection bar's bulk verbs: Restore in the Trash scope, else Trash.
   const renderBulkActions = useCallback(
@@ -453,7 +519,7 @@ function StorageExplorerContent({
       {openFileId ? (
         openFile ? (
           <FilePreviewFrame file={openFile} />
-        ) : filesFetching ? (
+        ) : openFileFetching ? (
           <LoadingPanel message={t("loadingFile")} />
         ) : (
           <EmptyState
@@ -465,16 +531,30 @@ function StorageExplorerContent({
         )
       ) : (
         <FileBrowserContent
-          rows={rows}
-          fetching={filesFetching}
-          error={filesError}
+          baseFilter={baseFilter}
+          defaultGroup={defaultGroup}
           rowHref={rowHref}
           bulkActions={renderBulkActions}
+          onListStateChange={onListStateChange}
           uploads={uploads}
           uploadTarget={uploadTarget}
           canUpload={canUpload}
         />
       )}
+      {openFileId && navigationScope ? (
+        <FileBrowserContent
+          hidden
+          baseFilter={baseFilter}
+          defaultGroup={defaultGroup}
+          rowHref={rowHref}
+          bulkActions={renderBulkActions}
+          onListStateChange={onListStateChange}
+          navigationScope={navigationScope}
+          uploads={uploads}
+          uploadTarget={uploadTarget}
+          canUpload={canUpload}
+        />
+      ) : null}
     </>
   );
 }

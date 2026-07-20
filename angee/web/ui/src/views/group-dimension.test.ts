@@ -340,6 +340,19 @@ describe("relation group display label (Odoo (id, display_name))", () => {
     ]);
   });
 
+  test("bucketValueLabels names an empty relation instead of falling back to its id", () => {
+    const bucket = { key: { partyId: null, party_DisplayName: null }, count: 1 };
+    expect(
+      bucketValueLabels(
+        bucket,
+        [PARTY_GROUP],
+        GROUP_METADATA,
+        "No value",
+        (field) => `No ${field}`,
+      ),
+    ).toEqual(["No party"]);
+  });
+
   test("bucketValueLabels needs resource metadata for grouped buckets", () => {
     const bucket = { key: { partyId: "pty_abc", party_DisplayName: "PRG Iva" }, count: 1 };
     expect(() => bucketValueLabels(bucket, [PARTY_GROUP], null, "No value")).toThrow(

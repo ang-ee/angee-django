@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { act, renderHook } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { useScopedTreeExplorer } from "./useScopedTreeExplorer";
 
@@ -91,6 +91,60 @@ describe("useScopedTreeExplorer", () => {
     expect(result.current.rootId).toBe("root-b");
     expect(result.current.selectedId).toBe("all");
     expect(result.current.selectedRow).toBeUndefined();
+  });
+
+  test("routes setSelectedId to onSelectedIdChange for a controlled selection", () => {
+    const onSelectedIdChange = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ selectedId }: { selectedId: string }) =>
+        useScopedTreeExplorer<Root, TreeRow>({
+          roots: ROOTS,
+          getRootId,
+          getRootLabel,
+          getTreeRows,
+          selectedId,
+          onSelectedIdChange,
+          defaultSelectedId: "all",
+          isSelectedIdValid: hasPseudoSelection,
+        }),
+      { initialProps: { selectedId: "a-folder" } },
+    );
+
+    expect(result.current.selectedId).toBe("a-folder");
+
+    act(() => result.current.setSelectedId("all"));
+
+    // The controlled owner is notified; the controlled value only changes once the
+    // owner feeds a new `selectedId` back in (here, the URL store round-trip).
+    expect(onSelectedIdChange).toHaveBeenCalledWith("all");
+    expect(result.current.selectedId).toBe("a-folder");
+
+    rerender({ selectedId: "all" });
+    expect(result.current.selectedId).toBe("all");
+  });
+
+  test("resets a controlled selection through onSelectedIdChange when the root changes", () => {
+    const onSelectedIdChange = vi.fn();
+    const { result } = renderHook(() =>
+      useScopedTreeExplorer<Root, TreeRow>({
+        roots: ROOTS,
+        getRootId,
+        getRootLabel,
+        getTreeRows,
+        selectedId: "a-folder",
+        onSelectedIdChange,
+        defaultSelectedId: "all",
+        isSelectedIdValid: hasPseudoSelection,
+      }));
+
+    expect(result.current.selectedId).toBe("a-folder");
+
+    act(() => result.current.setRootId("root-b"));
+
+    // The reset rides the single write seam: a controlled owner is notified with the
+    // default (its store, not local state, is the truth) — no dead local write.
+    expect(result.current.rootId).toBe("root-b");
+    expect(onSelectedIdChange).toHaveBeenCalledWith("all");
   });
 
   test("clamps invalid uncontrolled selections to the default", () => {

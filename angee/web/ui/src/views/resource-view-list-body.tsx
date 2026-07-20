@@ -1197,12 +1197,15 @@ export function bucketValueLabels(
   groupStack: readonly ResourceViewGroup[],
   metadata: ModelMetadata | null,
   emptyValueLabel: string,
+  emptyRelationLabel?: (field: string) => string,
 ): string[] {
   return groupStack.map((group) => {
     const labelKey = groupLabelKey(group, metadata);
     if (labelKey) {
       const label = bucket.key?.[groupDimensionForField(labelKey, metadata).key];
       if (label != null && label !== "") return String(label);
+      return emptyRelationLabel?.(group.aggregateField ?? group.field)
+        ?? emptyValueLabel;
     }
     const dimension = resourceViewGroupToAggregateDimension(group, metadata);
     const value = bucket.key?.[dimension.key ?? dimension.field];
@@ -1389,6 +1392,7 @@ function isMeasureOperator(
   aggregate: ColumnAggregate | undefined,
 ): aggregate is AggregateMeasureOperator {
   return (
+    aggregate === "count" ||
     aggregate === "sum" ||
     aggregate === "avg" ||
     aggregate === "min" ||
