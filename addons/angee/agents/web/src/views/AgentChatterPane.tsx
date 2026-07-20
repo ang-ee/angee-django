@@ -73,7 +73,7 @@ export function AgentChatterPane({
   const sessionQuery = useAuthoredQuery(
     ResolveSessionForView,
     { view: resolveView },
-    { models: ["agents.Agent"] },
+    { models: ["agents.Agent", "agents.AgentSession"] },
   );
   const session = sessionQuery.data?.resolve_session_for_view ?? null;
   const loading = sessionQuery.fetching && sessionQuery.data === undefined;
@@ -118,6 +118,8 @@ export function AgentChatterPane({
             agentId={id}
             view={liveView}
             modelHandle={agents.find((agent) => agent.id === id)?.model?.name ?? resolved.model_handle}
+            runtimeClass={agents.find((agent) => agent.id === id)?.runtime_class ?? resolved.runtime_class}
+            sessionId={id === resolved.agent_id ? resolved.session_id ?? undefined : undefined}
             agents={agents}
             selectedAgentId={selectedId ?? undefined}
             onSelectAgent={handleSelect}

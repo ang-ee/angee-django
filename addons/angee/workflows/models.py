@@ -30,7 +30,7 @@ from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import RecordRefMixin
-from angee.base.transitions import StateTransitions, save_state, transition
+from angee.base.transitions import StateTransitions, TransitionNotAllowed, save_state, transition
 from angee.workflows.steps import (
     StepImpl,
     optional_non_negative_int,
@@ -1194,6 +1194,21 @@ class StepRun(AuditMixin, AngeeDataModel):
         if resume_state is not None:
             self.resume_state = resume_state
         self._transition_fields = {"wait_until", "resume_state"}
+
+    def wake(self, *, at: datetime) -> None:
+        """Make this waiting journal row due without changing its state.
+
+        Event delivery changes only the durable due time. The engine owns the
+        later ``WAITING`` → ``STARTED`` claim and therefore remains the sole
+        scheduler of implementation work.
+        """
+
+        if self.status != StepRunStatus.WAITING:
+            raise TransitionNotAllowed(
+                f"StepRun.wake requires status={StepRunStatus.WAITING}; found {self.status}."
+            )
+        self.wait_until = at
+        self.save(update_fields=["wait_until", "updated_at"])
 
     @transition(
         status,

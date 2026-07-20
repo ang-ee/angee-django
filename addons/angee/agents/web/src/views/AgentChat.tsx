@@ -16,7 +16,8 @@ import {
 import { code } from "@streamdown/code";
 import { Streamdown } from "streamdown";
 
-import { useAcpRuntime } from "../useAcpRuntime";
+import { useAcpRuntime, type AcpRuntime } from "../useAcpRuntime";
+import { useSessionRuntime } from "../useSessionRuntime";
 import { useAgentsT } from "../i18n";
 import { AgentChooser } from "./AgentChooser";
 import { SlashCommandComposer } from "./slash-commands";
@@ -37,15 +38,7 @@ import type { AgentChatView, McpServerConfig, AgentRosterItem } from "../documen
  * static agent label. `fallbackName`/`modelHandle` label the chooser before the `AgentRoster`
  * loads or for a default agent not yet in the list.
  */
-export function AgentChat({
-  agentId,
-  view,
-  modelHandle,
-  agents,
-  selectedAgentId,
-  onSelectAgent,
-  fallbackName,
-}: {
+interface AgentChatProps {
   agentId: string;
   view: AgentChatView;
   modelHandle?: string;
@@ -53,9 +46,37 @@ export function AgentChat({
   selectedAgentId?: string;
   onSelectAgent?: (id: string) => void;
   fallbackName?: string;
-}): React.ReactElement {
+  runtimeClass?: string;
+  sessionId?: string;
+}
+
+export function AgentChat(props: AgentChatProps): React.ReactElement {
+  return props.runtimeClass?.toLowerCase() === "pydantic"
+    ? <SessionAgentChat {...props} />
+    : <AcpAgentChat {...props} />;
+}
+
+function AcpAgentChat(props: AgentChatProps): React.ReactElement {
+  const runtimeState = useAcpRuntime(props.agentId, props.view);
+  return <AgentChatContent {...props} runtimeState={runtimeState} />;
+}
+
+function SessionAgentChat(props: AgentChatProps): React.ReactElement {
+  const runtimeState = useSessionRuntime(props.agentId, props.view, props.sessionId);
+  return <AgentChatContent {...props} runtimeState={runtimeState} />;
+}
+
+function AgentChatContent({
+  agentId,
+  view,
+  modelHandle,
+  agents,
+  selectedAgentId,
+  onSelectAgent,
+  fallbackName,
+  runtimeState,
+}: AgentChatProps & { runtimeState: AcpRuntime }): React.ReactElement {
   const t = useAgentsT();
-  const runtimeState = useAcpRuntime(agentId, view);
   const {
     runtime,
     status,

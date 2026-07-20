@@ -8,5 +8,6 @@ SETTINGS = {
     # ANGEE_WORKFLOW_STEP_CLASSES, matching other composition addons' registry
     # contributions.
     "ANGEE_WORKFLOW_STEP_CLASSES.agent": "angee.workflows_agents.steps.AgentStepImpl",
+    "ANGEE_WORKFLOW_STEP_CLASSES.agent_session": "angee.workflows_agents.steps.AgentSessionStepImpl",
 }
 """Django settings contributed when the workflows-agents addon is installed."""

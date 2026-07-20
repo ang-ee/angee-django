@@ -123,6 +123,36 @@ def start(
     return run
 
 
+def deliver(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
+    """Deliver an external event by waking this run's parked journal rows.
+
+    This is the workflow engine's event-delivery seam. It writes only durable
+    due times under the same short row lock as :func:`advance`; the existing
+    advance/execute tasks still own claiming and running implementations.
+    """
+
+    timestamp = now or timezone.now()
+    run_model = _model("WorkflowRun")
+    step_run_model = _model("StepRun")
+    woken = 0
+    with system_context(reason="workflows.engine.deliver"), transaction.atomic():
+        run = run_model.objects.lock_if_supported().get(pk=run_id)
+        if run.status in RunStatus.TERMINAL:
+            return {"woken": 0}
+        waiting = list(
+            step_run_model.objects.lock_if_supported()
+            .filter(run=run, status=StepRunStatus.WAITING)
+            .order_by("pk")
+        )
+        for step_run in waiting:
+            step_run.wake(at=timestamp)
+            woken += 1
+        if run.status == RunStatus.WAITING and waiting:
+            run.resume()
+        transaction.on_commit(lambda run_id=run.pk: enqueue_advance(run_id))
+    return {"woken": woken}
+
+
 def advance(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
     """Advance one workflow run under a short row lock, without running impls."""
 
@@ -476,11 +506,15 @@ def _suspend_step_run(step_run: Any, result: StepResult) -> None:
 
     resume_state = dict(result.resume_state or {})
     decisions = tuple(result.decisions)
+    decision_ids: list[int] = []
     decision_schemas: dict[str, dict[str, Any]] = {}
     for spec in decisions:
         decision = _create_decision(step_run, spec)
+        decision_ids.append(decision.pk)
         if spec.decision_schema:
             decision_schemas[str(decision.pk)] = dict(spec.decision_schema)
+    if decision_ids:
+        resume_state["_decision_ids"] = decision_ids
     if decision_schemas:
         resume_state["_decision_schemas"] = decision_schemas
     step_run.mark_waiting(resume_state=resume_state)
@@ -808,9 +842,20 @@ def _apply_decision_policy(step_run: Any) -> None:
 
     if step_run.status != StepRunStatus.WAITING:
         return
-    decisions = list(step_run.decisions.order_by("priority", "pk"))
+    decision_ids = step_run.resume_state.get("_decision_ids")
+    queryset = step_run.decisions
+    if isinstance(decision_ids, list):
+        queryset = queryset.filter(pk__in=decision_ids)
+    decisions = list(queryset.order_by("priority", "pk"))
     outcome = _decision_policy_outcome(_policy_for(step_run), decisions)
     if outcome is None:
+        return
+    if step_run.resume_state.get("_resume_after_decisions"):
+        state = dict(step_run.resume_state)
+        state["_decision_outcome"] = outcome
+        step_run.resume_state = state
+        step_run.save(update_fields=["resume_state", "updated_at"])
+        step_run.wake(at=timezone.now())
         return
     step_run.mark_succeeded(
         output={"decisions": [decision.sqid for decision in decisions]},
@@ -839,6 +884,8 @@ def _decision_policy_outcome(policy: str, decisions: list[Any]) -> str | None:
         for verdict in (VERDICT_REJECTED, VERDICT_ESCALATED, VERDICT_EXPIRED):
             if any(decision.verdict == verdict for decision in terminal):
                 return str(verdict.value)
+        return "completed" if len(terminal) == len(decisions) else None
+    if policy == "all_done":
         return "completed" if len(terminal) == len(decisions) else None
     if policy == "majority":
         for verdict in (VERDICT_ESCALATED, VERDICT_EXPIRED):

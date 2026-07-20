@@ -58,6 +58,8 @@ Skill = apps.get_model("agents", "Skill")
 MCPServer = apps.get_model("agents", "MCPServer")
 MCPTool = apps.get_model("agents", "MCPTool")
 Agent = apps.get_model("agents", "Agent")
+AgentSessionModel = apps.get_model("agents", "AgentSession")
+AgentTurn = apps.get_model("agents", "AgentTurn")
 Integration = apps.get_model("integrate", "Integration")
 Vendor = apps.get_model("integrate", "Vendor")
 Credential = apps.get_model("integrate", "Credential")
@@ -156,6 +158,7 @@ class MCPToolType(AngeeNode):
     description: auto
     input_schema: JSON
     enabled: auto
+    requires_approval: auto
     created_at: auto
     updated_at: auto
 
@@ -190,6 +193,37 @@ class AgentType(AngeeNode):
     updated_at: auto
 
 
+@strawberry_django.type(AgentSessionModel)
+class AgentSessionType(AngeeNode):
+    """Owner-visible projection of one persisted agent conversation."""
+
+    agent: AgentType
+    owner: UserType
+    title: auto
+    context: JSON
+    status: auto
+    usage: JSON
+    last_error: auto
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.type(AgentTurn)
+class AgentTurnType(AngeeNode):
+    """Owner-visible projection of one persisted agent turn."""
+
+    session: AgentSessionType
+    index: auto
+    prompt: auto
+    status: auto
+    updates: JSON
+    text: auto
+    usage: JSON
+    error: auto
+    created_at: auto
+    updated_at: auto
+
+
 @strawberry.type
 class AgentChatEndpoint:
     """Browser-reachable chat endpoint for a running agent.
@@ -210,19 +244,15 @@ class AgentChatEndpoint:
 
 
 @strawberry.type
-class AgentSession:
-    """The agent that serves the user's current view, for the side chatter.
-
-    The view-driven counterpart to :class:`AgentChatEndpoint`: the chatter knows the
-    *view*, not the agent, so this resolves *which* agent (identity only — name, status,
-    model). The client then mints the chat endpoint for ``agent_id`` with
-    ``agentChatEndpoint``. A ``None`` result means the user has no running agent.
-    """
+class AgentChatTarget:
+    """Read-only view resolution for either persisted or container chat."""
 
     agent_id: PublicID
     agent_name: str
     status: str
     model_handle: str
+    runtime_class: str
+    session_id: PublicID | None = None
 
 
 @strawberry.input
@@ -322,6 +352,35 @@ _AGENT_RESOURCE = hasura_model_resource(
         delete_guard=lambda agent: agent.delete_blocker(),
     ),
 )
+_AGENT_SESSION_RESOURCE = hasura_model_resource(
+    AgentSessionType,
+    model=AgentSessionModel,
+    name="agent_sessions",
+    filterable=["id", "agent", "owner", "status", "updated_at"],
+    sortable=["title", "status", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["agent", "owner", "status"],
+    insert=False,
+    update=False,
+    delete=False,
+    field_id_decode={
+        "agent": public_pk_decoder(Agent),
+        "owner": public_pk_decoder(User),
+    },
+)
+_AGENT_TURN_RESOURCE = hasura_model_resource(
+    AgentTurnType,
+    model=AgentTurn,
+    name="agent_turns",
+    filterable=["id", "session", "index", "status", "updated_at"],
+    sortable=["session", "index", "status", "created_at", "updated_at"],
+    aggregatable=["id", "index"],
+    groupable=["session", "status"],
+    insert=False,
+    update=False,
+    delete=False,
+    field_id_decode={"session": public_pk_decoder(AgentSessionModel)},
+)
 _SKILL_RESOURCE = hasura_model_resource(
     SkillType,
     model=Skill,
@@ -356,8 +415,8 @@ _MCP_TOOL_RESOURCE = hasura_model_resource(
     sortable=["server", "name", "enabled", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["server", "server__name", "enabled", "updated_at"],
-    insertable=["server", "name", "description", "input_schema", "enabled"],
-    updatable=["name", "description", "input_schema", "enabled"],
+    insertable=["server", "name", "description", "input_schema", "enabled", "requires_approval"],
+    updatable=["name", "description", "input_schema", "enabled", "requires_approval"],
     field_id_decode={"server": public_pk_decoder(MCPServer)},
     write_backend=AngeeHasuraWriteBackend(MCPTool, public_id_fields=("server",)),
 )
@@ -580,12 +639,18 @@ def _agent_for_view(view: dict[str, Any]) -> Any:
     if user_id is None:
         return None
     with system_context(reason="agents.graphql.agent_for_view"):
-        return (
+        candidates = (
             Agent.objects.filter(owner_id=user_id, is_template=False, runtime_status=RuntimeStatus.RUNNING)
-            .exclude(service="")
             .select_related("model")
             .order_by("-updated_at")
-            .first()
+        )
+        return next(
+            (
+                agent
+                for agent in candidates
+                if agent.runtime_backend.runs_in_process or bool(agent.service)
+            ),
+            None,
         )
 
 
@@ -594,7 +659,7 @@ class AgentSessionQuery:
     """Authenticated agent session queries for chat surfaces."""
 
     @strawberry.field
-    def resolve_session_for_view(self, view: JSON) -> AgentSession | None:
+    def resolve_session_for_view(self, view: JSON) -> AgentChatTarget | None:
         """Resolve the agent that serves the user's current view, for the side chatter.
 
         The chatter knows the *view*, not the agent: this picks the actor's running agent
@@ -607,11 +672,23 @@ class AgentSessionQuery:
         if agent is None:
             return None
         model = getattr(agent, "model", None)
-        return AgentSession(
+        owner_id = actor_user_id(current_actor())
+        with system_context(reason="agents.graphql.session_for_view"):
+            session = (
+                AgentSessionModel.objects.filter(agent=agent, owner_id=owner_id)
+                .exclude(status="closed")
+                .order_by("-updated_at")
+                .first()
+                if agent.runtime_backend.runs_in_process
+                else None
+            )
+        return AgentChatTarget(
             agent_id=PublicID(str(agent.sqid)),
             agent_name=str(agent.name),
             status=str(agent.runtime_status),
             model_handle=str(agent.service_model_handle()) if model is not None else "",
+            runtime_class=str(agent.runtime_class),
+            session_id=PublicID(str(session.sqid)) if session is not None else None,
         )
 
 
@@ -702,8 +779,13 @@ _CONSOLE_TYPES: list[object] = [
     MCPServerType,
     MCPToolType,
     AgentType,
+    AgentSessionType,
+    AgentTurnType,
     AgentChatEndpoint,
+    AgentChatTarget,
     *_AGENT_RESOURCE.types,
+    *_AGENT_SESSION_RESOURCE.types,
+    *_AGENT_TURN_RESOURCE.types,
     *_SKILL_RESOURCE.types,
     *_MCP_SERVER_RESOURCE.types,
     *_MCP_TOOL_RESOURCE.types,
@@ -717,6 +799,8 @@ schemas = {
         "query": [
             AgentSessionQuery,
             _AGENT_RESOURCE.query,
+            _AGENT_SESSION_RESOURCE.query,
+            _AGENT_TURN_RESOURCE.query,
             _SKILL_RESOURCE.query,
             _MCP_SERVER_RESOURCE.query,
             _MCP_TOOL_RESOURCE.query,
@@ -725,6 +809,8 @@ schemas = {
         ],
         "mutation": [
             _AGENT_RESOURCE.mutation,
+            _AGENT_SESSION_RESOURCE.mutation,
+            _AGENT_TURN_RESOURCE.mutation,
             InferenceProviderCreateMutation,
             InferenceProviderConnectMutation,
             InferenceProviderUpdateMutation,
@@ -736,7 +822,11 @@ schemas = {
             InferenceActionMutation,
             AgentActionMutation,
         ],
-        "subscription": [changes(Agent, field="agentChanged")],
+        "subscription": [
+            changes(Agent, field="agentChanged"),
+            changes(AgentSessionModel, field="agentSessionChanged"),
+            changes(AgentTurn, field="agentTurnChanged"),
+        ],
         "types": _CONSOLE_TYPES,
         "type_extensions": [IntegrationInferenceProviderExtension],
     },

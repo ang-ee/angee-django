@@ -131,6 +131,8 @@ export const ResolveSessionForView = graphql(`
       agent_name
       status
       model_handle
+      runtime_class
+      session_id
     }
   }
 `);
@@ -152,6 +154,7 @@ export const AgentRoster = graphql(`
       id
       name
       runtime_status
+      runtime_class
       is_template
       updated_at
       model {
@@ -165,3 +168,71 @@ export const AgentRoster = graphql(`
 export type AgentRosterItem = NonNullable<
   DocumentType<typeof AgentRoster>["agents"]
 >[number];
+
+export const LatestAgentSession = graphql(`
+  query LatestAgentSession($agentId: String!) {
+    agent_sessions(
+      where: { agent: { _eq: $agentId } }
+      order_by: [{ created_at: desc }]
+      limit: 1
+    ) {
+      id
+      status
+      context
+      last_error
+      agent {
+        model {
+          name
+        }
+      }
+    }
+  }
+`);
+
+export const AgentSessionTurns = graphql(`
+  query AgentSessionTurns($sessionId: String!) {
+    agent_turns(
+      where: { session: { _eq: $sessionId } }
+      order_by: [{ index: asc }]
+    ) {
+      id
+      index
+      prompt
+      status
+      updates
+      text
+      error
+    }
+  }
+`);
+
+export const StartAgentSession = graphql(`
+  mutation StartAgentSession($agent: ID!, $context: JSON!) {
+    start_agent_session(agent: $agent, context: $context) {
+      id
+      status
+      context
+      last_error
+    }
+  }
+`);
+
+export const PostAgentMessage = graphql(`
+  mutation PostAgentMessage($session: ID!, $text: String!) {
+    post_agent_message(session: $session, text: $text) {
+      id
+      index
+      status
+      prompt
+    }
+  }
+`);
+
+export const CloseAgentSession = graphql(`
+  mutation CloseAgentSession($session: ID!) {
+    close_agent_session(session: $session) {
+      id
+      status
+    }
+  }
+`);

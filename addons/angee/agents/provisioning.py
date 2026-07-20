@@ -56,6 +56,18 @@ def provision_agent(id: PublicID) -> ActionResult:
         reason="agents.graphql.provision_agent",
         select_related=_PROVISION_CHAIN,
     ) as agent:
+        if agent.runtime_backend.runs_in_process:
+            if not agent.inference_credential_ready():
+                return ActionResult(
+                    ok=False,
+                    message="Connect a usable inference credential to this agent's provider before provisioning.",
+                )
+            try:
+                agent.mark_provisioning()
+                agent.mark_provisioned(workspace="", service="")
+            except TransitionNotAllowed as error:
+                return ActionResult(ok=False, message=f"Provisioning failed: {error}")
+            return ActionResult(ok=True, message="Provisioned in process.")
         if agent.workspace:
             return ActionResult(ok=False, message="Agent is already provisioned — deprovision it first.")
         if agent.workspace_template is None:
@@ -157,6 +169,14 @@ def deprovision_agent(id: PublicID) -> ActionResult:
     """Tear down an agent's operator workspace and services, then clear the record."""
 
     with action_target(_agent_model(), id, reason="agents.graphql.deprovision_agent") as agent:
+        if agent.runtime_backend.runs_in_process:
+            try:
+                agent.mark_deprovisioning()
+                _close_open_sessions(agent)
+                agent.mark_deprovisioned()
+            except TransitionNotAllowed as error:
+                return ActionResult(ok=False, message=f"Teardown failed: {error}")
+            return ActionResult(ok=True, message="Deprovisioned.")
         if not agent.workspace and not agent.service:
             try:
                 if str(agent.lifecycle) == "provisioning":
@@ -293,3 +313,11 @@ def _agent_model() -> Any:
     """Return the composed runtime Agent model without pinning it at import time."""
 
     return apps.get_model("agents", "Agent")
+
+
+def _close_open_sessions(agent: Any) -> None:
+    """Close this in-process agent's persisted sessions before deprovisioning."""
+
+    session_model = apps.get_model("agents", "AgentSession")
+    for session in session_model.objects.lock_if_supported().filter(agent=agent).exclude(status="closed"):
+        session.close()

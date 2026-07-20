@@ -27,7 +27,9 @@ import json
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.conf import settings
+from django.utils.module_loading import import_string
 
+from angee.agents.runners import SessionRunner
 from angee.base.impl import ImplBase
 from angee.integrate.credentials import CredentialKind
 
@@ -66,6 +68,7 @@ class AgentRuntime(ImplBase):
     # renders no service (a workspace-only agent).
     service_template_name: ClassVar[str] = ""
     service_template_kind: ClassVar[str] = "service"
+    session_runner_class: ClassVar[str] = ""
     # Credential kinds this runtime can consume for inference. The generic runtime
     # accepts only a static API key; OAuth support is runtime-specific. Typed as a bare
     # ClassVar because (without django-stubs) mypy reads a TextChoices member as its
@@ -77,6 +80,24 @@ class AgentRuntime(ImplBase):
         """Whether this runtime renders an operator service (vs workspace-only)."""
 
         return bool(self.service_template_name)
+
+    @property
+    def runs_in_process(self) -> bool:
+        """Whether this runtime executes turns inside the Angee worker."""
+
+        return bool(self.session_runner_class)
+
+    def session_runner(self) -> SessionRunner:
+        """Return this runtime's in-process session runner."""
+
+        if not self.session_runner_class:
+            raise NotImplementedError(f"{type(self).__name__} does not define session_runner_class.")
+        resolved = import_string(self.session_runner_class)
+        if not isinstance(resolved, type) or not issubclass(resolved, SessionRunner):
+            raise TypeError(
+                f"{type(self).__name__}.session_runner_class must resolve to a SessionRunner subclass."
+            )
+        return resolved()
 
     def supports_credential(self, credential: Any) -> bool:
         """Whether this runtime can authenticate inference with ``credential``.

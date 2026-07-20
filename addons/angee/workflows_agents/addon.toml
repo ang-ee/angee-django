@@ -6,3 +6,9 @@ description = "Workflow activity steps backed by the agents inference catalogue"
 keywords = ["workflows", "agents", "inference"]
 category = "Workflows"
 depends_on = ["angee.workflows", "angee.agents"]
+
+[resources]
+install = [
+  { path = "resources/install/100_workflows.workflow.yaml", publish = true },
+  { path = "resources/install/101_workflows.step.yaml", depends_on = "resources/install/100_workflows.workflow.yaml" },
+]

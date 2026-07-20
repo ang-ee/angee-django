@@ -1,0 +1,8 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.agents_runtime_pydantic"
+description = "In-process pydantic-ai runtime for durable agent sessions"
+keywords = ["agents", "pydantic-ai", "runtime"]
+category = "Agents"
+depends_on = ["angee.agents", "angee.integrate"]

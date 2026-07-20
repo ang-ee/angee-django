@@ -1,7 +1,7 @@
 // Authorization schema for the agents addon.
 // @rebac_package: agents
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 definition agents/agent {
     relation owner: auth/user // rebac:field=owner
@@ -67,4 +67,24 @@ definition agents/mcp_tool {
     permission read = agent + server->read + admin->member
     permission write = server->write + admin->member
     permission delete = server->write + admin->member
+}
+
+definition agents/session {
+    relation owner: auth/user // rebac:field=owner
+    relation agent: agents/agent // rebac:field=agent
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = agent->write + admin->member
+    permission read = owner + admin->member
+    permission write = owner + admin->member
+    permission delete = owner + admin->member
+}
+
+definition agents/turn {
+    relation session: agents/session // rebac:field=session
+
+    permission create = session->write
+    permission read = session->read
+    permission write = session->write
+    permission delete = session->write
 }

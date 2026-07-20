@@ -10,19 +10,22 @@ and debits token usage onto the run budget ledger.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Mapping
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from django.apps import apps
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import transaction
 from django.template import Context, Engine
-from rebac import system_context
+from django.utils import timezone
+from rebac import actor_context, system_context, to_subject_ref
 
 from angee.agents.backends import InferenceRequest, InferenceResponse
-from angee.workflows.steps import StepImpl, StepResult, TransientStepError
+from angee.agents.runners import TurnOutcome
+from angee.workflows.steps import DecisionSpec, StepImpl, StepResult, TransientStepError
 
 AGENT_STEP_JOURNAL_MAX_BYTES = 4096
 """Maximum UTF-8 JSON bytes stored in one agent step-run output journal."""
@@ -32,6 +35,11 @@ AGENT_STEP_TRUNCATION_MARKER = "[truncated: workflows_agents.AgentStepImpl journ
 
 _ONE_SHOT_MODE = "one_shot"
 _TEMPLATE_ENGINE = Engine(debug=False)
+SESSION_PARKED_UNTIL = datetime.max.replace(tzinfo=UTC)
+"""Far-future durable wait used because ``StepResult.wait`` requires a due time."""
+
+SESSION_UPDATE_FLUSH_SECONDS = 0.25
+"""Minimum interval between streamed turn-row saves."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +114,259 @@ class AgentStepImpl(StepImpl):
                 output=_bounded_summary(_failure_summary(request=request, error=error)),
                 outcome="failed",
             )
+
+
+class AgentSessionStepImpl(StepImpl):
+    """Multi-turn agent session whose bounded turns run on workflow workers.
+
+    Idle sessions park at :data:`SESSION_PARKED_UNTIL` and wake only through
+    ``workflows.engine.deliver``. The update sink flushes ACP payloads at a
+    bounded cadence and refreshes the step heartbeat on every flush, keeping a
+    healthy long turn clear of the workflow reaper.
+    """
+
+    key = "agent_session"
+    label = "Agent session"
+    category = "Activity"
+    deterministic = False
+
+    def run(self, step_run: Any, *, now: datetime) -> StepResult:
+        """Run the oldest active/pending turn or park an idle session."""
+
+        del now
+        with system_context(reason="workflows_agents.session_step.claim"), transaction.atomic():
+            session = _session_for_step(step_run)
+            if _state_value(session.status) == "closed":
+                return StepResult.done(output={"session": session.sqid}, outcome="closed")
+            turn, resumed = _claim_turn(session)
+            if turn is None:
+                if _state_value(session.status) != "idle":
+                    session.mark_idle()
+                return _park_session()
+            deferred_results = _deferred_results(step_run) if resumed else []
+
+        sink = _TurnUpdateSink(step=self, step_run=step_run, turn=turn)
+        try:
+            runner = session.agent.runtime_backend.session_runner()
+            with actor_context(session.agent.principal_subject()):
+                outcome = runner.run_turn(
+                    session,
+                    turn,
+                    deferred_results=deferred_results,
+                    emit=sink,
+                )
+        except TransientStepError:
+            raise
+        except Exception as error:  # noqa: BLE001 - provider/runtime failures become turn outcomes.
+            if _is_retryable_provider_error(error):
+                raise TransientStepError(str(error)) from error
+            outcome = TurnOutcome(
+                kind="failed",
+                error=str(error),
+                replay_state=session.replay_state,
+            )
+        finally:
+            sink.flush()
+        return _persist_turn_outcome(step_run, session, turn, outcome)
+
+
+@dataclass(slots=True)
+class _TurnUpdateSink:
+    """Bounded ACP update flusher and workflow heartbeat reporter."""
+
+    step: StepImpl
+    step_run: Any
+    turn: Any
+    pending: list[dict[str, Any]] = field(default_factory=list)
+    last_flush: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.last_flush = time.monotonic()
+
+    def __call__(self, update: dict[str, Any]) -> None:
+        """Buffer one ACP payload and flush when the cadence bound elapsed."""
+
+        self.pending.append(dict(update))
+        if time.monotonic() - self.last_flush >= SESSION_UPDATE_FLUSH_SECONDS:
+            self.flush()
+
+    def flush(self) -> None:
+        """Append buffered updates and heartbeat the running step."""
+
+        if not self.pending:
+            return
+        turn_model = type(self.turn)
+        with system_context(reason="workflows_agents.session_step.emit"), transaction.atomic():
+            locked = turn_model.objects.lock_if_supported().get(pk=self.turn.pk)
+            locked.updates = [*(locked.updates or []), *self.pending]
+            locked.save(update_fields=["updates", "updated_at"])
+            self.turn.updates = locked.updates
+        self.pending.clear()
+        self.last_flush = time.monotonic()
+        self.step.heartbeat(self.step_run)
+
+
+def _session_for_step(step_run: Any) -> Any:
+    """Resolve and lock the declared AgentSession workflow subject."""
+
+    subject = step_run.run.subject
+    if subject is None or subject._meta.label_lower != "agents.agentsession":
+        raise ValidationError({"run": "Agent session steps require an agents.AgentSession subject."})
+    session_model = apps.get_model("agents", "AgentSession")
+    return (
+        session_model.objects.lock_if_supported()
+        .select_related(
+            "owner",
+            "agent",
+            "agent__model",
+            "agent__model__provider",
+            "agent__model__provider__credential",
+            "agent__inference_credential",
+        )
+        .prefetch_related("agent__mcp_servers__credential", "agent__mcp_tools")
+        .get(pk=subject.pk)
+    )
+
+
+def _claim_turn(session: Any) -> tuple[Any | None, bool]:
+    """Claim the session's active retry/resume turn, else its oldest pending one."""
+
+    active = (
+        session.turns.lock_if_supported()
+        .filter(status__in=["running", "awaiting_approval"])
+        .order_by("index")
+        .first()
+    )
+    resumed = active is not None and _state_value(active.status) == "awaiting_approval"
+    turn = active or session.turns.lock_if_supported().filter(status="pending").order_by("index").first()
+    if turn is None:
+        return None, False
+    turn.mark_running()
+    session.mark_running()
+    return turn, resumed
+
+
+def _deferred_results(step_run: Any) -> list[dict[str, Any]]:
+    """Project this suspension's resolved workflow decisions for the runtime."""
+
+    decision_ids = step_run.resume_state.get("_decision_ids")
+    if not isinstance(decision_ids, list):
+        return []
+    decisions = step_run.decisions.filter(pk__in=decision_ids).order_by("priority", "pk")
+    return [
+        {
+            **dict(decision.payload or {}),
+            "approved": _state_value(decision.verdict) == "completed",
+            "verdict": _state_value(decision.verdict),
+            "resolution": dict(decision.resolution or {}),
+        }
+        for decision in decisions
+    ]
+
+
+def _persist_turn_outcome(step_run: Any, session: Any, turn: Any, outcome: TurnOutcome) -> StepResult:
+    """Persist one runtime outcome under system authority and map it to the engine."""
+
+    session_model = type(session)
+    turn_model = type(turn)
+    run_model = type(step_run.run)
+    with system_context(reason="workflows_agents.session_step.persist"), transaction.atomic():
+        locked_session = session_model.objects.lock_if_supported().select_related("owner").get(pk=session.pk)
+        locked_turn = turn_model.objects.lock_if_supported().get(pk=turn.pk)
+        locked_run = run_model.objects.lock_if_supported().get(pk=step_run.run_id)
+        locked_run.debit_budget(outcome.usage)
+        locked_run.refresh_from_db(fields=["budget_spent"])
+        locked_session.replay_state = outcome.replay_state
+        locked_session.usage = dict(locked_run.budget_spent or {})
+
+        if outcome.kind == "completed":
+            locked_turn.mark_completed(text=outcome.text, usage=outcome.usage)
+            if _state_value(locked_session.status) != "closed":
+                locked_session.mark_idle()
+            result = (
+                StepResult.done(output={"session": locked_session.sqid}, outcome="closed")
+                if _state_value(locked_session.status) == "closed"
+                else _continue_or_park(locked_session)
+            )
+        elif outcome.kind == "needs_approval":
+            if not outcome.approval_requests:
+                locked_turn.mark_failed("The runtime requested approval without any tool calls.")
+                locked_session.mark_error(locked_turn.error)
+                result = _park_session()
+            elif _state_value(locked_session.status) == "closed":
+                locked_turn.cancel()
+                result = StepResult.done(output={"session": locked_session.sqid}, outcome="closed")
+            else:
+                locked_turn.mark_awaiting_approval()
+                locked_session.mark_awaiting_approval()
+                result = StepResult.suspend(
+                    resume_state={
+                        "_resume_after_decisions": True,
+                        "gate": {"policy": "all_done"},
+                        "turn": locked_turn.sqid,
+                        "approval_requests": outcome.approval_requests,
+                    },
+                    decisions=_approval_decisions(locked_session, outcome.approval_requests),
+                )
+        else:
+            locked_turn.mark_failed(outcome.error or "Agent runtime failed.")
+            if _state_value(locked_session.status) != "closed":
+                locked_session.mark_error(locked_turn.error)
+            result = (
+                StepResult.done(output={"session": locked_session.sqid}, outcome="closed")
+                if _state_value(locked_session.status) == "closed"
+                else _continue_or_park(locked_session)
+            )
+
+        locked_session.save(update_fields=["replay_state", "usage", "updated_at"])
+    return result
+
+
+def _approval_decisions(session: Any, requests: list[dict[str, Any]]) -> tuple[DecisionSpec, ...]:
+    """Build one owner-assigned workflow decision per deferred tool call."""
+
+    assignee = str(to_subject_ref(session.owner))
+    schema = {
+        "type": "object",
+        "properties": {
+            "reason": {
+                "type": "string",
+                "label": "Decision note",
+                "widget": "textarea",
+            }
+        },
+    }
+    return tuple(
+        DecisionSpec(
+            assignees=(assignee,),
+            action="approve_tool",
+            payload=dict(request),
+            priority=index,
+            max_attempts=3,
+            decision_schema=schema,
+        )
+        for index, request in enumerate(requests)
+    )
+
+
+def _park_session() -> StepResult:
+    """Return the far-future wait woken only by explicit event delivery."""
+
+    return StepResult.wait(until=SESSION_PARKED_UNTIL, resume_state={})
+
+
+def _continue_or_park(session: Any) -> StepResult:
+    """Keep an already-delivered queued turn due, otherwise park the session."""
+
+    if session.turns.filter(status="pending").exists():
+        return StepResult.wait(until=timezone.now(), resume_state={})
+    return _park_session()
+
+
+def _state_value(value: Any) -> str:
+    """Return a Django TextChoices member's stored value."""
+
+    return str(getattr(value, "value", value))
 
 
 def _render_prompt(template: str, step_run: Any) -> str:

@@ -39,6 +39,7 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
     default_broker_name = DEFAULT_BROKER_NAME
     default_model_limit = DEFAULT_MODEL_LIMIT
     client_class_path = "anthropic.Anthropic"
+    async_client_class_path = "anthropic.AsyncAnthropic"
     sdk_package_name = "anthropic"
 
     def _client_kwargs(self) -> dict[str, Any]:

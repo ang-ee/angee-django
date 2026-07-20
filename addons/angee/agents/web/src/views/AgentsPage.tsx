@@ -29,10 +29,10 @@ import { type AgentChatView } from "../documents";
 
 const MODEL = "agents.Agent";
 
-// Just what the chat gate needs: a running, service-backed agent gets the chat panel.
+// Just what the chat gate needs: a running service-backed or in-process agent gets the chat panel.
 // (`sqid` is not a GraphQL field — the agent's public id is carried by `id` for
 // the view envelope; see below.)
-const CHAT_FIELDS = ["id", "runtime_status", "service"] as const;
+const CHAT_FIELDS = ["id", "runtime_status", "runtime_class", "service"] as const;
 
 function canProvisionAgent(record: Row | null): boolean {
   return booleanField(record, "can_provision");
@@ -47,10 +47,8 @@ function canDeleteAgent(record: Row): boolean {
 }
 
 /**
- * The agent detail's Chat tab. Once the agent is RUNNING and has a rendered
- * `service` (the routed WebSocket the browser connects to) it shows the live ACP
- * chat; otherwise a hint to provision first. The view envelope tells the agent the
- * user is looking at this agent record.
+ * The agent detail's Chat tab. A running in-process runtime uses the persisted
+ * session transport; a running container runtime still requires its routed service.
  */
 function AgentChatPanel({ agentId }: { agentId: string }): React.ReactElement {
   const t = useAgentsT();
@@ -70,8 +68,10 @@ function AgentChatPanel({ agentId }: { agentId: string }): React.ReactElement {
     },
   });
   const record = (run.result as Row | undefined) ?? null;
+  const runtimeClass = stringField(record, "runtime_class");
   const running =
-    agentRuntime(record) === "RUNNING" && stringField(record, "service") !== "";
+    agentRuntime(record) === "RUNNING" &&
+    (runtimeClass === "pydantic" || stringField(record, "service") !== "");
   if (!running) {
     return (
       <Card>
@@ -82,7 +82,7 @@ function AgentChatPanel({ agentId }: { agentId: string }): React.ReactElement {
     );
   }
   const view: AgentChatView = { kind: "record", type: "agents/agent", sqid: agentId };
-  return <AgentChat agentId={agentId} view={view} />;
+  return <AgentChat agentId={agentId} view={view} runtimeClass={runtimeClass} />;
 }
 
 type RowRecord = BaseRecord & Row;

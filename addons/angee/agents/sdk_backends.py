@@ -16,6 +16,7 @@ class SDKInferenceBackend(InferenceBackend):
 
     client_class: ClassVar[Any | None] = None
     client_class_path: ClassVar[str] = ""
+    async_client_class_path: ClassVar[str] = ""
     default_broker_name: ClassVar[str] = ""
     default_model_limit: ClassVar[int] = 1000
     oauth_auth_kwarg: ClassVar[str] = "auth_token"
@@ -27,10 +28,30 @@ class SDKInferenceBackend(InferenceBackend):
         client_class = self.client_class or self._load_client_class()
         return client_class(**self._client_kwargs())
 
-    def _client_kwargs(self) -> dict[str, Any]:
+    def async_client(self, *, credential: Any | None = None) -> Any:
+        """Return the vendor's async SDK client with a live credential.
+
+        ``credential`` lets an agent-owned override win over the provider
+        catalogue credential without moving vendor auth rules into a runtime.
+        """
+
+        if not self.async_client_class_path:
+            raise RuntimeError(
+                f"{self.label} inference does not declare an async SDK client; "
+                f"install and configure `{self.sdk_package_name}` for in-process agent sessions."
+            )
+        try:
+            client_class = import_string(self.async_client_class_path)
+        except ImportError as error:
+            raise RuntimeError(
+                f"Install the `{self.sdk_package_name}` package to use the {self.label} async client."
+            ) from error
+        return client_class(**self._client_kwargs(credential=credential))
+
+    def _client_kwargs(self, *, credential: Any | None = None) -> dict[str, Any]:
         """Return common SDK client constructor kwargs."""
 
-        kwargs: dict[str, Any] = self._credential_auth()
+        kwargs: dict[str, Any] = self._credential_auth(credential=credential)
         base_url = str(getattr(self.provider, "base_url", "") or "").strip()
         if base_url:
             kwargs["base_url"] = base_url.rstrip("/")
@@ -39,10 +60,10 @@ class SDKInferenceBackend(InferenceBackend):
             kwargs["timeout"] = timeout
         return kwargs
 
-    def _credential_auth(self) -> dict[str, str]:
+    def _credential_auth(self, *, credential: Any | None = None) -> dict[str, str]:
         """Return SDK auth kwargs for the attached credential kind."""
 
-        credential = getattr(self.provider, "credential", None)
+        credential = credential or getattr(self.provider, "credential", None)
         if credential is None:
             raise ValueError(f"{self.label} inference requires an attached credential.")
         ensure_fresh = getattr(credential, "ensure_fresh", None)

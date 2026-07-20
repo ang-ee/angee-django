@@ -1,0 +1,12 @@
+_meta:
+  model: workflows.Step
+rows:
+  - xref: agent_session_entry
+    fields:
+      workflow: workflows_agents.agent_session
+      key: session
+      name: Agent session
+      step_class: agent_session
+      config: {}
+      is_entry: true
+      position: {x: 0, y: 0}

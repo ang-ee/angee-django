@@ -115,6 +115,27 @@ class RuntimeStatus(models.TextChoices):
     WARNING = "warning", "Warning"
 
 
+class SessionStatus(models.TextChoices):
+    """Display projection of one persisted agent session's workflow state."""
+
+    IDLE = "idle", "Idle"
+    RUNNING = "running", "Running"
+    AWAITING_APPROVAL = "awaiting_approval", "Awaiting approval"
+    CLOSED = "closed", "Closed"
+    ERROR = "error", "Error"
+
+
+class TurnStatus(models.TextChoices):
+    """Execution state of one prompt-to-response turn."""
+
+    PENDING = "pending", "Pending"
+    RUNNING = "running", "Running"
+    AWAITING_APPROVAL = "awaiting_approval", "Awaiting approval"
+    COMPLETED = "completed", "Completed"
+    FAILED = "failed", "Failed"
+    CANCELED = "canceled", "Canceled"
+
+
 class InferenceProvider(ImplDefaultsMixin, AngeeModel):
     """An LLM provider account, materialized as an integration child row.
 
@@ -472,6 +493,8 @@ class MCPTool(SqidMixin, AuditMixin, AngeeModel):
     description = models.TextField(blank=True)
     input_schema = models.JSONField(default=dict, blank=True)
     enabled = models.BooleanField(default=True)
+    requires_approval = models.BooleanField(default=False)
+    """Whether invoking this tool must suspend for an owner decision."""
 
     objects = AngeeManager()
 
@@ -1081,6 +1104,15 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         runtime = self.runtime_backend
         return not runtime.renders_service or runtime.supports_credential(credential)
 
+    def resolved_inference_credential(self) -> Any:
+        """Return the live credential an in-process inference backend must use.
+
+        The agent owns the per-agent override rule, so runtimes ask this method
+        instead of re-walking or decoding the model/provider credential chain.
+        """
+
+        return self._inference_credential()
+
     def _inference_credential(self) -> Any:
         """Return the ``integrate.Credential`` backing this agent's inference, or ``None``.
 
@@ -1095,6 +1127,221 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
             return override
         model = getattr(self, "model", None)
         return model.credential if model is not None else None
+
+
+class AgentSession(SqidMixin, AuditMixin, AngeeModel):
+    """Runtime-neutral persisted conversation backed by one workflow run."""
+
+    runtime = True
+
+    sqid_prefix = "ase_"
+    agent = models.ForeignKey("agents.Agent", on_delete=models.PROTECT, related_name="sessions")
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="agent_sessions")
+    title = models.CharField(max_length=200, blank=True)
+    context = models.JSONField(default=dict, blank=True)
+    status = StateField(choices_enum=SessionStatus, default=SessionStatus.IDLE)
+    replay_state = models.JSONField(default=list, blank=True)
+    usage = models.JSONField(default=dict, blank=True)
+    last_error = models.TextField(blank=True)
+
+    status_transitions = StateTransitions(
+        status,
+        {
+            SessionStatus.IDLE: [SessionStatus.IDLE, SessionStatus.RUNNING, SessionStatus.CLOSED, SessionStatus.ERROR],
+            SessionStatus.RUNNING: [
+                SessionStatus.RUNNING,
+                SessionStatus.IDLE,
+                SessionStatus.AWAITING_APPROVAL,
+                SessionStatus.CLOSED,
+                SessionStatus.ERROR,
+            ],
+            SessionStatus.AWAITING_APPROVAL: [
+                SessionStatus.RUNNING,
+                SessionStatus.CLOSED,
+                SessionStatus.ERROR,
+            ],
+            SessionStatus.ERROR: [
+                SessionStatus.ERROR,
+                SessionStatus.IDLE,
+                SessionStatus.RUNNING,
+                SessionStatus.CLOSED,
+            ],
+        },
+    )
+
+    objects = AngeeManager()
+
+    class Meta:
+        """Django model options for persisted agent sessions."""
+
+        abstract = True
+        ordering = ("-updated_at", "sqid")
+        rebac_resource_type = "agents/session"
+        rebac_id_attr = "sqid"
+
+    def __str__(self) -> str:
+        """Return the session title or its agent name."""
+
+        return self.title or str(self.agent)
+
+    @transition(
+        status,
+        source=[SessionStatus.IDLE, SessionStatus.RUNNING, SessionStatus.AWAITING_APPROVAL, SessionStatus.ERROR],
+        target=SessionStatus.RUNNING,
+        on_success=save_state,
+    )
+    def mark_running(self) -> None:
+        """Project active turn execution onto the session."""
+
+        self.last_error = ""
+        self._transition_fields = {"last_error"}
+
+    @transition(
+        status,
+        source=[SessionStatus.IDLE, SessionStatus.RUNNING, SessionStatus.ERROR],
+        target=SessionStatus.IDLE,
+        on_success=save_state,
+    )
+    def mark_idle(self) -> None:
+        """Project a parked session awaiting its next user turn."""
+
+        self.last_error = ""
+        self._transition_fields = {"last_error"}
+
+    @transition(
+        status,
+        source=SessionStatus.RUNNING,
+        target=SessionStatus.AWAITING_APPROVAL,
+        on_success=save_state,
+    )
+    def mark_awaiting_approval(self) -> None:
+        """Project a suspended tool approval onto the session."""
+
+    @transition(
+        status,
+        source=[SessionStatus.IDLE, SessionStatus.RUNNING, SessionStatus.AWAITING_APPROVAL, SessionStatus.ERROR],
+        target=SessionStatus.CLOSED,
+        on_success=save_state,
+    )
+    def close(self) -> None:
+        """Close the conversation so its workflow step can finish."""
+
+    @transition(
+        status,
+        source=[SessionStatus.IDLE, SessionStatus.RUNNING, SessionStatus.AWAITING_APPROVAL, SessionStatus.ERROR],
+        target=SessionStatus.ERROR,
+        on_success=save_state,
+    )
+    def mark_error(self, message: str) -> None:
+        """Project a session-level runtime error."""
+
+        self.last_error = message[:2000]
+        self._transition_fields = {"last_error"}
+
+
+class AgentTurn(SqidMixin, AuditMixin, AngeeModel):
+    """One prompt-to-response cycle with append-only ACP updates."""
+
+    runtime = True
+
+    sqid_prefix = "atn_"
+    session = models.ForeignKey("agents.AgentSession", on_delete=models.CASCADE, related_name="turns")
+    index = models.PositiveIntegerField()
+    prompt = models.TextField()
+    status = StateField(choices_enum=TurnStatus, default=TurnStatus.PENDING)
+    updates = models.JSONField(default=list, blank=True)
+    text = models.TextField(blank=True)
+    usage = models.JSONField(default=dict, blank=True)
+    error = models.TextField(blank=True)
+
+    status_transitions = StateTransitions(
+        status,
+        {
+            TurnStatus.PENDING: [TurnStatus.RUNNING, TurnStatus.CANCELED],
+            TurnStatus.RUNNING: [
+                TurnStatus.RUNNING,
+                TurnStatus.AWAITING_APPROVAL,
+                TurnStatus.COMPLETED,
+                TurnStatus.FAILED,
+                TurnStatus.CANCELED,
+            ],
+            TurnStatus.AWAITING_APPROVAL: [
+                TurnStatus.RUNNING,
+                TurnStatus.COMPLETED,
+                TurnStatus.FAILED,
+                TurnStatus.CANCELED,
+            ],
+        },
+    )
+
+    objects = AngeeManager()
+
+    class Meta:
+        """Django model options for agent turns."""
+
+        abstract = True
+        ordering = ("session", "index")
+        rebac_resource_type = "agents/turn"
+        rebac_id_attr = "sqid"
+        constraints = (
+            models.UniqueConstraint(fields=("session", "index"), name="uniq_agents_turn_session_index"),
+        )
+
+    @transition(
+        status,
+        source=[TurnStatus.PENDING, TurnStatus.RUNNING, TurnStatus.AWAITING_APPROVAL],
+        target=TurnStatus.RUNNING,
+        on_success=save_state,
+    )
+    def mark_running(self) -> None:
+        """Claim or resume this turn for runtime execution."""
+
+        self.error = ""
+        self._transition_fields = {"error"}
+
+    @transition(
+        status,
+        source=TurnStatus.RUNNING,
+        target=TurnStatus.AWAITING_APPROVAL,
+        on_success=save_state,
+    )
+    def mark_awaiting_approval(self) -> None:
+        """Suspend this turn for deferred tool approval."""
+
+    @transition(
+        status,
+        source=[TurnStatus.RUNNING, TurnStatus.AWAITING_APPROVAL],
+        target=TurnStatus.COMPLETED,
+        on_success=save_state,
+    )
+    def mark_completed(self, *, text: str, usage: Mapping[str, int]) -> None:
+        """Persist the final response projection for a completed turn."""
+
+        self.text = text
+        self.usage = dict(usage)
+        self.error = ""
+        self._transition_fields = {"text", "usage", "error"}
+
+    @transition(
+        status,
+        source=[TurnStatus.RUNNING, TurnStatus.AWAITING_APPROVAL],
+        target=TurnStatus.FAILED,
+        on_success=save_state,
+    )
+    def mark_failed(self, message: str) -> None:
+        """Persist a terminal failure for this turn."""
+
+        self.error = message[:2000]
+        self._transition_fields = {"error"}
+
+    @transition(
+        status,
+        source=[TurnStatus.PENDING, TurnStatus.RUNNING, TurnStatus.AWAITING_APPROVAL],
+        target=TurnStatus.CANCELED,
+        on_success=save_state,
+    )
+    def cancel(self) -> None:
+        """Cancel this turn without deleting its audit trail."""
 
 
 _MCP_AGENT_RELATION = "agent"

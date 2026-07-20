@@ -24,6 +24,7 @@ dependencies = [
   "django-zed-rebac[strawberry-django]>=0.14",
   "django>=6.0",
   "pydantic>=2.13",
+  "pydantic-ai-slim[anthropic,mcp,openai]>=2.13",
   "croniter>=6.0",
   "python-dateutil>=2.9",
   "phonenumbers>=9.0",

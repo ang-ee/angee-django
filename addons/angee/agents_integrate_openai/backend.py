@@ -50,6 +50,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
     }
     default_broker_name = DEFAULT_BROKER_NAME
     client_class_path = "openai.OpenAI"
+    async_client_class_path = "openai.AsyncOpenAI"
     oauth_auth_kwarg = ""
     sdk_package_name = "openai"
 

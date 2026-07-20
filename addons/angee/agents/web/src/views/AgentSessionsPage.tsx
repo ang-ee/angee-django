@@ -158,7 +158,13 @@ export function AgentSessionsPage(): React.ReactElement {
         <KeptAliveAgents
           openedIds={openedIds}
           selectedId={activeId}
-          renderAgent={(id) => <AgentChat agentId={id} view={viewForAgent(id)} />}
+          renderAgent={(id) => (
+            <AgentChat
+              agentId={id}
+              view={viewForAgent(id)}
+              runtimeClass={agents.find((agent) => agent.id === id)?.runtime_class}
+            />
+          )}
         />
       </div>
     </>

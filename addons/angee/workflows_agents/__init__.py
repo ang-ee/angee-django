@@ -1,6 +1,6 @@
 """Composition addon connecting workflow activity steps to the agents catalogue.
 
-This addon owns the ``agent`` workflow activity implementation only. Agent gate
-dispatch is deferred pending an architect decision on zed subject-union extension
-for ``workflows/decision`` assignees and requesters.
+This addon owns both the one-shot ``agent`` activity and the durable
+``agent_session`` activity, plus the session service and owner-gated mutations
+that bind the agents catalogue to workflow execution.
 """
