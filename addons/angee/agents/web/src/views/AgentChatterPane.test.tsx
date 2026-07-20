@@ -94,6 +94,7 @@ function agent(
     id,
     name,
     runtime_status: "RUNNING",
+    runtime_class: "CLAUDE_CODE",
     is_template: false,
     updated_at: "2026-06-27T00:00:00Z",
     model: { name: "claude-sonnet-4-6" },
@@ -107,6 +108,7 @@ function session(overrides: Partial<AgentSession> = {}): AgentSession {
     agent_name: "Demo Agent",
     status: "running",
     model_handle: "claude-opus-4-8",
+    runtime_class: "CLAUDE_CODE",
     ...overrides,
   } as AgentSession;
 }
@@ -175,7 +177,8 @@ describe("AgentChatterPane", () => {
       sdkMocks.calls.some(
         (call) =>
           call.operation === "ResolveSessionForView" &&
-          JSON.stringify(call.options) === JSON.stringify({ models: ["agents.Agent"] }),
+          JSON.stringify(call.options) ===
+            JSON.stringify({ models: ["agents.Agent", "agents.AgentSession"] }),
       ),
     ).toBe(true);
   });

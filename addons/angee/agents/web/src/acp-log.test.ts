@@ -16,6 +16,23 @@ function toolParts(message: ChatMessage | undefined): Extract<ChatPart, { kind: 
 }
 
 describe("foldIntoLog", () => {
+  it("derives a stable assistant id from the persisted turn user id", () => {
+    const initial: ChatMessage[] = [
+      { id: "user-atn_1", role: "user", parts: [{ kind: "text", text: "Hello" }] },
+    ];
+    const first = foldIntoLog(
+      initial,
+      note({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Answer" } }),
+    );
+    const refolded = foldIntoLog(
+      [{ id: "user-atn_1", role: "user", parts: [{ kind: "text", text: "Hello" }] }],
+      note({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Answer" } }),
+    );
+
+    expect(first[1]?.id).toBe("assistant-atn_1");
+    expect(refolded[1]?.id).toBe(first[1]?.id);
+  });
+
   it("coalesces a run of agent_message_chunk text into one part", () => {
     let log: ChatMessage[] = [];
     log = foldIntoLog(log, note({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hello" } }));

@@ -266,6 +266,7 @@ def test_probe_gate_map_execute_archive_end_to_end(
 
     with system_context(reason="test workflows integrate decision"):
         decision = Decision.objects.select_related("step_run").get(step_run__run=run)
+    assert decision.step_run.resume_state["_decision_ids"] == [decision.pk]
     expected_schema = {
         "type": "object",
         "required": ["mappings"],

@@ -20,7 +20,9 @@ import hmac
 from typing import Any
 
 from django.apps import apps
-from rebac import SubjectRef, system_context, to_object_ref
+from rebac import SubjectRef, system_context
+
+from angee.agents.models import AgentLifecycle, RuntimeStatus
 
 
 def resolve_actor(bearer: str) -> SubjectRef | None:
@@ -44,18 +46,14 @@ def resolve_actor(bearer: str) -> SubjectRef | None:
         ).prefetch_related("agents"):
             if hmac.compare_digest(str(server.credential.secret_value()), bearer):
                 for agent in server.agents.all():
-                    if agent.is_template or str(agent.lifecycle) != "ready" or not (agent.workspace or agent.service):
+                    if (
+                        agent.is_template
+                        or agent.lifecycle != AgentLifecycle.READY
+                        or agent.runtime_status != RuntimeStatus.RUNNING
+                    ):
                         continue
                     agents[agent.pk] = agent
         if len(agents) != 1:
             return None
         agent = next(iter(agents.values()))
-        # ── TEMPORARY DEMO UNBLOCK — REVERT AFTER DEMO ──────────────────────────
-        # Resolve to the agent's OWNER user (the sole angee/role:admin member) so
-        # the agent can read/write notes & pages over MCP. This intentionally
-        # reopens the deferred A6 privilege-scope gap (agent borrows owner identity;
-        # see .work/plans/fork-a6-mcp-authz-deferred.md) and MUST be reverted.
-        # Original: return agent.principal_subject()
-        owner_ref = to_object_ref(agent.owner)
-        return SubjectRef.of(owner_ref.resource_type, owner_ref.resource_id)
-        # ────────────────────────────────────────────────────────────────────────
+        return agent.principal_subject()

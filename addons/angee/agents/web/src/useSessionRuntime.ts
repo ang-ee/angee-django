@@ -71,6 +71,7 @@ export function useSessionRuntime(
   const [recordAttached, setRecordAttached] = React.useState(true);
   const [clearedThrough, setClearedThrough] = React.useState(0);
   const startingRef = React.useRef<string | null>(null);
+  const activeAgentRef = React.useRef(agentId);
   const turnMessagesRef = React.useRef(new Map<string, CachedTurnMessages>());
 
   const latest = useAuthoredQuery(LatestAgentSession, { agentId }, { models: SESSION_MODELS });
@@ -90,6 +91,8 @@ export function useSessionRuntime(
   const [renderPrompt] = useAuthoredMutation(RenderAgentPrompt);
 
   React.useEffect(() => {
+    if (activeAgentRef.current === agentId) return;
+    activeAgentRef.current = agentId;
     setStartedSessionId(null);
     setClearedThrough(0);
     setPosting(false);

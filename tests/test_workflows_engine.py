@@ -479,6 +479,60 @@ def test_timer_wait_resumes_from_wake_sweep(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_deliver_is_idempotent_and_counts_delivery_on_terminal_runs(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    handler_calls: list[dict[str, Any]],
+) -> None:
+    """Repeated delivery only wakes one journal row, while every event advances generation."""
+
+    del workflow_engine_tables, no_workflow_queue, handler_calls
+    now = timezone.now()
+    parked = workflow_with_steps(
+        name="Deliver parked run",
+        steps=(
+            {
+                "key": "wait",
+                "step_class": "wait",
+                "config": {"until": (now + timedelta(days=1)).isoformat()},
+            },
+        ),
+        edges=(),
+    )
+    run = start_run(parked)
+    advance_once(run, now=now)
+    execute_started(run, now=now)
+    engine.advance(run.pk, now=now)
+
+    assert engine.deliver(run.pk, now=now) == {"woken": 1}
+    assert engine.deliver(run.pk, now=now) == {"woken": 1}
+    run.refresh_from_db()
+    assert run.deliveries == 2
+    assert engine.advance(run.pk, now=now) == {"claimed": 1}
+    with system_context(reason="test deliver idempotency"):
+        rows = list(StepRun.objects.filter(run=run))
+    assert len(rows) == 1
+    assert rows[0].status == workflow_models.StepRunStatus.STARTED
+    assert rows[0].claimed_deliveries == 2
+
+    finished = workflow_with_steps(
+        name="Deliver terminal run",
+        steps=({"key": "finish", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    terminal = start_run(finished)
+    advance_once(terminal, now=now)
+    execute_started(terminal, now=now)
+    engine.advance(terminal.pk, now=now)
+    terminal.refresh_from_db()
+    assert terminal.status == workflow_models.RunStatus.SUCCEEDED
+
+    assert engine.deliver(terminal.pk, now=now) == {"woken": 0}
+    terminal.refresh_from_db()
+    assert terminal.deliveries == 1
+
+
+@pytest.mark.django_db(transaction=True)
 def test_cancellation_propagates_to_journal_and_child_runs(
     workflow_engine_tables: None,
     no_workflow_queue: None,

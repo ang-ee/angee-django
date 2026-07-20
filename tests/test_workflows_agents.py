@@ -9,17 +9,29 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from datetime import timedelta
 from typing import Any
 
 import pytest
+from asgiref.sync import async_to_sync
+from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
-from django.db import connection
-from rebac import system_context
+from django.db import connection, transaction
+from django.db.models.deletion import ProtectedError
+from django.utils import timezone
+from pydantic_ai.models.test import TestModel
+from pydantic_ai.toolsets.function import FunctionToolset
+from rebac import actor_context, current_actor, system_context, to_subject_ref
 
 from angee.agents.backends import InferenceRequest, InferenceResponse
+from angee.agents.models import AgentLifecycle, RuntimeStatus, SessionStatus, TurnStatus
+from angee.agents.runners import TurnOutcome
+from angee.graphql.access import ChangeReadGate
+from angee.graphql.events import ChangePayload
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.steps import TransientStepError
+from angee.workflows_agents import sessions
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
@@ -27,7 +39,7 @@ from tests.conftest import (
     _create_missing_tables,
 )
 from tests.test_agents import InferenceModel, _provider
-from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent
+from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent, AgentSession, AgentTurn
 from tests.workflows import (
     WORKFLOW_RUNTIME_MODELS,
     advance_once,
@@ -325,9 +337,293 @@ def test_agent_step_reraises_transient_backend_errors(
     assert step_run.status == workflow_models.StepRunStatus.STARTED
 
 
+def test_session_and_turn_reads_and_turn_subscription_are_owner_gated(
+    workflows_agents_tables: None,
+) -> None:
+    """A non-owner cannot query a session/turn or receive its change notification."""
+
+    del workflows_agents_tables
+    owner = User.objects.create_user(username="session-owner")
+    stranger = User.objects.create_user(username="session-stranger")
+    with system_context(reason="test workflows agents rebac seed"):
+        agent = Agent.objects.create(name="Private agent", owner=owner, runtime_class="pydantic")
+        session = AgentSession.objects.create(agent=agent, owner=owner)
+        turn = AgentTurn.objects.create(session=session, index=1, prompt="private prompt")
+
+    assert list(AgentSession.objects.as_user(owner)) == [session]
+    assert list(AgentTurn.objects.as_user(owner)) == [turn]
+    assert list(AgentSession.objects.as_user(stranger)) == []
+    assert list(AgentTurn.objects.as_user(stranger)) == []
+
+    change = ChangePayload.from_instance(turn, action="update", update_fields={"status"})
+    assert ChangeReadGate(AgentTurn, to_subject_ref(owner)).filter(change) is not None
+    assert ChangeReadGate(AgentTurn, to_subject_ref(stranger)).filter(change) is None
+
+
+def test_delivery_generation_closes_the_post_between_park_and_waiting_race(
+    workflows_agents_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A post delivered after the park decision is immediately reclaimed, not stranded."""
+
+    del workflows_agents_tables, no_workflow_queue
+    from angee.agents_runtime_pydantic.runtime import PydanticAIRuntime
+    from angee.workflows_agents.steps import AgentSessionStepImpl
+
+    owner, agent = _ready_session_agent("lost-wakeup")
+    _session_workflow()
+    session = sessions.start_session(agent, owner=owner, context={})
+    with system_context(reason="test lost wakeup run"):
+        run = sessions.run_for(session)
+    step_run = advance_once(run)[0]
+    original_run = AgentSessionStepImpl.run
+    late_turns: list[Any] = []
+
+    class FakeRunner:
+        def run_turn(self, session: Any, turn: Any, **kwargs: Any) -> TurnOutcome:
+            kwargs["heartbeat"]()
+            kwargs["emit"](
+                {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "caught"}}
+            )
+            return TurnOutcome(kind="completed", text="caught", replay_state=[], usage={"requests": 1})
+
+    monkeypatch.setattr(PydanticAIRuntime, "session_runner", lambda self: FakeRunner())
+
+    def park_then_post(self: AgentSessionStepImpl, claimed: Any, *, now: Any) -> Any:
+        result = original_run(self, claimed, now=now)
+        if not late_turns:
+            late_turns.append(sessions.post_message(session, "arrived during park"))
+        return result
+
+    monkeypatch.setattr(AgentSessionStepImpl, "run", park_then_post)
+    engine.execute(step_run.pk)
+
+    step_run.refresh_from_db()
+    run.refresh_from_db()
+    assert run.deliveries == 1
+    assert step_run.claimed_deliveries == 0
+    assert step_run.status == workflow_models.StepRunStatus.WAITING
+    assert step_run.wait_until is not None and step_run.wait_until < timezone.now() + timedelta(seconds=1)
+
+    monkeypatch.setattr(AgentSessionStepImpl, "run", original_run)
+    assert engine.advance(run.pk) == {"claimed": 1}
+    engine.execute(step_run.pk)
+
+    late_turns[0].refresh_from_db()
+    assert late_turns[0].status == TurnStatus.COMPLETED
+    assert late_turns[0].text == "caught"
+
+
+def test_quiet_turn_heartbeat_cadence_survives_reaper_then_expires_without_pulses(
+    workflows_agents_tables: None,
+    no_workflow_queue: None,
+    settings: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The runner pulses independently of emitted updates often enough for a 300s lease."""
+
+    del workflows_agents_tables, no_workflow_queue
+    from angee.agents_runtime_pydantic import runner as runner_module
+    from angee.workflows_agents.steps import AgentSessionStepImpl
+
+    settings.ANGEE_WORKFLOWS_HEARTBEAT_TIMEOUT = 300
+    started_at = timezone.now()
+    workflow = workflow_with_steps(
+        name="Quiet heartbeat",
+        steps=({"key": "quiet", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    run = start_run(workflow)
+    step_run = advance_once(run, now=started_at)[0]
+    clock = {"now": started_at, "sleeps": 0}
+
+    class StopHeartbeat(Exception):
+        pass
+
+    async def advance_clock(seconds: float) -> None:
+        assert seconds == 60
+        clock["sleeps"] += 1
+        if clock["sleeps"] > 5:
+            raise StopHeartbeat
+        clock["now"] += timedelta(seconds=seconds)
+
+    def pulse() -> None:
+        AgentSessionStepImpl().heartbeat(step_run, at=clock["now"])
+
+    monkeypatch.setattr(runner_module.asyncio, "sleep", advance_clock)
+    with pytest.raises(StopHeartbeat):
+        async_to_sync(runner_module._heartbeat_loop)(pulse)
+
+    step_run.refresh_from_db()
+    assert step_run.heartbeat_at == started_at + timedelta(seconds=300)
+    assert engine.reap(now=started_at + timedelta(seconds=301)) == {"reaped": 0}
+    assert engine.reap(now=started_at + timedelta(seconds=601)) == {"reaped": 1}
+
+
+def test_builtin_style_tool_turn_keeps_agent_actor_and_async_db_boundary(
+    workflows_agents_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fake builtin tool observes the agent actor and performs ORM work asynchronously."""
+
+    del workflows_agents_tables
+    from angee.agents_runtime_pydantic import runner as runner_module
+
+    owner, agent = _ready_session_agent("builtin-tool")
+    with system_context(reason="test builtin tool session"):
+        session = AgentSession.objects.create(agent=agent, owner=owner)
+        turn = AgentTurn.objects.create(session=session, index=1, prompt="Who owns me?")
+    observed: list[tuple[Any, str]] = []
+
+    async def builtin_read_owner() -> str:
+        actor = current_actor()
+
+        def read_owner() -> str:
+            with system_context(reason="test builtin tool db boundary"):
+                return User.objects.get(pk=owner.pk).username
+
+        username = await database_sync_to_async(
+            read_owner,
+            thread_sensitive=True,
+        )()
+        observed.append((actor, username))
+        return username
+
+    monkeypatch.setattr(
+        runner_module,
+        "model_for_agent",
+        lambda selected: TestModel(call_tools=["builtin_read_owner"], custom_output_text="done"),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "toolsets_for_agent",
+        lambda selected: [FunctionToolset([builtin_read_owner])],
+    )
+
+    with actor_context(agent.principal_subject()):
+        outcome = runner_module.PydanticAISessionRunner().run_turn(
+            session,
+            turn,
+            deferred_results=[],
+            emit=lambda update: None,
+            heartbeat=lambda: None,
+        )
+
+    assert outcome.kind == "completed"
+    assert observed == [(agent.principal_subject(), owner.username)]
+
+
+def test_retrying_running_turn_discards_partial_updates(
+    workflows_agents_tables: None,
+) -> None:
+    """Reclaiming a running turn starts a clean transcript for the retry attempt."""
+
+    del workflows_agents_tables
+    from angee.workflows_agents.steps import _claim_turn
+
+    owner, agent = _ready_session_agent("retry-reset")
+    with system_context(reason="test retry reset seed"):
+        session = AgentSession.objects.create(agent=agent, owner=owner, status=SessionStatus.RUNNING)
+        turn = AgentTurn.objects.create(
+            session=session,
+            index=1,
+            prompt="retry me",
+            status=TurnStatus.RUNNING,
+            updates=[{"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "partial"}}],
+        )
+
+    with system_context(reason="test retry reset claim"), transaction.atomic():
+        claimed, resumed = _claim_turn(session)
+
+    turn.refresh_from_db()
+    assert claimed is not None and claimed.pk == turn.pk
+    assert resumed is False
+    assert turn.status == TurnStatus.RUNNING
+    assert turn.updates == []
+
+
+def test_in_process_provision_and_teardown_leave_no_orphaned_waiting_run(
+    workflows_agents_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In-process provisioning skips the operator and teardown closes/wakes every session."""
+
+    del workflows_agents_tables, no_workflow_queue
+    from angee.agents import provisioning
+
+    owner = User.objects.create_user(username="provision-in-process-owner")
+    with system_context(reason="test in-process provision seed"):
+        agent = Agent.objects.create(name="In-process", owner=owner, runtime_class="pydantic")
+    _session_workflow()
+
+    def operator_must_not_be_called() -> Any:
+        raise AssertionError("in-process provisioning must not call the operator")
+
+    monkeypatch.setattr(provisioning.OperatorDaemon, "from_settings", operator_must_not_be_called)
+    result = provisioning.provision_agent(agent.sqid)
+    agent.refresh_from_db()
+    assert result.ok is True
+    assert agent.lifecycle == AgentLifecycle.READY
+    assert agent.runtime_status == RuntimeStatus.RUNNING
+    assert agent.workspace == "" and agent.service == ""
+
+    session = sessions.start_session(agent, owner=owner, context={})
+    with system_context(reason="test teardown session run"):
+        run = sessions.run_for(session)
+    advance_once(run)
+    execute_started(run)
+    engine.advance(run.pk)
+    run.refresh_from_db()
+    assert run.status == workflow_models.RunStatus.WAITING
+
+    result = provisioning.deprovision_agent(agent.sqid)
+    session.refresh_from_db()
+    assert result.ok is True
+    assert session.status == SessionStatus.CLOSED
+
+    advance_once(run)
+    execute_started(run)
+    engine.advance(run.pk)
+    run.refresh_from_db()
+    assert run.status == workflow_models.RunStatus.SUCCEEDED
+    with system_context(reason="test no waiting session rows"):
+        assert not run.step_runs.filter(status=workflow_models.StepRunStatus.WAITING).exists()
+        with pytest.raises(ProtectedError):
+            agent.delete()
+
+
 def _inference_model(slug: str) -> InferenceModel:
     """Create one stub-backed inference model for workflow-agent tests."""
 
     provider = _provider(slug, backend_class="stub_inference", name="Stub provider")
     with system_context(reason="test workflows agent model setup"):
         return InferenceModel.objects.create(provider=provider, name=f"{slug}-model")
+
+
+def _ready_session_agent(slug: str) -> tuple[Any, Agent]:
+    """Create an owner and already-running in-process agent for session tests."""
+
+    owner = User.objects.create_user(username=f"{slug}-owner")
+    with system_context(reason="test ready session agent"):
+        agent = Agent.objects.create(
+            name=slug,
+            owner=owner,
+            runtime_class="pydantic",
+            lifecycle=AgentLifecycle.READY,
+            runtime_status=RuntimeStatus.RUNNING,
+        )
+    return owner, agent
+
+
+def _session_workflow() -> Any:
+    """Publish the structural workflow selected by the session service."""
+
+    return workflow_with_steps(
+        name="Agent session fixture",
+        subject_declaration="agents.agentsession",
+        max_steps=100000,
+        steps=({"key": "session", "step_class": "agent_session", "config": {}},),
+        edges=(),
+    )

@@ -146,6 +146,92 @@ def test_gate_policy_aggregates_resolutions_and_routes(
     assert routed.status == workflow_models.StepRunStatus.STARTED
 
 
+def test_legacy_gate_decision_still_marks_the_suspended_step_succeeded(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """Decision scoping preserves the legacy gate's terminal journal behavior."""
+
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="wdc-legacy-assignee")
+    run = _open_gate_run(_workflow_with_gate_routes(policy="one_done", assignees=[assignee]))
+    gate = _step_run(run, "gate")
+    decision = _decision_for(run, "gate")
+
+    assert gate.resume_state["_decision_ids"] == [decision.pk]
+    engine.decide(decision, "complete", actor=assignee)
+
+    gate.refresh_from_db()
+    assert gate.status == workflow_models.StepRunStatus.SUCCEEDED
+    assert gate.outcome == "completed"
+
+
+def test_resume_after_decisions_scopes_each_single_and_multi_suspension(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resumed step considers only the decisions created by its current suspension."""
+
+    del workflow_gate_tables, no_workflow_queue
+    first = User.objects.create_user(username="wdc-resume-first")
+    second = User.objects.create_user(username="wdc-resume-second")
+    third = User.objects.create_user(username="wdc-resume-third")
+
+    def suspend_each_attempt(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+        del self, now
+        assignees = [first] if step_run.attempt == 1 else [second, third]
+        return StepResult.suspend(
+            resume_state={"_resume_after_decisions": True, "gate": {"policy": "all_done"}},
+            decisions=tuple(
+                DecisionSpec(
+                    assignees=(str(to_subject_ref(assignee)),),
+                    action="approve-tool",
+                    priority=index,
+                )
+                for index, assignee in enumerate(assignees)
+            ),
+        )
+
+    monkeypatch.setattr(HandlerStep, "run", suspend_each_attempt)
+    workflow = workflow_with_steps(
+        name="Resumable decision workflow",
+        steps=({"key": "handler", "step_class": "handler", "config": {}},),
+        edges=(),
+    )
+    run = start_run(workflow)
+    advance_once(run)
+    execute_started(run)
+
+    row = _step_run(run, "handler")
+    first_decision = _decisions_for(run, "handler")[0]
+    assert row.resume_state["_decision_ids"] == [first_decision.pk]
+
+    engine.decide(first_decision, "complete", actor=first)
+    row.refresh_from_db()
+    assert row.status == workflow_models.StepRunStatus.WAITING
+    assert row.resume_state["_decision_outcome"] == "completed"
+
+    advance_once(run)
+    execute_started(run)
+    row.refresh_from_db()
+    all_decisions = _decisions_for(run, "handler")
+    current = all_decisions[1:]
+    assert len(current) == 2
+    assert row.resume_state["_decision_ids"] == [decision.pk for decision in current]
+    assert first_decision.pk not in row.resume_state["_decision_ids"]
+
+    engine.decide(current[0], "complete", actor=second)
+    row.refresh_from_db()
+    assert row.status == workflow_models.StepRunStatus.WAITING
+    assert "_decision_outcome" not in row.resume_state
+
+    engine.decide(current[1], "complete", actor=third)
+    row.refresh_from_db()
+    assert row.status == workflow_models.StepRunStatus.WAITING
+    assert row.resume_state["_decision_outcome"] == "completed"
+
+
 def test_sequential_policy_requires_priority_order(
     workflow_gate_tables: None,
     no_workflow_queue: None,

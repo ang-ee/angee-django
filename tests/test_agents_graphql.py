@@ -28,6 +28,8 @@ from rebac.roles import grant
 
 from angee.agents.context import render_view_context
 from angee.agents.models import Agent as AbstractAgent
+from angee.agents.models import AgentSession as AbstractAgentSession
+from angee.agents.models import AgentTurn as AbstractAgentTurn
 from angee.agents.models import MCPServer as AbstractMCPServer
 from angee.agents.models import MCPTool as AbstractMCPTool
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
@@ -93,8 +95,39 @@ class Agent(AbstractAgent):
         rebac_id_attr = "sqid"
 
 
+class AgentSession(AbstractAgentSession):
+    """Concrete persisted agent session used by runtime tests."""
+
+    class Meta(AbstractAgentSession.Meta):
+        abstract = False
+        app_label = "agents"
+        db_table = "test_agents_session"
+        rebac_resource_type = "agents/session"
+        rebac_id_attr = "sqid"
+
+
+class AgentTurn(AbstractAgentTurn):
+    """Concrete persisted agent turn used by runtime tests."""
+
+    class Meta(AbstractAgentTurn.Meta):
+        abstract = False
+        app_label = "agents"
+        db_table = "test_agents_turn"
+        rebac_resource_type = "agents/turn"
+        rebac_id_attr = "sqid"
+
+
 # Order: leaf models before `Agent`, whose M2M through-tables reference them.
-AGENTS_GRAPHQL_MODELS = (Skill, MCPServer, MCPTool, InferenceProvider, InferenceModel, Agent)
+AGENTS_GRAPHQL_MODELS = (
+    Skill,
+    MCPServer,
+    MCPTool,
+    InferenceProvider,
+    InferenceModel,
+    Agent,
+    AgentSession,
+    AgentTurn,
+)
 
 # Imported only now that every agents concrete is registered.
 agents_provisioning = importlib.import_module("angee.agents.provisioning")

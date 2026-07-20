@@ -81,6 +81,7 @@ function agent(
     id,
     name,
     runtime_status: "RUNNING",
+    runtime_class: "CLAUDE_CODE",
     is_template: false,
     updated_at: "2026-06-26T00:00:00Z",
     model: { name: "claude-opus" },

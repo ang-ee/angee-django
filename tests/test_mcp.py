@@ -67,6 +67,29 @@ def test_mcp_bearer_resolves_to_single_agent_principal(agents_console_tables: No
     assert resolve_actor("tok-agent") == SubjectRef.of("agents/agent", str(agent.sqid))
 
 
+def test_mcp_bearer_resolves_for_ready_in_process_agent_without_operator_names(
+    agents_console_tables: None,
+) -> None:
+    """A READY/RUNNING in-process agent authenticates despite rendering no workspace or service."""
+
+    owner = User.objects.create_user(username="mcp-process-owner", email="mcp-process@example.com")
+    with system_context(reason="test.mcp.actor.in_process"):
+        credential = Credential.objects.create_local_credential(
+            owner,
+            kind=str(CredentialKind.STATIC_TOKEN),
+            name="mcp-process-bearer",
+            material={"api_key": "tok-process"},
+        )
+        server = MCPServer.objects.create(name="angee", url="http://x/mcp/", credential=credential)
+        agent = Agent.objects.create(name="Process Agent", owner=owner, runtime_class="pydantic")
+        agent.mark_provisioning()
+        agent.mark_provisioned(workspace="", service="")
+        agent.mcp_servers.add(server)
+
+    assert agent.workspace == "" and agent.service == ""
+    assert resolve_actor("tok-process") == agent.principal_subject()
+
+
 def test_mcp_bearer_shared_by_multiple_agents_fails_closed(agents_console_tables: None) -> None:
     """A server-level bearer selected by multiple agents is ambiguous."""
 

@@ -102,6 +102,7 @@ ANGEE_AGENT_RUNTIME_CLASSES = {
     "none": "angee.agents.runtimes.NoRuntime",
     "claude_code": "angee.agents.runtimes.ClaudeCodeRuntime",
     "opencode": "angee.agents.runtimes.OpenCodeRuntime",
+    "pydantic": "angee.agents_runtime_pydantic.runtime.PydanticAIRuntime",
 }
 ANGEE_WORKFLOW_STEP_CLASSES = {
     "handler": "angee.workflows.steps.HandlerStep",
@@ -109,10 +110,12 @@ ANGEE_WORKFLOW_STEP_CLASSES = {
     "gate": "angee.workflows.steps.GateStep",
     "map": "angee.workflows.steps.MapStep",
     "agent": "angee.workflows_agents.steps.AgentStepImpl",
+    "agent_session": "angee.workflows_agents.steps.AgentSessionStepImpl",
     "archive_probe": "angee.workflows_integrate.steps.ArchiveProbeStepImpl",
     "archive_gate": "angee.workflows_integrate.steps.ArchiveGateStepImpl",
     "archive_execute": "angee.workflows_integrate.steps.ArchiveExecuteStepImpl",
 }
+ANGEE_AGENT_TEARDOWN_HOOKS = ("angee.workflows_agents.sessions.close_agent_sessions",)
 ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES = {
     "fixture_archive": "tests.test_workflows_integrate.FixtureArchiveExtractor",
 }
