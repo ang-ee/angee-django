@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from django.conf import settings
 from django.core.files.storage import FileSystemStorage, Storage
@@ -38,6 +38,9 @@ class StorageBackend(Storage):
     do not implement authorization, byte hashing, or upload state; those live
     on ``File.objects`` and the REBAC schema.
     """
+
+    writable: ClassVar[bool] = True
+    """Whether callers may create new objects through this backend."""
 
     def __init__(self, *, backend_config: Mapping[str, Any] | None = None) -> None:
         """Store the resolved per-row backend config."""

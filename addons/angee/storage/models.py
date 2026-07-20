@@ -29,8 +29,9 @@ import posixpath
 import re
 import secrets
 from collections import OrderedDict
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime
-from typing import Any, BinaryIO, ClassVar, cast
+from typing import Any, BinaryIO, ClassVar, NoReturn, cast
 from urllib.parse import urlencode
 
 from django.conf import settings
@@ -290,6 +291,8 @@ class FolderManager(AngeeManager):
         drive = drive_model._default_manager.all().from_public_id(str(drive_id))
         if drive is None:
             raise exceptions.UploadTargetNotFound("drive not found")
+        if not drive.storage.writable:
+            raise exceptions.UploadConflict("drive is read-only")
         if not drive.has_access("write"):
             raise exceptions.UploadDenied("write access to the drive is required")
         parent = None
@@ -308,6 +311,98 @@ class FolderManager(AngeeManager):
         if actor is not None:
             folder.with_actor(actor)
         return folder
+
+    def ensure_path(
+        self,
+        drive: Any,
+        parts: Sequence[str],
+        *,
+        cache: dict[tuple[str, ...], Any | None] | None = None,
+    ) -> Any | None:
+        """Return the real folder at ``parts``, creating missing segments.
+
+        External indexers already own a drive and need idempotent tree
+        materialization rather than the actor-gated GraphQL creation path.
+        The database uniqueness constraints serialize concurrent attempts. A
+        caller-owned prefix cache lets a tree walk resolve each directory once.
+        """
+
+        prefixes: dict[tuple[str, ...], Any | None] = cache if cache is not None else {(): None}
+        prefixes.setdefault((), None)
+        prefix: tuple[str, ...] = ()
+        parent = prefixes[()]
+        with system_context(reason="storage.folder.ensure_path"):
+            for raw_part in parts:
+                name = str(raw_part).strip()
+                if not name or name in {".", ".."} or "/" in name or "\\" in name:
+                    raise exceptions.UploadError(f"invalid folder path segment: {raw_part!r}")
+                prefix = (*prefix, name)
+                if prefix in prefixes:
+                    parent = prefixes[prefix]
+                    continue
+                parent, _created = self.get_or_create(
+                    drive=drive,
+                    parent=parent,
+                    name=name,
+                    defaults={"is_virtual": False},
+                )
+                prefixes[prefix] = parent
+        return parent
+
+    def prune_missing(self, drive: Any, present: Collection[Sequence[str]]) -> int:
+        """Delete real folders whose source directory vanished and hold no rows.
+
+        The folder mirror of :meth:`FileManager.trash_missing_external`: a
+        directory removed from an external source must not linger in the tree.
+        Only a truly empty leaf is removed — a folder that still parents a file
+        (a live one, or a soft-trashed one kept for history) or a surviving
+        subfolder is retained, so the reconcile never orphans a row and needs no
+        recursion. The ``folders_with_files`` guard is load-bearing precisely
+        because ``File.folder`` is ``SET_NULL`` (not ``PROTECT``): deleting a
+        folder that still parents a file would silently null the file's folder
+        rather than being blocked, so the guard — not the FK constraint — is what
+        keeps a live sync from detaching a row. Deepest paths are removed first,
+        so the ``parent`` PROTECT constraint always holds. ``present`` is the set
+        of drive-relative directory paths the current sync mirrored.
+        """
+
+        present_paths = {tuple(parts) for parts in present}
+        file_model = self.model._meta.get_field("files").related_model
+        with system_context(reason="storage.folder.prune_missing"):
+            rows = list(self.filter(drive=drive, is_virtual=False).values_list("pk", "parent_id", "name"))
+            parents: dict[Any, tuple[Any, str]] = {pk: (parent_id, name) for pk, parent_id, name in rows}
+            child_counts: dict[Any, int] = {}
+            for _pk, parent_id, _name in rows:
+                if parent_id is not None:
+                    child_counts[parent_id] = child_counts.get(parent_id, 0) + 1
+            folders_with_files = set(
+                file_model._default_manager.filter(drive=drive, folder__isnull=False)
+                .order_by()  # a distinct values_list must clear Meta.ordering
+                .values_list("folder_id", flat=True)
+                .distinct()
+            )
+
+            def path_of(pk: Any) -> tuple[str, ...]:
+                names: list[str] = []
+                cursor: Any = pk
+                while cursor is not None:
+                    parent_id, name = parents[cursor]
+                    names.append(name)
+                    cursor = parent_id
+                return tuple(reversed(names))
+
+            pruned = 0
+            for pk in sorted(parents, key=lambda folder_pk: len(path_of(folder_pk)), reverse=True):
+                parent_id, _name = parents[pk]
+                if path_of(pk) in present_paths:
+                    continue
+                if pk in folders_with_files or child_counts.get(pk, 0) > 0:
+                    continue
+                self.filter(pk=pk).delete()
+                pruned += 1
+                if parent_id is not None:
+                    child_counts[parent_id] = child_counts.get(parent_id, 1) - 1
+            return pruned
 
 
 class Folder(SqidMixin, AuditMixin, AngeeModel):
@@ -545,6 +640,8 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         """
 
         drive = self._drive_for(drive_id=drive_id, drive_slug=drive_slug)
+        if not drive.storage.writable:
+            raise exceptions.UploadConflict("drive is read-only")
         folder = self._folder_for(folder_id, drive=drive)
         if not drive.has_access("write"):
             raise exceptions.UploadDenied("write access to the drive is required")
@@ -609,10 +706,44 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         """
 
         digest = hashlib.sha256(content).hexdigest()
-        with system_context(reason="storage.file.ingest_bytes"):
+        return self.ingest_stream(
+            ContentFile(content),
+            filename=filename,
+            content_hash=digest,
+            size_bytes=len(content),
+            owner_id=owner_id,
+            drive_id=drive_id,
+            drive_slug=drive_slug,
+            folder_id=folder_id,
+        )
+
+    def ingest_stream(
+        self,
+        reader: BinaryIO,
+        *,
+        filename: str,
+        content_hash: str,
+        size_bytes: int,
+        metadata: dict[str, Any] | None = None,
+        owner_id: Any = None,
+        drive_id: str = "",
+        drive_slug: str = "",
+        folder_id: str = "",
+    ) -> Any:
+        """Ingest a pre-hashed stream without materializing it in memory.
+
+        The caller hashes outside this write path. A READY dedup hit returns
+        before the reader is consumed; otherwise the bytes stream through the
+        selected Django storage backend and the normal finalize contract
+        verifies the declared digest and size.
+        """
+
+        digest = _normalized_hash(content_hash)
+        expected_size = max(int(size_bytes), 0)
+        with system_context(reason="storage.file.ingest_stream"):
             row = self.draft(
                 filename=filename,
-                size_bytes=len(content),
+                size_bytes=expected_size,
                 drive_id=drive_id,
                 drive_slug=drive_slug,
                 folder_id=folder_id,
@@ -620,6 +751,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             )
             if row.upload_state == UploadState.READY:
                 self._grant_dedup_reach(row, owner_id)
+                self._merge_row_metadata(row, metadata)
                 return row  # content-addressed dedup hit — the bytes already exist
             if owner_id is not None and row.created_by_id is None:
                 # AuditMixin only stamps created_by when unset, so set the sync's
@@ -627,12 +759,12 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
                 row.created_by_id = owner_id
                 row.save(update_fields=["created_by"])
             storage = row.storage
-            saved_path = storage.save(row.storage_path, ContentFile(content, name=row.storage_path))
+            saved_path = storage.save(row.storage_path, DjangoFile(reader, name=row.storage_path))
             if saved_path and saved_path != row.storage_path:
                 row.storage_path = saved_path
                 row.save(update_fields=["storage_path"])
             try:
-                return row.finalize(expected_hash=digest, expected_size=len(content))
+                result = row.finalize(expected_hash=digest, expected_size=expected_size)
             except exceptions.UploadConflict:
                 # A concurrent ingest of identical bytes won the dedup race; the
                 # winner is READY, so resolve to it instead of failing the sync.
@@ -643,8 +775,240 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
                 ).first()
                 if winner is not None:
                     self._grant_dedup_reach(winner, owner_id)
-                    return winner
-                raise
+                    result = winner
+                else:
+                    raise
+            self._merge_row_metadata(result, metadata)
+            return result
+
+    def index_external(
+        self,
+        *,
+        drive: Any,
+        storage_path: str,
+        filename: str,
+        content_hash: str,
+        size_bytes: int,
+        mime_type: str = "",
+        folder: Any | None = None,
+        metadata: dict[str, Any] | None = None,
+        mime_cache: dict[str, Any | None] | None = None,
+        existing_pk: Any = None,
+        owner_id: Any = None,
+    ) -> Any:
+        """Upsert one externally-owned object by its drive-relative path.
+
+        External bytes are already present, so this path creates READY rows
+        directly. Path is the identity; the drive's content-hash uniqueness
+        remains authoritative and reports a second path with identical bytes
+        as :class:`~angee.storage.exceptions.ExternalDuplicate`.
+        """
+
+        path = str(storage_path).strip()
+        if not path:
+            raise exceptions.UploadError("storage_path is required")
+        digest = _normalized_hash(content_hash)
+        with system_context(reason="storage.file.index_external"), transaction.atomic():
+            mime = self._cached_mime_row(mime_type, cache=mime_cache)
+            row = None
+            if existing_pk is not None:
+                row = self.filter(drive=drive, pk=existing_pk).first()
+            if row is None:
+                row = self.filter(drive=drive, storage_path=path).first()
+
+            if row is None:
+                duplicate = self.filter(
+                    drive=drive,
+                    content_hash=digest,
+                    upload_state=UploadState.READY,
+                ).first()
+                if duplicate is not None:
+                    if not duplicate.is_trashed:
+                        self._raise_external_duplicate(duplicate)
+                    row = duplicate
+
+            metadata_patch = dict(metadata or {})
+
+            if row is None:
+                row = self.model(
+                    drive=drive,
+                    folder=folder,
+                    filename=filename,
+                    content_hash=digest,
+                    size_bytes=max(int(size_bytes), 0),
+                    mime_type=mime,
+                    storage_path=path,
+                    metadata=self._merged_metadata({}, metadata_patch),
+                    upload_state=UploadState.READY,
+                    created_by_id=owner_id,
+                )
+                try:
+                    row.full_clean()
+                except ValidationError as error:
+                    raise exceptions.UploadError(f"invalid external file: {error}") from error
+                try:
+                    with transaction.atomic():
+                        row.save()
+                except IntegrityError as error:
+                    duplicate = self.filter(
+                        drive=drive,
+                        content_hash=digest,
+                        upload_state=UploadState.READY,
+                    ).first()
+                    if duplicate is not None:
+                        self._raise_external_duplicate(duplicate, cause=error)
+                    raise
+                row._emit_finalized()
+                return row
+
+            content_changed = row.content_hash != digest
+            if content_changed:
+                duplicate = (
+                    self.filter(
+                        drive=drive,
+                        content_hash=digest,
+                        upload_state=UploadState.READY,
+                    )
+                    .exclude(pk=row.pk)
+                    .first()
+                )
+                if duplicate is not None:
+                    self._raise_external_duplicate(duplicate)
+            updates: list[str] = []
+            values = {
+                "folder": folder,
+                "filename": filename,
+                "content_hash": digest,
+                "size_bytes": max(int(size_bytes), 0),
+                "mime_type": mime,
+                "storage_path": path,
+                "upload_state": UploadState.READY,
+                "is_trashed": False,
+                "trashed_at": None,
+                "trashed_by": None,
+            }
+            if metadata_patch:
+                values["metadata"] = self._merged_metadata(row.metadata, metadata_patch)
+            if owner_id is not None and row.created_by_id is None:
+                values["created_by_id"] = owner_id
+            for field, value in values.items():
+                if getattr(row, field) != value:
+                    setattr(row, field, value)
+                    updates.append(field.removesuffix("_id"))
+            if updates:
+                try:
+                    row.full_clean()
+                except ValidationError as error:
+                    raise exceptions.UploadError(f"invalid external file: {error}") from error
+                try:
+                    with transaction.atomic():
+                        row.save(update_fields=[*updates, "updated_at"])
+                except IntegrityError as error:
+                    duplicate = (
+                        self.filter(
+                            drive=drive,
+                            content_hash=digest,
+                            upload_state=UploadState.READY,
+                        )
+                        .exclude(pk=row.pk)
+                        .first()
+                    )
+                    if duplicate is not None:
+                        self._raise_external_duplicate(duplicate, cause=error)
+                    raise
+            if content_changed:
+                row._emit_finalized()
+            return row
+
+    def trash_missing_external(self, drive: Any, present_paths: Collection[str]) -> int:
+        """Soft-trash live rows in ``drive`` whose external path vanished."""
+
+        present = {str(path) for path in present_paths}
+        with system_context(reason="storage.file.trash_missing_external"):
+            rows = self.filter(drive=drive, is_trashed=False).values_list("pk", "storage_path")
+            missing = [
+                pk
+                for pk, storage_path in rows.iterator(chunk_size=2000)
+                if str(storage_path) not in present
+            ]
+            if not missing:
+                return 0
+            now = timezone.now()
+            return self.filter(pk__in=missing).update(
+                is_trashed=True,
+                trashed_at=now,
+                trashed_by_id=actor_user_id(current_actor()),
+                updated_at=now,
+            )
+
+    def _cached_mime_row(
+        self,
+        mime_type: str,
+        *,
+        cache: dict[str, Any | None] | None,
+    ) -> Any | None:
+        """Resolve one MIME taxonomy row, caching distinct values for a sync run."""
+
+        key = str(mime_type or "").strip().lower() or FALLBACK_MIME
+        if cache is not None and key in cache:
+            return cache[key]
+        row = _mime_row(self.model, key)
+        if row is None and key != FALLBACK_MIME:
+            if cache is not None and FALLBACK_MIME in cache:
+                row = cache[FALLBACK_MIME]
+            else:
+                row = _mime_row(self.model, FALLBACK_MIME)
+                if cache is not None:
+                    cache[FALLBACK_MIME] = row
+        if cache is not None:
+            cache[key] = row
+        return row
+
+    def _merge_row_metadata(self, row: Any, metadata: dict[str, Any] | None) -> None:
+        """Merge caller-owned metadata into ``row`` without dropping other owners."""
+
+        if not metadata:
+            return
+        merged = self._merged_metadata(row.metadata, metadata)
+        if merged == row.metadata:
+            return
+        row.metadata = merged
+        row.save(update_fields=["metadata", "updated_at"])
+
+    def _merged_metadata(
+        self,
+        current: Any,
+        updates: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Return ``current`` recursively merged with ``updates``.
+
+        A nested :class:`~collections.abc.Mapping` under any key is merged
+        recursively, so a caller updating one owner's sub-dict keeps every other
+        owner's facts; a non-mapping value (or a value replacing a non-mapping)
+        overwrites outright. The metadata schema is opaque to storage — an owner
+        namespaces its own keys and this merge names none of them.
+        """
+
+        merged = dict(current) if isinstance(current, Mapping) else {}
+        for key, value in updates.items():
+            existing = merged.get(key)
+            if isinstance(existing, Mapping) and isinstance(value, Mapping):
+                merged[key] = self._merged_metadata(existing, dict(value))
+            else:
+                merged[key] = value
+        return merged
+
+    def _raise_external_duplicate(
+        self,
+        duplicate: Any,
+        *,
+        cause: Exception | None = None,
+    ) -> NoReturn:
+        """Raise the canonical collision for a live row at another path."""
+
+        raise exceptions.ExternalDuplicate(
+            f"identical external bytes already exist: {duplicate.sqid}"
+        ) from cause
 
     def for_upload_token(self, token: str) -> Any:
         """Return the DRAFT row a signed proxy upload token addresses.
@@ -825,6 +1189,7 @@ class File(SqidMixin, AuditMixin, AngeeModel):
                 name="uniq_storage_file_drive_content_hash",
             ),
         )
+        indexes = (models.Index(fields=("drive", "storage_path")),)
 
     def __str__(self) -> str:
         """Return the display title or original filename."""

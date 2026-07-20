@@ -41,6 +41,10 @@ class UploadConflict(UploadError):
     code = "conflict"
 
 
+class ExternalDuplicate(UploadConflict):
+    """An external path repeats content already indexed in the same drive."""
+
+
 class UploadTooLarge(UploadError):
     """The proxied body exceeds the configured byte cap."""
 

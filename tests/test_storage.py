@@ -13,6 +13,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import SuspiciousFileOperation
 from django.core.management import call_command
 from django.db import connection, models
 from django.db.models.signals import post_save
@@ -27,6 +28,7 @@ from angee.graphql.data.resource_fields import model_resource_fields
 from angee.storage import exceptions
 from angee.storage.models import FileManager, UploadState
 from angee.storage.signals import file_finalized
+from angee.storage_integrate.backends import LocalFolderBackend
 from tests.conftest import (
     STORAGE_TEST_MODELS,
     Backend,
@@ -923,3 +925,298 @@ def test_backend_storage_cache_is_bounded(
         backend.storage
 
     assert len(Backend._storage_cache) == 2
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_stream_dedup_does_not_consume_the_reader(drive: Any) -> None:
+    """A READY content hit returns before touching the caller's stream."""
+
+    digest = hashlib.sha256(b"same bytes").hexdigest()
+    with system_context(reason="test storage stream ingest"):
+        first = File.objects.ingest_stream(
+            BytesIO(b"same bytes"),
+            filename="first.bin",
+            content_hash=digest,
+            size_bytes=len(b"same bytes"),
+            owner_id=drive.alice.pk,
+            drive_id=str(drive.sqid),
+        )
+
+        class UnreadableStream(BytesIO):
+            def read(self, size: int = -1) -> bytes:
+                del size
+                raise AssertionError("dedup must not consume the reader")
+
+        duplicate = File.objects.ingest_stream(
+            UnreadableStream(b"same bytes"),
+            filename="duplicate.bin",
+            content_hash=digest,
+            size_bytes=len(b"same bytes"),
+            owner_id=drive.alice.pk,
+            drive_id=str(drive.sqid),
+        )
+
+    assert duplicate.pk == first.pk
+    assert File._base_manager.filter(drive=drive).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_stream_rejects_a_hash_mismatch_and_discards_bytes(
+    tmp_path: Path,
+    drive: Any,
+) -> None:
+    """The normal finalize contract fails a falsely pre-hashed stream."""
+
+    with pytest.raises(exceptions.UploadConflict), system_context(reason="test bad stream ingest"):
+        File.objects.ingest_stream(
+            BytesIO(b"actual bytes"),
+            filename="mismatch.bin",
+            content_hash=hashlib.sha256(b"declared bytes").hexdigest(),
+            size_bytes=len(b"actual bytes"),
+            owner_id=drive.alice.pk,
+            drive_id=str(drive.sqid),
+        )
+
+    failed = File._base_manager.get(drive=drive)
+    assert failed.upload_state == UploadState.FAILED
+    assert failed.upload_envelope["failure_reason"] == "hash_mismatch"
+    assert not (tmp_path / failed.storage_path).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_stream_reads_in_chunks_instead_of_materializing(drive: Any) -> None:
+    """Django storage pulls bounded chunks from the supplied binary stream."""
+
+    payload = b"streaming payload" * 10_000
+    read_sizes: list[int] = []
+
+    class ChunkOnlyStream(BytesIO):
+        def read(self, size: int = -1) -> bytes:
+            assert size >= 0, "the ingest owner must never request the whole stream"
+            read_sizes.append(size)
+            return super().read(size)
+
+    with system_context(reason="test streaming ingest"):
+        row = File.objects.ingest_stream(
+            ChunkOnlyStream(payload),
+            filename="stream.bin",
+            content_hash=hashlib.sha256(payload).hexdigest(),
+            size_bytes=len(payload),
+            owner_id=drive.alice.pk,
+            drive_id=str(drive.sqid),
+        )
+
+    assert row.upload_state == UploadState.READY
+    assert len(read_sizes) >= 3
+    assert set(read_sizes) == {64 * 1024}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_index_external_creates_updates_and_emits_file_finalized(drive: Any) -> None:
+    """External path upserts keep identity and publish create/content changes."""
+
+    seen: list[int] = []
+
+    def capture(sender: Any, instance: Any, **kwargs: Any) -> None:
+        del sender, kwargs
+        seen.append(instance.pk)
+
+    first_hash = hashlib.sha256(b"first").hexdigest()
+    second_hash = hashlib.sha256(b"second version").hexdigest()
+    file_finalized.connect(capture, sender=File, dispatch_uid="test.storage.index_external")
+    try:
+        created = File.objects.index_external(
+            drive=drive,
+            storage_path="docs/report.txt",
+            filename="report.txt",
+            content_hash=first_hash,
+            size_bytes=len(b"first"),
+            metadata={"source": "test", "origin": {"path": "docs/report.txt", "rev": 1}},
+            owner_id=drive.alice.pk,
+        )
+        updated = File.objects.index_external(
+            drive=drive,
+            storage_path="docs/report.txt",
+            filename="renamed.txt",
+            content_hash=second_hash,
+            size_bytes=len(b"second version"),
+            metadata={"origin": {"rev": 2}},
+            owner_id=drive.alice.pk,
+        )
+    finally:
+        file_finalized.disconnect(sender=File, dispatch_uid="test.storage.index_external")
+
+    assert updated.pk == created.pk
+    assert (updated.filename, updated.content_hash, updated.size_bytes) == (
+        "renamed.txt",
+        second_hash,
+        len(b"second version"),
+    )
+    # The opaque metadata arg merges recursively for ANY nested key: a later
+    # patch under "origin" updates "rev" while preserving the untouched "path"
+    # and the sibling top-level "source" — storage names no owner's vocabulary.
+    assert updated.metadata == {
+        "source": "test",
+        "origin": {"path": "docs/report.txt", "rev": 2},
+    }
+    assert updated.created_by_id == drive.alice.pk
+    assert seen == [created.pk, created.pk]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_index_external_restores_and_repoints_a_trashed_content_hit(drive: Any) -> None:
+    """A moved path reuses a trashed row carrying the same external bytes."""
+
+    digest = hashlib.sha256(b"moved").hexdigest()
+    original = File.objects.index_external(
+        drive=drive,
+        storage_path="old/name.txt",
+        filename="name.txt",
+        content_hash=digest,
+        size_bytes=len(b"moved"),
+        owner_id=drive.alice.pk,
+    )
+    with actor_context(drive.alice):
+        original.delete()
+
+    restored = File.objects.index_external(
+        drive=drive,
+        storage_path="new/name.txt",
+        filename="name.txt",
+        content_hash=digest,
+        size_bytes=len(b"moved"),
+        owner_id=drive.alice.pk,
+    )
+
+    assert restored.pk == original.pk
+    assert restored.storage_path == "new/name.txt"
+    assert not restored.is_trashed
+    assert restored.trashed_at is None and restored.trashed_by_id is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_index_external_rejects_a_live_duplicate_at_another_path(drive: Any) -> None:
+    """Content uniqueness remains authoritative when both paths are live."""
+
+    digest = hashlib.sha256(b"duplicate").hexdigest()
+    File.objects.index_external(
+        drive=drive,
+        storage_path="one.txt",
+        filename="one.txt",
+        content_hash=digest,
+        size_bytes=len(b"duplicate"),
+    )
+
+    with pytest.raises(exceptions.ExternalDuplicate, match="identical external bytes"):
+        File.objects.index_external(
+            drive=drive,
+            storage_path="two.txt",
+            filename="two.txt",
+            content_hash=digest,
+            size_bytes=len(b"duplicate"),
+        )
+
+    assert File._base_manager.filter(drive=drive).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_trash_missing_external_only_trashes_absent_live_paths(drive: Any) -> None:
+    """The streamed reconciliation leaves present and already-trashed rows alone."""
+
+    rows = {}
+    for path, content in (("keep.txt", b"keep"), ("gone.txt", b"gone"), ("old.txt", b"old")):
+        rows[path] = File.objects.index_external(
+            drive=drive,
+            storage_path=path,
+            filename=path,
+            content_hash=hashlib.sha256(content).hexdigest(),
+            size_bytes=len(content),
+            owner_id=drive.alice.pk,
+        )
+    with actor_context(drive.alice):
+        rows["old.txt"].delete()
+
+    assert File.objects.trash_missing_external(drive, {"keep.txt"}) == 1
+    for row in rows.values():
+        row.refresh_from_db()
+    assert not rows["keep.txt"].is_trashed
+    assert rows["gone.txt"].is_trashed
+    assert rows["old.txt"].is_trashed
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ensure_path_is_idempotent_and_reuses_the_prefix_cache(drive: Any) -> None:
+    """One caller-owned cache shares ancestors across neighboring paths."""
+
+    cache: dict[tuple[str, ...], Any | None] = {(): None}
+    first = Folder.objects.ensure_path(drive, ("projects", "angee"), cache=cache)
+    sibling = Folder.objects.ensure_path(drive, ("projects", "docs"), cache=cache)
+    repeated = Folder.objects.ensure_path(drive, ("projects", "angee"), cache=cache)
+
+    assert repeated.pk == first.pk
+    assert sibling.parent_id == first.parent_id
+    assert cache[("projects",)].pk == first.parent_id
+    assert cache[("projects", "angee")].pk == first.pk
+    assert cache[("projects", "docs")].pk == sibling.pk
+    assert Folder._base_manager.filter(drive=drive).count() == 3
+
+
+@pytest.mark.django_db(transaction=True)
+def test_read_only_drive_refuses_file_drafts_and_folder_creation(
+    tmp_path: Path,
+    drive: Any,
+) -> None:
+    """Both storage creation owners consult the backend writable contract."""
+
+    external_root = tmp_path / "external"
+    external_root.mkdir()
+    with system_context(reason="test read-only drive"):
+        backend = Backend._base_manager.create(
+            slug="read-only",
+            label="Read only",
+            backend_class="local_folder",
+            backend_config={"root": str(external_root)},
+            created_by=drive.alice,
+        )
+        read_only_drive = Drive._base_manager.create(
+            backend=backend,
+            slug="external",
+            name="External",
+            created_by=drive.alice,
+        )
+
+    with actor_context(drive.alice):
+        with pytest.raises(exceptions.UploadConflict, match="drive is read-only"):
+            File.objects.draft(filename="blocked.txt", drive_id=str(read_only_drive.sqid))
+        with pytest.raises(exceptions.UploadConflict, match="drive is read-only"):
+            Folder.objects.create_in_drive(drive_id=str(read_only_drive.sqid), name="Blocked")
+
+
+def test_local_folder_backend_never_deletes_and_has_no_public_url(tmp_path: Path) -> None:
+    """External storage keeps bytes for direct delete, discard, and URL calls."""
+
+    root = tmp_path / "external"
+    root.mkdir()
+    target = root / "kept.txt"
+    target.write_text("keep me")
+    backend = LocalFolderBackend(backend_config={"root": str(root)})
+
+    backend.discard("kept.txt", context="test")
+    assert target.read_text() == "keep me"
+    with pytest.raises(OSError, match="read-only"):
+        backend.delete("kept.txt")
+    assert target.read_text() == "keep me"
+    with pytest.raises(ValueError, match="not URL-accessible"):
+        backend.url("kept.txt")
+
+
+def test_local_folder_backend_rejects_traversal_keys(tmp_path: Path) -> None:
+    """Django's filesystem owner refuses keys that escape the configured root."""
+
+    root = tmp_path / "external"
+    root.mkdir()
+    (tmp_path / "outside.txt").write_text("secret")
+    backend = LocalFolderBackend(backend_config={"root": str(root)})
+
+    with pytest.raises(SuspiciousFileOperation):
+        backend.open("../outside.txt", "rb")
