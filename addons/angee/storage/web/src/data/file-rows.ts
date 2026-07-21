@@ -78,14 +78,53 @@ export interface StorageTreeRow extends Record<string, unknown> {
   parent: string;
   icon: string;
   kind: "scope" | "folder" | "file";
+  /**
+   * Whether the folder shows an expand caret. A not-yet-expanded folder is
+   * optimistic (`true`); once its children load it reflects whether any child
+   * folders came back (`false` when the folder proved to be a leaf). Absent on
+   * synthetic scopes and files, which keep the default loaded-children caret.
+   */
+  hasChildren?: boolean;
+  /** Whether the folder is currently fetching its children (shows a spinner). */
+  loading?: boolean;
 }
 
-/** Build the navigator rows: All files, Trash, then the drive's real folders. */
+/**
+ * Build the navigator rows from the folders loaded so far (the lazy-tree
+ * accumulator): All files, Trash, then the drive's real folders. `loadedParents`
+ * is the set of folder ids whose children have already been fetched — a folder
+ * still absent from it shows an optimistic caret; one present with no accumulated
+ * children is a leaf. `loadingParentId` is the folder currently fetching.
+ */
 export function folderTreeRows(
   folders: readonly StorageFolder[],
   driveId: string,
+  loadedParents: ReadonlySet<string>,
   openFile?: StorageFile | null,
+  loadingParentId?: string | null,
 ): StorageTreeRow[] {
+  // Which loaded folders actually parent a child folder — the fact that turns a
+  // just-expanded folder into a leaf when nothing came back.
+  const parentsWithChildren = new Set<string>();
+  const folderIds = new Set<string>();
+  const driveFolders: StorageFolder[] = [];
+  for (const folder of folders) {
+    if (folder.is_virtual) continue;
+    if ((folder.drive ?? "") !== driveId) continue;
+    driveFolders.push(folder);
+    folderIds.add(folder.id);
+    if (folder.parent) parentsWithChildren.add(folder.parent);
+  }
+  // Anchor the open file under its folder only when that folder is a rendered
+  // node; otherwise fall back to All files so the open file never orphans out of
+  // the tree (its ancestor chain may not be expanded, or it may be filtered out).
+  const openAnchorParent =
+    openFile && openFile.drive === driveId
+      ? openFile.folder && folderIds.has(openFile.folder)
+        ? openFile.folder
+        : ALL_SCOPE
+      : null;
+
   const rows: StorageTreeRow[] = [
     {
       id: ALL_SCOPE,
@@ -102,30 +141,24 @@ export function folderTreeRows(
       kind: "scope",
     },
   ];
-  const folderIds = new Set<string>();
-  for (const folder of folders) {
-    if (folder.is_virtual) continue;
-    if ((folder.drive ?? "") !== driveId) continue;
-    folderIds.add(folder.id);
+  for (const folder of driveFolders) {
     rows.push({
       id: folder.id,
       name: folder.name,
       parent: folder.parent ?? "",
       icon: "folder",
       kind: "folder",
+      hasChildren: loadedParents.has(folder.id)
+        ? parentsWithChildren.has(folder.id) || openAnchorParent === folder.id
+        : true,
+      loading: loadingParentId === folder.id,
     });
   }
-  if (openFile && openFile.drive === driveId) {
+  if (openFile && openAnchorParent) {
     rows.push({
       id: openFile.id,
       name: openFile.title || openFile.filename,
-      // Anchor under the file's folder only when that folder is a rendered
-      // node; otherwise fall back to All files so the open file never orphans
-      // out of the tree (folders may resolve after files, or be filtered out).
-      parent:
-        openFile.folder && folderIds.has(openFile.folder)
-          ? openFile.folder
-          : ALL_SCOPE,
+      parent: openAnchorParent,
       icon: openFile.mime_type?.icon_key || "file",
       kind: "file",
     });

@@ -68,9 +68,34 @@ export const StorageBackends = graphql(`
   }
 `);
 
-export const StorageFolders = graphql(`
-  query StorageFolders($drive: String!) {
-    folders(where: { drive: { _eq: $drive } }, order_by: [{ name: asc }]) {
+// The folder tree loads lazily: top-level folders first, then a folder's
+// children only when it is expanded. Both arms share the projection and bound
+// each request with `limit`; the drive's partial indexes on `(drive, parent,
+// name)` and `(drive, name) WHERE parent IS NULL` serve them cheaply.
+export const StorageFolderRoots = graphql(`
+  query StorageFolderRoots($drive: String!, $limit: Int) {
+    folders(
+      where: { drive: { _eq: $drive }, parent: { _is_null: true } }
+      order_by: [{ name: asc }]
+      limit: $limit
+    ) {
+      id
+      name
+      description
+      is_virtual
+      drive
+      parent
+    }
+  }
+`);
+
+export const StorageFolderChildren = graphql(`
+  query StorageFolderChildren($drive: String!, $parent: String!, $limit: Int) {
+    folders(
+      where: { drive: { _eq: $drive }, parent: { _eq: $parent } }
+      order_by: [{ name: asc }]
+      limit: $limit
+    ) {
       id
       name
       description
@@ -111,10 +136,10 @@ export type StorageFile = NonNullable<
   DocumentType<typeof StorageFileById>["files_by_pk"]
 >;
 
-/** A folder (tree node) or smart folder, as projected by `StorageFolders`; ids
- * are public sqids. */
+/** A folder (tree node) or smart folder, as projected by the folder-tree
+ * queries; the roots and children arms share this shape. Ids are public sqids. */
 export type StorageFolder = NonNullable<
-  DocumentType<typeof StorageFolders>["folders"]
+  DocumentType<typeof StorageFolderRoots>["folders"]
 >[number];
 
 /** A drive (tree root), as projected by `StorageDrives`. */

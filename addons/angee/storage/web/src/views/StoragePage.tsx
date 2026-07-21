@@ -9,9 +9,11 @@ import {
   StorageBackends,
   StorageDrives,
   StorageFileById,
-  StorageFolders,
+  StorageFolderChildren,
+  StorageFolderRoots,
   type StorageDrive,
   type StorageFile,
+  type StorageFolder,
 } from "../data/documents";
 import {
   ALL_SCOPE,
@@ -35,10 +37,18 @@ import { SelectedFolderControl } from "./SelectedFolderControl";
 import { useStorageT } from "../i18n";
 
 // Drives and backends are small catalogues. Files page through their resource
-// and folders are fetched independently for the active drive.
+// and folders load lazily per parent for the active drive.
 const STORAGE_CATALOGUE_LIMIT = 500;
 const FILE_MODEL = "storage.File";
+const FOLDER_MODEL = "storage.Folder";
 const ALL_FILES_DEFAULT_GROUP = { field: "folder" } as const;
+// A single parent's children (and the drive's top level) come back in one
+// request, capped here. The Tree is not virtualized, so rendering far more than
+// this under one parent would be the real cost; the cap keeps each per-parent
+// fetch and render bounded. NOTE: a level with more than this many folders is
+// truncated (no continuation) — acceptable for now, since virtualization + paged
+// children is the tracked follow-up, not silent completeness.
+const FOLDER_PAGE_LIMIT = 5000;
 
 // Stable field projections for the drive tree roots: module-scope so the
 // explorer's option list keeps a stable identity (the navigator is published
@@ -112,12 +122,100 @@ export function StoragePage(): ReactElement {
   useEffect(() => {
     if (openFile?.drive) setActiveDriveId(openFile.drive);
   }, [openFile?.drive]);
-  const foldersQuery = useAuthoredQuery(
-    StorageFolders,
-    { drive: folderDriveId },
-    { enabled: folderDriveId !== "", models: ["storage.Folder"] },
+  // Lazy folder tree: the drive's top-level folders come from `rootsQuery` and
+  // stay in the query cache (derived during render, never mirrored into state).
+  // Only a folder's children are accumulated — fetched on the first expand and
+  // kept in `childrenByParent`, keyed by the expanded folder's id — with
+  // `loadedParents` recording which folders have resolved their children.
+  const [childrenByParent, setChildrenByParent] = useState<
+    ReadonlyMap<string, readonly StorageFolder[]>
+  >(() => new Map());
+  const [loadedParents, setLoadedParents] = useState<ReadonlySet<string>>(
+    () => new Set(),
   );
-  const folders = foldersQuery.data?.folders ?? [];
+  // A FIFO of folders awaiting a children fetch; the head drives the single
+  // children query, so one parent is in flight at a time and expansions queue up.
+  const [expandQueue, setExpandQueue] = useState<readonly string[]>([]);
+  const nextParent = expandQueue[0] ?? null;
+
+  // Switching drives invalidates every loaded folder; start the accumulator over.
+  useEffect(() => {
+    setChildrenByParent(new Map<string, readonly StorageFolder[]>());
+    setLoadedParents(new Set<string>());
+    setExpandQueue([]);
+  }, [folderDriveId]);
+
+  const rootsQuery = useAuthoredQuery(
+    StorageFolderRoots,
+    { drive: folderDriveId, limit: FOLDER_PAGE_LIMIT },
+    { enabled: folderDriveId !== "", models: [FOLDER_MODEL] },
+  );
+
+  const childrenQuery = useAuthoredQuery(
+    StorageFolderChildren,
+    { drive: folderDriveId, parent: nextParent ?? "", limit: FOLDER_PAGE_LIMIT },
+    {
+      enabled: folderDriveId !== "" && nextParent !== null,
+      models: [FOLDER_MODEL],
+    },
+  );
+  const childFolders = childrenQuery.data?.folders;
+  const childrenFetching = childrenQuery.fetching;
+  const childrenError = childrenQuery.error;
+  // Append a resolved parent's children to the accumulator, then dequeue it. The
+  // `fetching` gate keeps `keepPreviousData` placeholders out, and the parent
+  // check ignores any stale rows that belong to a different parent. Dequeuing
+  // clears `nextParent`, so this settles after one pass per expanded folder.
+  useEffect(() => {
+    if (nextParent === null || childrenFetching) return;
+    // A failed fetch (permission error, dropped socket, timeout after react-
+    // query's retries) must not wedge the queue: drop the head so the rest keeps
+    // draining. The parent is deliberately left out of `loadedParents`, so its
+    // optimistic caret stays and a later expand re-enqueues it — the fetch is
+    // retryable rather than stuck spinning forever.
+    if (childrenError) {
+      setExpandQueue((prev) => (prev[0] === nextParent ? prev.slice(1) : prev));
+      return;
+    }
+    if (!childFolders) return;
+    if (childFolders.length > 0 && (childFolders[0]?.parent ?? "") !== nextParent) {
+      return;
+    }
+    setChildrenByParent((prev) => new Map(prev).set(nextParent, childFolders));
+    setLoadedParents((prev) => new Set(prev).add(nextParent));
+    setExpandQueue((prev) => (prev[0] === nextParent ? prev.slice(1) : prev));
+  }, [nextParent, childrenFetching, childrenError, childFolders]);
+
+  // Expanding an unloaded folder enqueues it (deduped against the queue and the
+  // already-loaded set, read through a ref to keep the callback stable).
+  const loadedParentsRef = useLatestRef(loadedParents);
+  const handleExpandFolder = useCallback(
+    (nodeId: string) => {
+      if (loadedParentsRef.current.has(nodeId)) return;
+      setExpandQueue((prev) =>
+        prev.includes(nodeId) ? prev : [...prev, nodeId],
+      );
+    },
+    [loadedParentsRef],
+  );
+  // A folder write can change the top level and any expanded parent's children:
+  // refresh the roots (they flow straight from the query) and collapse the loaded
+  // children so the next expand refetches them.
+  const refetchRoots = rootsQuery.refetch;
+  const handleFolderMutation = useCallback(() => {
+    refetchRoots();
+    setChildrenByParent(new Map<string, readonly StorageFolder[]>());
+    setLoadedParents(new Set<string>());
+    setExpandQueue([]);
+  }, [refetchRoots]);
+  const rootFolders = rootsQuery.data?.folders;
+  const accumulatedFolders = useMemo(
+    () => [
+      ...(rootFolders ?? []),
+      ...Array.from(childrenByParent.values()).flat(),
+    ],
+    [rootFolders, childrenByParent],
+  );
   const closeDetail = useCallback(() => {
     void navigate({
       to: "/storage",
@@ -138,8 +236,15 @@ export function StoragePage(): ReactElement {
     [navigate],
   );
   const getTreeRows = useCallback(
-    (rootId: string) => folderTreeRows(folders, rootId, openFile),
-    [folders, openFile],
+    (rootId: string) =>
+      folderTreeRows(
+        accumulatedFolders,
+        rootId,
+        loadedParents,
+        openFile,
+        nextParent,
+      ),
+    [accumulatedFolders, loadedParents, nextParent, openFile],
   );
   // The inline drive-create form. `name` is the record title (prefilled with the
   // typed query); `backend` is the required FK, picked from the catalogue above.
@@ -173,7 +278,7 @@ export function StoragePage(): ReactElement {
   }, [openFileId, openFileQuery.refetch]);
   const fileActions = useFileActions({ onChanged: refreshOpenFile });
   const folderActions = useFolderActions({
-    onChanged: foldersQuery.refetch,
+    onChanged: handleFolderMutation,
   });
   const confirm = useConfirm();
   const { refetch: refetchDrives } = drivesQuery;
@@ -214,6 +319,9 @@ export function StoragePage(): ReactElement {
         label="name"
         rowKey="id"
         icon="icon"
+        hasChildren="hasChildren"
+        loading="loading"
+        onExpand={handleExpandFolder}
         selectedId={openFile?.id ?? (controller.selectedId ?? ALL_SCOPE)}
         onSelect={(row) => {
           if (row.kind === "file") {
@@ -232,7 +340,7 @@ export function StoragePage(): ReactElement {
         className="min-h-0 flex-1 overflow-auto"
       />
     ),
-    [handleFileDrop, openFile, openFileRoute],
+    [handleExpandFolder, handleFileDrop, openFile, openFileRoute],
   );
   const renderNavigatorFooter = useCallback(
     (controller: StorageExplorerController) => {
