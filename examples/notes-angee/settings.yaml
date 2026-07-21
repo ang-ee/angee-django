@@ -12,6 +12,7 @@ INSTALLED_APPS:
   - angee.agents_integrate_anthropic
   - angee.agents_integrate_openai
   - angee.integrate
+  - angee.integrate_iphone
   - angee.iam_integrate_oidc
   - angee.integrate_github
   - angee.knowledge
@@ -31,6 +32,7 @@ INSTALLED_APPS:
   - angee.platform_integrate_vcs
   - angee.storage
   - angee.storage_integrate
+  - angee.storage_integrate_iphone
   - example.notes
 
 ANGEE_ADDON_DIRS:

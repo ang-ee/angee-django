@@ -14,6 +14,7 @@ INSTALLED_APPS = [
     "angee.resources",
     "tests.iam_app.TestIAMConfig",
     "angee.integrate",
+    "angee.integrate_iphone",
     "angee.iam_integrate_oidc",
     "angee.agents",
     "angee.workflows",
@@ -23,6 +24,7 @@ INSTALLED_APPS = [
     "angee.mcp",
     "angee.storage",
     "angee.storage_integrate",
+    "angee.storage_integrate_iphone",
     "angee.parties",
     "angee.money",
     "angee.scheduling",
@@ -77,9 +79,11 @@ ANGEE_STORAGE_TRASH_TTL_DAYS = 30
 ANGEE_STORAGE_BACKEND_CLASSES = {
     "local": "angee.storage.backends.LocalBackend",
     "local_folder": "angee.storage_integrate.backends.LocalFolderBackend",
+    "iphone_backup": "angee.storage_integrate_iphone.backends.IphoneBackupStorageBackend",
 }
 ANGEE_STORAGE_MOUNT_BACKEND_CLASSES = {
     "local_folder": "angee.storage_integrate.mounts.LocalFolderMountBackend",
+    "iphone_backup": "angee.storage_integrate_iphone.mounts.IphoneBackupMountBackend",
 }
 ANGEE_INTEGRATION_IMPLS = {
     "none": "angee.integrate.impl.NullIntegrationImpl",

@@ -1,0 +1,8 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.storage_integrate_iphone"
+description = "iPhone backups exposed as external storage Mounts"
+keywords = ["iphone", "backup", "storage", "mounts"]
+category = "Integration"
+depends_on = ["angee.storage_integrate", "angee.storage", "angee.integrate", "angee.integrate_iphone"]
