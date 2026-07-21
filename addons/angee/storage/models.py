@@ -439,7 +439,9 @@ class Folder(SqidMixin, AuditMixin, AngeeModel):
         blank=True,
         related_name="children",
     )
-    name = models.CharField(max_length=200)
+    # A single path segment, mirrored from an external source; one observed iOS
+    # backup cache-directory segment exceeded 200 characters. Match File.filename.
+    name = models.CharField(max_length=512)
     description = models.TextField(blank=True)
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,

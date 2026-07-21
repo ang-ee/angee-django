@@ -10,7 +10,7 @@ from typing import Any, cast
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import DataError, models
 from rebac import system_context
 
 from angee.base.fields import StateField
@@ -172,7 +172,9 @@ class Mount(Bridge):
                 counts["duplicates"] += 1
                 self._report_batch(counts)
                 continue
-            except (exceptions.UploadError, OSError, ValidationError):
+            # Each manager write owns its atomic block; with no transaction
+            # around sync, a contained DataError is already rolled back.
+            except (DataError, exceptions.UploadError, OSError, ValidationError):
                 counts["errors"] += 1
                 self._report_batch(counts)
                 continue
@@ -277,7 +279,9 @@ class Mount(Bridge):
                     PurePosixPath(directory).parts,
                     cache=cache,
                 )
-            except (exceptions.UploadError, OSError, ValidationError):
+            # Each ensure_path write owns its atomic block; with no transaction
+            # around sync, a contained DataError is already rolled back.
+            except (DataError, exceptions.UploadError, OSError, ValidationError):
                 counts["errors"] += 1
                 continue
 

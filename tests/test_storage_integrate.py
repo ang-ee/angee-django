@@ -15,7 +15,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import connection
+from django.db import DataError, connection
 from django.utils import timezone
 from rebac import app_settings, system_context
 from rebac.roles import grant
@@ -595,6 +595,38 @@ def test_reference_entry_validation_error_is_contained_and_counted(
     assert mount.last_sync_status == "ok"
     assert _details(mount)["errors"] == 1
     assert _details(mount)["scanned"] == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reference_entry_data_error_is_contained_and_counted(
+    mount_env: SimpleNamespace,
+    queued_mounts: list[Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One over-limit external name cannot abort the remaining file sync."""
+
+    root = mount_env.tmp_path / "data-error"
+    root.mkdir()
+    long_name = f"{'x' * 220}.txt"
+    _write(root / long_name, b"bad", mtime_ns=BASE_MTIME_NS)
+    _write(root / "good.txt", b"good", mtime_ns=BASE_MTIME_NS + 1)
+    mount = _connect(mount_env, root, mode=MountMode.REFERENCE, name="Data error")
+    del queued_mounts
+
+    manager = File.objects
+    original_index_external = manager.index_external
+
+    def index_external(**kwargs: Any) -> Any:
+        if kwargs["filename"] == long_name:
+            raise DataError("value too long for storage filename")
+        return original_index_external(**kwargs)
+
+    monkeypatch.setattr(manager, "index_external", index_external)
+    assert _run_sync(mount) == 1
+    assert mount.last_sync_status == "ok"
+    assert _details(mount)["errors"] == 1
+    assert _details(mount)["scanned"] == 2
+    assert set(_file_map(mount.drive)) == {"good.txt"}
 
 
 @pytest.mark.django_db(transaction=True)

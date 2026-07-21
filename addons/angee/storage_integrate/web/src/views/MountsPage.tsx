@@ -7,25 +7,28 @@ import {
   Group,
   List,
   ResourceList,
+  SlotOutlet,
   useRecordActionMutation,
+  useSlot,
 } from "@angee/ui";
 import * as React from "react";
 
-import { ConnectLocalFolderAction } from "../ConnectLocalFolderAction";
 import { MOUNT_MODEL } from "../documents";
 import { useStorageIntegrateT } from "../i18n";
+import { STORAGE_MOUNT_TOOLBAR_SLOT } from "../slots";
 
 /** Local and future vendor-backed external storage mounts. */
 export function MountsPage(): React.ReactElement {
   const t = useStorageIntegrateT();
   const [sync] = useRecordActionMutation<ActionFieldName>("sync_mount");
+  const toolbarEntries = useSlot(STORAGE_MOUNT_TOOLBAR_SLOT);
   return (
     <ResourceList
       resource={MOUNT_MODEL}
       placement="inline"
       routed
       hideCreate
-      toolbarActions={<ConnectLocalFolderAction />}
+      toolbarActions={<SlotOutlet entries={toolbarEntries} />}
     >
       <List resource={MOUNT_MODEL}>
         <Column field="display_name" header={t("mount.name")} />
