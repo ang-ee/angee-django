@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from angee.agents.backends import InferenceModelSpec, InferenceRequest, InferenceResponse
+from angee.agents.backends import InferenceModelSpec, InferenceRequest, InferenceResponse, ChatAPI
 from angee.agents.sdk_backends import SDKInferenceBackend
 
 DEFAULT_BROKER_NAME = "openai"
@@ -43,6 +43,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
     key = "openai"
     label = "OpenAI"
     icon = "openai"
+    chat_api = ChatAPI.OPENAI_CHAT
     api_key_env = ("OPENAI_API_KEY",)
     defaults = {
         "vendor": "openai",
