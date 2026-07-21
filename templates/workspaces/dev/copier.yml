@@ -44,6 +44,7 @@ _angee:
     operator.port_pool.operator:   { range: "9001-9099" }
     operator.port_pool.postgres:   { range: "5433-5531" }
     operator.port_pool.redis:      { range: "6380-6478" }
+    operator.port_pool.ollama:     { range: "11435-11533" }
     operator.port_pool.process_compose: { range: "10000-10999" }
     # Caddy edge host port — each workspace leases a distinct one so parallel
     # workspace stacks (and the base stack on :80) don't all contend for :80.
@@ -84,6 +85,7 @@ _angee:
         operator_port:      "${alloc.operator}"
         postgres_port:      "${alloc.postgres}"
         redis_port:         "${alloc.redis}"
+        ollama_port:        "${alloc.ollama}"
         edge_port:          "${alloc.edge}"
         process_compose_port: "${alloc.process_compose}"
 

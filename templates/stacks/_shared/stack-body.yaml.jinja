@@ -93,8 +93,8 @@ ports:
   # The operator reads process_compose for the process-compose control port.
   process_compose: { value: {{ process_compose_port }}, export_env: PROCESS_COMPOSE_PORT }
   postgres: { value: {{ postgres_port }}, export_env: POSTGRES_PORT }
-  redis: { value: {{ redis_port }}, export_env: REDIS_PORT }
-{% endif %}
+  redis: { value: {{ redis_port }}, export_env: REDIS_PORT }{# Optional entries share the outer endif line so disabled output stays byte-identical. #}
+{% if enable_ollama %}  ollama: { value: {{ ollama_port }}, export_env: OLLAMA_PORT }{% endif %}{% endif %}
 {% if runtime_mode == "docker" %}
   ui: { value: {{ ui_port }}, export_env: ANGEE_UI_PORT }
 {% endif %}
@@ -108,7 +108,7 @@ persist:
   # Host coding agent's Playwright MCP user-data-dir (docs/stack.md).
   chrome-profile: { subpath: {{ ANGEE_ROOT }}/data/chrome, scope: stack }
   pgdata: { subpath: {{ ANGEE_ROOT }}/pgdata, scope: stack }
-{% endif %}
+{% if enable_ollama %}  ollama: { subpath: {{ ANGEE_ROOT }}/ollama, scope: stack }{% endif %}{% endif %}
 {% if runtime_mode == "docker" %}
   # App media/static (ANGEE_DATA_DIR -> /app/.angee/data via the django bind mount).
   app-data: { subpath: ./data, scope: stack }
@@ -241,7 +241,16 @@ services:
       - "${ports.redis}:6379"
 {% endif %}
 
-{% if runtime_mode == "process" %}
+{% if runtime_mode == "process" %}{% if enable_ollama %}  # Optional shared local inference server. Models live in the stack-owned bind
+  # mount and are pulled manually; no agent owns or duplicates this singleton.
+  ollama:
+    runtime: container
+    image: ollama/ollama
+    mounts:
+      - bind://./ollama:/root/.ollama
+    ports:
+      - "${ports.ollama}:11434"
+{% endif %}{% endif %}{% if runtime_mode == "process" %}
   # Angee overrides `runserver` to serve angee.asgi with uvicorn under Django's own
   # follow-imports autoreloader (consumer addons, base addons, framework core, editable
   # deps), never the generated runtime/ tree. Provision has already emitted runtime,

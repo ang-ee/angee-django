@@ -4,10 +4,9 @@ Both stack templates (``stacks/dev`` = process mode, ``stacks/local`` = docker m
 render from ONE shared manifest body (``stacks/_shared/stack-body.yaml.jinja``): each
 ``angee.yaml.jinja`` is a thin ``{% set %}`` header that includes it. The mini-renderer
 below inlines that include, then evaluates the template constructs the operator's
-pongo2 engine handles — ``{% set %}``, ``{% if VAR == "VAL" %}`` blocks, the celery
-``{% for role in [...] %}`` loop, and inline ``{% if flag %}`` / ``{% if VAR == "VAL" %}``
-command guards — so the contract tests pin whatever the templates compute, never a
-value re-derived here.
+pongo2 engine handles — ``{% set %}``, nested equality/bare-flag conditionals,
+and the celery ``{% for role in [...] %}`` loop — so the contract tests pin
+whatever the templates compute, never a value re-derived here.
 """
 
 from __future__ import annotations
@@ -42,27 +41,23 @@ SHARED_SERVICES = {"operator", "postgres", "redis", "django", "celery-worker", "
 
 _INCLUDE = re.compile(r'{%\s*include\s+"([^"]+)"\s*%}')
 _JINJA_TAG = re.compile(r"{%\s*(.*?)\s*%}")
-_BLOCK_IF = re.compile(r'^{%\s*if\s+(\w+)\s*==\s*"([^"]*)"\s*%}$')
-_BLOCK_ELIF = re.compile(r'^{%\s*elif\s+(\w+)\s*==\s*"([^"]*)"\s*%}$')
+_CONDITIONAL_TAG = re.compile(r"{%\s*(if\s+.*?|elif\s+.*?|else|endif)\s*%}")
 
 
 def _render_stack_manifest(manifest_path: Path, variables: dict[str, str]) -> dict[str, Any]:
     """Render a wrapper manifest + its shared body into a YAML contract dict.
 
     Runs the template passes in dependency order: inline the shared-body include,
-    strip comments, bind ``{% set %}`` variables, evaluate the ``{% if VAR == "VAL" %}``
-    mode/framework blocks, expand the celery ``{% for %}`` loop, resolve the inline
-    ``{% if VAR == "VAL" %}`` and ``{% if flag %}`` command guards, then substitute the
-    remaining ``{{ var }}`` interpolations.
+    strip comments, bind ``{% set %}`` variables, expand the celery ``{% for %}``
+    loop, evaluate nested/inline conditionals, then substitute the remaining
+    ``{{ var }}`` interpolations.
     """
 
     text = _inline_includes(manifest_path)
     text = _strip_jinja_comments(text)
     text = _render_jinja_set_tags(text, variables)
-    text = _render_conditional_blocks(text, variables)
     text = _render_for_loops(text, variables)
-    text = _render_inline_eq_conditionals(text, variables)
-    text = _render_inline_flag_conditionals(text, variables)
+    text = _render_conditionals(text, variables)
     for key, value in variables.items():
         text = text.replace(f"{{{{ {key} }}}}", value)
     assert "{{" not in text, text
@@ -155,52 +150,40 @@ def _apply_set_line(line: str, variables: dict[str, str]) -> None:
             variables[name.strip()] = _eval_expr(expr, variables)
 
 
-def _render_conditional_blocks(text: str, variables: dict[str, str]) -> str:
-    """Evaluate standalone `{% if VAR == "VAL" %}` / elif / else / endif blocks.
-
-    A frame stack keeps parent activity, so nested guards — e.g. the docker
-    ``framework == "source"`` source inside the ``runtime_mode == "docker"`` block —
-    resolve correctly. Only whole-line tags are treated as block boundaries; an inline
-    ``{% if … %}…{% endif %}`` on a content line (with trailing text) passes through
-    to the inline passes.
-    """
+def _render_conditionals(text: str, variables: dict[str, str]) -> str:
+    """Evaluate nested equality/bare-flag blocks, including inline boundary tags."""
 
     frames: list[dict[str, bool]] = []
     output: list[str] = []
-
-    for line in text.splitlines():
-        stripped = line.strip()
-        match_if = _BLOCK_IF.match(stripped)
-        if match_if:
+    cursor = 0
+    for match in _CONDITIONAL_TAG.finditer(text):
+        if _parent_active(frames):
+            output.append(text[cursor : match.start()])
+        body = match.group(1)
+        if body.startswith("if "):
             parent = _parent_active(frames)
-            active = parent and variables.get(match_if.group(1)) == match_if.group(2)
+            active = parent and _eval_condition(body[len("if ") :], variables)
             frames.append({"active": active, "matched": active, "parent": parent})
-            continue
-        match_elif = _BLOCK_ELIF.match(stripped)
-        if match_elif:
+        elif body.startswith("elif "):
             frame = frames[-1]
             active = (
                 frame["parent"]
                 and not frame["matched"]
-                and variables.get(match_elif.group(1)) == match_elif.group(2)
+                and _eval_condition(body[len("elif ") :], variables)
             )
             frame["active"] = active
             frame["matched"] = frame["matched"] or active
-            continue
-        if stripped == "{% else %}":
+        elif body == "else":
             frame = frames[-1]
-            active = frame["parent"] and not frame["matched"]
-            frame["active"] = active
+            frame["active"] = frame["parent"] and not frame["matched"]
             frame["matched"] = True
-            continue
-        if stripped == "{% endif %}":
+        else:
             frames.pop()
-            continue
-        if _parent_active(frames):
-            output.append(line)
-
+        cursor = match.end()
+    if _parent_active(frames):
+        output.append(text[cursor:])
     assert not frames
-    return "\n".join(output) + "\n"
+    return "".join(output)
 
 
 def _parent_active(frames: list[dict[str, bool]]) -> bool:
@@ -250,26 +233,6 @@ def _render_for_loops(text: str, variables: dict[str, str]) -> str:
         expand,
         text,
         flags=re.DOTALL,
-    )
-
-
-def _render_inline_eq_conditionals(text: str, variables: dict[str, str]) -> str:
-    """Resolve inline `{% if VAR == "VAL" %}…{% endif %}` command guards (same line)."""
-
-    return re.sub(
-        r'{%\s*if\s+(\w+)\s*==\s*"([^"]*)"\s*%}(.*?){%\s*endif\s*%}',
-        lambda m: m.group(3) if variables.get(m.group(1)) == m.group(2) else "",
-        text,
-    )
-
-
-def _render_inline_flag_conditionals(text: str, variables: dict[str, str]) -> str:
-    """Resolve inline `{% if <flag> %}…{% endif %}` command guards by truthiness."""
-
-    return re.sub(
-        r"{%\s*if\s+(\w+)\s*%}(.*?){%\s*endif\s*%}",
-        lambda m: m.group(2) if variables.get(m.group(1)) else "",
-        text,
     )
 
 
@@ -329,6 +292,8 @@ def _render_dev_stack(
     project_path: str = "../examples/notes-angee",
     framework_path: str = "..",
     celery_queues: str = "",
+    enable_ollama: bool = False,
+    ollama_port: str = "11434",
 ) -> dict[str, Any]:
     """Render the process-mode dev stack enough for YAML contract tests.
 
@@ -345,7 +310,9 @@ def _render_dev_stack(
         "celery_queues": celery_queues,
         "django_port": "8100",
         "edge_port": "7001",
+        "enable_ollama": "true" if enable_ollama else "",
         "framework_path": framework_path,
+        "ollama_port": ollama_port,
         "operator_port": "9000",
         "postgres_port": "5433",
         "process_compose_port": "10000",
@@ -637,6 +604,38 @@ def test_dev_stack_runs_redis_and_celery_services() -> None:
     assert "worker" in stack["services"]["celery-worker"]["command"]
     assert "celery" in stack["services"]["celery-beat"]["command"]
     assert "beat" in stack["services"]["celery-beat"]["command"]
+
+
+def test_dev_stack_ollama_is_opt_in_and_persistent() -> None:
+    """The large shared Ollama service leaves no manifest entries until enabled."""
+
+    manifest = yaml.safe_load(DEV_COPIER.read_text(encoding="utf-8"))
+    assert manifest["enable_ollama"] == {
+        "type": "bool",
+        "default": False,
+        "help": (
+            "Run the shared Ollama container for local inference. Models are pulled manually "
+            "and persist under the dev stack."
+        ),
+    }
+    assert manifest["ollama_port"]["type"] == "int"
+    assert manifest["ollama_port"]["default"] == 11434
+
+    disabled = _render_dev_stack()
+    assert "ollama" not in disabled["ports"]
+    assert "ollama" not in disabled["persist"]
+    assert "ollama" not in disabled["services"]
+    assert "ollama" not in _render_local_stack()["services"]
+
+    enabled = _render_dev_stack(enable_ollama=True, ollama_port="11435")
+    assert enabled["ports"]["ollama"] == {"value": 11435, "export_env": "OLLAMA_PORT"}
+    assert enabled["persist"]["ollama"] == {"subpath": ".angee/ollama", "scope": "stack"}
+    assert enabled["services"]["ollama"] == {
+        "runtime": "container",
+        "image": "ollama/ollama",
+        "mounts": ["bind://./ollama:/root/.ollama"],
+        "ports": ["${ports.ollama}:11434"],
+    }
 
 
 def test_dev_stack_keeps_the_process_only_frontend_services() -> None:
