@@ -207,6 +207,26 @@ example project, so it brings the whole stack up for you.
    clones its sources in; that is how a downstream project or a shared local
    platform is run.
 
+### Optional Ollama inference
+
+The dev stack can run one shared, operator-managed Ollama container for local
+inference. It is disabled by default because the image and model store are large.
+Enable it when rendering a standalone dev overlay:
+
+```sh
+angee init --dev --input enable_ollama=true --input ollama_port=11434
+angee dev
+# In another shell after the stack is up:
+docker compose -f .angee/docker-compose.yaml exec ollama ollama pull llama3.2
+```
+
+The model pull is deliberately manual; downloaded models persist in the stack's
+`.angee/ollama` store across restarts. The `ollama` inference backend defaults to
+`http://localhost:11434/v1`, which reaches the published port from the local
+Django and Celery processes. If `ollama_port` is changed or leased to a workspace,
+set the Ollama inference provider row's `base_url` to
+`http://localhost:<ollama_port>/v1`.
+
 To run one-shot management commands against the example (emit runtime sources,
 migrate, sync permissions, load data, check the GraphQL SDL), drive its
 `manage.py` through `uv` from the root — the full sequence is in

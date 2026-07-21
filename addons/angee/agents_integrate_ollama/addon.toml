@@ -1,0 +1,15 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.agents_integrate_ollama"
+description = "Ollama local inference backend — adds OpenAI-compatible local models to the agents catalogue"
+keywords = ["ollama", "local", "inference"]
+category = "Integration"
+depends_on = ["angee.agents", "angee.agents_integrate_openai", "angee.integrate"]
+
+[resources]
+master = [{ path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" }]
+demo = [
+  { path = "resources/demo/030_agents.inferenceprovider.yaml", depends_on = ["iam:resources/demo/010_iam.user.yaml", "resources/master/010_integrate.vendor.yaml"] },
+  { path = "resources/demo/040_agents.inferencemodel.yaml", depends_on = "resources/demo/030_agents.inferenceprovider.yaml", adopt = ["provider", "name"] },
+]

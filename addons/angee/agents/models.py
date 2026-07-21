@@ -1088,20 +1088,20 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         """Whether this agent can be provisioned with working inference auth.
 
         A model-less agent needs no inference credential, so it is always ready. A
-        model-backed agent is ready only when its credential yields a usable secret — a
-        missing or placeholder credential (no key) would render a service that can never
-        authenticate, so the provision flow refuses it up front rather than bringing up a
-        broken agent. When the runtime renders a service, the runtime must also be able to
-        consume that credential kind (e.g. OpenCode cannot use an OAuth token), so an
+        credential-less backend is ready only for an in-process runtime, where its default
+        endpoint reaches the host directly. Every attached credential must yield a usable
+        secret, and a service-rendering runtime must be able to consume its kind, so an
         unworkable pairing is refused here rather than degrading silently at run time.
         """
 
         if self.model_id is None:
             return True
         credential = self.inference_credential_for_runtime()
-        if credential is None or not self.inference_secret():
-            return False
         runtime = self.runtime_backend
+        if credential is None:
+            return not self.model.provider.backend.requires_credential and not runtime.renders_service
+        if not self.inference_secret():
+            return False
         return not runtime.renders_service or runtime.supports_credential(credential)
 
     def inference_credential_for_runtime(self) -> Any:

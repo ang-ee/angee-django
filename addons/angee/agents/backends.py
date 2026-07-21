@@ -9,10 +9,29 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, ClassVar
 
 from angee.base.impl import ImplBase
 from angee.integrate.connect import enabled_oauth_client_from_hint
+
+
+class ChatAPI(StrEnum):
+    """The chat protocol an inference backend speaks to its vendor.
+
+    A vendor-neutral fact each backend *declares*, so a consumer that must pick a
+    protocol adapter reads the declaration instead of switching on vendor identity.
+    That is what lets an OpenAI-compatible backend (Ollama, a local router, a
+    hosted gateway) inherit the right adapter from its base class without the
+    consumer growing a branch per vendor.
+
+    It is deliberately coarser than a vendor: many vendors speak ``OPENAI_CHAT``.
+    A new protocol adds a member here and one builder in the consuming runtime;
+    a new vendor on an existing protocol adds neither.
+    """
+
+    ANTHROPIC_MESSAGES = "anthropic_messages"
+    OPENAI_CHAT = "openai_chat"
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +105,12 @@ class InferenceBackend(ImplBase):
     category = "inference"
     label = "Inference"
     icon = "sparkles"
+    # The chat protocol this backend speaks, for consumers that must bind a protocol
+    # adapter to it (the in-process pydantic-ai runtime is the one today). Empty means
+    # the backend offers no in-process adapter — the built-in manual backend has no
+    # client at all. Subclasses inherit it, so an OpenAI-compatible vendor declares
+    # nothing here.
+    chat_api: ClassVar[str] = ""
     # Vendor-neutral: a base backend never pins a product OAuth client. Provider
     # connect is available only when a vendor backend addon sets this slug.
     oauth_client: ClassVar[str] = ""
@@ -93,6 +118,9 @@ class InferenceBackend(ImplBase):
     # runtime composes into the container env (see ``angee.agents.runtimes``). An
     # empty tuple means the backend declares no static-key runtime env.
     api_key_env: ClassVar[tuple[str, ...]] = ()
+    # Whether callers must attach an inference credential. This belongs to the
+    # contract because every backend consumer must make the same typed decision.
+    requires_credential: ClassVar[bool] = True
     defaults = {
         "name": "Manual",
         "status": "draft",

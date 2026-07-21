@@ -605,7 +605,7 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(agents_co
         credential = Credential.objects.upsert_for_user(
             provider.owner,
             oauth_client,
-            CredentialKind.OAUTH,
+            str(CredentialKind.OAUTH),
             {"access_token": "anthropic-token"},
         )
     mutation = """
@@ -1631,6 +1631,24 @@ def test_provision_service_inputs_credential_drives_auth_env(agents_console_tabl
         '      ANTHROPIC_CUSTOM_HEADERS: "anthropic-beta: oauth-2025-04-20"'
     )
     assert oauth_inputs["model"] == "claude-opus-4-8"
+
+
+def test_provision_service_inputs_allow_an_unauthenticated_backend(agents_console_tables: None) -> None:
+    """Only an in-process runtime is ready for a no-auth backend."""
+
+    owner = User.objects.create_user(username="agt-svc-ollama-agent", email="ollama@example.com")
+    provider = _provider("agt-svc-ollama", backend_class="ollama", name="Ollama")
+    with system_context(reason="test.agents.provision_inputs.ollama"):
+        provider.credential = None
+        provider.save(update_fields=["credential"])
+        model = InferenceModel.objects.create(provider=provider, name="ollama/llama3.2:latest")
+        agent = Agent.objects.create(name="Local", owner=owner, model=model, runtime_class="pydantic")
+        service_agent = Agent.objects.create(name="Local service", owner=owner, model=model, runtime_class="opencode")
+
+        assert agent.inference_credential_ready() is True
+        assert agent.provision_service_inputs() == {"model": "ollama/llama3.2:latest"}
+        assert agent.provision_inference_secret() == ""
+        assert service_agent.inference_credential_ready() is False
 
 
 def test_provision_service_inputs_opencode_refuses_oauth_credential(agents_console_tables: None) -> None:

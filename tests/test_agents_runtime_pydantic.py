@@ -17,6 +17,7 @@ from pydantic_ai.messages import (
     ToolCallPart,
     ToolReturnPart,
 )
+from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.toolsets.function import FunctionToolset
 
@@ -25,8 +26,10 @@ from angee.agents_integrate_anthropic.backend import (
     AnthropicInferenceBackend,
     _OAuthMessagesTransport,
 )
+from angee.agents_integrate_ollama.backend import OllamaInferenceBackend
 from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
 from angee.agents_runtime_pydantic.acp import updates_for_event
+from angee.agents_runtime_pydantic.providers import model_for_agent
 from angee.agents_runtime_pydantic.runner import PydanticAISessionRunner, _usage_limits
 from angee.agents_runtime_pydantic.toolsets import _transport_for
 from angee.integrate.credentials import CredentialKind
@@ -35,7 +38,7 @@ from angee.integrate.credentials import CredentialKind
 class _Credential:
     """Minimal credential double exercising the public SDK backend seam."""
 
-    def __init__(self, value: str, *, kind: CredentialKind = CredentialKind.STATIC_TOKEN) -> None:
+    def __init__(self, value: str, *, kind: Any = CredentialKind.STATIC_TOKEN) -> None:
         self.value = value
         self.kind = kind
         self.freshened = 0
@@ -96,6 +99,35 @@ def test_openai_async_client_keeps_per_agent_static_credential(monkeypatch: Any)
     assert captured == [{"api_key": "agent-key", "timeout": 12}]
     assert override.freshened == 1
     assert provider_credential.freshened == 0
+
+
+def test_model_for_agent_builds_ollama_without_a_credential(monkeypatch: Any) -> None:
+    """The declared OpenAI protocol builds Ollama with its no-auth endpoint defaults."""
+
+    captured: list[dict[str, Any]] = []
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.append(kwargs)
+            self.base_url = kwargs["base_url"]
+
+    monkeypatch.setattr("angee.agents.sdk_backends.import_string", lambda path: FakeAsyncOpenAI)
+    provider = SimpleNamespace(credential=None, base_url="", config={})
+    provider.backend = OllamaInferenceBackend(provider)
+    agent = SimpleNamespace(
+        model=SimpleNamespace(provider=provider, provider_model_name="llama3.2:latest"),
+        inference_credential_for_runtime=lambda: None,
+    )
+
+    inference_model = model_for_agent(agent)
+
+    assert isinstance(inference_model, OpenAIChatModel)
+    assert captured == [
+        {
+            "api_key": "not-required",
+            "base_url": "http://localhost:11434/v1",
+        }
+    ]
 
 
 def test_acp_events_emit_reducer_shapes_and_one_tool_call() -> None:

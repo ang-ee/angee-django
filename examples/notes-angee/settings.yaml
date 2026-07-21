@@ -10,6 +10,7 @@ INSTALLED_APPS:
   - angee.workflows_agents
   - angee.agents_runtime_pydantic
   - angee.agents_integrate_anthropic
+  - angee.agents_integrate_ollama
   - angee.agents_integrate_openai
   - angee.integrate
   - angee.integrate_iphone

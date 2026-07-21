@@ -845,6 +845,9 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   registry raises `ImproperlyConfigured` at import — give the addon a
   noop/null-object default so the set is never empty. The column stores the key
   (`local`), never a dotted path.
+- **Implementation subclasses must replace every inherited semantic default that changes.**
+  See `ImplBase.effective_defaults()` for the merge contract. An OpenAI-compatible
+  backend that omits its own `name` and `vendor` silently creates an OpenAI provider row.
 - **Never name an addon module after a third-party top-level package it imports.**
   `unittest` discovery inserts the discovery-root directory onto `sys.path`, so an
   addon's `mcp.py` that does `from mcp.server… import …` becomes an importable

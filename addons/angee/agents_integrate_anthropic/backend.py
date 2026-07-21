@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from angee.agents.backends import InferenceModelSpec, InferenceRequest, InferenceResponse
+from angee.agents.backends import ChatAPI, InferenceModelSpec, InferenceRequest, InferenceResponse
 from angee.agents.runtimes import ANTHROPIC_OAUTH_CLIENT_HEADERS, ANTHROPIC_OAUTH_SYSTEM_PREAMBLE
 from angee.agents.sdk_backends import SDKInferenceBackend
 from angee.integrate.credentials import CredentialKind
@@ -80,6 +80,7 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
     key = "anthropic"
     label = "Anthropic"
     icon = "anthropic"
+    chat_api = ChatAPI.ANTHROPIC_MESSAGES
     oauth_client = "anthropic-personal"
     api_key_env = ("ANTHROPIC_API_KEY",)
     defaults = {
