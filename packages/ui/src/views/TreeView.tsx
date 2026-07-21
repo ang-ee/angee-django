@@ -32,8 +32,19 @@ export interface TreeViewProps<
   rowKey?: keyof TRow & string;
   /** Field holding an icon registry name. */
   icon?: keyof TRow & string;
+  /**
+   * Field holding a boolean that declares the row is expandable even when its
+   * children are not loaded yet (lazy trees). Opt-in: when omitted, a node's
+   * caret follows the loaded children exactly as before. Pair it with
+   * {@link TreeViewProps.onExpand} to fetch children on demand.
+   */
+  hasChildren?: keyof TRow & string;
+  /** Field holding a boolean that shows a spinner while the row's children load. */
+  loading?: keyof TRow & string;
   selectedId?: string;
   onSelect?: (row: TRow) => void;
+  /** Fired with a node id when it expands and its children are not loaded yet. */
+  onExpand?: (nodeId: string) => void;
   renderRow?: (row: TRow) => ReactNode;
   /** Make a node draggable by returning a payload for its row, or `null`. */
   draggableRow?: (row: TRow) => DndPayload | null;
@@ -55,8 +66,11 @@ export function TreeView<TRow extends Record<string, unknown>>({
   badge,
   rowKey = "id" as keyof TRow & string,
   icon,
+  hasChildren,
+  loading,
   selectedId,
   onSelect,
+  onExpand,
   renderRow,
   draggableRow,
   dropAccept,
@@ -72,8 +86,18 @@ export function TreeView<TRow extends Record<string, unknown>>({
     [rows, rowKey],
   );
   const nodes = useMemo(
-    () => buildTree(rows, { parent, label, badge, rowKey, icon, renderRow }),
-    [rows, parent, label, badge, rowKey, icon, renderRow],
+    () =>
+      buildTree(rows, {
+        parent,
+        label,
+        badge,
+        rowKey,
+        icon,
+        hasChildren,
+        loading,
+        renderRow,
+      }),
+    [rows, parent, label, badge, rowKey, icon, hasChildren, loading, renderRow],
   );
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const droppable = onNodeDrop != null;
@@ -88,6 +112,7 @@ export function TreeView<TRow extends Record<string, unknown>>({
     <Tree
       nodes={nodes}
       selectedId={selectedId}
+      onExpand={onExpand}
       className={className}
       dropTargetId={dropTargetId}
       onSelect={
@@ -158,6 +183,8 @@ function buildTree<TRow extends Record<string, unknown>>(
     badge: (keyof TRow & string) | undefined;
     rowKey: keyof TRow & string;
     icon: (keyof TRow & string) | undefined;
+    hasChildren: (keyof TRow & string) | undefined;
+    loading: (keyof TRow & string) | undefined;
     renderRow?: (row: TRow) => ReactNode;
   },
 ): TreeNode[] {
@@ -179,6 +206,15 @@ function buildTree<TRow extends Record<string, unknown>>(
         ? { icon: row[options.icon] as string }
         : {}),
       ...(count !== undefined && Number.isFinite(count) ? { count } : {}),
+      // Only carry the caret/spinner facts a row explicitly declares: a row that
+      // leaves the field unset (e.g. a synthetic scope) keeps the default,
+      // loaded-children caret behavior.
+      ...(options.hasChildren && row[options.hasChildren] !== undefined
+        ? { hasChildren: Boolean(row[options.hasChildren]) }
+        : {}),
+      ...(options.loading && row[options.loading] !== undefined
+        ? { loading: Boolean(row[options.loading]) }
+        : {}),
       children: (byParent.get(id) ?? []).map(toNode),
     };
   };

@@ -14,6 +14,7 @@ import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
 import { toneGlyph, type Tone } from "../lib/tones";
 import { tv } from "../lib/variants";
+import { Spinner } from "./spinner";
 
 /**
  * Generic recursive tree primitive. Renders one flat row per node with
@@ -34,6 +35,15 @@ export interface TreeNode {
   /** Numeric count, right-aligned. */
   count?: number;
   children?: readonly TreeNode[];
+  /**
+   * Declares the node is expandable even when its `children` are not loaded yet
+   * (lazy trees). An unloaded expandable node renders a caret and starts folded;
+   * expanding it fires {@link TreeProps.onExpand}. Falls back to
+   * `Boolean(children?.length)` when omitted (eager trees).
+   */
+  hasChildren?: boolean;
+  /** Shows a spinner in place of the caret while its children load. */
+  loading?: boolean;
   /** Starts collapsed when true. */
   defaultCollapsed?: boolean;
 }
@@ -42,6 +52,13 @@ export interface TreeProps {
   nodes: readonly TreeNode[];
   selectedId?: string;
   onSelect?: (id: string) => void;
+  /**
+   * Fired when a node transitions collapsed→expanded and its children are not
+   * loaded yet (a `hasChildren` node with an empty/absent `children` array), so a
+   * lazy tree can fetch that node's children on demand. Never fires for a node
+   * whose children are already loaded.
+   */
+  onExpand?: (id: string) => void;
   getNodeDraggable?: (id: string) => boolean;
   onNodeDragStart?: (id: string, event: DragEvent<HTMLDivElement>) => void;
   onNodeDragEnd?: (id: string, event: DragEvent<HTMLDivElement>) => void;
@@ -99,11 +116,19 @@ function flattenTree(
   out: FlatRow[] = [],
 ): FlatRow[] {
   for (const node of nodes) {
-    const hasChildren = Boolean(node.children?.length);
-    const isCollapsed = collapsed.has(node.id);
+    const loadedChildren = node.children ?? [];
+    const hasLoadedChildren = loadedChildren.length > 0;
+    // A node may declare it is expandable before its children are loaded; then it
+    // still gets a caret but has nothing to render underneath yet.
+    const hasChildren = node.hasChildren ?? hasLoadedChildren;
+    // An expandable node with no loaded children starts folded (lazy): it shows a
+    // caret and stays collapsed until expanded. A node with loaded children obeys
+    // the collapsed set (expanded unless the user folded it — eager behavior).
+    const isCollapsed =
+      hasChildren && !hasLoadedChildren ? true : collapsed.has(node.id);
     out.push({ node, depth, hasChildren, collapsed: isCollapsed, parentId });
     if (hasChildren && !isCollapsed) {
-      flattenTree(node.children ?? [], collapsed, node.id, depth + 1, out);
+      flattenTree(loadedChildren, collapsed, node.id, depth + 1, out);
     }
   }
   return out;
@@ -113,6 +138,7 @@ export function Tree({
   nodes,
   selectedId,
   onSelect,
+  onExpand,
   getNodeDraggable,
   onNodeDragStart,
   onNodeDragEnd,
@@ -173,6 +199,28 @@ export function Tree({
     setFocusedId(id);
   }, []);
 
+  // Expand a row, requesting its children on the first expand of a lazy node.
+  // `toggleCollapsed(id, false)` keeps it out of the collapsed set so its
+  // children render once they load; `onExpand` only fires when they are absent.
+  const expandNode = useCallback(
+    (row: FlatRow) => {
+      toggleCollapsed(row.node.id, false);
+      if (!row.node.children?.length) onExpand?.(row.node.id);
+    },
+    [onExpand, toggleCollapsed],
+  );
+
+  const handleToggle = useCallback(
+    (row: FlatRow) => {
+      if (row.hasChildren && !row.node.children?.length) {
+        expandNode(row);
+        return;
+      }
+      toggleCollapsed(row.node.id);
+    },
+    [expandNode, toggleCollapsed],
+  );
+
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
       if (!effectiveFocusedId) return;
@@ -200,7 +248,7 @@ export function Tree({
         case "ArrowRight": {
           if (row.hasChildren) {
             event.preventDefault();
-            if (row.collapsed) toggleCollapsed(row.node.id, false);
+            if (row.collapsed) expandNode(row);
             else {
               const child = flat[index + 1];
               if (child && child.depth === row.depth + 1) moveFocus(child.node.id);
@@ -224,7 +272,7 @@ export function Tree({
           return;
       }
     },
-    [effectiveFocusedId, flat, moveFocus, onSelect, toggleCollapsed],
+    [effectiveFocusedId, expandNode, flat, moveFocus, onSelect, toggleCollapsed],
   );
 
   const renderRow = (row: FlatRow): ReactNode => (
@@ -234,7 +282,7 @@ export function Tree({
       selectedId={selectedId}
       isFocused={row.node.id === effectiveFocusedId}
       dropTargetId={dropTargetId}
-      onToggle={() => toggleCollapsed(row.node.id)}
+      onToggle={() => handleToggle(row)}
       onSelect={onSelect}
       onFocusRow={setFocusedId}
       getNodeDraggable={getNodeDraggable}
@@ -310,6 +358,7 @@ function TreeRow({
   rowRef: (el: HTMLDivElement | null) => void;
 }): ReactNode {
   const { node, depth, hasChildren, collapsed } = row;
+  const loading = node.loading ?? false;
   // Depth-driven left padding so nested rows indent without wrapping.
   const padLeft: CSSProperties | undefined =
     depth > 0
@@ -354,19 +403,35 @@ function TreeRow({
     >
       <button
         type="button"
-        aria-label={hasChildren ? (collapsed ? "Expand" : "Collapse") : undefined}
-        className={cn("grid place-content-center", !hasChildren && "invisible")}
-        disabled={!hasChildren}
+        aria-label={
+          loading
+            ? "Loading…"
+            : hasChildren
+              ? collapsed
+                ? "Expand"
+                : "Collapse"
+              : undefined
+        }
+        aria-busy={loading || undefined}
+        className={cn(
+          "grid place-content-center",
+          !hasChildren && !loading && "invisible",
+        )}
+        disabled={!hasChildren || loading}
         tabIndex={-1}
         onClick={(event) => {
           event.stopPropagation();
           onToggle();
         }}
       >
-        <Glyph
-          name="chevron-right"
-          className={cn("transition-transform", hasChildren && !collapsed && "rotate-90")}
-        />
+        {loading ? (
+          <Spinner size="sm" />
+        ) : (
+          <Glyph
+            name="chevron-right"
+            className={cn("transition-transform", hasChildren && !collapsed && "rotate-90")}
+          />
+        )}
       </button>
       {node.icon ? (
         <span className={node.iconTone ? toneGlyph(node.iconTone) : undefined}>
