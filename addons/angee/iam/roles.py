@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from django.contrib.auth import get_user_model
-from django.db.models import Exists, OuterRef, QuerySet, Subquery
+from django.db.models import Exists, OuterRef, QuerySet, Subquery, TextField
+from django.db.models.functions import Cast
 from django.http import HttpRequest
 from rebac import ObjectRef, app_settings, system_context
 from rebac import backend as rebac_backend
@@ -675,11 +676,21 @@ def unassigned_user_queryset() -> QuerySet[Any]:
             .order_by(*user_ordering(user_model)),
         )
 
+    # REBAC stores subject ids as text (``str(<attr>)`` — see the sqid branch
+    # above and rebac's own actor resolution). The correlated attribute may be an
+    # integer column (the default ``REBAC_USER_ID_ATTR="pk"`` resolves to the
+    # bigint pk), so cast it to text before the subquery compares it against the
+    # varchar subject id — otherwise registry storage correlates
+    # ``subject_fk.resource_id`` (varchar) to the bigint pk and Postgres rejects
+    # ``character varying = bigint``.
+    user_queryset = user_queryset.annotate(
+        _iam_subject_id=Cast(subject_lookup, output_field=TextField()),
+    )
     assigned_exists = active_relationship_model().objects.filter(
         resource_type__in=schema_role_resource_types(),
         relation=ROLE_RELATION,
         subject_type=app_settings.REBAC_USER_TYPE,
-        subject_id=OuterRef(subject_lookup),
+        subject_id=OuterRef("_iam_subject_id"),
         optional_subject_relation="",
     )
     return cast(
