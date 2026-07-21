@@ -3,27 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, ClassVar
 
-from angee.agents.backends import InferenceModelSpec, InferenceRequest, InferenceResponse, ChatAPI
+from angee.agents.backends import ChatAPI, InferenceModelSpec, InferenceRequest, InferenceResponse
 from angee.agents.sdk_backends import SDKInferenceBackend
 
 DEFAULT_BROKER_NAME = "openai"
 _ALLOWED_MESSAGE_ROLES = frozenset({"assistant", "developer", "system", "tool", "user"})
-_DEFAULT_MODEL_ALLOW_PREFIXES = ("gpt-", "chatgpt-", "o1", "o3", "o4")
-_DEFAULT_MODEL_DENY_PREFIXES = (
-    "babbage-",
-    "codex-",
-    "dall-e",
-    "davinci-",
-    "gpt-4o-mini-transcribe",
-    "gpt-4o-transcribe",
-    "gpt-image-",
-    "omni-moderation",
-    "text-embedding-",
-    "tts-",
-    "whisper-",
-)
 _MAX_TOKEN_FIELDS = frozenset({"max_tokens", "max_completion_tokens"})
 _RESERVED_CHAT_OPTIONS = frozenset(
     {
@@ -44,7 +30,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
     label = "OpenAI"
     icon = "openai"
     chat_api = ChatAPI.OPENAI_CHAT
-    api_key_env = ("OPENAI_API_KEY",)
+    api_key_env: ClassVar[tuple[str, ...]] = ("OPENAI_API_KEY",)
     defaults = {
         "vendor": "openai",
         "name": "OpenAI",
@@ -52,6 +38,21 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
     default_broker_name = DEFAULT_BROKER_NAME
     client_class_path = "openai.OpenAI"
     async_client_class_path = "openai.AsyncOpenAI"
+    # Empty is the explicit allow-all sentinel; deny prefixes are still evaluated first.
+    model_allow_prefixes: ClassVar[tuple[str, ...]] = ("gpt-", "chatgpt-", "o1", "o3", "o4")
+    model_deny_prefixes: ClassVar[tuple[str, ...]] = (
+        "babbage-",
+        "codex-",
+        "dall-e",
+        "davinci-",
+        "gpt-4o-mini-transcribe",
+        "gpt-4o-transcribe",
+        "gpt-image-",
+        "omni-moderation",
+        "text-embedding-",
+        "tts-",
+        "whisper-",
+    )
     oauth_auth_kwarg = ""
     sdk_package_name = "openai"
 
@@ -65,7 +66,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
                 continue
             if not self._is_chat_model(model_id):
                 continue
-            config = {"provider_model": model_id, "source": "openai"}
+            config = {"provider_model": model_id, "source": self.key}
             owned_by = str(getattr(model, "owned_by", "") or "").strip()
             if owned_by:
                 config["owned_by"] = owned_by
@@ -82,7 +83,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
         """Send one non-streaming Chat Completions request through OpenAI."""
 
         params: dict[str, Any] = {
-            **self._message_options(request, reserved=_RESERVED_CHAT_OPTIONS, owner="OpenAI"),
+            **self._message_options(request, reserved=_RESERVED_CHAT_OPTIONS, owner=self.label),
             "model": self._provider_model(request.model),
             "messages": self._openai_messages(request),
             self._max_tokens_param(): request.max_tokens,
@@ -102,13 +103,17 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
         )
 
     def _is_chat_model(self, model_id: str) -> bool:
-        """Return whether an OpenAI model id should enter the chat catalogue."""
+        """Return whether a compatible model id should enter the chat catalogue.
 
-        denied = self._config_string_list("model_deny_prefixes", default=_DEFAULT_MODEL_DENY_PREFIXES)
+        Deny prefixes win; an empty allow-prefix tuple is the explicit allow-all
+        sentinel for every remaining id.
+        """
+
+        denied = self._config_string_list("model_deny_prefixes", default=self.model_deny_prefixes)
         if any(model_id.startswith(prefix) for prefix in denied):
             return False
-        allowed = self._config_string_list("model_allow_prefixes", default=_DEFAULT_MODEL_ALLOW_PREFIXES)
-        return any(model_id.startswith(prefix) for prefix in allowed)
+        allowed = self._config_string_list("model_allow_prefixes", default=self.model_allow_prefixes)
+        return not allowed or any(model_id.startswith(prefix) for prefix in allowed)
 
     def _max_tokens_param(self) -> str:
         """Return the OpenAI token-limit parameter owned by this backend."""
@@ -116,7 +121,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
         value = str(self._config_value("max_tokens_param", default="max_tokens") or "max_tokens")
         if value not in _MAX_TOKEN_FIELDS:
             allowed = ", ".join(sorted(_MAX_TOKEN_FIELDS))
-            raise ValueError(f"OpenAI max_tokens_param must be one of: {allowed}.")
+            raise ValueError(f"{self.label} max_tokens_param must be one of: {allowed}.")
         return value
 
     def _openai_messages(self, request: InferenceRequest) -> list[dict[str, Any]]:

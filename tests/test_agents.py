@@ -25,12 +25,14 @@ from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionUsage
 from rebac import system_context
 
+from angee.agents.backends import ChatAPI
 from angee.agents.models import InferenceModel as AbstractInferenceModel
 from angee.agents.models import InferenceProvider as AbstractInferenceProvider
 from angee.agents.models import Skill as AbstractSkill
 from angee.agents.sdk_backends import SDKInferenceBackend
 from angee.agents.skills import parse_skill_meta
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
+from angee.agents_integrate_ollama.backend import OllamaInferenceBackend
 from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
 from angee.integrate.credentials import CredentialKind
 from tests.conftest import (
@@ -281,7 +283,8 @@ def test_sdk_backend_client_class_override_skips_dotted_import() -> None:
         client_class_path = "missing_provider_sdk.Client"
         sdk_package_name = "missing-provider-sdk"
 
-        def _client_kwargs(self) -> dict[str, Any]:
+        def _client_kwargs(self, *, credential: Any | None = None) -> dict[str, Any]:
+            del credential
             return {}
 
     assert type(DemoSDKBackend(SimpleNamespace()).client()).__name__ == "SimpleNamespace"
@@ -297,6 +300,52 @@ def test_sdk_backend_wraps_missing_client_package_error() -> None:
 
     with pytest.raises(RuntimeError, match="missing-provider-sdk.*Missing inference backend"):
         MissingSDKBackend(SimpleNamespace())._load_client_class()
+
+
+def test_sdk_backend_still_requires_a_credential_by_default() -> None:
+    """The no-auth SDK seam does not weaken credential-requiring backends."""
+
+    class RequiredSDKBackend(SDKInferenceBackend):
+        label = "Required"
+
+    with pytest.raises(ValueError, match="Required inference requires an attached credential"):
+        RequiredSDKBackend(SimpleNamespace(credential=None))._credential_auth()
+
+
+def test_ollama_backend_keeps_an_explicit_gateway_credential() -> None:
+    """An attached credential wins over Ollama's unauthenticated fallback."""
+
+    freshened: list[bool] = []
+    credential = SimpleNamespace(
+        kind=CredentialKind.STATIC_TOKEN,
+        ensure_fresh=lambda: freshened.append(True),
+        secret_value=lambda: "gateway-key",
+    )
+    backend = OllamaInferenceBackend(SimpleNamespace(credential=None))
+
+    assert backend._credential_auth(credential=credential) == {"api_key": "gateway-key"}
+    assert freshened == [True]
+
+
+def test_ollama_backend_inherits_openai_protocol_without_inheriting_identity_defaults() -> None:
+    """The compatible subclass inherits the protocol while owning its provider identity."""
+
+    assert OllamaInferenceBackend.chat_api == ChatAPI.OPENAI_CHAT
+    assert OllamaInferenceBackend.effective_defaults() == {
+        "name": "Ollama",
+        "status": "draft",
+        "vendor": "ollama",
+    }
+
+
+def test_openai_model_filtering_keeps_its_existing_prefix_policy() -> None:
+    """Lifting the prefix data onto the class does not broaden OpenAI's catalogue."""
+
+    backend = OpenAIInferenceBackend(SimpleNamespace(config={}))
+
+    assert backend._is_chat_model("gpt-4.1") is True
+    assert backend._is_chat_model("llama3.2:latest") is False
+    assert backend._is_chat_model("text-embedding-3-large") is False
 
 
 class _FakeModelPage:
@@ -448,6 +497,33 @@ class _FakeOpenAIClient:
         self.kwargs = kwargs
         self.models = _FakeOpenAIModels(self)
         self.chat = _FakeOpenAIChat(self)
+        self.instances.append(self)
+
+
+class _FakeOllamaModels:
+    """Small fake for Ollama's OpenAI-compatible model-list resource."""
+
+    def list(self, **kwargs: Any) -> _FakeModelPage:
+        """Return representative tagged Ollama model ids."""
+
+        assert kwargs == {}
+        return _FakeModelPage(
+            [
+                SimpleNamespace(id="llama3.2:latest", owned_by="library"),
+                SimpleNamespace(id="nomic-embed-text:latest", owned_by="library"),
+                SimpleNamespace(id="qwen2.5-coder:7b", owned_by="library"),
+            ]
+        )
+
+
+class _FakeOllamaClient:
+    """Small fake for Ollama through ``openai.OpenAI``."""
+
+    instances: list[Any] = []
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+        self.models = _FakeOllamaModels()
         self.instances.append(self)
 
 
@@ -627,6 +703,30 @@ def test_openai_backend_refresh_syncs_native_and_broker_models(
     assert models["openai/gpt-4.1"].display_name == "gpt-4.1 (openai)"
     assert models["openai/gpt-4.1"].config["provider_model"] == "gpt-4.1"
     assert models["gpt-4.2"].display_name == "gpt-4.2"
+
+
+def test_ollama_backend_lists_tagged_models_without_a_credential(monkeypatch: Any) -> None:
+    """Ollama reuses the OpenAI client with its endpoint, placeholder key, and open allow-list."""
+
+    _FakeOllamaClient.instances.clear()
+    monkeypatch.setattr(OllamaInferenceBackend, "client_class", _FakeOllamaClient)
+    backend = OllamaInferenceBackend(SimpleNamespace(credential=None, base_url="", config={}))
+
+    specs = backend.list_models()
+
+    assert [spec.handle for spec in specs] == [
+        "llama3.2:latest",
+        "ollama/llama3.2:latest",
+        "nomic-embed-text:latest",
+        "ollama/nomic-embed-text:latest",
+        "qwen2.5-coder:7b",
+        "ollama/qwen2.5-coder:7b",
+    ]
+    assert {spec.config["source"] for spec in specs} == {"ollama"}
+    assert _FakeOllamaClient.instances[-1].kwargs == {
+        "api_key": "not-required",
+        "base_url": "http://localhost:11434/v1",
+    }
 
 
 @pytest.mark.django_db(transaction=True)

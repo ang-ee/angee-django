@@ -17,6 +17,8 @@ class SDKInferenceBackend(InferenceBackend):
     client_class: ClassVar[Any | None] = None
     client_class_path: ClassVar[str] = ""
     async_client_class_path: ClassVar[str] = ""
+    # A provider row may override this; blank leaves endpoint selection to the SDK.
+    default_base_url: ClassVar[str] = ""
     default_broker_name: ClassVar[str] = ""
     default_model_limit: ClassVar[int] = 1000
     oauth_auth_kwarg: ClassVar[str] = "auth_token"
@@ -62,7 +64,7 @@ class SDKInferenceBackend(InferenceBackend):
         """Return common SDK client constructor kwargs."""
 
         kwargs: dict[str, Any] = self._credential_auth(credential=credential)
-        base_url = str(getattr(self.provider, "base_url", "") or "").strip()
+        base_url = str(getattr(self.provider, "base_url", "") or self.default_base_url).strip()
         if base_url:
             kwargs["base_url"] = base_url.rstrip("/")
         timeout = self._config_int("timeout_seconds", default=0)
@@ -71,10 +73,12 @@ class SDKInferenceBackend(InferenceBackend):
         return kwargs
 
     def _credential_auth(self, *, credential: Any | None = None) -> dict[str, str]:
-        """Return SDK auth kwargs for the attached credential kind."""
+        """Return credential auth, or the SDK placeholder key for a no-auth backend."""
 
         credential = credential or getattr(self.provider, "credential", None)
         if credential is None:
+            if not self.requires_credential:
+                return {"api_key": "not-required"}
             raise ValueError(f"{self.label} inference requires an attached credential.")
         ensure_fresh = getattr(credential, "ensure_fresh", None)
         if callable(ensure_fresh):

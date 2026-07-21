@@ -36,9 +36,11 @@ def test_base_config_is_a_dependency_node() -> None:
     """The model foundation participates in addon dependency ordering."""
 
     base = apps.get_app_config("base")
+    contract = addon_contract(base)
 
     assert base.name == "angee.base"
-    assert addon_contract(base).depends_on == (
+    assert contract is not None
+    assert contract.depends_on == (
         "angee.compose",
         "django.contrib.contenttypes",
         "rebac",
@@ -256,6 +258,44 @@ def test_openai_addon_owns_demo_provider_chain() -> None:
     assert model_rows["model_openai_demo"]["provider"] == "agents_integrate_openai.provider_openai_demo"
 
 
+def test_ollama_addon_owns_vendor_and_demo_provider_chain() -> None:
+    """The Ollama addon contributes its vendor plus an unauthenticated demo provider."""
+
+    module = import_module("angee.agents_integrate_ollama")
+    config = AppConfig("angee.agents_integrate_ollama", module)
+    contract = addon_contract(config)
+    manifest = resource_manifest_for(config)
+
+    assert contract is not None
+    assert contract.depends_on == (
+        "angee.agents",
+        "angee.agents_integrate_openai",
+        "angee.integrate",
+    )
+    assert manifest["master"] == (
+        {"path": "resources/master/010_integrate.vendor.yaml", "adopt": "slug"},
+    )
+    assert [item["path"] for item in manifest["demo"]] == [
+        "resources/demo/030_agents.inferenceprovider.yaml",
+        "resources/demo/040_agents.inferencemodel.yaml",
+    ]
+    vendor_rows = _resource_rows(config, "master", "resources/master/010_integrate.vendor.yaml")
+    assert vendor_rows["ollama"]["slug"] == "ollama"
+    provider_rows = _resource_rows(config, "demo", "resources/demo/030_agents.inferenceprovider.yaml")
+    assert provider_rows["provider_ollama_demo"] == {
+        "owner": "iam.user_admin",
+        "vendor": "agents_integrate_ollama.ollama",
+        "backend_class": "ollama",
+        "lifecycle": "connected",
+        "name": "Ollama",
+    }
+    model_rows = _resource_rows(config, "demo", "resources/demo/040_agents.inferencemodel.yaml")
+    assert model_rows["model_ollama_demo"]["provider"] == "agents_integrate_ollama.provider_ollama_demo"
+    assert model_rows["model_ollama_demo"]["name"] == "llama3.2:latest"
+    assert model_rows["model_ollama_broker_demo"]["provider"] == "agents_integrate_ollama.provider_ollama_demo"
+    assert model_rows["model_ollama_broker_demo"]["name"] == "ollama/llama3.2:latest"
+
+
 def test_notes_demo_only_composes_reusable_agent_seeds() -> None:
     """The notes example keeps demo rows separate from master-tier catalogue seeds."""
 
@@ -304,6 +344,16 @@ def test_openai_autoconfig_contributes_inference_backend_registry() -> None:
 
     assert SETTINGS["ANGEE_INFERENCE_BACKEND_CLASSES.openai"] == (
         "angee.agents_integrate_openai.backend.OpenAIInferenceBackend"
+    )
+
+
+def test_ollama_autoconfig_contributes_inference_backend_registry() -> None:
+    """The Ollama addon uses the composer-owned SETTINGS contract."""
+
+    from angee.agents_integrate_ollama.autoconfig import SETTINGS
+
+    assert SETTINGS["ANGEE_INFERENCE_BACKEND_CLASSES.ollama"] == (
+        "angee.agents_integrate_ollama.backend.OllamaInferenceBackend"
     )
 
 

@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from angee.agents.backends import InferenceModelSpec, InferenceRequest, InferenceResponse, ChatAPI
+from angee.agents.backends import ChatAPI, InferenceModelSpec, InferenceRequest, InferenceResponse
 from angee.agents.runtimes import ANTHROPIC_OAUTH_CLIENT_HEADERS, ANTHROPIC_OAUTH_SYSTEM_PREAMBLE
 from angee.agents.sdk_backends import SDKInferenceBackend
 from angee.integrate.credentials import CredentialKind

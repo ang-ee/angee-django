@@ -95,6 +95,7 @@ ANGEE_VCS_BACKEND_CLASSES = {
 ANGEE_INFERENCE_BACKEND_CLASSES = {
     "manual": "angee.agents.backends.ManualInferenceBackend",
     "anthropic": "angee.agents_integrate_anthropic.backend.AnthropicInferenceBackend",
+    "ollama": "angee.agents_integrate_ollama.backend.OllamaInferenceBackend",
     "openai": "angee.agents_integrate_openai.backend.OpenAIInferenceBackend",
     "stub_inference": "tests.conftest.StubInferenceBackend",
 }

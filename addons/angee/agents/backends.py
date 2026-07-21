@@ -118,6 +118,9 @@ class InferenceBackend(ImplBase):
     # runtime composes into the container env (see ``angee.agents.runtimes``). An
     # empty tuple means the backend declares no static-key runtime env.
     api_key_env: ClassVar[tuple[str, ...]] = ()
+    # Whether callers must attach an inference credential. This belongs to the
+    # contract because every backend consumer must make the same typed decision.
+    requires_credential: ClassVar[bool] = True
     defaults = {
         "name": "Manual",
         "status": "draft",
