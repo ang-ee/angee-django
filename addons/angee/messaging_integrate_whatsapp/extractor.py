@@ -105,7 +105,7 @@ def _recognized_manifest(
             continue
         with archive.open(store_info) as stream:
             header = stream.read(backup.SQLITE_HEADER_LENGTH)
-        if backup.IosBackup.is_chat_storage_header(header):
+        if backup.is_sqlite_header(header):
             return manifest_name
     return None
 

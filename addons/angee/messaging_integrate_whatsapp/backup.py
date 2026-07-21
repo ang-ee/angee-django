@@ -1,4 +1,4 @@
-"""WhatsApp iOS device-backup import — stdlib readers + the shared ingest drive.
+"""WhatsApp iOS device-backup import over the shared iPhone reader.
 
 An **unencrypted** iPhone backup (Finder/iTunes) stores files content-addressed:
 ``Manifest.db`` maps ``(domain, relativePath)`` to a ``fileID`` whose bytes live
@@ -8,7 +8,8 @@ derivable as ``sha1(f"{domain}-{relativePath}")``. WhatsApp's data lives in the
 (a Core Data store — timestamps count seconds from 2001-01-01 UTC) plus the
 media files its ``ZWAMEDIAITEM`` rows point at.
 
-:class:`IosBackup` and :class:`ChatStorage` only *read* those shapes into the
+:class:`angee.integrate_iphone.backup.IosBackup` resolves backup blobs and
+:class:`ChatStorage` reads WhatsApp's store into the
 neutral :class:`~.parser.ChatMessage`; every identity rule (JID normalization,
 the ``<chat>/<stanza>`` convergence key, the ``ios:<pk>`` synthetic fallback,
 media markers) is :mod:`.parser`'s, so a backup import and a later live pairing
@@ -19,19 +20,23 @@ interrupted import converges instead of duplicating.
 
 from __future__ import annotations
 
-import hashlib
 import mimetypes
-import plistlib
 import sqlite3
 from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 from django.apps import apps
 from django.db.models import Max
 from rebac import system_context
 
+from angee.integrate_iphone.backup import (
+    SQLITE_HEADER_LENGTH,
+    BackupError,
+    IosBackup,
+    is_sqlite_header,
+)
 from angee.messaging.backends import MediaItem
 from angee.messaging_integrate_whatsapp.parser import ChatMessage, bare_jid, parsed_message
 
@@ -49,108 +54,25 @@ device with both accounts backs up two independent stores."""
 CORE_DATA_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
 
 _SKIPPED_MESSAGE_TYPES = (6, 14)  # group-system events and revoked messages
-_SQLITE_HEADER = b"SQLite format 3\x00"
-
-SQLITE_HEADER_LENGTH = len(_SQLITE_HEADER)
-"""Bytes a bounded chat-store header check reads — never the store body."""
 
 
-class BackupError(Exception):
-    """The backup directory cannot serve this import (missing, encrypted, foreign)."""
+def chat_storage_path(backup: IosBackup, domain: str = WHATSAPP_DOMAIN) -> Path | None:
+    """Return one WhatsApp app domain's manifest-resolved chat-store blob."""
+
+    return backup.blob_path(domain, CHAT_STORAGE_PATH)
 
 
-class IosBackup:
-    """Read-only view over one unencrypted iPhone backup directory."""
+def has_chat_storage(backup: IosBackup, domain: str = WHATSAPP_DOMAIN) -> bool:
+    """Return whether ``domain`` carries a SQLite WhatsApp chat store."""
 
-    def __init__(self, path: Path | str) -> None:
-        self.path = Path(path)
-        manifest_db = self.path / "Manifest.db"
-        if not manifest_db.exists():
-            raise BackupError(f"{self.path} is not an iPhone backup (no Manifest.db).")
-        self._reject_encrypted()
-        self._manifest = sqlite3.connect(f"file:{manifest_db}?mode=ro", uri=True)
-
-    def _reject_encrypted(self) -> None:
-        """Fail loudly on an encrypted backup — decryption is out of scope."""
-
-        manifest_plist = self.path / "Manifest.plist"
-        if not manifest_plist.exists():
-            return
-        try:
-            manifest = plistlib.loads(manifest_plist.read_bytes())
-        except plistlib.InvalidFileException as exc:
-            raise BackupError(f"{manifest_plist} could not be parsed.") from exc
-        if manifest.get("IsEncrypted"):
-            raise BackupError(
-                "This iPhone backup is encrypted. Create an unencrypted backup "
-                "(Finder → uncheck 'Encrypt local backup') and import that."
-            )
-
-    def blob_path(self, domain: str, relative_path: str) -> Path | None:
-        """Return the on-disk blob for one backed-up file, or ``None``.
-
-        Prefers the manifest row; falls back to the deterministic
-        ``sha1(domain-relativePath)`` id backups omit manifest rows for.
-        """
-
-        blob = self.path / self.blob_relative_path(domain, relative_path)
-        return blob if blob.exists() else None
-
-    def blob_relative_path(self, domain: str, relative_path: str) -> PurePosixPath:
-        """Return the fanout-relative blob location — the layout's single owner.
-
-        iOS backups shard blobs as ``<fileID[:2]>/<fileID>``; every consumer
-        (filesystem or archive member lookup) composes this instead of
-        re-deriving the fanout.
-        """
-
-        file_id = self.blob_id(domain, relative_path)
-        return PurePosixPath(file_id[:2], file_id)
-
-    def blob_id(self, domain: str, relative_path: str) -> str:
-        """Return one file's manifest id or its deterministic fallback id."""
-
-        row = self._manifest.execute(
-            "SELECT fileID FROM Files WHERE domain = ? AND relativePath = ?",
-            (domain, relative_path),
-        ).fetchone()
-        return str(row[0]) if row else hashlib.sha1(f"{domain}-{relative_path}".encode()).hexdigest()
-
-    def chat_storage_path(self, domain: str = WHATSAPP_DOMAIN) -> Path | None:
-        """Return one WhatsApp app domain's manifest-resolved chat-store blob."""
-
-        return self.blob_path(domain, CHAT_STORAGE_PATH)
-
-    def has_chat_storage(self, domain: str = WHATSAPP_DOMAIN) -> bool:
-        """Return whether ``domain``'s manifest-resolved chat store has a SQLite header.
-
-        Recognition intentionally reads only SQLite's fixed 16-byte header;
-        parsing messages remains :class:`ChatStorage`'s execution-time job.
-        """
-
-        store = self.chat_storage_path(domain)
-        if store is None:
-            return False
-        try:
-            with store.open("rb") as stream:
-                return self.is_chat_storage_header(stream.read(len(_SQLITE_HEADER)))
-        except OSError:
-            return False
-
-    @staticmethod
-    def is_chat_storage_header(value: bytes) -> bool:
-        """Return whether ``value`` begins with SQLite's fixed file header."""
-
-        return value.startswith(_SQLITE_HEADER)
-
-    def read(self, domain: str, relative_path: str) -> bytes | None:
-        """Return one backed-up file's bytes, or ``None`` when absent."""
-
-        blob = self.blob_path(domain, relative_path)
-        return blob.read_bytes() if blob is not None else None
-
-    def close(self) -> None:
-        self._manifest.close()
+    store = chat_storage_path(backup, domain)
+    if store is None:
+        return False
+    try:
+        with store.open("rb") as stream:
+            return is_sqlite_header(stream.read(SQLITE_HEADER_LENGTH))
+    except OSError:
+        return False
 
 
 class ChatStorage:
@@ -159,7 +81,7 @@ class ChatStorage:
     def __init__(self, backup: IosBackup, *, domain: str = WHATSAPP_DOMAIN) -> None:
         self.backup = backup
         self.domain = domain
-        store = backup.chat_storage_path(domain)
+        store = chat_storage_path(backup, domain)
         if store is None:
             # Close the backup's manifest connection we can no longer own.
             backup.close()
@@ -430,7 +352,7 @@ def whatsapp_domains(backup: IosBackup) -> tuple[str, ...]:
     :class:`~messaging.Channel`.
     """
 
-    return tuple(domain for domain in WHATSAPP_DOMAINS if backup.has_chat_storage(domain))
+    return tuple(domain for domain in WHATSAPP_DOMAINS if has_chat_storage(backup, domain))
 
 
 def import_backup(

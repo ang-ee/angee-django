@@ -1,0 +1,8 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.integrate_iphone"
+description = "Dependency-free reader for unencrypted Apple-device backups"
+keywords = ["apple", "iphone", "backup"]
+category = "Integration"
+depends_on = ["angee.base"]
