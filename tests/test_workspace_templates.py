@@ -32,3 +32,12 @@ def test_dev_workspace_materializes_work_state_from_local_source() -> None:
         "path": "${inputs.work_state_path}",
         "subpath": ".work",
     }
+
+
+def test_dev_workspace_leases_ollama_port_for_the_chained_stack() -> None:
+    """Parallel workspace stacks receive distinct ports when Ollama is enabled."""
+
+    manifest = yaml.safe_load(DEV_COPIER.read_text(encoding="utf-8"))
+
+    assert manifest["_angee"]["ensure"]["operator.port_pool.ollama"] == {"range": "11435-11533"}
+    assert manifest["_angee"]["chain"][0]["inputs"]["ollama_port"] == "${alloc.ollama}"

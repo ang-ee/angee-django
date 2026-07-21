@@ -60,6 +60,20 @@ redis_port:
   type: int
   default: 6379
 
+enable_ollama:
+  type: bool
+  default: false
+  help: >-
+    Run the shared Ollama container for local inference. Models are pulled
+    manually and persist under the dev stack.
+
+ollama_port:
+  type: int
+  default: 11434
+  help: >-
+    Host port published by the optional Ollama container. Set the inference
+    provider base_url when this differs from 11434.
+
 # Host port the Caddy edge publishes (ws://localhost:<edge_port>/<service>/). Defaults
 # to 80 for the base stack; workspaces lease a distinct value from operator.port_pool.edge
 # so parallel stacks on one host don't all contend for :80.
