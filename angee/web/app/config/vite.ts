@@ -191,7 +191,12 @@ export function defineAngeeWebViteConfig({
     // tsconfig/vitest.
     resolve: {
       alias: [{ find: /^@angee\/gql\//, replacement: gqlRuntimeDir }],
-      dedupe: ["react", "react-dom"],
+      // Context-singleton libraries must resolve to ONE instance even when a
+      // linked framework checkout ships its own node_modules beside the
+      // project's: an addon file otherwise walks up into the checkout's copy,
+      // forking the React context (a second @tanstack/react-router made
+      // useNavigate read a null RouterProvider context).
+      dedupe: ["react", "react-dom", "@tanstack/react-router"],
     },
     // Prebundle installed `@angee/*` packages; the serve-only
     // `angeePrebundleForcePlugin` merges in `force` when their workspace source
