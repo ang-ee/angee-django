@@ -1386,18 +1386,25 @@ def _sync_agent_mcp_selection(
 ) -> None:
     """Mirror one Agent↔MCP M2M edit into the non-field REBAC relation."""
 
-    for resource, agent in _agent_mcp_selection_pairs(
+    pairs = _agent_mcp_selection_pairs(
         instance=instance,
         action=action,
         reverse=reverse,
         model=model,
         pk_set=pk_set,
         field_name=field_name,
-    ):
-        if action == "post_add":
-            _write_agent_mcp_relation(resource, cast(Agent, agent))
-        else:
-            _delete_agent_mcp_relation(resource, cast(Agent, agent))
+    )
+    if not pairs:
+        return
+
+    def reconcile() -> None:
+        for resource, agent in pairs:
+            if action == "post_add":
+                _write_agent_mcp_relation(resource, cast(Agent, agent))
+            else:
+                _delete_agent_mcp_relation(resource, cast(Agent, agent))
+
+    transaction.on_commit(reconcile)
 
 
 def _agent_mcp_selection_pairs(
@@ -1456,18 +1463,26 @@ def _sync_agent_mcp_tools(
     """Mirror Agent.mcp_tools changes into ``agents/tool_grant#grantee`` tuples."""
 
     del sender, kwargs
-    for tool, agent in _agent_mcp_selection_pairs(
+    pairs = _agent_mcp_selection_pairs(
         instance=instance,
         action=action,
         reverse=reverse,
         model=model,
         pk_set=pk_set,
         field_name="mcp_tools",
-    ):
-        if action == "post_add":
-            write_tool_grant(str(tool.name), agent.principal_subject())
-        else:
-            revoke_tool_grant(str(tool.name), agent.principal_subject())
+    )
+    if not pairs:
+        return
+
+    def reconcile() -> None:
+        for tool, agent in pairs:
+            server_sqid = str(cast(MCPTool, tool).server.sqid)
+            if action == "post_add":
+                write_tool_grant(server_sqid, str(tool.name), agent.principal_subject())
+            else:
+                revoke_tool_grant(server_sqid, str(tool.name), agent.principal_subject())
+
+    transaction.on_commit(reconcile)
 
 
 def _deactivate_agent_service_user(

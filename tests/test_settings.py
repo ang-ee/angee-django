@@ -194,7 +194,7 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         # task seam ahead of every integration addon.
         "angee.tasks",
         "angee.integrate.apps.IntegrateConfig",
-        "angee.mcp",
+        "angee.mcp.apps.MCPConfig",
         "angee.operator",
         "angee.agents.apps.AgentsConfig",
         "angee.agents_integrate_anthropic",

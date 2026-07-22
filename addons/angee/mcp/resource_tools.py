@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from fastmcp import FastMCP
@@ -33,6 +34,9 @@ DEFAULT_QUERY_LIMIT = 25
 MAX_QUERY_LIMIT = 50
 MAX_SUMMARY_FIELDS = 8
 
+RESOURCE_READER_TOOL_TAG = "angee:resource_reader"
+"""Registration marker consumed by the built-in grant-catalogue sync."""
+
 
 @dataclass(frozen=True, slots=True)
 class ResourceToolCatalogueEntry:
@@ -47,24 +51,25 @@ class ResourceToolCatalogueEntry:
 def register_resource_tools(server: FastMCP) -> None:
     """Register the honest resource catalogue and deterministic generated readers."""
 
-    schemas = GraphQLSchemas.from_discovery()
-    specs, catalogue = resource_tool_specs(schemas)
+    specs, catalogue = resource_tool_specs()
     server.add_tool(
         Tool.from_function(
             _catalogue_reader(catalogue),
             name="list_resources",
             description="List the data resources available through generated read tools.",
             annotations=ToolAnnotations(readOnlyHint=True),
+            tags={RESOURCE_READER_TOOL_TAG},
         )
     )
     register_graphql_tools(server, list(specs))
 
 
 def resource_tool_specs(
-    schemas: GraphQLSchemas,
+    schemas: GraphQLSchemas | None = None,
 ) -> tuple[tuple[GraphQLTool, ...], tuple[ResourceToolCatalogueEntry, ...]]:
     """Return generated GraphQL declarations and catalogue entries in stable order."""
 
+    schemas = schemas or GraphQLSchemas.from_discovery()
     graphql_schema = schemas.graphql_schema(RESOURCE_SCHEMA)
     query_root = graphql_schema.query_type
     if query_root is None:
@@ -108,6 +113,7 @@ def resource_tool_specs(
                     search_fields=search_fields,
                     default_limit=DEFAULT_QUERY_LIMIT,
                     max_limit=MAX_QUERY_LIMIT,
+                    tags=frozenset({RESOURCE_READER_TOOL_TAG}),
                 ),
                 GraphQLTool(
                     operation=detail_name,
@@ -116,6 +122,7 @@ def resource_tool_specs(
                     description=f"Read one {description} record by public id.",
                     schema=RESOURCE_SCHEMA,
                     id_arg=id_arg,
+                    tags=frozenset({RESOURCE_READER_TOOL_TAG}),
                 ),
             )
         )
@@ -128,6 +135,26 @@ def resource_tool_specs(
             )
         )
     return tuple(specs), tuple(catalogue)
+
+
+def check_resource_tool_specs(
+    app_configs: Any = None,
+    **kwargs: Any,
+) -> list[checks.CheckMessage]:
+    """Fail Django's system check when console resources cannot compile to tools."""
+
+    del app_configs, kwargs
+    try:
+        resource_tool_specs()
+    except Exception as error:  # noqa: BLE001 - system checks must report drift, not abort registration
+        return [
+            checks.Error(
+                f"Generated MCP resource tools do not match the console schema: {error}",
+                hint="Rebuild the runtime/schema or fix the owning resource metadata/root contract.",
+                id="angee.mcp.E001",
+            )
+        ]
+    return []
 
 
 def _catalogue_reader(

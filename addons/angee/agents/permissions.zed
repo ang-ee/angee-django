@@ -1,7 +1,7 @@
 // Authorization schema for the agents addon.
 // @rebac_package: agents
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 4
 
 definition agents/agent {
     relation owner: auth/user // rebac:field=owner
@@ -26,9 +26,12 @@ definition agents/toolrole {
     permission effective_member = member + includes + admin->member
 }
 
-// A tool grant is a pure tuple object whose id is the FastMCP tool name. There
-// is no grant row: Agent.mcp_tools mirrors direct selections into `grantee`,
-// while role/group bundles write the same relation through the Permissions Hub.
+// A tool grant is a pure tuple object whose id is
+// `<mcp-server-sqid>.<FastMCP-tool-name>`. There is no grant row:
+// Agent.mcp_tools mirrors direct selections into `grantee`, while role/group
+// bundles write the same relation through the Permissions Hub. Server
+// qualification keeps same-named tools on different servers independently
+// grantable and revocable.
 // Advertisement and execution intentionally check `use` only. `use_approved`
 // is a separate standing-approval arm for a later consumer; the current
 // requires_approval flag still drives the per-call workflow Decision flow.
@@ -37,13 +40,13 @@ definition agents/toolrole {
 // adds e.g. `vault_grantee` and `scope_vault` to this definition from its own
 // permissions.extends.zed, then unions
 // `vault_grantee & scope_vault->read` into `use`. It stores two tuples on
-// `agents/tool_grant:<tool>.<vault-sqid>` (`#vault_grantee` and `#scope_vault`)
+// `agents/tool_grant:<server-sqid>.<tool>.<vault-sqid>` (`#vault_grantee` and `#scope_vault`)
 // and the runtime checks that scoped id. The scoped object deliberately has no
 // base `grantee` tuple, so the unscoped arm below cannot bypass the scope.
 // tests/extcontrib is the mechanical fragment recipe. V1 builds no scoped
 // grant or scope relation.
 definition agents/tool_grant {
-    relation grantee: agents/agent | agents/toolrole#effective_member | auth/group#member
+    relation grantee: agents/agent | agents/toolrole#effective_member | auth/group#agent_member
     relation approver: auth/user
     relation admin: angee/role // rebac:const=admin
 

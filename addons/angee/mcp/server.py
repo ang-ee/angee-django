@@ -38,10 +38,12 @@ if TYPE_CHECKING:  # pragma: no cover
 ToolRegistrar = Callable[[FastMCP], None]
 """An addon's ``register(server)`` callable — it adds tools to the MCP server.
 
-Every registered tool must declare ``ToolAnnotations.readOnlyHint``. Builtin tools
-also run through the in-process pydantic runtime, so their callable may not depend
-on FastMCP's request-scoped ``Context`` or ``get_access_token``; the native toolset
-asserts this contract when it advertises a granted tool.
+Non-GraphQL tools must explicitly declare ``ToolAnnotations.readOnlyHint``.
+Compiled GraphQL tools carry their root ``op_type`` as the structural actor-posture
+fact (their annotation must agree). Builtins also run through the in-process
+pydantic runtime, so their callable may not depend on FastMCP's request-scoped
+``Context`` or ``get_access_token``; the native toolset asserts these contracts
+when it advertises a granted tool.
 """
 
 MOUNT_PATH = "/mcp"

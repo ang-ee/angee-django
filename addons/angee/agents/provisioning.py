@@ -17,6 +17,7 @@ from django.conf import settings
 from django.utils.module_loading import import_string
 from rebac import system_context
 
+from angee.agents.grants import grant_resource_reader_role
 from angee.agents.models import AgentLifecycle
 from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.actions import ActionResult, action_target
@@ -68,6 +69,7 @@ def provision_agent(id: PublicID) -> ActionResult:
             try:
                 agent.mark_provisioning()
                 agent.mark_provisioned(workspace="", service="")
+                grant_resource_reader_role(agent)
             except TransitionNotAllowed as error:
                 return ActionResult(ok=False, message=f"Provisioning failed: {error}")
             return ActionResult(ok=True, message="Provisioned in process.")

@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import reversion
 from asgiref.sync import async_to_sync, sync_to_async
-from django.db import connection, models
+from django.apps import apps
+from django.core.exceptions import ImproperlyConfigured
+from django.core.management import call_command
+from django.db import connection, models, transaction
 from django.test import override_settings
 from fastmcp import Context, FastMCP
-from fastmcp.tools import Tool
+from fastmcp.tools import Tool, ToolResult
 from mcp.types import ToolAnnotations
 from pydantic_ai import RunContext
 from pydantic_ai.capabilities import ToolSearch
@@ -31,9 +36,19 @@ from pydantic_ai.usage import RunUsage
 from pydantic_core import to_jsonable_python
 from rebac import ObjectRef, RelationshipTuple, SubjectRef, actor_context, system_context, to_subject_ref
 from rebac.backends import backend
+from rebac.models import PermissionAuditEvent
 from rebac.relationships import write_relationships
+from reversion.models import Version
 
-from angee.agents.grants import tool_grant_ref
+from angee.agents import grants as grants_module
+from angee.agents import provisioning
+from angee.agents.grants import (
+    RESOURCE_READER_ROLE,
+    TOOL_GRANT_RESOURCE_TYPE,
+    resync_tool_grants,
+    sync_builtin_tool_catalogue,
+    tool_grant_ref,
+)
 from angee.agents.models import ToolGrant, ToolRole
 from angee.agents_runtime_pydantic import toolsets as toolsets_module
 from angee.agents_runtime_pydantic.runner import _BINARY_CONTENT_OMITTED, _without_binary_content
@@ -42,9 +57,14 @@ from angee.agents_runtime_pydantic.toolsets import (
     TOOL_RESULT_TRUNCATED,
     AngeeToolset,
     ToolGrantAccess,
+    _accessible_tool_grant_ids,
     _assert_in_process_compatible,
 )
 from angee.base.mixins import AuditMixin
+from angee.compose.permissions import apply_schema_paths, extension_source_map, merged_schema_relpath
+from angee.fs import write_atomic
+from angee.mcp.graphql import _CompiledTool
+from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
 from tests.conftest import _clear_model_tables
 from tests.conftest import _create_missing_tables as _create_tables
 from tests.test_agents_graphql import (
@@ -59,6 +79,7 @@ from tests.test_agents_graphql import (
 )
 
 
+@reversion.register(fields=("label",))
 class AgentToolWriteProbe(AuditMixin, models.Model):
     """A neutral audit row proving which user an in-process write attributes."""
 
@@ -82,6 +103,35 @@ def agent_tooling_tables(agents_console_tables: None) -> Any:
         if created:
             with connection.schema_editor() as schema_editor:
                 schema_editor.delete_model(AgentToolWriteProbe)
+
+
+@pytest.fixture()
+def agent_group_schema(tmp_path: Path) -> Any:
+    """Apply the real build-time extension seam for agent membership in IAM groups."""
+
+    app_configs = list(apps.get_app_configs())
+    source_map = extension_source_map(app_configs)
+    runtime_dir = tmp_path / "runtime"
+    for relpath, source in source_map.items():
+        write_atomic(runtime_dir / relpath, source)
+    changed = {
+        config.name: (config, getattr(config, "rebac_schema", None), hasattr(config, "rebac_schema"))
+        for config in app_configs
+        if merged_schema_relpath(config.name) in source_map
+    }
+    apply_schema_paths(app_configs, runtime_dir)
+    # Plain sync respects the package manager's no_update guard and will not
+    # overwrite the already-synced base definition with the folded one.
+    call_command("rebac", "sync", "--force-overwrite", "--yes", verbosity=0)
+    try:
+        yield
+    finally:
+        for config, original, existed in changed.values():
+            if existed:
+                config.rebac_schema = original
+            elif hasattr(config, "rebac_schema"):
+                delattr(config, "rebac_schema")
+        call_command("rebac", "sync", "--force-overwrite", "--yes", verbosity=0)
 
 
 def _registered_server(*functions: tuple[Any, bool]) -> FastMCP:
@@ -111,17 +161,17 @@ def test_grant_advertisement_shares_one_accessible_lookup(monkeypatch: pytest.Mo
 
     def accessible(agent: SubjectRef) -> frozenset[str]:
         calls.append(agent)
-        return frozenset({"read_sessions"})
+        return frozenset({"mcp_one.read_sessions"})
 
-    monkeypatch.setattr(toolsets_module, "_accessible_tool_names", accessible)
+    monkeypatch.setattr(toolsets_module, "_accessible_tool_grant_ids", accessible)
     agent = SubjectRef.of("agents/agent", "one")
     access = ToolGrantAccess(agent)
 
     async def read_twice() -> tuple[frozenset[str], frozenset[str]]:
-        first, second = await asyncio.gather(access.granted_names(), access.granted_names())
+        first, second = await asyncio.gather(access.granted_ids(), access.granted_ids())
         return first, second
 
-    assert async_to_sync(read_twice)() == (frozenset({"read_sessions"}),) * 2
+    assert async_to_sync(read_twice)() == (frozenset({"mcp_one.read_sessions"}),) * 2
     assert calls == [agent]
 
 
@@ -159,7 +209,8 @@ def test_native_tool_grants_split_read_and_write_actors_and_regate(
         read_row = MCPTool.objects.create(server=server_row, name="read_sessions")
         write_row = MCPTool.objects.create(server=server_row, name="write_probe")
 
-    native = AngeeToolset(session, ToolGrantAccess(agent.principal_subject()))
+    server_sqid = str(server_row.sqid)
+    native = AngeeToolset(session, ToolGrantAccess(agent.principal_subject()), server_sqid)
     assert async_to_sync(native.get_tools)(_native_context()) == {}
 
     with actor_context(agent.principal_subject()):
@@ -168,7 +219,7 @@ def test_native_tool_grants_split_read_and_write_actors_and_regate(
     with system_context(reason="test native tool grants"):
         agent.mcp_tools.add(read_row, write_row)
 
-    native = AngeeToolset(session, ToolGrantAccess(agent.principal_subject()))
+    native = AngeeToolset(session, ToolGrantAccess(agent.principal_subject()), server_sqid)
     advertised = async_to_sync(native.get_tools)(_native_context())
     assert set(advertised) == {"read_sessions", "write_probe"}
     assert all(tool.tool_def.defer_loading for tool in advertised.values())
@@ -203,13 +254,19 @@ def test_native_tool_grants_split_read_and_write_actors_and_regate(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_toolrole_and_group_grantee_paths(agent_tooling_tables: None) -> None:
-    """The approved userset arms resolve toolrole hierarchy and auth-group membership."""
+def test_toolrole_and_group_grantee_paths(
+    agent_tooling_tables: None,
+    agent_group_schema: None,
+) -> None:
+    """Advertisement resolves toolrole and group arms under the agent principal."""
 
-    del agent_tooling_tables
+    del agent_tooling_tables, agent_group_schema
     owner = User.objects.create_user(username="tool-bundle-owner")
     with system_context(reason="test tool bundle setup"):
         agent = Agent.objects.create(name="Tool Bundle Agent", owner=owner)
+        server = MCPServer.objects.create(name="bundle-server")
+        role_ref = tool_grant_ref(str(server.sqid), "role_reader")
+        group_ref = tool_grant_ref(str(server.sqid), "group_reader")
         write_relationships(
             [
                 RelationshipTuple(
@@ -218,41 +275,280 @@ def test_toolrole_and_group_grantee_paths(agent_tooling_tables: None) -> None:
                     subject=agent.principal_subject(),
                 ),
                 RelationshipTuple(
-                    resource=tool_grant_ref("role_reader"),
+                    resource=role_ref,
                     relation="grantee",
                     subject=SubjectRef.of("agents/toolrole", "readers", "effective_member"),
                 ),
                 RelationshipTuple(
                     resource=ObjectRef("auth/group", "research"),
-                    relation="member",
-                    subject=to_subject_ref(owner),
+                    relation="agent_member",
+                    subject=agent.principal_subject(),
                 ),
                 RelationshipTuple(
-                    resource=tool_grant_ref("group_reader"),
+                    resource=group_ref,
                     relation="grantee",
-                    subject=SubjectRef.of("auth/group", "research", "member"),
+                    subject=SubjectRef.of("auth/group", "research", "agent_member"),
                 ),
             ]
         )
 
-    assert (
-        backend()
-        .check_access(
+    advertised = frozenset(
+        backend().accessible(
             subject=agent.principal_subject(),
             action="use",
-            resource=tool_grant_ref("role_reader"),
+            resource_type=TOOL_GRANT_RESOURCE_TYPE,
         )
-        .allowed
     )
-    assert (
-        backend()
-        .check_access(
-            subject=to_subject_ref(owner),
+    assert advertised == {role_ref.resource_id, group_ref.resource_id}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_server_qualified_grants_do_not_collide(agent_tooling_tables: None) -> None:
+    """Same-named tools on two servers grant and revoke independently."""
+
+    del agent_tooling_tables
+    owner = User.objects.create_user(username="qualified-grants-owner")
+    with system_context(reason="test qualified grants setup"):
+        agent = Agent.objects.create(name="Qualified Grants", owner=owner)
+        first = MCPServer.objects.create(name="qualified-first")
+        second = MCPServer.objects.create(name="qualified-second")
+        first_tool = MCPTool.objects.create(server=first, name="search")
+        second_tool = MCPTool.objects.create(server=second, name="search")
+        agent.mcp_tools.add(first_tool, second_tool)
+
+    first_ref = tool_grant_ref(str(first.sqid), "search")
+    second_ref = tool_grant_ref(str(second.sqid), "search")
+    assert frozenset(
+        backend().accessible(
+            subject=agent.principal_subject(),
             action="use",
-            resource=tool_grant_ref("group_reader"),
+            resource_type=TOOL_GRANT_RESOURCE_TYPE,
         )
-        .allowed
+    ) == {first_ref.resource_id, second_ref.resource_id}
+
+    with system_context(reason="test qualified grant revoke"):
+        agent.mcp_tools.remove(first_tool)
+    assert not backend().check_access(
+        subject=agent.principal_subject(), action="use", resource=first_ref
+    ).allowed
+    assert backend().check_access(
+        subject=agent.principal_subject(), action="use", resource=second_ref
+    ).allowed
+
+
+@pytest.mark.django_db(transaction=True)
+def test_m2m_grant_write_is_discarded_with_rolled_back_edit(agent_tooling_tables: None) -> None:
+    """The on-commit mirror cannot outlive a rolled-back Agent.mcp_tools edit."""
+
+    del agent_tooling_tables
+    owner = User.objects.create_user(username="rolled-back-grant-owner")
+    with system_context(reason="test rolled back grant setup"):
+        agent = Agent.objects.create(name="Rolled Back Grant", owner=owner)
+        server = MCPServer.objects.create(name="rolled-back-server")
+        tool = MCPTool.objects.create(server=server, name="rolled_back_tool")
+
+    with system_context(reason="test rolled back grant edit"), transaction.atomic():
+        agent.mcp_tools.add(tool)
+        transaction.set_rollback(True)
+
+    assert not backend().check_access(
+        subject=agent.principal_subject(),
+        action="use",
+        resource=tool_grant_ref(str(server.sqid), tool.name),
+    ).allowed
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resync_delete_and_rewrite_are_atomic(
+    agent_tooling_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed rewrite rolls back the preceding direct-grant deletion."""
+
+    del agent_tooling_tables
+    owner = User.objects.create_user(username="atomic-resync-owner")
+    with system_context(reason="test atomic resync setup"):
+        agent = Agent.objects.create(name="Atomic Resync", owner=owner)
+        server = MCPServer.objects.create(name="atomic-resync-server")
+        tool = MCPTool.objects.create(server=server, name="atomic_tool")
+        agent.mcp_tools.add(tool)
+    grant_ref = tool_grant_ref(str(server.sqid), tool.name)
+    assert backend().check_access(
+        subject=agent.principal_subject(), action="use", resource=grant_ref
+    ).allowed
+
+    monkeypatch.setattr(grants_module, "sync_builtin_tool_catalogue", lambda: 0)
+
+    def fail_rewrite(writes: Any) -> None:
+        del writes
+        raise RuntimeError("rewrite failed")
+
+    monkeypatch.setattr(grants_module, "write_relationships", fail_rewrite)
+    with pytest.raises(RuntimeError, match="rewrite failed"):
+        resync_tool_grants()
+    assert backend().check_access(
+        subject=agent.principal_subject(), action="use", resource=grant_ref
+    ).allowed
+
+
+def test_universal_admin_grant_does_not_enumerate_tableless_anchor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The const-admin arm short-circuits before ``accessible`` can enumerate rows."""
+
+    class UniversalBackend:
+        def grants_all(self, **kwargs: Any) -> bool:
+            assert kwargs["resource_type"] == TOOL_GRANT_RESOURCE_TYPE
+            return True
+
+        def accessible(self, **kwargs: Any) -> Any:
+            del kwargs
+            raise AssertionError("table-less tool grants must not be enumerated")
+
+    monkeypatch.setattr(toolsets_module, "backend", lambda: UniversalBackend())
+    assert _accessible_tool_grant_ids(SubjectRef.of("agents/agent", "admin-agent")) is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_builtin_catalogue_sync_is_deterministic_and_seeds_reader_bundle(
+    agent_tooling_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Live code projects to MCPTool rows and one sync-owned reader role grant set."""
+
+    del agent_tooling_tables
+    owner = User.objects.create_user(username="catalogue-sync-owner")
+    with system_context(reason="test builtin catalogue setup"):
+        agent = Agent.objects.create(name="Catalogue Sync", owner=owner)
+        server = MCPServer.objects.create(name="builtin-catalogue", config={"builtin": "angee"})
+        MCPTool.objects.create(server=server, name="stale_tool")
+
+    def query_records(search: str = "") -> dict[str, str]:
+        """Query records in the generated-reader bundle."""
+
+        return {"search": search}
+
+    def write_records() -> str:
+        """A non-reader builtin tool."""
+
+        return "ok"
+
+    registry = FastMCP(name="catalogue-sync")
+    registry.add_tool(
+        Tool.from_function(
+            query_records,
+            annotations=ToolAnnotations(readOnlyHint=True),
+            tags={RESOURCE_READER_TOOL_TAG},
+        )
     )
+    registry.add_tool(
+        Tool.from_function(write_records, annotations=ToolAnnotations(readOnlyHint=False))
+    )
+    monkeypatch.setattr(grants_module, "mcp_server", lambda: registry)
+
+    assert sync_builtin_tool_catalogue() == 2
+    assert sync_builtin_tool_catalogue() == 2
+    with system_context(reason="test builtin catalogue verify"):
+        rows = list(MCPTool.objects.filter(server=server).order_by("name"))
+    assert [row.name for row in rows] == ["query_records", "write_records"]
+    assert rows[0].description == query_records.__doc__
+    assert rows[0].input_schema["properties"]["search"]["type"] == "string"
+
+    with system_context(reason="test builtin reader membership"):
+        write_relationships(
+            [
+                RelationshipTuple(
+                    resource=RESOURCE_READER_ROLE,
+                    relation="member",
+                    subject=agent.principal_subject(),
+                )
+            ]
+        )
+    assert frozenset(
+        backend().accessible(
+            subject=agent.principal_subject(),
+            action="use",
+            resource_type=TOOL_GRANT_RESOURCE_TYPE,
+        )
+    ) == {tool_grant_ref(str(server.sqid), "query_records").resource_id}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_production_reader_grant_path_advertises_and_executes_generated_tool(
+    agent_tooling_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sync + successful in-process provision grants, advertises, and runs a reader."""
+
+    del agent_tooling_tables
+    owner = User.objects.create_user(username="generated-reader-owner")
+    with system_context(reason="test generated reader setup"):
+        agent = Agent.objects.create(
+            name="Generated Reader",
+            owner=owner,
+            runtime_class="pydantic",
+        )
+        session = AgentSession.objects.create(agent=agent, owner=owner, title="reader session")
+        server = MCPServer.objects.create(name="builtin-reader", config={"builtin": "angee"})
+
+    from angee.graphql.schema import GraphQLSchemas
+    from angee.mcp import graphql as mcp_graphql
+    from angee.mcp.resource_tools import register_resource_tools
+    from tests.test_mcp_resource_tools import _FakeSchemas, _resource
+
+    schemas = _FakeSchemas((_resource("probes"),))
+    monkeypatch.setattr("angee.mcp.resource_tools.gated_read_fields", lambda model: frozenset())
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
+    registry = FastMCP(name="production-reader-path")
+    register_resource_tools(registry)
+    monkeypatch.setattr(grants_module, "mcp_server", lambda: registry)
+    monkeypatch.setattr(toolsets_module, "mcp_server", lambda: registry)
+
+    async def execute_probe(
+        schema: str,
+        document: str,
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        assert schema == "console" and document.startswith("query ")
+        assert variables == {"limit": 25}
+        return {
+            "probes": [
+                {
+                    "id": str(session.sqid),
+                    "title": "owner-visible",
+                    "body": "detail",
+                    "optional_secret": None,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(mcp_graphql, "execute_under_actor", execute_probe)
+
+    assert resync_tool_grants() == 0
+    assert "query_probes" not in async_to_sync(
+        AngeeToolset(
+            session,
+            ToolGrantAccess(agent.principal_subject()),
+            str(server.sqid),
+        ).get_tools
+    )(_native_context())
+
+    result = provisioning.provision_agent(agent.sqid)
+    assert result.ok is True
+    native = AngeeToolset(
+        session,
+        ToolGrantAccess(agent.principal_subject()),
+        str(server.sqid),
+    )
+    advertised = async_to_sync(native.get_tools)(_native_context())
+    assert "query_probes" in advertised
+    rows = async_to_sync(native.call_tool)(
+        "query_probes",
+        {},
+        _native_context(),
+        advertised["query_probes"],
+    )
+    assert str(session.sqid) in {row["sqid"] for row in rows}
 
 
 def test_tool_grant_anchors_are_tableless() -> None:
@@ -294,7 +590,11 @@ def test_native_tool_error_mapping_ceiling_and_context_constraint(
         ]
         agent.mcp_tools.add(*rows)
 
-    native = AngeeToolset(session, ToolGrantAccess(agent.principal_subject()))
+    native = AngeeToolset(
+        session,
+        ToolGrantAccess(agent.principal_subject()),
+        str(server_row.sqid),
+    )
     advertised = async_to_sync(native.get_tools)(_native_context())
     bounded = async_to_sync(native.call_tool)("huge_result", {}, _native_context(), advertised["huge_result"])
     assert isinstance(bounded, str)
@@ -319,6 +619,130 @@ def test_native_tool_error_mapping_ceiling_and_context_constraint(
     )
     with pytest.raises(Exception, match="request-scoped FastMCP Context"):
         _assert_in_process_compatible(request_tool)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_impersonated_read_post_call_guard_flags_revision_and_rebac_writes(
+    agent_tooling_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Persistent evidence survives thread hops and fails misdeclared read calls."""
+
+    del agent_tooling_tables
+    owner = User.objects.create_user(username="read-guard-owner")
+    with system_context(reason="test read guard setup"):
+        agent = Agent.objects.create(name="Read Guard", owner=owner)
+        session = AgentSession.objects.create(agent=agent, owner=owner)
+        server = MCPServer.objects.create(name="read-guard-server", config={"builtin": "angee"})
+
+    def revision_write() -> str:
+        with reversion.create_revision():
+            AgentToolWriteProbe.objects.create(label="revision violation")
+            reversion.set_user(owner)
+        return "should not escape"
+
+    def relationship_write() -> str:
+        write_relationships(
+            [
+                RelationshipTuple(
+                    resource=ObjectRef("agents/toolrole", "read-guard-side-effect"),
+                    relation="member",
+                    subject=agent.principal_subject(),
+                )
+            ]
+        )
+        return "should not escape"
+
+    registry = _registered_server((revision_write, True), (relationship_write, True))
+    monkeypatch.setattr(toolsets_module, "mcp_server", lambda: registry)
+    with system_context(reason="test read guard grants"):
+        rows = [
+            MCPTool.objects.create(server=server, name=name)
+            for name in ("revision_write", "relationship_write")
+        ]
+        agent.mcp_tools.add(*rows)
+
+    native = AngeeToolset(
+        session,
+        ToolGrantAccess(agent.principal_subject()),
+        str(server.sqid),
+    )
+    advertised = async_to_sync(native.get_tools)(_native_context())
+    with pytest.raises(ModelRetry, match="read-only tool attempted"):
+        async_to_sync(native.call_tool)(
+            "revision_write",
+            {},
+            _native_context(),
+            advertised["revision_write"],
+        )
+    assert Version.objects.filter(revision__user=owner).exists()
+
+    with pytest.raises(ModelRetry, match="read-only tool attempted"):
+        async_to_sync(native.call_tool)(
+            "relationship_write",
+            {},
+            _native_context(),
+            advertised["relationship_write"],
+        )
+    owner_ref = to_subject_ref(owner)
+    assert PermissionAuditEvent.objects.filter(
+        actor_subject_type=owner_ref.subject_type,
+        actor_subject_id=owner_ref.subject_id,
+    ).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_graphql_read_hint_cannot_override_structural_mutation_posture(
+    agent_tooling_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mutation mislabeled read-only is rejected before owner-attributed execution."""
+
+    del agent_tooling_tables
+    owner = User.objects.create_user(username="structural-posture-owner")
+    with system_context(reason="test structural posture setup"):
+        agent = Agent.objects.create(name="Structural Posture", owner=owner)
+        session = AgentSession.objects.create(agent=agent, owner=owner)
+        server = MCPServer.objects.create(name="structural-posture", config={"builtin": "angee"})
+        row = MCPTool.objects.create(server=server, name="lying_graphql_write")
+        agent.mcp_tools.add(row)
+    attempted: list[bool] = []
+
+    class MisdeclaredGraphQLWrite(_CompiledTool):
+        async def run(self, arguments: dict[str, Any]) -> ToolResult:
+            del arguments
+            attempted.append(True)
+            await sync_to_async(AgentToolWriteProbe.objects.create, thread_sensitive=True)(
+                label="must never run"
+            )
+            return ToolResult(structured_content={"result": "wrote"})
+
+    registered = MisdeclaredGraphQLWrite(
+        name="lying_graphql_write",
+        description="A mutation carrying an untrusted read hint.",
+        parameters={"type": "object", "properties": {}},
+        annotations=ToolAnnotations(readOnlyHint=True),
+        schema_name="console",
+        op_type="mutation",
+        document="mutation { ignored }",
+        payload_field="ignored",
+        node_type="Ignored",
+        is_list=False,
+        leaves=(),
+    )
+    registry = FastMCP(name="structural-posture")
+    registry.add_tool(registered)
+    monkeypatch.setattr(toolsets_module, "mcp_server", lambda: registry)
+
+    native = AngeeToolset(
+        session,
+        ToolGrantAccess(agent.principal_subject()),
+        str(server.sqid),
+    )
+    with pytest.raises(ImproperlyConfigured, match="disagrees with its mutation"):
+        async_to_sync(native.get_tools)(_native_context())
+    assert attempted == []
+    assert not AgentToolWriteProbe.objects.filter(label="must never run").exists()
 
 
 def test_tool_search_activation_replays_from_persisted_history() -> None:

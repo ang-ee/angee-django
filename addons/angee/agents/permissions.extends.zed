@@ -1,0 +1,10 @@
+// Agents-owned additive membership for IAM groups used as tool-grant bundles.
+// @rebac_package: agents
+// @rebac_schema_revision: 1
+
+// IAM owns groups; agents contributes only the agent-specific membership arm.
+// This keeps IAM independent of the downstream agents vocabulary while letting
+// tool-grant checks continue to run under the agents/agent principal.
+definition auth/group {
+    relation agent_member: agents/agent
+}

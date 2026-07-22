@@ -239,7 +239,7 @@ def test_agents_tool_grants_accept_agent_and_role_subjects() -> None:
     assert {(subject.type, subject.id, subject.relation) for subject in grantee.allowed_subjects} == {
         ("agents/agent", "", ""),
         ("agents/toolrole", "", "effective_member"),
-        ("auth/group", "", "member"),
+        ("auth/group", "", "agent_member"),
     }
     use = next(permission for permission in grant.permissions if permission.name == "use")
     assert "grantee" in _render_expr_names(use)

@@ -189,7 +189,7 @@ def test_agent_mcp_m2m_reconciles_server_read_and_tool_use(agents_console_tables
         subject = agent.principal_subject()
         server_ref = to_object_ref(server)
         tool_ref = to_object_ref(tool)
-        grant_ref = tool_grant_ref(tool.name)
+        grant_ref = tool_grant_ref(str(server.sqid), tool.name)
 
         assert not backend().check_access(subject=subject, action="read", resource=server_ref).allowed
         agent.mcp_servers.add(server)
@@ -216,6 +216,7 @@ def test_requires_user_actor_is_actor_species_not_attribution_user() -> None:
         parameters={"type": "object", "properties": {}},
         output_schema={"type": "object"},
         schema_name="public",
+        op_type="query",
         document="query { noop }",
         payload_field="noop",
         node_type="Noop",

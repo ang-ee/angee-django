@@ -181,7 +181,8 @@ class GraphQLTool:
     ``search_fields`` adds one optional text query mapped into a Hasura ``where``
     ``_or`` over the named string fields. ``default_limit`` and ``max_limit`` keep
     generated collection tools bounded even when the caller omits or overstates
-    ``limit_arg``.
+    ``limit_arg``. ``tags`` carries registration-owned classification such as the
+    generated-resource-reader bundle marker.
     """
 
     operation: str
@@ -198,6 +199,7 @@ class GraphQLTool:
     search_fields: tuple[str, ...] = ()
     default_limit: int | None = None
     max_limit: int | None = None
+    tags: frozenset[str] = frozenset()
 
 
 def register_graphql_tools(server: Any, specs: list[GraphQLTool]) -> None:
@@ -272,6 +274,7 @@ class _CompiledTool(Tool):
     """
 
     schema_name: str
+    op_type: str
     document: str
     payload_field: str
     node_type: str
@@ -377,7 +380,9 @@ def _compile(spec: GraphQLTool) -> _CompiledTool:
         parameters=parameters,
         output_schema=_output_schema(node, leaves, is_list),
         annotations=ToolAnnotations(readOnlyHint=(op_type == "query")),
+        tags=set(spec.tags),
         schema_name=spec.schema,
+        op_type=op_type,
         document=document,
         payload_field=spec.operation,
         node_type=node.name,

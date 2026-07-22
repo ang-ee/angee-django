@@ -33,6 +33,8 @@ from angee.mcp.graphql import _CompiledTool, register_graphql_tools
 from angee.mcp.resource_tools import (
     DEFAULT_QUERY_LIMIT,
     MAX_QUERY_LIMIT,
+    RESOURCE_READER_TOOL_TAG,
+    check_resource_tool_specs,
     register_resource_tools,
     resource_tool_specs,
 )
@@ -171,6 +173,7 @@ def test_generated_resource_names_projections_and_order(monkeypatch: pytest.Monk
     assert specs[1].fields == ("sqid", "title", "body", "optional_secret")
     assert specs[0].search_fields == ("title", "body")
     assert all("secret" not in spec.fields for spec in specs)
+    assert all(spec.tags == frozenset({RESOURCE_READER_TOOL_TAG}) for spec in specs)
 
 
 def test_generated_query_limits_and_search_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -184,6 +187,8 @@ def test_generated_query_limits_and_search_mapping(monkeypatch: pytest.MonkeyPat
     register_graphql_tools(server, list(specs))
     query = _tool_map(server)["query_probes"]
     assert isinstance(query, _CompiledTool)
+    assert query.op_type == "query"
+    assert query.tags == {RESOURCE_READER_TOOL_TAG}
 
     assert query.parameters["properties"]["limit"] == {
         "type": "integer",
@@ -220,6 +225,7 @@ def test_resource_registrar_adds_honest_catalogue_and_readers(monkeypatch: pytes
     tools = _tool_map(server)
     assert set(tools) == {"list_resources", "query_probes", "read_probes"}
     assert tools["list_resources"].annotations.readOnlyHint is True
+    assert tools["list_resources"].tags == {RESOURCE_READER_TOOL_TAG}
     result = asyncio.run(tools["list_resources"].run({}))
     assert result.structured_content == {
         "resources": [
@@ -266,3 +272,17 @@ def test_graphql_wire_root_is_normalized_only_for_tool_names(monkeypatch: pytest
     assert [spec.operation for spec in specs] == ["feedFollows", "feedFollows_by_pk"]
     assert [spec.name for spec in specs] == ["query_feed_follows", "read_feed_follows"]
     assert catalogue[0].name == "feed_follows"
+
+
+def test_resource_tool_system_check_reports_console_schema_drift(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Django check surface converts compiler drift into a stable check error."""
+
+    def drift() -> Any:
+        raise ValueError("missing console root")
+
+    monkeypatch.setattr("angee.mcp.resource_tools.resource_tool_specs", drift)
+    errors = check_resource_tool_specs()
+
+    assert len(errors) == 1
+    assert errors[0].id == "angee.mcp.E001"
+    assert "missing console root" in errors[0].msg
