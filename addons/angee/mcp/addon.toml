@@ -6,3 +6,6 @@ description = "An MCP server at /mcp — exposes addon tools to agents over auth
 keywords = ["mcp", "tools"]
 category = "Agents"
 depends_on = ["angee.iam"]
+
+[mcp]
+tools = "mcp_tools.register"

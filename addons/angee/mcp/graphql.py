@@ -178,6 +178,10 @@ class GraphQLTool:
     object), ``fixed`` injects constant GraphQL arguments the agent never sees
     (e.g. ``confirm`` on a delete), and ``requires_user_actor`` rejects non-user
     MCP actors before execution for operations whose write attribution is a user FK.
+    ``search_fields`` adds one optional text query mapped into a Hasura ``where``
+    ``_or`` over the named string fields. ``default_limit`` and ``max_limit`` keep
+    generated collection tools bounded even when the caller omits or overstates
+    ``limit_arg``.
     """
 
     operation: str
@@ -191,6 +195,9 @@ class GraphQLTool:
     args: tuple[str, ...] = ()
     fixed: dict[str, Any] = field(default_factory=dict)
     requires_user_actor: bool = False
+    search_fields: tuple[str, ...] = ()
+    default_limit: int | None = None
+    max_limit: int | None = None
 
 
 def register_graphql_tools(server: Any, specs: list[GraphQLTool]) -> None:
@@ -280,6 +287,9 @@ class _CompiledTool(Tool):
     limit_wire_arg: str | None = None
     fixed: dict[str, Any] = {}
     requires_user_actor: bool = False
+    search_fields: tuple[str, ...] = ()
+    default_limit: int | None = None
+    max_limit: int | None = None
 
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
         """Execute the operation and return the projected payload as structured content."""
@@ -301,12 +311,24 @@ class _CompiledTool(Tool):
         args = dict(arguments)
         sqid = args.pop("sqid", None)
         variables: dict[str, Any] = {}
-        if self.limit_arg and self.limit_arg in args:
-            value = args.pop(self.limit_arg)
-            if self.limit_wire_arg == "pagination":
+        if self.limit_arg:
+            value = args.pop(self.limit_arg, self.default_limit)
+            if value is not None:
+                value = int(value)
+                if value < 1:
+                    raise ToolError("limit must be at least 1.")
+                if self.max_limit is not None and value > self.max_limit:
+                    raise ToolError(f"limit must not exceed {self.max_limit}.")
+            if value is None:
+                pass
+            elif self.limit_wire_arg == "pagination":
                 variables["pagination"] = {"limit": value}
             elif self.limit_wire_arg:
                 variables[self.limit_wire_arg] = value
+        search = str(args.pop("search", "") or "").strip()
+        if search and self.search_fields:
+            clauses = [{name: {"_ilike": f"%{search}%"}} for name in self.search_fields]
+            variables["where"] = clauses[0] if len(clauses) == 1 else {"_or": clauses}
         if self.id_arg and sqid is not None:
             variables[self.id_arg] = {"id": str(sqid)} if self.id_arg_is_input else str(sqid)
         for agent_name, wire in self.passthrough_args.items():
@@ -371,6 +393,9 @@ def _compile(spec: GraphQLTool) -> _CompiledTool:
         limit_wire_arg=limit_wire_arg,
         fixed=spec.fixed,
         requires_user_actor=spec.requires_user_actor,
+        search_fields=spec.search_fields,
+        default_limit=spec.default_limit,
+        max_limit=spec.max_limit,
     )
 
 
@@ -488,11 +513,20 @@ def _validate(spec: GraphQLTool, field: Any, node: Any) -> None:
 
     _validate_fields(spec, node, spec.fields, depth=1)
     driven = [arg for arg in (_limit_wire_arg(field, spec), spec.id_arg, spec.flatten) if arg]
+    if spec.search_fields:
+        driven.append("where")
     driven += [_arg_wire(field, name) for name in spec.args]
     driven += list(spec.fixed)
     unknown_args = [arg for arg in driven if arg not in field.args]
     if unknown_args:
         raise ImproperlyConfigured(f"MCP tool {spec.name!r}: {spec.operation} takes no argument(s) {unknown_args}.")
+    if spec.search_fields:
+        where = _unwrap(field.args["where"].type)
+        unknown_search_fields = [name for name in spec.search_fields if name not in where.fields]
+        if unknown_search_fields:
+            raise ImproperlyConfigured(
+                f"MCP tool {spec.name!r}: {spec.operation} cannot search field(s) {unknown_search_fields}."
+            )
 
 
 def _validate_fields(spec: GraphQLTool, node: Any, fields: tuple[ProjectionSpec, ...], *, depth: int) -> None:
@@ -531,7 +565,18 @@ def _input_schema(field: Any, spec: GraphQLTool) -> dict[str, Any]:
     properties: dict[str, Any] = {}
     required: list[str] = []
     if spec.limit_arg:
-        properties[spec.limit_arg] = {"type": "integer", "description": "Maximum rows to return."}
+        properties[spec.limit_arg] = {
+            "type": "integer",
+            "minimum": 1,
+            **({"maximum": spec.max_limit} if spec.max_limit is not None else {}),
+            **({"default": spec.default_limit} if spec.default_limit is not None else {}),
+            "description": "Maximum rows to return.",
+        }
+    if spec.search_fields:
+        properties["search"] = {
+            "type": "string",
+            "description": "Case-insensitive text contained in a searchable summary field.",
+        }
     if spec.id_arg:
         properties["sqid"] = {"type": "string", "description": "Public id of the target record."}
         required.append("sqid")
@@ -566,6 +611,8 @@ def _document(
     """Render the GraphQL operation document with variable defs and the selection set."""
 
     used = [arg for arg in (limit_wire_arg, spec.id_arg, spec.flatten) if arg]
+    if spec.search_fields:
+        used.append("where")
     used += [_arg_wire(field, name) for name in spec.args]
     used += list(spec.fixed)
     used = list(dict.fromkeys(used))

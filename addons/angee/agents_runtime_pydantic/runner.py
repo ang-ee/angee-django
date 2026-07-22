@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from collections.abc import Mapping
 from contextlib import suppress
 from typing import Any
@@ -10,7 +11,8 @@ from typing import Any
 from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 from pydantic_ai import Agent, AgentRunResultEvent, DeferredToolRequests, DeferredToolResults
-from pydantic_ai.messages import ModelMessagesTypeAdapter
+from pydantic_ai.capabilities import ToolSearch
+from pydantic_ai.messages import BinaryContent, ModelMessagesTypeAdapter
 from pydantic_ai.usage import UsageLimits
 from pydantic_core import to_jsonable_python
 
@@ -18,7 +20,10 @@ from angee.agents.context import render_view_context
 from angee.agents.runners import SessionHeartbeat, SessionRunner, SessionUpdateSink, TurnOutcome
 from angee.agents_runtime_pydantic.acp import approval_requests, updates_for_event
 from angee.agents_runtime_pydantic.providers import model_for_agent
-from angee.agents_runtime_pydantic.toolsets import toolsets_for_agent
+from angee.agents_runtime_pydantic.toolsets import toolsets_for_session
+
+_BINARY_CONTENT_OMITTED = "[Binary tool content omitted from persisted history; use a bounded file handle.]"
+"""Replay-safe placeholder until the storage-handle follow-on lands."""
 
 
 class PydanticAISessionRunner(SessionRunner):
@@ -39,7 +44,7 @@ class PydanticAISessionRunner(SessionRunner):
         context = render_view_context(dict(session.context or {}))
         instructions = "\n\n".join(part for part in (session.agent.instructions.strip(), context.strip()) if part)
         inference_model = model_for_agent(session.agent)
-        toolsets = toolsets_for_agent(session.agent)
+        toolsets = toolsets_for_session(session)
         limits = _usage_limits(session.agent)
         deferred = _deferred_tool_results(deferred_results)
         return async_to_sync(self._run_async)(
@@ -71,6 +76,7 @@ class PydanticAISessionRunner(SessionRunner):
             model=inference_model,
             instructions=instructions,
             toolsets=toolsets,
+            capabilities=[ToolSearch()],
             output_type=[str, DeferredToolRequests],
         )
         result = None
@@ -95,7 +101,7 @@ class PydanticAISessionRunner(SessionRunner):
         if result is None:
             raise RuntimeError("pydantic-ai completed without an AgentRunResultEvent.")
 
-        replay_state = to_jsonable_python(result.all_messages())
+        replay_state = to_jsonable_python(_without_binary_content(result.all_messages()))
         usage = _usage_delta(result.usage)
         if isinstance(result.output, DeferredToolRequests):
             requests = approval_requests(result.output)
@@ -127,6 +133,33 @@ def _deferred_tool_results(results: list[Mapping[str, Any]]) -> DeferredToolResu
             continue
         deferred.approvals[tool_call_id] = bool(result.get("approved"))
     return deferred
+
+
+def _without_binary_content(value: Any) -> Any:
+    """Copy a message tree with raw ``BinaryContent`` replaced by a handle marker.
+
+    Binary bytes are never persisted in ``AgentSession.replay_state``. The
+    storage-file handle design is a named follow-on; until then the persisted
+    transcript records that content was omitted while the live turn may still
+    show the bounded result to the model.
+    """
+
+    if isinstance(value, BinaryContent):
+        return _BINARY_CONTENT_OMITTED
+    if isinstance(value, Mapping):
+        return {key: _without_binary_content(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_without_binary_content(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_without_binary_content(item) for item in value)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        updates = {
+            field.name: _without_binary_content(getattr(value, field.name))
+            for field in dataclasses.fields(value)
+            if field.init
+        }
+        return dataclasses.replace(value, **updates)
+    return value
 
 
 def _usage_limits(agent: Any) -> UsageLimits:
