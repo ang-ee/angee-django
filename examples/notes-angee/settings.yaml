@@ -27,6 +27,7 @@ INSTALLED_APPS:
   - angee.nexus
   - angee.messaging_integrate_imap
   - angee.messaging_integrate_whatsapp
+  - angee.messaging_integrate_imessage
   - angee.messaging_integrate_telegram
   - angee.messaging_integrate_signal
   - angee.messaging_integrate_matrix

@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     "angee.uom",
     "angee.messaging",
     "angee.messaging_integrate_whatsapp",
+    "angee.messaging_integrate_imessage",
     "angee.messaging_integrate_telegram",
     "angee.messaging_integrate_signal",
     "angee.messaging_integrate_matrix",
@@ -165,6 +166,7 @@ ANGEE_CHANNEL_BACKEND_CLASSES = {
     "slack": "angee.messaging_integrate_slack.backend.SlackChannelBackend",
     "telegram": "angee.messaging_integrate_telegram.backend.TelegramChannelBackend",
     "whatsapp": "angee.messaging_integrate_whatsapp.backend.WhatsAppChannelBackend",
+    "imessage": "angee.messaging_integrate_imessage.backend.ImessageChannelBackend",
     "fake_live": "tests.pairing_backend.FakePairingBackend",
 }
 # Feed backends a ``posts.Feed`` may select (posts' autoconfig normally

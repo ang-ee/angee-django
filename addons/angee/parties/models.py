@@ -395,6 +395,7 @@ class Handle(SqidMixin, AuditMixin, AngeeModel):
 
         EMAIL = "email", "Email"
         PHONE = "phone", "Phone"
+        IMESSAGE = "imessage", "iMessage"
         MATRIX = "matrix", "Matrix"
         SIGNAL = "signal", "Signal"
         SLACK = "slack", "Slack"
@@ -482,16 +483,18 @@ class Handle(SqidMixin, AuditMixin, AngeeModel):
         WhatsApp values parse without an assumed region and format as E.164; values
         require a leading country code and must be possible and valid. Anything
         unparseable, invalid, or region-unknown falls back to its digits so
-        punctuation still does not fork the same contact point.
+        punctuation still does not fork the same contact point. iMessage carries
+        either kind of address, so it routes by value shape — the email rule when
+        the value contains ``@``, the phone rule otherwise.
         """
 
         normalized = (value or "").strip().lower()
-        if platform == cls.Platform.EMAIL and "@" in normalized:
+        if platform in (cls.Platform.EMAIL, cls.Platform.IMESSAGE) and "@" in normalized:
             local, _, domain = normalized.rpartition("@")
             if domain in ("gmail.com", "googlemail.com"):
                 local = local.split("+", 1)[0].replace(".", "")
             return f"{local}@{domain}"
-        if platform in (cls.Platform.PHONE, cls.Platform.WHATSAPP):
+        if platform in (cls.Platform.PHONE, cls.Platform.WHATSAPP, cls.Platform.IMESSAGE):
             try:
                 number = parse(normalized, None)
             except NumberParseException:
