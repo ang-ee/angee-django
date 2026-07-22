@@ -8,7 +8,13 @@ from django.views.decorators.debug import sensitive_variables
 from rebac import system_context
 
 from angee.integrate.impl import LiveBridgeImpl
-from angee.integrate.live import PairingProjection, await_session_exit, reset_session_store
+from angee.integrate.live import (
+    PairingProjection,
+    armed_material_key,
+    await_session_exit,
+    reset_session_store,
+    skipped_password_marker,
+)
 from angee.integrate.models import IntegrationLifecycle, IntegrationRuntimeStatus
 
 
@@ -31,21 +37,36 @@ def resume_channel_pairing(channel: Any) -> None:
 
 @sensitive_variables("password", "material")
 def submit_channel_password(channel: Any, password: str) -> None:
-    """Store one transient account password and signal that it is ready."""
+    """Store one transient secret under the armed material key and signal readiness."""
 
     _live_impl(channel)
     if not password:
         raise ValueError("A channel password is required.")
     with system_context(reason="messaging.submit_channel_password"):
         channel.refresh_from_db()
-        if channel.subscription_state.get("awaiting") != "password":
+        material_key = armed_material_key(channel.subscription_state)
+        if not material_key:
             raise ValueError("This channel is not awaiting a password.")
         credential = channel.credential
         if credential is None:
             raise ValueError("This channel has no credential for password input.")
-        credential.update_material(password=password)
+        credential.update_material(**{material_key: password})
         # See ``LiveSession._mark_awaiting_password`` for the awaiting tri-state.
         channel.merge_subscription_state(awaiting="")
+
+
+def skip_channel_password(channel: Any) -> None:
+    """Skip one armed optional secret round and signal that choice to the session."""
+
+    impl = _live_impl(channel)
+    with system_context(reason="messaging.skip_channel_password"):
+        channel.refresh_from_db()
+        material_key = armed_material_key(channel.subscription_state)
+        if not material_key:
+            raise ValueError("This channel is not awaiting a password.")
+        if not impl.pairing().can_skip:
+            raise ValueError("This channel password cannot be skipped.")
+        channel.merge_subscription_state(awaiting=skipped_password_marker(material_key))
 
 
 def reset_channel_pairing(channel: Any) -> None:
@@ -57,7 +78,9 @@ def reset_channel_pairing(channel: Any) -> None:
         await_session_exit(channel)
         channel.refresh_from_db(fields=["credential"])
         if channel.credential is not None:
-            channel.credential.update_material(password=None)
+            channel.credential.update_material(
+                **dict.fromkeys(impl.transient_material_keys),
+            )
         reset_session_store(channel)
         impl.mark_disconnected(clear_identity=True)
     resume_channel_pairing(channel)

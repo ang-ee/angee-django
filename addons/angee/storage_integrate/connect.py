@@ -114,7 +114,7 @@ def provision_mount(
             created_by_id=user.pk,
         )
         mount = mount_model.objects.create(
-            vendor=_local_vendor(),
+            vendor=apps.get_model("integrate", "Vendor").objects.seeded(_LOCAL_VENDOR_SLUG),
             owner=user,
             display_name=display_name,
             backend_class=backend_class,
@@ -141,9 +141,10 @@ def _available_mount_slug(
     base = slugify(name) or slug_default
     suffix = 1
     candidate = base
-    while backend_model.objects.filter(slug=f"mount-{candidate}").exists() or drive_model.objects.filter(
-        slug=f"mount-{candidate}"
-    ).exists():
+    while (
+        backend_model.objects.filter(slug=f"mount-{candidate}").exists()
+        or drive_model.objects.filter(slug=f"mount-{candidate}").exists()
+    ):
         suffix += 1
         candidate = f"{base}-{suffix}"
     return candidate
@@ -153,20 +154,6 @@ def _default_drive(drive_model: Any) -> Any:
     """Return the configured managed drive, failing clearly on resource drift."""
 
     try:
-        return drive_model.objects.select_related("backend").get(
-            slug=str(settings.ANGEE_STORAGE_DEFAULT_DRIVE)
-        )
+        return drive_model.objects.select_related("backend").get(slug=str(settings.ANGEE_STORAGE_DEFAULT_DRIVE))
     except drive_model.DoesNotExist as error:
         raise ImproperlyConfigured("The configured default storage drive is missing.") from error
-
-
-def _local_vendor() -> Any:
-    """Return the addon-seeded local vendor row."""
-
-    vendor_model = apps.get_model("integrate", "Vendor")
-    try:
-        return vendor_model.objects.get(slug=_LOCAL_VENDOR_SLUG)
-    except vendor_model.DoesNotExist as error:
-        raise ImproperlyConfigured(
-            "Local vendor is missing. Load storage_integrate resources before connecting mounts."
-        ) from error

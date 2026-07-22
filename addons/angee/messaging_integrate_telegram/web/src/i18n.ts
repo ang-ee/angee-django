@@ -1,6 +1,8 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enMessagingTelegramMessages: Record<string, string> = {
+  "channel.telegram.menu.label": "Telegram",
+  "channel.telegram.menu.description": "Link Telegram accounts by QR code",
   "channel.telegram.button": "Connect Telegram",
   "channel.telegram.title": "Connect Telegram",
   "channel.telegram.description":
@@ -26,10 +28,6 @@ export const enMessagingTelegramMessages: Record<string, string> = {
   "channel.telegram.error": "Could not connect Telegram.",
   "channel.telegram.scan":
     "Open Telegram on your phone → Settings → Devices → Link Desktop Device, then scan this code.",
-  "channel.telegram.disconnect": "Disconnect",
-  "channel.telegram.disconnectConfirm.title": "Disconnect this Telegram channel?",
-  "channel.telegram.disconnectConfirm.body":
-    "The live session stops and the account is released. The Telegram device session is retained, so you can reconnect without scanning again.",
 };
 
 export const useMessagingTelegramT = createNamespaceT(

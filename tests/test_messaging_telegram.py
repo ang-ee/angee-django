@@ -253,9 +253,10 @@ def test_telegram_message_exposes_media_for_task_thread_download() -> None:
 def test_app_keys_credential_kind_owns_the_application_pair() -> None:
     """The closed credential vocabulary exposes reusable application keys."""
 
-    assert CredentialKind.APP_KEYS.value == "app_keys"
-    assert CredentialKind.APP_KEYS.label == "App Keys"
-    handler = handler_for(CredentialKind.APP_KEYS)
+    app_keys = CredentialKind("app_keys")
+    assert app_keys.value == "app_keys"
+    assert app_keys.label == "App Keys"
+    handler = handler_for(app_keys)
     assert handler.material_field == "app_secret"
     assert handler.input_material_fields() == ("app_id", "app_secret")
     with pytest.raises(ValueError, match="app_id and app_secret"):
@@ -363,9 +364,7 @@ def test_telegram_backend_registration_and_pairing_projection(telegram_tables: A
     autoconfig = _telegram_module("autoconfig")
     backend_module = _telegram_module("backend")
     assert autoconfig.SETTINGS == {
-        "ANGEE_CHANNEL_BACKEND_CLASSES.telegram": (
-            "angee.messaging_integrate_telegram.backend.TelegramChannelBackend"
-        ),
+        "ANGEE_CHANNEL_BACKEND_CLASSES.telegram": ("angee.messaging_integrate_telegram.backend.TelegramChannelBackend"),
         "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES.telegram_takeout": (
             "angee.messaging_integrate_telegram.extractor.TelegramTakeoutExtractor"
         ),
@@ -1044,6 +1043,7 @@ def test_telegram_authorized_session_retries_history_until_seeded_once(
 def test_telegram_initial_history_lands_caption_and_media_marker_through_ingest(
     telegram_tables: Any,
     telegram_session_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The bounded seed uses the normal chunk, resolution, download, and ingest path."""
 
@@ -1090,7 +1090,11 @@ def test_telegram_initial_history_lands_caption_and_media_marker_through_ingest(
     )
     session.client = HistoryClient()
     downloads: list[Any] = []
-    session._download = lambda payload: downloads.append(payload) or None
+
+    def download(payload: Any, _fact: Any) -> None:
+        downloads.append(payload)
+
+    monkeypatch.setattr(session, "_download", download)
 
     assert asyncio.run(session._initial_history()) is True
     kind, batch = session.events.get_nowait()

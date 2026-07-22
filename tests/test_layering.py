@@ -142,7 +142,7 @@ def test_compose_has_no_rebac_permission_renderer() -> None:
 def test_live_console_import_path_stays_vendor_free() -> None:
     """The full console import closure excludes worker-only and vendor libraries."""
 
-    forbidden = ("neonize", "telethon", "qrcode", "PIL", "Pillow")
+    forbidden = ("mautrix", "neonize", "olm", "telethon", "qrcode", "PIL", "Pillow")
     console_entries = (
         "angee.integrate.live",
         "angee.integrate.impl",
@@ -157,8 +157,25 @@ def test_live_console_import_path_stays_vendor_free() -> None:
         "angee.messaging_integrate_telegram.connect",
         "angee.messaging_integrate_telegram.schema",
         "angee.messaging_integrate_telegram.autoconfig",
+        "angee.messaging_integrate_signal.backend",
+        "angee.messaging_integrate_signal.identity",
+        "angee.messaging_integrate_signal.connect",
+        "angee.messaging_integrate_signal.schema",
+        "angee.messaging_integrate_signal.autoconfig",
+        "angee.messaging_integrate_matrix.backend",
+        "angee.messaging_integrate_matrix.identity",
+        "angee.messaging_integrate_matrix.connect",
+        "angee.messaging_integrate_matrix.schema",
+        "angee.messaging_integrate_matrix.autoconfig",
+        "angee.messaging_integrate_slack.backend",
+        "angee.messaging_integrate_slack.identity",
+        "angee.messaging_integrate_slack.connect",
+        "angee.messaging_integrate_slack.schema",
+        "angee.messaging_integrate_slack.autoconfig",
     )
     closure = _import_closure(console_entries)
     assert not any(name == prefix or name.startswith(f"{prefix}.") for name in closure for prefix in forbidden)
     assert "angee.integrate.session" not in closure
     assert "angee.messaging.session" not in closure
+    assert "angee.messaging_integrate_signal.session" not in closure
+    assert "angee.messaging_integrate_matrix.session" not in closure

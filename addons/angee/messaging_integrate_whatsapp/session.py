@@ -105,7 +105,7 @@ class WhatsAppSession(LiveChannelSession):
         connection.join(timeout=STOP_JOIN_SECONDS)
         return not connection.is_alive()
 
-    def _download(self, payload: Any) -> bytes | None:
+    def _download(self, payload: Any, _fact: Any) -> bytes | None:
         """Fetch one message's media bytes; ``None`` lands the marker part."""
 
         if payload is None:

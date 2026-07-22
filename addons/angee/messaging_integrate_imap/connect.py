@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import Any
 
 from django.apps import apps
-from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from rebac import system_context
 
@@ -51,9 +50,8 @@ def connect_imap_channel(
     )
 
     with system_context(reason="messaging_integrate_imap.connect"), transaction.atomic():
-        vendor = _imap_vendor()
         channel = Channel.objects.create(
-            vendor=vendor,
+            vendor=Vendor.objects.seeded(_IMAP_VENDOR_SLUG),
             owner=user,
             backend_class=_IMAP_VENDOR_SLUG,
             display_name=display_name,
@@ -96,17 +94,6 @@ def _clean_string_list(values: list[str] | None) -> list[str]:
     """Return non-empty strings from optional GraphQL list input."""
 
     return [cleaned for value in values or [] if (cleaned := str(value).strip())]
-
-
-def _imap_vendor() -> Any:
-    """Return the addon-seeded IMAP vendor row, failing clearly on resource drift."""
-
-    try:
-        return Vendor.objects.get(slug=_IMAP_VENDOR_SLUG)
-    except Vendor.DoesNotExist as exc:
-        raise ImproperlyConfigured(
-            "IMAP vendor is missing. Load messaging_integrate_imap resources before connecting IMAP channels."
-        ) from exc
 
 
 def _credential_name(display_name: str, channel_id: str) -> str:

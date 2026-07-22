@@ -395,6 +395,9 @@ class Handle(SqidMixin, AuditMixin, AngeeModel):
 
         EMAIL = "email", "Email"
         PHONE = "phone", "Phone"
+        MATRIX = "matrix", "Matrix"
+        SIGNAL = "signal", "Signal"
+        SLACK = "slack", "Slack"
         TELEGRAM = "telegram", "Telegram"
         WHATSAPP = "whatsapp", "WhatsApp"
         YOUTUBE = "youtube", "YouTube"
@@ -493,11 +496,7 @@ class Handle(SqidMixin, AuditMixin, AngeeModel):
                 number = parse(normalized, None)
             except NumberParseException:
                 number = None
-            if (
-                number is not None
-                and is_possible_number(number)
-                and is_valid_number(number)
-            ):
+            if number is not None and is_possible_number(number) and is_valid_number(number):
                 return format_number(number, PhoneNumberFormat.E164)
             return "".join(character for character in normalized if character.isdigit())
         return normalized

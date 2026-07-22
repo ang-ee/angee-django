@@ -10,6 +10,7 @@ from __future__ import annotations
 import enum
 import shutil
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,27 @@ SESSION_EXIT_TIMEOUT = WAKE_SECONDS + STOP_JOIN_SECONDS + 20.0
 This bound derives from the real loop constants so a destructive reset cannot
 silently drift below the session's maximum stop and unwind time.
 """
+
+
+def skipped_password_marker(material_key: str) -> dict[str, str]:
+    """Return the non-secret persisted marker for a skipped material-key round."""
+
+    return {"skipped": material_key}
+
+
+def armed_material_key(state: object) -> str:
+    """Return the material key from an armed awaiting-password state, or ``""``."""
+
+    if not isinstance(state, Mapping):
+        return ""
+    value = state.get("awaiting")
+    return value if isinstance(value, str) and bool(value) else ""
+
+
+def is_skip_marker(value: object, material_key: str) -> bool:
+    """Return whether ``value`` records an explicit skip for ``material_key``."""
+
+    return value == skipped_password_marker(material_key)
 
 
 @strawberry.enum
@@ -67,6 +89,7 @@ class PairingProjection:
     state: PairingState
     qr: str = ""
     message: str = ""
+    can_skip: bool = False
     own_id: str = ""
     account_label: str = ""
     duplicate_channel_id: str = ""

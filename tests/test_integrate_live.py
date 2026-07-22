@@ -5,7 +5,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -18,7 +18,7 @@ from rebac import system_context
 from angee.integrate.live import PairingState
 from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import IntegrationRuntimeStatus
-from angee.integrate.session import LiveSession
+from angee.integrate.session import PASSWORD_SKIPPED, LiveSession, PasswordSkipped
 from angee.messaging.backends import LiveChannelBackend, ParsedMessage, ParsedPart, ParsedThread
 from angee.tasks.locks import task_lock_is_held
 from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
@@ -40,7 +40,7 @@ class FakeLiveSession(LiveSession):
     def _shutdown(self, connection: threading.Thread) -> bool:
         return True
 
-    def _download(self, payload: Any) -> bytes | None:
+    def _download(self, payload: Any, fact: Any) -> bytes | None:
         return None
 
     def _handle(self, kind: str, payload: Any) -> bool:
@@ -96,6 +96,31 @@ class RePromptingPasswordInputSession(FakeLiveSession):
         return not connection.is_alive()
 
 
+class OptionalPasswordInputSession(FakeLiveSession):
+    """Fake vendor that requests a skippable secret under a non-password key."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.received_password: str | PasswordSkipped | None = None
+        self.password_received = threading.Event()
+
+    def _connect(self) -> None:
+        self.received_password = self.request_password(
+            "Enter the recovery key.",
+            material_key="recovery_key",
+            optional=True,
+        )
+        self.password_received.set()
+        if self.received_password is not None:
+            self.events.put(("paired", "account-1"))
+            self.events.put(("disconnected", None))
+            self._stopping.wait(timeout=1)
+
+    def _shutdown(self, connection: threading.Thread) -> bool:
+        connection.join(timeout=0.5)
+        return not connection.is_alive()
+
+
 class FakeLiveChannelBackend(LiveChannelBackend):
     """Live backend with no vendor dependency, used by generic integrate tests."""
 
@@ -116,6 +141,11 @@ class _QueuedLiveMessage:
 
     metadata: dict[str, Any] = field(default_factory=dict)
     media: tuple[Any, ...] = ()
+
+    def with_media(self, media: tuple[Any, ...]) -> _QueuedLiveMessage:
+        """Return the vendor DTO with its resolved media attached."""
+
+        return replace(self, media=media)
 
 
 @pytest.fixture
@@ -328,6 +358,56 @@ def test_live_session_reports_the_non_secret_password_prompt(live_tables: Any) -
         "state": PairingState.AWAITING_PASSWORD,
         "message": "Enter the account password.",
     }
+
+
+@pytest.mark.django_db(transaction=True)
+def test_optional_material_round_skips_without_touching_durable_password(
+    live_tables: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-password round carries its key, projects skip, and returns the sentinel."""
+
+    from angee.integrate import session as session_module
+    from angee.integrate.sync import BridgeProgressReporter
+    from angee.messaging.connect import skip_channel_password
+
+    monkeypatch.setattr(session_module, "AWAITING_PASSWORD_WAKE_SECONDS", 0.01)
+    channel = _live_channel("fake-live-recovery-skip")
+    channel.credential.update_material(password="durable-login-password")
+    session = OptionalPasswordInputSession(
+        channel,
+        reporter=BridgeProgressReporter(channel),
+        stop_event=threading.Event(),
+    )
+    operator_failures: list[BaseException] = []
+
+    def skip_round() -> None:
+        try:
+            _wait_until(lambda: session.pairing is PairingState.AWAITING_PASSWORD)
+            with system_context(reason="test optional material skip operator"):
+                operator_channel = type(channel).objects.get(pk=channel.pk)
+                assert operator_channel.subscription_state["awaiting"] == "recovery_key"
+                assert operator_channel.live_impl.pairing().can_skip is True
+                skip_channel_password(operator_channel)
+        except BaseException as error:  # noqa: BLE001 — surface operator-thread failures.
+            operator_failures.append(error)
+
+    operator_thread = threading.Thread(target=skip_round, daemon=True)
+    with system_context(reason="test optional material skip"), bridge_advisory_lock(channel) as acquired:
+        assert acquired
+        operator_thread.start()
+        outcome = session.run()
+        operator_thread.join(timeout=1)
+        assert not operator_thread.is_alive()
+
+    assert operator_failures == []
+    assert outcome is PairingState.PAIRED
+    assert session.password_received.is_set()
+    assert session.received_password is PASSWORD_SKIPPED
+    with system_context(reason="test optional material skip verify"):
+        credential = type(channel.credential).objects.get(pk=channel.credential_id)
+        assert credential.reveal()["password"] == "durable-login-password"
+        assert "recovery_key" not in credential.reveal()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -887,10 +967,11 @@ def test_live_channel_session_owns_message_ingest(live_tables: Any) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_live_channel_media_resolution_copies_metadata_and_uses_shared_item(
+def test_live_channel_media_resolution_downloads_once_per_fact(
     live_tables: Any,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The base resolves facts without mutating a frozen DTO's shared metadata."""
+    """The base passes each media fact without mutating a frozen DTO's metadata."""
 
     from angee.integrate.sync import BridgeProgressReporter
     from angee.messaging import backends as messaging_backends
@@ -904,18 +985,45 @@ def test_live_channel_media_resolution_copies_metadata_and_uses_shared_item(
         reporter=BridgeProgressReporter(channel),
         stop_event=threading.Event(),
     )
-    fact = media_item_class(mime="image/jpeg", name="photo.jpg")
-    original_metadata = {"_media_facts": (fact,), "kept": "value"}
+    first = media_item_class(mime="image/jpeg", name="photo.jpg")
+    second = media_item_class(mime="image/png", name="diagram.png")
+    original_metadata = {"_media_facts": (first, second), "kept": "value"}
     queued = _QueuedLiveMessage(metadata=original_metadata)
-    session._download = lambda payload: b"downloaded" if payload == "wire" else None
+    downloads: list[tuple[Any, Any]] = []
+
+    def download(payload: Any, fact: Any) -> bytes:
+        downloads.append((payload, fact))
+        return fact.name.encode()
+
+    monkeypatch.setattr(session, "_download", download)
 
     resolved = session._with_media(queued, "wire")
 
     assert FakeLiveChannelBackend.media_item_class is media_item_class
     assert queued.metadata is original_metadata
-    assert queued.metadata == {"_media_facts": (fact,), "kept": "value"}
+    assert queued.metadata == {"_media_facts": (first, second), "kept": "value"}
     assert resolved.metadata == {"kept": "value"}
-    assert resolved.media == (media_item_class(mime="image/jpeg", name="photo.jpg", content=b"downloaded"),)
+    assert downloads == [("wire", first), ("wire", second)]
+    assert resolved.media == (
+        media_item_class(mime="image/jpeg", name="photo.jpg", content=b"photo.jpg"),
+        media_item_class(mime="image/png", name="diagram.png", content=b"diagram.png"),
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_vendor_manager_resolves_seeded_slug_with_load_guidance(live_tables: Any) -> None:
+    """The catalogue owner centralizes seeded lookup and slug-specific guidance."""
+
+    from tests.conftest import Vendor
+
+    with system_context(reason="test seeded vendor manager"):
+        seeded = Vendor.objects.create(slug="seeded-owner", display_name="Seeded Owner")
+        assert Vendor.objects.seeded("seeded-owner") == seeded
+        with pytest.raises(
+            ImproperlyConfigured,
+            match=r"Vendor 'missing-owner'.*manage\.py resources load",
+        ):
+            Vendor.objects.seeded("missing-owner")
 
 
 @pytest.mark.django_db(transaction=True)

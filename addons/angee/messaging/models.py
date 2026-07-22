@@ -1074,6 +1074,7 @@ class Channel(Bridge):
         message_model = apps.get_model("messaging", "Message")
         landed = 0
         previous: tuple[tuple[str, ...], Any] | None = None
+        backend.sync_deadline = deadline
         reporter = current_bridge_progress()
         if reporter is not None:
             reporter.report(
@@ -1092,7 +1093,14 @@ class Channel(Bridge):
                         f"{type(backend).__name__} returned the same batch twice without advancing its cursor."
                     )
                 previous = current
-                landed += len(message_model.objects.ingest(batch, channel=self))
+                landed += len(
+                    message_model.objects.ingest(
+                        batch,
+                        channel=self,
+                        message_kind=backend.message_kind,
+                        quote_edges=backend.quote_edges,
+                    )
+                )
                 if partition is None:
                     self.save(update_fields=["cursor", "updated_at"])
                 else:

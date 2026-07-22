@@ -1,0 +1,22 @@
+display_information:
+  name: Angee Messaging
+  description: Read Slack workspace conversations into Angee messaging.
+oauth_config:
+  scopes:
+    user:
+      - channels:history
+      - groups:history
+      - im:history
+      - mpim:history
+      - channels:read
+      - groups:read
+      - im:read
+      - mpim:read
+      - users:read
+      - users.profile:read
+      - files:read
+      - team:read
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

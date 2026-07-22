@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from django.apps import apps
-from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from rebac import system_context
 
@@ -44,7 +43,7 @@ def create_telegram_channel(
     telegram_app_keys(credential)
     with system_context(reason="messaging_integrate_telegram.create"), transaction.atomic():
         channel = Channel.objects.create(
-            vendor=_telegram_vendor(),
+            vendor=Vendor.objects.seeded(_TELEGRAM_SLUG),
             owner=user,
             backend_class=_TELEGRAM_SLUG,
             display_name=display_name,
@@ -75,15 +74,3 @@ def telegram_app_keys(credential: Any) -> tuple[int, str]:
     if not api_id or not api_hash:
         raise ValueError("The Telegram credential requires app_id and app_secret.")
     return api_id, api_hash
-
-
-def _telegram_vendor() -> Any:
-    """Return the addon-seeded Telegram vendor row, failing clearly on drift."""
-
-    try:
-        return Vendor.objects.get(slug=_TELEGRAM_SLUG)
-    except Vendor.DoesNotExist as exc:
-        raise ImproperlyConfigured(
-            "Telegram vendor is missing. Load messaging_integrate_telegram resources "
-            "before connecting Telegram channels."
-        ) from exc

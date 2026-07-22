@@ -138,6 +138,7 @@ export const enMessagingMessages: Record<string, string> = {
   "channel.pairing.passwordPrompt": "Enter the account password to finish linking.",
   "channel.pairing.passwordLabel": "Account password",
   "channel.pairing.passwordSubmit": "Submit password",
+  "channel.pairing.passwordSkip": "Skip",
   "channel.pairing.qrAlt": "Channel pairing QR code",
   "channel.pairing.paired": "Linked! Messages are syncing.",
   "channel.pairing.stopped": "The pairing session stopped before completing.",
@@ -146,6 +147,10 @@ export const enMessagingMessages: Record<string, string> = {
   "channel.pairing.duplicate": "This account is already connected to another channel.",
   "channel.pairing.repair": "Re-pair",
   "channel.pairing.resume": "Resume",
+  "channel.pairing.disconnect": "Disconnect",
+  "channel.pairing.disconnectConfirm.title": "Disconnect this channel?",
+  "channel.pairing.disconnectConfirm.body":
+    "The live session stops and the account is released. Reusable pairing material is retained so you can reconnect without linking again.",
   "channel.pairing.done": "Done",
 
   // MessagesPage — the inbox list + detail.

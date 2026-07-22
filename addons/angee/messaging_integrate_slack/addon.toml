@@ -1,0 +1,11 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# package metadata and entry points.
+[addon]
+name = "angee.messaging_integrate_slack"
+description = "Slack messaging sync — polls workspace conversations into chat threads"
+keywords = ["slack", "chat", "messaging", "sync"]
+category = "Integration"
+depends_on = ["angee.messaging", "angee.integrate", "angee.parties"]
+
+[resources]
+master = [{ path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" }]

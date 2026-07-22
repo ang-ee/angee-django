@@ -12,6 +12,12 @@ import { RecordChatterPane } from "./RecordChatterPane";
 export { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
 export { CHANNEL_MODEL } from "./documents";
 export {
+  defineChannelBridgeAddon,
+  defineChannelPollBridgeAddon,
+  type ChannelBridgeAddonOptions,
+  type ChannelPollBridgeAddonOptions,
+} from "./channel-bridge-addon";
+export {
   ChannelPairingAction,
   PairingDialog,
 } from "./PairingDialog";

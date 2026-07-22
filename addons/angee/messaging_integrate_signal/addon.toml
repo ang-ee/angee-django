@@ -1,0 +1,11 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.messaging_integrate_signal"
+description = "Signal sync — pairs signal-cli as a linked device and pulls chats into messaging"
+keywords = ["signal", "chat", "sync"]
+category = "Integration"
+depends_on = ["angee.messaging", "angee.integrate", "angee.parties"]
+
+[resources]
+master = [{ path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" }]

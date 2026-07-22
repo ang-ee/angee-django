@@ -41,14 +41,18 @@ class LiveChannelSession(LiveSession):
             landed = message_model.objects.ingest(
                 parsed,
                 channel=self.bridge,
-                message_kind=message_model.MessageKind.CHAT,
-                quote_edges=False,
+                message_kind=self.live_impl.message_kind,
+                quote_edges=self.live_impl.quote_edges,
             )
+            self._after_ingest(chunk, landed)
             self.landed += len(landed)
             self._report(self.pairing)
             if start + INGEST_CHUNK < len(batch) and not self._still_wanted():
                 return False
         return self._still_wanted()
+
+    def _after_ingest(self, _batch: list[tuple[Any, Any]], _landed: list[Any]) -> None:
+        """Run implementation cleanup only after the owning messages commit."""
 
     def _with_media(self, message: Any, payload: Any) -> Any:
         """Resolve queued media facts through the implementation's declared DTO class."""
@@ -58,15 +62,11 @@ class LiveChannelSession(LiveSession):
         if not facts:
             return message
         media_item_class = self.live_impl.media_item_class
-        # One payload carries one download: `_download` resolves the *payload*, not the
-        # fact, so fetching per fact would re-fetch the same bytes from the vendor once
-        # per fact and pay its rate limit for each.
-        content = self._download(payload)
         media = tuple(
             media_item_class(
                 mime=getattr(fact, "mime", "application/octet-stream"),
                 name=getattr(fact, "name", ""),
-                content=content,
+                content=self._download(payload, fact),
             )
             for fact in facts
         )
@@ -75,4 +75,4 @@ class LiveChannelSession(LiveSession):
     def _attach_media(self, message: Any, media: tuple[Any, ...]) -> Any:
         """Attach resolved media to the default vendor DTO shape."""
 
-        return replace(message, media=media)
+        return message.with_media(media)

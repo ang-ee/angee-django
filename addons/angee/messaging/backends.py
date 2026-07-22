@@ -182,8 +182,18 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     label = "Channel"
     icon = "inbox"
 
+    # Strings avoid a model import cycle; values must equal Message.MessageKind.<X>.value.
+    message_kind: ClassVar[str] = "email"
+    """Messaging kind assigned to every message this backend ingests."""
+
+    quote_edges: ClassVar[bool] = True
+    """Whether ingest should build the email shared-fragment quotation graph."""
+
     partition: str | None = None
     """When set, this instance drains only the named partition (see :meth:`sync_partitions`)."""
+
+    sync_deadline: float | None = None
+    """Monotonic drain deadline, bound by ``Channel._drain`` for transport retries."""
 
     def sync_partitions(self) -> tuple[str, ...]:
         """Return this source's independently drainable partition keys, or ``()``.
@@ -255,6 +265,10 @@ class LiveChannelBackend(LiveBridgeImpl, ChannelBackend):
     category = "channel"
     label = "Live Channel"
     icon = "inbox"
+
+    # Strings avoid a model import cycle; values must equal Message.MessageKind.<X>.value.
+    message_kind: ClassVar[str] = "chat"
+    quote_edges: ClassVar[bool] = False
 
     media_item_class: ClassVar[type[MediaItem]] = MediaItem
     """DTO class used to attach downloaded media to a queued live message."""

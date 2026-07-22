@@ -8,7 +8,7 @@ identity-only mapping, this parser owns the DTO also produced by ``backup.py``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from angee.messaging.backends import MediaItem, ParsedHandle, ParsedMessage, ParsedThread, body_part
@@ -95,6 +95,11 @@ class ChatMessage:
     quoted_stanza_id: str = ""
     media: tuple[MediaItem, ...] = ()
     metadata: dict = field(default_factory=dict)
+
+    def with_media(self, media: tuple[MediaItem, ...]) -> ChatMessage:
+        """Return this message with task-thread-resolved media attached."""
+
+        return replace(self, media=media)
 
 
 def parsed_message(message: ChatMessage) -> ParsedMessage:

@@ -16,7 +16,7 @@ import threading
 from contextlib import ExitStack
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, overload
 
 import qrcode
 from django.utils import timezone
@@ -26,6 +26,7 @@ from angee.integrate.live import (
     STOP_JOIN_SECONDS,
     WAKE_SECONDS,
     PairingState,
+    is_skip_marker,
     reset_session_store,
     session_store_path,
 )
@@ -34,6 +35,16 @@ from angee.integrate.models import IntegrationRuntimeStatus
 from angee.integrate.sync import BridgeProgressReporter
 
 logger = logging.getLogger(__name__)
+
+
+class PasswordSkipped:
+    """Type of the explicit optional-password skip sentinel."""
+
+    __slots__ = ()
+
+
+PASSWORD_SKIPPED = PasswordSkipped()
+"""An optional password round was skipped; distinct from the abort value ``None``."""
 
 
 def _qr_data_uri(payload: bytes) -> str:
@@ -57,7 +68,7 @@ class LiveSession:
         self.reporter = reporter
         self.stop_event = stop_event
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
-        self.inputs: queue.Queue[str] = queue.Queue()
+        self.inputs: queue.Queue[str | PasswordSkipped] = queue.Queue()
         self.client: Any = None
         self.live_impl = self.bridge.live_impl
         self.pairing = PairingState.STARTING
@@ -69,6 +80,8 @@ class LiveSession:
         self._account_locks = ExitStack()
         self._account_id = ""
         self._password_delivered = False
+        self._password_material_key = "password"
+        self._password_optional = False
         self.outcome_error: Exception | None = None
         self._stopping = threading.Event()
 
@@ -161,7 +174,12 @@ class LiveSession:
             self.pairing = PairingState.AWAITING_SCAN
             self._report(PairingState.AWAITING_SCAN, qr=_qr_data_uri(payload))
         elif kind == "awaiting_password":
-            if not self._mark_awaiting_password(payload):
+            message, material_key, optional = payload
+            if not self._mark_awaiting_password(
+                message,
+                material_key=material_key,
+                optional=optional,
+            ):
                 return False
         elif kind == "paired":
             keep_running = self._mark_paired(payload)
@@ -202,17 +220,51 @@ class LiveSession:
             return False
         return self._deliver_password_if_ready()
 
-    def request_password(self, message: str = "") -> str | None:
-        """Ask the task thread for one account password, or return ``None`` on stop.
+    def _vendor_stopping(self) -> bool:
+        """Return whether either session owner requested vendor shutdown."""
+
+        return self._stopping.is_set() or self.stop_event.is_set()
+
+    @overload
+    def request_password(
+        self,
+        message: str = "",
+        *,
+        material_key: str = "password",
+        optional: Literal[False] = False,
+    ) -> str | None: ...
+
+    @overload
+    def request_password(
+        self,
+        message: str = "",
+        *,
+        material_key: str = "password",
+        optional: Literal[True],
+    ) -> str | PasswordSkipped | None: ...
+
+    def request_password(
+        self,
+        message: str = "",
+        *,
+        material_key: str = "password",
+        optional: bool = False,
+    ) -> str | PasswordSkipped | None:
+        """Ask for one transient secret, a skip sentinel, or ``None`` on stop.
 
         ``message`` is a non-secret, operator-visible prompt from the vendor.
+        ``material_key`` selects the consume-once credential key. Optional rounds
+        may be explicitly skipped without conflating that choice with shutdown.
         Vendor connections call this from their own thread. The queue wait stays
         bounded by the short awaiting-password wake so a task-thread stop decision
         can unwind a vendor blocked here without outliving cooperative shutdown.
         """
 
         prompt = str(message or "")
-        self.events.put(("awaiting_password", prompt))
+        key = str(material_key or "").strip()
+        if not key:
+            raise ValueError("A transient material key is required.")
+        self.events.put(("awaiting_password", (prompt, key, optional)))
         stopped_states = {
             PairingState.PAUSED,
             PairingState.LOGGED_OUT,
@@ -227,10 +279,16 @@ class LiveSession:
                     return None
         return None
 
-    def _mark_awaiting_password(self, message: str) -> bool:
+    def _mark_awaiting_password(
+        self,
+        message: str,
+        *,
+        material_key: str = "password",
+        optional: bool = False,
+    ) -> bool:
         """Scrub the old round and arm the awaiting-password tri-state.
 
-        ``awaiting`` is absent before any prompt, ``"password"`` while this
+        ``awaiting`` is absent before any prompt, the material key while this
         round is armed, and ``""`` after its answer is submitted or consumed.
         The merge-only state owner keeps the sentinel; a new round explicitly
         overwrites it after invalidating persisted and queued old answers.
@@ -239,25 +297,43 @@ class LiveSession:
         credential = self._fresh_credential()
         if credential is None:
             return self._terminal_password_failure(ValueError("This live bridge has no credential for password input."))
-        self._arm_password_round(message, credential=credential)
+        self._arm_password_round(
+            message,
+            credential=credential,
+            material_key=material_key,
+            optional=optional,
+        )
         return True
 
-    def _arm_password_round(self, message: str, *, credential: Any) -> None:
+    def _arm_password_round(
+        self,
+        message: str,
+        *,
+        credential: Any,
+        material_key: str = "password",
+        optional: bool = False,
+    ) -> None:
         """Invalidate old answers, persist the armed marker, and report the prompt."""
 
+        key = str(material_key or "").strip()
+        if not key:
+            raise ValueError("A transient material key is required.")
         self._discard_inputs()
-        credential.update_material(password=None)
-        self.bridge.merge_subscription_state(awaiting="password")
+        self._password_material_key = key
+        self._password_optional = optional
+        credential.update_material(**{key: None})
+        self.bridge.merge_subscription_state(awaiting=key)
         self.pairing = PairingState.AWAITING_PASSWORD
         self._report(
             PairingState.AWAITING_PASSWORD,
             **({"message": message} if message else {}),
+            **({"can_skip": True} if optional else {}),
         )
 
     def _deliver_password_if_ready(self) -> bool:
         """Consume the submitted arm of the awaiting-password tri-state.
 
-        ``awaiting`` is absent before the first prompt, ``"password"`` while
+        ``awaiting`` is absent before the first prompt, the material key while
         armed, and ``""`` after submit/consume. Delivery always refreshes the
         credential relation so a long-lived bridge instance cannot reuse an FK
         object whose encrypted material predates the operator's write.
@@ -265,12 +341,18 @@ class LiveSession:
 
         if self.pairing is not PairingState.AWAITING_PASSWORD or self._password_delivered:
             return True
-        if self.bridge.subscription_state.get("awaiting") != "":
+        material_key = self._password_material_key
+        awaiting = self.bridge.subscription_state.get("awaiting")
+        if is_skip_marker(awaiting, material_key):
+            self._password_delivered = True
+            self.inputs.put(PASSWORD_SKIPPED)
+            return True
+        if awaiting != "":
             return True
         credential = self._fresh_credential()
         if credential is None:
             return self._terminal_password_failure(ValueError("This live bridge has no credential for password input."))
-        password = credential.reveal().get("password")
+        password = credential.reveal().get(material_key)
         if not isinstance(password, str) or not password:
             error = ValueError("The live bridge credential has no submitted password.")
             logger.error(
@@ -282,6 +364,8 @@ class LiveSession:
             self._arm_password_round(
                 "The submitted password was unavailable. Enter the bridge password again.",
                 credential=credential,
+                material_key=material_key,
+                optional=self._password_optional,
             )
             self.bridge.record_sync_error(error, now=timezone.now())
             self.outcome_error = error
@@ -298,7 +382,7 @@ class LiveSession:
         credential = self._fresh_credential()
         if credential is None:
             return self._terminal_password_failure(ValueError("This live bridge has no credential for password input."))
-        credential.update_material(password=None)
+        credential.update_material(**{self._password_material_key: None})
         self._password_delivered = False
         return True
 
@@ -393,8 +477,8 @@ class LiveSession:
 
         raise NotImplementedError
 
-    def _download(self, payload: Any) -> bytes | None:
-        """Fetch one message's media bytes; ``None`` lands a marker part."""
+    def _download(self, payload: Any, fact: Any) -> bytes | None:
+        """Fetch one media fact's bytes; ``None`` lands a marker part."""
 
         raise NotImplementedError
 

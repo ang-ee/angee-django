@@ -1,6 +1,8 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enMessagingImapMessages: Record<string, string> = {
+  "channel.imap.menu.label": "IMAP",
+  "channel.imap.menu.description": "Connect IMAP mailbox channels",
   "channel.connect.button": "Connect IMAP",
   "channel.connect.title": "Connect IMAP",
   "channel.connect.description": "Create a message channel from an IMAP account.",

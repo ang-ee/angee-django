@@ -20,7 +20,6 @@ from __future__ import annotations
 from typing import Any
 
 from django.apps import apps
-from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from rebac import system_context
 
@@ -48,7 +47,7 @@ def create_whatsapp_channel(user: Any, *, name: str) -> Any:
         raise ValueError("A channel name is required.")
     with system_context(reason="messaging_integrate_whatsapp.create"), transaction.atomic():
         channel = Channel.objects.create(
-            vendor=_whatsapp_vendor(),
+            vendor=Vendor.objects.seeded(_WHATSAPP_SLUG),
             owner=user,
             backend_class=_WHATSAPP_SLUG,
             display_name=display_name,
@@ -73,15 +72,3 @@ def connect_whatsapp_channel(user: Any, *, name: str) -> Any:
     channel = create_whatsapp_channel(user, name=name)
     resume_channel_pairing(channel)
     return channel
-
-
-def _whatsapp_vendor() -> Any:
-    """Return the addon-seeded WhatsApp vendor row, failing clearly on drift."""
-
-    try:
-        return Vendor.objects.get(slug=_WHATSAPP_SLUG)
-    except Vendor.DoesNotExist as exc:
-        raise ImproperlyConfigured(
-            "WhatsApp vendor is missing. Load messaging_integrate_whatsapp resources "
-            "before connecting WhatsApp channels."
-        ) from exc

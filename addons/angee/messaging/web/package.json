@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@angee/app": "workspace:*",
+    "@angee/integrate": "workspace:*",
     "@angee/parties": "workspace:*",
     "@angee/refine": "workspace:*",
     "@angee/storage": "workspace:*",

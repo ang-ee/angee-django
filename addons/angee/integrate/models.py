@@ -32,7 +32,7 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import checks
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import IntegrityError, connections, models, transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -1249,6 +1249,21 @@ def _validated_manager_values(
     return result
 
 
+class VendorManager(AngeeManager):
+    """Manager for the resource-seeded third-party catalogue."""
+
+    def seeded(self, slug: str) -> Any:
+        """Return the seeded vendor named by ``slug`` or raise with load guidance."""
+
+        try:
+            return self.get(slug=slug)
+        except self.model.DoesNotExist as error:
+            raise ImproperlyConfigured(
+                f"Vendor {slug!r} is missing. Run `manage.py resources load` before "
+                "connecting integrations that use it."
+            ) from error
+
+
 class Vendor(SqidMixin, AuditMixin, AngeeModel):
     """Admin-managed third-party catalogue (GitHub, Google, Slack, …).
 
@@ -1269,6 +1284,8 @@ class Vendor(SqidMixin, AuditMixin, AngeeModel):
     website_url = models.URLField(blank=True)
     icon = models.CharField(max_length=128, blank=True)
     description = models.TextField(blank=True)
+
+    objects = VendorManager()
 
     class Meta:
         """Django model options for integration vendors."""

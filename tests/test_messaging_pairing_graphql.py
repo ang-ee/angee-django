@@ -83,6 +83,7 @@ def test_channel_pairing_projects_neutral_identity(pairing_graphql: list[dict[st
         "state": "PAIRED",
         "qr": "",
         "message": "",
+        "can_skip": False,
         "own_id": "account-1",
         "account_label": "Account account-1",
         "duplicate_channel_id": "",
@@ -134,7 +135,7 @@ def test_channel_pairing_renders_every_lifecycle_and_report_state(
         lifecycle=lifecycle,
     )
     with system_context(reason="test.messaging.pairing.state.seed"):
-        values = {"desired": Channel.LiveState.LIVE}
+        values: dict[str, Any] = {"desired": Channel.LiveState.LIVE}
         if identity:
             values["own_id"] = identity
         channel.merge_subscription_state(**values)
@@ -156,6 +157,7 @@ def test_channel_pairing_renders_every_lifecycle_and_report_state(
     assert payload["state"] == expected
     assert payload["qr"] == expected_qr
     assert payload["message"] == ("Vendor password prompt." if expected == "AWAITING_PASSWORD" else "")
+    assert payload["can_skip"] is False
 
 
 def test_reset_channel_pairing_wipes_store_and_restarts(
@@ -212,6 +214,37 @@ def test_reset_channel_pairing_refuses_without_a_cross_process_lock(
     assert result.errors is not None
     assert "cross-process task lock backend" in str(result.errors[0])
     assert (store / "session.db").read_bytes() == b"unproven-session"
+
+
+def test_reset_channel_pairing_wipes_backend_declared_transients_only(
+    pairing_graphql: list[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reset preserves durable login material outside the backend's transient keys."""
+
+    del pairing_graphql
+    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda: True)
+    monkeypatch.setattr(
+        FakePairingBackend,
+        "transient_material_keys",
+        ("recovery_key",),
+    )
+    admin = _platform_admin("msg-pairing-reset-transients-admin")
+    channel = _live_channel("msg-pairing-reset-transients")
+    with system_context(reason="test.messaging.pairing.reset.transients.seed"):
+        channel.credential.update_material(
+            password="durable-login-password",
+            recovery_key="consume-once-recovery-key",
+        )
+
+    payload = _execute(admin, _RESET_MUTATION, {"id": channel.sqid})
+
+    assert payload["reset_channel_pairing"]["ok"] is True
+    with system_context(reason="test.messaging.pairing.reset.transients.verify"):
+        channel.credential.refresh_from_db()
+        material = channel.credential.reveal()
+        assert material["password"] == "durable-login-password"
+        assert "recovery_key" not in material
 
 
 def test_disconnect_channel_stops_and_releases_ownership_but_retains_pairing(
@@ -343,6 +376,82 @@ def test_submit_channel_password_refuses_channel_without_credential(
     assert "must-not-escape" not in str(result.errors)
 
 
+def test_submit_channel_password_writes_under_the_armed_material_key(
+    pairing_graphql: list[dict[str, Any]],
+) -> None:
+    """A recovery-key round cannot overwrite a credential's durable login password."""
+
+    del pairing_graphql
+    admin = _platform_admin("msg-pairing-material-key-admin")
+    channel = _live_channel("msg-pairing-material-key")
+    recovery_key = "graphql-recovery-key"
+    with system_context(reason="test.messaging.pairing.material_key.seed"):
+        channel.credential.update_material(password="durable-login-password")
+        channel.merge_subscription_state(awaiting="recovery_key")
+
+    payload = _execute(
+        admin,
+        _SUBMIT_PASSWORD_MUTATION,
+        {"id": channel.sqid, "password": recovery_key},
+    )
+
+    assert payload["submit_channel_password"]["ok"] is True
+    with system_context(reason="test.messaging.pairing.material_key.verify"):
+        channel.credential.refresh_from_db()
+        material = channel.credential.reveal()
+        assert material["password"] == "durable-login-password"
+        assert material["recovery_key"] == recovery_key
+
+
+def test_skip_channel_password_marks_only_an_optional_armed_round(
+    pairing_graphql: list[dict[str, Any]],
+) -> None:
+    """The generic skip verb records a non-secret marker only for optional rounds."""
+
+    del pairing_graphql
+    admin = _platform_admin("msg-pairing-skip-admin")
+    channel = _live_channel("msg-pairing-skip")
+    with system_context(reason="test.messaging.pairing.skip.seed"):
+        channel.merge_subscription_state(awaiting="recovery_key")
+        channel.sync_progress = {
+            "details": {
+                "pairing": {
+                    "state": "awaiting_password",
+                    "message": "Enter the recovery key.",
+                    "can_skip": True,
+                }
+            }
+        }
+        channel.save(update_fields=["sync_progress", "updated_at"])
+
+    before = _execute(admin, _PAIRING_QUERY, {"id": channel.sqid})["channel_pairing"]
+    payload = _execute(admin, _SKIP_PASSWORD_MUTATION, {"id": channel.sqid})
+
+    assert before["can_skip"] is True
+    assert payload["skip_channel_password"] == {
+        "ok": True,
+        "message": "Password skipped.",
+    }
+    with system_context(reason="test.messaging.pairing.skip.verify"):
+        channel.refresh_from_db()
+        assert channel.subscription_state["awaiting"] == {"skipped": "recovery_key"}
+        assert "recovery_key" not in channel.credential.reveal()
+
+    required = _live_channel("msg-pairing-skip-required")
+    with system_context(reason="test.messaging.pairing.skip.required"):
+        required.merge_subscription_state(awaiting="password")
+        required.sync_progress = {"details": {"pairing": {"state": "awaiting_password"}}}
+        required.save(update_fields=["sync_progress", "updated_at"])
+    result = execute_schema(
+        _schema(),
+        _SKIP_PASSWORD_MUTATION,
+        {"id": required.sqid},
+        request=_request(admin),
+    )
+    assert result.errors is not None
+    assert result.errors[0].message == "This channel password cannot be skipped."
+
+
 def test_submit_channel_password_refuses_an_unarmed_channel(
     pairing_graphql: list[dict[str, Any]],
 ) -> None:
@@ -386,6 +495,7 @@ def test_pairing_verbs_reject_poll_only_channels(pairing_graphql: list[dict[str,
         _RESUME_MUTATION,
         _RESET_MUTATION,
         _DISCONNECT_MUTATION,
+        _SKIP_PASSWORD_MUTATION,
         _SUBMIT_PASSWORD_MUTATION,
     ):
         result = execute_schema(
@@ -408,6 +518,7 @@ def test_pairing_verbs_reject_poll_only_channels(pairing_graphql: list[dict[str,
         "reset_channel_pairing",
         "resume_channel_pairing",
         "disconnect_channel",
+        "skip_channel_password",
         "submit_channel_password",
     ],
 )
@@ -429,6 +540,7 @@ def test_pairing_verbs_deny_non_admin_before_elevated_lookup(
         "reset_channel_pairing": _RESET_MUTATION,
         "resume_channel_pairing": _RESUME_MUTATION,
         "disconnect_channel": _DISCONNECT_MUTATION,
+        "skip_channel_password": _SKIP_PASSWORD_MUTATION,
         "submit_channel_password": _SUBMIT_PASSWORD_MUTATION,
     }[operation_name]
     lookups: list[str] = []
@@ -515,6 +627,7 @@ query ChannelPairing($id: ID!) {
     state
     qr
     message
+    can_skip
     own_id
     account_label
     duplicate_channel_id
@@ -559,12 +672,22 @@ mutation SubmitChannelPassword($id: ID!, $password: String!) {
 }
 """
 
+_SKIP_PASSWORD_MUTATION = """
+mutation SkipChannelPassword($id: ID!) {
+  skip_channel_password(id: $id) {
+    ok
+    message
+  }
+}
+"""
+
 _PAIRING_READABLE_SURFACES_QUERY = """
 query PairingReadableSurfaces($pairingId: ID!, $channelId: String!) {
   channel_pairing(id: $pairingId) {
     state
     qr
     message
+    can_skip
     own_id
     account_label
     duplicate_channel_id

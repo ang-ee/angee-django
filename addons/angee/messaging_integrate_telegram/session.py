@@ -238,11 +238,6 @@ class TelegramSession(LiveChannelSession):
 
         return await asyncio.wait_for(awaitable, timeout=API_TIMEOUT_SECONDS)
 
-    def _vendor_stopping(self) -> bool:
-        """Return whether either side has requested this vendor thread to unwind."""
-
-        return self._stopping.is_set() or self.stop_event.is_set()
-
     def _queue_account(self, user: Any) -> None:
         """Queue the stable id through generic pairing, then mutable label facts."""
 
@@ -328,12 +323,7 @@ class TelegramSession(LiveChannelSession):
             return False
         return super()._handle(kind, payload)
 
-    def _attach_media(self, message: ParsedMessage, media: tuple[Any, ...]) -> ParsedMessage:
-        """Delegate neutral body merging to :class:`ParsedMessage`."""
-
-        return message.with_media(media)
-
-    def _download(self, payload: Any) -> bytes | None:
+    def _download(self, payload: Any, _fact: Any) -> bytes | None:
         """Run Telethon's media coroutine on its owning loop with a finite wait."""
 
         if payload is None:

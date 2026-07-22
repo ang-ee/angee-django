@@ -19,7 +19,7 @@ from rebac import system_context
 from angee.base.impl import ImplBase
 from angee.integrate.connect import enabled_oauth_client_from_hint
 from angee.integrate.constants import RUN_SESSION_TASK, SESSION_START_EXPIRES
-from angee.integrate.live import PairingProjection, PairingState, SessionLoggedOut
+from angee.integrate.live import PairingProjection, PairingState, SessionLoggedOut, armed_material_key
 from angee.tasks.enqueue import enqueue_task
 from angee.tasks.locks import LockKey, task_lock
 
@@ -86,6 +86,7 @@ class LiveBridgeImpl(BridgeImpl):
     session_queue: ClassVar[str] = ""
     session_class: ClassVar[type[Any] | str | None] = None
     state_identity_key: ClassVar[str] = "own_id"
+    transient_material_keys: ClassVar[tuple[str, ...]] = ("password",)
 
     @property
     def CLAIMING_LIFECYCLES(self) -> tuple[str, ...]:
@@ -274,6 +275,11 @@ class LiveBridgeImpl(BridgeImpl):
             state=state,
             qr=str(report.get("qr") or "") if state is PairingState.AWAITING_SCAN else "",
             message=str(report.get("message") or "") if state is PairingState.AWAITING_PASSWORD else "",
+            can_skip=(
+                bool(report.get("can_skip")) and bool(armed_material_key(self.bridge.subscription_state))
+                if state is PairingState.AWAITING_PASSWORD
+                else False
+            ),
             own_id=own_id,
             account_label=self.account_label(own_id) if own_id else "",
             duplicate_channel_id="" if duplicate is None else str(duplicate.sqid),

@@ -121,6 +121,14 @@ class MessagingPairingMutation:
         return ActionResult(ok=True, message="Password submitted.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
+    def skip_channel_password(self, id: PublicID) -> ActionResult:
+        """Skip one optional consume-once secret round."""
+
+        with action_target(Channel, id, reason="messaging.graphql.skip_channel_password") as channel:
+            connect.skip_channel_password(channel)
+        return ActionResult(ok=True, message="Password skipped.")
+
+    @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
     def reset_channel_pairing(self, id: PublicID) -> ActionResult:
         """Wipe released pairing material and restart with a fresh session."""
 
@@ -1811,16 +1819,8 @@ def _record_thread_payload(
         if thread is not None
         else ([], 0)
     )
-    followers = (
-        list(cast(Any, record).message_followers().select_related("user"))
-        if thread is not None
-        else []
-    )
-    activities = (
-        list(cast(Any, record).activity_ids().select_related("user"))
-        if thread is not None
-        else []
-    )
+    followers = list(cast(Any, record).message_followers().select_related("user")) if thread is not None else []
+    activities = list(cast(Any, record).activity_ids().select_related("user")) if thread is not None else []
     attachment_count = (
         apps.get_model("messaging", "Part").objects.filter(message__thread=thread).attachments().count()
         if thread is not None
@@ -1843,8 +1843,9 @@ def _record_thread_payload(
     is_following = self_follower is not None
     notifications = (
         list(
-            ThreadNotification.objects.for_record(record, user=user, role=role)
-            .select_related("thread", "attachment", "follower", "message", "message__subtype", "user")[:50]
+            ThreadNotification.objects.for_record(record, user=user, role=role).select_related(
+                "thread", "attachment", "follower", "message", "message__subtype", "user"
+            )[:50]
         )
         if thread is not None and user is not None
         else []
@@ -1859,9 +1860,7 @@ def _record_thread_payload(
         # per-request memo once (keyed by this thread) through the public post-access
         # owner so the can_edit/can_delete resolvers read it instead of re-walking
         # message → record for every row.
-        _record_post_access_cache(info)[messages[0].thread_id] = bool(
-            cast(Any, record).can_post(user)
-        )
+        _record_post_access_cache(info)[messages[0].thread_id] = bool(cast(Any, record).can_post(user))
     if messages and thread is not None and user is not None:
         # One receipt-anchored scan primes the page's needaction flags — the same
         # unread set the badge counts, restricted to the rows on this page.
@@ -1884,10 +1883,7 @@ def _record_thread_payload(
         followers=followers,
         self_follower=self_follower,
         suggested_recipients=suggested_recipients,
-        subtypes=[
-            MessageSubtypeOptionType(**option)
-            for option in message_subtype_options(record._meta.label)
-        ],
+        subtypes=[MessageSubtypeOptionType(**option) for option in message_subtype_options(record._meta.label)],
         follower_count=len(followers),
         is_following=is_following,
         notifications=notifications,

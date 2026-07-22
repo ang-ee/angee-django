@@ -24,6 +24,7 @@ export const ChannelPairing = graphql(`
       state
       qr
       message
+      can_skip
       account_label
       duplicate_channel_name
     }

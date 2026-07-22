@@ -195,7 +195,7 @@ export function PairingDialog({
     { id: channelId ?? "" },
     { enabled: channelId !== null, models: [CHANNEL_MODEL] },
   );
-  // Both verbs move the channel model. The action owner invalidates its refine
+  // Pairing verbs move the channel model. The action owner invalidates its refine
   // resource caches and sweeps authored reads registered for the same model,
   // including ChannelPairing above.
   const [resetPairing, resetState] = useActionResultMutation<ActionFieldName>(
@@ -210,6 +210,10 @@ export function PairingDialog({
     useActionResultMutation<ActionFieldName>("submit_channel_password", {
       invalidateModels: [CHANNEL_MODEL],
     });
+  const [skipPassword, skipState] = useActionResultMutation<ActionFieldName>(
+    "skip_channel_password",
+    { invalidateModels: [CHANNEL_MODEL] },
+  );
   if (channelId === null) return null;
   // `PairingState` is a StrEnum: the read wire value is the upper-case member
   // name, not the lower-case token the session serializes into its report.
@@ -217,6 +221,7 @@ export function PairingDialog({
     state: "STARTING",
     qr: "",
     message: "",
+    can_skip: false,
     account_label: "",
     duplicate_channel_name: "",
   };
@@ -233,7 +238,7 @@ export function PairingDialog({
           type="password"
           autoComplete="current-password"
           required
-          disabled={submitState.fetching}
+          disabled={submitState.fetching || skipState.fetching}
           value={password}
           onChange={(event) => setPassword(event.target.value)}
         />
@@ -246,7 +251,7 @@ export function PairingDialog({
   };
   const submit = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
-    if (!password || submitState.fetching) return;
+    if (!password || submitState.fetching || skipState.fetching) return;
     const value = password;
     try {
       await submitPassword(channelId, { password: value });
@@ -280,9 +285,24 @@ export function PairingDialog({
                   type="submit"
                   variant="primary"
                   size="sm"
-                  disabled={!password || submitState.fetching}
+                  disabled={!password || submitState.fetching || skipState.fetching}
                 >
                   {t("channel.pairing.passwordSubmit")}
+                </Button>
+              ) : null}
+              {(pairing.state === "AWAITING_PASSWORD" && pairing.can_skip) ||
+              skipState.fetching ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={submitState.fetching || skipState.fetching}
+                  onClick={() => {
+                    setPassword("");
+                    void skipPassword(channelId);
+                  }}
+                >
+                  {t("channel.pairing.passwordSkip")}
                 </Button>
               ) : null}
               {NEEDS_REPAIR.includes(pairing.state) || resetState.fetching ? (

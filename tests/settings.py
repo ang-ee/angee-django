@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 SECRET_KEY = "angee-tests"
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
@@ -34,6 +37,9 @@ INSTALLED_APPS = [
     "angee.messaging",
     "angee.messaging_integrate_whatsapp",
     "angee.messaging_integrate_telegram",
+    "angee.messaging_integrate_signal",
+    "angee.messaging_integrate_matrix",
+    "angee.messaging_integrate_slack",
     "angee.spaces",
     "angee.nexus",
     "angee.posts",
@@ -59,10 +65,20 @@ INSTALLED_APPS = [
     "tests.mtidemo",
     "tests.hierdemo",
 ]
+_TEST_DB_FILE = str(Path(tempfile.gettempdir()) / "angee_pytest_db.sqlite3")
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": ":memory:",
+        # A file-backed test DB (not ":memory:") so each thread gets its own
+        # connection. Threaded session tests (Matrix/Telegram/Signal live sessions)
+        # write the bridge row from a worker thread while the test's operator thread
+        # writes too; production is Postgres, where those serialize on a row lock. A
+        # shared in-memory SQLite connection instead raises "database table is locked".
+        # With a file DB + busy timeout each writer waits for the other, matching
+        # production. WAL keeps concurrent reads non-blocking.
+        "NAME": _TEST_DB_FILE,
+        "OPTIONS": {"timeout": 30, "init_command": "PRAGMA journal_mode=WAL;"},
+        "TEST": {"NAME": _TEST_DB_FILE},
     }
 }
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
@@ -144,6 +160,9 @@ ANGEE_DIRECTORY_BACKEND_CLASSES = {
 ANGEE_CHANNEL_BACKEND_CLASSES = {
     "manual": "angee.messaging.backends.ManualChannelBackend",
     "imap": "angee.messaging_integrate_imap.backend.ImapChannelBackend",
+    "signal": "angee.messaging_integrate_signal.backend.SignalChannelBackend",
+    "matrix": "angee.messaging_integrate_matrix.backend.MatrixChannelBackend",
+    "slack": "angee.messaging_integrate_slack.backend.SlackChannelBackend",
     "telegram": "angee.messaging_integrate_telegram.backend.TelegramChannelBackend",
     "whatsapp": "angee.messaging_integrate_whatsapp.backend.WhatsAppChannelBackend",
     "fake_live": "tests.pairing_backend.FakePairingBackend",

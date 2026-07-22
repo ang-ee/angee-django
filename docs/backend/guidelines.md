@@ -478,6 +478,13 @@ data through REBAC, never a queryset bypass.
 
 ## Pitfalls
 
+- **Never mix `select()` with buffered `readline()` on a subprocess pipe.** A
+  buffered wrapper may consume several complete records while the file descriptor
+  becomes non-readable, stranding those records behind the readiness check; it
+  can also block mid-line past the stop cadence. Read raw bytes with `os.read()`
+  into a manual newline accumulator and drain complete buffered lines before the
+  next readiness wait.
+
 Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 
 - **`.values_list(...).distinct()` must clear the model's default ordering.**

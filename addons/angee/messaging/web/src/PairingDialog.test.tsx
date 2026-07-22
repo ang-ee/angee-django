@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
     state: "STARTING",
     qr: "",
     message: "",
+    can_skip: false,
     account_label: "",
     duplicate_channel_name: "",
   } as PairingSnapshot,
@@ -124,6 +125,7 @@ describe("PairingDialog", () => {
       state: "STARTING",
       qr: "",
       message: "",
+      can_skip: false,
       account_label: "",
       duplicate_channel_name: "",
     };
@@ -160,7 +162,7 @@ describe("PairingDialog", () => {
     expect(mocks.queryVariables).toEqual({ id: "chn_1" });
   });
 
-  test("declares the channel model both lifecycle verbs move", () => {
+  test("declares the channel model every pairing verb moves", () => {
     // `useActionMutation` defaults to no invalidation, so a verb that moves the
     // channel's lifecycle must name its target or the record goes stale.
     mocks.pairing.state = "LOGGED_OUT";
@@ -169,6 +171,7 @@ describe("PairingDialog", () => {
     for (const field of [
       "reset_channel_pairing",
       "resume_channel_pairing",
+      "skip_channel_password",
       "submit_channel_password",
     ]) {
       expect(mocks.actionOptions.get(field)?.invalidateModels).toEqual([
@@ -239,6 +242,7 @@ describe("PairingDialog", () => {
         state,
         qr: state === "AWAITING_SCAN" ? "data:image/png;base64,qr" : "",
         message: "",
+        can_skip: false,
         account_label: state === "PAIRED" ? "Account One" : "",
         duplicate_channel_name:
           state === "DUPLICATE_ACCOUNT" ? "Existing channel" : "",
@@ -273,11 +277,45 @@ describe("PairingDialog", () => {
     await waitFor(() => expect(input.value).toBe(""));
   });
 
+  test("offers and submits an explicit skip only for optional password rounds", async () => {
+    mocks.pairing = {
+      ...mocks.pairing,
+      state: "AWAITING_PASSWORD" as PairingSnapshot["state"],
+      can_skip: true,
+    };
+    const { rerender } = render(
+      <PairingDialog
+        channelId="chn_1"
+        instruction="Scan in the vendor app."
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+
+    await waitFor(() =>
+      expect(mocks.actions.get("skip_channel_password")).toHaveBeenCalledWith(
+        "chn_1",
+      ),
+    );
+
+    mocks.pairing.can_skip = false;
+    rerender(
+      <PairingDialog
+        channelId="chn_1"
+        instruction="Scan in the vendor app."
+        onClose={() => undefined}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
+  });
+
   test("reads as starting until the QR for an awaiting-scan session lands", () => {
     mocks.pairing = {
       state: "AWAITING_SCAN",
       qr: "",
       message: "",
+      can_skip: false,
       account_label: "",
       duplicate_channel_name: "",
     };
@@ -337,6 +375,7 @@ describe("ChannelPairingAction", () => {
       state: "STARTING",
       qr: "",
       message: "",
+      can_skip: false,
       account_label: "",
       duplicate_channel_name: "",
     };
@@ -377,6 +416,7 @@ describe("ChannelPairingAction", () => {
       state: "AWAITING_SCAN",
       qr: "data:image/png;base64,qr",
       message: "",
+      can_skip: false,
       account_label: "",
       duplicate_channel_name: "",
     };
