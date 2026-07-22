@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.core.management import CommandError, call_command
 from django.db import connection
 from rebac import system_context
@@ -28,7 +29,8 @@ from rebac import system_context
 from angee.integrate_iphone.backup import BackupError, IosBackup
 from angee.messaging_integrate_imessage import mount_extractor
 from angee.messaging_integrate_imessage.attributed_body import attributed_body_text
-from angee.messaging_integrate_imessage.importer import import_backup
+from angee.messaging_integrate_imessage.importer import import_backup, import_backup_per_line
+from angee.messaging_integrate_imessage.lines import line_channel_name, normalize_line
 from angee.messaging_integrate_imessage.parser import (
     ChatMessage,
     external_id,
@@ -43,7 +45,7 @@ from angee.messaging_integrate_imessage.store import (
     ImessageStore,
     has_sms_store,
 )
-from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
+from tests.conftest import Vendor, _clear_model_tables, _create_missing_tables, make_integration
 from tests.test_messaging import MESSAGING_TEST_MODELS, Handle, Message, Thread, _storage_drive
 from tests.test_messaging_graphql import Channel
 
@@ -78,6 +80,32 @@ def test_external_id_is_the_global_guid_with_rowid_fallback() -> None:
     assert external_id("", "ios:42") == "ios:42"
 
 
+def test_normalize_line_collapses_number_variants_and_buckets_the_rest() -> None:
+    """The three US variants collapse to one E.164 line; email folds; junk → None."""
+
+    assert normalize_line("+14244798217") == "+14244798217"
+    assert normalize_line("14244798217") == "+14244798217"
+    assert normalize_line("tel:+14244798217") == "+14244798217"
+    assert normalize_line("TEL:+14244798217") == "+14244798217"
+
+    assert normalize_line("alexis@ww.net") == "alexis@ww.net"
+    assert normalize_line("Alexis@WW.net") == "alexis@ww.net"
+
+    assert normalize_line("2536CD39-DF5B-4BD1-B708-CFB7ECD47334") is None
+    assert normalize_line("") is None
+    assert normalize_line("   ") is None
+    assert normalize_line(None) is None
+    assert normalize_line("611") is None  # short code — unresolvable
+
+
+def test_line_channel_name_labels_real_lines_and_the_catch_all() -> None:
+    """A real line names its channel; the catch-all bucket has a fixed label."""
+
+    assert line_channel_name("+14244798217") == "Messages +14244798217"
+    assert line_channel_name("alexis@ww.net") == "Messages alexis@ww.net"
+    assert line_channel_name(None) == "Messages (other)"
+
+
 def test_parsed_message_maps_inbound_direct() -> None:
     """An inbound direct message maps to a phone sender and a direct thread."""
 
@@ -100,7 +128,13 @@ def test_parsed_message_maps_inbound_direct() -> None:
     assert parsed.thread is not None
     assert parsed.thread.external_id == "iMessage;-;+15550001111"
     assert parsed.thread.modality == "direct"
-    assert parsed.metadata == {"service": "iMessage", "chat_guid": "iMessage;-;+15550001111"}
+    assert parsed.metadata == {
+        "service": "iMessage",
+        "chat_guid": "iMessage;-;+15550001111",
+        "line": "",
+        "line_raw": "",
+        "account": "",
+    }
 
 
 def test_parsed_message_outbound_has_no_sender_and_group_thread() -> None:
@@ -245,6 +279,94 @@ def test_backup_import_resume_advances_past_imported_prefix(
     processed = import_backup(channel, backup, resume=True)
     assert processed == 6
     assert Message._base_manager.count() == 7
+
+
+def _per_line_owner(tmp_path: Path) -> Any:
+    """Seed the iMessage vendor + a storage drive and return a fresh owner user."""
+
+    with system_context(reason="test imessage per-line owner"):
+        owner = get_user_model().objects.create_user(
+            username="perline-owner", email="perline@example.com"
+        )
+        Vendor.objects.create(slug="imessage", display_name="iMessage")
+        _storage_drive(tmp_path / "drive", owner=owner)
+    return owner
+
+
+def _line_counts(owner: Any) -> dict[str, int]:
+    """Return ``{channel display_name: landed message count}`` for ``owner``'s channels."""
+
+    with system_context(reason="test imessage per-line counts"):
+        channels = Channel._base_manager.filter(owner=owner, backend_class="imessage")
+        return {
+            channel.display_name: Message._base_manager.filter(thread__channel=channel).count()
+            for channel in channels
+        }
+
+
+def test_import_backup_per_line_routes_collapses_and_is_idempotent(
+    imessage_tables: Any, tmp_path: Any
+) -> None:
+    """Per-line import splits one backup into one channel per local line + a catch-all."""
+
+    owner = _per_line_owner(tmp_path)
+    backup = _build_backup(tmp_path)
+
+    results = import_backup_per_line(owner, backup)
+
+    # One channel per normalized line, plus the catch-all — the three variant forms
+    # of +14244798217 collapsed onto one line, the two email cases onto another.
+    assert _line_counts(owner) == {
+        "Messages +14244798217": 3,
+        "Messages alexis@ww.net": 2,
+        "Messages (other)": 2,
+    }
+    assert sum(results.values()) == 7
+    assert len(results) == 3
+
+    # A catch-all message keeps its raw, unresolvable destination_caller_id in metadata.
+    with system_context(reason="test imessage per-line metadata"):
+        group_hi = Message._base_manager.get(parts__fragment__text="Group hi")
+        assert group_hi.metadata["line"] == ""
+        assert group_hi.metadata["line_raw"] == "2536CD39-DF5B-4BD1-B708-CFB7ECD47334"
+        hello = Message._base_manager.get(parts__fragment__text="Hello from backup")
+        assert hello.metadata["line"] == "+14244798217"
+        assert hello.metadata["line_raw"] == "+14244798217"
+        assert hello.metadata["account"] == "acct-A"
+
+    # Re-running converges: the same three channels, no duplicated rows.
+    import_backup_per_line(owner, backup)
+    assert _line_counts(owner) == {
+        "Messages +14244798217": 3,
+        "Messages alexis@ww.net": 2,
+        "Messages (other)": 2,
+    }
+    assert Message._base_manager.count() == 7
+    with system_context(reason="test imessage per-line channel count"):
+        assert Channel._base_manager.filter(owner=owner, backend_class="imessage").count() == 3
+
+    # Resuming re-flows only each thread's watermark row — one per line plus the two
+    # catch-all chats (four threads) — and still lands nothing new.
+    resumed = import_backup_per_line(owner, backup, resume=True)
+    assert sum(resumed.values()) == 4
+    assert Message._base_manager.count() == 7
+
+
+def test_imessage_import_command_per_line_needs_owner(imessage_tables: Any, tmp_path: Any) -> None:
+    """The --per-line CLI mode splits by line and requires --owner."""
+
+    owner = _per_line_owner(tmp_path)
+    backup = _build_backup(tmp_path)
+
+    with pytest.raises(CommandError, match="--per-line needs --owner"):
+        call_command("imessage_import", str(backup), "--per-line")
+
+    call_command("imessage_import", str(backup), "--per-line", "--owner", owner.username)
+    assert _line_counts(owner) == {
+        "Messages +14244798217": 3,
+        "Messages alexis@ww.net": 2,
+        "Messages (other)": 2,
+    }
 
 
 def test_encrypted_backup_fails_loudly(tmp_path: Any) -> None:
@@ -395,7 +517,8 @@ def _build_sms_store(path: Path) -> None:
         CREATE TABLE message (
             ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT, attributedBody BLOB,
             handle_id INTEGER, service TEXT, date INTEGER, is_from_me INTEGER,
-            associated_message_type INTEGER, item_type INTEGER
+            associated_message_type INTEGER, item_type INTEGER,
+            destination_caller_id TEXT, account TEXT
         );
         CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
         CREATE TABLE attachment (
@@ -418,19 +541,24 @@ def _build_sms_store(path: Path) -> None:
     )
     ns = int(_DM_SECONDS * 1e9)
     attributed = _attributed_body("From attributed body")
+    # destination_caller_id (the handling local line) is deliberately messy: line A
+    # appears as +E.164, plus-less digits, and a tel: URI (all collapse to
+    # +14244798217); line B is an iMessage email in two cases; the GUID and NULL
+    # rows carry no resolvable line and pool into the catch-all channel.
     messages = [
-        # (rowid, guid, text, attributedBody, handle, service, date, from_me, assoc, item)
-        (1, "GUID-1", "Hello from backup", None, 1, "iMessage", ns, 0, None, 0),
-        (2, "GUID-2", "My reply", None, 0, "iMessage", ns + 60 * 10**9, 1, None, 0),
-        (3, "GUID-TB", "Liked a message", None, 1, "iMessage", ns + 90 * 10**9, 0, 2000, 0),
-        (4, "GUID-SYS", None, None, 1, "iMessage", ns + 120 * 10**9, 0, None, 1),
-        (5, "GUID-AB", None, attributed, 1, "iMessage", ns + 180 * 10**9, 0, None, 0),
-        (6, "GUID-MED1", None, None, 1, "iMessage", ns + 240 * 10**9, 0, None, 0),
-        (7, "GUID-MED2", None, None, 1, "iMessage", ns + 300 * 10**9, 0, None, 0),
-        (8, "GUID-GRP", "Group hi", None, 2, "iMessage", ns + 360 * 10**9, 0, None, 0),
-        (9, "GUID-EMAIL", "Email hi", None, 3, "SMS", ns + 420 * 10**9, 0, None, 0),
+        # (rowid, guid, text, attrBody, handle, service, date, from_me, assoc, item, dcid, account)
+        (1, "GUID-1", "Hello from backup", None, 1, "iMessage", ns, 0, None, 0, "+14244798217", "acct-A"),
+        (2, "GUID-2", "My reply", None, 0, "iMessage", ns + 60 * 10**9, 1, None, 0, "14244798217", None),
+        (3, "GUID-TB", "Liked a message", None, 1, "iMessage", ns + 90 * 10**9, 0, 2000, 0, "+14244798217", None),
+        (4, "GUID-SYS", None, None, 1, "iMessage", ns + 120 * 10**9, 0, None, 1, None, None),
+        (5, "GUID-AB", None, attributed, 1, "iMessage", ns + 180 * 10**9, 0, None, 0, "tel:+14244798217", None),
+        (6, "GUID-MED1", None, None, 1, "iMessage", ns + 240 * 10**9, 0, None, 0, "alexis@ww.net", None),
+        (7, "GUID-MED2", None, None, 1, "iMessage", ns + 300 * 10**9, 0, None, 0, "ALEXIS@WW.net", None),
+        (8, "GUID-GRP", "Group hi", None, 2, "iMessage", ns + 360 * 10**9, 0, None, 0,
+         "2536CD39-DF5B-4BD1-B708-CFB7ECD47334", None),
+        (9, "GUID-EMAIL", "Email hi", None, 3, "SMS", ns + 420 * 10**9, 0, None, 0, None, None),
     ]
-    store.executemany("INSERT INTO message VALUES (?,?,?,?,?,?,?,?,?,?)", messages)
+    store.executemany("INSERT INTO message VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", messages)
     store.executemany(
         "INSERT INTO chat_message_join VALUES (?, ?)",
         [(1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7), (2, 8), (3, 9)],

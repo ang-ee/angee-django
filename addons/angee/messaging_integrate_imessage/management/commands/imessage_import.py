@@ -13,7 +13,7 @@ from rebac import system_context
 from angee.integrate_iphone.backup import BackupError
 from angee.messaging_integrate_imessage.backend import ImessageChannelBackend
 from angee.messaging_integrate_imessage.connect import create_imessage_channel
-from angee.messaging_integrate_imessage.importer import import_backup
+from angee.messaging_integrate_imessage.importer import import_backup, import_backup_per_line
 
 
 class Command(BaseCommand):
@@ -36,7 +36,12 @@ class Command(BaseCommand):
             metavar="NAME",
             help="Create a disconnected iMessage channel with this name instead of --channel.",
         )
-        parser.add_argument("--owner", help="Owner username for --create.")
+        parser.add_argument("--owner", help="Owner username for --create or --per-line.")
+        parser.add_argument(
+            "--per-line",
+            action="store_true",
+            help="Split into one channel per local line (needs --owner; ignores --channel/--create).",
+        )
         parser.add_argument("--since", help="Import messages on/after this ISO-8601 instant.")
         parser.add_argument("--batch-size", type=int, default=500, help="Messages per ingest batch.")
         parser.add_argument("--limit", type=int, help="Stop after this many messages.")
@@ -60,6 +65,9 @@ class Command(BaseCommand):
             since = parse_datetime(options["since"])
             if since is None or since.tzinfo is None:
                 raise CommandError("--since must be an ISO-8601 instant with a timezone.")
+        if options["per_line"]:
+            self._import_per_line(options, since)
+            return
         channel = self._channel(options)
         try:
             total = import_backup(
@@ -77,6 +85,46 @@ class Command(BaseCommand):
         verb = "Parsed" if options["dry_run"] else "Imported"
         self.stdout.write(self.style.SUCCESS(f"{verb} {total} message(s) into {channel.display_name}."))
 
+    def _import_per_line(self, options: dict[str, Any], since: Any) -> None:
+        """Split the backup into one channel per local line for ``--owner``."""
+
+        owner = self._owner(options, flag="--per-line")
+        try:
+            results = import_backup_per_line(
+                owner,
+                options["backup_dir"],
+                since=since,
+                limit=options["limit"],
+                batch_size=options["batch_size"],
+                dry_run=options["dry_run"],
+                resume=options["resume"],
+                on_batch=lambda done: self.stdout.write(f"{done} message(s) processed…"),
+            )
+        except BackupError as error:
+            raise CommandError(str(error)) from error
+        verb = "Parsed" if options["dry_run"] else "Imported"
+        for line, count in sorted(results.items()):
+            self.stdout.write(f"  {line}: {count}")
+        total = sum(results.values())
+        self.stdout.write(
+            self.style.SUCCESS(f"{verb} {total} message(s) across {len(results)} line(s).")
+        )
+
+    def _owner(self, options: dict[str, Any], *, flag: str) -> Any:
+        """Resolve the ``--owner`` user, raising if unset or unknown.
+
+        ``flag`` names the option that requires the owner (``--create`` or
+        ``--per-line``) so the "missing owner" error points at the right switch.
+        """
+
+        if not options["owner"]:
+            raise CommandError(f"{flag} needs --owner <username>.")
+        with system_context(reason="imessage_import.resolve_owner"):
+            owner = get_user_model().objects.filter(username=options["owner"]).first()
+        if owner is None:
+            raise CommandError(f"No user {options['owner']!r}.")
+        return owner
+
     def _channel(self, options: dict[str, Any]) -> Any:
         """Resolve the target channel from ``--channel`` or create one for ``--create``."""
 
@@ -90,11 +138,5 @@ class Command(BaseCommand):
                 raise CommandError(f"No iMessage channel {options['channel']!r}.")
             return channel
         if options["create"]:
-            if not options["owner"]:
-                raise CommandError("--create needs --owner <username>.")
-            with system_context(reason="imessage_import.resolve_owner"):
-                owner = get_user_model().objects.filter(username=options["owner"]).first()
-            if owner is None:
-                raise CommandError(f"No user {options['owner']!r}.")
-            return create_imessage_channel(owner, name=options["create"])
+            return create_imessage_channel(self._owner(options, flag="--create"), name=options["create"])
         raise CommandError("Pass --channel <sqid> or --create <name> --owner <username>.")

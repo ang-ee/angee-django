@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from angee.messaging.backends import MediaItem, ParsedHandle, ParsedMessage, ParsedThread, body_part
+from angee.messaging_integrate_imessage.lines import normalize_line
 
 PLATFORM = "imessage"
 
@@ -64,6 +65,8 @@ class ChatMessage:
     text: str = ""
     service: str = ""
     media: tuple[MediaItem, ...] = ()
+    line_raw: str = ""
+    account: str = ""
 
 
 def parsed_message(message: ChatMessage) -> ParsedMessage:
@@ -72,7 +75,11 @@ def parsed_message(message: ChatMessage) -> ParsedMessage:
     Direction is outbound iff ``from_me``; an inbound row's ``handle.id`` names
     the sender (an outbound row has none). The thread is the Apple chat guid; the
     reader classifies group vs direct from the chat's ``style``/``room_name`` and
-    passes it through, defaulting to direct when neither column is present.
+    passes it through, defaulting to direct when neither column is present. The
+    handling local line is carried in the metadata both normalized (``line``) and
+    raw (``line_raw``) so even a catch-all message keeps its original
+    ``destination_caller_id`` for later resolution; ``account`` is stashed
+    alongside. This is metadata only — it does not touch identity or threading.
     """
 
     group = bool(message.group)
@@ -93,5 +100,11 @@ def parsed_message(message: ChatMessage) -> ParsedMessage:
             title=message.chat_name,
         ),
         body=body_part(message.text, message.media),
-        metadata={"service": message.service, "chat_guid": message.chat_guid},
+        metadata={
+            "service": message.service,
+            "chat_guid": message.chat_guid,
+            "line": normalize_line(message.line_raw) or "",
+            "line_raw": message.line_raw,
+            "account": message.account,
+        },
     )

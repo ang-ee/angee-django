@@ -18,6 +18,8 @@ from typing import Any
 
 from angee.integrate_iphone.backup import IosBackup
 from angee.messaging.backup_ingest import batch_ingest, thread_watermarks
+from angee.messaging_integrate_imessage.connect import get_or_create_imessage_channel
+from angee.messaging_integrate_imessage.lines import line_channel_name
 from angee.messaging_integrate_imessage.parser import parsed_message
 from angee.messaging_integrate_imessage.store import ImessageStore
 
@@ -59,5 +61,58 @@ def import_backup(
             dry_run=dry_run,
             on_batch=on_batch,
         )
+    finally:
+        store.close()
+
+
+def import_backup_per_line(
+    owner: Any,
+    backup_dir: Path | str,
+    *,
+    since: datetime | None = None,
+    limit: int | None = None,
+    batch_size: int = 500,
+    dry_run: bool = False,
+    resume: bool = False,
+    on_batch: Callable[[int], None] | None = None,
+) -> dict[str, int]:
+    """Import one backup split into one channel per local line; return per-line counts.
+
+    Each distinct ``destination_caller_id`` line (:meth:`ImessageStore.line_variants`)
+    gets an idempotent iMessage channel owned by ``owner`` — real lines named
+    ``Messages <line>``, everything unresolvable pooled into ``Messages (other)`` —
+    and the existing single-channel :func:`batch_ingest` path runs once per line over
+    that line's raw caller-id variants. Lines are visited in a deterministic order
+    (sorted, catch-all last). Returns ``{channel_sqid_or_name: imported_count}``;
+    the caller sums the values for a run total.
+    """
+
+    store = ImessageStore(IosBackup(backup_dir))
+    try:
+        variants = store.line_variants()
+        results: dict[str, int] = {}
+        for line_key, raw_variants in sorted(
+            variants.items(), key=lambda item: (item[0] is None, item[0] or "")
+        ):
+            channel = get_or_create_imessage_channel(owner, name=line_channel_name(line_key))
+            watermarks = (
+                thread_watermarks(channel, reason=_WATERMARK_REASON) if resume and not dry_run else {}
+            )
+            messages = store.messages(
+                since=since,
+                limit=limit,
+                watermarks=watermarks,
+                caller_ids=tuple(raw_variants),
+            )
+            results[str(channel.sqid or channel.display_name)] = batch_ingest(
+                channel,
+                messages,
+                parsed_message,
+                reason=_IMPORT_REASON,
+                batch_size=batch_size,
+                dry_run=dry_run,
+                on_batch=on_batch,
+            )
+        return results
     finally:
         store.close()

@@ -34,6 +34,7 @@ from angee.integrate_iphone.backup import (
 )
 from angee.messaging.backends import MediaItem
 from angee.messaging_integrate_imessage.attributed_body import attributed_body_text
+from angee.messaging_integrate_imessage.lines import normalize_line
 from angee.messaging_integrate_imessage.parser import ChatMessage
 
 SMS_DOMAIN = "HomeDomain"
@@ -56,8 +57,21 @@ _DATE_SECONDS_SQL = (
     f"(CASE WHEN m.date > {_NANOSECOND_THRESHOLD:.0f} THEN m.date / 1000000000.0 ELSE m.date END)"
 )
 
-_MESSAGE_OPTIONAL = ("attributedBody", "associated_message_type", "item_type")
-"""``message`` columns absent on older iOS — selected as ``NULL`` when missing."""
+_MESSAGE_OPTIONAL = (
+    "attributedBody",
+    "associated_message_type",
+    "item_type",
+    "destination_caller_id",
+    "account",
+)
+"""``message`` columns absent on older iOS — selected as ``NULL`` when missing.
+
+``destination_caller_id`` is the handling local line (see :mod:`.lines`); ``account``
+is Apple's own account identifier, stashed onto message metadata.
+"""
+
+_LINE_COLUMN = "destination_caller_id"
+"""The ``message`` column naming the local line each message was handled on."""
 
 _CHAT_OPTIONAL = ("chat_identifier", "display_name", "style", "room_name")
 """``chat`` columns absent on older iOS — selected as ``NULL`` when missing."""
@@ -117,6 +131,7 @@ class ImessageStore:
         since: datetime | None = None,
         limit: int | None = None,
         watermarks: dict[str, datetime] | None = None,
+        caller_ids: tuple[str | None, ...] | None = None,
     ) -> Iterator[ChatMessage]:
         """Yield chat-ordered messages as the neutral shape, media bytes resolved.
 
@@ -127,6 +142,13 @@ class ImessageStore:
         any media — so a resumed import skips the imported prefix instead of
         re-reading its media, the reason a very large history advances across the
         task time limit instead of restarting.
+
+        ``caller_ids`` restricts the read to one local line's raw
+        ``destination_caller_id`` variants (see :meth:`line_variants`), so the
+        per-line importer runs this single-channel read once per line. A ``None``
+        entry matches SQL ``NULL`` rows (``IS NULL``); the catch-all bucket passes
+        the NULL/``''`` and account-GUID raws together. On a store predating the
+        column the filter is skipped, so all messages fall to the catch-all line.
         """
 
         if watermarks:
@@ -151,6 +173,8 @@ class ImessageStore:
             conditions.append("(m.item_type IS NULL OR m.item_type = 0)")
         if watermarks:
             conditions.append(f"(temp._wm.since IS NULL OR {_DATE_SECONDS_SQL} >= temp._wm.since)")
+        if caller_ids is not None and _LINE_COLUMN in self._message_columns:
+            conditions.append(self._caller_id_condition(caller_ids, params))
         if since is not None:
             conditions.append(f"{_DATE_SECONDS_SQL} >= ?")
             params.append(self._core_data_seconds(since))
@@ -165,6 +189,45 @@ class ImessageStore:
             message = self._row_message(row)
             if message is not None:
                 yield message
+
+    def line_variants(self) -> dict[str | None, list[str | None]]:
+        """Group every distinct ``destination_caller_id`` raw by its normalized line.
+
+        Returns ``{line_key: [raw, …]}`` — the map the per-line importer iterates to
+        create one channel per line and drive :meth:`messages` filtered to that
+        line's raws. The ``None`` key is the catch-all bucket: its raw list gathers
+        the NULL/``''`` values and the account GUIDs that carry no resolvable line
+        (:func:`~.lines.normalize_line`). A store predating the column yields a lone
+        catch-all bucket whose ``None`` raw matches every row.
+        """
+
+        if _LINE_COLUMN not in self._message_columns:
+            return {None: [None]}
+        variants: dict[str | None, list[str | None]] = {}
+        for (raw,) in self._db.execute(f"SELECT DISTINCT {_LINE_COLUMN} FROM message"):
+            variants.setdefault(normalize_line(raw), []).append(raw)
+        for raws in variants.values():
+            raws.sort(key=lambda raw: (raw is None, raw or ""))
+        return variants
+
+    @staticmethod
+    def _caller_id_condition(caller_ids: tuple[str | None, ...], params: list[Any]) -> str:
+        """Return the SQL that restricts the read to one line's raw caller ids.
+
+        Appends the literal raws as bound ``params`` for an ``IN`` list; a ``None``
+        entry becomes ``IS NULL`` (SQL ``NULL`` never matches ``IN``), so the
+        catch-all bucket's NULL/``''`` and GUID raws are all covered. An empty set
+        matches nothing.
+        """
+
+        literals = [raw for raw in caller_ids if raw is not None]
+        clauses: list[str] = []
+        if literals:
+            clauses.append(f"m.{_LINE_COLUMN} IN ({', '.join('?' for _ in literals)})")
+            params.extend(literals)
+        if any(raw is None for raw in caller_ids):
+            clauses.append(f"m.{_LINE_COLUMN} IS NULL")
+        return "(" + " OR ".join(clauses) + ")" if clauses else "0"
 
     def _table_columns(self, table: str) -> set[str]:
         """Return the column names present on ``table`` (probed once).
@@ -189,6 +252,8 @@ class ImessageStore:
             "m.service",
             self._optional("m", "associated_message_type", self._message_columns),
             self._optional("m", "item_type", self._message_columns),
+            self._optional("m", "destination_caller_id", self._message_columns),
+            self._optional("m", "account", self._message_columns),
             "h.id AS handle_value",
             "c.ROWID AS chat_rowid",
             "c.guid AS chat_guid",
@@ -231,6 +296,8 @@ class ImessageStore:
             service,
             _associated_type,
             _item_type,
+            line_raw,
+            account,
             handle_value,
             chat_rowid,
             chat_guid,
@@ -263,6 +330,8 @@ class ImessageStore:
             text=body,
             service=str(service or ""),
             media=media,
+            line_raw=str(line_raw or ""),
+            account=str(account or ""),
         )
 
     def _index_attachments(self) -> dict[Any, list[tuple[Any, Any, Any]]]:
