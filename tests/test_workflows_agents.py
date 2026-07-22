@@ -384,9 +384,7 @@ def test_delivery_generation_closes_the_post_between_park_and_waiting_race(
     class FakeRunner:
         def run_turn(self, session: Any, turn: Any, **kwargs: Any) -> TurnOutcome:
             kwargs["heartbeat"]()
-            kwargs["emit"](
-                {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "caught"}}
-            )
+            kwargs["emit"]({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "caught"}})
             return TurnOutcome(kind="completed", text="caught", replay_state=[], usage={"requests": 1})
 
     monkeypatch.setattr(PydanticAIRuntime, "session_runner", lambda self: FakeRunner())
@@ -462,11 +460,11 @@ def test_quiet_turn_heartbeat_cadence_survives_reaper_then_expires_without_pulse
     assert engine.reap(now=started_at + timedelta(seconds=601)) == {"reaped": 1}
 
 
-def test_builtin_style_tool_turn_keeps_agent_actor_and_async_db_boundary(
+def test_generic_toolset_turn_keeps_outer_actor_and_async_db_boundary(
     workflows_agents_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A fake builtin tool observes the agent actor and performs ORM work asynchronously."""
+    """A generic toolset observes the runner's outer actor across an async ORM boundary."""
 
     del workflows_agents_tables
     from angee.agents_runtime_pydantic import runner as runner_module
@@ -498,7 +496,7 @@ def test_builtin_style_tool_turn_keeps_agent_actor_and_async_db_boundary(
     )
     monkeypatch.setattr(
         runner_module,
-        "toolsets_for_agent",
+        "toolsets_for_session",
         lambda selected: [FunctionToolset([builtin_read_owner])],
     )
 

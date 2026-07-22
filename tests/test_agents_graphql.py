@@ -32,6 +32,8 @@ from angee.agents.models import AgentSession as AbstractAgentSession
 from angee.agents.models import AgentTurn as AbstractAgentTurn
 from angee.agents.models import MCPServer as AbstractMCPServer
 from angee.agents.models import MCPTool as AbstractMCPTool
+from angee.agents.models import ToolGrant as AbstractToolGrant
+from angee.agents.models import ToolRole as AbstractToolRole
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate.credentials import CredentialKind
 from angee.operator.daemon import OperatorDaemonNotFound
@@ -80,6 +82,26 @@ class MCPTool(AbstractMCPTool):
         db_table = "test_agents_mcp_tool"
         rebac_resource_type = "agents/mcp_tool"
         rebac_id_attr = "sqid"
+
+
+class ToolGrant(AbstractToolGrant):
+    """Concrete, table-less runtime anchor emitted by the composer in real projects."""
+
+    class Meta(AbstractToolGrant.Meta):
+        abstract = False
+        managed = False
+        app_label = "agents"
+        rebac_resource_type = "agents/tool_grant"
+
+
+class ToolRole(AbstractToolRole):
+    """Concrete, table-less runtime anchor emitted by the composer in real projects."""
+
+    class Meta(AbstractToolRole.Meta):
+        abstract = False
+        managed = False
+        app_label = "agents"
+        rebac_resource_type = "agents/toolrole"
 
 
 class Agent(AbstractAgent):
@@ -463,10 +485,7 @@ def test_inference_model_groups_aggregate_runs_for_provider_and_capability(
         {"key": {"model_use": "CHAT"}, "aggregate": {"count": 2}},
         {"key": {"model_use": "EMBEDDING"}, "aggregate": {"count": 1}},
     ]
-    provider_groups = {
-        row["key"]["provider_id"]: row
-        for row in grouped["byProvider"]
-    }
+    provider_groups = {row["key"]["provider_id"]: row for row in grouped["byProvider"]}
     assert provider_groups == {
         str(provider_a.sqid): {
             "key": {
@@ -823,9 +842,7 @@ def test_mark_provisioning_can_reenter_provisioning(agents_console_tables: None)
     assert agent.last_error == ""
 
 
-def test_provision_agent_reenters_existing_provisioning_row(
-    agents_console_tables: None, monkeypatch: Any
-) -> None:
+def test_provision_agent_reenters_existing_provisioning_row(agents_console_tables: None, monkeypatch: Any) -> None:
     """A repeated provision request for a stuck PROVISIONING row resumes the render flow."""
 
     admin = _platform_admin("agt-double-provision-admin")
@@ -1121,8 +1138,13 @@ def test_reprovision_agent_recreates_service_over_existing_workspace(
     admin = _platform_admin("agt-reprov-admin")
     plain = User.objects.create_user(username="agt-reprov-plain", email="reprov@example.com")
     agent = _provisionable_agent(
-        admin, "Rebot", slug="agt-reprov-tpl", workspace="ws-keep", service="svc-old",
-        lifecycle="ready", runtime_status="running",
+        admin,
+        "Rebot",
+        slug="agt-reprov-tpl",
+        workspace="ws-keep",
+        service="svc-old",
+        lifecycle="ready",
+        runtime_status="running",
     )
     agent_id = _public_id(agent.sqid)
 
@@ -1179,8 +1201,13 @@ def test_reprovision_agent_failure_clears_destroyed_service_but_keeps_workspace(
 
     admin = _platform_admin("agt-reprovfail-admin")
     agent = _provisionable_agent(
-        admin, "ReDoomed", slug="agt-reprovfail-tpl", workspace="ws-keep", service="svc-old",
-        lifecycle="ready", runtime_status="running",
+        admin,
+        "ReDoomed",
+        slug="agt-reprovfail-tpl",
+        workspace="ws-keep",
+        service="svc-old",
+        lifecycle="ready",
+        runtime_status="running",
     )
     agent_id = _public_id(agent.sqid)
 
@@ -1609,9 +1636,7 @@ def test_provision_service_inputs_credential_drives_auth_env(agents_console_tabl
             provider=static_provider,
             name="claude-3",
         )
-        static_agent = Agent.objects.create(
-            name="Static", owner=owner, model=static_model, runtime_class="claude_code"
-        )
+        static_agent = Agent.objects.create(name="Static", owner=owner, model=static_model, runtime_class="claude_code")
         static_inputs = static_agent.provision_service_inputs()
 
         oauth_model = InferenceModel.objects.create(

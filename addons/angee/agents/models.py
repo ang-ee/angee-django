@@ -25,12 +25,13 @@ from rebac.relationships import delete_relationships, write_relationships
 from rebac.types import RelationshipFilter
 
 from angee.agents.backends import InferenceBackend, InferenceRequest, InferenceResponse
+from angee.agents.grants import revoke_tool_grant, write_tool_grant
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel
+from angee.base.models import AngeeManager, AngeeModel, role_anchor
 from angee.base.transitions import StateTransitions, save_state, transition
 
 
@@ -71,6 +72,14 @@ class MCPTransport(models.TextChoices):
 
 BUILTIN_MCP_ANGEE = "angee"
 """``MCPServer.config["builtin"]`` value for this process's built-in Angee MCP server."""
+
+
+ToolGrant = role_anchor("agents/tool_grant", name="ToolGrant")
+"""Table-less REBAC type anchor for pure-tuple tool grants."""
+
+
+ToolRole = role_anchor("agents/toolrole", name="ToolRole")
+"""Table-less REBAC type anchor for hierarchical tool bundles."""
 
 
 def _update_field_names(update_fields: Any) -> set[str]:
@@ -1274,9 +1283,7 @@ class AgentTurn(SqidMixin, AuditMixin, AngeeModel):
         ordering = ("session", "index")
         rebac_resource_type = "agents/turn"
         rebac_id_attr = "sqid"
-        constraints = (
-            models.UniqueConstraint(fields=("session", "index"), name="uniq_agents_turn_session_index"),
-        )
+        constraints = (models.UniqueConstraint(fields=("session", "index"), name="uniq_agents_turn_session_index"),)
 
     @transition(
         status,
@@ -1379,23 +1386,47 @@ def _sync_agent_mcp_selection(
 ) -> None:
     """Mirror one Agent↔MCP M2M edit into the non-field REBAC relation."""
 
-    if action not in {"post_add", "post_remove", "pre_clear"}:
+    pairs = _agent_mcp_selection_pairs(
+        instance=instance,
+        action=action,
+        reverse=reverse,
+        model=model,
+        pk_set=pk_set,
+        field_name=field_name,
+    )
+    if not pairs:
         return
+
+    def reconcile() -> None:
+        for resource, agent in pairs:
+            if action == "post_add":
+                _write_agent_mcp_relation(resource, cast(Agent, agent))
+            else:
+                _delete_agent_mcp_relation(resource, cast(Agent, agent))
+
+    transaction.on_commit(reconcile)
+
+
+def _agent_mcp_selection_pairs(
+    *,
+    instance: models.Model,
+    action: str,
+    reverse: bool,
+    model: type[models.Model],
+    pk_set: set[Any] | None,
+    field_name: str,
+) -> list[tuple[models.Model, Agent]]:
+    """Return the selected MCP resource/agent pairs affected by one M2M signal."""
+
+    if action not in {"post_add", "post_remove", "pre_clear"}:
+        return []
     if action == "pre_clear":
         if reverse:
-            pairs = [(instance, agent) for agent in getattr(instance, "agents").all()]
-        else:
-            pairs = [(resource, instance) for resource in getattr(instance, field_name).all()]
-    elif reverse:
-        pairs = [(instance, agent) for agent in model._base_manager.filter(pk__in=pk_set or ())]
-    else:
-        pairs = [(resource, instance) for resource in model._base_manager.filter(pk__in=pk_set or ())]
-
-    for resource, agent in pairs:
-        if action == "post_add":
-            _write_agent_mcp_relation(resource, cast(Agent, agent))
-        else:
-            _delete_agent_mcp_relation(resource, cast(Agent, agent))
+            return [(instance, cast(Agent, agent)) for agent in getattr(instance, "agents").all()]
+        return [(resource, cast(Agent, instance)) for resource in getattr(instance, field_name).all()]
+    if reverse:
+        return [(instance, cast(Agent, agent)) for agent in model._base_manager.filter(pk__in=pk_set or ())]
+    return [(resource, cast(Agent, instance)) for resource in model._base_manager.filter(pk__in=pk_set or ())]
 
 
 def _sync_agent_mcp_servers(
@@ -1429,10 +1460,10 @@ def _sync_agent_mcp_tools(
     pk_set: set[Any] | None,
     **kwargs: Any,
 ) -> None:
-    """Mirror Agent.mcp_tools changes into ``agents/mcp_tool#agent`` tuples."""
+    """Mirror Agent.mcp_tools changes into ``agents/tool_grant#grantee`` tuples."""
 
     del sender, kwargs
-    _sync_agent_mcp_selection(
+    pairs = _agent_mcp_selection_pairs(
         instance=instance,
         action=action,
         reverse=reverse,
@@ -1440,6 +1471,18 @@ def _sync_agent_mcp_tools(
         pk_set=pk_set,
         field_name="mcp_tools",
     )
+    if not pairs:
+        return
+
+    def reconcile() -> None:
+        for tool, agent in pairs:
+            server_sqid = str(cast(MCPTool, tool).server.sqid)
+            if action == "post_add":
+                write_tool_grant(server_sqid, str(tool.name), agent.principal_subject())
+            else:
+                revoke_tool_grant(server_sqid, str(tool.name), agent.principal_subject())
+
+    transaction.on_commit(reconcile)
 
 
 def _deactivate_agent_service_user(

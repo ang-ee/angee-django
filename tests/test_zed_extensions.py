@@ -81,10 +81,7 @@ def test_merge_carries_relation_and_unions_arm(tmp_path: Path) -> None:
     base = _base_addon(tmp_path)
     contrib = _contrib_addon(
         tmp_path,
-        "definition demo/thing {\n"
-        "    relation reviewer: auth/user\n"
-        "    permission read = reviewer\n"
-        "}\n",
+        "definition demo/thing {\n    relation reviewer: auth/user\n    permission read = reviewer\n}\n",
     )
     merged = merged_schemas([base, contrib])
     assert set(merged) == {"base"}
@@ -167,10 +164,7 @@ def test_arm_without_base_permission_fails_fast(tmp_path: Path) -> None:
     base = _base_addon(tmp_path)
     contrib = _contrib_addon(
         tmp_path,
-        "definition demo/thing {\n"
-        "    relation reviewer: auth/user\n"
-        "    permission approve = reviewer\n"
-        "}\n",
+        "definition demo/thing {\n    relation reviewer: auth/user\n    permission approve = reviewer\n}\n",
     )
     with pytest.raises(SchemaExtensionError, match="approve"):
         merged_schemas([base, contrib])
@@ -182,18 +176,12 @@ def test_merge_is_deterministic(tmp_path: Path) -> None:
     base = _base_addon(tmp_path)
     first = _contrib_addon(
         tmp_path,
-        "definition demo/thing {\n"
-        "    relation auditor: auth/user\n"
-        "    permission read = auditor\n"
-        "}\n",
+        "definition demo/thing {\n    relation auditor: auth/user\n    permission read = auditor\n}\n",
         name="contrib_a",
     )
     second = _contrib_addon(
         tmp_path,
-        "definition demo/thing {\n"
-        "    relation reviewer: auth/user\n"
-        "    permission read = reviewer\n"
-        "}\n",
+        "definition demo/thing {\n    relation reviewer: auth/user\n    permission read = reviewer\n}\n",
         name="contrib_b",
     )
     rendered = render_zed("base", merged_schemas([base, first, second])["base"])
@@ -231,20 +219,30 @@ def test_render_round_trips_a_real_backed_schema() -> None:
     assert {p.name for p in roundtripped.permissions} == {p.name for p in original.permissions}
 
 
-def test_agents_mcp_relations_accept_agent_subjects() -> None:
-    """Agents may be direct subjects only on the agents addon's MCP access relations."""
+def test_agents_tool_grants_accept_agent_and_role_subjects() -> None:
+    """Tool use is granted on pure grant objects, not on MCP catalogue rows."""
 
     source = Path(apps.get_app_config("agents").path) / "permissions.zed"
     schema = parse_zed(source.read_text(encoding="utf-8"))
 
-    for resource_type in ("agents/mcp_server", "agents/mcp_tool"):
-        definition = schema.get_definition(resource_type)
-        relation = next(relation for relation in definition.relations if relation.name == "agent")
-        assert {(subject.type, subject.id, subject.relation) for subject in relation.allowed_subjects} == {
-            ("agents/agent", "", "")
-        }
-        read = next(permission for permission in definition.permissions if permission.name == "read")
-        assert "agent" in _render_expr_names(read)
+    server = schema.get_definition("agents/mcp_server")
+    server_agent = next(relation for relation in server.relations if relation.name == "agent")
+    assert {(subject.type, subject.id, subject.relation) for subject in server_agent.allowed_subjects} == {
+        ("agents/agent", "", "")
+    }
+
+    tool = schema.get_definition("agents/mcp_tool")
+    assert "agent" not in {relation.name for relation in tool.relations}
+
+    grant = schema.get_definition("agents/tool_grant")
+    grantee = next(relation for relation in grant.relations if relation.name == "grantee")
+    assert {(subject.type, subject.id, subject.relation) for subject in grantee.allowed_subjects} == {
+        ("agents/agent", "", ""),
+        ("agents/toolrole", "", "effective_member"),
+        ("auth/group", "", "agent_member"),
+    }
+    use = next(permission for permission in grant.permissions if permission.name == "use")
+    assert "grantee" in _render_expr_names(use)
 
 
 # ---------- full wiring: emit + repoint + sync + resolve ----------
@@ -282,9 +280,7 @@ def test_contributed_relation_syncs_and_resolves(tmp_path: Path, _restore_scoped
     apply_schema_paths(app_configs, runtime_dir)
 
     scopedemo = _restore_scopedemo_schema
-    assert scopedemo.rebac_schema == str(
-        (runtime_dir / merged_schema_relpath("tests.scopedemo")).resolve()
-    )
+    assert scopedemo.rebac_schema == str((runtime_dir / merged_schema_relpath("tests.scopedemo")).resolve())
 
     call_command("rebac", "sync", verbosity=0)
 
@@ -296,9 +292,7 @@ def test_contributed_relation_syncs_and_resolves(tmp_path: Path, _restore_scoped
     reviewer = User.objects.create_user(username="reviewer", email="reviewer@example.com")
     outsider = User.objects.create_user(username="outsider", email="outsider@example.com")
     doc = ObjectRef(resource_type="scopedemo/doc", resource_id="doc-1")
-    write_relationships(
-        [RelationshipTuple(resource=doc, relation="reviewer", subject=to_subject_ref(reviewer))]
-    )
+    write_relationships([RelationshipTuple(resource=doc, relation="reviewer", subject=to_subject_ref(reviewer))])
 
     assert backend().check_access(subject=to_subject_ref(reviewer), action="read", resource=doc)
     assert not backend().check_access(subject=to_subject_ref(outsider), action="read", resource=doc)

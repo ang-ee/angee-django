@@ -14,6 +14,7 @@ from fastmcp.exceptions import ToolError
 from rebac import SubjectRef, actor_context, system_context, to_object_ref
 from rebac.backends import backend
 
+from angee.agents.grants import tool_grant_ref
 from angee.agents.mcp_verifier import resolve_actor
 from angee.integrate.credentials import CredentialKind
 from angee.mcp.graphql import _CompiledTool
@@ -175,8 +176,8 @@ def test_mcp_bearer_ignores_template_and_unprovisioned_agents(
     assert resolve_actor(token) is None
 
 
-def test_agent_mcp_m2m_reconciles_rebac_read_tuples(agents_console_tables: None) -> None:
-    """Agent MCP server/tool selections grant and revoke the matching REBAC tuples."""
+def test_agent_mcp_m2m_reconciles_server_read_and_tool_use(agents_console_tables: None) -> None:
+    """Server selection gates catalogue reads; tool selection gates invocation."""
 
     owner = User.objects.create_user(username="mcp-rebac-owner", email="mcp-rebac@example.com")
     with system_context(reason="test.mcp.rebac.seed"):
@@ -188,6 +189,7 @@ def test_agent_mcp_m2m_reconciles_rebac_read_tuples(agents_console_tables: None)
         subject = agent.principal_subject()
         server_ref = to_object_ref(server)
         tool_ref = to_object_ref(tool)
+        grant_ref = tool_grant_ref(str(server.sqid), tool.name)
 
         assert not backend().check_access(subject=subject, action="read", resource=server_ref).allowed
         agent.mcp_servers.add(server)
@@ -196,10 +198,13 @@ def test_agent_mcp_m2m_reconciles_rebac_read_tuples(agents_console_tables: None)
         assert not backend().check_access(subject=subject, action="read", resource=server_ref).allowed
 
         assert not backend().check_access(subject=subject, action="read", resource=tool_ref).allowed
+        assert not backend().check_access(subject=subject, action="use", resource=grant_ref).allowed
         agent.mcp_tools.add(tool)
-        assert backend().check_access(subject=subject, action="read", resource=tool_ref).allowed
+        assert not backend().check_access(subject=subject, action="read", resource=tool_ref).allowed
+        assert backend().check_access(subject=subject, action="use", resource=grant_ref).allowed
         agent.mcp_tools.remove(tool)
         assert not backend().check_access(subject=subject, action="read", resource=tool_ref).allowed
+        assert not backend().check_access(subject=subject, action="use", resource=grant_ref).allowed
 
 
 def test_requires_user_actor_is_actor_species_not_attribution_user() -> None:
@@ -211,6 +216,7 @@ def test_requires_user_actor_is_actor_species_not_attribution_user() -> None:
         parameters={"type": "object", "properties": {}},
         output_schema={"type": "object"},
         schema_name="public",
+        op_type="query",
         document="query { noop }",
         payload_field="noop",
         node_type="Noop",
@@ -220,9 +226,7 @@ def test_requires_user_actor_is_actor_species_not_attribution_user() -> None:
     )
 
     with (
-        override_settings(
-            ANGEE_ACTOR_USER_RESOLVERS={"agents/agent": "tests.test_mcp._test_actor_user_resolver"}
-        ),
+        override_settings(ANGEE_ACTOR_USER_RESOLVERS={"agents/agent": "tests.test_mcp._test_actor_user_resolver"}),
         actor_context(SubjectRef.of("agents/agent", "agent-1")),
         pytest.raises(ToolError, match="user actor"),
     ):

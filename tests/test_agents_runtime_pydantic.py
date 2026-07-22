@@ -173,14 +173,14 @@ def test_acp_events_emit_reducer_shapes_and_one_tool_call() -> None:
     assert sum(update["sessionUpdate"] == "tool_call" for update in updates) == 1
 
 
-def test_builtin_mcp_transport_carries_its_agent_bearer() -> None:
-    """The built-in server takes the authenticated HTTP path instead of ambient actor leakage."""
+def test_external_mcp_transport_carries_its_agent_bearer() -> None:
+    """External servers retain the authenticated HTTP transport."""
 
     credential = _Credential("agent-bearer")
     server = SimpleNamespace(
         name="Angee",
         resolved_url="http://angee.test/mcp",
-        builtin="angee",
+        builtin="",
         credential_id=1,
         credential=credential,
     )
