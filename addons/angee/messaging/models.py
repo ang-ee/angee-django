@@ -870,10 +870,11 @@ class Channel(Bridge):
 
     An ``integrate.Integration`` child (credential / owner / status from the
     connection substrate) and a ``Bridge`` (the scheduler + ``syncIntegration`` drive
-    it through ``run_sync``). ``backend_class`` selects the protocol — ``imap``
-    (contributed by ``messaging_integrate_imap``), later ``youtube``/``facebook`` —
-    and ``config`` carries source settings. ``sync()`` fetches + parses, then maps
-    each message onto the messaging managers.
+    it through ``run_sync``). ``backend_class`` selects the protocol, contributed by
+    the ``messaging_integrate_*`` addons (``imap``, the chat bridges), and ``config``
+    carries source settings. ``sync()`` fetches + parses, then maps each message onto
+    the messaging managers. Public feeds are not channel backends — ``posts.Feed``
+    owns the public-content overlay.
     """
 
     runtime = True
@@ -1186,11 +1187,10 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
 
     Two orthogonal axes, both base-owned: ``modality`` (the *shape* — email thread /
     direct / group / public post) and ``visibility`` (*who can see it*). A public
-    thread's post payload (``subject_url``/``body``/``parent``) has no producer
-    in this base slice, so the ``posts`` addon owns those columns and folds them onto
-    this same row through the same-row ``extends`` seam. ``message_count``/
-    ``last_message_at`` are denormalised and maintained with ``F()`` deltas by the
-    ingest write path.
+    thread's post link (``subject_url``) has no producer in this base slice, so the
+    ``posts`` addon owns that column and folds it onto this same row through the
+    same-row ``extends`` seam. ``message_count``/``last_message_at`` are
+    denormalised and maintained with ``F()`` deltas by the ingest write path.
 
     ``title`` is a pointer at the content-addressed :class:`Fragment` holding the
     thread's normalised subject — a denormalisation that duplicates nothing (the row
@@ -1686,15 +1686,20 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         FAILED = "failed", "Failed"
 
     class MessageKind(models.TextChoices):
-        """Odoo-style functional kind of a message."""
+        """Odoo-style functional kind of a message.
+
+        Every value has a live producer: ``COMMENT`` is a chatter note *or* a
+        public post (disambiguated structurally — ``direction``/thread shape, see
+        :meth:`Message.content_edit_error`), ``EMAIL``/``CHAT`` are set by the
+        ingest producers, ``NOTIFICATION``/``AUTO_COMMENT`` by the chatter log and
+        field tracking. Add a value only together with its producer.
+        """
 
         COMMENT = "comment", "Comment"
         EMAIL = "email", "Email"
         CHAT = "chat", "Chat"
         NOTIFICATION = "notification", "Notification"
         AUTO_COMMENT = "auto_comment", "Auto comment"
-        USER_NOTIFICATION = "user_notification", "User notification"
-        OUT_OF_OFFICE = "out_of_office", "Out of office"
 
     sqid = SqidField(real_field_name="id", prefix="msg_", min_length=8)
     thread = models.ForeignKey(
@@ -2260,7 +2265,7 @@ class Part(SqidMixin, AuditMixin, AngeeModel):
 
 
 class MessageEdge(SqidMixin, AuditMixin, AngeeModel):
-    """One typed cross-message relation — the unified quote/reply/reference graph.
+    """One typed cross-message relation — the unified quote/reference graph.
 
     ``Message.parent`` stays the single-parent reply pointer and ``Thread`` is
     membership; this carries the M2M/derived relations. A derived *quote* edge sets
@@ -2275,16 +2280,16 @@ class MessageEdge(SqidMixin, AuditMixin, AngeeModel):
 
         ``quote`` is produced by the messaging quotation builder; ``mention``/
         ``crosspost``/``forward`` are produced by the ``posts`` feed overlay onto this
-        shared graph (through ``MessageEdgeManager.relate``). ``reply`` (carried instead
-        by ``Message.parent``) and ``duplicate`` have no producer in the shipped slice.
+        shared graph (through ``MessageEdgeManager.relate``). The single-parent reply
+        pointer is ``Message.parent``, not an edge. Add a value only together with
+        its producer (cross-channel dedup will add ``duplicate`` with the
+        annotate-both design).
         """
 
-        REPLY = "reply", "Reply"
         QUOTE = "quote", "Quote"
         MENTION = "mention", "Mention"
         CROSSPOST = "crosspost", "Crosspost"
         FORWARD = "forward", "Forward"
-        DUPLICATE = "duplicate", "Duplicate"
 
     sqid = SqidField(real_field_name="id", prefix="mge_", min_length=8)
     src = models.ForeignKey(
@@ -2342,14 +2347,7 @@ class Participant(SqidMixin, AuditMixin, AngeeModel):
     runtime = True
 
     class ParticipantRole(models.TextChoices):
-        """The RFC-5322 envelope role of a participant.
-
-        Base messaging owns only the mail-envelope roles. The ``posts`` addon layers
-        public-membership semantics (``author``/``owner``/``moderator``/``viewer``) as
-        additional documented string values on this same ``role`` field: a same-row
-        ``extends`` cannot widen an existing enum, and ``StateField`` stores the raw
-        string, so posts writes those values without a schema change here.
-        """
+        """The RFC-5322 envelope role of a participant."""
 
         FROM = "from", "From"
         TO = "to", "To"

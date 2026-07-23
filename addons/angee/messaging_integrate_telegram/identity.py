@@ -161,6 +161,9 @@ def parsed_message(
                 is_group=is_group,
                 is_channel=is_channel,
             ),
+            # A broadcast channel is a public feed, not a private conversation —
+            # the same adapter-level vocabulary mapping as thread_modality.
+            visibility="public" if is_channel else "",
             title=_display_name(chat),
         ),
         body=body_part(text),

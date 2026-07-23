@@ -414,24 +414,15 @@ class Quota(SqidMixin, AuditMixin, AngeeModel):
 
 
 class ThreadPublic(AngeeModel):
-    """Public-post payload fields posts contributes onto ``messaging.Thread`` (same row).
+    """Public-post payload posts contributes onto ``messaging.Thread`` (same row).
 
-    A public thread's row *is* its subject post: ``subject_url``/``body`` carry the
-    post payload and ``parent`` nests a thread under another (a reply/quote thread).
-    These have no producer in base messaging, so posts owns them; the structural
-    ``modality``/``visibility`` discriminators stay owned by messaging.
+    ``subject_url`` links a public thread to its post's canonical URL. It has no
+    producer in base messaging, so posts owns it; the structural ``modality``/
+    ``visibility`` discriminators stay owned by messaging.
     """
 
     extends = "messaging.Thread"
 
-    parent = models.ForeignKey(
-        "messaging.Thread",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="children",
-    )
-    body = models.TextField(blank=True, default="")
     subject_url = models.URLField(max_length=1024, blank=True, default="")
 
     class Meta:

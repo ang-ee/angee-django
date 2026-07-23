@@ -85,12 +85,15 @@ class ParsedThread:
     its conversation outright. ``external_id`` is the source's raw conversation
     id, scoped by the adapter exactly like ``ParsedMessage.external_id`` — the
     map namespaces it (the ``chat:`` thread key), so adapters never compose
-    prefixes. ``modality``/``title`` land on a newly created thread only; an
-    established thread keeps its own.
+    prefixes. ``modality``/``visibility``/``title`` land on a newly created
+    thread only; an established thread keeps its own. ``visibility`` is the
+    adapter's hint for a source that knows its conversation is not private (a
+    broadcast feed passes ``public``); empty means the private default.
     """
 
     external_id: str
     modality: str = ""
+    visibility: str = ""
     title: str = ""
 
 

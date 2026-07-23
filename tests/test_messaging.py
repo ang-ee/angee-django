@@ -3044,6 +3044,77 @@ def test_ingest_named_thread_converges_chat_messages(channel: Any) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_ingest_named_thread_honors_visibility_hint(channel: Any) -> None:
+    """A broadcast adapter names its feed public; the default stays private.
+
+    ``ParsedThread.visibility`` lands on a newly created thread only — the same
+    contract as the modality/title hints.
+    """
+
+    feed = ParsedThread(external_id="feed-1", modality="public_thread", visibility="public")
+    dm = ParsedThread(external_id="dm-1")
+    assert (
+        _ingest(
+            [
+                replace(_parsed("bcast-1", subject=""), thread=feed),
+                replace(_parsed("dm-msg-1", subject=""), thread=dm),
+            ],
+            channel=channel,
+        )
+        == 2
+    )
+
+    threads = {thread.external_id: thread for thread in Thread._base_manager.all()}
+    assert threads[f"chat:{channel.pk}:feed-1"].visibility == Thread.Visibility.PUBLIC
+    assert threads[f"chat:{channel.pk}:dm-1"].visibility == Thread.Visibility.PRIVATE
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_resolves_reply_parent(channel: Any) -> None:
+    """``in_reply_to`` lands the single-parent pointer, for email and named chats.
+
+    The pointer is the ``Message.parent`` contract the model docstring promises:
+    thread membership and the parent pointer both resolve from the same hint,
+    each through its owner.
+    """
+
+    assert _ingest([_parsed("root@x", subject="Plans")], channel=channel) == 1
+    assert _ingest([_parsed("reply@x", subject="Re: Plans", in_reply_to="root@x")], channel=channel) == 1
+    root = Message._base_manager.get(external_id="root@x")
+    reply = Message._base_manager.get(external_id="reply@x")
+    assert reply.parent_id == root.pk
+    assert reply.thread_id == root.thread_id
+
+    chat = ParsedThread(external_id="room-1", modality="group")
+    first = replace(_parsed("chat-a", subject=""), thread=chat)
+    second = replace(_parsed("chat-b", subject="", in_reply_to="chat-a"), thread=chat)
+    assert _ingest([first, second], channel=channel) == 2
+    chat_reply = Message._base_manager.get(external_id="chat-b")
+    assert chat_reply.parent_id == Message._base_manager.get(external_id="chat-a").pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_reply_before_parent_heals_on_resync(channel: Any) -> None:
+    """A reply that lands before its parent backfills on the no-op re-sync.
+
+    First pass: the hint resolves nothing, the pointer stays NULL. Once the
+    parent exists, re-ingesting the identical reply takes the no-op path and
+    backfills exactly the pointer — no part rebuild, no edit-history entry.
+    """
+
+    reply = _parsed("late-reply@x", subject="Re: Plans", in_reply_to="late-root@x")
+    assert _ingest([reply], channel=channel) == 1
+    row = Message._base_manager.get(external_id="late-reply@x")
+    assert row.parent_id is None
+
+    assert _ingest([_parsed("late-root@x", subject="Plans")], channel=channel) == 1
+    assert _ingest([reply], channel=channel) == 1
+    row.refresh_from_db()
+    assert row.parent_id == Message._base_manager.get(external_id="late-root@x").pk
+    assert row.edit_history == []
+
+
+@pytest.mark.django_db(transaction=True)
 def test_handle_upsert_resolves_external_id_before_value(messaging_tables: None) -> None:
     """The source-stable external id wins over the human-readable value.
 

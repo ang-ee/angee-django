@@ -7,5 +7,10 @@ keywords = ["telegram", "chat", "sync"]
 category = "Integration"
 depends_on = ["angee.messaging", "angee.integrate", "angee.parties", "angee.workflows_integrate"]
 
+[[migrations]]
+name = "broadcast_thread_visibility"
+app_label = "messaging"
+module = "runtime_migrations.broadcast_thread_visibility"
+
 [resources]
 master = [{ path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" }]

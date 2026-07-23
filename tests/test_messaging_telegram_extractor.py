@@ -214,7 +214,11 @@ def test_telegram_takeout_and_live_paths_converge_on_sync_identity(
 
 
 def test_telegram_takeout_broadcast_channel_uses_public_thread_modality() -> None:
-    """The export adapter delegates broadcast modality to the live identity owner."""
+    """The export adapter delegates broadcast shape to the live identity owner.
+
+    A broadcast channel is a public feed: modality ``public_thread`` and the
+    ``public`` visibility hint; a plain chat keeps the private default.
+    """
 
     parsed = identity.parsed_export_message(
         _chat(chat_type="private_channel"),
@@ -224,6 +228,14 @@ def test_telegram_takeout_broadcast_channel_uses_public_thread_modality() -> Non
 
     assert parsed.thread is not None
     assert parsed.thread.modality == "public_thread"
+    assert parsed.thread.visibility == "public"
+
+    group = identity.parsed_export_message(
+        _chat(chat_type="private_group"),
+        _message(),
+        marked_chat_id=utils.get_peer_id(types.PeerChat(42)),
+    )
+    assert group.thread is not None and group.thread.visibility == ""
 
 
 @pytest.mark.django_db

@@ -420,6 +420,10 @@ def _parsed_sync_hash(
         ],
         "body": _parsed_part_digest(parsed.body),
     }
+    if parsed.in_reply_to:
+        # Present only when set: non-reply hashes stay stable across the reply-pointer
+        # rollout, so a full re-import rewrites exactly the rows that gain a parent.
+        payload["in_reply_to"] = parsed.in_reply_to
     canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -544,8 +548,10 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         compose prefixes. Chat threads are **channel-scoped**, unlike email's
         platform-wide merge: two linked accounts that each DM the same person
         are two private conversations owned by different people, so they must
-        not fuse into one REBAC-shared thread. The hint's ``modality``/``title``
-        land on a newly created thread only.
+        not fuse into one REBAC-shared thread. The hint's ``modality``/
+        ``visibility``/``title`` land on a newly created thread only — a
+        broadcast source names its feed public at the adapter that knows it,
+        instead of every public source re-owning the visibility default.
 
         Otherwise the email priority applies: ``In-Reply-To`` → ``References``
         (newest-first, i.e. right-to-left, resolved in one batch query) →
@@ -581,7 +587,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
                     "channel": channel,
                     "title": title,
                     "modality": thread.modality or modality or self.model.Modality.DIRECT,
-                    "visibility": visibility or self.model.Visibility.PRIVATE,
+                    "visibility": thread.visibility or visibility or self.model.Visibility.PRIVATE,
                     "created_by_id": owner_id,
                 },
             )
@@ -1033,10 +1039,8 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         )
         if follower is None:
             return message_model._base_manager.none()
-        queryset = (
-            message_model._base_manager.filter(thread=thread)
-            .exclude(message_type=message_model.MessageKind.USER_NOTIFICATION)
-            .annotate(_order_at=_MESSAGE_ORDER_ANNOTATION)
+        queryset = message_model._base_manager.filter(thread=thread).annotate(
+            _order_at=_MESSAGE_ORDER_ANNOTATION
         )
         subtype_keys = tuple(str(key) for key in (follower.subtype_keys or ()))
         if subtype_keys:
@@ -1843,14 +1847,6 @@ class MessageQuerySet(AngeeQuerySet[Any]):
 
         return cast(MessageQuerySet, self.filter(thread__attachments__isnull=True))
 
-    def visible_in_chatter(self) -> MessageQuerySet:
-        """Return messages a record's chatter feed shows (drop user notifications)."""
-
-        return cast(
-            MessageQuerySet,
-            self.exclude(message_type=self.model.MessageKind.USER_NOTIFICATION),
-        )
-
     def searching(self, term: str) -> MessageQuerySet:
         """Return messages matching one Odoo-style chatter search token."""
 
@@ -1962,7 +1958,6 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         queryset = (
             self.sudo(reason="messaging.message.for_record")
             .for_thread(attachment.thread)
-            .visible_in_chatter()
             .select_related("thread", "subtype", "sender", "channel", "parent", "parent__subtype")
             .prefetch_related("parts__fragment", "parts__file", "tracking_values", "reactions__handle", "stars")
             .annotate(_order_at=_MESSAGE_ORDER_ANNOTATION)
@@ -2372,7 +2367,10 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         by external id.
 
         Idempotent on ``(channel, external_id)``; null bytes stripped; thread
-        counters bumped with ``F()``. ``modality``/``visibility`` land each resolved
+        counters bumped with ``F()``. ``in_reply_to`` lands twice, each through its
+        owner: thread membership via :meth:`ThreadManager.resolve` and the
+        single-parent reply pointer via :meth:`_resolve_reply_parent` onto
+        ``Message.parent``. ``modality``/``visibility`` land each resolved
         thread under a non-email :class:`~angee.messaging.models.Thread.Modality` /
         :class:`~angee.messaging.models.Thread.Visibility` (a public feed passes
         ``PUBLIC_THREAD``/``PUBLIC``); each defaults to the private email-thread shape.
@@ -2481,7 +2479,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         prior = (
             _external_id_annotated(self.model._base_manager)
             .filter(_external_id_q(parsed.external_id), channel=channel)
-            .values("pk", "thread_id", "metadata")
+            .values("pk", "thread_id", "parent_id", "metadata")
             .first()
         )
         content_hash = _parsed_sync_hash(
@@ -2495,14 +2493,24 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             and (prior["metadata"] or {}).get(_SYNC_HASH_KEY) == content_hash
         ):
             # Idempotent re-sync into the same thread with identical content: nothing
-            # to write — skipping the part rebuild avoids churning Part primary keys,
-            # re-upserting Fragments, and minting a spurious edit-history entry.
-            return self.model._base_manager.get(pk=prior["pk"]), ()
+            # to rebuild — skipping the part rebuild avoids churning Part primary keys,
+            # re-upserting Fragments, and minting a spurious edit-history entry. One
+            # precise exception: a reply that landed before its parent keeps NULL, so
+            # the re-sync backfills the pointer once its parent exists (this is how a
+            # resumed backup import heals reply order across batches).
+            message = self.model._base_manager.get(pk=prior["pk"])
+            if parsed.in_reply_to and prior["parent_id"] is None:
+                parent = self._resolve_reply_parent(parsed, channel=channel)
+                if parent is not None:
+                    message.parent = parent
+                    message.save(update_fields=("parent", "updated_at"))
+            return message, ()
         metadata = {**envelope_metadata, _SYNC_HASH_KEY: content_hash}
         defaults = {
             "thread": thread,
             "channel": channel,
             "sender": sender,
+            "parent": self._resolve_reply_parent(parsed, channel=channel),
             "platform": parsed.platform,
             "direction": parsed.direction,
             "status": self.model.MessageStatus.SYNCED,
@@ -2568,6 +2576,31 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         if created or thread_changed:
             self._bump_thread(thread_model, thread.pk, parsed.sent_at)
         return message, handles
+
+    def _resolve_reply_parent(self, parsed: ParsedMessage, *, channel: Any) -> Any:
+        """Resolve ``in_reply_to`` onto the parent ``Message`` row, or ``None``.
+
+        The single-parent reply pointer the model docstring promises. Resolution is
+        platform-wide (a reply through account B must find the parent account A
+        ingested), riding the non-unique ``MD5(external_id)`` index; when the same
+        provider event exists once per channel, the ingesting channel's own row wins
+        and a cross-channel copy is the fallback — the posts target-resolution rule.
+        A reply that lands before its parent keeps ``NULL``; the no-op re-sync path
+        backfills the pointer once the parent exists, so a re-run of the same
+        import heals ordering gaps without rebuilding unchanged rows.
+        """
+
+        reply_to = parsed.in_reply_to
+        if not reply_to or reply_to == parsed.external_id:
+            return None
+        rows = list(
+            _external_id_annotated(self.model._base_manager).filter(
+                _external_id_q(reply_to), platform=parsed.platform
+            )
+        )
+        if not rows:
+            return None
+        return min(rows, key=lambda row: (row.channel_id != channel.pk, row.pk))
 
     @staticmethod
     def _content_fragment_hashes(part_model: Any, message: Any) -> list[str]:
