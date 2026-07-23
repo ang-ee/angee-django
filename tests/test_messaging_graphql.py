@@ -26,6 +26,7 @@ from rebac import (
 )
 from rebac.roles import grant
 
+from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.messaging.managers import ChannelManager
 from angee.messaging.models import Channel as AbstractChannel
@@ -33,11 +34,14 @@ from angee.parties.mixins import LinkSource
 from tests import test_messaging as messaging_models
 from tests import test_parties_graphql as parties_graphql
 from tests.conftest import (
+    POSTS_TEST_MODELS,
     Backend,
     Drive,
     Integration,
     MimeType,
     SchemaAddon,
+    VcsBridge,
+    WebhookSubscription,
     _clear_model_tables,
     _create_missing_tables,
     execute_schema,
@@ -47,6 +51,7 @@ from tests.conftest import (
     File as StorageFile,
 )
 from tests.conftest import result_data as _data
+from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
 
 _ChannelMeta = getattr(AbstractChannel, "Meta", object)
 
@@ -73,6 +78,20 @@ User = get_user_model()
 MESSAGING_GRAPHQL_MODELS = (
     *messaging_models.MESSAGING_TEST_MODELS,
     Channel,
+)
+
+# Confirming a channel delete runs `channel.delete()`, whose Django collector queries
+# every reverse FK to the shared Integration parent — including other addons' tables
+# (posts, agents, webhooks, VCS). Those tables must exist for the cascade query to run,
+# so the end-to-end confirm test needs the same comprehensive set the integration-delete
+# test uses, plus the messaging Channel.
+CHANNEL_PURGE_MODELS = tuple(
+    dict.fromkeys(
+        MESSAGING_GRAPHQL_MODELS
+        + POSTS_TEST_MODELS
+        + (VcsBridge, WebhookSubscription)
+        + AGENTS_GRAPHQL_MODELS
+    )
 )
 
 
@@ -218,13 +237,25 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
     assert channel.roots.list_name == "channels"
     assert channel.roots.detail_name == "channels_by_pk"
     assert channel.roots.create_name is None
-    # A channel is created by a bespoke connect flow and deleted never — but its
-    # operator label is the one fact a human owns, so update is open for it alone.
+    # A channel is created by a bespoke connect flow, but its operator label is the one
+    # fact a human owns (update), and deleting it purges everything it ingested — the
+    # generic delete root lights the button, the authored `delete_channel` root drives
+    # the purge-accurate cascade preview + confirm.
     assert channel.roots.update_name == "update_channels_by_pk"
     assert channel.update_fields == ("display_name",)
-    assert channel.roots.delete_name is None
+    assert channel.roots.delete_name == "delete_channels_by_pk"
+    assert channel.roots.delete_preview_name == "delete_channel"
     assert channel.roots.changes_name == "channelChanged"
-    assert channel.capabilities == ("list", "detail", "aggregate", "groups", "update", "changes")
+    assert channel.capabilities == (
+        "list",
+        "detail",
+        "aggregate",
+        "groups",
+        "update",
+        "delete",
+        "deletePreview",
+        "changes",
+    )
 
 
 def test_message_by_pk_serves_title_beside_a_parts_selection(messaging_graphql_tables: None) -> None:
@@ -2743,6 +2774,27 @@ def messaging_graphql_tables(transactional_db: Any) -> Iterator[None]:
                     schema_editor.delete_model(model)
 
 
+@pytest.fixture
+def channel_purge_tables(transactional_db: Any) -> Iterator[None]:
+    """Create the messaging GraphQL tables plus every Integration-referencing table.
+
+    Deleting a channel cascades through the shared Integration parent, so the collector
+    touches other addons' reverse-FK tables; they must exist for the confirm path.
+    """
+
+    del transactional_db
+    created_models = _create_missing_tables(CHANNEL_PURGE_MODELS)
+    call_command("rebac", "sync", verbosity=0)
+    try:
+        yield
+    finally:
+        _clear_model_tables(CHANNEL_PURGE_MODELS)
+        if created_models:
+            with connection.schema_editor() as schema_editor:
+                for model in reversed(created_models):
+                    schema_editor.delete_model(model)
+
+
 def _schema() -> Any:
     """Build the merged console schema used by the messaging app."""
 
@@ -3140,3 +3192,332 @@ def test_record_chatter_rows_opt_out_of_change_broadcasts(messaging_graphql_tabl
         assert record_message.broadcasts_changes() is False
         # A message with no thread is not record-attached and stays on the surface.
         assert orphan.broadcasts_changes() is True
+
+
+def test_teardown_for_channel_purges_messages_threads_and_cascade(messaging_graphql_tables: None) -> None:
+    """``teardown_for_channel`` deletes a channel's threads/messages and their subtrees.
+
+    A channel delete is a purge: the channel's threads and messages FK the shared
+    Integration parent with ``SET_NULL``, so the manager method removes them explicitly
+    (and their ``CASCADE`` children — parts, reactions) rather than orphaning them. The
+    channel is a real MTI child of Integration, so filtering ``channel=channel`` resolves
+    against the shared FK by its Integration pk. The channel row itself is left to the
+    caller — the teardown owns only what the channel ingested.
+    """
+
+    channel = make_integration("chan-teardown", model=Channel, backend_class="manual")
+    with system_context(reason="test.channel.teardown.seed"):
+        fragment = messaging_models.Fragment.objects.upsert(text="Channel body")
+        thread = messaging_models.Thread.objects.create(
+            channel=channel, external_id="chat:teardown:1", visibility="private", created_by_id=channel.owner_id
+        )
+        message = messaging_models.Message.objects.create(
+            thread=thread, channel=channel, external_id="m1", status="synced", created_by_id=channel.owner_id
+        )
+        part = messaging_models.Part._base_manager.create(message=message, fragment=fragment, role="body")
+        reaction = messaging_models.Reaction._base_manager.create(
+            message=message, reaction="like", created_by_id=channel.owner_id
+        )
+
+    messaging_models.Thread.objects.teardown_for_channel(channel)
+
+    assert not messaging_models.Message._base_manager.filter(pk=message.pk).exists()
+    assert not messaging_models.Thread._base_manager.filter(pk=thread.pk).exists()
+    assert not messaging_models.Part._base_manager.filter(pk=part.pk).exists()
+    assert not messaging_models.Reaction._base_manager.filter(pk=reaction.pk).exists()
+    assert Channel._base_manager.filter(pk=channel.pk).exists()
+
+
+def test_channel_purge_spares_the_same_message_in_another_channel(messaging_graphql_tables: None) -> None:
+    """Purging channel A deletes only A's rows; the same message via channel B survives.
+
+    The "same" logical message that also arrived through another channel is a separate
+    ``(channel, external_id)`` Message row in that channel, so it must survive A's purge —
+    automatic under the per-channel-row model. Its body is a shared content-addressed
+    ``Fragment`` (parts FK it with ``SET_NULL``), so A's purge must not delete the
+    Fragment nor unlink B's body from it.
+    """
+
+    channel_a = make_integration("chan-a", model=Channel, backend_class="manual")
+    channel_b = make_integration("chan-b", model=Channel, backend_class="manual")
+    with system_context(reason="test.channel.crosschannel.seed"):
+        fragment = messaging_models.Fragment.objects.upsert(text="Same body, two channels")
+        thread_a = messaging_models.Thread.objects.create(
+            channel=channel_a, external_id="chat:a:1", visibility="private", created_by_id=channel_a.owner_id
+        )
+        message_a = messaging_models.Message.objects.create(
+            thread=thread_a,
+            channel=channel_a,
+            external_id="shared-ext-id",
+            status="synced",
+            created_by_id=channel_a.owner_id,
+        )
+        messaging_models.Part._base_manager.create(message=message_a, fragment=fragment, role="body")
+        thread_b = messaging_models.Thread.objects.create(
+            channel=channel_b, external_id="chat:b:1", visibility="private", created_by_id=channel_b.owner_id
+        )
+        message_b = messaging_models.Message.objects.create(
+            thread=thread_b,
+            channel=channel_b,
+            external_id="shared-ext-id",
+            status="synced",
+            created_by_id=channel_b.owner_id,
+        )
+        part_b = messaging_models.Part._base_manager.create(message=message_b, fragment=fragment, role="body")
+
+    # Two channels can hold the same external id as two distinct rows.
+    assert message_a.pk != message_b.pk
+    messaging_models.Thread.objects.teardown_for_channel(channel_a)
+
+    assert not messaging_models.Message._base_manager.filter(pk=message_a.pk).exists()
+    assert not messaging_models.Thread._base_manager.filter(pk=thread_a.pk).exists()
+    assert messaging_models.Message._base_manager.filter(pk=message_b.pk).exists()
+    assert messaging_models.Thread._base_manager.filter(pk=thread_b.pk).exists()
+    # The shared body Fragment survives, and B still points at it (SET_NULL untouched).
+    assert messaging_models.Fragment._base_manager.filter(pk=fragment.pk).exists()
+    part_b.refresh_from_db()
+    assert part_b.fragment_id == fragment.pk
+
+
+def test_delete_channel_preview_counts_purge_as_deleted(channel_purge_tables: None) -> None:
+    """The channel delete preview forecasts threads/messages as deleted, then purges.
+
+    The preview counts the channel + its Integration parent + the thread/message totals
+    as ``deleted`` (never as ``updated``/orphaned) with ``.count()``, so it stays fast on
+    a large channel and ``has_blockers`` is False; a bare preview deletes nothing. The
+    ``confirm`` mutation runs the purge and removes the channel + Integration row.
+    """
+
+    admin = _platform_admin("chan-delete-admin")
+    channel = make_integration("chan-delete", model=Channel, backend_class="manual")
+    with system_context(reason="test.channel.delete.seed"):
+        for index in range(3):
+            thread = messaging_models.Thread.objects.create(
+                channel=channel, external_id=f"chat:del:{index}", visibility="private", created_by_id=admin.pk
+            )
+            messaging_models.Message.objects.create(
+                thread=thread, channel=channel, external_id=f"m{index}", status="synced", created_by_id=admin.pk
+            )
+    schema = _schema()
+
+    preview = _data(
+        execute_schema(
+            schema,
+            """
+            mutation Preview($id: ID!) {
+              delete_channel(id: $id) {
+                total_deleted_count has_blockers
+                deleted { label count }
+                updated { label count }
+              }
+            }
+            """,
+            {"id": channel.sqid},
+            request=_request(admin),
+        )
+    )["delete_channel"]
+    counts = {group["label"]: group["count"] for group in preview["deleted"]}
+    assert counts["messages"] == 3
+    assert counts["threads"] == 3
+    assert preview["updated"] == []
+    assert preview["has_blockers"] is False
+    # channel(1) + integration(1) + 3 threads + 3 messages
+    assert preview["total_deleted_count"] == 8
+    # A bare preview deletes nothing.
+    assert Channel._base_manager.filter(pk=channel.pk).exists()
+    assert messaging_models.Message._base_manager.filter(channel_id=channel.pk).count() == 3
+
+    _data(
+        execute_schema(
+            schema,
+            """
+            mutation Confirm($id: ID!) {
+              delete_channel(id: $id, confirm: true) { total_deleted_count has_blockers }
+            }
+            """,
+            {"id": channel.sqid},
+            request=_request(admin),
+        )
+    )
+    assert not Channel._base_manager.filter(pk=channel.pk).exists()
+    assert not messaging_models.Message._base_manager.filter(channel_id=channel.pk).exists()
+    assert not messaging_models.Thread._base_manager.filter(channel_id=channel.pk).exists()
+
+
+def test_delete_channel_denied_for_non_admin_reader(messaging_graphql_tables: None) -> None:
+    """A non-admin who cannot write the channel cannot purge it; nothing is deleted."""
+
+    admin = _platform_admin("chan-deny-admin")
+    channel = make_integration("chan-deny", model=Channel, backend_class="manual")
+    with system_context(reason="test.channel.deny.seed"):
+        thread = messaging_models.Thread.objects.create(
+            channel=channel, external_id="chat:deny:1", visibility="private", created_by_id=admin.pk
+        )
+        messaging_models.Message.objects.create(
+            thread=thread, channel=channel, external_id="m1", status="synced", created_by_id=admin.pk
+        )
+    reader = User.objects.create_user(username="chan-deny-reader", email="chan-deny-reader@example.com")
+    schema = _schema()
+
+    result = execute_schema(
+        schema,
+        """
+        mutation Confirm($id: ID!) {
+          delete_channel(id: $id, confirm: true) { total_deleted_count }
+        }
+        """,
+        {"id": channel.sqid},
+        request=_request(reader),
+    )
+
+    assert result.errors is not None
+    # Nothing was purged.
+    assert Channel._base_manager.filter(pk=channel.pk).exists()
+    assert messaging_models.Message._base_manager.filter(channel_id=channel.pk).count() == 1
+    assert messaging_models.Thread._base_manager.filter(channel_id=channel.pk).count() == 1
+
+
+def test_delete_channel_preview_total_matches_real_deleted_rows(channel_purge_tables: None) -> None:
+    """The preview total equals the rows a purge really deletes — cascade children included.
+
+    Fix 2: the inventory (:meth:`ChannelManager.inventory`) counts the channel's
+    threads/messages AND their top-level CASCADE children (parts, reactions, stars,
+    tracking values, edges, participants, notifications, followers), so the count-based
+    forecast matches what ``teardown_for_channel`` + the channel delete remove — no
+    under-count from omitted subtrees. Compared against Django's authoritative per-call
+    ``.delete()`` totals over the exact same scope.
+    """
+
+    channel = make_integration("chan-accuracy", model=Channel, backend_class="manual")
+    with system_context(reason="test.channel.accuracy.seed"):
+        owner_id = channel.owner_id
+        handle = messaging_models.Handle._base_manager.create(
+            platform=messaging_models.Handle.Platform.EMAIL, value="pt@example.com", created_by_id=owner_id
+        )
+        fragment = messaging_models.Fragment.objects.upsert(text="Accuracy body")
+        thread1 = messaging_models.Thread.objects.create(
+            channel=channel, external_id="chat:acc:1", visibility="private", created_by_id=owner_id
+        )
+        thread2 = messaging_models.Thread.objects.create(
+            channel=channel, external_id="chat:acc:2", visibility="private", created_by_id=owner_id
+        )
+        msg1 = messaging_models.Message.objects.create(
+            thread=thread1, channel=channel, external_id="acc-a1", status="synced", created_by_id=owner_id
+        )
+        msg2 = messaging_models.Message.objects.create(
+            thread=thread2, channel=channel, external_id="acc-a2", status="synced", created_by_id=owner_id
+        )
+        # Message-rooted CASCADE children on msg1: a nested part tree, a reaction, a star,
+        # a tracking value; a cross-message edge; and both participant flavors (message- and
+        # thread-attached, to exercise the OR predicate) plus a delivery notification.
+        root_part = messaging_models.Part._base_manager.create(message=msg1, fragment=fragment, role="body")
+        messaging_models.Part._base_manager.create(message=msg1, parent=root_part, fragment=fragment, role="quoted")
+        messaging_models.Part._base_manager.create(message=msg2, fragment=fragment, role="body")
+        messaging_models.Reaction._base_manager.create(message=msg1, reaction="like", created_by_id=owner_id)
+        messaging_models.MessageStar._base_manager.create(message=msg1, user_id=owner_id, created_by_id=owner_id)
+        messaging_models.TrackingValue._base_manager.create(
+            message=msg1, field_name="stage", field_label="Stage", created_by_id=owner_id
+        )
+        messaging_models.MessageEdge._base_manager.create(src=msg1, dst=msg2, created_by_id=owner_id)
+        messaging_models.Participant._base_manager.create(message=msg1, handle=handle, created_by_id=owner_id)
+        messaging_models.Participant._base_manager.create(thread=thread2, handle=handle, created_by_id=owner_id)
+        # Thread-rooted CASCADE children: a bare follower and a delivery notification.
+        messaging_models.ThreadFollower._base_manager.create(
+            thread=thread1, user_id=owner_id, created_by_id=owner_id
+        )
+        messaging_models.ThreadNotification._base_manager.create(
+            thread=thread1, message=msg1, user_id=owner_id, created_by_id=owner_id
+        )
+
+    # Forecast first (count-only), then delete the exact scope teardown + channel-delete
+    # cover, capturing Django's authoritative per-call totals.
+    preview = DeletePreview.from_counts(channel, Channel.objects.inventory(channel))
+    with system_context(reason="test.channel.accuracy.delete"):
+        real_deleted = messaging_models.Message.objects.for_channel(channel).delete()[0]
+        real_deleted += messaging_models.Thread.objects.for_channel(channel).delete()[0]
+        real_deleted += channel.delete()[0]
+
+    assert preview.total_deleted_count == real_deleted
+    # The fixture has real cascade children, so the total is well past channel + integration
+    # + 2 threads + 2 messages (== 6); the children push it higher.
+    assert real_deleted > 6
+    # The preview lists the child models it counted, not just threads/messages.
+    labels = {group.label for group in preview.deleted}
+    assert str(messaging_models.Part._meta.verbose_name_plural) in labels
+    assert str(messaging_models.Reaction._meta.verbose_name_plural) in labels
+
+
+def test_channel_teardown_mutes_per_row_change_broadcasts(messaging_graphql_tables: None) -> None:
+    """``teardown_for_channel`` fires no per-row Message/Thread change broadcast.
+
+    Fix 1 (the broadcast storm): each channel Message/Thread declares ``changes()``, so a
+    naive bulk purge would emit one ``post_delete`` publisher per row — an ``exists()``
+    thread probe plus a buffered ``group_send`` apiece. The teardown runs under
+    :func:`~angee.graphql.publishing.mute_changes`, so ``publish_change`` returns before the
+    probe and nothing broadcasts. A positive control (an unmuted delete of a sibling row)
+    proves the spy and publisher wiring are live, so the muted silence is real.
+    """
+
+    from angee.graphql.publishing import change_published, connect_publishers, disconnect_publishers
+
+    channel = make_integration("chan-mute", model=Channel, backend_class="manual")
+    with system_context(reason="test.channel.mute.seed"):
+        owner_id = channel.owner_id
+        thread = messaging_models.Thread.objects.create(
+            channel=channel, external_id="chat:mute:1", visibility="private", created_by_id=owner_id
+        )
+        keep = messaging_models.Message.objects.create(
+            thread=thread, channel=channel, external_id="mute-keep", status="synced", created_by_id=owner_id
+        )
+        control = messaging_models.Message.objects.create(
+            thread=thread, channel=channel, external_id="mute-control", status="synced", created_by_id=owner_id
+        )
+
+    captured: list[Any] = []
+
+    def _spy(sender: Any, payload: Any, **kwargs: Any) -> None:
+        captured.append(payload)
+
+    connect_publishers(messaging_models.Message)
+    connect_publishers(messaging_models.Thread)
+    change_published.connect(_spy, dispatch_uid="test-channel-mute-spy", weak=False)
+    try:
+        # Positive control: an unmuted delete DOES broadcast, proving the wiring is live.
+        with system_context(reason="test.channel.mute.control"):
+            control.delete()
+        assert captured, "expected the unmuted control delete to broadcast a change"
+        captured.clear()
+
+        # The muted teardown deletes `keep` + the thread and broadcasts nothing per row.
+        messaging_models.Thread.objects.teardown_for_channel(channel)
+        assert captured == []
+    finally:
+        change_published.disconnect(dispatch_uid="test-channel-mute-spy")
+        disconnect_publishers(messaging_models.Message)
+        disconnect_publishers(messaging_models.Thread)
+
+    assert not messaging_models.Message._base_manager.filter(pk=keep.pk).exists()
+    assert not messaging_models.Thread._base_manager.filter(pk=thread.pk).exists()
+
+
+def test_from_counts_ignores_target_type_to_avoid_double_counting_root(messaging_graphql_tables: None) -> None:
+    """``from_counts`` counts the root once even if the caller also passes ``type(target)``.
+
+    Fix 4: the root already contributes +1 for its own model (and its MTI parent), so a
+    ``type(target)`` entry in the passed counts — a caller that re-counts the channel —
+    must be ignored, not added, so the forecast cannot double the root.
+    """
+
+    channel = make_integration("chan-guard", model=Channel, backend_class="manual")
+    guarded = DeletePreview.from_counts(channel, {Channel: 5, messaging_models.Thread: 2})
+    plain = DeletePreview.from_counts(channel, {messaging_models.Thread: 2})
+    assert guarded.total_deleted_count == plain.total_deleted_count
+    channel_counts = {
+        group.label: group.count
+        for group in guarded.deleted
+        if group.label == str(Channel._meta.verbose_name_plural)
+    }
+    # The root counts once, not 1 + the bogus 5.
+    assert channel_counts[str(Channel._meta.verbose_name_plural)] == 1
+    # The MTI Integration parent is derived from the target, still counted once.
+    assert guarded.total_deleted_count == 1 + 1 + 2

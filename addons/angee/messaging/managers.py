@@ -37,11 +37,12 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, connection, models, transaction
 from django.db.models.functions import MD5, Coalesce, Greatest
 from django.utils import timezone
-from rebac import current_actor, system_context
+from rebac import PermissionDenied, current_actor, system_context
 
 from angee.base.actors import actor_user_id
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
+from angee.graphql.publishing import mute_changes
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.messaging.tracking import TrackingChange
 from angee.parties.mixins import LinkSource
@@ -107,7 +108,16 @@ _MESSAGE_METADATA_MAX_BYTES = 512 * 1024
 
 
 class ChannelManager(IntegrationManager):
-    """Manager for channel factories shared by vendor connect services."""
+    """Channel factory + delete owner, bound as ``Channel.objects``.
+
+    A Channel is a multi-table-inheritance child of the concrete ``Integration``, so
+    the composer emits this manager as the concrete child's ``objects`` (see
+    ``Channel.angee_model_attributes``); it extends ``IntegrationManager`` and adds the
+    channel-specific verbs: ``create_disconnected`` (vendor connect services) and the
+    purge owner (:meth:`purge`/:meth:`inventory`) that deletes everything a channel
+    ingested and forecasts the same scope for the delete-confirmation preview — one
+    owner for both the destructive path and its forecast, so the preview cannot drift.
+    """
 
     def create_disconnected(
         self,
@@ -129,6 +139,60 @@ class ChannelManager(IntegrationManager):
             created_by_id=user.pk,
             **extra,
         )
+
+    def inventory(self, channel: Any) -> dict[type[models.Model], int]:
+        """Return ``{model: count}`` for every row a purge of ``channel`` would delete.
+
+        Threads and messages are counted through their :meth:`ThreadQuerySet.for_channel` /
+        :meth:`MessageQuerySet.for_channel` owner; the ``CASCADE`` children through
+        :func:`_channel_cascade_children` — counts only, no materialization, so the preview
+        stays a fixed number of queries on a 90k-message channel. Excludes the channel row
+        and its ``Integration`` MTI parent: :meth:`DeletePreview.from_counts` derives those
+        from ``target``. Runs elevated so the totals are the true purge scope regardless of
+        the caller's REBAC row visibility.
+        """
+
+        thread_model = apps.get_model("messaging", "Thread")
+        message_model = apps.get_model("messaging", "Message")
+        with system_context(reason="messaging.channel.purge_inventory"):
+            counts: dict[type[models.Model], int] = {
+                thread_model: int(thread_model.objects.for_channel(channel).count()),
+                message_model: int(message_model.objects.for_channel(channel).count()),
+            }
+            for model, predicate in _channel_cascade_children(channel):
+                counts[model] = int(model._base_manager.filter(predicate).count())
+        return {model: count for model, count in counts.items() if count}
+
+    def purge(self, channel: Any) -> None:
+        """Preflight ``delete``, tear down the ingested subtree, then delete the channel row.
+
+        The channel's own ``delete`` permission is checked under the caller's actor first
+        (the explicit-preflight shape :class:`~angee.messaging.models.ThreadedModelMixin`
+        uses), then :meth:`ThreadManager.teardown_for_channel` removes the private
+        thread/message subtree and the channel + MTI parent row is deleted under
+        ``system_context`` — all in one transaction, so a denied or failing row delete rolls
+        the teardown back. Purging first means the channel delete's collector never has to
+        ``SET_NULL`` the rows it just removed. A ``ProtectedError``/``RestrictedError`` from
+        a consumer addon that ``PROTECT``\\s a reverse FK to ``integrate.Integration``
+        propagates (the transaction rolls back); the authored preview mutation catches it
+        and surfaces a blocked preview rather than a raw 500. The deleted instance keeps its
+        pk so the Hasura delete shape can return it.
+        """
+
+        # Defense-in-depth: the channel's read/write/delete scopes are today all the same
+        # owner+admin arm, so a caller that resolved the channel to write it already passes
+        # `delete`; this preflight denies at resolve regardless. A divergent-zed preflight
+        # test (delete narrower than write) is only meaningful once the deferred thread/
+        # message `delete` arm (see teardown FOLLOW-UP) splits the scopes.
+        if not channel.has_access("delete"):
+            raise PermissionDenied(f"Denied: cannot delete {channel._meta.label}")
+        thread_model = apps.get_model("messaging", "Thread")
+        deleted_pk = channel.pk
+        with transaction.atomic():
+            thread_model.objects.teardown_for_channel(channel)
+            with system_context(reason="messaging.channel.delete"):
+                channel.delete()
+        channel.pk = deleted_pk
 
 
 def _bounded_message_metadata(value: dict[str, Any]) -> dict[str, Any]:
@@ -396,6 +460,37 @@ class FragmentManager(AngeeManager):
         return fragment
 
 
+def _channel_cascade_children(channel: Any) -> tuple[tuple[Any, models.Q], ...]:
+    """Return each ``(model, predicate)`` a channel purge deletes below its threads/messages.
+
+    A fixed, bounded inventory of the real top-level ``CASCADE`` children of a channel's
+    messages and threads — the delete removes exactly these (plus the threads and messages
+    counted through their :meth:`for_channel` owner). Each predicate reaches the channel
+    through the child's own delete root, so a plain ``.count()`` never materializes a row.
+    The ``OR`` predicates join two independent to-one FKs (a participant/notification FKs a
+    message *or* a thread; an edge FKs a source *or* destination message), so each matching
+    row still appears once — no fan-out to dedupe. ``ThreadAttachment`` is absent by
+    construction: an attachment makes a thread record chatter, never channel-scoped.
+    """
+
+    by_message = models.Q(message__channel=channel)
+    by_thread = models.Q(thread__channel=channel)
+    return (
+        (apps.get_model("messaging", "Part"), by_message),
+        (apps.get_model("messaging", "Reaction"), by_message),
+        (apps.get_model("messaging", "MessageStar"), by_message),
+        (apps.get_model("messaging", "TrackingValue"), by_message),
+        (
+            apps.get_model("messaging", "MessageEdge"),
+            models.Q(src__channel=channel) | models.Q(dst__channel=channel),
+        ),
+        (apps.get_model("messaging", "Participant"), by_message | by_thread),
+        (apps.get_model("messaging", "ThreadNotification"), by_message | by_thread),
+        (apps.get_model("messaging", "ThreadFollower"), by_thread),
+        (apps.get_model("messaging", "ThreadActivity"), by_thread),
+    )
+
+
 class ThreadQuerySet(AngeeQuerySet[Any]):
     """Chainable read scopes for message threads."""
 
@@ -409,6 +504,17 @@ class ThreadQuerySet(AngeeQuerySet[Any]):
         """
 
         return cast(ThreadQuerySet, self.filter(attachments__isnull=True))
+
+    def for_channel(self, channel: Any) -> ThreadQuerySet:
+        """Return the threads that belong to ``channel`` — the purge-scope predicate.
+
+        A channel's threads FK the shared ``integrate.Integration`` parent through the
+        channel's Integration pk, so ``filter(channel=channel)`` resolves against that
+        shared FK. The single owner of the thread channel-scope predicate: the teardown
+        delete and the delete-preview count both read it, so they cannot drift.
+        """
+
+        return cast(ThreadQuerySet, self.filter(channel=channel))
 
 
 class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore[misc]
@@ -569,6 +675,43 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
             if existing is None:
                 raise
             return existing, False
+
+    def teardown_for_channel(self, channel: Any) -> None:
+        """Purge every thread and message that belongs to ``channel``.
+
+        Deleting a channel is a purge, not an orphan: its threads and messages FK the
+        shared ``integrate.Integration`` parent with ``SET_NULL`` (so a message can
+        outlive a merged thread, and a bulk integration teardown never cascades into
+        unrelated messages), which means deleting the channel row alone would leave 13k+
+        rows behind pointing at nothing. This deletes them explicitly instead — messages
+        first (their ``SET_NULL`` thread FK would otherwise churn as each thread goes),
+        then threads — so their ``CASCADE`` subtrees (parts, reactions, participants,
+        followers, activities, notifications, attachments) go with them. Only *this*
+        channel's ``(channel, external_id)`` message rows are touched, so the same
+        logical message reached through another channel — a separate row in that
+        channel — survives, and a body ``Fragment`` shared with it is spared (parts FK it
+        with ``SET_NULL``). Runs under ``system_context`` like the other messaging
+        teardown paths; ``channel`` is a Channel (an MTI child of Integration whose pk is
+        the Integration pk), so :meth:`MessageQuerySet.for_channel` /
+        :meth:`ThreadQuerySet.for_channel` resolve against the shared FK. Both deletes run
+        under :func:`~angee.graphql.publishing.mute_changes`: each Message/Thread declares
+        ``changes()``, so without muting the ``post_delete`` publisher would fire once per
+        row — an ``exists()`` thread probe plus a buffered ``group_send`` for every purged
+        row — turning a 90k-message purge into ~180k queries and 90k broadcasts. The single
+        Channel-delete event the console's channel list needs is emitted by the later
+        ``channel.delete()``, which runs outside this muted teardown.
+        """
+
+        if channel.pk is None:
+            return
+        message_model = apps.get_model("messaging", "Message")
+        # FOLLOW-UP: give messaging/thread + messaging/message a channel/integration-derived
+        # REBAC `delete` arm (mirror integrate/vcs_bridge) so this elevated cascade is
+        # authorized by schema, not the sync co-ownership invariant. Non-exploitable today
+        # (the teardown runs under system_context behind the channel `delete` preflight).
+        with system_context(reason="messaging.channel.teardown"), mute_changes(), transaction.atomic():
+            message_model.objects.for_channel(channel).delete()
+            self.for_channel(channel).delete()
 
 
 class ThreadAttachmentManager(AngeeManager):
@@ -1675,6 +1818,17 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         """Return messages belonging to one thread."""
 
         return cast(MessageQuerySet, self.filter(thread=thread))
+
+    def for_channel(self, channel: Any) -> MessageQuerySet:
+        """Return the messages that belong to ``channel`` — the purge-scope predicate.
+
+        Only *this* channel's ``(channel, external_id)`` rows: the same logical message
+        reached through another channel is a separate row there and survives. The single
+        owner of the message channel-scope predicate, read by both the teardown delete and
+        the delete-preview count so they cannot drift.
+        """
+
+        return cast(MessageQuerySet, self.filter(channel=channel))
 
     def inbox(self) -> MessageQuerySet:
         """Return channel/inbox messages — those not attached to a record thread.

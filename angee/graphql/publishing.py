@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+import threading
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from asgiref.sync import async_to_sync
@@ -29,6 +31,33 @@ propagated to the save/delete caller or allowed to starve later receivers.
 """
 
 logger = logging.getLogger(__name__)
+
+_mute_state = threading.local()
+
+
+@contextmanager
+def mute_changes() -> Iterator[None]:
+    """Suppress per-row change publishing for the duration of the block.
+
+    A bulk teardown that deletes thousands of rows fires one ``post_delete``
+    publisher per row; each would lazy-load the row's thread and run an ``exists()``
+    probe inside ``broadcasts_changes()`` before buffering an ``on_commit``
+    ``group_send``. While a whole scope is being purged those per-row events are
+    noise (and their N+1 defeats a count-only preview's scale win), so
+    :func:`publish_change` returns immediately when muted — skipping both the probe
+    and the broadcast. Thread-local and reentrant, and the prior depth is restored in
+    ``finally`` so a nested or failing block never leaks the muted state. This is not
+    :func:`disconnect_publishers`: it does not touch the shared signal registry, so it
+    is safe under concurrent requests. A coarse-grained change the caller still wants
+    observed (the purged root's own row) must run *outside* the block.
+    """
+
+    depth = getattr(_mute_state, "depth", 0)
+    _mute_state.depth = depth + 1
+    try:
+        yield
+    finally:
+        _mute_state.depth = depth
 
 
 def change_group(model: type[models.Model]) -> str:
@@ -138,6 +167,11 @@ def publish_change(
 ) -> None:
     """Build and send one observable change payload after commit."""
 
+    # A bulk purge mutes publishing for its whole teardown (see mute_changes): return
+    # before the broadcasts_changes() probe so neither the per-row thread lazy-load /
+    # exists() nor the group_send runs while thousands of rows are being deleted.
+    if getattr(_mute_state, "depth", 0):
+        return
     # The row owns whether its changes reach the generic subscription surface; a
     # record-chatter row that is isolated to ``record_thread`` drops out here, so
     # its create/update/delete never broadcasts to a non-record-reader — the

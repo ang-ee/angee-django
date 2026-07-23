@@ -16,6 +16,8 @@ import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
+from django.db import transaction
+from django.db.models.deletion import ProtectedError, RestrictedError
 from django.views.decorators.debug import sensitive_variables
 from rebac import PermissionDenied
 from strawberry import auto
@@ -23,9 +25,11 @@ from strawberry import auto
 from angee.base.models import instance_from_public_id
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
-from angee.graphql.ids import PublicID
+from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
+from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
+from angee.graphql.writes import write_queryset
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, request_from_info
 from angee.iam.schema import UserType
 from angee.integrate.live import PairingProjection, PairingState
@@ -143,6 +147,50 @@ class MessagingPairingMutation:
         with action_target(Channel, id, reason="messaging.graphql.disconnect_channel") as channel:
             connect.disconnect_channel(channel)
         return ActionResult(ok=True, message="Disconnected channel.")
+
+
+@strawberry.type
+class MessagingChannelMutation:
+    """Owner/admin console mutation for deleting a connected channel."""
+
+    @strawberry.mutation(name="delete_channel")
+    def delete_channel(self, id: PublicID, confirm: bool = False) -> DeletePreview:
+        """Preview, then optionally purge, one channel and everything it ingested.
+
+        Deleting a channel is a purge: its threads and messages FK the shared
+        ``integrate.Integration`` parent with ``SET_NULL``, so removing the channel row
+        alone would orphan them. The preview forecasts the channel + its Integration row
+        + the channel's thread/message totals **and their CASCADE children** as
+        **deleted** — the single inventory :meth:`ChannelManager.inventory` counts with
+        ``.count()``, never materialized, so it stays fast on a 90k-message channel — and
+        ``confirm`` runs that same scope through :meth:`ChannelManager.purge`
+        (:meth:`ThreadManager.teardown_for_channel` first, then the channel + Integration
+        row). Gated by the channel's own ``delete`` permission (its integration owner or a
+        platform admin): a caller who cannot write the channel never resolves it, and
+        :meth:`ChannelManager.purge` re-checks ``delete`` before any destructive work. A
+        ``PROTECT``/``RESTRICT`` blocker on the confirm delete is surfaced as a blocked
+        preview rather than a raw error.
+        """
+
+        with transaction.atomic():
+            channel = require_instance_for_id(Channel, str(id), queryset=write_queryset(Channel))
+            preview = DeletePreview.from_counts(channel, Channel.objects.inventory(channel))
+            if confirm:
+                try:
+                    Channel.objects.purge(channel)
+                except (ProtectedError, RestrictedError) as error:
+                    preview = DeletePreview.blocked_from_error(channel, error)
+                else:
+                    preview.deleted_instance = channel
+        return preview
+
+
+attach_delete_preview_metadata(
+    MessagingChannelMutation,
+    model=Channel,
+    node=ChannelType,
+    field="delete_channel",
+)
 
 
 @strawberry_django.type(Fragment)
@@ -1488,6 +1536,26 @@ class _InboxWriteBackend(AngeeHasuraWriteBackend):
         return super().write_target_queryset().inbox()
 
 
+class _ChannelWriteBackend(AngeeHasuraWriteBackend):
+    """Make the generic ``delete_channels_by_pk`` a purge, not an orphan.
+
+    ``delete=True`` on the channel resource is what lights the console's delete button
+    (the generic views gate on the presence of the delete root). Its default backend
+    would ``SET_NULL`` the channel's threads/messages — the shared-Integration-parent
+    orphan this whole feature exists to prevent — so the auto path routes through the
+    same :meth:`ChannelManager.purge` as the authored ``delete_channel`` preview mutation
+    the console actually drives; both are thin dispatchers to that one owner.
+    """
+
+    def delete(self, info: strawberry.Info, pk: str) -> Any:
+        """Purge, then delete, one public-id-addressed channel; return the deleted row."""
+
+        del info
+        channel = require_instance_for_id(Channel, str(pk), queryset=self.write_target_queryset())
+        Channel.objects.purge(channel)
+        return channel
+
+
 _CHANNEL_RESOURCE = hasura_model_resource(
     ChannelType,
     model=Channel,
@@ -1511,7 +1579,10 @@ _CHANNEL_RESOURCE = hasura_model_resource(
     # the row is runtime truth a session writes. Blank falls back to the
     # vendor-derived `Integration.display_label`, so clearing it is a real intent.
     updatable=["display_name"],
-    delete=False,
+    # Deleting a channel purges everything it ingested (see `delete_channel` /
+    # `_ChannelWriteBackend`); `delete=True` lights the console's delete button.
+    delete=True,
+    write_backend=_ChannelWriteBackend(Channel),
 )
 _MESSAGE_RESOURCE = hasura_model_resource(
     MessageType,
@@ -1623,6 +1694,7 @@ _MESSAGING_SCHEMA_BUCKET = {
     ],
     "mutation": [
         MessagingPairingMutation,
+        MessagingChannelMutation,
         MessagingMutation,
         _CHANNEL_RESOURCE.mutation,
         _MESSAGE_RESOURCE.mutation,
