@@ -324,6 +324,25 @@ describe("PairingDialog", () => {
     expect(screen.getByText(/Starting the pairing session/)).toBeTruthy();
   });
 
+  test("omits an empty scan instruction and renders a vendor next step", () => {
+    mocks.pairing = {
+      ...mocks.pairing,
+      state: "AWAITING_SCAN",
+      qr: "data:image/png;base64,qr",
+    };
+    const { container } = render(
+      <PairingDialog
+        channelId="chn_1"
+        instruction=""
+        nextStep={<a href="https://example.test/next">Vendor next step</a>}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(container.querySelector("p")).toBeNull();
+    expect(screen.getByRole("link", { name: "Vendor next step" })).toBeTruthy();
+  });
+
   test("renders the authored read error instead of an eternal starting state", () => {
     mocks.queryError = new Error("Pairing state could not be loaded.");
 

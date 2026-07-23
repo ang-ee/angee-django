@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 SECRET_KEY = "angee-tests"
@@ -41,6 +40,7 @@ INSTALLED_APPS = [
     "angee.messaging_integrate_signal",
     "angee.messaging_integrate_matrix",
     "angee.messaging_integrate_slack",
+    "angee.messaging_integrate_discord",
     "angee.spaces",
     "angee.nexus",
     "angee.posts",
@@ -66,7 +66,12 @@ INSTALLED_APPS = [
     "tests.mtidemo",
     "tests.hierdemo",
 ]
-_TEST_DB_FILE = str(Path(tempfile.gettempdir()) / "angee_pytest_db.sqlite3")
+# Checkout-local (NOT a global tempdir) so parallel git worktrees / concurrent test
+# runs on the same machine never share one SQLite file and corrupt each other with
+# "disk I/O error". `.test-db/` is purpose-named, gitignored, and per-checkout.
+_TEST_DB_DIR = Path(__file__).resolve().parent.parent / ".test-db"
+_TEST_DB_DIR.mkdir(parents=True, exist_ok=True)
+_TEST_DB_FILE = str(_TEST_DB_DIR / "angee_pytest_db.sqlite3")
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
@@ -160,6 +165,7 @@ ANGEE_DIRECTORY_BACKEND_CLASSES = {
 }
 ANGEE_CHANNEL_BACKEND_CLASSES = {
     "manual": "angee.messaging.backends.ManualChannelBackend",
+    "discord": "angee.messaging_integrate_discord.backend.DiscordChannelBackend",
     "imap": "angee.messaging_integrate_imap.backend.ImapChannelBackend",
     "signal": "angee.messaging_integrate_signal.backend.SignalChannelBackend",
     "matrix": "angee.messaging_integrate_matrix.backend.MatrixChannelBackend",

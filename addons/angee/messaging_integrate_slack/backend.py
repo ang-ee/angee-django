@@ -34,12 +34,9 @@ from datetime import UTC, datetime, timedelta
 from time import monotonic, sleep
 from typing import Any, ClassVar, TypeVar
 
-import httpx
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
-from angee.integrate.http import PinnedTransport
-from angee.integrate.net import parse_http_url
 from angee.messaging.backends import ChannelBackend, MediaItem, ParsedMessage
 from angee.messaging_integrate_slack.identity import parsed_message, response_data
 
@@ -53,7 +50,6 @@ _DEFAULT_MAX_MEDIA_BYTES = 50_000_000
 _DEFAULT_MAX_BATCH_BYTES = 64_000_000
 _MAX_RATE_LIMIT_RETRIES = 5
 _MAX_RATE_LIMIT_SLEEP_SECONDS = 60.0
-_DOWNLOAD_CHUNK_BYTES = 64 * 1024
 
 
 class SlackRateLimitError(TimeoutError):
@@ -470,31 +466,14 @@ class SlackChannelBackend(ChannelBackend):
         if not url or limit <= 0 or declared_size > limit:
             return None
         try:
-            parse_http_url(url)
             timeout = max(1, int(self._config().get("media_timeout_seconds") or 10))
-            with httpx.Client(transport=PinnedTransport(), timeout=timeout) as client:
-                with client.stream(
-                    "GET",
-                    url,
-                    headers={"Authorization": f"Bearer {self._token()}"},
-                    follow_redirects=True,
-                ) as response:
-                    if not response.is_success:
-                        return None
-                    try:
-                        content_length = int(response.headers.get("content-length") or 0)
-                    except ValueError:
-                        content_length = 0
-                    if content_length > limit:
-                        return None
-                    chunks: list[bytes] = []
-                    size = 0
-                    for chunk in response.iter_bytes(chunk_size=min(_DOWNLOAD_CHUNK_BYTES, limit + 1)):
-                        size += len(chunk)
-                        if size > limit:
-                            return None
-                        chunks.append(chunk)
-                    return b"".join(chunks)
+            return self.http.download_capped(
+                url,
+                cap=limit,
+                headers={"Authorization": f"Bearer {self._token()}"},
+                follow_redirects=True,
+                timeout=timeout,
+            )
         except Exception:  # noqa: BLE001 — a failed attachment stays visible as a marker.
             return None
 

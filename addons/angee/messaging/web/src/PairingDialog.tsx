@@ -55,7 +55,7 @@ const PAIRING_BODY: Record<
   AWAITING_SCAN: (pairing, t, instruction) =>
     pairing.qr ? (
       <>
-        <p>{instruction}</p>
+        {instruction ? <p>{instruction}</p> : null}
         <img
           src={pairing.qr}
           alt={t("channel.pairing.qrAlt")}
@@ -118,7 +118,7 @@ export function ChannelPairingAction({
   /** Messaging-namespace key for the action label. */
   labelKey: string;
   /** Messaging-namespace key contributed by the channel backend addon. */
-  instructionKey: string;
+  instructionKey?: string;
   resumeOnOpen?: boolean;
   when: (context: LoadedRecordChromeContext) => boolean;
 }): React.ReactElement | null {
@@ -154,7 +154,7 @@ export function ChannelPairingAction({
       ) : null}
       <PairingDialog
         channelId={dialogId}
-        instruction={t(instructionKey)}
+        instruction={instructionKey ? t(instructionKey) : ""}
         onClose={() => setDialogId(null)}
       />
     </>
@@ -178,10 +178,12 @@ export function ChannelPairingAction({
 export function PairingDialog({
   channelId,
   instruction,
+  nextStep,
   onClose,
 }: {
   channelId: string | null;
-  instruction: string;
+  instruction?: string;
+  nextStep?: React.ReactNode;
   onClose: () => void;
 }): React.ReactElement | null {
   const t = useMessagingT();
@@ -274,10 +276,11 @@ export function PairingDialog({
                 (PAIRING_BODY[pairing.state] ?? PAIRING_BODY.STARTING)(
                   pairing,
                   t,
-                  instruction,
+                  instruction ?? "",
                   passwordPrompt,
                 )
               )}
+              {nextStep}
             </DialogBody>
             <DialogFooter>
               {pairing.state === "AWAITING_PASSWORD" || submitState.fetching ? (

@@ -5,24 +5,37 @@ import * as React from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const actionMocks = vi.hoisted(() => ({
-  authoredMutation: vi.fn(async () => ({ connect_signal_channel: { id: "chn_1" } })),
+  authoredMutation: vi.fn(async (_variables: unknown) => ({
+    connect_signal_channel: { id: "chn_1" },
+  })),
   mutationOptions: null as Record<string, unknown> | null,
   pairingDialogProps: null as Record<string, unknown> | null,
   danger: vi.fn(),
 }));
 
-vi.mock("@angee/refine", () => ({
-  useAuthoredMutation: (_document: unknown, options: Record<string, unknown>) => {
-    actionMocks.mutationOptions = options;
-    return [actionMocks.authoredMutation, { fetching: false, error: null }];
-  },
-}));
-
 vi.mock("@angee/messaging", () => ({
-  CHANNEL_MODEL: "messaging.Channel",
-  PairingDialog: (props: Record<string, unknown>) => {
+  usePairingConnect: (_document: unknown, resultField: string, instruction: string) => {
+    actionMocks.mutationOptions = {
+      invalidateModels: ["messaging.Channel"],
+    };
+    const [channelId, setChannelId] = React.useState<string | null>(null);
+    const connect = async (variables: unknown) => {
+      const data = await actionMocks.authoredMutation(variables);
+      const result = data[resultField as keyof typeof data];
+      if (result?.id) setChannelId(String(result.id));
+      return data;
+    };
+    const props = {
+      channelId,
+      instruction,
+      onClose: () => setChannelId(null),
+    };
     actionMocks.pairingDialogProps = props;
-    return props.channelId ? <div role="dialog">{props.instruction as string}</div> : null;
+    return {
+      connect,
+      connectState: { fetching: false, error: null },
+      pairingDialog: channelId ? <div role="dialog">{instruction}</div> : null,
+    };
   },
 }));
 

@@ -7,8 +7,7 @@ import json
 import logging
 import secrets
 import threading
-import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -29,19 +28,21 @@ from mautrix.types import (
 )
 from mautrix.util.async_db import Database
 
-from angee.integrate.live import STOP_JOIN_SECONDS
 from angee.integrate.session import PASSWORD_SKIPPED
-from angee.messaging.session import INGEST_CHUNK, LiveChannelSession
+from angee.messaging._wire import mapping, sequence
+from angee.messaging.session import (
+    API_TIMEOUT_SECONDS,
+    INGEST_CHUNK,
+    INITIAL_CONVERSATION_LIMIT,
+    INITIAL_HISTORY_LIMIT,
+    INITIAL_HISTORY_TIMEOUT_SECONDS,
+    AsyncioLiveSession,
+)
 from angee.messaging_integrate_matrix.connect import matrix_login
 from angee.messaging_integrate_matrix.identity import MatrixMediaFact, parsed_message
 
 logger = logging.getLogger(__name__)
 
-API_TIMEOUT_SECONDS = 30.0
-DOWNLOAD_TIMEOUT_SECONDS = 60.0
-INITIAL_HISTORY_TIMEOUT_SECONDS = 60.0
-INITIAL_HISTORY_LIMIT = 100
-INITIAL_ROOM_LIMIT = 20
 SYNC_TIMEOUT_MILLISECONDS = 30_000
 
 _SESSION_FILE = "session.json"
@@ -54,7 +55,7 @@ _RECOVERY_PROMPT = (
 )
 
 
-class MatrixSession(LiveChannelSession):
+class MatrixSession(AsyncioLiveSession):
     """One Matrix account whose asyncio loop belongs to its connection thread."""
 
     session_file_name = _SESSION_FILE
@@ -67,8 +68,6 @@ class MatrixSession(LiveChannelSession):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._main_task: asyncio.Task[Any] | None = None
         self._session_path: Path | None = None
         self._session_facts: dict[str, Any] = {}
         self._login_material: tuple[str, str] | None = None
@@ -100,37 +99,6 @@ class MatrixSession(LiveChannelSession):
             token=str(self._session_facts.get("access_token") or "") or None,
             state_store=state_store,
         )
-
-    def _connect(self) -> None:
-        """Own the mautrix asyncio loop and all SDK calls on this vendor thread."""
-
-        loop = asyncio.new_event_loop()
-        self._loop = loop
-        asyncio.set_event_loop(loop)
-        try:
-            self._main_task = loop.create_task(self._run_client())
-            loop.run_until_complete(self._main_task)
-        except asyncio.CancelledError:
-            pass
-        except Exception as error:
-            if _matrix_errcode(error) in {"M_MISSING_TOKEN", "M_UNKNOWN_TOKEN"}:
-                self.events.put(("logged_out", None))
-            else:
-                self.outcome_error = error
-                logger.exception("Matrix connection for channel %s crashed.", self.bridge.sqid)
-        finally:
-            try:
-                loop.run_until_complete(self._close_client())
-            except Exception:
-                logger.info("Closing Matrix channel %s did not finish cleanly.", self.bridge.sqid)
-            pending = asyncio.all_tasks(loop)
-            for task in pending:
-                task.cancel()
-            if pending:
-                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            asyncio.set_event_loop(None)
-            loop.close()
-            self.events.put(("disconnected", None))
 
     async def _run_client(self) -> None:
         """Authenticate, initialize E2EE, recover keys, then sync.
@@ -234,8 +202,7 @@ class MatrixSession(LiveChannelSession):
 
         if self._session_facts.get("recovery") in {"verified", "skipped"}:
             return True
-        recovery_key = await asyncio.to_thread(
-            self.request_password,
+        recovery_key = await self.request_password_async(
             _RECOVERY_PROMPT,
             material_key="recovery_key",
             optional=True,
@@ -316,9 +283,9 @@ class MatrixSession(LiveChannelSession):
                 for room_id, room in rooms:
                     if remaining <= 0 or self._vendor_stopping():
                         break
-                    timeline = _mapping(room.get("timeline")) or {}
+                    timeline = mapping(room.get("timeline")) or {}
                     from_token = str(timeline.get("prev_batch") or "") or None
-                    limit = min(INITIAL_ROOM_LIMIT, remaining)
+                    limit = min(INITIAL_CONVERSATION_LIMIT, remaining)
                     page = await self._bounded(
                         self.client.get_messages(
                             room_id,
@@ -395,14 +362,14 @@ class MatrixSession(LiveChannelSession):
 
         for room_id, room in _joined_rooms(sync):
             self._joined_room_ids.add(room_id)
-            state = _mapping(room.get("state")) or {}
-            timeline = _mapping(room.get("timeline")) or {}
-            events = (*_sequence(state.get("events")), *_sequence(timeline.get("events")))
+            state = mapping(room.get("state")) or {}
+            timeline = mapping(room.get("timeline")) or {}
+            events = (*sequence(state.get("events")), *sequence(timeline.get("events")))
             for event in events:
                 if not isinstance(event, Mapping):
                     continue
                 event_type = str(event.get("type") or "")
-                content = _mapping(event.get("content")) or {}
+                content = mapping(event.get("content")) or {}
                 if event_type == "m.room.name" and (name := str(content.get("name") or "").strip()):
                     self._room_names[room_id] = name
                 elif event_type == "m.room.canonical_alias" and room_id not in self._room_names:
@@ -418,21 +385,15 @@ class MatrixSession(LiveChannelSession):
     def _handle(self, kind: str, payload: Any) -> bool:
         """Persist the one initial-history gate; delegate message ingest."""
 
-        if kind == "history_seeded":
-            self.bridge.merge_subscription_state(history_seeded=True)
-            return self._still_wanted()
         if kind == "sync_checkpoint":
             next_batch, persisted, done = payload
-            future: Any = None
             try:
-                if self._loop is None or self._loop.is_closed() or not self._loop.is_running():
-                    raise RuntimeError("The Matrix event loop is unavailable for a sync checkpoint.")
-                future = asyncio.run_coroutine_threadsafe(self._put_next_batch(next_batch), self._loop)
-                future.result(timeout=API_TIMEOUT_SECONDS)
+                self._run_coro_threadsafe(
+                    self._put_next_batch(next_batch),
+                    API_TIMEOUT_SECONDS,
+                )
                 persisted.set()
             except Exception as error:
-                if future is not None:
-                    future.cancel()
                 self.outcome_error = error
                 logger.exception("Matrix sync checkpoint failed for channel %s.", self.bridge.sqid)
                 return False
@@ -441,33 +402,19 @@ class MatrixSession(LiveChannelSession):
             return self._still_wanted()
         return super()._handle(kind, payload)
 
-    def _download(self, _payload: Any, fact: MatrixMediaFact) -> bytes | None:
+    async def _download_coro(self, _payload: Any, fact: MatrixMediaFact) -> bytes | None:
         """Download authenticated Matrix media and decrypt encrypted attachments."""
 
-        loop = self._loop
-        if loop is None or loop.is_closed() or not loop.is_running():
-            return None
-        future = asyncio.run_coroutine_threadsafe(self._download_media(fact.url), loop)
-        try:
-            content = future.result(timeout=DOWNLOAD_TIMEOUT_SECONDS)
-            raw = bytes(content)
-            if fact.encrypted:
-                raw = self.decrypt_attachment(raw, fact.key, fact.hash, fact.iv)
-            return raw
-        except Exception:
-            future.cancel()
-            logger.info("Matrix media download failed for channel %s.", self.bridge.sqid)
-            return None
+        content = await self._download_media(fact.url)
+        raw = bytes(content)
+        if fact.encrypted:
+            raw = self.decrypt_attachment(raw, fact.key, fact.hash, fact.iv)
+        return raw
 
     async def _download_media(self, mxc_url: str) -> bytes:
         """Let mautrix negotiate authenticated or legacy Matrix media download."""
 
         return bytes(await self.client.download_media(mxc_url))
-
-    async def _bounded(self, awaitable: Any) -> Any:
-        """Await one Matrix API operation with a finite bound."""
-
-        return await asyncio.wait_for(awaitable, timeout=API_TIMEOUT_SECONDS)
 
     async def _get_next_batch(self) -> str | None:
         """Read the native crypto-store sync token."""
@@ -505,16 +452,32 @@ class MatrixSession(LiveChannelSession):
             await self._crypto_db.stop()
             self._crypto_db = None
 
-    def _shutdown(self, connection: threading.Thread) -> bool:
-        """Cancel the Matrix loop and join its thread within one shared deadline."""
+    def _is_logged_out(self, error: Exception) -> bool:
+        """Classify Matrix token errors that prove retained auth is unusable."""
 
-        deadline = time.monotonic() + STOP_JOIN_SECONDS
-        loop = self._loop
+        return _matrix_errcode(error) in {"M_MISSING_TOKEN", "M_UNKNOWN_TOKEN"}
+
+    def _teardown_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Close Matrix crypto/network stores and cancel remaining loop tasks."""
+
+        try:
+            loop.run_until_complete(self._close_client())
+        except Exception:
+            logger.info("Closing Matrix channel %s did not finish cleanly.", self.bridge.sqid)
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        asyncio.set_event_loop(None)
+
+    def _stop_main(self, loop: asyncio.AbstractEventLoop, *, deadline: float) -> None:
+        """Cancel Matrix sync without blocking beyond its fire-and-forget handoff."""
+
+        del deadline
         task = self._main_task
-        if loop is not None and not loop.is_closed() and loop.is_running() and task is not None:
+        if task is not None:
             loop.call_soon_threadsafe(task.cancel)
-        connection.join(timeout=max(0.0, deadline - time.monotonic()))
-        return not connection.is_alive()
 
     def _persist_session_facts(self) -> None:
         """Atomically persist mautrix login and sync facts beside its stores."""
@@ -527,8 +490,8 @@ class MatrixSession(LiveChannelSession):
 def _joined_rooms(sync: Mapping[str, Any]) -> tuple[tuple[str, Mapping[str, Any]], ...]:
     """Return joined room mappings in deterministic room-id order."""
 
-    rooms = _mapping(sync.get("rooms")) or {}
-    joined = _mapping(rooms.get("join")) or {}
+    rooms = mapping(sync.get("rooms")) or {}
+    joined = mapping(rooms.get("join")) or {}
     return tuple(
         (str(room_id), room)
         for room_id, room in sorted(joined.items(), key=lambda item: str(item[0]))
@@ -603,11 +566,3 @@ def _matrix_errcode(error: Exception) -> str:
 
     value = getattr(error, "errcode", "")
     return str(getattr(value, "value", value) or "").upper()
-
-
-def _mapping(value: object) -> Mapping[str, Any] | None:
-    return value if isinstance(value, Mapping) else None
-
-
-def _sequence(value: object) -> Sequence[Any]:
-    return value if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray) else ()

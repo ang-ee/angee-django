@@ -391,8 +391,8 @@ def test_download_file_stops_streaming_after_the_byte_cap(monkeypatch: pytest.Mo
         return httpx.Response(200, stream=CountingStream())
 
     monkeypatch.setattr(
-        "angee.messaging_integrate_slack.backend.PinnedTransport",
-        lambda: httpx.MockTransport(handler),
+        "angee.integrate.http.PinnedTransport",
+        lambda *, allow_private: httpx.MockTransport(handler),
     )
     backend = SlackChannelBackend(_BridgeStub(config={"max_media_bytes": 5}))
 

@@ -9,12 +9,10 @@ from django.db import transaction
 from rebac import system_context
 
 from angee.integrate.credentials import CredentialKind
-from angee.integrate.models import IntegrationLifecycle
 from angee.messaging.connect import resume_channel_pairing
 from angee.messaging_integrate_telegram.backend import TelegramChannelBackend
 
 Channel = apps.get_model("messaging", "Channel")
-Vendor = apps.get_model("integrate", "Vendor")
 
 _TELEGRAM_SLUG = TelegramChannelBackend.key
 
@@ -42,13 +40,10 @@ def create_telegram_channel(
         raise ValueError("A Telegram channel requires an app-keys credential.")
     telegram_app_keys(credential)
     with system_context(reason="messaging_integrate_telegram.create"), transaction.atomic():
-        channel = Channel.objects.create(
-            vendor=Vendor.objects.seeded(_TELEGRAM_SLUG),
-            owner=user,
+        channel = Channel.objects.create_disconnected(
+            user,
+            name=display_name,
             backend_class=_TELEGRAM_SLUG,
-            display_name=display_name,
-            lifecycle=IntegrationLifecycle.DISCONNECTED,
-            created_by_id=user.pk,
         )
         channel.connect(credential=credential)
     resume_channel_pairing(channel)

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -21,16 +20,19 @@ from telethon.errors import (
     SessionRevokedError,
 )
 
-from angee.integrate.live import STOP_JOIN_SECONDS
 from angee.messaging.backends import ParsedMessage
-from angee.messaging.session import INGEST_CHUNK, LiveChannelSession
+from angee.messaging.session import (
+    API_TIMEOUT_SECONDS,
+    INGEST_CHUNK,
+    INITIAL_CONVERSATION_LIMIT,
+    INITIAL_HISTORY_LIMIT,
+    INITIAL_HISTORY_TIMEOUT_SECONDS,
+    AsyncioLiveSession,
+)
 from angee.messaging_integrate_telegram.connect import telegram_app_keys
 from angee.messaging_integrate_telegram.identity import parsed_message
 
 logger = logging.getLogger(__name__)
-
-API_TIMEOUT_SECONDS = 30.0
-"""Maximum wait for one bounded Telethon API operation."""
 
 QR_WAIT_SECONDS = 10.0
 """Maximum event-loop wait slice within one QR token's real lifetime."""
@@ -41,18 +43,6 @@ QR_ROTATION_LIMIT = 6
 CONNECTION_WAKE_SECONDS = 1.0
 """Cooperative-stop polling interval while a connected client is idle."""
 
-DOWNLOAD_TIMEOUT_SECONDS = 60.0
-"""Maximum task-thread wait for one vendor-loop media download."""
-
-INITIAL_HISTORY_TIMEOUT_SECONDS = 60.0
-"""Wall-clock bound for the first bounded history seed."""
-
-INITIAL_HISTORY_LIMIT = 100
-"""Global maximum number of messages in the first history seed."""
-
-INITIAL_DIALOG_LIMIT = 20
-"""Maximum recent dialogs considered by the first history seed."""
-
 _LOGGED_OUT_ERRORS = (
     AuthKeyInvalidError,
     AuthKeyPermEmptyError,
@@ -62,14 +52,12 @@ _LOGGED_OUT_ERRORS = (
 """Telethon authorization failures proving a retained device key is unusable."""
 
 
-class TelegramSession(LiveChannelSession):
+class TelegramSession(AsyncioLiveSession):
     """One Telegram connection whose vendor loop stays on its connection thread."""
 
     session_file_name = "session.session"
     client_class: type[Any] = TelegramClient
     new_message_event: type[Any] = events.NewMessage
-    _loop: asyncio.AbstractEventLoop | None = None
-    """Event loop written and owned only by the vendor connection thread."""
 
     def _build_client(self, store: Path) -> Any:
         """Build Telethon from freshly revealed per-channel application keys."""
@@ -85,29 +73,6 @@ class TelegramSession(LiveChannelSession):
         )
         client.add_event_handler(self._on_new_message, self.new_message_event())
         return client
-
-    def _connect(self) -> None:
-        """Own and run Telethon's asyncio loop on the vendor connection thread."""
-
-        loop = asyncio.new_event_loop()
-        self._loop = loop
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(self._run_client())
-        except _LOGGED_OUT_ERRORS:
-            self.events.put(("logged_out", None))
-        except Exception as error:
-            self.outcome_error = error
-            logger.exception("Telegram connection for channel %s crashed.", self.bridge.sqid)
-        finally:
-            try:
-                if not loop.is_closed():
-                    loop.run_until_complete(self._disconnect_client())
-            except Exception:
-                logger.info("Telegram disconnect for channel %s failed.", self.bridge.sqid)
-            finally:
-                loop.close()
-                self.events.put(("disconnected", None))
 
     async def _run_client(self) -> None:
         """Connect, pair if needed, seed bounded history, then await disconnect."""
@@ -168,7 +133,7 @@ class TelegramSession(LiveChannelSession):
 
         message = "Enter your Telegram two-step verification password."
         while not self._vendor_stopping():
-            password = await asyncio.to_thread(self.request_password, message)
+            password = await self.request_password_async(message)
             if password is None:
                 return None
             try:
@@ -187,11 +152,11 @@ class TelegramSession(LiveChannelSession):
 
         batch: list[tuple[ParsedMessage, Any]] = []
         remaining = INITIAL_HISTORY_LIMIT
-        per_dialog = max(1, INITIAL_HISTORY_LIMIT // INITIAL_DIALOG_LIMIT)
+        per_dialog = max(1, INITIAL_HISTORY_LIMIT // INITIAL_CONVERSATION_LIMIT)
         completed = True
         try:
             async with asyncio.timeout(INITIAL_HISTORY_TIMEOUT_SECONDS):
-                dialogs = await self.client.get_dialogs(limit=INITIAL_DIALOG_LIMIT)
+                dialogs = await self.client.get_dialogs(limit=INITIAL_CONVERSATION_LIMIT)
                 for dialog in dialogs:
                     if remaining <= 0 or self._vendor_stopping():
                         break
@@ -232,11 +197,6 @@ class TelegramSession(LiveChannelSession):
             if disconnected in done:
                 await disconnected
                 return
-
-    async def _bounded(self, awaitable: Any) -> Any:
-        """Await one vendor operation with the shared finite API bound."""
-
-        return await asyncio.wait_for(awaitable, timeout=API_TIMEOUT_SECONDS)
 
     def _queue_account(self, user: Any) -> None:
         """Queue the stable id through generic pairing, then mutable label facts."""
@@ -314,34 +274,33 @@ class TelegramSession(LiveChannelSession):
             )
             self._report(self.pairing)
             return self._still_wanted()
-        if kind == "history_seeded":
-            self.bridge.merge_subscription_state(history_seeded=True)
-            return self._still_wanted()
         if kind == "pairing_timeout":
             self.pairing = self.pairing.STOPPED
             self._report(self.pairing)
             return False
         return super()._handle(kind, payload)
 
-    def _download(self, payload: Any, _fact: Any) -> bytes | None:
-        """Run Telethon's media coroutine on its owning loop with a finite wait."""
+    async def _download_coro(self, payload: Any, _fact: Any) -> bytes | None:
+        """Download Telethon media from inside the owning vendor loop."""
 
         if payload is None:
             return None
-        loop = self._loop
-        if loop is None or loop.is_closed() or not loop.is_running():
-            return None
-        future = asyncio.run_coroutine_threadsafe(
-            self.client.download_media(payload, file=bytes),
-            loop,
-        )
-        try:
-            content = future.result(timeout=DOWNLOAD_TIMEOUT_SECONDS)
-        except Exception:
-            future.cancel()
-            logger.info("Telegram media download failed for channel %s.", self.bridge.sqid)
-            return None
+        content = await self.client.download_media(payload, file=bytes)
         return bytes(content) if isinstance(content, bytes | bytearray) else None
+
+    def _is_logged_out(self, error: Exception) -> bool:
+        """Classify Telethon's retained-authorization failure types."""
+
+        return isinstance(error, _LOGGED_OUT_ERRORS)
+
+    def _teardown_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Disconnect Telethon before its owning event loop closes."""
+
+        try:
+            if not loop.is_closed():
+                loop.run_until_complete(self._disconnect_client())
+        except Exception:
+            logger.info("Telegram disconnect for channel %s failed.", self.bridge.sqid)
 
     async def _disconnect_client(self) -> None:
         """Disconnect Telethon from inside its owning event loop."""
@@ -352,22 +311,17 @@ class TelegramSession(LiveChannelSession):
         if inspect.isawaitable(result):
             await asyncio.wait_for(result, timeout=API_TIMEOUT_SECONDS)
 
-    def _shutdown(self, connection: threading.Thread) -> bool:
-        """Disconnect Telethon and join its loop thread within one shared bound."""
+    def _stop_main(self, loop: asyncio.AbstractEventLoop, *, deadline: float) -> None:
+        """Synchronously disconnect Telethon within the shared stop deadline."""
 
-        deadline = time.monotonic() + STOP_JOIN_SECONDS
-        loop = self._loop
-        if loop is not None and not loop.is_closed() and loop.is_running():
-            future = None
-            disconnect = self._disconnect_client()
-            try:
-                future = asyncio.run_coroutine_threadsafe(disconnect, loop)
-                future.result(timeout=max(0.0, deadline - time.monotonic()))
-            except Exception:
-                if future is not None:
-                    future.cancel()
-                else:
-                    disconnect.close()
-                logger.info("Stopping the Telegram client for channel %s failed.", self.bridge.sqid)
-        connection.join(timeout=max(0.0, deadline - time.monotonic()))
-        return not connection.is_alive()
+        future = None
+        disconnect = self._disconnect_client()
+        try:
+            future = asyncio.run_coroutine_threadsafe(disconnect, loop)
+            future.result(timeout=max(0.0, deadline - time.monotonic()))
+        except Exception:
+            if future is not None:
+                future.cancel()
+            else:
+                disconnect.close()
+            logger.info("Stopping the Telegram client for channel %s failed.", self.bridge.sqid)

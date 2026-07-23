@@ -395,6 +395,7 @@ class Handle(SqidMixin, AuditMixin, AngeeModel):
 
         EMAIL = "email", "Email"
         PHONE = "phone", "Phone"
+        DISCORD = "discord", "Discord"
         IMESSAGE = "imessage", "iMessage"
         MATRIX = "matrix", "Matrix"
         SIGNAL = "signal", "Signal"

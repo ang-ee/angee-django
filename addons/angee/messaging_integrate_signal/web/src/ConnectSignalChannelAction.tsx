@@ -1,5 +1,4 @@
-import { CHANNEL_MODEL, PairingDialog } from "@angee/messaging";
-import { useAuthoredMutation } from "@angee/refine";
+import { usePairingConnect } from "@angee/messaging";
 import { Button, Glyph, errorMessage, useToast } from "@angee/ui";
 import * as React from "react";
 
@@ -10,16 +9,15 @@ import { useMessagingSignalT } from "./i18n";
 export function ConnectSignalChannelAction(): React.ReactElement {
   const t = useMessagingSignalT();
   const toast = useToast();
-  const [pairingChannelId, setPairingChannelId] = React.useState<string | null>(null);
-  const [connect, connectState] = useAuthoredMutation(ConnectSignalChannel, {
-    invalidateModels: [CHANNEL_MODEL],
-  });
+  const { connect, connectState, pairingDialog } = usePairingConnect(
+    ConnectSignalChannel,
+    "connect_signal_channel",
+    t("channel.signal.scan"),
+  );
 
   const start = async (): Promise<void> => {
     try {
-      const data = await connect({});
-      const id = data?.connect_signal_channel?.id;
-      if (id) setPairingChannelId(String(id));
+      await connect({});
     } catch (cause) {
       toast.danger({ title: errorMessage(cause, t("channel.signal.error")) });
     }
@@ -38,11 +36,7 @@ export function ConnectSignalChannelAction(): React.ReactElement {
         <Glyph decorative name="plus" />
         {t("channel.signal.button")}
       </Button>
-      <PairingDialog
-        channelId={pairingChannelId}
-        instruction={t("channel.signal.scan")}
-        onClose={() => setPairingChannelId(null)}
-      />
+      {pairingDialog}
     </>
   );
 }

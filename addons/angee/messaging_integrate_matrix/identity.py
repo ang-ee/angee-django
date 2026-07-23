@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any
 
+from angee.messaging._wire import mapping, millis_to_utc, text
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedThread, body_part
 
 PLATFORM = "matrix"
@@ -47,35 +47,35 @@ def external_id(room_id: object, event_id: object) -> str:
 def handle_for_user(user_id: object, *, display_name: object = "") -> ParsedHandle | None:
     """Map one stable Matrix user id and mutable profile label."""
 
-    stable_id = _text(user_id)
+    stable_id = text(user_id)
     if not stable_id:
         return None
     return ParsedHandle(
         platform=PLATFORM,
         external_id=stable_id,
         value=stable_id,
-        display_name=_text(display_name),
+        display_name=text(display_name),
     )
 
 
 def media_fact(content: Mapping[str, Any]) -> MatrixMediaFact | None:
     """Return one plain or encrypted Matrix media reference."""
 
-    encrypted = _mapping(content.get("file"))
+    encrypted = mapping(content.get("file"))
     source = encrypted if encrypted is not None else content
-    url = _text(source.get("url"))
+    url = text(source.get("url"))
     if not url:
         return None
-    info = _mapping(content.get("info")) or {}
-    key_data = _mapping(source.get("key")) or {}
-    hashes = _mapping(source.get("hashes")) or {}
+    info = mapping(content.get("info")) or {}
+    key_data = mapping(source.get("key")) or {}
+    hashes = mapping(source.get("hashes")) or {}
     return MatrixMediaFact(
         url=url,
-        mime=_text(info.get("mimetype")).lower() or "application/octet-stream",
-        name=_text(content.get("filename") or content.get("body")),
-        key=_text(key_data.get("k")),
-        hash=_text(hashes.get("sha256")),
-        iv=_text(source.get("iv")),
+        mime=text(info.get("mimetype")).lower() or "application/octet-stream",
+        name=text(content.get("filename") or content.get("body")),
+        key=text(key_data.get("k")),
+        hash=text(hashes.get("sha256")),
+        iv=text(source.get("iv")),
     )
 
 
@@ -93,32 +93,32 @@ def parsed_message(
     only after mautrix decrypts them into their original room-message shape.
     """
 
-    if _text(event.get("type")) != "m.room.message" or "state_key" in event:
+    if text(event.get("type")) != "m.room.message" or "state_key" in event:
         return None
-    content = _mapping(event.get("content"))
+    content = mapping(event.get("content"))
     if content is None:
         return None
-    relation = _mapping(content.get("m.relates_to"))
-    if relation is not None and _text(relation.get("rel_type")) == "m.replace":
+    relation = mapping(content.get("m.relates_to"))
+    if relation is not None and text(relation.get("rel_type")) == "m.replace":
         return None
-    msgtype = _text(content.get("msgtype"))
+    msgtype = text(content.get("msgtype"))
     if msgtype not in _TEXT_MSGTYPES | _MEDIA_MSGTYPES:
         return None
 
-    resolved_room_id = _text(room_id or event.get("room_id"))
-    event_id = _text(event.get("event_id"))
-    sender_id = _text(event.get("sender"))
+    resolved_room_id = text(room_id or event.get("room_id"))
+    event_id = text(event.get("event_id"))
+    sender_id = text(event.get("sender"))
     if not resolved_room_id or not event_id or not sender_id:
         return None
 
     fact = media_fact(content) if msgtype in _MEDIA_MSGTYPES else None
-    text = _text(content.get("body")) if msgtype in _TEXT_MSGTYPES else ""
-    if not text and fact is None:
+    message_text = text(content.get("body")) if msgtype in _TEXT_MSGTYPES else ""
+    if not message_text and fact is None:
         return None
 
     reply_to = ""
-    in_reply_to = _mapping(relation.get("m.in_reply_to")) if relation is not None else None
-    if in_reply_to is not None and (reply_event_id := _text(in_reply_to.get("event_id"))):
+    in_reply_to = mapping(relation.get("m.in_reply_to")) if relation is not None else None
+    if in_reply_to is not None and (reply_event_id := text(in_reply_to.get("event_id"))):
         reply_to = external_id(resolved_room_id, reply_event_id)
 
     metadata: dict[str, Any] = {
@@ -130,38 +130,15 @@ def parsed_message(
     return ParsedMessage(
         external_id=external_id(resolved_room_id, event_id),
         platform=PLATFORM,
-        direction="outbound" if sender_id == _text(own_user_id) else "inbound",
+        direction="outbound" if sender_id == text(own_user_id) else "inbound",
         sender=handle_for_user(sender_id, display_name=event.get("sender_display_name")),
-        sent_at=_timestamp(event.get("origin_server_ts")),
+        sent_at=millis_to_utc(event.get("origin_server_ts")),
         in_reply_to=reply_to,
         thread=ParsedThread(
             external_id=resolved_room_id,
             modality="group",
-            title=_text(room_name) or resolved_room_id,
+            title=text(room_name) or resolved_room_id,
         ),
-        body=body_part(text),
+        body=body_part(message_text),
         metadata=metadata,
     )
-
-
-def _timestamp(value: object) -> datetime | None:
-    """Convert a Matrix millisecond epoch to an aware UTC instant."""
-
-    try:
-        milliseconds = int(str(value))
-    except (TypeError, ValueError):  # fmt: skip
-        return None
-    if milliseconds <= 0:
-        return None
-    try:
-        return datetime.fromtimestamp(milliseconds / 1000, tz=timezone.utc)
-    except (OSError, OverflowError, ValueError):  # fmt: skip
-        return None
-
-
-def _mapping(value: object) -> Mapping[str, Any] | None:
-    return value if isinstance(value, Mapping) else None
-
-
-def _text(value: object) -> str:
-    return str(value or "").strip()

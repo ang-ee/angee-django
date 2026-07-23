@@ -13,6 +13,7 @@ is used.
 from __future__ import annotations
 
 import socket
+from collections.abc import Iterator
 from typing import Any
 
 import httpcore
@@ -184,6 +185,71 @@ def test_response_without_status_raises_rather_than_defaulting_to_200() -> None:
     with pytest.raises(ValueError):
         _response_status(Bare())
     assert _response_status(WithStatus()) == 204
+
+
+def test_download_capped_stops_streaming_after_the_byte_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unknown-length response is closed after the cap without reading its tail."""
+
+    reads = 0
+
+    class CountingStream(httpx.SyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            nonlocal reads
+            for _index in range(20):
+                reads += 1
+                yield b"abcd"
+
+    def transport(*, allow_private: bool) -> httpx.MockTransport:
+        assert allow_private is False
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.headers["authorization"] == "Bearer token"
+            return httpx.Response(200, stream=CountingStream())
+
+        return httpx.MockTransport(handler)
+
+    monkeypatch.setattr(http_module, "PinnedTransport", transport)
+
+    assert (
+        HttpClient().download_capped(
+            URL,
+            cap=5,
+            headers={"Authorization": "Bearer token"},
+        )
+        is None
+    )
+    assert reads < 20
+
+
+def test_download_capped_rejects_declared_oversize_before_reading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Content-Length rejects an oversized response before its stream is consumed."""
+
+    reads = 0
+
+    class CountingStream(httpx.SyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            nonlocal reads
+            reads += 1
+            yield b"body"
+
+    def transport(*, allow_private: bool) -> httpx.MockTransport:
+        assert allow_private is False
+        return httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                headers={"Content-Length": "6"},
+                stream=CountingStream(),
+            )
+        )
+
+    monkeypatch.setattr(http_module, "PinnedTransport", transport)
+
+    assert HttpClient().download_capped(URL, cap=5) is None
+    assert reads == 0
 
 
 def test_redirect_to_an_unsafe_host_is_rejected_at_the_hop(monkeypatch: pytest.MonkeyPatch) -> None:

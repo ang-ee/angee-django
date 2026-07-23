@@ -1,4 +1,4 @@
-import { CHANNEL_MODEL, PairingDialog } from "@angee/messaging";
+import { usePairingConnect } from "@angee/messaging";
 import { useAuthoredMutation } from "@angee/refine";
 import {
   Button,
@@ -20,10 +20,11 @@ const APP_KEYS_ONLY = [
 export function ConnectTelegramChannelAction(): React.ReactElement {
   const t = useMessagingTelegramT();
   const [open, setOpen] = React.useState(false);
-  const [pairingChannelId, setPairingChannelId] = React.useState<string | null>(null);
-  const [connect] = useAuthoredMutation(ConnectTelegramChannel, {
-    invalidateModels: [CHANNEL_MODEL],
-  });
+  const { connect, pairingDialog } = usePairingConnect(
+    ConnectTelegramChannel,
+    "connect_telegram_channel",
+    t("channel.telegram.scan"),
+  );
   const [createAppKeys] = useAuthoredMutation(CreateTelegramAppKeys);
   const createFields = React.useMemo<readonly MutationDialogField[]>(
     () => [
@@ -108,19 +109,13 @@ export function ConnectTelegramChannelAction(): React.ReactElement {
         cancelLabel={t("channel.telegram.cancel")}
         errorFallback={t("channel.telegram.error")}
         onSubmit={async (values) => {
-          const data = await connect({
+          await connect({
             name: stringValue(values.name).trim(),
             credentialId: stringValue(values.credential),
           });
-          const id = data?.connect_telegram_channel?.id;
-          if (id) setPairingChannelId(String(id));
         }}
       />
-      <PairingDialog
-        channelId={pairingChannelId}
-        instruction={t("channel.telegram.scan")}
-        onClose={() => setPairingChannelId(null)}
-      />
+      {pairingDialog}
     </>
   );
 }

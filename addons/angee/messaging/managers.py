@@ -42,6 +42,7 @@ from rebac import current_actor, system_context
 from angee.base.actors import actor_user_id
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
+from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.messaging.tracking import TrackingChange
 from angee.parties.mixins import LinkSource
 
@@ -103,6 +104,31 @@ _SEARCH_MAX_BYTES = 512 * 1024
 # UTF-8 representation at the same conservative size as fragment vector input;
 # reject rather than truncate because the envelope is explicitly lossless.
 _MESSAGE_METADATA_MAX_BYTES = 512 * 1024
+
+
+class ChannelManager(IntegrationManager):
+    """Manager for channel factories shared by vendor connect services."""
+
+    def create_disconnected(
+        self,
+        user: Any,
+        *,
+        name: str,
+        backend_class: str,
+        **extra: Any,
+    ) -> Any:
+        """Create one vendor-backed channel in its initial disconnected state."""
+
+        vendor_model = apps.get_model("integrate", "Vendor")
+        return self.create(
+            vendor=vendor_model.objects.seeded(backend_class),
+            owner=user,
+            backend_class=backend_class,
+            display_name=name,
+            lifecycle=IntegrationLifecycle.DISCONNECTED,
+            created_by_id=user.pk,
+            **extra,
+        )
 
 
 def _bounded_message_metadata(value: dict[str, Any]) -> dict[str, Any]:

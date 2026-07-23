@@ -9,6 +9,7 @@ build/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
+.test-db/
 .coverage
 htmlcov/
 .tox/

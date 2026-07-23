@@ -41,6 +41,9 @@ from .net import canonical_address, is_unsafe_address, parse_http_url, resolved_
 HTTP_TIMEOUT_SECONDS = 10
 """Default timeout (seconds) for one outbound request."""
 
+_DOWNLOAD_CHUNK_BYTES = 64 * 1024
+"""Maximum chunk read while enforcing a capped streamed download."""
+
 _SSL_CONTEXT = ssl.create_default_context()
 """One shared system-trust-store TLS context reused by every pinned transport, so the
 CA bundle is parsed once rather than on every outbound request."""
@@ -172,6 +175,50 @@ class HttpClient:
         return self.request(
             "GET", url, headers=headers, allow_private=allow_private, follow_redirects=follow_redirects, timeout=timeout
         )
+
+    def download_capped(
+        self,
+        url: str,
+        *,
+        cap: int,
+        headers: dict[str, str] | None = None,
+        follow_redirects: bool = False,
+        allow_private: bool = False,
+        timeout: int = HTTP_TIMEOUT_SECONDS,
+    ) -> bytes | None:
+        """Stream a pinned GET without reading more than ``cap`` bytes."""
+
+        if cap <= 0:
+            return None
+        parse_http_url(url)
+        with httpx.Client(
+            transport=PinnedTransport(allow_private=allow_private),
+            timeout=timeout,
+        ) as client:
+            with client.stream(
+                "GET",
+                url,
+                headers=_without_host(headers),
+                follow_redirects=follow_redirects,
+            ) as response:
+                if not response.is_success:
+                    return None
+                try:
+                    content_length = int(response.headers.get("content-length") or 0)
+                except ValueError:
+                    content_length = 0
+                if content_length > cap:
+                    return None
+                chunks: list[bytes] = []
+                size = 0
+                for chunk in response.iter_bytes(
+                    chunk_size=min(_DOWNLOAD_CHUNK_BYTES, cap + 1),
+                ):
+                    size += len(chunk)
+                    if size > cap:
+                        return None
+                    chunks.append(chunk)
+                return b"".join(chunks)
 
     def post(
         self,

@@ -1,5 +1,4 @@
-import { useAuthoredMutation } from "@angee/refine";
-import { CHANNEL_MODEL, PairingDialog } from "@angee/messaging";
+import { usePairingConnect } from "@angee/messaging";
 import * as React from "react";
 import {
   Button,
@@ -15,10 +14,11 @@ import { useMessagingWhatsappT } from "./i18n";
 export function ConnectWhatsappChannelAction(): React.ReactElement {
   const t = useMessagingWhatsappT();
   const [open, setOpen] = React.useState(false);
-  const [pairingChannelId, setPairingChannelId] = React.useState<string | null>(null);
-  const [connect] = useAuthoredMutation(ConnectWhatsappChannel, {
-    invalidateModels: [CHANNEL_MODEL],
-  });
+  const { connect, pairingDialog } = usePairingConnect(
+    ConnectWhatsappChannel,
+    "connect_whatsapp_channel",
+    t("channel.whatsapp.scan"),
+  );
   const fields = React.useMemo<readonly MutationDialogField[]>(
     () => [
       {
@@ -48,16 +48,10 @@ export function ConnectWhatsappChannelAction(): React.ReactElement {
         errorFallback={t("channel.whatsapp.error")}
         onSubmit={async (values) => {
           const name = typeof values.name === "string" ? values.name.trim() : "";
-          const data = await connect({ name });
-          const id = data?.connect_whatsapp_channel?.id;
-          if (id) setPairingChannelId(String(id));
+          await connect({ name });
         }}
       />
-      <PairingDialog
-        channelId={pairingChannelId}
-        instruction={t("channel.whatsapp.scan")}
-        onClose={() => setPairingChannelId(null)}
-      />
+      {pairingDialog}
     </>
   );
 }

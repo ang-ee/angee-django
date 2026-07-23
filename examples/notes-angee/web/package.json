@@ -18,6 +18,7 @@
     "@angee/integrate": "workspace:*",
     "@angee/knowledge": "workspace:*",
     "@angee/messaging": "workspace:*",
+    "@angee/messaging-integrate-discord": "workspace:*",
     "@angee/messaging-integrate-imap": "workspace:*",
     "@angee/messaging-integrate-matrix": "workspace:*",
     "@angee/messaging-integrate-signal": "workspace:*",

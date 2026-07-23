@@ -5,7 +5,9 @@ import * as React from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const actionMocks = vi.hoisted(() => ({
-  connect: vi.fn(async () => ({ connect_matrix_channel: { id: "chn_1" } })),
+  connect: vi.fn(async (_variables: unknown) => ({
+    connect_matrix_channel: { id: "chn_1" },
+  })),
   connectOptions: null as Record<string, unknown> | null,
   dialogProps: null as Record<string, unknown> | null,
   pairingDialogProps: null as Record<string, unknown> | null,
@@ -15,19 +17,29 @@ vi.mock("./documents", () => ({
   ConnectMatrixChannel: "ConnectMatrixChannel",
 }));
 
-vi.mock("@angee/refine", () => ({
-  useAuthoredMutation: (document: unknown, options?: Record<string, unknown>) => {
-    expect(document).toBe("ConnectMatrixChannel");
-    actionMocks.connectOptions = options ?? null;
-    return [actionMocks.connect];
-  },
-}));
-
 vi.mock("@angee/messaging", () => ({
-  CHANNEL_MODEL: "messaging.Channel",
-  PairingDialog: (props: Record<string, unknown>) => {
+  usePairingConnect: (document: unknown, resultField: string, instruction: string) => {
+    expect(document).toBe("ConnectMatrixChannel");
+    actionMocks.connectOptions = {
+      invalidateModels: ["messaging.Channel"],
+    };
+    const [channelId, setChannelId] = React.useState<string | null>(null);
+    const connect = async (variables: unknown) => {
+      const data = await actionMocks.connect(variables);
+      const result = data[resultField as keyof typeof data];
+      if (result?.id) setChannelId(String(result.id));
+      return data;
+    };
+    const props = {
+      channelId,
+      instruction,
+      onClose: () => setChannelId(null),
+    };
     actionMocks.pairingDialogProps = props;
-    return props.channelId ? <div role="dialog">{props.instruction as string}</div> : null;
+    return {
+      connect,
+      pairingDialog: channelId ? <div role="dialog">{instruction}</div> : null,
+    };
   },
 }));
 

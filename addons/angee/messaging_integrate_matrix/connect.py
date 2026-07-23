@@ -11,14 +11,12 @@ from django.db import transaction
 from rebac import system_context
 
 from angee.integrate.credentials import CredentialKind
-from angee.integrate.models import IntegrationLifecycle
 from angee.integrate.net import is_unsafe_address, parse_http_url, resolved_addresses
 from angee.messaging.connect import resume_channel_pairing
 from angee.messaging_integrate_matrix.backend import MatrixChannelBackend
 
 Channel = apps.get_model("messaging", "Channel")
 Credential = apps.get_model("integrate", "Credential")
-Vendor = apps.get_model("integrate", "Vendor")
 
 _MATRIX_SLUG = MatrixChannelBackend.key
 
@@ -37,14 +35,11 @@ def create_matrix_channel(user: Any, homeserver: str, username: str, password: s
             name=f"Matrix - {clean_username}",
             material={"username": clean_username, "password": password},
         )
-        channel = Channel.objects.create(
-            vendor=Vendor.objects.seeded(_MATRIX_SLUG),
-            owner=user,
+        channel = Channel.objects.create_disconnected(
+            user,
+            name=clean_username,
             backend_class=_MATRIX_SLUG,
-            display_name=clean_username,
-            lifecycle=IntegrationLifecycle.DISCONNECTED,
             subscription_state={"homeserver": base_url},
-            created_by_id=user.pk,
         )
         channel.connect(credential=credential)
     resume_channel_pairing(channel)

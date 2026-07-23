@@ -1,5 +1,4 @@
-import { CHANNEL_MODEL, PairingDialog } from "@angee/messaging";
-import { useAuthoredMutation } from "@angee/refine";
+import { usePairingConnect } from "@angee/messaging";
 import { Button, Glyph, MutationDialog, type MutationDialogField } from "@angee/ui";
 import * as React from "react";
 
@@ -10,10 +9,11 @@ import { useMessagingMatrixT } from "./i18n";
 export function ConnectMatrixChannelAction(): React.ReactElement {
   const t = useMessagingMatrixT();
   const [open, setOpen] = React.useState(false);
-  const [pairingChannelId, setPairingChannelId] = React.useState<string | null>(null);
-  const [connect] = useAuthoredMutation(ConnectMatrixChannel, {
-    invalidateModels: [CHANNEL_MODEL],
-  });
+  const { connect, pairingDialog } = usePairingConnect(
+    ConnectMatrixChannel,
+    "connect_matrix_channel",
+    t("channel.matrix.recovery"),
+  );
   const fields = React.useMemo<readonly MutationDialogField[]>(
     () => [
       {
@@ -55,20 +55,14 @@ export function ConnectMatrixChannelAction(): React.ReactElement {
         cancelLabel={t("channel.matrix.cancel")}
         errorFallback={t("channel.matrix.error")}
         onSubmit={async (values) => {
-          const data = await connect({
+          await connect({
             homeserver: stringValue(values.homeserver).trim(),
             username: stringValue(values.username).trim(),
             password: stringValue(values.password),
           });
-          const id = data?.connect_matrix_channel?.id;
-          if (id) setPairingChannelId(String(id));
         }}
       />
-      <PairingDialog
-        channelId={pairingChannelId}
-        instruction={t("channel.matrix.recovery")}
-        onClose={() => setPairingChannelId(null)}
-      />
+      {pairingDialog}
     </>
   );
 }

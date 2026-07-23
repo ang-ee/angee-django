@@ -30,7 +30,7 @@ export interface ChannelPollBridgeAddonOptions {
 
 export interface ChannelBridgeAddonOptions extends ChannelPollBridgeAddonOptions {
   /** Messaging-namespace QR instruction key. */
-  instructionKey: string;
+  instructionKey?: string;
   /** Optional specialization of the generic retained-material disconnect verb. */
   disconnectAction?: ReactNode;
 }
@@ -62,7 +62,7 @@ export function defineChannelBridgeAddon({
   ): ReactNode => (
     <ChannelPairingAction
       labelKey={labelKey}
-      instructionKey={instructionKey}
+      {...(instructionKey ? { instructionKey } : {})}
       {...(resumeOnOpen ? { resumeOnOpen: true } : {})}
       when={integrationLifecycleIs(lifecycle)}
     />

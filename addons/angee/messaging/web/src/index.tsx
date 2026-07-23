@@ -21,6 +21,7 @@ export {
   ChannelPairingAction,
   PairingDialog,
 } from "./PairingDialog";
+export { usePairingConnect } from "./usePairingConnect";
 
 // The reusable record-thread conversation owner (transcript + composer + mark-read
 // + live refetch): the record-chatter pane composes it below, and a discuss room

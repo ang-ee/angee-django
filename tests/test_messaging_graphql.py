@@ -27,6 +27,7 @@ from rebac import (
 from rebac.roles import grant
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.messaging.managers import ChannelManager
 from angee.messaging.models import Channel as AbstractChannel
 from angee.parties.mixins import LinkSource
 from tests import test_messaging as messaging_models
@@ -52,6 +53,8 @@ _ChannelMeta = getattr(AbstractChannel, "Meta", object)
 
 class Channel(Integration, AbstractChannel):
     """Concrete message channel used to import the messaging schema."""
+
+    objects = ChannelManager()
 
     class Meta(_ChannelMeta):
         abstract = False

@@ -15,7 +15,6 @@ from angee.messaging_integrate_slack.identity import response_data
 
 Channel = apps.get_model("messaging", "Channel")
 Credential = apps.get_model("integrate", "Credential")
-Vendor = apps.get_model("integrate", "Vendor")
 
 _CREDENTIAL_NAME_MAX_LENGTH = 255
 
@@ -49,21 +48,17 @@ def create_slack_channel(user: Any, *, name: str, token: str) -> Any:
 
     credential_name = _credential_name(requested_name or workspace_name, team_id)
     with system_context(reason="messaging_integrate_slack.create"), transaction.atomic():
-        vendor = Vendor.objects.seeded(SlackChannelBackend.key)
         credential = Credential.objects.create_local_credential(
             user,
             kind=CredentialKind.STATIC_TOKEN,
             name=credential_name,
             material={"api_key": clean_token},
         )
-        channel = Channel.objects.create(
-            vendor=vendor,
-            owner=user,
+        channel = Channel.objects.create_disconnected(
+            user,
+            name=workspace_name,
             backend_class=SlackChannelBackend.key,
-            display_name=workspace_name,
             subscription_state={"team_id": team_id, "own_id": own_id},
-            lifecycle="disconnected",
-            created_by_id=user.pk,
         )
         channel.connect(credential=credential)
     return channel

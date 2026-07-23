@@ -5,7 +5,9 @@ import * as React from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const actionMocks = vi.hoisted(() => ({
-  connectMutation: vi.fn(async () => ({ connect_telegram_channel: { id: "chn_1" } })),
+  connectMutation: vi.fn(async (_variables: unknown) => ({
+    connect_telegram_channel: { id: "chn_1" },
+  })),
   createKeysMutation: vi.fn(async () => ({
     create_credential: { id: "cred_9", display_name: "My keys" },
   })),
@@ -23,17 +25,35 @@ vi.mock("./documents", () => ({
 
 vi.mock("@angee/refine", () => ({
   useAuthoredMutation: (document: unknown, options?: Record<string, unknown>) => {
-    if (document === "CreateTelegramAppKeys") return [actionMocks.createKeysMutation];
-    actionMocks.mutationOptions = options ?? null;
-    return [actionMocks.connectMutation];
+    expect(document).toBe("CreateTelegramAppKeys");
+    expect(options).toBeUndefined();
+    return [actionMocks.createKeysMutation];
   },
 }));
 
 vi.mock("@angee/messaging", () => ({
-  CHANNEL_MODEL: "messaging.Channel",
-  PairingDialog: (props: Record<string, unknown>) => {
+  usePairingConnect: (document: unknown, resultField: string, instruction: string) => {
+    expect(document).toBe("ConnectTelegramChannel");
+    actionMocks.mutationOptions = {
+      invalidateModels: ["messaging.Channel"],
+    };
+    const [channelId, setChannelId] = React.useState<string | null>(null);
+    const connect = async (variables: unknown) => {
+      const data = await actionMocks.connectMutation(variables);
+      const result = data[resultField as keyof typeof data];
+      if (result?.id) setChannelId(String(result.id));
+      return data;
+    };
+    const props = {
+      channelId,
+      instruction,
+      onClose: () => setChannelId(null),
+    };
     actionMocks.pairingDialogProps = props;
-    return props.channelId ? <div role="dialog">{props.instruction as string}</div> : null;
+    return {
+      connect,
+      pairingDialog: channelId ? <div role="dialog">{instruction}</div> : null,
+    };
   },
 }));
 

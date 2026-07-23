@@ -54,15 +54,17 @@ from rebac import (
 )
 
 from angee.base.actors import actor_user_id
+from angee.base.emission import ModelClassAttribute
 from angee.base.fields import SqidField, StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel
+from angee.base.models import AngeeModel
 from angee.base.refs import RecordRefMixin
 from angee.integrate.models import Bridge
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
 from angee.messaging.backends import ChannelBackend
 from angee.messaging.managers import (
+    ChannelManager,
     FragmentManager,
     MessageEdgeManager,
     MessageManager,
@@ -886,7 +888,25 @@ class Channel(Bridge):
     )
     """Registry key for the channel backend bound to this channel."""
 
-    objects = AngeeManager()
+    objects = ChannelManager()
+
+    @classmethod
+    def angee_model_attributes(
+        cls,
+        *,
+        app_label: str,
+        model_class: type[models.Model],
+        extension_bases: tuple[type[models.Model], ...],
+    ) -> tuple[ModelClassAttribute, ...]:
+        """Emit the channel manager on the parent-first concrete child."""
+
+        del cls, app_label, model_class, extension_bases
+        return (
+            ModelClassAttribute(
+                name="objects",
+                import_path="angee.messaging.managers.ChannelManager",
+            ),
+        )
 
     class Meta:
         """Django model options for the channel child model."""

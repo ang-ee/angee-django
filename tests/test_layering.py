@@ -142,7 +142,7 @@ def test_compose_has_no_rebac_permission_renderer() -> None:
 def test_live_console_import_path_stays_vendor_free() -> None:
     """The full console import closure excludes worker-only and vendor libraries."""
 
-    forbidden = ("mautrix", "neonize", "olm", "telethon", "qrcode", "PIL", "Pillow")
+    forbidden = ("discord", "mautrix", "neonize", "olm", "telethon", "qrcode", "PIL", "Pillow")
     console_entries = (
         "angee.integrate.live",
         "angee.integrate.impl",
@@ -167,6 +167,11 @@ def test_live_console_import_path_stays_vendor_free() -> None:
         "angee.messaging_integrate_matrix.connect",
         "angee.messaging_integrate_matrix.schema",
         "angee.messaging_integrate_matrix.autoconfig",
+        "angee.messaging_integrate_discord.backend",
+        "angee.messaging_integrate_discord.identity",
+        "angee.messaging_integrate_discord.connect",
+        "angee.messaging_integrate_discord.schema",
+        "angee.messaging_integrate_discord.autoconfig",
         "angee.messaging_integrate_slack.backend",
         "angee.messaging_integrate_slack.identity",
         "angee.messaging_integrate_slack.connect",
@@ -179,3 +184,4 @@ def test_live_console_import_path_stays_vendor_free() -> None:
     assert "angee.messaging.session" not in closure
     assert "angee.messaging_integrate_signal.session" not in closure
     assert "angee.messaging_integrate_matrix.session" not in closure
+    assert "angee.messaging_integrate_discord.session" not in closure

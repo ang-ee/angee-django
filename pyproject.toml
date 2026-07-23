@@ -70,6 +70,7 @@ dependencies = [
   # for its store module import and aiosqlite for this addon's SQLite store URL.
   "asyncpg>=0.30",
   "aiosqlite>=0.21",
+  "discord-py>=2.7",
 ]
 
 [project.optional-dependencies]

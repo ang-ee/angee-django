@@ -27,7 +27,12 @@ vi.mock("./i18n", () => ({
 
 vi.mock("./PairingDialog", () => ({
   ChannelPairingAction: (props: Record<string, unknown>) => (
-    <span data-pairing={String(props.labelKey)} />
+    <span
+      data-pairing={String(props.labelKey)}
+      {...(props.instructionKey
+        ? { "data-instruction": String(props.instructionKey) }
+        : {})}
+    />
   ),
 }));
 
@@ -113,6 +118,29 @@ describe("defineChannelBridgeAddon live bridges", () => {
     });
 
     expect(manifest.slots?.[4]?.content).toBe(override);
+  });
+
+  test("does not require scan copy for a static-token live bridge", () => {
+    const manifest = defineChannelBridgeAddon({
+      id: "messaging-integrate-example",
+      key: "example",
+      sequence: 22,
+      connectAction: <span>Connect example</span>,
+      i18n: {
+        "channel.example.menu.label": "Example",
+        "channel.example.menu.description": "Link Example accounts",
+      },
+    });
+
+    render(manifest.slots?.[1]?.content as React.ReactElement);
+
+    expect(
+      screen
+        .getByText((_content, element) =>
+          element?.getAttribute("data-pairing") === "channel.pairing.connect"
+        )
+        .hasAttribute("data-instruction"),
+    ).toBe(false);
   });
 });
 

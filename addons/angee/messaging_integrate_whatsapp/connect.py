@@ -23,12 +23,10 @@ from django.apps import apps
 from django.db import transaction
 from rebac import system_context
 
-from angee.integrate.models import IntegrationLifecycle
 from angee.messaging.connect import resume_channel_pairing
 from angee.messaging_integrate_whatsapp.backend import WhatsAppChannelBackend
 
 Channel = apps.get_model("messaging", "Channel")
-Vendor = apps.get_model("integrate", "Vendor")
 
 _WHATSAPP_SLUG = WhatsAppChannelBackend.key
 """This addon's one name — the seeded vendor catalogue slug and the channel
@@ -46,13 +44,10 @@ def create_whatsapp_channel(user: Any, *, name: str) -> Any:
     if not display_name:
         raise ValueError("A channel name is required.")
     with system_context(reason="messaging_integrate_whatsapp.create"), transaction.atomic():
-        channel = Channel.objects.create(
-            vendor=Vendor.objects.seeded(_WHATSAPP_SLUG),
-            owner=user,
+        channel = Channel.objects.create_disconnected(
+            user,
+            name=display_name,
             backend_class=_WHATSAPP_SLUG,
-            display_name=display_name,
-            lifecycle=IntegrationLifecycle.DISCONNECTED,
-            created_by_id=user.pk,
         )
     return channel
 

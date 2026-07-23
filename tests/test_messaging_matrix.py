@@ -724,7 +724,7 @@ def test_matrix_password_login_recovery_secret_sync_and_bounded_backfill(
     ]
     assert _FakeOlmMachine.instances[-1].recovery_keys == ["recovery-secret"]
     assert len(client.history_calls) == 1
-    assert client.history_calls[0]["limit"] == matrix_session_module.INITIAL_ROOM_LIMIT
+    assert client.history_calls[0]["limit"] == matrix_session_module.INITIAL_CONVERSATION_LIMIT
     assert len(_FakeMatrixClient.history_events) <= matrix_session_module.INITIAL_HISTORY_LIMIT
     assert {message.external_id for message in Message._base_manager.filter(channel_id=channel.pk)} == {
         "!room:example.com/$live",

@@ -17,7 +17,6 @@ from angee.integrate.credentials import CredentialKind
 
 Channel = apps.get_model("messaging", "Channel")
 Credential = apps.get_model("integrate", "Credential")
-Vendor = apps.get_model("integrate", "Vendor")
 
 _IMAP_VENDOR_SLUG = "imap"
 _CREDENTIAL_NAME_MAX_LENGTH = 255
@@ -50,14 +49,11 @@ def connect_imap_channel(
     )
 
     with system_context(reason="messaging_integrate_imap.connect"), transaction.atomic():
-        channel = Channel.objects.create(
-            vendor=Vendor.objects.seeded(_IMAP_VENDOR_SLUG),
-            owner=user,
+        channel = Channel.objects.create_disconnected(
+            user,
+            name=display_name,
             backend_class=_IMAP_VENDOR_SLUG,
-            display_name=display_name,
             config=config,
-            lifecycle="disconnected",
-            created_by_id=user.pk,
         )
         credential = Credential.objects.create_local_credential(
             user,

@@ -14,7 +14,6 @@ from django.apps import apps
 from django.db import transaction
 from rebac import system_context
 
-from angee.integrate.models import IntegrationLifecycle
 from angee.messaging_integrate_imessage.backend import ImessageChannelBackend
 
 _IMESSAGE_SLUG = ImessageChannelBackend.key
@@ -34,15 +33,11 @@ def create_imessage_channel(user: Any, *, name: str) -> Any:
     if not display_name:
         raise ValueError("A channel name is required.")
     channel_model = apps.get_model("messaging", "Channel")
-    vendor_model = apps.get_model("integrate", "Vendor")
     with system_context(reason="messaging_integrate_imessage.create"), transaction.atomic():
-        channel = channel_model.objects.create(
-            vendor=vendor_model.objects.seeded(_IMESSAGE_SLUG),
-            owner=user,
+        channel = channel_model.objects.create_disconnected(
+            user,
+            name=display_name,
             backend_class=_IMESSAGE_SLUG,
-            display_name=display_name,
-            lifecycle=IntegrationLifecycle.DISCONNECTED,
-            created_by_id=user.pk,
         )
     return channel
 

@@ -949,7 +949,7 @@ def test_telegram_initial_history_shares_the_global_budget_across_dialogs(
 
     session_module = telegram_session_module
     monkeypatch.setattr(session_module, "INITIAL_HISTORY_LIMIT", 10)
-    monkeypatch.setattr(session_module, "INITIAL_DIALOG_LIMIT", 2)
+    monkeypatch.setattr(session_module, "INITIAL_CONVERSATION_LIMIT", 2)
     session = session_module.TelegramSession.__new__(session_module.TelegramSession)
     session.bridge = SimpleNamespace(sqid="chn_budget")
     session._stopping = threading.Event()
