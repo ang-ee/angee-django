@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
@@ -188,6 +188,93 @@ class DeletePreview:
             blocked=blocked,
             has_blockers=bool(blocked),
             root=root,
+        )
+
+    @classmethod
+    def from_counts(
+        cls,
+        target: models.Model,
+        counts: Mapping[type[models.Model], int],
+    ) -> DeletePreview:
+        """Return a delete forecast whose non-root rows are known by count, not collected.
+
+        :meth:`from_instance` runs Django's ``Collector``, which materializes every
+        related row — including the ``on_delete=SET_NULL`` rows it would only *update*.
+        When a delete is really a **purge** that removes those rows through a separate
+        bulk scoped ``queryset.delete()`` (a messaging channel's threads and messages FK
+        the shared ``integrate.Integration`` parent with ``SET_NULL``, so the collector
+        would forecast them as ``updated`` and load all of them), the purge owner counts
+        the scope with ``.count()`` and passes the totals here instead. This builds the
+        same preview shape with no per-row materialization — a fixed number of queries
+        regardless of how large the purged scope is.
+
+        ``target`` is the tree root: it counts as one deleted row of its own model, and
+        each of its multi-table-inheritance parents (``target._meta.parents`` — e.g. a
+        channel's ``Integration`` row) as one more, since deleting an MTI child deletes
+        its parent rows too. ``counts`` names the *additional* purged models and their
+        totals — the deletion scope **including** the ``CASCADE`` subtrees (for a channel:
+        its threads and messages plus their parts, reactions, participants, followers,
+        activities, notifications, edges, stars, and tracking values) — so summing them
+        equals the rows the delete removes. Any ``type(target)`` entry in ``counts`` is
+        ignored so a caller that re-counts the root cannot double it against the root's
+        own +1.
+
+        Unlike :meth:`from_instance`, ``counts`` is **caller-trusted and unscoped**: the
+        purge owner computes it elevated, so the preview reflects the true scope
+        regardless of the actor's REBAC row visibility. The count-based path assumes no
+        blockers — a channel purge has none today — so it takes the ``has_blockers=False``
+        branch; a blocker only surfaces if the confirm delete actually raises, whose owner
+        rebuilds the preview through :meth:`blocked_from_error`.
+        """
+
+        root_model = type(target)
+        merged: dict[type[models.Model], int] = {}
+        for model, count in counts.items():
+            if model is root_model or count <= 0:
+                continue
+            merged[model] = merged.get(model, 0) + count
+        groups = {model: _PreviewRows(total_count=count) for model, count in merged.items()}
+        deleted_counts = _deleted_counts(target, groups)
+        for parent_model in target._meta.parents:
+            deleted_counts[parent_model] = deleted_counts.get(parent_model, 0) + 1
+        return cls(
+            total_deleted_count=sum(deleted_counts.values()),
+            deleted=_groups(deleted_counts),
+            updated=[],
+            blocked=[],
+            has_blockers=False,
+            root=DeletePreviewNode.from_target(target, groups),
+        )
+
+    @classmethod
+    def blocked_from_error(
+        cls,
+        target: models.Model,
+        error: ProtectedError | RestrictedError,
+    ) -> DeletePreview:
+        """Return a preview surfacing the rows that blocked a purge's confirm delete.
+
+        The count-based :meth:`from_counts` path assumes no blockers. If a consumer addon
+        ever ``PROTECT``\\s or ``RESTRICT``\\s a reverse FK to ``target``, the confirm
+        delete raises instead of orphaning; the purge owner catches it and calls this so
+        the surface reports the blockers as a blocked preview (mirroring
+        :func:`delete_by_public_id`), never a raw 500. Nothing was deleted — the purge
+        transaction rolled back — so the deleted/updated counts are empty and only
+        ``blocked`` is populated, straight from the offending rows the error carries.
+        """
+
+        protected = (
+            error.protected_objects
+            if isinstance(error, ProtectedError)
+            else error.restricted_objects
+        )
+        return cls(
+            total_deleted_count=0,
+            deleted=[],
+            updated=[],
+            blocked=_groups(_count_by_model(protected)),
+            has_blockers=True,
+            root=DeletePreviewNode.from_target(target, {}),
         )
 
 

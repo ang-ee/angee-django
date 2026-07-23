@@ -63,6 +63,7 @@ from angee.integrate.models import Bridge
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
 from angee.messaging.backends import ChannelBackend
 from angee.messaging.managers import (
+    ChannelManager,
     FragmentManager,
     MessageEdgeManager,
     MessageManager,
@@ -887,6 +888,16 @@ class Channel(Bridge):
     """Registry key for the channel backend bound to this channel."""
 
     objects = AngeeManager()
+    deletion = ChannelManager()
+    """Channel-purge + delete-forecast owner (see :class:`~angee.messaging.managers.ChannelManager`).
+
+    A Channel is a multi-table-inheritance child of the concrete ``Integration``, so its
+    default ``objects`` manager resolves to the parent ``IntegrationManager`` (the abstract
+    child cannot shadow a concrete parent's ``objects``). The channel-scoped purge verbs
+    therefore live on this dedicated, additively-named manager — reachable as
+    ``Channel.deletion`` — so both delete paths dispatch to one owner without disturbing
+    the inherited integration default.
+    """
 
     class Meta:
         """Django model options for the channel child model."""
