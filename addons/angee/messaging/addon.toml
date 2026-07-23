@@ -7,3 +7,8 @@ keywords = ["messaging", "channels", "chat"]
 category = "Data"
 # django.contrib.postgres backs the Fragment full-text SearchVectorField/GinIndex.
 depends_on = ["angee.iam", "angee.parties", "angee.integrate", "angee.storage", "django.contrib.contenttypes", "django.contrib.postgres"]
+
+[[migrations]]
+name = "public_thread_message_kind"
+app_label = "messaging"
+module = "runtime_migrations.public_thread_message_kind"

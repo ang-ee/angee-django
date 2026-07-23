@@ -3070,6 +3070,39 @@ def test_ingest_named_thread_honors_visibility_hint(channel: Any) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_ingest_derives_message_kind_from_structure(channel: Any) -> None:
+    """The ingest owner decides the functional kind from structural facts.
+
+    Public-thread content is a COMMENT, a source-named conversation is CHAT,
+    the email resolution path is EMAIL — no producer names a kind, so the same
+    act cannot land differently by arrival path.
+    """
+
+    feed = ParsedThread(external_id="feed-k", modality="public_thread", visibility="public")
+    chat = ParsedThread(external_id="room-k")
+    assert (
+        _ingest(
+            [
+                replace(_parsed("post-k", subject=""), thread=feed),
+                replace(_parsed("chat-k", subject=""), thread=chat),
+                _parsed("mail-k", subject="Plain mail"),
+            ],
+            channel=channel,
+        )
+        == 3
+    )
+    kinds = {
+        row.external_id: row.message_type
+        for row in Message._base_manager.filter(external_id__in=("post-k", "chat-k", "mail-k"))
+    }
+    assert kinds == {
+        "post-k": Message.MessageKind.COMMENT,
+        "chat-k": Message.MessageKind.CHAT,
+        "mail-k": Message.MessageKind.EMAIL,
+    }
+
+
+@pytest.mark.django_db(transaction=True)
 def test_ingest_resolves_reply_parent(channel: Any) -> None:
     """``in_reply_to`` lands the single-parent pointer, for email and named chats.
 

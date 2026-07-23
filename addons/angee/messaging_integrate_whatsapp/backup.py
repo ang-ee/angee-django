@@ -313,7 +313,6 @@ class BackupImporter:
                     message_model.objects.ingest(
                         batch,
                         channel=self.channel,
-                        message_kind=message_model.MessageKind.CHAT,
                         quote_edges=False,
                     )
             total += len(batch)

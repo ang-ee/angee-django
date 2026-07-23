@@ -106,7 +106,6 @@ class SlackChannelBackend(ChannelBackend):
     label = "Slack"
     icon = "message-square"
     defaults = {"vendor": "slack"}
-    message_kind: ClassVar[str] = "chat"
     quote_edges: ClassVar[bool] = False
 
     client_class: ClassVar[type[WebClient]] = WebClient

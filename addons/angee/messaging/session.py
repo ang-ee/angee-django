@@ -66,7 +66,6 @@ class LiveChannelSession(LiveSession):
             landed = message_model.objects.ingest(
                 parsed,
                 channel=self.bridge,
-                message_kind=self.live_impl.message_kind,
                 quote_edges=self.live_impl.quote_edges,
             )
             self._after_ingest(chunk, landed)

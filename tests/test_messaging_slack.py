@@ -446,7 +446,12 @@ def test_rate_limit_stops_before_the_sync_deadline(monkeypatch: pytest.MonkeyPat
 
 
 def test_poll_and_live_paths_read_backend_ingest_policy(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Poll drain and live ingest converge on each backend's class declarations."""
+    """Poll drain and live ingest read backend quote policy; the kind stays owner-derived.
+
+    ``quote_edges`` is the one per-backend ingest declaration left; the functional
+    kind is decided inside ``Message.objects.ingest`` from structural facts, so
+    neither path may pass a kind.
+    """
 
     calls: list[dict[str, Any]] = []
 
@@ -469,12 +474,9 @@ def test_poll_and_live_paths_read_backend_ingest_policy(monkeypatch: pytest.Monk
     drain(SlackChannelBackend)
     drain(ImapChannelBackend)
 
-    assert SlackChannelBackend.message_kind == "chat"
-    assert ImapChannelBackend.message_kind == "email"
-    assert calls[0]["message_kind"] == Message.MessageKind.CHAT
     assert calls[0]["quote_edges"] is False
-    assert calls[1]["message_kind"] == Message.MessageKind.EMAIL
     assert calls[1]["quote_edges"] is True
+    assert all("message_kind" not in call for call in calls)
 
     calls.clear()
     monkeypatch.setattr("angee.messaging.session.apps.get_model", lambda *_args: message_model)
@@ -496,7 +498,6 @@ def test_poll_and_live_paths_read_backend_ingest_policy(monkeypatch: pytest.Monk
     session.live_impl = cast(
         Any,
         SimpleNamespace(
-            message_kind="declared-live-kind",
             quote_edges=True,
             parse_live_message=lambda message: message,
         ),
@@ -506,8 +507,8 @@ def test_poll_and_live_paths_read_backend_ingest_policy(monkeypatch: pytest.Monk
     session.pairing = PairingState.PAIRED
 
     assert session._ingest([(ParsedMessage(external_id="live", platform="test"), None)]) is True
-    assert calls[0]["message_kind"] == "declared-live-kind"
     assert calls[0]["quote_edges"] is True
+    assert "message_kind" not in calls[0]
 
 
 @pytest.fixture

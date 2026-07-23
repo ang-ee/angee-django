@@ -1118,7 +1118,6 @@ class Channel(Bridge):
                     message_model.objects.ingest(
                         batch,
                         channel=self,
-                        message_kind=backend.message_kind,
                         quote_edges=backend.quote_edges,
                     )
                 )

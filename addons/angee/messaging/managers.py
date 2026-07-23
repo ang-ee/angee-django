@@ -2356,7 +2356,6 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         owner_id: Any = None,
         modality: Any = None,
         visibility: Any = None,
-        message_kind: Any = None,
         quote_edges: bool = True,
     ) -> list[Any]:
         """Upsert each parsed message into a thread with its parts/participants/edges.
@@ -2374,18 +2373,20 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         thread under a non-email :class:`~angee.messaging.models.Thread.Modality` /
         :class:`~angee.messaging.models.Thread.Visibility` (a public feed passes
         ``PUBLIC_THREAD``/``PUBLIC``); each defaults to the private email-thread shape.
-        ``message_kind`` is the :class:`~angee.messaging.models.Message.MessageKind` each
-        message lands under (this manager owns writing the column) — it defaults to
-        ``EMAIL``, and a public-feed producer passes ``COMMENT`` so a public post is not
-        mislabelled email. ``quote_edges`` runs the RFC-5322 quotation builder — email's
-        shared-fragment graph — and defaults on; a non-email producer whose short shared
-        text would otherwise mint spurious ``quote`` edges passes ``quote_edges=False``.
-        The externally controlled metadata envelope is rejected above 512 KiB of
-        canonical UTF-8 JSON so the lossless column remains deterministically bounded.
+        The functional :class:`~angee.messaging.models.Message.MessageKind` is decided
+        here, from the structural facts, never by the producer: content in a
+        ``PUBLIC_THREAD`` is a ``COMMENT`` (a public post, not email), a message whose
+        source names its conversation (``ParsedThread``) is ``CHAT``, and everything
+        else is ``EMAIL`` — so the same act cannot land under different kinds depending
+        on which backend delivered it. ``quote_edges`` runs the RFC-5322 quotation
+        builder — email's shared-fragment graph — and defaults on; a non-email producer
+        whose short shared text would otherwise mint spurious ``quote`` edges passes
+        ``quote_edges=False``. The externally controlled metadata envelope is rejected
+        above 512 KiB of canonical UTF-8 JSON so the lossless column remains
+        deterministically bounded.
         """
 
         owner_id = owner_id if owner_id is not None else channel.owner_id
-        message_kind = message_kind or self.model.MessageKind.EMAIL
         thread_model = apps.get_model("messaging", "Thread")
         ingested: list[Any] = []
         unresolved_handles: dict[Any, Any] = {}
@@ -2400,7 +2401,6 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     thread_model=thread_model,
                     modality=modality,
                     visibility=visibility,
-                    message_kind=message_kind,
                 )
                 ingested.append(message)
                 for handle in handles:
@@ -2446,7 +2446,6 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         thread_model: Any,
         modality: Any = None,
         visibility: Any = None,
-        message_kind: Any = None,
     ) -> Any:
         handle_model = apps.get_model("parties", "Handle")
         part_model = apps.get_model("messaging", "Part")
@@ -2514,7 +2513,15 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             "platform": parsed.platform,
             "direction": parsed.direction,
             "status": self.model.MessageStatus.SYNCED,
-            "message_type": message_kind or self.model.MessageKind.EMAIL,
+            # The kind derives from structure at the one write owner: public-thread
+            # content is a COMMENT, a source-named conversation is CHAT, else EMAIL.
+            "message_type": (
+                self.model.MessageKind.COMMENT
+                if thread.modality == thread_model.Modality.PUBLIC_THREAD
+                else self.model.MessageKind.CHAT
+                if parsed.thread is not None
+                else self.model.MessageKind.EMAIL
+            ),
             "preview": strip_null_bytes(_preview(parsed.body)),
             "sent_at": parsed.sent_at,
             "received_at": parsed.received_at,

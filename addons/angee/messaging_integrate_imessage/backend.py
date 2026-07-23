@@ -26,7 +26,6 @@ class ImessageChannelBackend(ChannelBackend):
     label = "iMessage"
     icon = "message-square"
 
-    message_kind: ClassVar[str] = "chat"
     quote_edges: ClassVar[bool] = False
 
     def fetch_messages(self) -> list[ParsedMessage]:

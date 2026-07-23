@@ -500,7 +500,6 @@ def _import_result(
             message_model.objects.ingest(
                 batch,
                 channel=channel,
-                message_kind=message_model.MessageKind.CHAT,
                 quote_edges=False,
             )
         total += len(batch)

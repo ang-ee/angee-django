@@ -657,10 +657,12 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   `addon.toml`. Their pure `applies(ProjectState)` guard must select the exact
   old state, skip the complete new or absent state, and fail on recognized
   partial states. Copy-local `RunPython` functions must use historical models
-  from `apps` and `_base_manager`; never import current models. Once an origin
-  has materialized downstream, never edit its source or copied runtime file —
-  ship a new named declaration. Explicit `angee build` is the only writer;
-  normal boot remains migration-write-free.
+  from `apps` and `_base_manager`, and clear the default ordering with
+  `.order_by()` before a queryset write — `Meta.ordering` may name live-model
+  alias fields (`sqid`) that historical models cannot resolve; never import
+  current models. Once an origin has materialized downstream, never edit its
+  source or copied runtime file — ship a new named declaration. Explicit
+  `angee build` is the only writer; normal boot remains migration-write-free.
 - **Agent runtime auth is a `(runtime × provider × credential-kind)` fact, not provider-only.**
   The `AgentRuntime` an agent's `runtime_class` selects (`angee.agents.runtimes`) owns how a
   credential becomes container env *and* the synced secret payload (`auth_env` /

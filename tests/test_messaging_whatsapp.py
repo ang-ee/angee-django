@@ -987,9 +987,7 @@ def test_backup_and_live_converge_on_the_same_row(whatsapp_tables: Any, tmp_path
         )
     )
     with system_context(reason="test whatsapp convergence live ingest"):
-        landed = Message.objects.ingest(
-            [live], channel=channel, message_kind=Message.MessageKind.CHAT, quote_edges=False
-        )
+        landed = Message.objects.ingest([live], channel=channel, quote_edges=False)
 
     assert [row.pk for row in landed] == [imported.pk]
     assert landed[0].thread_id == imported.thread_id

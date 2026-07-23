@@ -262,7 +262,7 @@ def test_telegram_takeout_execute_delegates_to_messaging_ingest(
     assert filters == [{"sqid": channel.sqid, "backend_class": "telegram"}]
     assert len(manager.calls) == 1
     assert manager.calls[0]["channel"] is channel
-    assert manager.calls[0]["message_kind"] == "chat"
+    assert "message_kind" not in manager.calls[0]
     assert manager.calls[0]["quote_edges"] is False
     parsed = manager.calls[0]["messages"][0]
     assert parsed.external_id == f"{utils.get_peer_id(types.PeerChannel(42))}/17"

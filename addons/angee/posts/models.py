@@ -101,12 +101,11 @@ class Feed(Bridge):
         The message core (thread/message/parts) is the messaging owner's job, so a
         public post shares email's one idempotent write path; posts only writes the
         overlay it owns (public payload / metrics / reactions / post edges). The
-        ingest is told the facts a public feed differs on, each set through the
-        messaging owner rather than bulk-patched afterward: every thread is born a
-        ``PUBLIC_THREAD`` with ``PUBLIC`` visibility, each message lands under the
-        ``COMMENT`` kind (a public post, not email), and the RFC-5322 quotation builder
-        is skipped (``quote_edges=False``) so a post's short shared text does not mint
-        spurious email ``quote`` edges.
+        ingest is told the structural facts a public feed differs on: every thread
+        is born a ``PUBLIC_THREAD`` with ``PUBLIC`` visibility — the ingest owner
+        derives the ``COMMENT`` kind from that shape — and the RFC-5322 quotation
+        builder is skipped (``quote_edges=False``) so a post's short shared text
+        does not mint spurious email ``quote`` edges.
         """
 
         posts = self.backend.fetch_posts()
@@ -123,7 +122,6 @@ class Feed(Bridge):
             channel=self,
             modality=thread_model.Modality.PUBLIC_THREAD,
             visibility=thread_model.Visibility.PUBLIC,
-            message_kind=message_model.MessageKind.COMMENT,
             quote_edges=False,
         )
         self._overlay_engagement(posts, messages)

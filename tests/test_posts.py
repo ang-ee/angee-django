@@ -292,8 +292,8 @@ def test_feed_sync_overlays_post_metrics_and_public_payload(posts_tables: None) 
 
     assert ingested == 1
     assert (row.view_count, row.like_count, row.repost_count, row.reply_count, row.bookmark_count) == (99, 12, 3, 4, 1)
-    # A public post lands under the COMMENT kind the feed passes, not the ingest's
-    # email default — the messaging owner writes the column from message_kind.
+    # A public post lands under the COMMENT kind the ingest owner derives from the
+    # public-thread shape — no producer names a kind.
     assert message.message_type == Message.MessageKind.COMMENT
     # The public payload folds onto the shared messaging rows (same-row extension).
     assert message.is_original_post is True

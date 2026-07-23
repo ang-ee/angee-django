@@ -185,10 +185,6 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     label = "Channel"
     icon = "inbox"
 
-    # Strings avoid a model import cycle; values must equal Message.MessageKind.<X>.value.
-    message_kind: ClassVar[str] = "email"
-    """Messaging kind assigned to every message this backend ingests."""
-
     quote_edges: ClassVar[bool] = True
     """Whether ingest should build the email shared-fragment quotation graph."""
 
@@ -269,8 +265,6 @@ class LiveChannelBackend(LiveBridgeImpl, ChannelBackend):
     label = "Live Channel"
     icon = "inbox"
 
-    # Strings avoid a model import cycle; values must equal Message.MessageKind.<X>.value.
-    message_kind: ClassVar[str] = "chat"
     quote_edges: ClassVar[bool] = False
 
     media_item_class: ClassVar[type[MediaItem]] = MediaItem
