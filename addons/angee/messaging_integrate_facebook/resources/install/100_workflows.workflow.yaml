@@ -1,0 +1,10 @@
+_meta:
+  model: workflows.Workflow
+rows:
+  - xref: archive_import
+    fields:
+      name: Facebook archive import
+      description: Recognize an uploaded Facebook export, confirm its channel, and import it through the Facebook takeout owner.
+      subject_declaration: storage.file
+      max_steps: 1000
+      budget: {}

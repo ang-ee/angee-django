@@ -1054,6 +1054,8 @@ def test_mount_backup_extractor_reuses_importer_per_domain(
     fake_manifest = SimpleNamespace(
         storage=SimpleNamespace(path=lambda name: str(manifest_path)),
         storage_path="backup/Manifest.db",
+        # The extractor asks the File owner for its real path (File.local_path).
+        local_path=lambda: manifest_path,
     )
     monkeypatch.setattr(mount_extractor, "_manifest_file", lambda drive: fake_manifest)
     drive = object()  # the resolved manifest row stands in for a real drive lookup

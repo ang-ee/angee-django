@@ -38,6 +38,8 @@ class ParsedHandle:
     value: str
     display_name: str = ""
     external_id: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+    """Source-owned identity evidence used to refresh the resolved Handle."""
 
 
 @dataclass(frozen=True)
@@ -95,6 +97,8 @@ class ParsedThread:
     modality: str = ""
     visibility: str = ""
     title: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+    """Source-owned conversation facts written when the thread is first created."""
 
 
 @dataclass(frozen=True)

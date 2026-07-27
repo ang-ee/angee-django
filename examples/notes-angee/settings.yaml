@@ -29,6 +29,8 @@ INSTALLED_APPS:
   - angee.messaging_integrate_whatsapp
   - angee.messaging_integrate_imessage
   - angee.messaging_integrate_telegram
+  - angee.messaging_integrate_meta
+  - angee.messaging_integrate_facebook
   - angee.messaging_integrate_signal
   - angee.messaging_integrate_matrix
   - angee.messaging_integrate_slack

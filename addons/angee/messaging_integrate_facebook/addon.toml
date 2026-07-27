@@ -1,0 +1,19 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.messaging_integrate_facebook"
+description = "Facebook takeout import — messages, own posts, comments, albums, and friend connections"
+keywords = ["facebook", "meta", "takeout", "messages", "posts", "connections"]
+category = "Integration"
+depends_on = ["angee.messaging", "angee.integrate", "angee.parties", "angee.posts", "angee.workflows_integrate", "angee.messaging_integrate_meta"]
+
+[resources]
+master = [{ path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" }]
+install = [
+  { path = "resources/install/100_workflows.workflow.yaml", publish = true },
+  { path = "resources/install/101_workflows.step.yaml", depends_on = "resources/install/100_workflows.workflow.yaml" },
+  { path = "resources/install/102_workflows.edge.yaml", depends_on = "resources/install/101_workflows.step.yaml" },
+  { path = "resources/install/110_workflows.workflow.yaml", publish = true },
+  { path = "resources/install/111_workflows.step.yaml", depends_on = "resources/install/110_workflows.workflow.yaml" },
+  { path = "resources/install/112_workflows.edge.yaml", depends_on = "resources/install/111_workflows.step.yaml" },
+]

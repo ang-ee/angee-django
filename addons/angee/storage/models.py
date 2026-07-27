@@ -31,6 +31,7 @@ import secrets
 from collections import OrderedDict
 from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime
+from pathlib import Path
 from typing import Any, BinaryIO, ClassVar, NoReturn, cast
 from urllib.parse import urlencode
 
@@ -1220,6 +1221,24 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         with system_context(reason="storage.file.storage"):
             drive = drive_model._base_manager.select_related("backend").get(pk=self.drive_id)
             return drive.storage
+
+    def local_path(self) -> Path | None:
+        """Return this file's real on-disk path when its backend exposes one.
+
+        Reference-mode mounts store rows at real filesystem paths (a
+        ``FileSystemStorage`` rooted at the mount folder), which lets a mount
+        extractor open the bytes in place; object-store backends have no local
+        path and return ``None``. This owns the backend probe so no caller
+        reaches into the storage shape from outside.
+        """
+
+        path_fn = getattr(self.storage, "path", None)
+        if path_fn is None:
+            return None
+        try:
+            return Path(path_fn(self.storage_path))
+        except (NotImplementedError, ValueError):
+            return None
 
     @property
     def url(self) -> str:

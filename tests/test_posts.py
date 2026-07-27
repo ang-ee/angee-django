@@ -31,6 +31,7 @@ from rebac import (
 
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from angee.posts.backends import ParsedMetrics, ParsedPost, ParsedReaction
+from angee.posts.ingest import land_posts
 from angee.posts.models import ThreadPublic
 from tests.conftest import (
     POSTS_TEST_MODELS,
@@ -298,6 +299,27 @@ def test_feed_sync_overlays_post_metrics_and_public_payload(posts_tables: None) 
     # The public payload folds onto the shared messaging rows (same-row extension).
     assert message.is_original_post is True
     assert thread.subject_url == "https://youtu.be/p1"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_land_posts_is_the_shared_public_overlay_owner(posts_tables: None) -> None:
+    """Archive clients can land the same public shape without a Feed backend."""
+
+    del posts_tables
+    feed = _feed("archive-post-owner")
+    with system_context(reason="test direct posts owner"):
+        landed = land_posts(
+            feed,
+            [_post("archive-p1", subject_url="https://example.test/archive-p1")],
+            owner_id=feed.owner_id,
+        )
+        message = Message._base_manager.get(external_id="archive-p1")
+
+    assert landed == [message]
+    assert message.message_type == Message.MessageKind.COMMENT
+    assert message.thread.modality == Thread.Modality.PUBLIC_THREAD
+    assert message.thread.visibility == Thread.Visibility.PUBLIC
+    assert message.is_original_post is True
 
 
 def test_thread_public_extension_has_no_json_tags_column() -> None:

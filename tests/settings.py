@@ -37,6 +37,8 @@ INSTALLED_APPS = [
     "angee.messaging_integrate_whatsapp",
     "angee.messaging_integrate_imessage",
     "angee.messaging_integrate_telegram",
+    "angee.messaging_integrate_meta",
+    "angee.messaging_integrate_facebook",
     "angee.messaging_integrate_signal",
     "angee.messaging_integrate_matrix",
     "angee.messaging_integrate_slack",
@@ -166,6 +168,7 @@ ANGEE_DIRECTORY_BACKEND_CLASSES = {
 ANGEE_CHANNEL_BACKEND_CLASSES = {
     "manual": "angee.messaging.backends.ManualChannelBackend",
     "discord": "angee.messaging_integrate_discord.backend.DiscordChannelBackend",
+    "facebook": "angee.messaging_integrate_facebook.backend.FacebookChannelBackend",
     "imap": "angee.messaging_integrate_imap.backend.ImapChannelBackend",
     "signal": "angee.messaging_integrate_signal.backend.SignalChannelBackend",
     "matrix": "angee.messaging_integrate_matrix.backend.MatrixChannelBackend",

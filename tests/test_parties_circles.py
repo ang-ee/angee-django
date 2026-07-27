@@ -17,7 +17,9 @@ from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
 from rebac import system_context
 
+from angee.messaging.backends import ParsedHandle
 from angee.parties.backends import ParsedContact
+from angee.parties.connections import ParsedConnection, ingest_connection
 from angee.parties.mixins import LinkSource
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
 from tests.conftest import _clear_model_tables, _create_missing_tables
@@ -61,6 +63,58 @@ def _user(username: str) -> Any:
     """Create a plain user for ownership fixtures."""
 
     return User.objects.create_user(username=username, password="x")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_connection_ingest_is_idempotent_and_uses_existing_affiliation_shape(
+    parties_tables: None,
+) -> None:
+    """Social connections confirm one Person and map employment to Relationship."""
+
+    del parties_tables
+    with system_context(reason="test connection ingest"):
+        owner = _user("connection-owner")
+        RelationshipKind._base_manager.create(
+            slug="acquaintance",
+            name="Acquaintance",
+        )
+        RelationshipKind._base_manager.create(
+            slug="employee",
+            name="Employee",
+            inverse_name="Employer",
+            other_party_kind="organization",
+        )
+        parsed = ParsedConnection(
+            handle=ParsedHandle(
+                platform="linkedin",
+                value="Ada Lovelace",
+                external_id="https://linkedin.example/ada",
+                display_name="Ada Lovelace",
+            ),
+            email="ada@example.com",
+            organization="Analytical Engines",
+            title="Programmer",
+            connected_at=date(2026, 1, 2),
+            provenance="linkedin_takeout",
+        )
+        first = ingest_connection(parsed, created_by_id=owner.pk)
+        second = ingest_connection(parsed, created_by_id=owner.pk)
+
+    assert second.pk == first.pk
+    assert Person._base_manager.filter(pk=first.pk).count() == 1
+    assert PartyHandle._base_manager.filter(party=first, is_confirmed=True).count() == 2
+    social_handle = Handle._base_manager.get(platform="linkedin")
+    social_link = PartyHandle._base_manager.get(party=first, handle=social_handle)
+    assert social_handle.party_link_confirmed is True
+    assert social_link.source == LinkSource.IMPORT
+    assert social_link.metadata["provenance"] == "linkedin_takeout"
+    acquaintance = Relationship._base_manager.get(kind__slug="acquaintance")
+    employment = Relationship._base_manager.get(kind__slug="employee")
+    assert acquaintance.other_party_id == first.pk
+    assert acquaintance.started_at == date(2026, 1, 2)
+    assert employment.other_name == "Analytical Engines"
+    assert employment.title == "Programmer"
+    assert Relationship._base_manager.count() == 2
 
 
 @pytest.mark.django_db(transaction=True)

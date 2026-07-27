@@ -108,7 +108,7 @@ def _backup_root(drive: Any) -> Path | None:
     manifest = _manifest_file(drive)
     if manifest is None:
         return None
-    local = _file_local_path(manifest)
+    local = manifest.local_path()
     if local is None or not local.exists():
         return None
     return local.parent
@@ -124,15 +124,3 @@ def _manifest_file(drive: Any) -> Any:
             .order_by("storage_path")
             .first()
         )
-
-
-def _file_local_path(file_row: Any) -> Path | None:
-    """Return one File row's real on-disk path when its backend serves one."""
-
-    path_fn = getattr(file_row.storage, "path", None)
-    if path_fn is None:
-        return None
-    try:
-        return Path(path_fn(file_row.storage_path))
-    except (NotImplementedError, ValueError):
-        return None

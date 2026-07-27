@@ -24,10 +24,8 @@ posts never edits or forks messaging.
 
 from __future__ import annotations
 
-from dataclasses import replace
-from typing import Any, cast
+from typing import cast
 
-from django.apps import apps
 from django.db import models
 from rebac.managers import RebacManager
 
@@ -35,7 +33,8 @@ from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.integrate.models import Bridge
-from angee.posts.backends import FeedBackend, ParsedPost
+from angee.posts.backends import FeedBackend
+from angee.posts.ingest import land_posts
 from angee.posts.managers import (
     FeedFollowManager,
     PostMetricsManager,
@@ -109,161 +108,8 @@ class Feed(Bridge):
         """
 
         posts = self.backend.fetch_posts()
-        message_model = apps.get_model("messaging", "Message")
-        thread_model = apps.get_model("messaging", "Thread")
-        messages = message_model.objects.ingest(
-            [
-                replace(
-                    post.message,
-                    metadata={**post.message.metadata, "tags": list(post.tags)},
-                )
-                for post in posts
-            ],
-            channel=self,
-            modality=thread_model.Modality.PUBLIC_THREAD,
-            visibility=thread_model.Visibility.PUBLIC,
-            quote_edges=False,
-        )
-        self._overlay_engagement(posts, messages)
         # last_sync_items reports messages ingested, consistent with Channel.sync.
-        return len(messages)
-
-    def _overlay_engagement(self, posts: list[ParsedPost], messages: list) -> None:
-        """Attach the posts overlay to the message rows the ingest just landed.
-
-        Keys the ``messages`` the owner returned by ``(platform, external_id)`` — no
-        re-query, since ``Message.objects.ingest`` hands back the rows it resolved — and
-        writes what posts owns: the public-post payload it folds onto the shared rows
-        (``is_original_post``/``subject_url`` via
-        :class:`MessagePublic`/:class:`ThreadPublic`), rolled-up :class:`PostMetrics`,
-        per-actor reactions on the reused ``messaging.Reaction`` table, and cross-post
-        edges through the ``messaging.MessageEdge`` owner (``relate``). The engagement is
-        landed in batch: every distinct reactor handle is resolved once and all reactions
-        insert through the ``Reaction`` owner in one pass, and cross-post targets are
-        pre-keyed from this fetch with a single query for the rest — no per-reaction or
-        per-relation round-trip. Runs under the scheduler's ``system_context``, so the
-        reads/writes carry system scope through REBAC — not by dropping to the non-REBAC
-        ``_base_manager``. The thread shape (born ``PUBLIC_THREAD``/``PUBLIC``) is set at
-        ingest time, so no post-hoc bulk update is needed.
-        """
-
-        if not posts:
-            return
-        metrics_model = apps.get_model("posts", "PostMetrics")
-        # Reactions reuse the single messaging.Reaction table (one per-actor reaction
-        # store, not a parallel posts one): posts writes like/repost as reaction values.
-        reaction_model = apps.get_model("messaging", "Reaction")
-        edge_model = apps.get_model("messaging", "MessageEdge")
-        handle_model = apps.get_model("parties", "Handle")
-        owner_id = self.owner_id
-
-        by_key = {(message.platform, message.external_id): message for message in messages}
-        landed = [
-            (message, post)
-            for post in posts
-            if (message := by_key.get((post.message.platform, post.message.external_id))) is not None
-        ]
-
-        # Payload + rolled-up metrics per landed post (each write is idempotent).
-        for message, post in landed:
-            self._write_public_payload(message, post)
-            if post.metrics is not None:
-                metrics_model.objects.upsert(message=message, metrics=post.metrics, owner_id=owner_id)
-
-        # Reactions: resolve every distinct reactor handle once, then land the whole
-        # batch through the messaging Reaction owner (one insert, idempotent on the
-        # partial unique constraint) rather than a get_or_create per reaction.
-        handles = self._resolve_reaction_handles(landed, handle_model, owner_id)
-        reaction_model.objects.attribute(
-            (
-                (message, handles[(reaction.handle.platform, reaction.handle.value)], reaction.reaction)
-                for message, post in landed
-                for reaction in post.reactions
-            ),
-            owner_id=owner_id,
-        )
-
-        # Cross-post edges: pre-key every target from this fetch, then one query resolves
-        # any referenced post not in the batch; the MessageEdge owner writes the edge
-        # shape once (idempotent on the (src, dst, kind) key) — posts only supplies the kind.
-        targets = self._resolve_relation_targets(landed, by_key, channel_id=self.pk)
-        for message, post in landed:
-            for relation in post.relations:
-                target = targets.get((post.message.platform, relation.dst_external_id))
-                if target is not None:
-                    edge_model.objects.relate(message, target, kind=relation.kind, owner_id=owner_id)
-
-    @staticmethod
-    def _resolve_reaction_handles(landed: list, handle_model: Any, owner_id: Any) -> dict:
-        """Upsert each distinct reactor handle once, keyed by ``(platform, value)``.
-
-        A post's reactors repeat across the batch, so the handle upsert is deduped to
-        one write per distinct reactor through the ``parties.Handle`` owner instead of
-        one per reaction.
-        """
-
-        specs: dict[tuple[str, str], Any] = {}
-        for _message, post in landed:
-            for reaction in post.reactions:
-                specs.setdefault((reaction.handle.platform, reaction.handle.value), reaction.handle)
-        return {
-            key: handle_model.objects.upsert(
-                platform=parsed.platform,
-                value=parsed.value,
-                created_by_id=owner_id,
-                display_name=parsed.display_name,
-            )
-            for key, parsed in specs.items()
-        }
-
-    @staticmethod
-    def _resolve_relation_targets(landed: list, by_key: dict, *, channel_id: Any) -> dict:
-        """Key every cross-post target by ``(platform, external_id)``.
-
-        Targets already landed in this fetch come from ``by_key``; any post referenced
-        but not in the batch is resolved in one indexed ``with_external_ids`` query
-        per platform. Message identity is channel-scoped, so the same external id may
-        exist once per channel — rows from this feed's own channel win the key, and a
-        cross-channel copy is only the fallback.
-        """
-
-        message_model = apps.get_model("messaging", "Message")
-        targets = dict(by_key)
-        missing: dict[str, set[str]] = {}
-        for _message, post in landed:
-            for relation in post.relations:
-                key = (post.message.platform, relation.dst_external_id)
-                if key not in targets:
-                    missing.setdefault(post.message.platform, set()).add(relation.dst_external_id)
-        for platform, external_ids in missing.items():
-            rows = list(
-                message_model.objects.with_external_ids(sorted(external_ids)).filter(platform=platform)
-            )
-            # Same-channel rows overwrite cross-channel fallbacks (they sort last).
-            for row in sorted(rows, key=lambda row: row.channel_id == channel_id):
-                targets[(platform, row.external_id)] = row
-        return targets
-
-    @staticmethod
-    def _write_public_payload(message: Any, post: ParsedPost) -> None:
-        """Fold the parsed public-post payload onto its message/thread rows.
-
-        ``is_original_post`` rides the message and ``subject_url`` rides its thread —
-        the fields :class:`MessagePublic`/:class:`ThreadPublic` contribute onto
-        the single messaging tables. Each row is written only when a value actually
-        changes, so an idempotent re-sync stays a no-op.
-        """
-
-        if message.is_original_post != post.is_original_post:
-            message.is_original_post = post.is_original_post
-            message.save(update_fields=("is_original_post", "updated_at"))
-        thread = message.thread
-        if thread is None:
-            return
-        subject_url = post.subject_url or ""
-        if thread.subject_url != subject_url:
-            thread.subject_url = subject_url
-            thread.save(update_fields=("subject_url", "updated_at"))
+        return len(land_posts(self, posts, owner_id=self.owner_id))
 
 
 class FeedFollow(SqidMixin, AuditMixin, AngeeModel):

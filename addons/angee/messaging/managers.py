@@ -588,6 +588,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
                     "title": title,
                     "modality": thread.modality or modality or self.model.Modality.DIRECT,
                     "visibility": thread.visibility or visibility or self.model.Visibility.PRIVATE,
+                    "metadata": thread.metadata,
                     "created_by_id": owner_id,
                 },
             )
@@ -2470,6 +2471,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 created_by_id=owner_id,
                 display_name=parsed.sender.display_name,
                 external_id=parsed.sender.external_id,
+                metadata=parsed.sender.metadata,
             )
         # Capture the message's prior state before the upsert moves it: the prior
         # thread (a re-sync that re-resolves to a different thread must reconcile both
@@ -2497,7 +2499,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             # precise exception: a reply that landed before its parent keeps NULL, so
             # the re-sync backfills the pointer once its parent exists (this is how a
             # resumed backup import heals reply order across batches).
-            message = self.model._base_manager.get(pk=prior["pk"])
+            message = self.model._base_manager.select_related("thread").get(pk=prior["pk"])
             if parsed.in_reply_to and prior["parent_id"] is None:
                 parent = self._resolve_reply_parent(parsed, channel=channel)
                 if parent is not None:
@@ -2753,6 +2755,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 created_by_id=owner_id,
                 display_name=recipient.handle.display_name,
                 external_id=recipient.handle.external_id,
+                metadata=recipient.handle.metadata,
             )
             # The write path owns envelope dedup (the unique constraint is the
             # backstop): any producer may repeat an address within one role.

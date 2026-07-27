@@ -180,8 +180,19 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
 
     @staticmethod
     def _refresh(handle: Any, fields: dict[str, Any]) -> None:
-        """Apply the non-blank ``fields`` that differ; one save, only when dirty."""
+        """Apply the non-blank ``fields`` that differ; one save, only when dirty.
 
+        ``metadata`` merges key-wise instead of replacing: several producers
+        stamp independent evidence on one handle (a message importer's identity
+        confidence, the connections owner's provenance), and a whole-dict write
+        from one would silently erase the others' — the same merge rule
+        :meth:`PartyHandleManager.link` applies to link metadata.
+        """
+
+        merged = fields.get("metadata")
+        if isinstance(merged, dict):
+            current = handle.metadata if isinstance(handle.metadata, dict) else {}
+            fields = {**fields, "metadata": {**current, **merged}}
         dirty = [name for name, new in fields.items() if new and getattr(handle, name, None) != new]
         if dirty:
             for name in dirty:
@@ -260,6 +271,7 @@ class PartyHandleManager(AngeeManager):
         confidence: float = 1.0,
         source: LinkSource = cast(LinkSource, LinkSource.MANUAL),
         is_confirmed: bool = False,
+        metadata: dict[str, Any] | None = None,
         created_by_id: Any = None,
     ) -> Any:
         """Link ``handle`` to ``party`` with ``confidence``, then resolve the handle's owner.
@@ -268,7 +280,8 @@ class PartyHandleManager(AngeeManager):
         the signed-in user's own handle); it upgrades an existing weaker link to the
         confirmed self-link. Resolution only re-runs when the link is new, upgraded,
         or the handle's owner is not already this party, so a re-sync of an unchanged
-        contact does no extra work.
+        contact does no extra work. Source metadata merges onto the existing link so
+        a later importer can add provenance without erasing prior evidence.
         """
 
         link, created = self.get_or_create(
@@ -278,17 +291,25 @@ class PartyHandleManager(AngeeManager):
                 "confidence": confidence,
                 "source": source,
                 "is_confirmed": is_confirmed,
+                "metadata": metadata or {},
                 "created_by_id": created_by_id,
             },
         )
         upgraded = False
+        dirty: list[str] = []
         if not created and is_confirmed and not link.is_confirmed:
             link.confidence = confidence
             link.source = source
             link.is_confirmed = True
             link.is_dismissed = False
-            link.save(update_fields=["confidence", "source", "is_confirmed", "is_dismissed", "updated_at"])
+            dirty.extend(("confidence", "source", "is_confirmed", "is_dismissed"))
             upgraded = True
+        merged_metadata = {**(link.metadata or {}), **(metadata or {})}
+        if merged_metadata != link.metadata:
+            link.metadata = merged_metadata
+            dirty.append("metadata")
+        if dirty:
+            link.save(update_fields=[*dict.fromkeys(dirty), "updated_at"])
         if created or upgraded or handle.party_id != party.pk:
             self.resolve(handle)
         return link

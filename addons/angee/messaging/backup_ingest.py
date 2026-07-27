@@ -31,6 +31,9 @@ the store) is a mechanical follow-up.
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections import Counter
 from collections.abc import Callable, Iterable
 from datetime import datetime
 from typing import Any
@@ -50,6 +53,44 @@ DEFAULT_MAX_BATCH_BYTES = 64_000_000
 The message-count default is fine for text, but a run of large videos would
 otherwise hold gigabytes of media bytes resident before the first ingest.
 """
+
+
+class ContentKeyCounter:
+    """Derive stable ids only for export records that carry no native id.
+
+    Prefer the export's native id whenever one exists. For an id-less record,
+    :meth:`key` returns
+    ``<thread>:<timestamp_ms>:<sender>:<content-digest>:<occurrence>``.
+    ``occurrence`` counts previously seen identical tuples within the thread,
+    preserving true duplicates while a fresh counter over the same deterministic
+    export reproduces exactly the same ids.
+    """
+
+    def __init__(self) -> None:
+        self._occurrences: Counter[tuple[str, int, str, str]] = Counter()
+
+    def key(
+        self,
+        *,
+        thread_key: str,
+        timestamp_ms: int,
+        sender_key: str,
+        content: Any,
+    ) -> str:
+        """Return the next deterministic external id for one id-less record."""
+
+        canonical = json.dumps(
+            content,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
+        identity = (str(thread_key), int(timestamp_ms), str(sender_key), digest)
+        occurrence = self._occurrences[identity]
+        self._occurrences[identity] += 1
+        return f"{identity[0]}:{identity[1]}:{identity[2]}:{digest}:{occurrence}"
 
 
 def thread_watermarks(channel: Any, *, reason: str) -> dict[str, datetime]:

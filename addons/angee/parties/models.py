@@ -404,6 +404,9 @@ class Handle(SqidMixin, AuditMixin, AngeeModel):
         WHATSAPP = "whatsapp", "WhatsApp"
         YOUTUBE = "youtube", "YouTube"
         FACEBOOK = "facebook", "Facebook"
+        INSTAGRAM = "instagram", "Instagram"
+        LINKEDIN = "linkedin", "LinkedIn"
+        TWITTER = "twitter", "Twitter"
         OTHER = "other", "Other"
 
         @classmethod
