@@ -152,7 +152,7 @@ run a business-critical product on unattended.
 
 ## How do I get it?
 
-Angee is open source under the **AGPL-3.0** license — clone it, no invitation
+Angee is open source under the **LGPL-3.0** license — clone it, no invitation
 needed. The framework, base addons, and default Host all live in one repository:
 
 - **[`ang-ee/angee-django`](https://github.com/ang-ee/angee-django)** — the
