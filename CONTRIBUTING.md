@@ -25,10 +25,12 @@ the repository root. See `docs/howto/getstarted.md`.
   `runtime/` trees.
 - Run the relevant backend / frontend / schema / e2e checks described in the
   guidelines, and state in the PR what you ran.
-- By submitting a pull request you agree that your contribution is licensed under
-  the project's LGPL-3.0 license (see `LICENSE`) and you certify you have the
-  right to submit it under the [Developer Certificate of
-  Origin](https://developercertificate.org/).
+- Sign the [Contributor License Agreement](CLA.md) — an automated check asks you
+  to on your first pull request. You keep the copyright in your contribution; the
+  agreement grants Angee the right to relicense it, which is what lets Angee ship
+  both an LGPL release and commercially licensed builds. Contributing on behalf of
+  an employer? See [CLA-CORPORATE.md](CLA-CORPORATE.md). One signature covers
+  every repository in the `ang-ee` organization.
 
 ## Security
 
