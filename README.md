@@ -3,7 +3,7 @@
 **Developer framework and base addons for building Django + React applications
 on the [Angee platform](https://angee.ai).**
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
+[![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-docs.angee.ai-1f6feb.svg)](https://docs.angee.ai)
 ![Python](https://img.shields.io/badge/python-3.14%2B-3776AB.svg)
 ![Django](https://img.shields.io/badge/django-6.0%2B-092E20.svg)
@@ -179,5 +179,11 @@ current built-versus-ahead breakdown.
 
 ## License
 
-Copyright © 2026 Angee, Inc. Licensed under the **GNU Affero General Public
-License v3.0 or later** (AGPL-3.0-or-later). See **[LICENSE](LICENSE)**.
+Copyright © 2026 Angee, Inc. Licensed under the **GNU Lesser General Public
+License v3.0 or later** (LGPL-3.0-or-later). The LGPL is drafted as additional
+permissions on top of the GPL, so both texts ship: **[LICENSE](LICENSE)** (the
+Lesser additional permissions) and **[LICENSE.GPL](LICENSE.GPL)** (the GNU
+General Public License v3.0 they extend).
+
+Addons and applications built on Angee are yours to license as you choose,
+including proprietary — the LGPL's terms apply to Angee itself.

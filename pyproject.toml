@@ -6,8 +6,10 @@ build-backend = "hatch_angee.build"
 name = "django-angee"
 version = "0.1.7"
 description = "Thin Django composition primitives for Angee applications."
-license = "AGPL-3.0-or-later"
-license-files = ["LICENSE"]
+# LGPLv3 is drafted as additional permissions on top of GPLv3, so both texts ship:
+# LICENSE is the Lesser additional permissions, LICENSE.GPL the GPLv3 they extend.
+license = "LGPL-3.0-or-later"
+license-files = ["LICENSE", "LICENSE.GPL"]
 requires-python = ">=3.14"
 # `dynamic = ["entry-points"]` and the build hooks are injected by the hatch-angee
 # build backend (build-backend above) — see [tool.hatch-angee] below.
@@ -165,6 +167,7 @@ extra-web = ["angee/web/*"]
 only-include = [
   "AGENTS.md",
   "LICENSE",
+  "LICENSE.GPL",
   "README.md",
   "addons",
   "angee",

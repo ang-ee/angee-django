@@ -84,10 +84,11 @@ FROM deps AS runtime
 # framework source lands at /opt/angee-src — a mount over /app can never hide it.
 WORKDIR /opt/angee-src
 # The forks in [tool.uv.sources] are public (git inherited from base clones them
-# over anonymous HTTPS → credential-free). README.md + LICENSE satisfy the wheel
-# build's metadata (`license-files`); angee + addons are the two source roots the
-# hatch-angee backend merges onto the one `angee.*` PEP 420 namespace.
-COPY --chown=angee:angee pyproject.toml uv.lock README.md LICENSE ./
+# over anonymous HTTPS → credential-free). README.md + both license files satisfy
+# the wheel build's metadata (`license-files`: LGPLv3 additional permissions plus
+# the GPLv3 they extend); angee + addons are the two source roots the hatch-angee
+# backend merges onto the one `angee.*` PEP 420 namespace.
+COPY --chown=angee:angee pyproject.toml uv.lock README.md LICENSE LICENSE.GPL ./
 COPY --chown=angee:angee angee ./angee
 COPY --chown=angee:angee addons ./addons
 # --no-editable installs the framework as a BUILT wheel into /opt/.venv (via the

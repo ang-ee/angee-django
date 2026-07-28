@@ -26,7 +26,7 @@ the repository root. See `docs/howto/getstarted.md`.
 - Run the relevant backend / frontend / schema / e2e checks described in the
   guidelines, and state in the PR what you ran.
 - By submitting a pull request you agree that your contribution is licensed under
-  the project's AGPL-3.0 license (see `LICENSE`) and you certify you have the
+  the project's LGPL-3.0 license (see `LICENSE`) and you certify you have the
   right to submit it under the [Developer Certificate of
   Origin](https://developercertificate.org/).
 
