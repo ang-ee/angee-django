@@ -1,10 +1,16 @@
 import * as React from "react";
 import { runActionResult, useAuthoredMutation } from "@angee/refine";
-import { Action, Column, Facet, Field, Form, Group, List, ResourceList, useEnumOptions, useImplPrefill, useRecordAction, useRecordActionMutation } from "@angee/ui";
+import { Action, Column, Facet, Field, Form, Group, List, ResourceList, useAuthoredResourceMutation, useEnumOptions, useImplPrefill, useRecordAction, useRecordActionMutation, type FormSubmit } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
+import type { DocumentVariables } from "@angee/refine";
 
 import { useIntegrateT } from "../i18n";
-import { IntegrateDiscoverRepositories } from "../documents";
+import {
+  INTEGRATE_VCS_BRIDGE_INVALIDATES,
+  IntegrateCreateVcsBridge,
+  IntegrateDiscoverRepositories,
+  IntegrateUpdateVcsBridge,
+} from "../documents";
 
 const MODEL = "integrate.VcsBridge";
 
@@ -27,6 +33,42 @@ export function VcsBridgesPage(): React.ReactElement {
   );
   const discoverAll = useRecordAction(discoverRepositories);
 
+  // A VCS bridge exposes no auto-CRUD insert/update root — its writes resolve the
+  // backend impl key and re-materialise backend defaults — so both verbs save
+  // through the bespoke mutations that own that.
+  const [createBridge] = useAuthoredResourceMutation(IntegrateCreateVcsBridge, {
+    invalidateModels: INTEGRATE_VCS_BRIDGE_INVALIDATES,
+  });
+  const [updateBridge] = useAuthoredResourceMutation(IntegrateUpdateVcsBridge, {
+    invalidateModels: INTEGRATE_VCS_BRIDGE_INVALIDATES,
+  });
+  const submitBridge = React.useCallback<FormSubmit>(
+    async (data, context) => {
+      // `data` is FormView's normalized payload: relation fields are already flat
+      // public ids. Only keys the form actually submitted are forwarded, so an
+      // untouched patch field stays UNSET server-side instead of being cleared.
+      const fields = pickPresent(data, [
+        "vendor",
+        "owner",
+        "credential",
+        "account",
+        "backend_class",
+        "config",
+      ]);
+      // The write-only secret is named for its input key, not the read projection.
+      if (data.webhookSecret !== undefined) fields.webhook_secret = data.webhookSecret;
+      if (context.isCreate) {
+        const variables = { data: fields } as DocumentVariables<typeof IntegrateCreateVcsBridge>;
+        return (await createBridge(variables))?.create_vcs_bridge ?? null;
+      }
+      const variables = {
+        data: { ...fields, id: context.id },
+      } as DocumentVariables<typeof IntegrateUpdateVcsBridge>;
+      return (await updateBridge(variables))?.update_vcs_bridge ?? null;
+    },
+    [createBridge, updateBridge],
+  );
+
   return (
     <ResourceList resource={MODEL} placement="inline" routed>
       <List resource={MODEL}>
@@ -46,7 +88,7 @@ export function VcsBridgesPage(): React.ReactElement {
         <Column field="sync_stage" />
         <Column field="last_sync_completed_at" />
       </List>
-      <Form resource={MODEL}>
+      <Form resource={MODEL} submit={submitBridge}>
         <Field name="owner" />
         <Field name="vendor" />
         <Field
@@ -76,4 +118,19 @@ export function VcsBridgesPage(): React.ReactElement {
       </Form>
     </ResourceList>
   );
+}
+
+/**
+ * Copy the named keys the form actually submitted. An absent key stays absent so
+ * the patch leaves that field `UNSET` server-side rather than clearing it.
+ */
+function pickPresent(
+  data: Record<string, unknown>,
+  names: readonly string[],
+): Record<string, unknown> {
+  const picked: Record<string, unknown> = {};
+  for (const name of names) {
+    if (data[name] !== undefined) picked[name] = data[name];
+  }
+  return picked;
 }

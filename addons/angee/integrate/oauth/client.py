@@ -44,6 +44,12 @@ HTTP_TIMEOUT_SECONDS = 10
 # an honest client UA passes. httpx defaults to ``python-httpx/…``, so the session
 # and the GET helper set this explicitly. See docs/backend/guidelines.md (Pitfalls).
 USER_AGENT = "Angee-Integrate/1.0"
+# Headers every outbound OAuth request carries. Angee parses only JSON bodies —
+# Authlib's token parser calls ``response.json()`` unconditionally — so the request
+# must say so: RFC 6749 §5.1 specifies a JSON token response, but GitHub's token
+# endpoint answers ``application/x-www-form-urlencoded`` unless ``Accept`` asks
+# otherwise, which a JSON-only parser then fails to read.
+OUTBOUND_HEADERS = {"Accept": "application/json", "User-Agent": USER_AGENT}
 logger = logging.getLogger(__name__)
 
 # The token-response keys Angee carries forward; everything else the provider
@@ -292,14 +298,14 @@ class OAuthClientProtocol:
             client_id=str(getattr(self.oauth_client, "client_id", "")),
             client_secret=secret or None,
             token_endpoint_auth_method="client_secret_post" if secret else "none",
-            headers={"User-Agent": USER_AGENT},
+            headers=dict(OUTBOUND_HEADERS),
             **_outbound_kwargs(self._transport),
         )
 
     def _httpx_client(self) -> httpx.Client:
-        """Return a plain httpx client carrying the honest UA (JSON-shim transport)."""
+        """Return a plain httpx client carrying the outbound headers (JSON-shim transport)."""
 
-        return httpx.Client(headers={"User-Agent": USER_AGENT}, **_outbound_kwargs(self._transport))
+        return httpx.Client(headers=dict(OUTBOUND_HEADERS), **_outbound_kwargs(self._transport))
 
     def _log_token_failure(self, status: object, body: Any) -> None:
         """Log a redacted token-request failure against the client label."""
@@ -399,13 +405,9 @@ def _get_json(
     error_code: str,
     _transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    """GET a JSON document over httpx with the honest User-Agent."""
+    """GET a JSON document over httpx with the shared outbound headers."""
 
-    request_headers = {
-        "Accept": "application/json",
-        "User-Agent": USER_AGENT,
-        **dict(headers or {}),
-    }
+    request_headers = {**OUTBOUND_HEADERS, **dict(headers or {})}
     try:
         with httpx.Client(**_outbound_kwargs(_transport)) as client:
             response = client.get(url, headers=request_headers)

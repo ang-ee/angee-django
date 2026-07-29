@@ -43,11 +43,45 @@ export const RotateWebhookSecret = graphql(`
   }
 `);
 
-// --- VCS console: repo typeahead and inventory actions ---
-// VcsBridge/Source CRUD and Repository delete stay model-driven (ResourceList
-// reads the SDL). These are the bespoke operations the VCS views need: the repo
-// search typeahead and inventory mutations whose variables do not match the
-// single-id ActionResult helper.
+// --- VCS console: bridge CRUD, repo typeahead and inventory actions ---
+// Source CRUD and Repository delete stay model-driven (ResourceList reads the
+// SDL). A VcsBridge does not: it is an MTI child whose create/update resolve the
+// backend impl key and re-materialise backend defaults, so it exposes bespoke
+// `create_vcs_bridge`/`update_vcs_bridge` roots instead of auto-CRUD ones and the
+// bridge form saves through them. The rest are the operations whose variables do
+// not match the single-id ActionResult helper.
+
+// Bridge writes change `integrate.VcsBridge` rows; keep that blast radius beside
+// the verbs that own it.
+export const INTEGRATE_VCS_BRIDGE_INVALIDATES = ["integrate.VcsBridge"] as const;
+
+/** Create one VCS bridge child row (no auto-CRUD insert root exists). */
+export const IntegrateCreateVcsBridge = graphql(`
+  mutation IntegrateCreateVcsBridge($data: VcsBridgeInput!) {
+    create_vcs_bridge(data: $data) {
+      id
+      display_name
+      backend_class
+      lifecycle
+      runtime_status
+      config
+    }
+  }
+`);
+
+/** Update one VCS bridge child row (no auto-CRUD update root exists). */
+export const IntegrateUpdateVcsBridge = graphql(`
+  mutation IntegrateUpdateVcsBridge($data: VcsBridgePatch!) {
+    update_vcs_bridge(data: $data) {
+      id
+      display_name
+      backend_class
+      lifecycle
+      runtime_status
+      config
+    }
+  }
+`);
 
 /** The add typeahead: host repositories matching a typed query, not yet inventoried. */
 export const IntegrateSearchRepositories = graphql(`

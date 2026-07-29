@@ -55,6 +55,7 @@ export const enPlatformMessages: Record<string, string> = {
   "apps.addSource.bridgePlaceholder": "Select a bridge",
   "apps.addSource.repo": "Repository",
   "apps.addSource.repoPlaceholder": "owner/repo",
+  "apps.addSource.selected": "Selected",
   "apps.addSource.ref": "Ref",
   "apps.addSource.refPlaceholder": "Default branch",
   "apps.addSource.path": "Path",

@@ -195,6 +195,11 @@ export {
   connectCallbackRedirectUri,
   currentConnectCallbackRedirectUri,
 } from "./connect/redirects";
+export {
+  RepositoryPicker,
+  type RepositoryPickerProps,
+} from "./views/RepositoryPicker";
+export { type RepoCandidate } from "./documents";
 
 export default integrate;
 export { VCS_BRIDGE_MODEL, VCS_BRIDGE_RELATION } from "./data/vcs-bridge";

@@ -1,10 +1,15 @@
 import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
-import { Action, Column, ResourceList, Field, Form, Group, List, recordActionId, useRecordActionMutation, type ActionContext } from "@angee/ui";
+import { Action, Column, ResourceList, Field, Form, Group, List, recordActionId, useAuthoredResourceMutation, useRecordActionMutation, type ActionContext, type FormSubmit } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
+import type { DocumentVariables } from "@angee/refine";
 
 import { useIntegrateT } from "../../i18n";
-import { IntegrateRevealCredential } from "../documents";
+import {
+  INTEGRATE_CREATE_CREDENTIAL_INVALIDATES,
+  IntegrateCreateCredential,
+  IntegrateRevealCredential,
+} from "../documents";
 
 const MODEL = "Credential";
 
@@ -57,11 +62,36 @@ export function CredentialsPage(): React.ReactElement {
     [revealCredential, t],
   );
 
+  // Credentials have no auto-CRUD insert root, so create saves through the
+  // `create_credential` mutation that owns kind-dispatched material. `createSubmit`
+  // is create-only: editing keeps the stock update path for `status`.
+  const [createCredential] = useAuthoredResourceMutation(IntegrateCreateCredential, {
+    invalidateModels: INTEGRATE_CREATE_CREDENTIAL_INVALIDATES,
+  });
+  const submitCredential = React.useCallback<FormSubmit>(
+    async (data) => {
+      // `data` carries the override form's field names; map the write-only
+      // material fields onto the discriminated `CredentialInput` keys. The cast
+      // bridges FormSubmit's untyped payload to the typed document variables.
+      const variables = {
+        data: {
+          name: String(data.name ?? ""),
+          kind: String(data.kind ?? ""),
+          api_key: String(data.apiKey ?? ""),
+          private_key: String(data.privateKey ?? ""),
+        },
+      } as DocumentVariables<typeof IntegrateCreateCredential>;
+      const result = await createCredential(variables);
+      return result?.create_credential ?? null;
+    },
+    [createCredential],
+  );
+
   // Create uses the addon-registered `Credential` form override (a kind dropdown
   // that swaps the material field); this declared form is the lifecycle editor
   // (status / reveal / health) the detail shows on edit.
   const credentialForm = (
-    <Form resource={MODEL}>
+    <Form resource={MODEL} createSubmit={submitCredential}>
       <Field name="display_name" title readOnly />
       <Field name="status" widget="statusbar" />
       <Group label={t("credentials.group.health")} columns={2}>

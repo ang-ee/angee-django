@@ -1,7 +1,7 @@
 import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
 import { Button, Dialog, Glyph, MutationDialog, Spinner, errorMessage, textRoleVariants, useAuthoredResourceMutation, useRelationOptions, useToast, type MutationDialogField } from "@angee/ui";
-import { VCS_BRIDGE_RELATION } from "@angee/integrate";
+import { RepositoryPicker, VCS_BRIDGE_RELATION } from "@angee/integrate";
 
 import {
   AddAddonSource,
@@ -75,7 +75,22 @@ function AddSourceDialog({
         label: t("apps.addSource.repo"),
         placeholder: t("apps.addSource.repoPlaceholder"),
         required: true,
-        readOnlyWhen: (values) => stringValue(values.vcsBridgeId) === "",
+        // Repositories are host candidates, not rows — integrate owns that search,
+        // so the picker comes from there rather than being retyped here as a bare
+        // `owner/repo` text field the user has to already know.
+        control: ({ id, value, readOnly, describedBy, onChange, dialogValues }) => (
+          <RepositoryPicker
+            id={id}
+            describedBy={describedBy}
+            readOnly={readOnly}
+            vcsBridgeId={stringValue(dialogValues.vcsBridgeId)}
+            onPick={(candidate) => onChange(candidate.name)}
+            pickedNames={
+              stringValue(value) === "" ? undefined : new Set([stringValue(value)])
+            }
+            pickedLabel={t("apps.addSource.selected")}
+          />
+        ),
       },
       {
         name: "ref",

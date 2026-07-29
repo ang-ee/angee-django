@@ -1,27 +1,21 @@
 import * as React from "react";
-import { useAuthoredQuery } from "@angee/refine";
-import { Button, DialogForm, Glyph, Input, RelationField, Spinner, cn, errorMessage, textRoleVariants, useAuthoredResourceMutation, useRelationOptions } from "@angee/ui";
-import { useDebounce } from "use-debounce";
-import type { DocumentVariables } from "@angee/refine";
+import { Button, DialogForm, Glyph, RelationField, errorMessage, useAuthoredResourceMutation, useRelationOptions } from "@angee/ui";
 
 import { useIntegrateT } from "../i18n";
 import { VCS_BRIDGE_RELATION } from "../data/vcs-bridge";
 import {
   INTEGRATE_ADD_REPOSITORY_INVALIDATES,
   IntegrateAddRepository,
-  IntegrateSearchRepositories,
   type RepoCandidate,
 } from "../documents";
-
-// Debounce keystrokes before hitting the host search API.
-const SEARCH_DEBOUNCE_MS = 250;
+import { RepositoryPicker } from "./RepositoryPicker";
 
 /**
  * The "Add repository" affordance: a button (for the list toolbar slot) opening a
- * dialog that picks a VCS bridge and types a repository name like a foreign-key
- * field. Matches against `search_repositories` (live host candidates, debounced) and
- * on pick inventories the row via `add_repository`, refreshing the repository list.
- * The dialog stays open so several repositories can be added in one sitting.
+ * dialog that picks a VCS bridge and searches its host through the shared
+ * {@link RepositoryPicker}. A picked candidate is inventoried via `add_repository`,
+ * refreshing the repository list. The dialog stays open so several repositories can
+ * be added in one sitting.
  */
 export function AddRepositoryControl(): React.ReactElement {
   const t = useIntegrateT();
@@ -36,8 +30,6 @@ export function AddRepositoryControl(): React.ReactElement {
     </>
   );
 }
-
-type SearchRepositoryVariables = DocumentVariables<typeof IntegrateSearchRepositories>;
 
 function AddRepositoryDialog({
   open,
@@ -58,18 +50,6 @@ function AddRepositoryDialog({
   const soleBridge = bridgeOptions.length === 1 ? bridgeOptions[0] : undefined;
   const vcsBridgeId = pickedId ?? soleBridge?.value ?? "";
 
-  const [query, setQuery] = React.useState("");
-  const [debouncedQuery] = useDebounce(query.trim(), SEARCH_DEBOUNCE_MS);
-  const searchEnabled = open && vcsBridgeId !== "" && debouncedQuery !== "";
-  const searchVars = React.useMemo<SearchRepositoryVariables>(
-    () => ({ vcsBridgeId, query: debouncedQuery }),
-    [vcsBridgeId, debouncedQuery],
-  );
-  const searchQuery = useAuthoredQuery(IntegrateSearchRepositories, searchVars, {
-    enabled: searchEnabled,
-  });
-  const candidates = searchQuery.data?.search_repositories ?? [];
-
   const [addRepository] = useAuthoredResourceMutation(IntegrateAddRepository, {
     invalidateModels: INTEGRATE_ADD_REPOSITORY_INVALIDATES,
   });
@@ -83,7 +63,6 @@ function AddRepositoryDialog({
   // Reset per-session state whenever the dialog closes or the bridge changes.
   React.useEffect(() => {
     if (!open) {
-      setQuery("");
       setAdded(new Set());
       setError(null);
       setAdding(null);
@@ -129,105 +108,19 @@ function AddRepositoryDialog({
           searchPlaceholder={t("addRepo.integrationSearch")}
           onChange={setPickedId}
         />
-        <Input
-          type="search"
-          aria-label={t("addRepo.nameLabel")}
-          placeholder={t("addRepo.namePlaceholder")}
-          value={query}
-          disabled={vcsBridgeId === ""}
-          onChange={(event) => setQuery(event.currentTarget.value)}
-        />
         {error ? (
           <p className="text-13 text-danger-text" role="alert">
             {error}
           </p>
         ) : null}
-        <RepoCandidateList
-          candidates={candidates}
-          fetching={searchQuery.fetching}
-          searching={searchEnabled}
-          hasBridge={vcsBridgeId !== ""}
-          adding={adding}
-          added={added}
-          onAdd={add}
+        <RepositoryPicker
+          vcsBridgeId={vcsBridgeId}
+          onPick={(candidate) => void add(candidate)}
+          pickedNames={added}
+          pickedLabel={t("addRepo.added")}
+          busyName={adding}
         />
       </div>
     </DialogForm>
   );
-}
-
-function RepoCandidateList({
-  candidates,
-  fetching,
-  searching,
-  hasBridge,
-  adding,
-  added,
-  onAdd,
-}: {
-  candidates: readonly RepoCandidate[];
-  fetching: boolean;
-  searching: boolean;
-  hasBridge: boolean;
-  adding: string | null;
-  added: ReadonlySet<string>;
-  onAdd: (candidate: RepoCandidate) => void;
-}): React.ReactElement {
-  const t = useIntegrateT();
-  if (!hasBridge) {
-    return <ListHint>{t("addRepo.selectIntegration")}</ListHint>;
-  }
-  if (!searching) {
-    return <ListHint>{t("addRepo.typeToSearch")}</ListHint>;
-  }
-  if (fetching && candidates.length === 0) {
-    return (
-      <div className={cn(textRoleVariants({ role: "meta" }), "flex items-center gap-2 px-1 py-3")}>
-        <Spinner size="sm" />
-        {t("addRepo.searching")}
-      </div>
-    );
-  }
-  if (candidates.length === 0) {
-    return <ListHint>{t("addRepo.noMatches")}</ListHint>;
-  }
-  return (
-    <ul className="flex max-h-72 flex-col gap-1 overflow-auto">
-      {candidates.map((candidate) => {
-        const isAdded = added.has(candidate.name);
-        const isAdding = adding === candidate.name;
-        return (
-          <li key={candidate.name}>
-            <button
-              type="button"
-              disabled={isAdded || isAdding}
-              onClick={() => onAdd(candidate)}
-              className="flex w-full items-center gap-3 rounded-6 border border-border bg-sheet px-3 py-2 text-left outline-none transition-colors hover:border-border-strong focus-visible:focus-ring disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-13 text-fg">{candidate.name}</div>
-                <div className="truncate text-12 text-fg-muted">
-                  {candidate.default_branch} · {candidate.visibility}
-                </div>
-              </div>
-              {isAdding ? (
-                <Spinner size="sm" />
-              ) : isAdded ? (
-                <span className="flex items-center gap-1 text-12 text-fg-muted">
-                  <Glyph decorative name="check" />
-                  {t("addRepo.added")}
-                </span>
-              ) : (
-                <Glyph decorative name="plus" className="text-fg-muted" />
-              )}
-            </button>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-function ListHint({ children }: { children: React.ReactNode }): React.ReactElement {
-  return <p className={cn(textRoleVariants({ role: "meta" }), "px-1 py-3")}>{children}</p>;
 }

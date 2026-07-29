@@ -6,3 +6,8 @@ description = "GitHub backend for the VCS inventory — reads repositories over 
 keywords = ["github", "vcs"]
 category = "Integration"
 depends_on = ["angee.integrate"]
+
+[resources]
+install = [
+  { path = "resources/install/010_integrate.oauthclient.yaml", adopt = ["slug", "environment"] },
+]
