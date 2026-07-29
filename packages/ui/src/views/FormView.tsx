@@ -184,6 +184,17 @@ export interface FormViewProps {
    * form.
    */
   submit?: FormSubmit;
+  /**
+   * Create-only save owner, for a resource whose create is a bespoke mutation but
+   * whose update is the stock Hasura root — a model the auto-CRUD insert cannot
+   * serve because creating it means more than writing its columns (dispatching
+   * discriminated secret material, say). Unlike `submit`, which takes over both
+   * verbs, this leaves editing on the stock update path.
+   *
+   * Pairs with the addon `forms` create-form override, which is likewise
+   * create-only: the override declares the fields, this declares who saves them.
+   */
+  createSubmit?: FormSubmit;
   /** Label used for the submit button. */
   submitLabel?: React.ReactNode;
   /**
@@ -380,6 +391,7 @@ export function FormView({
   defaultValues,
   onSaved,
   submit,
+  createSubmit,
   submitLabel,
   toolbarStart,
   toolbar,
@@ -761,13 +773,16 @@ export function FormView({
   // An existing-record form starts before its query resolves. Keep fields locked
   // until the record exists so a fast edit cannot be overwritten by the seed reset.
   const recordUnavailable = !isCreate && record == null;
+  // Who owns this form's save: an explicit `submit` for both verbs, or a
+  // create-only `createSubmit` that leaves editing on the stock update root.
+  const submitOwner = submit ?? (isCreate ? createSubmit : undefined);
   const formReadOnly = React.useMemo(
     () =>
       recordUnavailable ||
-      (!submit &&
+      (!submitOwner &&
         !Boolean(isCreate ? dataResource?.roots.create : dataResource?.roots.update)) ||
       (formFields.length > 0 && formFields.every((field) => field.readOnly)),
-    [dataResource, formFields, isCreate, recordUnavailable, submit],
+    [dataResource, formFields, isCreate, recordUnavailable, submitOwner],
   );
   const formIsDirty = form.formState.isDirty;
   const formIsDirtyRef = React.useRef(formIsDirty);
@@ -792,9 +807,9 @@ export function FormView({
   );
   const runSubmit = React.useCallback(
     async (data: Values, lines: LineDiff | null = null): Promise<Row | null> => {
-      if (submit) {
+      if (submitOwner) {
         return (
-          (await submit(data, {
+          (await submitOwner(data, {
             resource,
             id: id ?? null,
             isCreate,
@@ -828,7 +843,7 @@ export function FormView({
       resource,
       resourceSave,
       saveOperation.target,
-      submit,
+      submitOwner,
     ],
   );
   const commitSavedRecord = React.useCallback(

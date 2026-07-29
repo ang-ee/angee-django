@@ -29,6 +29,7 @@ export {
 export {
   LabeledDescriptorField,
   MutationDialog,
+  type MutationDialogControlProps,
   type MutationDialogField,
   type MutationDialogProps,
   type MutationDialogRelation,

@@ -55,6 +55,29 @@ export interface MutationDialogField extends FieldDescriptor {
    * a dialog must not navigate away from itself mid-edit.
    */
   relation?: MutationDialogRelation;
+  /**
+   * Render an addon-supplied control in place of the registry widget, while the
+   * dialog keeps owning the surrounding label/description/error/required chrome
+   * and the submit lifecycle. The seam for a field whose options are neither a
+   * static list nor a resource relation — e.g. candidates searched live from a
+   * remote host — so the addon that owns that vocabulary supplies the control
+   * without the framework primitive learning the domain.
+   *
+   * Takes precedence over `relation`; `dialogValues` lets the control react to
+   * the dialog's other fields (a picker scoped by a bridge chosen above it).
+   */
+  control?: (props: MutationDialogControlProps) => React.ReactElement;
+}
+
+/** What {@link MutationDialogField.control} receives to render one dialog field. */
+export interface MutationDialogControlProps {
+  id: string;
+  value: unknown;
+  readOnly: boolean;
+  describedBy: string | undefined;
+  onChange: (value: unknown) => void;
+  /** Every current dialog value, so a control can scope itself by a sibling field. */
+  dialogValues: Record<string, unknown>;
 }
 
 export interface MutationDialogProps<
@@ -186,6 +209,7 @@ export function MutationDialog<
           key={field.name}
           field={field}
           value={values[field.name]}
+          dialogValues={values}
           readOnly={
             field.readOnly || field.readOnlyWhen?.(values) || submitting
           }
@@ -206,6 +230,7 @@ export function MutationDialog<
 export function LabeledDescriptorField({
   field,
   value,
+  dialogValues,
   readOnly,
   messages = [],
   showLabel = true,
@@ -216,6 +241,8 @@ export function LabeledDescriptorField({
     rowTemplate?: readonly FormSpecFieldDescriptor[];
   };
   value: unknown;
+  /** The sibling dialog values a `field.control` may scope itself by. */
+  dialogValues?: Record<string, unknown>;
   readOnly?: boolean;
   messages?: readonly string[];
   showLabel?: boolean;
@@ -247,7 +274,16 @@ export function LabeledDescriptorField({
           {field.label ?? field.name}
         </FieldLabel>
       ) : null}
-      {field.relation ? (
+      {field.control ? (
+        field.control({
+          id: controlId,
+          value,
+          readOnly: Boolean(readOnly),
+          describedBy,
+          onChange,
+          dialogValues: dialogValues ?? {},
+        })
+      ) : field.relation ? (
         <MutationDialogRelationControl
           controlId={controlId}
           describedBy={describedBy}
