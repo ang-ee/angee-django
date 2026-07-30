@@ -21,6 +21,13 @@ import { defineConfig, mergeConfig, type Plugin, type UserConfig } from "vite";
 // `@angee/gql` alias is inlined (two lines) rather than imported from
 // `@angee/app/vitest`, whose top-level `require.resolve` side effect has no place
 // in the Vite build path.
+//
+// A config that imports this module must run Vite with `--configLoader runner`
+// (both the example and the project template do). Vite's default loader bundles
+// the config but leaves a linked workspace package external, so Node imports THIS
+// `.ts` file directly — and fails with `ERR_UNKNOWN_FILE_EXTENSION` on any Node
+// build without type stripping (the distro Node on Ubuntu is built without
+// TypeScript support at all). The runner loader transpiles it instead.
 
 const django = process.env.ANGEE_DJANGO_URL ?? "http://127.0.0.1:8000";
 // The operator daemon (the dev-stack supervisor) the console talks to. The

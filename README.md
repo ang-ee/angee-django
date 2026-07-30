@@ -71,6 +71,25 @@ are.*
 - The **`angee` CLI** — `curl -fsSL https://angee.ai/install.sh | sh`
 - **Docker** (container Services), **process-compose** (local Services), and
   **git** (git Sources)
+- A **native build toolchain** — `clang`, `cmake`, a C toolchain, the Python
+  development headers, and the system **libmagic**. A few locked dependencies have
+  no wheel for the supported Python on every architecture and compile on install
+  (`python-olm`, `audioop-lts`); `python-magic` binds libmagic at import.
+
+  ```sh
+  # Debian/Ubuntu
+  sudo apt-get install -y build-essential clang cmake pkg-config python3-dev libmagic1
+  # RHEL/CentOS Stream
+  sudo dnf install -y gcc gcc-c++ clang cmake pkgconf-pkg-config python3-devel file-libs
+  # macOS (clang ships with the Command Line Tools)
+  brew install cmake libmagic
+  ```
+
+  The container images carry all of this already; these are the requirements for
+  running the stack's Python on the host (the dev stack) or building the images.
+  On Apple Silicon the dynamic loader does not search Homebrew's prefix, so a
+  host run also needs `export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` for
+  `python-magic` to find libmagic.
 
 ## Quick start
 

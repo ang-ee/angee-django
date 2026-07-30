@@ -11,6 +11,7 @@ whatever the templates compute, never a value re-derived here.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,10 @@ SHARED_BODY = ROOT / "templates" / "stacks" / "_shared" / "stack-body.yaml.jinja
 SHARED_AGENTS = ROOT / "templates" / "stacks" / "_shared" / "AGENTS.md.jinja"
 PROJECT_GITIGNORE = ROOT / "templates" / "projects" / "web" / "template" / ".gitignore.jinja"
 PROJECT_SETTINGS_TEMPLATE = ROOT / "templates" / "projects" / "web" / "template" / "settings.yaml.jinja"
+PROJECT_WEB_TEMPLATE = ROOT / "templates" / "projects" / "web" / "template" / "{{ web_path }}"
+PROJECT_WEB_PACKAGE = PROJECT_WEB_TEMPLATE / "package.json.jinja"
+EXAMPLE_WEB_PACKAGE = ROOT / "examples" / "notes-angee" / "web" / "package.json"
+JINJA_TEMPLATES = tuple(sorted((ROOT / "templates").rglob("*.jinja")))
 
 # Services both stack templates render from the one shared body.
 SHARED_SERVICES = {"operator", "postgres", "redis", "django", "celery-worker", "celery-beat"}
@@ -101,12 +106,16 @@ def _strip_jinja_comments(text: str) -> str:
 
     pongo2 (the operator's renderer) rejects a comment spanning lines ("Newline not
     permitted in a single-line comment"), so a multi-line comment in a template is a
-    render-breaking bug this renderer must refuse to paper over.
+    render-breaking bug this renderer must refuse to paper over. A comment ends at
+    the FIRST `#}` — writing that sequence inside the prose closes the comment early
+    and spills the rest into the rendered file, which pongo2 accepts silently.
     """
 
     for match in re.finditer(r"{#.*?#}", text, flags=re.DOTALL):
         assert "\n" not in match.group(0), f"multi-line jinja comment breaks pongo2: {match.group(0)[:80]}..."
-    return re.sub(r"{#.*?#}", "", text)
+    stripped = re.sub(r"{#.*?#}", "", text)
+    assert "#}" not in stripped, "a `#}` inside comment prose closes the comment early and leaks into the output"
+    return stripped
 
 
 def _render_jinja_set_tags(text: str, variables: dict[str, str]) -> str:
@@ -378,6 +387,37 @@ def _render_project_settings_conditionals(
     return "\n".join(output) + "\n"
 
 
+# --- renderer grammar ----------------------------------------------------------
+
+
+def test_every_template_obeys_pongo2_comment_grammar() -> None:
+    """No template may span a `{# … #}` comment across lines — any template, any kind.
+
+    The operator renders EVERY template with pongo2, not just the stack manifests,
+    so a multi-line comment is a render-time failure ("Newline not permitted in a
+    single-line comment") for whoever scaffolds a project or an addon.
+    """
+
+    assert JINJA_TEMPLATES
+    for path in JINJA_TEMPLATES:
+        _strip_jinja_comments(path.read_text(encoding="utf-8"))
+
+
+def test_web_packages_load_the_vite_config_through_the_runner() -> None:
+    """`@angee/app/vite` is TypeScript: Vite's default loader leaves it to Node.
+
+    The example and the project template are the two owners of a `vite` invocation;
+    both must pass `--configLoader runner`, or Node imports the linked package's
+    `.ts` config directly and dies with `ERR_UNKNOWN_FILE_EXTENSION` on any build
+    of Node without type stripping.
+    """
+
+    for path in (PROJECT_WEB_PACKAGE, EXAMPLE_WEB_PACKAGE):
+        scripts = json.loads(_strip_jinja_comments(path.read_text(encoding="utf-8")))["scripts"]
+        assert scripts["dev"] == "vite --configLoader runner", path
+        assert scripts["build"] == "vite build --configLoader runner", path
+
+
 # --- shared-body contract ------------------------------------------------------
 
 
@@ -522,6 +562,8 @@ def test_local_stack_renders_single_caddy_frontend_ingress() -> None:
     assert "project/sources/angee-django/angee/web" in frontend_command
     assert "project/sources/angee-django/addons/angee" in frontend_command
     assert "fs.cpSync(srcDir,dstDir" in frontend_command
+    # The mounted project joins a workspace whose baked lockfile predates it.
+    assert "pnpm install --no-frozen-lockfile" in frontend_command
     assert 'path.join(root,"project/web/node_modules/@angee")' in frontend_command
     assert "fs.symlinkSync" in frontend_command
     assert "pnpm build" in frontend_command

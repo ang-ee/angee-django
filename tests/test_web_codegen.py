@@ -127,3 +127,50 @@ def test_web_codegen_resolves_addon_entry_and_documents_from_manifest_root(
     )
     assert 'import addon0 from "../../addon-web/src/index.tsx";' in app_module
     assert "DemoDocument" in generated_documents
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is required for frontend codegen")
+def test_web_codegen_prefers_the_installed_package_over_the_manifest_root(
+    tmp_path: Path,
+) -> None:
+    """The emitted import resolves dependencies, so an installed copy wins.
+
+    A manifest root can point at a checkout that was never installed — the shape the
+    container stack mounts — where the addon's own dependencies cannot resolve.
+    """
+
+    runtime = tmp_path / "runtime"
+    web = tmp_path / "web"
+    addon = tmp_path / "addon-web"
+    manifest_dir = runtime / "web"
+    manifest_dir.mkdir(parents=True)
+    (addon / "src").mkdir(parents=True)
+    (addon / "src" / "index.tsx").write_text("export default {};\n", encoding="utf-8")
+    installed = web / "node_modules" / "@demo" / "addon" / "src"
+    installed.mkdir(parents=True)
+    (installed / "index.tsx").write_text("export default {};\n", encoding="utf-8")
+
+    (manifest_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "addonPackages": [
+                    {"package": "@demo/addon", "root": "../../addon-web", "sourceRoot": "src"}
+                ],
+                "codegen": [],
+                "documentRoots": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        ["node", str(CODEGEN), "--runtime", str(runtime), "--web-root", str(web)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    app_module = (manifest_dir / "app.ts").read_text(encoding="utf-8")
+    assert 'import addon0 from "../../web/node_modules/@demo/addon/src/index.tsx";' in app_module

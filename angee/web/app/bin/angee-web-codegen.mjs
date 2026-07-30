@@ -113,11 +113,18 @@ function addonSourceDirectories(runtimeDir, webRoot, manifest) {
 
 function addonSourceDirectory(runtimeDir, webRoot, pkg) {
   const sourceRoot = typeof pkg.sourceRoot === "string" ? pkg.sourceRoot : "src";
-  const candidates = [];
+  // The installed workspace package wins: the emitted import is resolved by
+  // Node/Vite from the file that holds it, so it must point at a copy that carries
+  // its own declared node_modules graph. A raw checkout reached through the
+  // manifest root need not have been installed at all — in the container stack the
+  // framework sources are bind-mounted next to a workspace installed elsewhere,
+  // and importing from there fails on the package's own dependencies (`@angee/app`,
+  // `lucide-react`, …). The manifest root stays the fallback for a composed addon
+  // that is deliberately not a direct host dependency.
+  const candidates = [path.resolve(webRoot, "node_modules", pkg.package, sourceRoot)];
   if (typeof pkg.root === "string" && pkg.root.length > 0) {
     candidates.push(path.resolve(runtimeDir, "web", pkg.root, sourceRoot));
   }
-  candidates.push(path.resolve(webRoot, "node_modules", pkg.package, sourceRoot));
   const uniqueCandidates = [...new Set(candidates)];
   const sourceDir = uniqueCandidates.find((candidate) =>
     ADDON_ENTRY_EXTENSIONS.some((extension) =>

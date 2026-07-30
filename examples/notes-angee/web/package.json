@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "vite --configLoader runner",
+    "build": "vite build --configLoader runner",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "codegen": "angee-web-codegen --runtime ../runtime --web-root ."

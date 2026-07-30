@@ -598,6 +598,19 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **Layout slot ids use the `@angee/ui.*` symbol namespace.** Register new slots as
   `Symbol.for("@angee/ui.<name>-slot")` (see `layouts/slots.ts`); the legacy
   rendered-binding prefix is retired.
+- **Vite must load a config that imports `@angee/app/vite` with
+  `--configLoader runner`.** The default loader bundles the config but leaves a
+  linked workspace package external, so Node imports that `.ts` export directly and
+  dies with `ERR_UNKNOWN_FILE_EXTENSION` on any Node without type stripping — the
+  distro Node on Ubuntu is built without TypeScript support entirely
+  (`ERR_NO_TYPESCRIPT`). The example and the project template both pass the flag in
+  their `dev`/`build` scripts; a new web package that runs Vite must too.
+- **A generated import must point at an *installed* package, not at a checkout.**
+  Node/Vite resolve a package's own dependencies from the file that imports it, so
+  `runtime/web/app.ts` importing an addon's `src/` out of a bind-mounted framework
+  checkout fails on that addon's dependencies (`@angee/app`, `lucide-react`, …)
+  even though the file exists. `angee-web-codegen` therefore prefers
+  `web/node_modules/<pkg>/<sourceRoot>` over the manifest root; keep that order.
 
 ## Checks
 
