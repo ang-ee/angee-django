@@ -864,6 +864,23 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   a package` during a test run, while a single-module run and `manage.py check` pass.
   Name such a module for its role, not the library (the MCP tool seam infers — or
   resolves a `[mcp].tools` override to — `mcp_tools.py`, not `mcp.py`).
+- **A dependency that builds from source declares its toolchain in
+  `[tool.uv.extra-build-variables]`, never in a shell or a Dockerfile `ENV`.** Not
+  every locked dependency ships a wheel for the supported Python on every
+  architecture, so a fresh host compiles them — and a compiler flag set without its
+  compiler is fatal on the platform that does not use it (`python-olm`'s clang-only
+  `-fdelayed-template-parsing` killed every GCC install until `CC`/`CXX` were
+  declared alongside it). Declaring the variables in the manifest also makes them
+  part of uv's cache key, so a wheel built once (the image's `deps` stage) is reused
+  by every later `uv sync` instead of being rebuilt in an environment that may have
+  no compiler at all. Any host that syncs from source therefore needs the declared
+  toolchain — see README **Requirements**.
+- **Every file under `templates/` is rendered by the operator's pongo2, which
+  rejects a `{# … #}` comment that spans lines** ("Newline not permitted in a
+  single-line comment") — a scaffold-time failure for whoever renders the template,
+  not something this repo's own tests would notice by rendering YAML alone. Write
+  one `{# … #}` per line; `tests/test_stack_templates.py` enforces it across all
+  templates.
 
 ## Framework Contracts
 
