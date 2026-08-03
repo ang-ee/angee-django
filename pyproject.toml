@@ -38,7 +38,9 @@ dependencies = [
   "strawberry-graphql>=0.270",
   "strawberry-django-aggregates>=0.10.0",
   "strawberry-django-hasura>=0.6.0",
-  "strawberry-graphql-django>=0.86",
+  # 0.86.7 carries the DEFAULT_PK_FIELD_NAME mutation-lookup fix the Hasura
+  # resolvers depend on (upstream #928, was an Angee fork patch).
+  "strawberry-graphql-django>=0.86.7",
   "tablib>=3",
   "django-choices-field>=4.0.0",
   "django-yamlconf>=1.5.0",
@@ -113,13 +115,14 @@ cache-dir = ".angee/caches/uv"
 python-olm = { CXXFLAGS = "-fdelayed-template-parsing" }
 
 [tool.uv.sources]
-# Developing against the Angee Strawberry forks. strawberry-django is on
-# `hotfix-angee-django` = `codex/input-object-extensions` + upstream/main + two
-# upstream bug fixes (DEFAULT_PK_FIELD_NAME mutation lookups, #927; __copy__
-# dropping key_attr/argument_name). strawberry core stays on codex — the fixes are
-# strawberry-django-only. Keep pins explicit so every environment resolves identically.
+# Developing against the Angee Strawberry core fork. `extend=True` merges
+# same-name object/input types at schema build, which is how an addon
+# contributes fields to a type another addon owns; upstream raises
+# DuplicatedTypeName instead. Tracking strawberry-graphql/strawberry#4464 —
+# drop the pin when it lands. Keep it explicit so every environment resolves
+# identically. strawberry-django needs no fork: its patches are upstream as of
+# 0.86.7.
 strawberry-graphql = { git = "https://github.com/ang-ee/strawberry.git", branch = "codex/input-object-extensions" }
-strawberry-graphql-django = { git = "https://github.com/ang-ee/strawberry-django.git", branch = "hotfix-angee-django" }
 
 [tool.hatch.build.targets.wheel]
 # Two source roots merge into the one `angee` PEP 420 namespace: the framework
