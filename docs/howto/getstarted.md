@@ -179,7 +179,10 @@ example project, so it brings the whole stack up for you.
    ```
 
    You also need **Docker** (for container Services), **process-compose** (for
-   local Services), and **git** (for git Sources). See the operator's
+   local Services), **git** (for git Sources), and — because a few locked Python
+   dependencies compile on install — a native build toolchain (`clang`, `cmake`,
+   a C toolchain, Python headers, libmagic). The exact package lists are in the
+   [README Requirements](../../README.md#requirements). See the operator's
    [Getting started](https://docs.angee.ai/guide/getting-started) for details.
 
 3. **Set up and bring up the stack from the repo root.**

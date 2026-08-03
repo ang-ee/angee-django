@@ -107,12 +107,23 @@ dev = [
 cache-dir = ".angee/caches/uv"
 
 [tool.uv.extra-build-variables]
-# python-olm (mautrix[encryption]) vendors the EOL libolm C++ source, which
-# modern clang rejects on a const-increment inside a never-instantiated template
-# member (macOS has no wheels; manylinux wheels predate the stricter checks).
-# Deferring template semantic checks lets the sdist build unchanged. Remove when
-# mautrix moves off libolm (vodozemac) or a fixed release appears.
-python-olm = { CXXFLAGS = "-fdelayed-template-parsing" }
+# python-olm (mautrix[encryption]) vendors the EOL libolm C++/CMake source; no
+# wheel exists for the supported Python, so every platform builds this sdist.
+# The three variables are ONE decision — build it with clang:
+#   CXXFLAGS: modern compilers reject a const-increment inside a never-instantiated
+#     template member; `-fdelayed-template-parsing` defers the check. The flag is
+#     clang-only, so GCC dies on it with `unrecognized command-line option`.
+#   CC/CXX: pin the toolchain the flag belongs to instead of inheriting the
+#     platform default (clang on macOS, GCC on Linux). Declaring it here — not as
+#     ad-hoc env in a Dockerfile or a shell — also keeps the build variables part
+#     of uv's cache key identical everywhere, so a wheel built once (image build)
+#     is reused by every later `uv sync` instead of recompiling.
+#   CMAKE_POLICY_VERSION_MINIMUM: CMake 4 dropped compatibility with `< 3.5`,
+#     which the vendored libolm still declares.
+# Requires clang + cmake on any host that builds from source (see README
+# Requirements); the Docker `deps` stage installs both. Remove the whole entry
+# when mautrix moves off libolm (vodozemac) or a fixed release appears.
+python-olm = { CC = "clang", CXX = "clang++", CXXFLAGS = "-fdelayed-template-parsing", CMAKE_POLICY_VERSION_MINIMUM = "3.5" }
 
 [tool.uv.sources]
 # Developing against the Angee Strawberry core fork. `extend=True` merges

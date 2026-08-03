@@ -44,12 +44,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # `uv sync` at container start can link the editable project into /opt/.venv.
 RUN useradd --create-home --uid 1000 angee \
     && install -d -o angee -g angee /app /opt/.venv
-COPY docker/runtime-entrypoint.sh /usr/local/bin/angee-django-entrypoint
-RUN chmod +x /usr/local/bin/angee-django-entrypoint
 WORKDIR /app
 
 # --- deps: bake the dependency closure (git comes from base) --------------------
 FROM base AS deps
+# The toolchain lives in THIS stage only. Not every locked dependency ships a wheel
+# for the supported Python on every architecture (audioop-lts arrives as an sdist,
+# python-olm always builds its vendored libolm), so the closure cannot be baked
+# without a compiler — but the images that serve must stay compiler-free, and they
+# do: every stage below starts again from `base` and copies the finished venv.
+# clang + cmake are the toolchain `[tool.uv.extra-build-variables]` declares for
+# python-olm; the declared variables are part of uv's cache key, so the wheel built
+# here is reused by a mounted-source `uv sync` instead of being rebuilt.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential clang cmake \
+    && rm -rf /var/lib/apt/lists/*
 # `--build-arg DEV=--no-dev` for a runtime-lean image; default includes the dev
 # group so a dev workspace can run pytest/ruff/mypy in-container out of the box.
 ARG DEV=
@@ -57,14 +66,25 @@ COPY pyproject.toml uv.lock ./
 # The ang-ee/strawberry* forks pinned in `[tool.uv.sources]` are public, so uv
 # clones them over anonymous HTTPS — no credential, no SSH. Deps only — the project
 # is not built here, so the source tree / hatch-angee are not needed and the layer
-# caches until the lock moves.
+# caches until the lock moves. `g=u` mirrors owner rights onto the angee group so
+# the venv stays writable after the entrypoint remaps the user to the bind-mount
+# owner's uid (the gid stays angee's).
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project ${DEV} \
-    && chown -R angee:angee /opt/.venv
+    && chown -R angee:angee /opt/.venv \
+    && chmod -R g=u /opt/.venv
 
-# --- final: the lean base + the baked venv (git inherited for the dev uv sync) --
-FROM base AS final
+# --- runtime-base: the lean base + the baked venv + the entrypoint --------------
+# Shared by `final` and `runtime`. The entrypoint is copied AFTER the expensive
+# dependency layer on purpose: editing bootstrap/permission behaviour must not
+# invalidate the dependency build.
+FROM base AS runtime-base
 COPY --from=deps --chown=angee:angee /opt/.venv /opt/.venv
+COPY docker/runtime-entrypoint.sh /usr/local/bin/angee-django-entrypoint
+RUN chmod +x /usr/local/bin/angee-django-entrypoint
+
+# --- final: the lean runtime base (git inherited for the dev uv sync) -----------
+FROM runtime-base AS final
 USER root
 ENTRYPOINT ["tini", "--", "/usr/local/bin/angee-django-entrypoint"]
 # The stack service supplies the concrete command; a mounted-source dev service
@@ -72,14 +92,14 @@ ENTRYPOINT ["tini", "--", "/usr/local/bin/angee-django-entrypoint"]
 #   uv sync --frozen && exec uv run python manage.py runserver 0.0.0.0:8000
 CMD ["python", "-c", "import django, sys; print('django-angee-base ready — python', sys.version.split()[0], '· django', django.get_version())"]
 
-# --- runtime: base + baked deps + framework code + [postgres] -------------------
+# --- runtime: runtime-base + framework code + [postgres] ------------------------
 # ghcr.io/ang-ee/django-angee — the FULL framework runtime image (framework CODE +
 # deps + psycopg baked), distinct from the deps-only `final`/django-angee-base
 # above. The self-contained `local` stack runs its `django` service on this image:
 # the project bind-mounts over /app while `import angee.*` resolves from the baked
 # wheel in /opt/.venv, independent of the mount. Build it explicitly:
 #   docker build --target runtime -t ghcr.io/ang-ee/django-angee:latest .
-FROM deps AS runtime
+FROM runtime-base AS runtime
 # Off /app on purpose: the local stack bind-mounts the project at /app, so the
 # framework source lands at /opt/angee-src — a mount over /app can never hide it.
 WORKDIR /opt/angee-src
@@ -98,7 +118,8 @@ COPY --chown=angee:angee addons ./addons
 # runtime; --frozen honours the committed lock (relocked to carry the extra).
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable --extra postgres \
-    && chown -R angee:angee /opt/.venv
+    && chown -R angee:angee /opt/.venv \
+    && chmod -R g=u /opt/.venv
 USER root
 WORKDIR /app
 # tini reaps PID 1 for a clean `docker stop`. The stack's django service supplies
@@ -129,7 +150,14 @@ RUN mkdir -p /opt/angee-js && \
 # `workspace:*`) from the baked packages. Build it explicitly:
 #   docker build --target angee-web -t ghcr.io/ang-ee/angee-web:latest .
 FROM node:22-slim AS angee-web
-RUN corepack enable
+# gosu: the entrypoint drops to the project bind-mount's owner (see below).
+# COREPACK_ENABLE_DOWNLOAD_PROMPT=0: a mounted project may pin a different
+# `packageManager`, and corepack's interactive download prompt would hang a build
+# that has no TTY.
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN apt-get update && apt-get install -y --no-install-recommends gosu \
+    && rm -rf /var/lib/apt/lists/* \
+    && corepack enable
 WORKDIR /opt/angee-web
 # Every @angee/* package (core + addon frontends), byte-identical to the wheel's JS.
 COPY --from=web-src /opt/angee-js ./packages
@@ -139,4 +167,13 @@ COPY --from=web-src /opt/angee-js ./packages
 RUN printf 'packages:\n  - "packages/*"\n' > pnpm-workspace.yaml \
  && printf '{"name":"@angee/web-runtime","private":true,"packageManager":"pnpm@11.1.3"}\n' > package.json \
  && printf 'link-workspace-packages=true\nprefer-workspace-packages=true\nauto-install-peers=true\n' > .npmrc \
- && pnpm install
+ && pnpm install \
+ && chown -R node:node /opt/angee-web \
+ && chmod -R g=u /opt/angee-web
+# This image writes INTO the project bind mount (codegen output, dist/, the
+# node_modules links), so it must write as the mount's owner — otherwise the
+# outputs land root-owned and neither the host user nor the django container (which
+# maps to the same owner) can rewrite them. The entrypoint owns that mapping.
+COPY docker/web-entrypoint.sh /usr/local/bin/angee-web-entrypoint
+RUN chmod +x /usr/local/bin/angee-web-entrypoint
+ENTRYPOINT ["/usr/local/bin/angee-web-entrypoint"]
