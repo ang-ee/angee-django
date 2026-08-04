@@ -7,7 +7,7 @@ import {
 import { dedupeBy } from "../lib/dedupe";
 import { DEFAULT_PAGE_SIZE } from "./page-size";
 
-export const RESOURCE_VIEW_KINDS = ["list", "board", "calendar"] as const;
+export const RESOURCE_VIEW_KINDS = ["list", "board", "calendar", "pivot"] as const;
 
 /** The calendar kind's window modes; `month` is the default period. */
 export const CALENDAR_VIEW_MODES = ["month", "week", "day"] as const;
@@ -65,6 +65,16 @@ export const RESOURCE_VIEW_KIND_CAPABILITIES: Record<
     filter: false,
     requiresSources: true,
   },
+  // The pivot's row axis IS the group stack, so the group-by picker applies and
+  // the pager windows the outermost row axis. Its columns come from the column
+  // axis, never the record columns, so the show/hide chooser does not apply.
+  pivot: {
+    grouping: true,
+    pagination: true,
+    columns: false,
+    filter: true,
+    requiresSources: true,
+  },
 };
 
 /** All applicable, for a surface (e.g. an in-memory rows list) that names no kind. */
@@ -90,11 +100,12 @@ export function resourceViewKindCapabilities(
  * The switcher's options derive from this — never a hardcoded array.
  */
 export function availableResourceViewKinds(
-  declared: { calendar?: boolean } = {},
+  declared: { calendar?: boolean; pivot?: boolean } = {},
 ): readonly ResourceViewKind[] {
   return RESOURCE_VIEW_KINDS.filter((kind) => {
     if (!RESOURCE_VIEW_KIND_CAPABILITIES[kind].requiresSources) return true;
     if (kind === "calendar") return declared.calendar ?? false;
+    if (kind === "pivot") return declared.pivot ?? false;
     return false;
   });
 }
@@ -163,6 +174,10 @@ export interface ResourceViewInitialState {
   mode?: CalendarViewMode;
   /** Calendar anchor day (`yyyy-MM-dd`); defaults to today. */
   anchor?: string;
+  /** Pivot column axes; the row axes are the shared `groupStack`. */
+  columnStack?: readonly ResourceViewGroup[];
+  /** Selected measure ids; empty means every measure the view declares. */
+  measures?: readonly string[];
 }
 
 export interface ResourceViewFavorite {
@@ -172,6 +187,8 @@ export interface ResourceViewFavorite {
   sort?: ResourceViewSort | null;
   filter?: ResourceViewFilter;
   groupStack?: readonly ResourceViewGroup[];
+  columnStack?: readonly ResourceViewGroup[];
+  measures?: readonly string[];
   view?: ResourceViewKind;
 }
 
@@ -193,6 +210,8 @@ export type ResourceViewAction =
   | { type: "setFilter"; filter: ResourceViewFilter }
   | { type: "setGroup"; group: ResourceViewGroup | null }
   | { type: "setGroupStack"; groupStack: readonly ResourceViewGroup[] }
+  | { type: "setColumnStack"; columnStack: readonly ResourceViewGroup[] }
+  | { type: "setMeasures"; measures: readonly string[] }
   | { type: "setSelectedIds"; selectedIds: Iterable<string> }
   | { type: "toggleSelectedId"; id: string; selected?: boolean }
   | { type: "clearSelectedIds" }
@@ -411,6 +430,10 @@ export class ResourceViewState {
   readonly filter: ResourceViewFilter;
   readonly group: ResourceViewGroup | null;
   readonly groupStack: readonly ResourceViewGroup[];
+  /** Whether `columnStack` is an explicit override (including an empty one). */
+  readonly hasColumnStack: boolean;
+  readonly columnStack: readonly ResourceViewGroup[];
+  readonly measures: readonly string[];
   readonly selectedIds: ReadonlySet<string>;
   readonly view: ResourceViewKind;
   readonly mode: CalendarViewMode;
@@ -428,6 +451,11 @@ export class ResourceViewState {
     this.filter = ResourceViewState.normaliseFilter(initial.filter);
     this.group = groupStack[0] ?? null;
     this.groupStack = groupStack;
+    this.hasColumnStack = initial.columnStack !== undefined;
+    this.columnStack = ResourceViewState.normaliseGroupStack(
+      initial.columnStack ?? [],
+    );
+    this.measures = ResourceViewState.normaliseMeasures(initial.measures);
     this.selectedIds = new Set(initial.selectedIds ?? []);
     this.view = initial.view ?? "list";
     this.mode = initial.mode ?? DEFAULT_CALENDAR_VIEW_MODE;
@@ -456,6 +484,10 @@ export class ResourceViewState {
     const view = parseSearchView(search.view);
     const mode = parseSearchMode(search.mode);
     const anchor = parseSearchAnchor(search.anchor);
+    const columnsCleared = isClearedSearchValue(search.cols);
+    const columnStack = parseSearchGroupStack(search.cols);
+    const measuresCleared = isClearedSearchValue(search.measures);
+    const measures = parseSearchMeasures(search.measures);
     return ResourceViewState.create({
       ...base.toInitialState(),
       page: page ?? base.page,
@@ -475,6 +507,11 @@ export class ResourceViewState {
       view: view ?? base.view,
       mode: mode ?? base.mode,
       anchor: anchor ?? base.anchor,
+      columnStack:
+        columnsCleared
+          ? []
+          : columnStack ?? (base.hasColumnStack ? base.columnStack : undefined),
+      measures: measuresCleared ? [] : (measures ?? base.measures),
     });
   }
 
@@ -508,6 +545,14 @@ export class ResourceViewState {
           groupStack,
         });
       }
+      case "setColumnStack":
+        return this.resetQueryScope({
+          columnStack: ResourceViewState.normaliseGroupStack(action.columnStack),
+        });
+      case "setMeasures":
+        return this.with({
+          measures: ResourceViewState.normaliseMeasures(action.measures),
+        });
       case "setSelectedIds":
         return this.with({ selectedIds: new Set(action.selectedIds) });
       case "toggleSelectedId":
@@ -520,7 +565,11 @@ export class ResourceViewState {
       case "clearSelectedIds":
         return this.with({ selectedIds: new Set() });
       case "setView":
-        return this.with({ view: action.view });
+        // Pivot pages count row-axis members rather than records. Crossing that
+        // boundary must not reuse an offset from the other collection surface.
+        return action.view === "pivot" || this.view === "pivot"
+          ? this.resetQueryScope({ view: action.view })
+          : this.with({ view: action.view });
       case "setMode":
         return this.with({ mode: action.mode });
       case "setAnchor":
@@ -531,6 +580,8 @@ export class ResourceViewState {
           sort: action.favorite.sort ?? null,
           filter: action.favorite.filter ?? {},
           groupStack: action.favorite.groupStack ?? [],
+          columnStack: action.favorite.columnStack,
+          measures: action.favorite.measures ?? [],
           view: action.favorite.view ?? "list",
         });
     }
@@ -579,6 +630,27 @@ export class ResourceViewState {
       if (this.mode !== DEFAULT_CALENDAR_VIEW_MODE) search.mode = this.mode;
       if (this.anchor !== todayCalendarAnchor()) search.anchor = this.anchor;
     }
+    // cols/measures are pivot facts and ride the URL only under the pivot kind,
+    // the same way mode/anchor ride it only under the calendar.
+    if (this.view === "pivot") {
+      const columnStackValue = serializeResourceViewGroupStack(this.columnStack);
+      const baseColumnStackValue = serializeResourceViewGroupStack(base.columnStack);
+      if (this.hasColumnStack && this.columnStack.length > 0) {
+        if (columnStackValue !== baseColumnStackValue) search.cols = columnStackValue;
+      } else if (
+        this.hasColumnStack
+        && (!base.hasColumnStack || base.columnStack.length > 0)
+      ) {
+        search.cols = "";
+      }
+      const measuresValue = serializeResourceViewMeasures(this.measures);
+      const baseMeasuresValue = serializeResourceViewMeasures(base.measures);
+      if (this.measures.length > 0) {
+        if (measuresValue !== baseMeasuresValue) search.measures = measuresValue;
+      } else if (base.measures.length > 0) {
+        search.measures = "";
+      }
+    }
     return search;
   }
 
@@ -615,6 +687,8 @@ export class ResourceViewState {
       ...(this.sort ? { sort: this.sort } : {}),
       ...(this.hasFilter() ? { filter: this.filter } : {}),
       ...(this.groupStack.length > 0 ? { groupStack: this.groupStack } : {}),
+      ...(this.hasColumnStack ? { columnStack: this.columnStack } : {}),
+      ...(this.measures.length > 0 ? { measures: this.measures } : {}),
       ...(this.view !== "list" ? { view: this.view } : {}),
     };
   }
@@ -623,6 +697,12 @@ export class ResourceViewState {
     groups: readonly ResourceViewGroup[],
   ): readonly ResourceViewGroup[] {
     return dedupeBy(groups.map((group) => ResourceViewState.normaliseGroup(group)), serializeResourceViewGroup);
+  }
+
+  static normaliseMeasures(
+    measures: readonly string[] | undefined,
+  ): readonly string[] {
+    return [...new Set((measures ?? []).map((measure) => measure.trim()).filter(Boolean))];
   }
 
   private with(initial: ResourceViewInitialState): ResourceViewState {
@@ -649,6 +729,8 @@ export class ResourceViewState {
       filter: this.filter,
       group: this.group,
       groupStack: this.groupStack,
+      ...(this.hasColumnStack ? { columnStack: this.columnStack } : {}),
+      measures: this.measures,
       selectedIds: this.selectedIds,
       view: this.view,
       mode: this.mode,
@@ -705,6 +787,8 @@ const RESOURCE_VIEW_SEARCH_SHAPE = {
   view: undefined as string | undefined,
   mode: undefined as string | undefined,
   anchor: undefined as string | undefined,
+  cols: undefined as string | undefined,
+  measures: undefined as string | undefined,
 };
 
 export type ResourceViewSearchKey = keyof typeof RESOURCE_VIEW_SEARCH_SHAPE;
@@ -780,6 +864,11 @@ function parseSearchGroupStack(
 ): readonly ResourceViewGroup[] | null {
   if (typeof value !== "string") return null;
   return parseResourceViewGroupStack(value);
+}
+
+function parseSearchMeasures(value: unknown): readonly string[] | null {
+  if (typeof value !== "string" || value === "") return null;
+  return ResourceViewState.normaliseMeasures(value.split(","));
 }
 
 function parseSearchView(value: unknown): ResourceViewKind | null {
@@ -873,6 +962,10 @@ function serializeResourceViewGroupStack(
   groups: readonly ResourceViewGroup[],
 ): string {
   return groups.map(serializeResourceViewGroup).join(",");
+}
+
+function serializeResourceViewMeasures(measures: readonly string[]): string {
+  return measures.join(",");
 }
 
 export function resourceViewGroupsEqual(

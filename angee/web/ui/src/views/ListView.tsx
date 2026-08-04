@@ -33,6 +33,7 @@ import {
   type ResourceViewKind,
 } from "./resource-view-model";
 import { CalendarCollectionSurface } from "./calendar-collection-surface";
+import { PivotCollectionSurface } from "./pivot-collection-surface";
 import { DeletePreviewDialog } from "./DeletePreviewDialog";
 import {
   useClientResourceViewSurface,
@@ -94,9 +95,11 @@ export type {
   ListEmptyContent,
   ListEmptyState,
   ListViewProps,
+  PivotViewSpec,
 } from "./resource-view-types";
 
 const EMPTY_GROUP_STACK = [] as const;
+const EMPTY_ROWS = [] as const;
 
 export function ListView<TRow extends Row = Row>(
   props: ListViewProps<TRow>,
@@ -176,6 +179,7 @@ function ListViewBody<TRow extends Row = Row>({
   defaultGroup,
   defaultGroups,
   calendar,
+  pivot,
   laneSource,
   onCreate,
   createLabel,
@@ -198,9 +202,15 @@ function ListViewBody<TRow extends Row = Row>({
   // The Calendar kind is offered only where the page declares occurrence sources;
   // the switcher's options derive from that (list + board always).
   const calendarAvailable = (calendar?.sources.length ?? 0) > 0;
+  // The Pivot kind is offered only where the page declares its axes, the same
+  // rule the calendar follows for its occurrence sources.
+  const pivotAvailable = (pivot?.rows.length ?? 0) > 0;
   const availableViews = React.useMemo(
-    () => availableResourceViewKinds({ calendar: calendarAvailable }),
-    [calendarAvailable],
+    () => availableResourceViewKinds({
+      calendar: calendarAvailable,
+      pivot: pivotAvailable,
+    }),
+    [calendarAvailable, pivotAvailable],
   );
   const modelMetadata = useModelMetadata(resource);
   const schemaMetadata = useSchemaFieldMetadata();
@@ -233,6 +243,35 @@ function ListViewBody<TRow extends Row = Row>({
     resolvedColumns,
     modelMetadata,
     mergedFilter,
+  );
+  const baseToolbarGroupOptions = React.useMemo(
+    () => mergeGroupOptions(explicitGroupOptions, declaredFacets.groupOptions),
+    [declaredFacets.groupOptions, explicitGroupOptions],
+  );
+  // Explicit declarations and server facets are the shared filter vocabulary.
+  // Each surface adds only the row-derived options it can actually observe.
+  const baseToolbarFilterOptions = React.useMemo(
+    () =>
+      mergeFilterOptions(
+        explicitFilterOptions,
+        mergeFilterOptions(declaredFacets.filters, scalarFacets.filters),
+      ),
+    [declaredFacets.filters, explicitFilterOptions, scalarFacets.filters],
+  );
+  const baseToolbarCustomFilterFields = React.useMemo(
+    () =>
+      mergeFilterFields(
+        explicitCustomFilterFields,
+        mergeFilterFields(
+          declaredFacets.filterFields,
+          scalarFacets.filterFields,
+        ),
+      ),
+    [
+      declaredFacets.filterFields,
+      explicitCustomFilterFields,
+      scalarFacets.filterFields,
+    ],
   );
   const laneSourceGroup = React.useMemo(
     () =>
@@ -367,6 +406,60 @@ function ListViewBody<TRow extends Row = Row>({
     resourceView.state.view === "list"
     && groupDimensions.length > 0
     && !clientRowModel;
+  // The pivot surface renders instead of `ListViewContent`, so it needs the axis
+  // vocabulary here — the same declared/facet/column merge the list toolbar gets.
+  const pivotGroupOptions = React.useMemo(
+    () =>
+      mergeGroupOptions(
+        baseToolbarGroupOptions,
+        buildGroupOptions(resolvedColumns, modelMetadata, EMPTY_GROUP_STACK),
+      ),
+    [
+      baseToolbarGroupOptions,
+      modelMetadata,
+      resolvedColumns,
+    ],
+  );
+  const pivotInferredCustomFilterFields = React.useMemo(
+    () => buildFilterFields(resolvedColumns, EMPTY_ROWS, modelMetadata),
+    [modelMetadata, resolvedColumns],
+  );
+  const pivotCustomFilterFields = React.useMemo(
+    () =>
+      mergeFilterFields(
+        baseToolbarCustomFilterFields,
+        pivotInferredCustomFilterFields,
+      ),
+    [baseToolbarCustomFilterFields, pivotInferredCustomFilterFields],
+  );
+  const pivotInferredFilterOptions = React.useMemo(
+    () =>
+      buildFilterOptions(
+        resolvedColumns,
+        EMPTY_ROWS,
+        pivotInferredCustomFilterFields,
+      ),
+    [pivotInferredCustomFilterFields, resolvedColumns],
+  );
+  const pivotFilterOptions = React.useMemo(
+    () => mergeFilterOptions(baseToolbarFilterOptions, pivotInferredFilterOptions),
+    [baseToolbarFilterOptions, pivotInferredFilterOptions],
+  );
+  const pivotTextFilterField = resolveTextFilterField(modelMetadata);
+  const pivotCustomFilterChips = customFilterChipsFor(
+    resourceView.state.filter,
+    pivotFilterOptions,
+    pivotCustomFilterFields,
+    pivotTextFilterField,
+  );
+  const pivotActiveFilterIds = activeFilterIdsFor(
+    resourceView.state.filter,
+    pivotFilterOptions,
+  );
+  const pivotFilterText = textFilterValue(
+    resourceView.state.filter,
+    pivotTextFilterField,
+  );
   const surfaceProps: UseResourceViewSurfaceProps<TRow> = {
     resource,
     columns: resolvedColumns,
@@ -393,11 +486,9 @@ function ListViewBody<TRow extends Row = Row>({
       boardGroupingPinned={boardGroupingPinned}
       clientRowModel={clientRowModel}
       groupedListMode={groupedListMode}
-      declaredFacets={declaredFacets}
-      scalarFacets={scalarFacets}
-      explicitGroupOptions={explicitGroupOptions}
-      explicitFilterOptions={explicitFilterOptions}
-      explicitCustomFilterFields={explicitCustomFilterFields}
+      baseToolbarFilterOptions={baseToolbarFilterOptions}
+      baseToolbarCustomFilterFields={baseToolbarCustomFilterFields}
+      baseToolbarGroupOptions={baseToolbarGroupOptions}
       defaultGroup={defaultGroup}
       defaultGroups={defaultGroups}
       order={order}
@@ -416,10 +507,37 @@ function ListViewBody<TRow extends Row = Row>({
     />
   );
   // A client resource fetches once and pages in the browser; a server resource
-  // queries Hasura per page; the calendar fetches a window over authored sources.
-  // Each data path calls different hooks, so the choice is a component boundary
-  // (never a conditional hook): a view/metadata flip remounts the matching surface
-  // rather than reordering hooks. The calendar surface never calls `useList`.
+  // queries Hasura per page; the calendar fetches a window over authored sources;
+  // the pivot fetches one grouped call per axis level and cell block. Each data
+  // path calls different hooks, so the choice is a component boundary (never a
+  // conditional hook): a view/metadata flip remounts the matching surface rather
+  // than reordering hooks. Neither the calendar nor the pivot calls `useList`.
+  if (pivot && resourceView.state.view === "pivot" && pivotAvailable) {
+    return (
+      <PivotCollectionSurface<TRow>
+        resource={resource}
+        resourceView={resourceView}
+        pivot={pivot}
+        columns={resolvedColumns}
+        modelMetadata={modelMetadata}
+        baseFilter={baseFilter}
+        availableViews={availableViews}
+        groupOptions={pivotGroupOptions}
+        filterOptions={pivotFilterOptions}
+        customFilterFields={pivotCustomFilterFields}
+        customFilterChips={pivotCustomFilterChips}
+        favorites={resourceView.savedFavorites}
+        activeFilterIds={pivotActiveFilterIds}
+        filterText={pivotFilterText}
+        textFilterField={pivotTextFilterField}
+        createLabel={createLabel}
+        onCreate={onCreate}
+        toolbarActions={toolbarActions}
+        emptyContent={resolvedEmptyContent}
+        className={className}
+      />
+    );
+  }
   if (calendar && resourceView.state.view === "calendar" && calendarAvailable) {
     return (
       <CalendarCollectionSurface
@@ -480,11 +598,11 @@ interface ListViewContentProps<TRow extends Row> {
   boardGroupingPinned: boolean;
   clientRowModel: boolean;
   groupedListMode: boolean;
-  declaredFacets: ReturnType<typeof useRelationFacets>;
-  scalarFacets: ReturnType<typeof useScalarFacets>;
-  explicitGroupOptions: ListViewProps<TRow>["groupOptions"];
-  explicitFilterOptions: ListViewProps<TRow>["filterOptions"];
-  explicitCustomFilterFields: ListViewProps<TRow>["customFilterFields"];
+  baseToolbarFilterOptions: NonNullable<ListViewProps<TRow>["filterOptions"]>;
+  baseToolbarCustomFilterFields: NonNullable<
+    ListViewProps<TRow>["customFilterFields"]
+  >;
+  baseToolbarGroupOptions: NonNullable<ListViewProps<TRow>["groupOptions"]>;
   defaultGroup: ListViewProps<TRow>["defaultGroup"];
   defaultGroups: ListViewProps<TRow>["defaultGroups"];
   order: ListViewProps<TRow>["order"];
@@ -513,11 +631,9 @@ function ListViewContent<TRow extends Row = Row>({
   boardGroupingPinned,
   clientRowModel,
   groupedListMode,
-  declaredFacets,
-  scalarFacets,
-  explicitGroupOptions,
-  explicitFilterOptions,
-  explicitCustomFilterFields,
+  baseToolbarFilterOptions,
+  baseToolbarCustomFilterFields,
+  baseToolbarGroupOptions,
   defaultGroup,
   defaultGroups,
   order,
@@ -553,14 +669,10 @@ function ListViewContent<TRow extends Row = Row>({
     surface.list.pageSize,
     surface.list.total,
   ]);
-  const explicitAndFacetGroupOptions = React.useMemo(
-    () => mergeGroupOptions(explicitGroupOptions, declaredFacets.groupOptions),
-    [declaredFacets.groupOptions, explicitGroupOptions],
-  );
   const toolbarGroupOptions = React.useMemo(
     () =>
       mergeGroupOptions(
-        explicitAndFacetGroupOptions,
+        baseToolbarGroupOptions,
         buildGroupOptions(
           resolvedColumns,
           modelMetadata,
@@ -570,7 +682,7 @@ function ListViewContent<TRow extends Row = Row>({
     [
       defaultGroup,
       defaultGroups,
-      explicitAndFacetGroupOptions,
+      baseToolbarGroupOptions,
       modelMetadata,
       resolvedColumns,
     ],
@@ -583,29 +695,17 @@ function ListViewContent<TRow extends Row = Row>({
     () => buildFilterOptions(resolvedColumns, surface.rows, inferredCustomFilterFields),
     [inferredCustomFilterFields, resolvedColumns, surface.rows],
   );
-  const facetFilters = React.useMemo(
-    () => mergeFilterOptions(declaredFacets.filters, scalarFacets.filters),
-    [declaredFacets.filters, scalarFacets.filters],
-  );
-  const explicitAndFacetFilters = React.useMemo(
-    () => mergeFilterOptions(explicitFilterOptions, facetFilters),
-    [explicitFilterOptions, facetFilters],
-  );
   const filterOptions = React.useMemo(
-    () => mergeFilterOptions(explicitAndFacetFilters, inferredFilterOptions),
-    [explicitAndFacetFilters, inferredFilterOptions],
-  );
-  const facetCustomFilterFields = React.useMemo(
-    () => mergeFilterFields(declaredFacets.filterFields, scalarFacets.filterFields),
-    [declaredFacets.filterFields, scalarFacets.filterFields],
-  );
-  const explicitAndFacetCustomFilterFields = React.useMemo(
-    () => mergeFilterFields(explicitCustomFilterFields, facetCustomFilterFields),
-    [explicitCustomFilterFields, facetCustomFilterFields],
+    () => mergeFilterOptions(baseToolbarFilterOptions, inferredFilterOptions),
+    [baseToolbarFilterOptions, inferredFilterOptions],
   );
   const customFilterFields = React.useMemo(
-    () => mergeFilterFields(explicitAndFacetCustomFilterFields, inferredCustomFilterFields),
-    [explicitAndFacetCustomFilterFields, inferredCustomFilterFields],
+    () =>
+      mergeFilterFields(
+        baseToolbarCustomFilterFields,
+        inferredCustomFilterFields,
+      ),
+    [baseToolbarCustomFilterFields, inferredCustomFilterFields],
   );
   const activeFilterIds = activeFilterIdsFor(
     resourceView.state.filter,

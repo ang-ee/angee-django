@@ -33,6 +33,10 @@ export interface ResourceViewContextValue {
   setFilter: (filter: ResourceViewFilter) => void;
   setGroup: (group: ResourceViewGroup | null) => void;
   setGroupStack: (groupStack: readonly ResourceViewGroup[]) => void;
+  /** Pivot column axes; the row axes stay on `setGroupStack`. */
+  setColumnStack: (columnStack: readonly ResourceViewGroup[]) => void;
+  /** Selected measure ids; empty restores every declared measure. */
+  setMeasures: (measures: readonly string[]) => void;
   setSelectedIds: (selectedIds: Iterable<string>) => void;
   toggleSelectedId: (id: string, selected?: boolean) => void;
   clearSelectedIds: () => void;
@@ -252,6 +256,9 @@ function createResourceViewActions(
     setGroup: (group) => dispatch({ type: "setGroup", group }),
     setGroupStack: (groupStack) =>
       dispatch({ type: "setGroupStack", groupStack }),
+    setColumnStack: (columnStack) =>
+      dispatch({ type: "setColumnStack", columnStack }),
+    setMeasures: (measures) => dispatch({ type: "setMeasures", measures }),
     setSelectedIds: (selectedIds) =>
       dispatch({ type: "setSelectedIds", selectedIds }),
     toggleSelectedId: (id, selected) =>

@@ -12,6 +12,7 @@ export {
   type ListEmptyState,
   type ListColumn,
   type ListViewNavigationScope,
+  type PivotViewSpec,
   type ResourceListSnapshot,
   type ColumnAlign,
 } from "./ListView";
@@ -118,6 +119,23 @@ export {
   type CalendarCollectionSurfaceProps,
   type CalendarWindowFetch,
 } from "./calendar-collection-surface";
+export { PivotViewBody, type PivotViewBodyProps } from "./PivotView";
+export {
+  PivotCollectionSurface,
+  type PivotCollectionSurfaceProps,
+} from "./pivot-collection-surface";
+export {
+  measureOrderAlias,
+  pivotColumnHeaderRows,
+  usePivotResourceViewSurface,
+  type PivotAxisNode,
+  type PivotAxisSide,
+  type PivotAxisTruncation,
+  type PivotColumnHeaderCell,
+  type PivotResourceViewSurface,
+  type PivotRowItem,
+  type UsePivotResourceViewSurfaceProps,
+} from "./pivot-view-surface";
 export { Notebook, type NotebookProps } from "./Notebook";
 export {
   Tree,

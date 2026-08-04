@@ -21,6 +21,7 @@ export interface UseResourceToolbarPropsInput
     | "onFilterTextChange"
     | "onFilterToggle"
     | "onGroupStackChange"
+    | "onColumnStackChange"
     | "onPageChange"
     | "onPageSizeChange"
     | "onViewChange"
@@ -30,6 +31,8 @@ export interface UseResourceToolbarPropsInput
   group?: ResourceViewGroup | null;
   groupStack?: readonly ResourceViewGroup[];
   groupingEnabled?: boolean;
+  /** Offer the column-axis picker (the pivot kind's second axis). */
+  columnAxisEnabled?: boolean;
   textFilterField?: string;
 }
 
@@ -40,8 +43,10 @@ export function useResourceToolbarProps({
   view,
   group,
   groupStack,
+  columnStack,
   groupOptions,
   groupingEnabled = true,
+  columnAxisEnabled = false,
   filterOptions = [],
   ...props
 }: UseResourceToolbarPropsInput): ResourceToolbarProps {
@@ -64,6 +69,12 @@ export function useResourceToolbarProps({
         ? () => resourceView.setGroupStack([])
         : undefined,
       onGroupStackChange: groupingEnabled ? resourceView.setGroupStack : undefined,
+      columnStack: columnAxisEnabled
+        ? (columnStack ?? resourceView.state.columnStack)
+        : undefined,
+      onColumnStackChange: columnAxisEnabled
+        ? resourceView.setColumnStack
+        : undefined,
       onPageChange: setPage,
       onPageSizeChange: resourceView.setPageSize,
       onViewChange: view ? resourceView.setView : undefined,
@@ -85,18 +96,22 @@ export function useResourceToolbarProps({
         ),
     }),
     [
+      columnAxisEnabled,
       filterOptions,
       group,
       groupStack,
+      columnStack,
       groupOptions,
       groupingEnabled,
       props,
       resourceView.applyFavorite,
       resourceView.saveFavorite,
+      resourceView.setColumnStack,
       resourceView.setFilter,
       resourceView.setGroupStack,
       resourceView.setPageSize,
       resourceView.setView,
+      resourceView.state.columnStack,
       resourceView.state.filter,
       setPage,
       textFilterField,
