@@ -268,6 +268,19 @@ TanStack apply the URL-owned filter object to in-memory rows.
   action controls or hooks, but they do not own table mechanics, duplicate route
   params, cache state, bespoke loading/error surfaces, or local copies of shared
   resource-view state.
+- **A cross-tabulated view is the grouping owner read twice, not a second
+  engine.** The pivot kind declares row axes, column axes and measures
+  (`ListView`'s `pivot` prop) and reads them all through the one `_groups`
+  surface: one grouped call per axis level, one per (row level × column level)
+  cell block, one `_aggregate` for the grand total — priced by axis depth, never
+  by cell count. Its axes are the same `ResourceViewGroup` the group-by picker
+  edits (rows are the group stack, columns the column stack), its measures are
+  the page's own `aggregate=` columns, and its cell drilldown is the ordinary
+  URL-owned filter. Every subtotal comes from the server: never re-derive a
+  subtotal by summing cells, which is wrong for `avg` and for any non-additive
+  measure. When a grouped capability is missing, extend the dialect owners
+  together (`docs/stack.md` → Hasura Dialect Rule); do not add pivot-only group
+  semantics on the client.
 - **Two-collection settings pages are a sanctioned family, not a double toolbar.**
   A `SettingsShell` may stack several `SettingsSection`s, each wrapping its own
   `ResourceList`/`DrawerResourceList` (integrate Templates: template sources +

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ResourceList, Form, List, Column, Field, Group, REFINE_CREATE_ID, RevisionsTab, Statusline, StatusSegment, StatuslineSpacer, useResourceRevisions, type ChatterTab, type ResourceViewDefaultGroups, type RecordSmartButtonDescriptor, useChatterContent } from "@angee/ui";
+import { ResourceList, Form, List, Column, Field, Group, REFINE_CREATE_ID, RevisionsTab, Statusline, StatusSegment, StatuslineSpacer, useResourceRevisions, type ChatterTab, type PivotViewSpec, type ResourceViewDefaultGroups, type RecordSmartButtonDescriptor, useChatterContent } from "@angee/ui";
 import { useParams } from "@tanstack/react-router";
 
 const MODEL = "notes.Note";
@@ -17,10 +17,18 @@ const RECORD_SUBTITLE_FIELDS: readonly string[] = [
   "word_count",
 ];
 
+// Notes by status across the months they were last touched, measured by the
+// `word_count` sum the list already declares as an aggregate column.
+const NOTE_PIVOT = {
+  rows: [{ field: "status" }],
+  columns: [{ field: "updated_at", granularity: "month" }],
+} satisfies PivotViewSpec;
+
 const noteList = (
   <List
     resource={MODEL}
     defaultGroups={NOTE_DEFAULT_GROUPS}
+    pivot={NOTE_PIVOT}
     order={{ updated_at: "DESC" }}
     emptyContent={{
       icon: "agent",

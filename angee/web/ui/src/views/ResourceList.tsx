@@ -150,6 +150,9 @@ export interface ResourceListProps<TRow extends Row = Row> {
    * offered in the switcher and rendered as a windowed-collection surface;
    * quick-create rides `ResourceList`'s routed-create seam. */
   calendar?: ResourceListCalendarSpec;
+  /** Pivot axes + measures. When declared, the Pivot kind is offered in the
+   * switcher and rendered as a cross-tabulated surface. */
+  pivot?: ListViewProps<TRow>["pivot"];
   /** Declared board lanes for a relation group field; empty lanes render too. */
   laneSource?: BoardLaneSource;
   fields?: ListViewProps<TRow>["fields"];
@@ -391,6 +394,7 @@ function ResourceListBody<TRow extends Row = Row>({
   defaultGroup,
   defaultGroups,
   calendar,
+  pivot,
   laneSource,
   fields,
   list: ListRenderer = ListView as ListComponent<TRow>,
@@ -440,6 +444,7 @@ function ResourceListBody<TRow extends Row = Row>({
     cardActions,
     draggableRow,
     laneSource,
+    pivot,
     ...(declarations.list
       ? listElementRenderProps(declarations.list.props)
       : {}),

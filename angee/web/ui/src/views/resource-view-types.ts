@@ -47,6 +47,29 @@ export interface CalendarViewSpec {
   onSelectRange?: (start: Date, end: Date) => void;
 }
 
+/**
+ * The pivot kind's declaration: which axes cross-tabulate the resource, which
+ * measures fill the cells, how deep the axes open, and whether a cell drills
+ * down. The measures are the page's own aggregate columns (`aggregate="sum"`),
+ * so a pivot declares no second measure vocabulary; `measures` only narrows and
+ * orders them. Axes are the same `ResourceViewGroup` the group-by picker edits,
+ * so a user re-axing the pivot writes the URL-owned stacks, not a private state.
+ */
+export interface PivotViewSpec {
+  /** Row axes, outermost first. */
+  rows: readonly ResourceViewGroup[];
+  /** Column axes, outermost first; omit for a measured-rows-only pivot. */
+  columns?: readonly ResourceViewGroup[];
+  /** Measure column ids shown by default; defaults to every aggregate column. */
+  measures?: readonly string[];
+  /** Row axis levels expanded on first paint (default 0 — the outermost only). */
+  expandRows?: number;
+  /** Column axis levels expanded on first paint (default 0). */
+  expandColumns?: number;
+  /** Cell → filtered list navigation; `"none"` disables the drilldown. */
+  drilldown?: "list" | "none";
+}
+
 export interface BoardLaneSource {
   /** Resource field that owns the board lane id and receives drag writes. */
   field: string;
@@ -103,6 +126,9 @@ export interface ListViewProps<TRow extends Row = Row> {
   /** Calendar data + interaction seams. When declared, the Calendar kind is offered
    * in the switcher and rendered as a windowed-collection surface (no `useList`). */
   calendar?: CalendarViewSpec;
+  /** Pivot axes + measures. When declared, the Pivot kind is offered in the
+   * switcher and rendered as a cross-tabulated surface (no `useList`). */
+  pivot?: PivotViewSpec;
   /** Declared board lanes for a relation group field; empty lanes render too. */
   laneSource?: BoardLaneSource;
   /** Group seeded by the resource list. */

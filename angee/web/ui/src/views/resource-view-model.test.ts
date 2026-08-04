@@ -368,7 +368,7 @@ describe("resource-view model", () => {
   });
 
   test("registers the calendar kind with its applicability", () => {
-    expect(RESOURCE_VIEW_KINDS).toEqual(["list", "board", "calendar"]);
+    expect(RESOURCE_VIEW_KINDS).toEqual(["list", "board", "calendar", "pivot"]);
     // The calendar takes only window args in v1: no group-by/pager/columns/filter.
     expect(RESOURCE_VIEW_KIND_CAPABILITIES.calendar).toEqual({
       grouping: false,
@@ -399,6 +399,153 @@ describe("resource-view model", () => {
       "board",
       "calendar",
     ]);
+  });
+
+  test("registers the pivot kind and offers it only where axes are declared", () => {
+    // The pivot's row axis is the group stack, so grouping and the pager apply;
+    // its columns come from the column axis, so the columns chooser does not.
+    expect(RESOURCE_VIEW_KIND_CAPABILITIES.pivot).toEqual({
+      grouping: true,
+      pagination: true,
+      columns: false,
+      filter: true,
+      requiresSources: true,
+    });
+    expect(availableResourceViewKinds({ pivot: false })).toEqual(["list", "board"]);
+    expect(availableResourceViewKinds({ pivot: true })).toEqual([
+      "list",
+      "board",
+      "pivot",
+    ]);
+  });
+
+  test("round-trips the pivot column axes and measures through the family codec", () => {
+    const state = ResourceViewState.create({
+      view: "pivot",
+      groupStack: [{ field: "status" }],
+      columnStack: [
+        { field: "updatedAt", granularity: "month" },
+        { field: "owner" },
+      ],
+      measures: ["amount", "count"],
+    });
+
+    const search = resourceViewStateToSearch(state);
+    expect(search).toMatchObject({
+      view: "pivot",
+      cols: "updatedAt:month,owner",
+      measures: "amount,count",
+    });
+
+    const roundTrip = resourceViewSearchToState(search);
+    expect(roundTrip.columnStack).toEqual([
+      { field: "updatedAt", granularity: "month" },
+      { field: "owner" },
+    ]);
+    expect(roundTrip.measures).toEqual(["amount", "count"]);
+  });
+
+  test("round-trips an explicitly cleared pivot column axis", () => {
+    const state = ResourceViewState.create({ view: "pivot" }).reduce({
+      type: "setColumnStack",
+      columnStack: [],
+    });
+
+    expect(state.hasColumnStack).toBe(true);
+    expect(resourceViewStateToSearch(state)).toMatchObject({
+      view: "pivot",
+      cols: "",
+    });
+
+    const roundTrip = resourceViewSearchToState({ view: "pivot", cols: "" });
+    expect(roundTrip.hasColumnStack).toBe(true);
+    expect(roundTrip.columnStack).toEqual([]);
+  });
+
+  test("resets pagination when crossing the pivot boundary", () => {
+    const pivot = ResourceViewState.create({ page: 4 }).reduce({
+      type: "setView",
+      view: "pivot",
+    });
+    const list = ResourceViewState.create({ page: 3, view: "pivot" }).reduce({
+      type: "setView",
+      view: "list",
+    });
+
+    expect(pivot.page).toBe(1);
+    expect(list.page).toBe(1);
+  });
+
+  test("keeps pivot axes off a non-pivot deep link", () => {
+    // cols/measures are pivot facts, like the calendar's mode/anchor: a list
+    // deep-link never carries them.
+    const state = ResourceViewState.create({
+      view: "list",
+      columnStack: [{ field: "owner" }],
+      measures: ["amount"],
+    });
+
+    const search = resourceViewStateToSearch(state);
+    expect("cols" in search).toBe(false);
+    expect("measures" in search).toBe(false);
+  });
+
+  test("swaps the pivot axes by writing both stacks", () => {
+    const state = ResourceViewState.create({
+      view: "pivot",
+      groupStack: [{ field: "status" }],
+      columnStack: [{ field: "owner" }],
+    });
+
+    const swapped = state
+      .reduce({ type: "setGroupStack", groupStack: state.columnStack })
+      .reduce({ type: "setColumnStack", columnStack: state.groupStack });
+
+    expect(swapped.groupStack).toEqual([{ field: "owner" }]);
+    expect(swapped.columnStack).toEqual([{ field: "status" }]);
+  });
+
+  test("carries the pivot axes and measures into a saved favorite", () => {
+    const state = ResourceViewState.create({
+      view: "pivot",
+      groupStack: [{ field: "status" }],
+      columnStack: [{ field: "owner" }],
+      measures: ["amount"],
+    });
+
+    const favorite = state.toFavorite("Revenue by owner");
+    expect(favorite).toMatchObject({
+      view: "pivot",
+      groupStack: [{ field: "status" }],
+      columnStack: [{ field: "owner" }],
+      measures: ["amount"],
+    });
+
+    const applied = ResourceViewState.create().reduce({
+      type: "applyFavorite",
+      favorite,
+    });
+    expect(applied.columnStack).toEqual([{ field: "owner" }]);
+    expect(applied.hasColumnStack).toBe(true);
+    expect(applied.measures).toEqual(["amount"]);
+    expect(applied.view).toBe("pivot");
+  });
+
+  test("keeps an explicitly empty column axis in a saved favorite", () => {
+    const state = ResourceViewState.create({ view: "pivot" }).reduce({
+      type: "setColumnStack",
+      columnStack: [],
+    });
+
+    const favorite = state.toFavorite("Rows only");
+    expect(favorite.columnStack).toEqual([]);
+
+    const applied = ResourceViewState.create().reduce({
+      type: "applyFavorite",
+      favorite,
+    });
+    expect(applied.hasColumnStack).toBe(true);
+    expect(applied.columnStack).toEqual([]);
   });
 
   test("round-trips calendar mode + anchor through the family codec", () => {
