@@ -287,6 +287,7 @@ _FILE_RESOURCE = hasura_model_resource(
         "updated_at",
         "drive",
         "folder",
+        "mime_type",
     ],
     sortable=["filename", "title", "size_bytes", "created_at", "updated_at"],
     aggregatable=["id", "size_bytes"],
@@ -298,12 +299,15 @@ _FILE_RESOURCE = hasura_model_resource(
         "upload_state",
         "is_trashed",
         "updated_at",
+        "mime_type",
+        "mime_type__mime_type",
     ],
     insert=False,
     updatable=["filename", "title", "folder", "metadata"],
     field_id_decode={
         "drive": public_pk_decoder(Drive),
         "folder": public_pk_decoder(Folder),
+        "mime_type": public_pk_decoder(MimeType),
     },
     write_backend=AngeeHasuraWriteBackend(File, public_id_fields=("folder",)),
 )
