@@ -1,0 +1,25 @@
+SECRET_KEY: odee-example-dev-key
+DEBUG: true
+ALLOWED_HOSTS:
+  - "*"
+
+# Odee — the ERP reconstructed from the Odoo ontology (see ~/Dev/odoo2angee2).
+# Roots only: the composer expands each addon's declared dependencies. Domain
+# addons land in addons/odee/ as this project grows; the foundation owners
+# (money, uom, parties, storage, sequence) stay base addons of the framework.
+INSTALLED_APPS:
+  - angee.iam_integrate_oidc
+  - angee.operator
+  - angee.platform
+  - angee.platform_integrate_vcs
+  - angee.tags
+  - angee.parties
+  - angee.storage
+  - angee.money
+  - angee.uom
+  - angee.sequence
+
+ANGEE_ADDON_DIRS:
+  - "{BASE_DIR}/addons"
+ANGEE_RUNTIME_DIR: "{BASE_DIR}/runtime"
+ANGEE_DATA_DIR: "{BASE_DIR}/../../.angee/data"

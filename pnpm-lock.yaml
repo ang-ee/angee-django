@@ -1618,6 +1618,85 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(@types/node@26.0.1)(happy-dom@20.10.6)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0))
 
+  examples/odee-angee/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../angee/web/app
+      '@angee/iam':
+        specifier: workspace:*
+        version: link:../../../addons/angee/iam/web
+      '@angee/integrate':
+        specifier: workspace:*
+        version: link:../../../addons/angee/integrate/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../angee/web/metadata
+      '@angee/money':
+        specifier: workspace:*
+        version: link:../../../addons/angee/money/web
+      '@angee/operator':
+        specifier: workspace:*
+        version: link:../../../addons/angee/operator/web
+      '@angee/parties':
+        specifier: workspace:*
+        version: link:../../../addons/angee/parties/web
+      '@angee/platform':
+        specifier: workspace:*
+        version: link:../../../addons/angee/platform/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../angee/web/refine
+      '@angee/resources':
+        specifier: workspace:*
+        version: link:../../../addons/angee/resources/web
+      '@angee/storage':
+        specifier: workspace:*
+        version: link:../../../addons/angee/storage/web
+      '@angee/tags':
+        specifier: workspace:*
+        version: link:../../../addons/angee/tags/web
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../angee/web/ui
+      '@graphql-typed-document-node/core':
+        specifier: ^3.2.0
+        version: 3.2.0(graphql@16.14.0)
+      '@tanstack/react-router':
+        specifier: ^1.170.16
+        version: 1.170.16(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+    devDependencies:
+      '@tailwindcss/vite':
+        specifier: ^4.3.1
+        version: 4.3.1(vite@8.1.5(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0))
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      '@vitejs/plugin-react':
+        specifier: ^6.0.3
+        version: 6.0.3(vite@8.1.5(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0))
+      tailwindcss:
+        specifier: ^4.3.1
+        version: 4.3.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vite:
+        specifier: ^8.1.0
+        version: 8.1.5(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0)
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.9(@types/node@26.0.1)(happy-dom@20.10.6)(vite@8.1.5(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0))
+
   packages/e2e:
     devDependencies:
       '@playwright/test':
@@ -9393,6 +9472,13 @@ snapshots:
       tailwindcss: 4.3.1
       vite: 8.1.0(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0)
 
+  '@tailwindcss/vite@4.3.1(vite@8.1.5(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0))':
+    dependencies:
+      '@tailwindcss/node': 4.3.1
+      '@tailwindcss/oxide': 4.3.1
+      tailwindcss: 4.3.1
+      vite: 8.1.5(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0)
+
   '@tanstack/history@1.162.0': {}
 
   '@tanstack/query-core@5.101.1': {}
@@ -9703,6 +9789,11 @@ snapshots:
     dependencies:
       '@rolldown/pluginutils': 1.0.1
       vite: 8.1.0(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0)
+
+  '@vitejs/plugin-react@6.0.3(vite@8.1.5(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0))':
+    dependencies:
+      '@rolldown/pluginutils': 1.0.1
+      vite: 8.1.5(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0)
 
   '@vitest/expect@3.2.4':
     dependencies:
@@ -12258,7 +12349,7 @@ snapshots:
     dependencies:
       '@jridgewell/remapping': 2.3.5
       acorn: 8.17.0
-      picomatch: 4.0.4
+      picomatch: 4.0.5
       webpack-virtual-modules: 0.6.2
 
   update-browserslist-db@1.2.3(browserslist@4.28.2):
