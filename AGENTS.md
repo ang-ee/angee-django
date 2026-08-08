@@ -283,19 +283,21 @@ angee --root "$angee_root" dev
 
 `angee dev` is for bringing the long-running stack up. To run a one-shot Django
 management command against the example, drive its `manage.py` through `uv` from
-the repository root, never by `cd`-ing into the project. The composer is
-emit-only; migrations, permission sync, resource data, and GraphQL SDL checks
-are separate later steps (a fresh process loads the freshly emitted concrete
-models):
+the repository root, never by `cd`-ing into the project. Always pass
+`--extra postgres`: base addons import `django.contrib.postgres`, whose driver
+(`psycopg`) lives behind the pyproject `postgres` extra — the stack's own
+`uv sync` includes it, a bare `uv run` does not. The composer is emit-only;
+migrations, permission sync, resource data, and GraphQL SDL checks are separate
+later steps (a fresh process loads the freshly emitted concrete models):
 
 ```sh
-uv run examples/notes-angee/manage.py angee build              # emit runtime sources
-uv run examples/notes-angee/manage.py makemigrations base notes
-uv run examples/notes-angee/manage.py migrate
-uv run examples/notes-angee/manage.py rebac sync               # permissions, after migrate
-uv run examples/notes-angee/manage.py resources load           # data, after migrate
-uv run examples/notes-angee/manage.py schema                  # write SDL
-uv run examples/notes-angee/manage.py schema --check           # SDL, after runtime load
+uv run --extra postgres examples/notes-angee/manage.py angee build   # emit runtime sources
+uv run --extra postgres examples/notes-angee/manage.py makemigrations base notes
+uv run --extra postgres examples/notes-angee/manage.py migrate
+uv run --extra postgres examples/notes-angee/manage.py rebac sync    # permissions, after migrate
+uv run --extra postgres examples/notes-angee/manage.py resources load  # data, after migrate
+uv run --extra postgres examples/notes-angee/manage.py schema        # write SDL
+uv run --extra postgres examples/notes-angee/manage.py schema --check  # SDL, after runtime load
 ```
 
 For an isolated branch, load `.agents/skills/angee-workspace/SKILL.md` and
