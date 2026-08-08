@@ -9,6 +9,7 @@ import type {
   ResourceToolbarGroupOption,
   ResourceToolbarProps,
 } from "../toolbars";
+import { useArchiveFacetToolbar } from "./archive-facet";
 import { PivotViewBody } from "./PivotView";
 import { usePivotResourceViewSurface } from "./pivot-view-surface";
 import type { ColumnDescriptor } from "./page";
@@ -89,11 +90,13 @@ export function PivotCollectionSurface<TRow extends Row = Row>({
     }),
     [resourceView.state.page, resourceView.state.pageSize, surface.rowTotal],
   );
+  const archive = useArchiveFacetToolbar(resourceView, modelMetadata);
   const toolbar = useResourceToolbarProps({
     resourceView,
     view: "pivot",
     pager,
     pagerTotalUnit: t("pivot.rowUnit"),
+    archive,
     groupStack: surface.rowStack,
     group: surface.rowStack[0] ?? null,
     groupOptions,
