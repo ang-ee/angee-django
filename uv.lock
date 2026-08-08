@@ -800,9 +800,7 @@ name = "django-angee"
 version = "0.1.7"
 source = { editable = "." }
 dependencies = [
-    { name = "aiosqlite" },
     { name = "anthropic" },
-    { name = "asyncpg" },
     { name = "authlib" },
     { name = "celery", extra = ["redis"] },
     { name = "channels" },
@@ -827,7 +825,6 @@ dependencies = [
     { name = "imapclient" },
     { name = "mail-parser-reply" },
     { name = "markdown-it-py" },
-    { name = "mautrix", extra = ["encryption"] },
     { name = "mcp" },
     { name = "neonize" },
     { name = "openai" },
@@ -852,6 +849,11 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+matrix = [
+    { name = "aiosqlite" },
+    { name = "asyncpg" },
+    { name = "mautrix", extra = ["encryption"] },
+]
 postgres = [
     { name = "psycopg", extra = ["binary"] },
 ]
@@ -869,9 +871,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiosqlite", specifier = ">=0.21" },
+    { name = "aiosqlite", marker = "extra == 'matrix'", specifier = ">=0.21" },
     { name = "anthropic", specifier = ">=0.109.2" },
-    { name = "asyncpg", specifier = ">=0.30" },
+    { name = "asyncpg", marker = "extra == 'matrix'", specifier = ">=0.30" },
     { name = "authlib", specifier = ">=1.7.2" },
     { name = "celery", extras = ["redis"], specifier = ">=5.5" },
     { name = "channels", specifier = ">=4.0" },
@@ -896,7 +898,7 @@ requires-dist = [
     { name = "imapclient", specifier = ">=3.1.0" },
     { name = "mail-parser-reply", specifier = ">=1.36" },
     { name = "markdown-it-py", specifier = ">=4.2" },
-    { name = "mautrix", extras = ["encryption"] },
+    { name = "mautrix", extras = ["encryption"], marker = "extra == 'matrix'" },
     { name = "mcp", specifier = ">=1.2" },
     { name = "neonize", specifier = ">=0.4.3.post0" },
     { name = "openai", specifier = ">=2.43.0" },
@@ -920,7 +922,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
     { name = "vobject", specifier = ">=0.9.9" },
 ]
-provides-extras = ["postgres"]
+provides-extras = ["postgres", "matrix"]
 
 [package.metadata.requires-dev]
 dev = [

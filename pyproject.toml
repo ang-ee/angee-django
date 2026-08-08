@@ -69,22 +69,35 @@ dependencies = [
   "qrcode[pil]>=8.2",
   "telethon>=1.44",
   "cryptg>=0.6.0",
-  "mautrix[encryption]",
-  # mautrix's persistent PgCryptoStore selects these drivers directly: asyncpg
-  # for its store module import and aiosqlite for this addon's SQLite store URL.
-  "asyncpg>=0.30",
-  "aiosqlite>=0.21",
   "discord-py>=2.7",
 ]
 
 [project.optional-dependencies]
+# Per-addon extras: an addon whose third-party dependencies are heavy, or whose
+# build is fragile, declares them here instead of in the unconditional table above,
+# so a deployment that does not compose that addon never resolves them. Safe by
+# construction — `test_live_console_import_path_stays_vendor_free` proves the
+# console/ASGI import closure reaches none of these libraries; only the addon's
+# dedicated worker (its `*.session` module) loads them. Composing the addon without
+# its extra is the operator's error, and the worker fails fast on the import.
+#
+# pgvector's Python package and the hatch-angee addon-dependency collection stay
+# deferred, so this is a static table, not `dynamic`.
+
 # Postgres driver only — installed by the runtime image's `--extra postgres` and by
 # the self-contained local stack. psycopg 3 is the driver Django 6's
 # django.db.backends.postgresql uses when DATABASE_URL points at Postgres (the
 # stack env supplies the URL; angee/compose/settings.py maps it, SQLite floor
-# otherwise). pgvector's Python package and the hatch-angee addon-dependency
-# collection stay deferred, so this is a static table, not `dynamic`.
+# otherwise).
 postgres = ["psycopg[binary]>=3.2"]
+
+# angee.messaging_integrate_matrix. `mautrix[encryption]` pulls python-olm, which
+# vendors EOL libolm C++ and only builds under the `[tool.uv.extra-build-variables]`
+# workaround below — so it is the clearest case for staying out of the default
+# resolution. mautrix's persistent PgCryptoStore selects the two DB drivers
+# directly: asyncpg for its store module import, aiosqlite for the addon's SQLite
+# store URL, so they are part of the same E2EE boundary and move with it.
+matrix = ["mautrix[encryption]", "asyncpg>=0.30", "aiosqlite>=0.21"]
 
 [dependency-groups]
 dev = [
@@ -120,19 +133,16 @@ cache-dir = ".angee/caches/uv"
 #     is reused by every later `uv sync` instead of recompiling.
 #   CMAKE_POLICY_VERSION_MINIMUM: CMake 4 dropped compatibility with `< 3.5`,
 #     which the vendored libolm still declares.
-# Requires clang + cmake on any host that builds from source (see README
-# Requirements); the Docker `deps` stage installs both. Remove the whole entry
-# when mautrix moves off libolm (vodozemac) or a fixed release appears.
+# Inert unless the `matrix` extra is selected: python-olm is no longer in the
+# default resolution, so an install without `--extra matrix` never builds it and
+# never reads this. It stays here (not beside the extra — uv has no per-extra build
+# settings) so the one install that does resolve python-olm still gets the flags.
+# Requires clang + cmake on a host that builds it (see README Requirements); the
+# Docker `deps` stage installs both. Remove the whole entry when mautrix moves
+# off libolm (vodozemac) or a fixed release appears.
 python-olm = { CC = "clang", CXX = "clang++", CXXFLAGS = "-fdelayed-template-parsing", CMAKE_POLICY_VERSION_MINIMUM = "3.5" }
 
 [tool.uv.sources]
-# Developing against the Angee Strawberry core fork. `extend=True` merges
-# same-name object/input types at schema build, which is how an addon
-# contributes fields to a type another addon owns; upstream raises
-# DuplicatedTypeName instead. Tracking strawberry-graphql/strawberry#4464 —
-# drop the pin when it lands. Keep it explicit so every environment resolves
-# identically. strawberry-django needs no fork: its patches are upstream as of
-# 0.86.7.
 strawberry-graphql = { git = "https://github.com/ang-ee/strawberry.git", branch = "codex/input-object-extensions" }
 
 [tool.hatch.build.targets.wheel]
