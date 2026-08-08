@@ -38,6 +38,7 @@ import {
   resourceViewKindCapabilities,
 } from "../views/resource-view-model";
 import { groupFieldLabel } from "../views/resource-view-list-body";
+import type { ArchiveFacetToolbarProps } from "../views/archive-facet";
 import {
   filterOperatorLabel,
   labelText,
@@ -56,6 +57,9 @@ export interface ResourceToolbarProps {
   customFilterChips?: readonly ResourceToolbarCustomFilterChip[];
   favorites?: readonly ResourceViewFavorite[];
   activeFilterIds?: readonly string[];
+  /** The archive facet's segmented scope control (active / archived / all),
+   * rendered when the model carries the archive flag. */
+  archive?: ArchiveFacetToolbarProps;
   filterText?: string;
   createLabel?: ReactNode;
   onCreate?: () => void;
@@ -191,6 +195,7 @@ export function ResourceToolbar({
   customFilterChips = [],
   favorites = [],
   activeFilterIds = [],
+  archive,
   filterText = "",
   createLabel,
   onCreate,
@@ -270,6 +275,18 @@ export function ResourceToolbar({
           onCustomFilterRemove={onCustomFilterRemove}
           onFavoriteSave={onFavoriteSave}
           onFavoriteSelect={onFavoriteSelect}
+        />
+      ) : null}
+      {capabilities.filter && archive ? (
+        <SegmentedControl
+          aria-label={t("resourceToolbar.archiveScope")}
+          options={[
+            { value: "active", label: t("resourceToolbar.archiveActive") },
+            { value: "archived", label: t("resourceToolbar.archiveArchived") },
+            { value: "all", label: t("resourceToolbar.archiveAll") },
+          ]}
+          value={archive.value}
+          onValueChange={archive.onValueChange}
         />
       ) : null}
       <div className="min-w-2 flex-1" />

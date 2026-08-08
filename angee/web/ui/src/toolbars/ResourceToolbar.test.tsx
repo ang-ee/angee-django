@@ -100,3 +100,31 @@ describe("ResourceToolbar list-kind regression", () => {
     expect(screen.queryByLabelText("Previous period")).toBeNull();
   });
 });
+
+describe("ResourceToolbar archive facet", () => {
+  test("renders the three-scope control and reports the picked scope", () => {
+    const onValueChange = vi.fn();
+    renderToolbar({
+      view: "list",
+      archive: { value: "active", onValueChange },
+    });
+
+    expect(screen.getByLabelText("Archive scope")).toBeTruthy();
+    fireEvent.click(screen.getByText("Archived"));
+    expect(onValueChange).toHaveBeenCalledWith("archived", expect.anything());
+    fireEvent.click(screen.getByText("All"));
+    expect(onValueChange).toHaveBeenCalledWith("all", expect.anything());
+  });
+
+  test("stays hidden without an archivable model and under the calendar kind", () => {
+    renderToolbar({ view: "list" });
+    expect(screen.queryByLabelText("Archive scope")).toBeNull();
+    cleanup();
+    renderToolbar({
+      view: "calendar",
+      viewControls: viewControls(),
+      archive: { value: "active", onValueChange: vi.fn() },
+    });
+    expect(screen.queryByLabelText("Archive scope")).toBeNull();
+  });
+});

@@ -1,6 +1,21 @@
 import type { ModelFieldMetadata, ModelMetadata } from "./artifact";
 
 /**
+ * The model's archive-flag field — the `ArchiveMixin` column the backend marks
+ * `archivable` — when the node exposes it as filterable. This is the fact the
+ * archive facet keys on: present, a collection surface scopes to unarchived
+ * rows by default and offers the active/archived/all facet; absent, the model
+ * has no archive vocabulary and no facet renders.
+ */
+export function archiveFilterField(metadata: ModelMetadata | null): string | null {
+  if (!metadata) return null;
+  for (const field of Object.values(metadata.fields)) {
+    if (field.archivable && field.filterable) return field.name;
+  }
+  return null;
+}
+
+/**
  * A to-one relation the node projects as a bare `ID` scalar rather than a nested
  * object (`relationObject: false`): the wire carries the related row's public id
  * as a leaf, so a detail/form query selects it directly instead of emitting a

@@ -66,6 +66,7 @@ import type {
 
 import { errorFromUnknown } from "../data/errors";
 import { useUiT } from "../i18n";
+import { combineWithArchiveDefault } from "./archive-facet";
 import type { ResourceViewContextValue } from "./resource-view-context";
 import {
   DEFAULT_TEXT_FILTER_FIELD,
@@ -386,8 +387,8 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     [columns, fields, laneSource, modelMetadata],
   );
   const mergedFilter = React.useMemo(
-    () => Filter.combineOptional(filter, resourceView.state.filter),
-    [resourceView.state.filter, filter],
+    () => combineWithArchiveDefault(filter, resourceView.state.filter, modelMetadata),
+    [resourceView.state.filter, filter, modelMetadata],
   );
   const sortOrder = React.useMemo(
     () =>
@@ -702,8 +703,8 @@ export function useResourceViewSurface<TRow extends Row = Row>({
   );
 
   const mergedFilter = React.useMemo(
-    () => Filter.combineOptional(filter, resourceView.state.filter),
-    [resourceView.state.filter, filter],
+    () => combineWithArchiveDefault(filter, resourceView.state.filter, modelMetadata),
+    [resourceView.state.filter, filter, modelMetadata],
   );
   const sortOrder = React.useMemo(
     () =>
@@ -945,8 +946,8 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
   );
 
   const mergedFilter = React.useMemo(
-    () => Filter.combineOptional(filter, resourceView.state.filter),
-    [resourceView.state.filter, filter],
+    () => combineWithArchiveDefault(filter, resourceView.state.filter, modelMetadata),
+    [resourceView.state.filter, filter, modelMetadata],
   );
   const sortOrder = React.useMemo(
     () => resourceView.state.resourceOrder() ?? undefined,

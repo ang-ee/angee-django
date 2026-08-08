@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 
+import { archiveFilterField } from "./fields";
 import {
   refineResourceName,
   refineResourcesFromDataResources,
@@ -262,5 +263,58 @@ describe("relation contract, whichever way the node projects the FK", () => {
     const metadata = schemaFieldMetadataFromDataResources([relationResource()]);
     const model = modelMetadataForLabel(metadata, "storage.File");
     expect(relationFilterForRelation("status", model)).toBeUndefined();
+  });
+});
+
+describe("the archive flag column", () => {
+  const archivableResource = (): DataResourceMetadata => ({
+    ...resource(),
+    filterFields: ["status", "is_archived"],
+    fields: [
+      {
+        name: "is_archived",
+        kind: "scalar",
+        scalar: "Boolean",
+        readable: true,
+        filterable: true,
+        sortable: false,
+        aggregatable: false,
+        groupable: false,
+        creatable: false,
+        updatable: true,
+        requiredOnCreate: false,
+        archivable: true,
+      },
+      {
+        name: "status",
+        kind: "scalar",
+        scalar: "String",
+        readable: true,
+        filterable: true,
+        sortable: false,
+        aggregatable: false,
+        groupable: true,
+        creatable: true,
+        updatable: true,
+        requiredOnCreate: false,
+      },
+    ],
+  });
+
+  test("projects archivable into model field metadata", () => {
+    const metadata = schemaFieldMetadataFromDataResources([archivableResource()]);
+    const model = modelMetadataForLabel(metadata, "notes.Note");
+    expect(model?.fields.is_archived?.archivable).toBe(true);
+    expect(model?.fields.status?.archivable).toBeUndefined();
+  });
+
+  test("archiveFilterField finds the filterable archive flag, and only it", () => {
+    const metadata = schemaFieldMetadataFromDataResources([archivableResource()]);
+    expect(archiveFilterField(modelMetadataForLabel(metadata, "notes.Note"))).toBe(
+      "is_archived",
+    );
+    const plain = schemaFieldMetadataFromDataResources([resource()]);
+    expect(archiveFilterField(modelMetadataForLabel(plain, "notes.Note"))).toBeNull();
+    expect(archiveFilterField(null)).toBeNull();
   });
 });

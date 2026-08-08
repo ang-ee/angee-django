@@ -16,6 +16,7 @@ import {
   refineResourceName,
 } from "@angee/metadata";
 import {
+  archiveFilterField,
   useModelMetadata,
 } from "@angee/metadata";
 
@@ -67,6 +68,11 @@ export function useRelationOptions(
     () => refineFieldsFromPaths(["id", labelField]),
     [labelField],
   );
+  const archiveField = archiveFilterField(metadata);
+  const effectiveFilters = React.useMemo(
+    () => relationOptionFilters(filters, archiveField),
+    [archiveField, filters],
+  );
   const run = useList<RowRecord, HttpError>({
     resource: resource ? refineResourceName(resource) : "__angee_disabled__",
     dataProviderName: resource?.schemaName,
@@ -75,7 +81,7 @@ export function useRelationOptions(
       currentPage: 1,
       pageSize: pageSize ?? DEFAULT_PAGE_SIZE,
     },
-    ...(filters ? { filters: [...filters] } : {}),
+    ...(effectiveFilters ? { filters: [...effectiveFilters] } : {}),
     meta: { fields },
     queryOptions: {
       enabled: enabled && relation !== null && resource !== null,
@@ -99,6 +105,25 @@ export function useRelationOptions(
     [labelField, rows, sort],
   );
   return React.useMemo(() => ({ list, options }), [list, options]);
+}
+
+/**
+ * The picker's option filters with the unarchived default folded in. An
+ * archivable target offers only unarchived rows — the picker's analog of the
+ * list default: surfacing archived records is the archived facet's job, not the
+ * picker's. An explicit caller filter on the flag wins; already-linked archived
+ * records still resolve (the selected option reads from the parent record, not
+ * this list).
+ */
+export function relationOptionFilters(
+  filters: readonly CrudFilter[] | undefined,
+  archiveField: string | null,
+): readonly CrudFilter[] | undefined {
+  if (!archiveField) return filters;
+  if (filters?.some((item) => "field" in item && item.field === archiveField)) {
+    return filters;
+  }
+  return [...(filters ?? []), { field: archiveField, operator: "eq", value: false }];
 }
 
 /**

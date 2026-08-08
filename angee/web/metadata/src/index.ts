@@ -72,6 +72,7 @@ export {
   type ResourceGroupSpec,
 } from "./groups";
 export {
+  archiveFilterField,
   defaultWidgetForModelField,
   fieldUpdatable,
   filterFieldType,

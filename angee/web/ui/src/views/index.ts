@@ -241,6 +241,15 @@ export {
   type RelationOptionsList,
   type RelationOptionsResult,
 } from "./relation-options";
+export {
+  ARCHIVE_FACET_VALUES,
+  archiveFacetValue,
+  combineWithArchiveDefault,
+  useArchiveFacetToolbar,
+  withArchiveFacetValue,
+  type ArchiveFacetToolbarProps,
+  type ArchiveFacetValue,
+} from "./archive-facet";
 export * from "./resource-view-model";
 export * from "./resource-view-context";
 export type { StringIdRow } from "./resource-view-surface";

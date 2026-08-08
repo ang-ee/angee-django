@@ -30,6 +30,7 @@ import {
 
 import { errorFromUnknown } from "../data/errors";
 import { useUiT } from "../i18n";
+import { combineWithArchiveDefault } from "./archive-facet";
 import type { ResourceViewContextValue } from "./resource-view-context";
 import {
   Filter,
@@ -208,8 +209,8 @@ export function usePivotResourceViewSurface<TRow extends Row = Row>({
   );
 
   const mergedFilter = React.useMemo(
-    () => Filter.combineOptional(filter, resourceView.state.filter),
-    [filter, resourceView.state.filter],
+    () => combineWithArchiveDefault(filter, resourceView.state.filter, modelMetadata),
+    [filter, resourceView.state.filter, modelMetadata],
   );
 
   // Expansion is short-lived interaction state, so it stays local (the grouped

@@ -15,6 +15,7 @@ import type {
 
 import { useUiT } from "../i18n";
 import type { PagerState } from "../ui/pager";
+import { combineWithArchiveDefault, useArchiveFacetToolbar } from "./archive-facet";
 import { BoardView } from "./BoardView";
 import {
   ResourceViewProvider,
@@ -24,7 +25,6 @@ import {
 } from "./resource-view-context";
 import {
   RESOURCE_VIEW_KINDS,
-  Filter,
   availableResourceViewKinds,
   resourceViewGroupsEqual,
   stableSerialize,
@@ -234,8 +234,8 @@ function ListViewBody<TRow extends Row = Row>({
     [columns, modelMetadata, schemaMetadata],
   );
   const mergedFilter = React.useMemo(
-    () => Filter.combineOptional(baseFilter, resourceView.state.filter),
-    [resourceView.state.filter, baseFilter],
+    () => combineWithArchiveDefault(baseFilter, resourceView.state.filter, modelMetadata),
+    [resourceView.state.filter, baseFilter, modelMetadata],
   );
   const declaredFacets = useRelationFacets(resource, facets, mergedFilter);
   const scalarFacets = useScalarFacets(
@@ -732,10 +732,12 @@ function ListViewContent<TRow extends Row = Row>({
     () => ({ refresh: surface.list.refetch }),
     [surface.list.refetch],
   );
+  const archive = useArchiveFacetToolbar(resourceView, modelMetadata);
   const toolbar = useResourceToolbarProps({
     actions: toolbarActions,
     availableViews,
     pager: toolbarPager,
+    archive,
     view: resourceView.state.view,
     group: effectiveGroupStack[0] ?? null,
     groupStack: effectiveGroupStack,

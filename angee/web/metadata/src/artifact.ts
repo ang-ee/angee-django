@@ -49,6 +49,9 @@ export interface ModelFieldMetadata {
   creatable?: boolean;
   updatable?: boolean;
   requiredOnCreate?: boolean;
+  /** The model's `ArchiveMixin` flag column: collection surfaces scope to
+   * unarchived rows by default and key the archive facet on it. */
+  archivable?: boolean;
 }
 
 export interface ModelRootFieldMetadata {
@@ -219,6 +222,7 @@ export interface DataResourceFieldMetadata {
   creatable: boolean;
   updatable: boolean;
   requiredOnCreate: boolean;
+  archivable?: boolean;
   nullable?: boolean;
   relationModelLabel?: string | null;
   relationLabelAxis?: string | null;
@@ -471,6 +475,7 @@ function baseModelFieldMetadata(
     creatable: field.creatable,
     updatable: field.updatable,
     requiredOnCreate: field.requiredOnCreate,
+    ...(field.archivable ? { archivable: true } : {}),
   };
 }
 

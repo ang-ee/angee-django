@@ -279,6 +279,11 @@ export class Filter {
     return withoutFilterFields(this.value, omitted);
   }
 
+  /** Whether the filter constrains `field` anywhere, including inside AND/OR/NOT. */
+  mentionsField(field: string): boolean {
+    return filterMentionsField(this.value, field);
+  }
+
   and(filter: unknown): ResourceViewFilter {
     const right = filterRecord(filter);
     if (!right || Object.keys(right).length === 0) return this.value;
@@ -421,6 +426,18 @@ function isFilterControlKey(value: string): boolean {
     || value === "and"
     || value === "or"
     || value === "not";
+}
+
+function filterMentionsField(value: unknown, field: string): boolean {
+  const record = filterRecord(value);
+  if (!record) return false;
+  for (const [key, item] of Object.entries(record)) {
+    if (key === field) return true;
+    if (!isFilterControlKey(key)) continue;
+    const children = Array.isArray(item) ? item : [item];
+    if (children.some((child) => filterMentionsField(child, field))) return true;
+  }
+  return false;
 }
 
 export class ResourceViewState {
