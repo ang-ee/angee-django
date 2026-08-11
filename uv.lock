@@ -2848,8 +2848,8 @@ wheels = [
 
 [[package]]
 name = "strawberry-graphql"
-version = "0.317.2"
-source = { git = "https://github.com/ang-ee/strawberry.git?branch=codex%2Finput-object-extensions#ed69721ebcb006cfe7ed30b7ab2ede6b8c9c8fbb" }
+version = "0.324.0"
+source = { git = "https://github.com/ang-ee/strawberry.git?branch=codex%2Finput-object-extensions#e4fa3198f704d81b3ca96b6dcac75420c5fee516" }
 dependencies = [
     { name = "cross-web" },
     { name = "graphql-core" },
