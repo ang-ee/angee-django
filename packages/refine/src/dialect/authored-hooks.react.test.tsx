@@ -25,6 +25,7 @@ const invalidationMock = vi.hoisted(() => ({
 
 vi.mock("@refinedev/core", () => ({
   useCustom: vi.fn(),
+  useDataProvider: vi.fn(),
   useCustomMutation: () => {
     mutationMock.generation += 1;
     const generation = mutationMock.generation;
@@ -53,10 +54,12 @@ vi.mock("@refinedev/core", () => ({
     vi.fn(async (target: unknown) => {
       invalidationMock.resourceInvalidations.push(target);
     }),
+  useSubscription: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
   hashKey: (value: unknown) => JSON.stringify(value),
+  useInfiniteQuery: vi.fn(),
   useQueryClient: () => ({
     invalidateQueries: vi.fn(
       async (options: { predicate?: (query: { meta: unknown }) => boolean }) => {

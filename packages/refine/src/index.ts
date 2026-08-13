@@ -76,11 +76,15 @@ export {
 } from "./dialect/hooks";
 export {
   useAuthoredMutation,
+  useAuthoredInfiniteQuery,
   useAuthoredQuery,
   errorFromAuthoredEnvelope,
   authoredOperationData,
   authoredQueryData,
   type AuthoredDocument,
+  type AuthoredInfinitePageVariables,
+  type AuthoredInfiniteQueryOptions,
+  type AuthoredInfiniteQueryResult,
   type AuthoredMutate,
   type AuthoredMutationEnvelope,
   type AuthoredMutationOptions,
