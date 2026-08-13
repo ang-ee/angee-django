@@ -151,6 +151,23 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
 
         return self.display_name
 
+    PLACEHOLDER_NAME = "Unknown"
+    """The display name imports write when a source carries no name at all."""
+
+    @property
+    def has_real_name(self) -> bool:
+        """Whether ``display_name`` is a human-given name.
+
+        The import placeholder and letterless names (a phone number or other
+        handle spelling promoted into the name slot) do not count; ranking
+        surfaces such as merge-survivor proposals prefer parties that pass.
+        """
+
+        name = (self.display_name or "").strip()
+        if not name or name == self.PLACEHOLDER_NAME:
+            return False
+        return any(character.isalpha() for character in name)
+
     @property
     def concrete_kind(self) -> str | None:
         """Return this party's concrete kind (``"person"`` / ``"organization"``), or ``None``.

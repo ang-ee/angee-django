@@ -1031,7 +1031,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 folder=folder,
                 source_uid=parsed.uid,
                 defaults={
-                    "display_name": parsed.display_name or parsed.family_name or "Unknown",
+                    "display_name": parsed.display_name or parsed.family_name or person_model.PLACEHOLDER_NAME,
                     "name_prefix": parsed.name_prefix,
                     "given_name": parsed.given_name,
                     "additional_name": parsed.additional_name,

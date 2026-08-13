@@ -170,9 +170,7 @@ def _pair_row(candidate: Any) -> dict[str, str]:
 def _survivor_score(party: Any) -> tuple[bool, int, int]:
     """Rank a merge survivor: real name, then handle richness, then age."""
 
-    name = (party.display_name or "").strip()
-    has_name = bool(name) and not all(character in "0123456789+ " for character in name)
-    return (has_name, party.handle_count, -party.pk)
+    return (party.has_real_name, party.handle_count, -party.pk)
 
 
 def _dedupe_form_schema() -> dict[str, Any]:

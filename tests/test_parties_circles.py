@@ -728,6 +728,16 @@ def test_merged_into_flattens_transitively(parties_tables: None) -> None:
     assert a.pk not in canonical and b.pk not in canonical
 
 
+def test_has_real_name_rejects_placeholder_and_letterless_names() -> None:
+    """Blank, placeholder, and letterless display names are not real names."""
+
+    assert Party(display_name="Sofia Khomutova").has_real_name
+    assert Party(display_name="Ĝis 千葉").has_real_name
+    assert not Party(display_name=Party.PLACEHOLDER_NAME).has_real_name
+    assert not Party(display_name="+7 921 384 6620").has_real_name
+    assert not Party(display_name="   ").has_real_name
+
+
 @pytest.mark.django_db(transaction=True)
 def test_merge_into_rejects_reversal_and_database_rejects_self_merge(parties_tables: None) -> None:
     """The verb rejects A→B when B→A exists; the database is the direct-write floor."""

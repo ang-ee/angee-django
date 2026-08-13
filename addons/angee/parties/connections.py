@@ -212,7 +212,7 @@ def _connection_person(
                 person.save(update_fields=["display_name", "updated_at"])
             return person
     return person_model.objects.create(
-        display_name=display_name or "Unknown",
+        display_name=display_name or person_model.PLACEHOLDER_NAME,
         created_by_id=created_by_id,
     )
 
