@@ -30,6 +30,7 @@
     "@angee/operator": "workspace:*",
     "@angee/parties": "workspace:*",
     "@angee/platform": "workspace:*",
+    "@angee/posts": "workspace:*",
     "@angee/refine": "workspace:*",
     "@angee/resources": "workspace:*",
     "@angee/spaces": "workspace:*",

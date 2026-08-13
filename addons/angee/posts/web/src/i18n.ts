@@ -1,0 +1,35 @@
+import { createNamespaceT } from "@angee/ui";
+
+export const enPostsMessages: Record<string, string> = {
+  "feed.name": "Feed",
+  "feed.backend": "Backend",
+  "feed.handle": "Handle",
+  "feed.lifecycle": "Lifecycle",
+  "feed.runtime": "Runtime",
+  "feed.sync": "Last sync",
+  "feed.syncedAt": "Synced",
+  "feed.items": "Items",
+  "feed.details": "Details",
+  "feed.externalId": "External ID",
+  "feed.config": "Config",
+  "feed.progress": "Progress",
+  "feed.error": "Sync error",
+  "feed.posts": "Posts",
+  "feed.follows": "Follows",
+  "feed.postsLabel": "Recent posts",
+  "feed.postsLoading": "Loading posts",
+  "feed.postsEmpty": "No posts in this feed yet.",
+  "feed.postsError": "Could not load feed posts.",
+  "feed.follow.handle": "Handle",
+  "feed.follow.started": "Started",
+  "feed.follow.ended": "Ended",
+  "feed.follow.created": "Created",
+  "feed.follow.empty": "No follows for this feed yet.",
+  "post.author": "Unknown author",
+  "post.emptyBody": "No post body.",
+  "post.reactions": "Post reactions",
+  "post.reactionCount": "{reaction} reaction, {count}",
+  "post.reactionTitle": "{reaction} by {names}",
+};
+
+export const usePostsT = createNamespaceT("posts", enPostsMessages);
