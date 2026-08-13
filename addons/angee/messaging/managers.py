@@ -1024,9 +1024,14 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         """Return ``user``'s unread messages on ``thread`` — the receipt-anchored scan.
 
         Everything strictly after the follower's ``last_read_message`` in feed order
-        (the whole thread when no receipt yet); ``none()`` for a non-follower. The
-        scan rides the thread keyset index, so its cost is bounded by how far behind
-        the receipt is — never by thread size.
+        (the whole thread when no receipt yet), narrowed to the subtypes the follower
+        subscribes to (:meth:`ThreadFollower.subscribed_subtype_q`); ``none()`` for a
+        non-follower. The scan rides the thread keyset index, so its cost is bounded by
+        how far behind the receipt is — never by thread size. A composable queryset the
+        badge count and a caller ranging record threads reuse; the per-row callers
+        (``needaction_for_message``, ``fanout_for_message``) read the same rule through
+        its boolean twin ``is_subscribed_to``, so muting can never drift between the
+        badge, the needaction markers, and email delivery.
         """
 
         resolved_user_id = _resolve_user_id(user=user, user_id=user_id)
@@ -1040,12 +1045,11 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         )
         if follower is None:
             return message_model._base_manager.none()
-        queryset = message_model._base_manager.filter(thread=thread).annotate(
-            _order_at=_MESSAGE_ORDER_ANNOTATION
+        queryset = (
+            message_model._base_manager.filter(thread=thread)
+            .annotate(_order_at=_MESSAGE_ORDER_ANNOTATION)
+            .filter(follower.subscribed_subtype_q())
         )
-        subtype_keys = tuple(str(key) for key in (follower.subtype_keys or ()))
-        if subtype_keys:
-            queryset = queryset.filter(subtype__key__in=subtype_keys)
         if follower.last_read_message is None:
             return queryset
         anchor = _message_chronological_key(follower.last_read_message)
@@ -1082,7 +1086,13 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         return self.mark_read_up_to(attachment.thread, user=user, user_id=user_id)
 
     def needaction_for_message(self, message: Any, *, user: Any = None, user_id: Any = None) -> bool:
-        """Return whether ``message`` sits past ``user``'s read receipt — a pure comparison."""
+        """Return whether ``message`` needs ``user``'s attention: past their read receipt
+        AND within their subtype subscription.
+
+        Reads the same muting rule as the unread scan (``ThreadFollower.is_subscribed_to``),
+        so a muted or non-subscribed subtype is never needaction even when it sits past the
+        receipt — the per-message marker cannot disagree with the badge count.
+        """
 
         if message.thread_id is None:
             return False
@@ -1095,6 +1105,8 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
             .first()
         )
         if follower is None:
+            return False
+        if not follower.is_subscribed_to(message.subtype):
             return False
         if follower.last_read_message is None:
             return True
@@ -1262,7 +1274,6 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
         message: Any,
         *,
         attachment: Any | None = None,
-        subtype_key: str = "",
         owner_id: Any = None,
         recipient_user_ids: tuple[Any, ...] = (),
     ) -> int:
@@ -1296,13 +1307,15 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
         def _is_author(recipient_id: Any) -> bool:
             return owner_id is not None and str(recipient_id) == str(owner_id)
 
+        # One subtype-row load for the whole fanout: the muting rule reads the subtype's
+        # default/internal flags, so email delivery honors the same subscription the
+        # unread scan does (an empty selection = the default subscription, not "every
+        # subtype").
+        message_subtype = message.subtype
         for follower in followers.select_related("attachment"):
             if _is_author(follower.user_id):
                 continue
-            subtype_keys = tuple(str(key) for key in (follower.subtype_keys or ()))
-            if subtype_keys and subtype_key and subtype_key not in subtype_keys:
-                continue
-            if subtype_keys and not subtype_key:
+            if not follower.is_subscribed_to(message_subtype):
                 continue
             existing_row = existing.get(follower.user_id)
             if existing_row is not None:
@@ -2154,7 +2167,6 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             notification_model.objects.fanout_for_message(
                 message,
                 attachment=attachment,
-                subtype_key=subtype.key if subtype is not None else subtype_key,
                 owner_id=owner_id,
                 recipient_user_ids=recipient_user_ids,
             )

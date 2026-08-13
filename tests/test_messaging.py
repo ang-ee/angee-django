@@ -1590,6 +1590,51 @@ def test_threaded_model_marks_one_message_done(messaging_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_unread_count_respects_default_subtype_subscription(messaging_tables: None) -> None:
+    """An empty subtype selection is the default subscription, not "everything".
+
+    A follower who never narrowed their subtypes still counts plain comments and the
+    default subtypes as unread, but not a non-default subtype they were never offered a
+    checkbox for — so the unread badge can never disagree with the follow filters. A
+    follower who explicitly picked a subtype counts only that one.
+    """
+
+    del messaging_tables
+    user_model = get_user_model()
+    with system_context(reason="test unread subtype subscription setup"):
+        author = user_model.objects.create_user(username="mute-author", email="mute-author@example.com")
+        default_watcher = user_model.objects.create_user(username="mute-default", email="mute-default@example.com")
+        promo_watcher = user_model.objects.create_user(username="mute-promo", email="mute-promo@example.com")
+        ticket = ThreadedTicket.objects.create(title="Subtype muting")
+        # No subtype_keys → the default subscription, the same state the follow UI shows.
+        ticket.message_subscribe(user=default_watcher)
+        ticket.message_subscribe(user=promo_watcher, subtype_keys=("promo",))
+
+    with actor_context(author):
+        comment = ticket.message_post("A plain comment everyone tracks.")
+        promo = ticket.message_post("A promo blast.", subtype_key="promo")
+        ticket.message_post("A system alert.", subtype_key="system_alert")
+
+    # "promo" is a subtype the follow UI would not check by default; "system_alert" is
+    # internal — never offered as a checkbox at all. Both must fall out of the default
+    # subscription, which pins BOTH halves of the empty-selection rule (default AND
+    # not-internal).
+    assert MessageSubtype._base_manager.filter(key="promo").update(default=False) == 1
+    assert MessageSubtype._base_manager.filter(key="system_alert").update(internal=True) == 1
+
+    thread = ticket.message_thread(create=False)
+    # The default follower's unread set is exactly the plain comment — not the non-default
+    # promo nor the internal alert. Asserting the membership (not just the count) proves the
+    # comment IS counted and the other two are NOT; before the fix all three counted.
+    default_unread = ThreadFollower.objects.unread_messages(thread, user=default_watcher)
+    assert [message.pk for message in default_unread] == [comment.pk]
+    assert ThreadFollower.objects.unread_count_for_record(ticket, user=default_watcher) == 1
+    # The explicit follower counts only their chosen subtype.
+    explicit_unread = ThreadFollower.objects.unread_messages(thread, user=promo_watcher)
+    assert [message.pk for message in explicit_unread] == [promo.pk]
+
+
+@pytest.mark.django_db(transaction=True)
 def test_threaded_model_post_notifies_direct_recipient_without_following(messaging_tables: None) -> None:
     """Direct post recipients get notifications even when they are not followers."""
 

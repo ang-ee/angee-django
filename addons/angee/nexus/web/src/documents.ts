@@ -31,6 +31,10 @@ export const NexusTimeline = graphql(`
           id
           display_name
           value
+          party_link_confirmed
+          party {
+            display_name
+          }
         }
         thread {
           id
@@ -58,6 +62,10 @@ export const NexusTimeline = graphql(`
           id
           display_name
           value
+          party_link_confirmed
+          party {
+            display_name
+          }
         }
         thread {
           id

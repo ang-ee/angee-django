@@ -1,5 +1,6 @@
 import * as React from "react";
 import { type DocumentType } from "@angee/gql/console";
+import { senderDisplayName } from "@angee/parties";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   Avatar,
@@ -106,8 +107,7 @@ export function TimelinePane(props: TimelinePaneProps): React.ReactElement {
       </p>
       <ul className="flex flex-col gap-1">
         {rows.map((message) => {
-          const author =
-            message.sender?.display_name || message.sender?.value || "—";
+          const author = senderDisplayName(message.sender, "—");
           const title = message.thread?.title?.text ?? "";
           const direction = message.direction
             ? directionPresentation(message.direction)

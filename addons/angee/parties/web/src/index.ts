@@ -96,5 +96,6 @@ const parties = defineBaseAddon({
 
 export { PARTIES_OVERVIEW_SLOT } from "./slots";
 export { partyMergePath } from "./routes";
+export { senderDisplayName, type SenderIdentity } from "./identity";
 
 export default parties;

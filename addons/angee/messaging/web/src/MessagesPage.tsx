@@ -15,6 +15,8 @@ import {
   type StringIdRow,
 } from "@angee/ui";
 
+import { senderDisplayName, type SenderIdentity } from "@angee/parties";
+
 import { useMessagingT } from "./i18n";
 
 const MODEL = "messaging.Message";
@@ -31,19 +33,13 @@ const PART_GROUPS = { list: { field: "role" } } as const;
 
 type PartRow = StringIdRow;
 type MessageRow = StringIdRow & {
-  sender?: {
-    party?: { display_name?: string | null } | null;
-    party_link_confirmed?: boolean | null;
-    display_name?: string | null;
-    value?: string | null;
-  } | null;
+  sender?: SenderIdentity | null;
 };
 
 const MESSAGE_FIELDS = ["sender.party_link_confirmed", "sender.display_name", "sender.value"] as const;
 
 function messageSenderName(row: MessageRow): string {
-  const partyName = row.sender?.party_link_confirmed ? row.sender.party?.display_name : null;
-  return partyName || row.sender?.display_name || row.sender?.value || "";
+  return senderDisplayName(row.sender);
 }
 
 // The nested selection the part columns render from: the part's structural

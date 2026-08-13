@@ -1464,6 +1464,44 @@ class ThreadFollower(SqidMixin, AuditMixin, AngeeModel):
 
         return f"{self.user_id} follows {self.thread_id}"
 
+    # The one muting rule — "which messages this follower is subscribed to" — in the
+    # two shapes its callers need: a ``Message`` ``Q`` for the unread queryset scan,
+    # and a per-row boolean for the row-at-a-time callers (per-message needaction, the
+    # email fanout). Both branch on the same explicit-vs-empty fact so muting can never
+    # drift between the badge, the needaction markers, and email delivery.
+    #
+    # An explicit ``subtype_keys`` selection matches exactly those subtypes. An empty
+    # selection is the default subscription the follow UI shows: every subtype-less
+    # message (an ingested/system row with no subtype) plus the default, non-internal
+    # subtypes — a plain "comment" is a default non-internal subtype, so it counts;
+    # never the non-default or internal subtypes the follower was never offered a
+    # checkbox for.
+
+    def _explicit_subtype_keys(self) -> tuple[str, ...]:
+        """This follower's explicit subtype selection, or ``()`` for the default one."""
+
+        return tuple(str(key) for key in (self.subtype_keys or ()))
+
+    def subscribed_subtype_q(self) -> models.Q:
+        """The muting rule as a ``Message`` predicate — the queryset shape of the rule."""
+
+        explicit = self._explicit_subtype_keys()
+        if explicit:
+            return models.Q(subtype__key__in=explicit)
+        return models.Q(subtype__isnull=True) | models.Q(
+            subtype__default=True, subtype__internal=False
+        )
+
+    def is_subscribed_to(self, subtype: Any) -> bool:
+        """The muting rule for one message's ``subtype`` (``None`` when subtype-less) —
+        the per-row shape of :meth:`subscribed_subtype_q`, for the needaction and
+        email-fanout callers that hold a single subtype rather than a queryset."""
+
+        explicit = self._explicit_subtype_keys()
+        if explicit:
+            return subtype is not None and str(subtype.key) in explicit
+        return subtype is None or (bool(subtype.default) and not bool(subtype.internal))
+
 
 class ThreadActivity(SqidMixin, AuditMixin, AngeeModel):
     """A scheduled activity attached to a model chatter thread."""

@@ -824,6 +824,9 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
   onMarkDone,
 }: MessageFeedRowProps): React.ReactElement {
   const text = messageText(message);
+  // Envelope name by design: record chatter's sender (`RecordHandleType`) withholds
+  // party backedges as an authorization boundary, so this deliberately does NOT compose
+  // `@angee/parties` `senderDisplayName` (the curated-party surfaces do).
   const author = message.sender?.display_name || message.sender?.value || t("message.author");
   const trackingValues = [...message.tracking_values].sort(
     (left, right) =>
