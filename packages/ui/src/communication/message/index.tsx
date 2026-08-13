@@ -4,11 +4,13 @@
 // data, the mutations, and any streaming runtime around these. Tokens + `tone` follow
 // the base design system; copy routes through `useUiT`.
 
-import type { HTMLAttributes, ReactElement, ReactNode } from "react";
+import { useId, useState, type HTMLAttributes, type ReactElement, type ReactNode } from "react";
 
+import { Glyph } from "../../chrome/Glyph";
 import { RelativeTime } from "../../fragments/RelativeTime";
 import { useUiT } from "../../i18n";
 import { cn } from "../../lib/cn";
+import { formatSize, isImageMime, normaliseMime } from "../../preview/model";
 import { Chip, type ChipTone } from "../../ui/chip";
 import { Kbd } from "../../ui/kbd";
 import { textRoleVariants } from "../../ui/text";
@@ -135,6 +137,216 @@ export function MessageRow({
       </div>
     </li>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Parts
+// ---------------------------------------------------------------------------
+
+export interface MessagePartMime {
+  mime_type?: string | null;
+  label?: string | null;
+}
+
+export interface MessagePartFile {
+  id?: string | null;
+  filename?: string | null;
+  title?: string | null;
+  url?: string | null;
+  size_bytes?: number | null;
+  mime_type?: MessagePartMime | null;
+}
+
+export interface MessagePartFragment {
+  text?: string | null;
+}
+
+export interface MessagePart {
+  id?: string | null;
+  role?: string | null;
+  fragment?: MessagePartFragment | null;
+  disposition?: string | null;
+  cid?: string | null;
+  file?: MessagePartFile | null;
+}
+
+export interface MessagePartsViewProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
+  /** Ordered message parts as selected by the consumer's transport. */
+  parts: readonly MessagePart[];
+  /** Resolves a viewable/downloadable URL for a file part. */
+  resolveFileUrl: (file: MessagePartFile) => string | null | undefined;
+}
+
+/** Renders a message's ordered MIME/JMAP part list: title/body/quote/signature text
+ *  plus inline images and attachment chips. Presentation only — consumers pass the
+ *  already ordered parts and a file-URL resolver; no transport or GraphQL detail lives
+ *  here. */
+export function MessagePartsView({
+  parts,
+  resolveFileUrl,
+  className,
+  ...props
+}: MessagePartsViewProps): ReactElement | null {
+  if (!parts.some(hasRenderableMessagePart)) return null;
+  return (
+    <div className={cn("space-y-2 whitespace-normal text-13 leading-relaxed text-current", className)} {...props}>
+      {parts.map((part, index) =>
+        hasRenderableMessagePart(part) ? (
+          <MessagePartItem
+            key={messagePartKey(part, index)}
+            part={part}
+            resolveFileUrl={resolveFileUrl}
+          />
+        ) : null,
+      )}
+    </div>
+  );
+}
+
+interface MessagePartItemProps {
+  part: MessagePart;
+  resolveFileUrl: MessagePartsViewProps["resolveFileUrl"];
+}
+
+function MessagePartItem({ part, resolveFileUrl }: MessagePartItemProps): ReactElement | null {
+  const t = useUiT();
+  const text = part.fragment?.text ?? "";
+  const hasText = text.trim() !== "";
+  const file = part.file;
+  const fileNode = file ? renderMessagePartFile(part, file, resolveFileUrl, t) : null;
+  const role = normalisePartValue(part.role);
+
+  if (role === "QUOTED") {
+    return <QuotedMessagePart text={text} file={fileNode} />;
+  }
+
+  if (role === "TITLE") {
+    return (
+      <div className="space-y-1">
+        {hasText ? <h3 className="text-14 font-semibold leading-snug text-current">{text}</h3> : null}
+        {fileNode}
+      </div>
+    );
+  }
+
+  if (role === "SIGNATURE") {
+    return (
+      <div className="space-y-1 text-current opacity-70">
+        {hasText ? <div className="whitespace-pre-wrap">{text}</div> : null}
+        {fileNode}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      {hasText ? <div className="whitespace-pre-wrap">{text}</div> : null}
+      {fileNode}
+    </div>
+  );
+}
+
+interface QuotedMessagePartProps {
+  text: string;
+  file: ReactNode;
+}
+
+function QuotedMessagePart({ text, file }: QuotedMessagePartProps): ReactElement | null {
+  const t = useUiT();
+  const [open, setOpen] = useState(false);
+  const contentId = useId();
+  if (text.trim() === "" && !file) return null;
+  return (
+    <div className="space-y-1">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={contentId}
+        onClick={() => setOpen((current) => !current)}
+        className="inline-flex h-6 items-center rounded-full border border-current/20 px-2 text-2xs font-medium text-current opacity-75 outline-none transition-opacity hover:opacity-100 focus-visible:focus-ring"
+      >
+        {open ? t("message.parts.hideQuoted") : t("message.parts.showQuoted")}
+      </button>
+      {open ? (
+        <blockquote id={contentId} className="space-y-1 border-l-2 border-current pl-3 text-current opacity-75">
+          {text.trim() !== "" ? <div className="whitespace-pre-wrap">{text}</div> : null}
+          {file}
+        </blockquote>
+      ) : null}
+    </div>
+  );
+}
+
+function renderMessagePartFile(
+  part: MessagePart,
+  file: MessagePartFile,
+  resolveFileUrl: MessagePartsViewProps["resolveFileUrl"],
+  t: ReturnType<typeof useUiT>,
+): ReactElement {
+  const url = safeMessagePartUrl(resolveFileUrl(file));
+  const label = file.title || file.filename || t("message.parts.attachment");
+  const mime = normaliseMime(file.mime_type?.mime_type);
+  if (
+    url &&
+    normalisePartValue(part.disposition) === "INLINE" &&
+    Boolean(part.cid?.trim()) &&
+    isImageMime(mime)
+  ) {
+    return (
+      <figure className="my-1 max-w-full">
+        <img
+          src={url}
+          alt={label || t("message.parts.inlineImage")}
+          loading="lazy"
+          className="max-h-96 max-w-full rounded-6 border border-current/20 object-contain"
+        />
+      </figure>
+    );
+  }
+
+  const chip = (
+    <MessageAttachmentChip
+      icon={<Glyph decorative name="attachment" />}
+      remove={
+        typeof file.size_bytes === "number" ? (
+          <span className="shrink-0 text-2xs opacity-70">{formatSize(file.size_bytes)}</span>
+        ) : undefined
+      }
+    >
+      {label}
+    </MessageAttachmentChip>
+  );
+  if (!url) return chip;
+  return (
+    <a href={url} download={file.filename ?? undefined} className="inline-flex max-w-full align-middle">
+      {chip}
+    </a>
+  );
+}
+
+function hasRenderableMessagePart(part: MessagePart): boolean {
+  if (normalisePartValue(part.role) === "HEADER") return false;
+  return (part.fragment?.text ?? "").trim() !== "" || (part.file !== null && part.file !== undefined);
+}
+
+function messagePartKey(part: MessagePart, index: number): string {
+  return part.id || String(index);
+}
+
+function normalisePartValue(value: string | null | undefined): string {
+  return (value ?? "").trim().toUpperCase();
+}
+
+function safeMessagePartUrl(url: string | null | undefined): string | undefined {
+  const value = url?.trim();
+  if (!value) return undefined;
+  if (value.startsWith("/") && !value.startsWith("//")) return value;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // ---------------------------------------------------------------------------
