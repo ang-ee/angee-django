@@ -318,11 +318,16 @@ class MessageType(AngeeNode):
     # Feed both produce messages), so the projection is the parent type — a
     # ChannelType declaration would crash resolving a Feed-ingested row.
     channel: IntegrationType | None
-    parts: list[PartType]
     tracking_values: list[TrackingValueType]
     participants: list[ParticipantType]
     created_at: auto
     updated_at: auto
+
+    @strawberry.field
+    def parts(self) -> list[PartType]:
+        """Return this message's MIME parts in depth-first reading order."""
+
+        return cast(list[PartType], Part.objects.reading_order_for_message(self))
 
     @strawberry.field
     def title(self) -> str:
@@ -417,8 +422,13 @@ class RecordMessageType(AngeeNode):
     sender: RecordHandleType | None
     parent: RecordMessageParentType | None
     subtype: MessageSubtypeType | None
-    parts: list[PartType]
     tracking_values: list[TrackingValueType]
+
+    @strawberry.field
+    def parts(self) -> list[PartType]:
+        """Return this record message's MIME parts in depth-first reading order."""
+
+        return cast(list[PartType], Part.objects.reading_order_for_message(self))
 
     @strawberry.field
     def title(self) -> str:

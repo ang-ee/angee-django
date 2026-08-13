@@ -311,6 +311,60 @@ def test_message_by_pk_serves_title_beside_a_parts_selection(messaging_graphql_t
     ]
 
 
+def test_message_parts_projection_returns_depth_first_order(messaging_graphql_tables: None) -> None:
+    """Message projections flatten the part tree in MIME reading order."""
+
+    admin = _platform_admin("msg-parts-order-admin")
+    _thread, message = _seed_thread_and_message(admin)
+    with system_context(reason="test.messaging.parts.depth_first.generic"):
+        _replace_with_nested_part_tree(message, admin)
+    generic_parts = _data(
+        execute_schema(
+            _schema(),
+            """
+            query MessageParts($id: String!) {
+              messages_by_pk(id: $id) {
+                parts { role name fragment { text } }
+              }
+            }
+            """,
+            {"id": message.sqid},
+            request=_request(admin),
+        )
+    )["messages_by_pk"]["parts"]
+
+    with system_context(reason="test.messaging.parts.depth_first.record"):
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Nested parts")
+        record_message = ticket.message_post("placeholder")
+        _replace_with_nested_part_tree(record_message, admin)
+    record_parts = _data(
+        execute_schema(
+            _schema(),
+            """
+            query RecordMessageParts($model: String!, $id: ID!) {
+              record_thread(input: {model_label: $model, record_id: $id}) {
+                messages { parts { role name fragment { text } } }
+              }
+            }
+            """,
+            {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
+            request=_request(admin),
+        )
+    )["record_thread"]["messages"][0]["parts"]
+
+    expected = [
+        ("TITLE", "", "Depth subject"),
+        ("HEADER", "list-id", "List-ID: updates.example"),
+        ("HEADER", "list-unsubscribe", "<mailto:unsubscribe@example.com>"),
+        ("BODY", "", None),
+        ("BODY", "", "Body paragraph."),
+        ("QUOTED", "", "Quoted reply."),
+        ("SIGNATURE", "", "Regards, Ada"),
+    ]
+    assert _part_projection(generic_parts) == expected
+    assert _part_projection(record_parts) == expected
+
+
 def test_message_sender_and_participant_expose_resolved_party(messaging_graphql_tables: None) -> None:
     """Message and participant handles expose the curated party identity."""
 
@@ -2883,6 +2937,108 @@ def _seed_thread_and_message(owner: Any) -> tuple[Any, Any]:
             created_by_id=owner.pk,
         )
     return thread, message
+
+
+def _replace_with_nested_part_tree(message: Any, owner: Any) -> None:
+    """Replace ``message`` parts with a tree whose child positions restart at zero."""
+
+    fragment_model = messaging_models.Fragment
+    part_model = messaging_models.Part
+    part_role = part_model.PartRole
+    fragment_kind = fragment_model.FragmentKind
+    owner_id = owner.pk
+    fragments = {
+        "title": fragment_model.objects.upsert(text="Depth subject", owner_id=owner_id),
+        "list_id": fragment_model.objects.upsert(
+            text="List-ID: updates.example",
+            kind=fragment_kind.HEADER,
+            owner_id=owner_id,
+        ),
+        "unsubscribe": fragment_model.objects.upsert(
+            text="<mailto:unsubscribe@example.com>",
+            kind=fragment_kind.HEADER,
+            owner_id=owner_id,
+        ),
+        "body": fragment_model.objects.upsert(text="Body paragraph.", owner_id=owner_id),
+        "quote": fragment_model.objects.upsert(
+            text="Quoted reply.",
+            kind=fragment_kind.QUOTE,
+            owner_id=owner_id,
+        ),
+        "signature": fragment_model.objects.upsert(
+            text="Regards, Ada",
+            kind=fragment_kind.SIGNATURE,
+            owner_id=owner_id,
+        ),
+    }
+    part_model._base_manager.filter(message=message).delete()
+    part_model.objects.create(
+        message=message,
+        position=0,
+        role=part_role.TITLE,
+        fragment=fragments["title"],
+        created_by_id=owner_id,
+    )
+    part_model.objects.create(
+        message=message,
+        position=1,
+        role=part_role.HEADER,
+        name="list-id",
+        fragment=fragments["list_id"],
+        created_by_id=owner_id,
+    )
+    part_model.objects.create(
+        message=message,
+        position=2,
+        role=part_role.HEADER,
+        name="list-unsubscribe",
+        fragment=fragments["unsubscribe"],
+        created_by_id=owner_id,
+    )
+    root = part_model.objects.create(
+        message=message,
+        position=3,
+        role=part_role.BODY,
+        type="multipart/alternative",
+        created_by_id=owner_id,
+    )
+    part_model.objects.create(
+        message=message,
+        parent=root,
+        position=0,
+        role=part_role.BODY,
+        fragment=fragments["body"],
+        created_by_id=owner_id,
+    )
+    part_model.objects.create(
+        message=message,
+        parent=root,
+        position=1,
+        role=part_role.QUOTED,
+        fragment=fragments["quote"],
+        created_by_id=owner_id,
+    )
+    part_model.objects.create(
+        message=message,
+        parent=root,
+        position=2,
+        role=part_role.SIGNATURE,
+        fragment=fragments["signature"],
+        created_by_id=owner_id,
+    )
+
+
+def _part_projection(parts: list[dict[str, Any]]) -> list[tuple[str, str, str | None]]:
+    """Return the assertion shape for a projected part list."""
+
+    return [
+        (
+            part["role"],
+            part["name"],
+            part["fragment"]["text"] if part["fragment"] is not None else None,
+        )
+        for part in parts
+    ]
 
 
 def _storage_drive(tmp_path: Path, *, owner: Any) -> Any:

@@ -1,7 +1,6 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Avatar, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageFeed, MessageRow, ReactionBar, ReactionPicker, SearchInput, SegmentedControl, Select, Tag, Textarea, UploadDropTarget, avatarInitials, cn, errorMessage, messageComposerInputClassName, textRoleVariants, type Reaction } from "@angee/ui";
-import { formatSize } from "@angee/ui/preview/index";
+import { Avatar, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, SearchInput, SegmentedControl, Select, Tag, Textarea, UploadDropTarget, avatarInitials, cn, errorMessage, messageComposerInputClassName, textRoleVariants, type Reaction } from "@angee/ui";
 import {
   useStorageUpload,
   type UploadedFile,
@@ -602,7 +601,9 @@ function ChatterComposer({
                     <div className={cn(textRoleVariants({ role: "caption" }), "font-medium")}>
                       {t("message.replyingTo", { kind: replyKindLabel(replyToMessage, t) })}
                     </div>
-                    <div className="truncate text-13 text-fg">{messageText(replyToMessage)}</div>
+                    <div className="truncate text-13 text-fg">
+                      {replyToMessage.preview || editableMessageBody(replyToMessage)}
+                    </div>
                   </div>
                   <Button
                     type="button"
@@ -823,7 +824,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
   onToggleStarred,
   onMarkDone,
 }: MessageFeedRowProps): React.ReactElement {
-  const text = messageText(message);
+  const editableBody = editableMessageBody(message);
   // Envelope name by design: record chatter's sender (`RecordHandleType`) withholds
   // party backedges as an authorization boundary, so this deliberately does NOT compose
   // `@angee/parties` `senderDisplayName` (the curated-party surfaces do).
@@ -832,9 +833,6 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
     (left, right) =>
       left.position - right.position || left.field_label.localeCompare(right.field_label),
   );
-  const attachments = message.parts
-    .map((part) => part.file)
-    .filter((file): file is NonNullable<typeof file> => file !== null);
   const timestamp = message.sent_at ?? message.created_at;
   const subtypeDescription = message.subtype?.description || message.subtype?.name || "";
   const directionTag = directionLabel(message.direction, t);
@@ -855,7 +853,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
         author={author}
       >
         <MessageEditor
-          initialBody={text}
+          initialBody={editableBody}
           t={t}
           onCancel={onCancelEdit}
           onSave={(body) => onSaveEdit(message.id, body)}
@@ -889,24 +887,6 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
             ))}
           </dl>
         ) : undefined
-      }
-      attachments={
-        attachments.length > 0
-          ? attachments.map((file) => (
-              <a key={file.id} href={file.url} download={file.filename} className="block max-w-full">
-                <MessageAttachmentChip
-                  icon={<Glyph decorative name="attachment" />}
-                  remove={
-                    <span className="shrink-0 text-2xs text-fg-subtle">
-                      {formatSize(file.size_bytes)}
-                    </span>
-                  }
-                >
-                  {file.title || file.filename}
-                </MessageAttachmentChip>
-              </a>
-            ))
-          : undefined
       }
       reactions={
         reactions.length > 0 ? (
@@ -995,7 +975,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
           {subtypeDescription}
         </div>
       ) : null}
-      {text ? <span>{text}</span> : null}
+      <MessagePartsView parts={message.parts} resolveFileUrl={(file) => file.url} />
     </MessageRow>
   );
 });
@@ -1045,11 +1025,15 @@ function MessageEditor({
 // Pure helpers
 // ---------------------------------------------------------------------------
 
-function messageText(message: Pick<RecordMessageRow, "parts" | "preview">): string {
-  // Body prose only: the title/header/quoted/signature roles are envelope or
-  // suppressed content, never the feed row's text.
-  const part = message.parts.find((item) => item.role === "BODY" && item.fragment?.text);
+function editableMessageBody(message: Pick<RecordMessageRow, "parts" | "preview">): string {
+  const part = message.parts.find(
+    (item) => normaliseMessagePartValue(item.role) === "BODY" && item.fragment?.text,
+  );
   return part?.fragment?.text ?? message.preview ?? "";
+}
+
+function normaliseMessagePartValue(value: string | null | undefined): string {
+  return (value ?? "").trim().toUpperCase();
 }
 
 function replyKindLabel(message: { message_type?: string | null }, t: MessagingT): string {

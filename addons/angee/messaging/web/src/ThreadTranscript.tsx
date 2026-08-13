@@ -1,8 +1,7 @@
 import { senderDisplayName } from "@angee/parties";
 import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Button, ChatBubble, EmptyState, Glyph, LoadingPanel, MessageAttachmentChip, ReactionBar, RelativeTime, SectionEyebrow, cn, textRoleVariants, type ChatBubbleRole, type Reaction } from "@angee/ui";
-import { formatSize } from "@angee/ui/preview/index";
+import { Button, ChatBubble, EmptyState, Glyph, LoadingPanel, MessagePartsView, ReactionBar, RelativeTime, SectionEyebrow, cn, textRoleVariants, type ChatBubbleRole, type Reaction } from "@angee/ui";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { useMessagingT } from "./i18n";
@@ -294,11 +293,7 @@ function TranscriptMessage({ message, t }: TranscriptMessageProps): React.ReactE
   // across the messaging web surface (see `message_type` reads in RecordChatterPane).
   const direction = message.direction;
   const author = senderDisplayName(message.sender, t("message.author"));
-  const text = transcriptText(message);
   const timestamp = message.sent_at ?? message.created_at;
-  const attachments = message.parts
-    .map((part) => part.file)
-    .filter((file): file is NonNullable<typeof file> => file !== null);
   const reactions: Reaction[] = message.reaction_groups.map((group) => ({
     reaction: group.reaction,
     count: group.count,
@@ -308,22 +303,7 @@ function TranscriptMessage({ message, t }: TranscriptMessageProps): React.ReactE
 
   const body = (
     <>
-      {message.title ? <div className="mb-0.5 font-medium">{message.title}</div> : null}
-      {text ? <div className="whitespace-pre-wrap leading-relaxed">{text}</div> : null}
-      {attachments.length > 0 ? (
-        <div className="mt-2 space-y-1">
-          {attachments.map((file) => (
-            <a key={file.id} href={file.url} download={file.filename} className="block max-w-full">
-              <MessageAttachmentChip
-                icon={<Glyph decorative name="attachment" />}
-                remove={<span className="shrink-0 text-2xs text-fg-subtle">{formatSize(file.size_bytes)}</span>}
-              >
-                {file.title || file.filename}
-              </MessageAttachmentChip>
-            </a>
-          ))}
-        </div>
-      ) : null}
+      <MessagePartsView parts={message.parts} resolveFileUrl={(file) => file.url} />
       {reactions.length > 0 ? (
         <div className="mt-2">
           <ReactionBar reactions={reactions} label={t("message.reactions")} />
@@ -366,13 +346,6 @@ function TranscriptMessage({ message, t }: TranscriptMessageProps): React.ReactE
       </ChatBubble>
     </div>
   );
-}
-
-function transcriptText(message: Pick<ThreadTranscriptRow, "parts" | "preview">): string {
-  // Body prose only: the title/header/quoted/signature roles are envelope or
-  // suppressed content, never the bubble text.
-  const part = message.parts.find((item) => item.role === "BODY" && item.fragment?.text);
-  return part?.fragment?.text ?? message.preview ?? "";
 }
 
 function reactionTitle(group: ThreadTranscriptRow["reaction_groups"][number]): string {

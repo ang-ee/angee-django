@@ -2810,6 +2810,59 @@ class PartQuerySet(AngeeQuerySet[Any]):
 class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[misc]
     """Owns the recursive body-part rows; reads compose the ``PartQuerySet`` scopes."""
 
+    def reading_order_for_message(self, message: Any) -> list[Any]:
+        """Return ``message`` parts flattened in depth-first reading order.
+
+        ``Part.position`` is per parent, so the model's flat ordering is correct for
+        the structural resource table but not for transcript rendering. The message
+        projection needs the MIME tree order: roots by position, then each node's
+        children by position recursively. The parent message read is the gate; this
+        child walk uses the base manager so record-scoped chatter parts stay reachable
+        through the already-authorized ``record_thread`` projection.
+        """
+
+        cache = getattr(message, "_prefetched_objects_cache", None)
+        if cache is not None and "parts" in cache:
+            parts = list(message.parts.all())
+        else:
+            parts = list(
+                self.model._base_manager.filter(message=message)
+                .select_related("fragment", "file", "file__mime_type")
+                .order_by("parent_id", "position", "sqid")
+            )
+        siblings: dict[Any | None, list[Any]] = {}
+        for part in parts:
+            siblings.setdefault(part.parent_id, []).append(part)
+        for rows in siblings.values():
+            rows.sort(key=lambda part: (part.position, str(part.sqid)))
+
+        ordered: list[Any] = []
+        seen: set[Any] = set()
+
+        def visit(parent_id: Any | None) -> None:
+            for part in siblings.get(parent_id, []):
+                if part.pk in seen:
+                    continue
+                seen.add(part.pk)
+                ordered.append(part)
+                visit(part.pk)
+
+        visit(None)
+        for part in sorted(
+            parts,
+            key=lambda part: (
+                -1 if part.parent_id is None else part.parent_id,
+                part.position,
+                str(part.sqid),
+            ),
+        ):
+            if part.pk in seen:
+                continue
+            seen.add(part.pk)
+            ordered.append(part)
+            visit(part.pk)
+        return ordered
+
 
 class MessageEdgeManager(AngeeManager):
     """Owns the cross-message graph — derived quote edges from shared fragments."""

@@ -66,7 +66,6 @@ export const MessagingChannelHealth = graphql(`
 export const RecordMessageFields = graphql(`
   fragment RecordMessageFields on RecordMessageType {
     id
-    title
     preview
     direction
     status
@@ -116,7 +115,10 @@ export const RecordMessageFields = graphql(`
       new_display
     }
     parts {
+      id
       role
+      disposition
+      cid
       fragment {
         text
       }
@@ -147,7 +149,6 @@ export const TranscriptMessageFields = graphql(`
   fragment TranscriptMessageFields on MessageType {
     id
     direction
-    title
     preview
     message_type
     sent_at
@@ -162,7 +163,10 @@ export const TranscriptMessageFields = graphql(`
       }
     }
     parts {
+      id
       role
+      disposition
+      cid
       fragment {
         text
       }
