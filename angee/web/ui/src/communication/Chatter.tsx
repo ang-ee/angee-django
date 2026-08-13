@@ -38,6 +38,23 @@ export function Chatter({
   const t = useUiT();
   const { activeTab, content, setActiveTab } = useChatter();
   const runtime = useAppRuntime();
+  const [counts, setCounts] = React.useState<Record<string, number>>({});
+  const publishCount = React.useCallback(
+    (id: string, count: number | undefined) => {
+      setCounts((current) => {
+        const currentCount = current[id];
+        if (count === undefined) {
+          if (currentCount === undefined) return current;
+          const next = { ...current };
+          delete next[id];
+          return next;
+        }
+        if (currentCount === count) return current;
+        return { ...current, [id]: count };
+      });
+    },
+    [],
+  );
   // Tabs merge by id (last wins): the default agent/comments/activity tabs are the
   // base, runtime chatter contributions render for the active view on top, and a
   // page's published tabs (explicit prop or context) win last. A same-id tab
@@ -45,8 +62,8 @@ export function Chatter({
   // `details`/`backlinks` tab keeps the defaults it does not override.
   const viewContext = useActiveChatterView(runtime.chatterRoutes ?? []);
   const contributedTabs = React.useMemo(
-    () => tabsFromContributions(runtime.chatter ?? [], viewContext),
-    [runtime.chatter, viewContext],
+    () => tabsFromContributions(runtime.chatter ?? [], viewContext, counts),
+    [runtime.chatter, viewContext, counts],
   );
   const resolvedTabs = mergeChatterTabs(
     defaultTabs(children, t),
@@ -72,6 +89,17 @@ export function Chatter({
         className,
       )}
     >
+      {(runtime.chatter ?? []).map((contribution) =>
+        contribution.useCount ? (
+          <ChatterCountProbe
+            key={contribution.id}
+            id={contribution.id}
+            useCount={contribution.useCount}
+            context={viewContext}
+            onCount={publishCount}
+          />
+        ) : null,
+      )}
       <Tabs
         value={active}
         onValueChange={(value) => setActiveTab(value)}
@@ -172,6 +200,7 @@ function viewTypeFromPath(pathname: string): string {
 function tabsFromContributions(
   contributions: readonly ChatterContribution[],
   context: ChatterViewContext,
+  counts: Readonly<Record<string, number>>,
 ): readonly ChatterTab[] {
   return contributions.flatMap((contribution) => {
     if (!contribution.render) return [];
@@ -180,15 +209,37 @@ function tabsFromContributions(
     // not shown empty.
     const children = contribution.render(context);
     if (children == null || children === false) return [];
+    const count = counts[contribution.id] ?? contribution.count;
     return [{
       id: contribution.id,
       label: contribution.label ?? contribution.id,
       ...(contribution.icon ? { icon: contribution.icon } : {}),
-      ...(typeof contribution.count === "number" ? { count: contribution.count } : {}),
+      ...(typeof count === "number" ? { count } : {}),
       ...(contribution.panelClassName ? { panelClassName: contribution.panelClassName } : {}),
       children,
     }];
   });
+}
+
+interface ChatterCountProbeProps {
+  id: string;
+  useCount: (context: ChatterViewContext) => number | undefined;
+  context: ChatterViewContext;
+  onCount: (id: string, count: number | undefined) => void;
+}
+
+function ChatterCountProbe({
+  id,
+  useCount,
+  context,
+  onCount,
+}: ChatterCountProbeProps): null {
+  const count = useCount(context);
+  React.useEffect(() => {
+    onCount(id, count);
+    return () => onCount(id, undefined);
+  }, [id, count, onCount]);
+  return null;
 }
 
 // Merge tab groups by id (last wins): a same-id tab replaces its predecessor in

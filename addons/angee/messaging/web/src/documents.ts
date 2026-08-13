@@ -17,6 +17,13 @@ export const READ_MODELS = [
   "messaging.MessageStar",
 ] as const;
 
+// The count probe only depends on receipt-moving rows and messages; it avoids
+// the wider thread payload's followers, activities, notifications, and handles.
+export const RECORD_UNREAD_COUNT_MODELS = [
+  "messaging.Message",
+  "messaging.ThreadFollower",
+] as const;
+
 /** Reopenable live-channel pairing state; updates ride channelChanged. */
 export const ChannelPairing = graphql(`
   query ChannelPairing($id: ID!) {
@@ -362,6 +369,12 @@ export const RecordThreadDocument = graphql(`
         }
       }
     }
+  }
+`);
+
+export const RecordThreadUnreadCountDocument = graphql(`
+  query MessagingRecordThreadUnreadCount($modelLabel: String!, $recordId: ID!) {
+    record_thread_unread_count(model_label: $modelLabel, record_id: $recordId)
   }
 `);
 

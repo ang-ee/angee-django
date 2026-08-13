@@ -1,13 +1,20 @@
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { PARTIES_OVERVIEW_SLOT } from "@angee/parties";
+import { useAuthoredQuery } from "@angee/refine";
 import { type BaseMenuItem } from "@angee/ui";
+import type { ChatterViewContext } from "@angee/ui/runtime";
 import { lazyRouteComponent } from "@tanstack/react-router";
+import * as React from "react";
 import { Inbox, Mail, MessagesSquare, Send } from "lucide-react";
 
 import { enMessagingMessages } from "./i18n";
 import { MessagingOverviewContribution } from "./MessagingOverviewContribution";
 import { RecordActivityPane } from "./RecordActivityPane";
 import { RecordChatterPane } from "./RecordChatterPane";
+import {
+  RECORD_UNREAD_COUNT_MODELS,
+  RecordThreadUnreadCountDocument,
+} from "./documents";
 
 export { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
 export { CHANNEL_MODEL } from "./documents";
@@ -61,6 +68,7 @@ const messaging = defineBaseAddon({
       sequence: 10,
       label: "Comments",
       icon: "comments",
+      useCount: useRecordCommentsUnread,
       render: (context) => <RecordChatterPane context={context} />,
     },
     {
@@ -80,5 +88,25 @@ const messaging = defineBaseAddon({
     },
   ],
 });
+
+function useRecordCommentsUnread(
+  context: ChatterViewContext,
+): number | undefined {
+  const modelLabel = context.route?.modelLabel;
+  const recordId = context.view.kind === "record" ? context.view.sqid : undefined;
+  const enabled = Boolean(modelLabel && recordId);
+  const variables = React.useMemo(
+    () => ({
+      modelLabel: modelLabel ?? "",
+      recordId: recordId ?? "",
+    }),
+    [modelLabel, recordId],
+  );
+  const query = useAuthoredQuery(RecordThreadUnreadCountDocument, variables, {
+    enabled,
+    models: RECORD_UNREAD_COUNT_MODELS,
+  });
+  return query.data?.record_thread_unread_count || undefined;
+}
 
 export default messaging;

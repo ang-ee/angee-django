@@ -9,7 +9,7 @@ through their message/thread owners.
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import strawberry
 import strawberry_django
@@ -1042,6 +1042,32 @@ class MessagingQuery:
             after=input.after,
             around=input.around,
         )
+
+    @strawberry.field(name="record_thread_unread_count")
+    def record_thread_unread_count(
+        self,
+        info: strawberry.Info,
+        model_label: Annotated[str, strawberry.argument(name="model_label")],
+        record_id: Annotated[strawberry.ID, strawberry.argument(name="record_id")],
+    ) -> int:
+        """Return the request actor's unread count for a readable record thread."""
+
+        user = _request_user(info)
+        if user is None:
+            return 0
+        try:
+            record = _threaded_record(
+                RecordReferenceInput(
+                    model_label=model_label,
+                    record_id=record_id,
+                    role="chatter",
+                )
+            )
+        except ValueError:
+            return 0
+        if record is None:
+            return 0
+        return ThreadFollower.objects.unread_count_for_record(record, user=user, role="chatter")
 
     @strawberry.field(name="activity_agenda")
     def activity_agenda(
