@@ -41,6 +41,7 @@ _angee:
   schema: 1
   kind: stack
   name: local
+  include_root: "../.."  # pins templates/ in chain snapshots, so ../../_shared/ includes resolve
   description: >-
     A self-contained local Angee instance: the root folder IS the stack AND a
     git-controlled project (ANGEE_ROOT=.). It chains the `projects/web` project
