@@ -3,6 +3,7 @@ import {
   Action,
   Button,
   Column,
+  EmptyState,
   Field,
   Form,
   Group,
@@ -10,18 +11,23 @@ import {
   ListView,
   MutationDialog,
   ResourceList,
+  SplitPane,
+  SplitPaneHandle,
+  SplitPanes,
   Glyph,
+  cn,
   errorMessage,
   type ListColumn,
   type MutationDialogField,
   type RecordPanelContext,
   type RecordTabDescriptor,
+  type ResourceListSnapshot,
   type StringIdRow,
-  useResourceRecordHref,
   useAuthoredResourceMutation,
   useConfirm,
   useToast,
 } from "@angee/ui";
+import { ThreadTranscript } from "@angee/messaging";
 
 import {
   AddSpaceMembership,
@@ -34,7 +40,10 @@ import { useSpacesT } from "./i18n";
 const MODEL = "spaces.Group";
 
 type MembershipRow = StringIdRow;
-type SpaceThreadRow = StringIdRow;
+interface SpaceThreadRow extends StringIdRow {
+  title?: { text?: string | null } | null;
+}
+const EMPTY_THREAD_ROWS: readonly SpaceThreadRow[] = [];
 
 /** Narrow a dialog value onto the wire's MembershipRole enum, defaulting MEMBER. */
 export function membershipRole(value: unknown): "OWNER" | "MODERATOR" | "MEMBER" {
@@ -52,9 +61,23 @@ export function membershipRoleWireValue(value: unknown): string {
 
 function threadColumns(
   t: ReturnType<typeof useSpacesT>,
+  selectedThreadId: string | null,
 ): readonly ListColumn<SpaceThreadRow>[] {
   return [
-    { field: "title.text", header: t("group.threads.title") },
+    {
+      field: "title.text",
+      header: t("group.threads.title"),
+      render: (thread) => (
+        <span
+          className={cn(
+            "block min-w-0 truncate",
+            thread.id === selectedThreadId && "font-semibold text-fg",
+          )}
+        >
+          {thread.title?.text || thread.id}
+        </span>
+      ),
+    },
     { field: "message_count", header: t("group.threads.messages") },
     { field: "last_message_at" },
   ];
@@ -245,18 +268,71 @@ function GroupRosterTab({ recordId, ...context }: RecordPanelContext): React.Rea
 
 function GroupThreadsTab({ recordId, ...context }: RecordPanelContext): React.ReactElement {
   const t = useSpacesT();
-  const threadHref = useResourceRecordHref("messaging.Thread");
+  const [selectedThread, setSelectedThread] = React.useState<{
+    groupId: string;
+    threadId: string;
+  } | null>(null);
+  const [listState, setListState] =
+    React.useState<ResourceListSnapshot<SpaceThreadRow> | null>(null);
   void context;
+  const selectedThreadId =
+    selectedThread?.groupId === recordId ? selectedThread.threadId : null;
+  const threadRows = listState?.rows ?? EMPTY_THREAD_ROWS;
+  const activeThread = React.useMemo(
+    () =>
+      threadRows.find((thread) => thread.id === selectedThreadId)
+      ?? threadRows[0]
+      ?? null,
+    [selectedThreadId, threadRows],
+  );
+  const activeThreadId = activeThread?.id ?? null;
+  const columns = React.useMemo(
+    () => threadColumns(t, activeThreadId),
+    [activeThreadId, t],
+  );
+  const handleListStateChange = React.useCallback(
+    (state: ResourceListSnapshot<SpaceThreadRow>) => setListState(state),
+    [],
+  );
+  const handleThreadClick = React.useCallback(
+    (thread: SpaceThreadRow) => {
+      setSelectedThread({ groupId: recordId, threadId: thread.id });
+    },
+    [recordId],
+  );
+
   return (
-    <ListView<SpaceThreadRow>
-      resource="spaces.GroupThread"
-      scope="local"
-      fields={["id", "title.text", "message_count", "last_message_at"]}
-      baseFilter={{ group: { exact: recordId } }}
-      columns={threadColumns(t)}
-      rowHref={threadHref === undefined ? undefined : (thread) => threadHref(thread.id)}
-      emptyContent={t("group.threads.empty")}
-    />
+    <SplitPanes
+      direction="horizontal"
+      panelIds={["threads", "transcript"]}
+      className="min-h-[32rem] rounded-6 border border-border-subtle bg-sheet"
+    >
+      <SplitPane id="threads" defaultSize={38} minSize={28} maxSize={55} className="bg-sheet">
+        <ListView<SpaceThreadRow>
+          resource="spaces.GroupThread"
+          scope="local"
+          fields={["id", "title.text", "message_count", "last_message_at"]}
+          baseFilter={{ group: { exact: recordId } }}
+          columns={columns}
+          onRowClick={handleThreadClick}
+          onListStateChange={handleListStateChange}
+          emptyContent={t("group.threads.empty")}
+        />
+      </SplitPane>
+      <SplitPaneHandle />
+      <SplitPane id="transcript" defaultSize={62} minSize={40} className="bg-canvas p-3">
+        {activeThreadId ? (
+          <ThreadTranscript threadId={activeThreadId} />
+        ) : (
+          <EmptyState
+            fill
+            icon="comments"
+            title={t("group.threads.empty")}
+            className="min-h-full"
+          />
+        )}
+      </SplitPane>
+    </SplitPanes>
   );
 }
 

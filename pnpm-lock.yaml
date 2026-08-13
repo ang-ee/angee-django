@@ -887,6 +887,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../angee/web/app
+      '@angee/messaging':
+        specifier: workspace:*
+        version: link:../../messaging/web
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../angee/web/ui

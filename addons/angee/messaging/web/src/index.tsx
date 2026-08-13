@@ -38,6 +38,11 @@ export {
   type RecordThreadConversationProps,
   type RecordThreadConversationChrome,
 } from "./RecordThreadConversation";
+export {
+  ThreadTranscript,
+  type ThreadTranscriptProps,
+  type TranscriptOrder,
+} from "./ThreadTranscript";
 
 const messagingMenu: readonly BaseMenuItem[] = [
   {

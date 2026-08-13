@@ -1,14 +1,23 @@
 // @vitest-environment happy-dom
 
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import * as React from "react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+
+type MockThreadRow = {
+  id: string;
+  title?: { text?: string | null } | null;
+};
 
 const pageMocks = vi.hoisted(() => ({
   resourceProps: null as Record<string, unknown> | null,
   listViews: [] as Record<string, unknown>[],
   columnFields: [] as string[],
-  recordHrefResources: [] as string[],
+  transcriptThreadIds: [] as string[],
+  threadRows: [
+    { id: "thr_1", title: { text: "Primary" } },
+    { id: "thr_2", title: { text: "Side thread" } },
+  ] as MockThreadRow[],
 }));
 
 vi.mock("@angee/ui", () => ({
@@ -23,23 +32,62 @@ vi.mock("@angee/ui", () => ({
   List: ({ children }: { children?: React.ReactNode }) => <section>{children}</section>,
   ListView: (props: Record<string, unknown>) => {
     pageMocks.listViews.push(props);
+    React.useEffect(() => {
+      if (props.resource !== "spaces.GroupThread") return;
+      const onListStateChange = props.onListStateChange as
+        | ((state: {
+          rows: readonly MockThreadRow[];
+          total: number;
+          page: number;
+          pageSize: number;
+          pageCount: number;
+          hasNext: boolean;
+          hasPrev: boolean;
+          fetching: boolean;
+        }) => void)
+        | undefined;
+      onListStateChange?.({
+        rows: pageMocks.threadRows,
+        total: pageMocks.threadRows.length,
+        page: 1,
+        pageSize: 10,
+        pageCount: 1,
+        hasNext: false,
+        hasPrev: false,
+        fetching: false,
+      });
+    }, [props.resource]);
     return null;
   },
   ResourceList: (props: Record<string, unknown>) => {
     pageMocks.resourceProps = props;
     return <div>{props.children as React.ReactNode}</div>;
   },
-  useResourceRecordHref: (resource: string) => {
-    pageMocks.recordHrefResources.push(resource);
-    return (id: string) => `/routed/${encodeURIComponent(id)}`;
-  },
+  SplitPanes: ({ children }: { children?: React.ReactNode }) => <section>{children}</section>,
+  SplitPane: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  SplitPaneHandle: () => <span />,
+  EmptyState: ({ title }: { title: React.ReactNode }) => <section>{title}</section>,
   Button: ({ children }: { children?: React.ReactNode }) => <button>{children}</button>,
   Glyph: () => null,
   MutationDialog: () => null,
+  cn: (...classes: Array<string | false | null | undefined>) =>
+    classes.filter(Boolean).join(" "),
   errorMessage: (error: unknown) => String(error),
   useAuthoredResourceMutation: () => [vi.fn(), { fetching: false, error: null }],
   useConfirm: () => vi.fn(async () => true),
-  useToast: () => ({ toast: vi.fn(), success: vi.fn(), error: vi.fn() }),
+  useToast: () => ({
+    toast: vi.fn(),
+    success: vi.fn(),
+    error: vi.fn(),
+    danger: vi.fn(),
+  }),
+}));
+
+vi.mock("@angee/messaging", () => ({
+  ThreadTranscript: ({ threadId }: { threadId: string }) => {
+    pageMocks.transcriptThreadIds.push(threadId);
+    return <section data-testid="thread-transcript">{threadId}</section>;
+  },
 }));
 
 vi.mock("./i18n", () => ({
@@ -53,7 +101,7 @@ describe("SpacesPage", () => {
     pageMocks.resourceProps = null;
     pageMocks.listViews = [];
     pageMocks.columnFields = [];
-    pageMocks.recordHrefResources = [];
+    pageMocks.transcriptThreadIds = [];
   });
 
   test("membership role narrows to the enum and lowercases for the _set write", () => {
@@ -93,8 +141,16 @@ describe("SpacesPage", () => {
       scope: "local",
       baseFilter: { group: { exact: "grp_1" } },
     });
-    expect(pageMocks.recordHrefResources).toEqual(["messaging.Thread"]);
-    const threadHref = pageMocks.listViews[1]?.rowHref as (row: { id: string }) => string;
-    expect(threadHref({ id: "thr 1" })).toBe("/routed/thr%201");
+    const threadList = pageMocks.listViews.find(
+      (props) => props.resource === "spaces.GroupThread",
+    );
+    expect(threadList?.rowHref).toBeUndefined();
+    expect(pageMocks.transcriptThreadIds.at(-1)).toBe("thr_1");
+
+    const onRowClick = threadList?.onRowClick as
+      | ((row: MockThreadRow) => void)
+      | undefined;
+    act(() => onRowClick?.(pageMocks.threadRows[1]!));
+    expect(pageMocks.transcriptThreadIds.at(-1)).toBe("thr_2");
   });
 });
