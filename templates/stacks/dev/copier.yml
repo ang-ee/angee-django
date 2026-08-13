@@ -11,6 +11,7 @@ _angee:
   schema: 1
   kind: stack
   name: dev
+  include_root: "../.."  # pins templates/ in chain snapshots, so ../../_shared/ includes resolve
   description: Generic Django+Vite+Storybook process-compose dev stack for any consumer project under angee-django or downstream.
 
 project_name:
