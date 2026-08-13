@@ -73,6 +73,7 @@ export interface ChatterContribution {
   label?: ReactNode;
   icon?: string;
   count?: number;
+  useCount?: (context: ChatterViewContext) => number | undefined;
   panelClassName?: string;
   render?: (context: ChatterViewContext) => ReactNode;
 }
