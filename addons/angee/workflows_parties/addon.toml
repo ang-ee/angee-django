@@ -1,0 +1,15 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.workflows_parties"
+description = "Human-gated batch workflows over contacts — deduplication with a decision-table review"
+keywords = ["workflows", "parties", "dedupe", "contacts"]
+category = "Workflows"
+depends_on = ["angee.workflows", "angee.parties"]
+
+[resources]
+install = [
+  { path = "resources/install/100_workflows.workflow.yaml", publish = true },
+  { path = "resources/install/101_workflows.step.yaml", depends_on = "resources/install/100_workflows.workflow.yaml" },
+  { path = "resources/install/102_workflows.edge.yaml", depends_on = "resources/install/101_workflows.step.yaml" },
+]

@@ -1,0 +1,21 @@
+_meta:
+  model: workflows.Edge
+rows:
+  - xref: dedupe_parties_scan_to_gate
+    fields:
+      workflow: workflows_parties.dedupe_parties
+      source: workflows_parties.dedupe_parties_scan
+      target: workflows_parties.dedupe_parties_gate
+      condition: found
+  - xref: dedupe_parties_gate_to_prepare
+    fields:
+      workflow: workflows_parties.dedupe_parties
+      source: workflows_parties.dedupe_parties_gate
+      target: workflows_parties.dedupe_parties_prepare
+      condition: completed
+  - xref: dedupe_parties_prepare_to_map
+    fields:
+      workflow: workflows_parties.dedupe_parties
+      source: workflows_parties.dedupe_parties_prepare
+      target: workflows_parties.dedupe_parties_map
+      condition: prepared

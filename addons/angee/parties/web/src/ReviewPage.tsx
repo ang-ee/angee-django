@@ -12,12 +12,14 @@ import {
   PageBody,
   PageHeader,
   RailPanel,
+  SlotOutlet,
   Tag,
   TextLink,
   avatarInitials,
   type ListColumn,
   type StringIdRow,
   useAuthoredResourceMutation,
+  useSlot,
 } from "@angee/ui";
 import { Link } from "@tanstack/react-router";
 import {
@@ -29,6 +31,7 @@ import {
 } from "./documents";
 import { usePartiesT } from "./i18n";
 import { partyMergePath } from "./routes";
+import { PARTIES_REVIEW_TOOLBAR_SLOT } from "./slots";
 
 type SuggestionRow = StringIdRow;
 
@@ -106,7 +109,11 @@ export function ReviewPage(): React.ReactElement {
 
   return (
     <Page>
-      <PageHeader title={t("review.title")} description={t("review.description")} />
+      <PageHeader
+        title={t("review.title")}
+        description={t("review.description")}
+        actions={<SlotOutlet entries={useSlot(PARTIES_REVIEW_TOOLBAR_SLOT)} />}
+      />
       <PageBody>
         <div className="grid gap-5">
           <RailPanel

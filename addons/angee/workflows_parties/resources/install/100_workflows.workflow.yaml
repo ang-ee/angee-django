@@ -1,0 +1,14 @@
+# The dedupe workflow definition (install tier, published on load). Subjectless:
+# it scans the whole directory, so subject_declaration stays empty and the run
+# starts without a subject from the parties Review launcher.
+_meta:
+  model: workflows.Workflow
+rows:
+  - xref: dedupe_parties
+    fields:
+      name: Deduplicate contacts
+      description: >-
+        Scan for contacts sharing a normalized handle, review the proposed
+        merges as one editable batch, then apply the approved verbs.
+      subject_declaration: ""
+      budget: {}

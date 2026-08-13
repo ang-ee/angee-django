@@ -21,6 +21,7 @@ INSTALLED_APPS = [
     "angee.agents",
     "angee.workflows",
     "angee.workflows_agents",
+    "angee.workflows_parties",
     "angee.workflows_integrate",
     "angee.knowledge",
     "angee.mcp",
@@ -143,6 +144,9 @@ ANGEE_WORKFLOW_STEP_CLASSES = {
     "archive_probe": "angee.workflows_integrate.steps.ArchiveProbeStepImpl",
     "archive_gate": "angee.workflows_integrate.steps.ArchiveGateStepImpl",
     "archive_execute": "angee.workflows_integrate.steps.ArchiveExecuteStepImpl",
+    "parties_dedupe_scan": "angee.workflows_parties.steps.DedupeScanStepImpl",
+    "parties_dedupe_gate": "angee.workflows_parties.steps.DedupeGateStepImpl",
+    "parties_dedupe_execute": "angee.workflows_parties.steps.DedupeExecuteStepImpl",
 }
 ANGEE_AGENT_TEARDOWN_HOOKS = ("angee.workflows_agents.sessions.close_agent_sessions",)
 ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES = {

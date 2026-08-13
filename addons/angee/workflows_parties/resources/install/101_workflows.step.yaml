@@ -1,0 +1,57 @@
+_meta:
+  model: workflows.Step
+rows:
+  - xref: dedupe_parties_scan
+    fields:
+      workflow: workflows_parties.dedupe_parties
+      key: scan
+      name: Scan for duplicate contacts
+      step_class: parties_dedupe_scan
+      config:
+        limit: 50
+      is_entry: true
+      position: {x: 0, y: 0}
+  - xref: dedupe_parties_gate
+    fields:
+      workflow: workflows_parties.dedupe_parties
+      key: gate
+      name: Review duplicate pairs
+      step_class: parties_dedupe_gate
+      config: {}
+      join_rule: all_success
+      is_entry: false
+      position: {x: 280, y: 0}
+  - xref: dedupe_parties_prepare
+    fields:
+      workflow: workflows_parties.dedupe_parties
+      key: prepare
+      name: Prepare approved verbs
+      step_class: parties_dedupe_execute
+      config:
+        mode: prepare
+      join_rule: all_success
+      is_entry: false
+      position: {x: 560, y: 0}
+  - xref: dedupe_parties_map
+    fields:
+      workflow: workflows_parties.dedupe_parties
+      key: map
+      name: Apply approved verbs
+      step_class: map
+      config:
+        target_step: apply_unit
+        items: input
+      join_rule: all_success
+      is_entry: false
+      position: {x: 840, y: 0}
+  - xref: dedupe_parties_apply_unit
+    fields:
+      workflow: workflows_parties.dedupe_parties
+      key: apply_unit
+      name: Apply one pair verb
+      step_class: parties_dedupe_execute
+      config:
+        mode: unit
+      join_rule: all_success
+      is_entry: false
+      position: {x: 840, y: 180}
