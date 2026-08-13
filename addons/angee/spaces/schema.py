@@ -17,7 +17,7 @@ from angee.graphql.data import (
     public_pk_decoder,
 )
 from angee.graphql.node import AngeeNode
-from angee.graphql.relations import actor_scoped_to_one
+from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.messaging.schema import FragmentType
 from angee.parties.schema import PartyType
@@ -70,7 +70,7 @@ class SpaceThreadType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    group: SpaceGroupType | None = actor_scoped_to_one("group")
+    groups: list[SpaceGroupType] = actor_scoped_to_many("groups")
 
 
 @strawberry.type
@@ -130,13 +130,13 @@ class SpacesMembershipMutation:
 
 
 def _space_threads(info: strawberry.Info) -> object:
-    """Return actor-scoped threads that are explicitly bound to a group."""
+    """Return actor-scoped threads that are explicitly bound to at least one group."""
 
     del info
     return Thread.objects.filter(
         modality=Thread.Modality.GROUP,
-        group__isnull=False,
-    )
+        groups__isnull=False,
+    ).distinct()
 
 
 _GROUP_RESOURCE = hasura_model_resource(
@@ -183,20 +183,20 @@ _MEMBERSHIP_RESOURCE = hasura_model_resource(
 _SPACE_THREAD_RESOURCE = hasura_model_resource(
     SpaceThreadType,
     model=Thread,
-    # The folded field is not present in messaging's emitted threads_bool_exp,
-    # and resources have no downstream filter-extension seam. Keep this honest
-    # secondary-view label until the framework gains a validated secondary-view
-    # contract (tracked in the architecture backlog).
+    # Spaces owns this secondary view over messaging.Thread because the audience
+    # field is contributed by the spaces addon. The emitted SDL carries
+    # `space_threads_bool_exp.groups`; group-by-audience remains intentionally
+    # unavailable because grouping over M2M audience membership would fan rows out.
     model_label="spaces.GroupThread",
     name="space_threads",
-    filterable=["id", "group", "last_message_at", "created_at", "updated_at"],
+    filterable=["id", "groups", "last_message_at", "created_at", "updated_at"],
     sortable=["last_message_at", "message_count", "created_at", "updated_at"],
     aggregatable=["id", "message_count"],
-    groupable=["group", "last_message_at"],
+    groupable=["last_message_at"],
     insert=False,
     update=False,
     delete=False,
-    field_id_decode={"group": public_pk_decoder(Group)},
+    field_id_decode={"groups": public_pk_decoder(Group)},
     get_queryset=_space_threads,
     get_aggregate_queryset=lambda info: aggregate_queryset(_space_threads(info)),
 )

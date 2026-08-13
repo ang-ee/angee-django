@@ -2,6 +2,7 @@ import * as React from "react";
 import {
   Action,
   Button,
+  Chip,
   Column,
   EmptyState,
   Field,
@@ -42,12 +43,21 @@ const MODEL = "spaces.Group";
 type MembershipRow = StringIdRow;
 interface SpaceThreadRow extends StringIdRow {
   title?: { text?: string | null } | null;
+  groups?: ReadonlyArray<{ id?: string | null; name?: string | null } | null> | null;
 }
 const EMPTY_THREAD_ROWS: readonly SpaceThreadRow[] = [];
+type SpaceMembershipRole = "OWNER" | "MODERATOR" | "MEMBER" | "VIEWER";
 
 /** Narrow a dialog value onto the wire's MembershipRole enum, defaulting MEMBER. */
-export function membershipRole(value: unknown): "OWNER" | "MODERATOR" | "MEMBER" {
-  return value === "OWNER" || value === "MODERATOR" ? value : "MEMBER";
+export function membershipRole(value: unknown): SpaceMembershipRole {
+  return (
+    value === "OWNER"
+    || value === "MODERATOR"
+    || value === "MEMBER"
+    || value === "VIEWER"
+  )
+    ? value
+    : "MEMBER";
 }
 
 /**
@@ -75,6 +85,19 @@ function threadColumns(
           )}
         >
           {thread.title?.text || thread.id}
+        </span>
+      ),
+    },
+    {
+      field: "groups",
+      header: t("group.threads.audience"),
+      render: (thread) => (
+        <span className="inline-flex min-w-0 flex-wrap items-center gap-1">
+          {(thread.groups ?? []).map((group, index) => (
+            <Chip key={group?.id ?? `${group?.name ?? "unknown"}:${index}`} tone="info" size="sm">
+              {group?.name || group?.id || t("group.threads.unknownAudience")}
+            </Chip>
+          ))}
         </span>
       ),
     },
@@ -108,6 +131,7 @@ function GroupRosterTab({ recordId, ...context }: RecordPanelContext): React.Rea
       { value: "OWNER", label: t("group.roster.role.owner") },
       { value: "MODERATOR", label: t("group.roster.role.moderator") },
       { value: "MEMBER", label: t("group.roster.role.member") },
+      { value: "VIEWER", label: t("group.roster.role.viewer") },
     ],
     [t],
   );
@@ -311,8 +335,8 @@ function GroupThreadsTab({ recordId, ...context }: RecordPanelContext): React.Re
         <ListView<SpaceThreadRow>
           resource="spaces.GroupThread"
           scope="local"
-          fields={["id", "title.text", "message_count", "last_message_at"]}
-          baseFilter={{ group: { exact: recordId } }}
+          fields={["id", "title.text", "groups.id", "groups.name", "message_count", "last_message_at"]}
+          baseFilter={{ groups: { exact: recordId } }}
           columns={columns}
           onRowClick={handleThreadClick}
           onListStateChange={handleListStateChange}

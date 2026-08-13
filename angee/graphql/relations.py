@@ -61,3 +61,50 @@ def actor_scoped_to_one(field_name: str) -> Any:
         only=[f"{field_name}_id"],
         prefetch_related=[field_name],
     )
+
+
+def actor_scoped_to_many(field_name: str) -> Any:
+    """Return a to-many field whose rows are scoped to the current actor.
+
+    The parent may be actor-scoped through one relation while the selected
+    to-many relation contains other protected rows. Resolve the relation through
+    the target model's actor-scoped queryset instead of exposing the raw related
+    manager.
+    """
+
+    def resolve(root: models.Model) -> Any:
+        field = root._meta.get_field(field_name)
+        if not (
+            getattr(field, "many_to_many", False)
+            or getattr(field, "one_to_many", False)
+        ):
+            raise ImproperlyConfigured(
+                f"{root._meta.label}.{field_name} must be a forward or reverse to-many relation"
+            )
+
+        actor = current_actor()
+        if actor is None:
+            return []
+
+        cached = getattr(root, "_prefetched_objects_cache", {}).get(field_name, _UNCACHED)
+        if cached is not _UNCACHED and all(
+            getattr(row, "_rebac_actor", None) == actor for row in cached
+        ):
+            return cached
+
+        related_queryset = getattr(root, field_name).all()
+        with_actor = getattr(related_queryset, "with_actor", None)
+        if callable(with_actor):
+            return with_actor(actor)
+
+        related_model = field.related_model
+        raise ImproperlyConfigured(
+            f"{root._meta.label}.{field_name} targets {related_model._meta.label}, "
+            "whose related manager is not actor-scoped"
+        )
+
+    return strawberry_django.field(
+        resolver=resolve,
+        field_name=field_name,
+        prefetch_related=[field_name],
+    )

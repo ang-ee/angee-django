@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 type MockThreadRow = {
   id: string;
   title?: { text?: string | null } | null;
+  groups?: Array<{ id: string; name: string }>;
 };
 
 const pageMocks = vi.hoisted(() => ({
@@ -15,8 +16,15 @@ const pageMocks = vi.hoisted(() => ({
   columnFields: [] as string[],
   transcriptThreadIds: [] as string[],
   threadRows: [
-    { id: "thr_1", title: { text: "Primary" } },
-    { id: "thr_2", title: { text: "Side thread" } },
+    { id: "thr_1", title: { text: "Primary" }, groups: [{ id: "grp_1", name: "Community" }] },
+    {
+      id: "thr_2",
+      title: { text: "Side thread" },
+      groups: [
+        { id: "grp_1", name: "Community" },
+        { id: "grp_2", name: "Moderators" },
+      ],
+    },
   ] as MockThreadRow[],
 }));
 
@@ -68,6 +76,7 @@ vi.mock("@angee/ui", () => ({
   SplitPaneHandle: () => <span />,
   EmptyState: ({ title }: { title: React.ReactNode }) => <section>{title}</section>,
   Button: ({ children }: { children?: React.ReactNode }) => <button>{children}</button>,
+  Chip: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
   Glyph: () => null,
   MutationDialog: () => null,
   cn: (...classes: Array<string | false | null | undefined>) =>
@@ -106,8 +115,10 @@ describe("SpacesPage", () => {
 
   test("membership role narrows to the enum and lowercases for the _set write", () => {
     expect(membershipRole("MODERATOR")).toBe("MODERATOR");
+    expect(membershipRole("VIEWER")).toBe("VIEWER");
     expect(membershipRole("bogus")).toBe("MEMBER");
     expect(membershipRoleWireValue("OWNER")).toBe("owner");
+    expect(membershipRoleWireValue("VIEWER")).toBe("viewer");
     expect(membershipRoleWireValue(undefined)).toBe("member");
   });
 
@@ -139,7 +150,7 @@ describe("SpacesPage", () => {
     expect(pageMocks.listViews[1]).toMatchObject({
       resource: "spaces.GroupThread",
       scope: "local",
-      baseFilter: { group: { exact: "grp_1" } },
+      baseFilter: { groups: { exact: "grp_1" } },
     });
     const threadList = pageMocks.listViews.find(
       (props) => props.resource === "spaces.GroupThread",

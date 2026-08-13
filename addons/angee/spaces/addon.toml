@@ -6,3 +6,8 @@ description = "Shared groups with canonical rosters, role-derived access, and gr
 keywords = ["spaces", "groups", "rosters", "roles"]
 category = "Data"
 depends_on = ["angee.iam", "angee.parties", "angee.messaging"]
+
+[[migrations]]
+name = "thread_groups"
+app_label = "messaging"
+module = "runtime_migrations.thread_groups"

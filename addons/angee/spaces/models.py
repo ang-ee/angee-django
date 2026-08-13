@@ -9,9 +9,9 @@ so later revocation uses the identity that actually received the grant, never a
 fresh interpretation of a changed Party. A party without a platform user remains
 a valid roster row and deliberately grants nothing.
 
-``ThreadSpace`` contributes the nullable group pointer onto the existing
-``messaging.Thread`` row. It is an abstract same-row extension, never another
-runtime model or table.
+``ThreadSpace`` contributes the group audience onto the existing
+``messaging.Thread`` row through a same-row many-to-many field. It is an abstract
+extension, never another first-class runtime model.
 
 **Pitfalls.** Group visibility and membership grants are reconciled by instance
 ``save()``; bulk APIs that bypass it (``bulk_create`` and ``QuerySet.update``)
@@ -29,6 +29,7 @@ from typing import Any, cast
 
 from django.apps import apps
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
 from rebac import (
     RelationshipTuple,
@@ -147,6 +148,19 @@ class Group(HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
             )
         )
 
+    def revoke_thread_relationships(self) -> None:
+        """Revoke stored thread audience tuples where this group is the subject."""
+
+        subject = SubjectRef(to_object_ref(self))
+        delete_relationships(
+            RelationshipFilter(
+                resource_type=_thread_resource_type(),
+                relation=THREAD_GROUP_RELATION,
+                subject_type=subject.subject_type,
+                subject_id=subject.subject_id,
+            )
+        )
+
 
 class Membership(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
     """One party's role-bearing roster row in a shared group.
@@ -166,6 +180,7 @@ class Membership(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
         OWNER = "owner", "Owner"
         MODERATOR = "moderator", "Moderator"
         MEMBER = "member", "Member"
+        VIEWER = "viewer", "Viewer"
 
     group = models.ForeignKey(
         "spaces.Group",
@@ -335,19 +350,65 @@ class Membership(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
 GROUP_ROLE_RELATIONS = tuple(Membership.MembershipRole.values)
 """Direct group relations a confirmed roster membership may own."""
 
+THREAD_GROUP_RELATION = "group"
+"""Stored ``messaging/thread`` relation mirroring ``ThreadSpace.groups``."""
+
+
+def _thread_resource_type() -> str:
+    """Return messaging.Thread's owned REBAC resource type."""
+
+    resource_type = getattr(apps.get_model("messaging", "Thread")._meta, "rebac_resource_type", None)
+    if not resource_type:
+        raise ImproperlyConfigured("messaging.Thread must declare a rebac_resource_type")
+    return str(resource_type)
+
 
 class ThreadSpace(AngeeModel):
-    """Group pointer contributed onto ``messaging.Thread`` as a same-row field."""
+    """Group audience contributed onto ``messaging.Thread`` as a same-row field."""
 
     extends = "messaging.Thread"
 
-    group = models.ForeignKey(
+    groups = models.ManyToManyField(
         "spaces.Group",
-        null=True,
         blank=True,
-        on_delete=models.SET_NULL,
         related_name="threads",
     )
+
+    def grant_group_relationship(self, group: Group) -> None:
+        """Grant this thread's REBAC group relation to one audience group."""
+
+        write_relationships(
+            [
+                RelationshipTuple(
+                    resource=to_object_ref(self),
+                    relation=THREAD_GROUP_RELATION,
+                    subject=SubjectRef(to_object_ref(group)),
+                )
+            ]
+        )
+
+    def revoke_group_relationship(self, group: Group) -> None:
+        """Revoke this thread's REBAC group relation for one audience group."""
+
+        delete_relationship(
+            RelationshipTuple(
+                resource=to_object_ref(self),
+                relation=THREAD_GROUP_RELATION,
+                subject=SubjectRef(to_object_ref(group)),
+            )
+        )
+
+    def revoke_group_relationships(self) -> None:
+        """Revoke every stored group-audience relation for this thread."""
+
+        resource = to_object_ref(self)
+        delete_relationships(
+            RelationshipFilter(
+                resource_type=resource.resource_type,
+                resource_id=resource.resource_id,
+                relation=THREAD_GROUP_RELATION,
+            )
+        )
 
     class Meta:
         """Abstract same-row extension composed into ``messaging.Thread``."""

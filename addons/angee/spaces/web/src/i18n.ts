@@ -26,7 +26,10 @@ export const enSpacesMessages: Record<string, string> = {
   "group.roster.role.owner": "Owner",
   "group.roster.role.moderator": "Moderator",
   "group.roster.role.member": "Member",
+  "group.roster.role.viewer": "Viewer",
   "group.threads.title": "Conversation",
+  "group.threads.audience": "Audience",
+  "group.threads.unknownAudience": "Unknown space",
   "group.threads.messages": "Messages",
   "group.threads.empty": "No group conversations in this space yet.",
 };

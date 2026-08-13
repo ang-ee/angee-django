@@ -82,7 +82,7 @@ def _role_relations(group: Group, user: Any) -> set[str]:
         .objects.filter(
             resource_type="spaces/group",
             resource_id=group.sqid,
-            relation__in=("owner", "moderator", "member"),
+            relation__in=("owner", "moderator", "member", "viewer"),
             subject_type="auth/user",
             subject_id=user.sqid,
         )
@@ -418,7 +418,7 @@ def test_membership_without_a_platform_user_grants_nothing(spaces_tables: None) 
     assert not active_relationship_model().objects.filter(
         resource_type="spaces/group",
         resource_id=group.sqid,
-        relation__in=("owner", "moderator", "member"),
+        relation__in=("owner", "moderator", "member", "viewer"),
     ).exists()
 
 
@@ -486,22 +486,33 @@ def test_group_delete_revokes_membership_and_group_relationships(spaces_tables: 
     ).exists()
 
 
-def test_group_member_reads_bound_group_thread_but_outsider_cannot(spaces_tables: None) -> None:
-    """The messaging fragment grants a non-admin member, not an unrelated actor, thread read."""
+def test_group_member_and_viewer_read_bound_group_thread_but_outsider_cannot(
+    spaces_tables: None,
+) -> None:
+    """The messaging fragment grants member/viewer thread read, not unrelated access."""
 
     del spaces_tables
     member, person = _person_for("spaces-thread-member")
+    viewer, viewer_person = _person_for("spaces-thread-viewer")
     outsider = create_user("spaces-thread-outsider")
     with system_context(reason="spaces group thread"):
         group = Group.objects.create(name="Community", slug="community")
         membership = Membership.objects.create(group=group, party=person)
         membership.confirm()
+        viewer_membership = Membership.objects.create(
+            group=group,
+            party=viewer_person,
+            role=Membership.MembershipRole.VIEWER,
+        )
+        viewer_membership.confirm()
         thread = Thread.objects.create(
             modality=Thread.Modality.GROUP,
-            group=group,
         )
+        thread.groups.add(group)
 
     with actor_context(member):
+        assert Thread.objects.filter(pk=thread.pk).exists()
+    with actor_context(viewer):
         assert Thread.objects.filter(pk=thread.pk).exists()
     with actor_context(outsider):
         assert not Thread.objects.filter(pk=thread.pk).exists()
@@ -510,21 +521,24 @@ def test_group_member_reads_bound_group_thread_but_outsider_cannot(spaces_tables
 def test_group_owner_and_moderator_write_bound_thread_but_outsider_cannot(
     spaces_tables: None,
 ) -> None:
-    """The group post capability grants thread writes to owner/moderator, never outsiders."""
+    """The group post capability grants thread writes to owner/moderator, never viewers."""
 
     del spaces_tables
     owner, owner_person = _person_for("spaces-thread-owner")
     moderator, moderator_person = _person_for("spaces-thread-moderator")
+    viewer, viewer_person = _person_for("spaces-thread-write-viewer")
     outsider = create_user("spaces-thread-write-outsider")
     with system_context(reason="spaces group thread write setup"):
         group = Group.objects.create(name="Community", slug="community")
         for person, role in (
             (owner_person, Membership.MembershipRole.OWNER),
             (moderator_person, Membership.MembershipRole.MODERATOR),
+            (viewer_person, Membership.MembershipRole.VIEWER),
         ):
             membership = Membership.objects.create(group=group, party=person, role=role)
             membership.confirm()
-        thread = Thread.objects.create(modality=Thread.Modality.GROUP, group=group)
+        thread = Thread.objects.create(modality=Thread.Modality.GROUP)
+        thread.groups.add(group)
 
     for actor, visibility in (
         (owner, Thread.Visibility.PUBLIC),
@@ -535,10 +549,11 @@ def test_group_owner_and_moderator_write_bound_thread_but_outsider_cannot(
             writable.visibility = visibility
             writable.save(update_fields=["visibility", "updated_at"])
 
-    denied = Thread._base_manager.get(pk=thread.pk).with_actor(outsider)
-    denied.visibility = Thread.Visibility.RESTRICTED
-    with pytest.raises(PermissionDenied):
-        denied.save(update_fields=["visibility", "updated_at"])
+    for denied_actor in (viewer, outsider):
+        denied = Thread._base_manager.get(pk=thread.pk).with_actor(denied_actor)
+        denied.visibility = Thread.Visibility.RESTRICTED
+        with pytest.raises(PermissionDenied):
+            denied.save(update_fields=["visibility", "updated_at"])
 
 
 def test_spaces_fragment_merges_only_read_and_write_into_messaging_thread() -> None:
@@ -551,7 +566,8 @@ def test_spaces_fragment_merges_only_read_and_write_into_messaging_thread() -> N
     assert {relation.name for relation in definition.relations} >= {"group"}
 
     rendered = render_zed("angee.messaging", messaging)
-    assert "relation group: spaces/group // rebac:field=group" in rendered
+    assert "relation group: spaces/group" in rendered
+    assert "rebac:field=group" not in rendered
     assert "group->read" in rendered
     assert "group->post" in rendered
 

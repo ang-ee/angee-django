@@ -1,22 +1,24 @@
-"""Spaces-owned lifecycle receivers for membership role reconciliation."""
+"""Spaces-owned lifecycle receivers for role and thread-audience reconciliation."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from django.apps import apps
-from django.db.models.signals import class_prepared, post_delete, post_save, pre_save
+from django.db import models
+from django.db.models.signals import class_prepared, m2m_changed, post_delete, post_save, pre_save
 from rebac import system_context
 
+from angee.base.rebac_m2m import reconcile_m2m_changed_relationships_on_commit
 from angee.parties.models import Person
-from angee.spaces.models import Membership
+from angee.spaces.models import Group, Membership, ThreadSpace
 
-_DISPATCH_PREFIX = "spaces.membership_roles"
+_DISPATCH_PREFIX = "spaces.lifecycle"
 _USER_NOT_TRACKED = object()
 
 
 def connect() -> None:
-    """Bind role revocation to every concrete Membership model."""
+    """Bind spaces lifecycle hooks to every concrete composed model."""
 
     for model in apps.get_models():
         _bind(model)
@@ -34,7 +36,7 @@ def _on_class_prepared(sender: Any, **kwargs: Any) -> None:
 
 
 def _bind(model: Any) -> None:
-    """Connect membership and Person lifecycle hooks to one concrete model."""
+    """Connect membership, group, thread, and Person lifecycle hooks."""
 
     if model._meta.abstract:
         return
@@ -44,6 +46,23 @@ def _bind(model: Any) -> None:
             revoke_membership_roles,
             sender=model,
             dispatch_uid=f"{_DISPATCH_PREFIX}.membership_delete.{label}",
+        )
+    elif issubclass(model, Group):
+        post_delete.connect(
+            revoke_group_thread_relationships,
+            sender=model,
+            dispatch_uid=f"{_DISPATCH_PREFIX}.group_delete.{label}",
+        )
+    elif issubclass(model, ThreadSpace):
+        m2m_changed.connect(
+            sync_thread_group_relationships,
+            sender=getattr(model, "groups").through,
+            dispatch_uid=f"{_DISPATCH_PREFIX}.thread_groups.{label}",
+        )
+        post_delete.connect(
+            revoke_thread_group_relationships,
+            sender=model,
+            dispatch_uid=f"{_DISPATCH_PREFIX}.thread_delete.{label}",
         )
     elif issubclass(model, Person):
         pre_save.connect(
@@ -106,3 +125,54 @@ def revoke_membership_roles(sender: Any, instance: Any, **kwargs: Any) -> None:
     del sender, kwargs
     with system_context(reason="spaces.membership.delete"):
         instance.revoke_role_relationships()
+
+
+def sync_thread_group_relationships(
+    sender: type[models.Model],
+    instance: models.Model,
+    action: str,
+    reverse: bool,
+    model: type[models.Model],
+    pk_set: set[Any] | None,
+    using: str | None = None,
+    **kwargs: Any,
+) -> None:
+    """Mirror Thread.groups M2M edits into stored ``messaging/thread#group`` tuples."""
+
+    del sender, kwargs
+
+    def grant(forward: models.Model, reverse_instance: models.Model) -> None:
+        cast(ThreadSpace, forward).grant_group_relationship(cast(Group, reverse_instance))
+
+    def revoke(forward: models.Model, reverse_instance: models.Model) -> None:
+        cast(ThreadSpace, forward).revoke_group_relationship(cast(Group, reverse_instance))
+
+    reconcile_m2m_changed_relationships_on_commit(
+        instance=instance,
+        action=action,
+        reverse=reverse,
+        model=model,
+        pk_set=pk_set,
+        forward_field_name="groups",
+        reverse_field_name="threads",
+        grant=grant,
+        revoke=revoke,
+        using=using,
+        context=lambda: system_context(reason="spaces.thread.groups"),
+    )
+
+
+def revoke_thread_group_relationships(sender: Any, instance: Any, **kwargs: Any) -> None:
+    """Revoke stored group-audience tuples for a deleted thread."""
+
+    del sender, kwargs
+    with system_context(reason="spaces.thread.delete"):
+        instance.revoke_group_relationships()
+
+
+def revoke_group_thread_relationships(sender: Any, instance: Any, **kwargs: Any) -> None:
+    """Revoke stored thread audience tuples where a deleted group is the subject."""
+
+    del sender, kwargs
+    with system_context(reason="spaces.group.delete"):
+        instance.revoke_thread_relationships()

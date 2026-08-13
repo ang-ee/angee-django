@@ -768,6 +768,143 @@ def test_parties_handle_normalized_value_migration_adds_required_indexed_field()
     assert module.applies(migrated) is False
 
 
+def _thread_group_state(*, include_group: bool, include_groups: bool) -> ProjectState:
+    """Return a minimal messaging.Thread state for the spaces audience migration."""
+
+    state = ProjectState()
+    state.add_model(
+        ModelState(
+            "spaces",
+            "Group",
+            [("id", models.AutoField(primary_key=True))],
+        )
+    )
+    fields: list[tuple[str, models.Field]] = [
+        ("id", models.AutoField(primary_key=True)),
+    ]
+    if include_group:
+        fields.append(
+            (
+                "group",
+                models.ForeignKey(
+                    "spaces.Group",
+                    null=True,
+                    blank=True,
+                    on_delete=models.SET_NULL,
+                    related_name="threads",
+                ),
+            )
+        )
+    if include_groups:
+        fields.append(
+            (
+                "groups",
+                models.ManyToManyField(
+                    "spaces.Group",
+                    blank=True,
+                    related_name="threads",
+                ),
+            )
+        )
+    state.add_model(ModelState("messaging", "Thread", fields))
+    return state
+
+
+def test_spaces_thread_groups_migration_guards_and_preserves_state() -> None:
+    """The spaces runtime migration applies only to the exact FK-to-M2M transition."""
+
+    module = importlib.import_module("angee.spaces.runtime_migrations.thread_groups")
+    old_state = _thread_group_state(include_group=True, include_groups=False)
+    current = _thread_group_state(include_group=False, include_groups=True)
+    partial = _thread_group_state(include_group=True, include_groups=True)
+    unexpected = _thread_group_state(include_group=True, include_groups=False)
+    unexpected.models["messaging", "thread"].fields["group"] = models.CharField(max_length=32)
+
+    assert module.applies(ProjectState()) is False
+    assert module.applies(old_state) is True
+    assert module.applies(current) is False
+    with pytest.raises(ImproperlyConfigured, match="partial ThreadSpace group transition"):
+        module.applies(partial)
+    with pytest.raises(ImproperlyConfigured, match="unexpected Thread.group field"):
+        module.applies(unexpected)
+
+    intermediate = old_state.clone()
+    module.Migration.operations[0].state_forwards("messaging", intermediate)
+    intermediate.apps.get_model("messaging", "Thread")
+
+    migrated = module.Migration("probe", "messaging").mutate_state(old_state)
+    thread = migrated.models["messaging", "thread"]
+    assert "groups" in thread.fields
+    assert "group" not in thread.fields
+    assert isinstance(thread.fields["groups"], models.ManyToManyField)
+    assert thread.fields["groups"].remote_field.related_name == "threads"
+    assert module.applies(migrated) is False
+
+
+@pytest.mark.django_db(transaction=True)
+def test_spaces_thread_groups_migration_backfills_existing_fk_rows() -> None:
+    """Existing single-group threads retain that group in the new M2M audience."""
+
+    module = importlib.import_module("angee.spaces.runtime_migrations.thread_groups")
+
+    class LegacySpaceGroup(models.Model):
+        class Meta:
+            app_label = "tests"
+            db_table = "test_legacy_spaces_thread_group"
+
+    class LegacyThread(models.Model):
+        group = models.ForeignKey(
+            LegacySpaceGroup,
+            null=True,
+            blank=True,
+            on_delete=models.SET_NULL,
+            related_name="+",
+        )
+        groups = models.ManyToManyField(
+            LegacySpaceGroup,
+            blank=True,
+            related_name="+",
+        )
+
+        class Meta:
+            app_label = "tests"
+            db_table = "test_legacy_messaging_thread_groups"
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(LegacySpaceGroup)
+        schema_editor.create_model(LegacyThread)
+    historical_apps = SimpleNamespace(
+        get_model=lambda app_label, model_name: {
+            ("spaces", "Group"): LegacySpaceGroup,
+            ("messaging", "Thread"): LegacyThread,
+        }[app_label, model_name]
+    )
+    try:
+        group = LegacySpaceGroup._base_manager.create()
+        retained = LegacyThread._base_manager.create(group=group)
+        no_group = LegacyThread._base_manager.create(group=None)
+
+        with connection.schema_editor() as schema_editor:
+            module.copy_thread_group_to_groups(historical_apps, schema_editor)
+
+        through_model = LegacyThread.groups.through
+        thread_field = module._through_field_for(through_model, LegacyThread)
+        group_field = module._through_field_for(through_model, LegacySpaceGroup)
+        assert list(
+            through_model._base_manager.order_by(thread_field.attname).values_list(
+                thread_field.attname,
+                group_field.attname,
+            )
+        ) == [(retained.pk, group.pk)]
+        assert no_group.pk not in set(
+            through_model._base_manager.values_list(thread_field.attname, flat=True)
+        )
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(LegacyThread)
+            schema_editor.delete_model(LegacySpaceGroup)
+
+
 @pytest.mark.django_db(transaction=True)
 def test_parties_handle_normalized_value_migration_backfills_existing_rows() -> None:
     module = importlib.import_module("angee.parties.runtime_migrations.handle_normalized_value")

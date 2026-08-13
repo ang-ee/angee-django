@@ -1,8 +1,9 @@
 // @rebac_package: spaces
-// @rebac_schema_revision: 2
+// @rebac_schema_revision: 3
 
 definition messaging/thread {
-    relation group: spaces/group // rebac:field=group
+    // Non-field relation mirrored from Thread.groups by spaces.signals.
+    relation group: spaces/group
 
     permission read = group->read
     permission write = group->post
