@@ -1,7 +1,7 @@
 import * as React from "react";
 import { type DocumentType } from "@angee/gql/console";
 import { senderDisplayName } from "@angee/parties";
-import { useAuthoredQuery } from "@angee/refine";
+import { useAuthoredInfiniteQuery } from "@angee/refine";
 import {
   Avatar,
   AvatarFallback,
@@ -50,46 +50,47 @@ export function TimelinePane(props: TimelinePaneProps): React.ReactElement {
   const partyId = "partyId" in props ? props.partyId : undefined;
   const circle = typeof circleId === "string";
   const scopeId = (circle ? circleId : partyId) ?? "";
-  const [before, setBefore] = React.useState<string | undefined>(undefined);
-  const [rows, setRows] = React.useState<readonly TimelineMessage[]>([]);
-  const { data, fetching, error } = useAuthoredQuery(
-    NexusTimeline,
-    {
+  const variables = React.useMemo(
+    () => ({
       partyId: scopeId,
       circleId: scopeId,
       circle,
-      before: before ?? null,
+      before: null,
       limit: PAGE_SIZE,
       search: "",
+    }),
+    [circle, scopeId],
+  );
+  const timeline = useAuthoredInfiniteQuery(
+    NexusTimeline,
+    variables,
+    {
+      models: ["messaging.Message", "parties.PartyHandle", "parties.CircleMember"],
+      getRows: (data) =>
+        (circle ? data.circle_timeline : data.party_timeline)?.messages ?? [],
+      getRowId: (row) => row.id,
+      getPageParam: (pageRows) => {
+        const oldest = pageRows.length >= PAGE_SIZE ? pageRows.at(-1) : undefined;
+        return oldest ? { before: oldest.id } : undefined;
+      },
     },
-    { models: ["messaging.Message", "parties.PartyHandle", "parties.CircleMember"] },
   );
 
-  // Pages accumulate by message id: the query returns one window; older windows
-  // merge in as the cursor moves back. A party switch resets the accumulation.
-  React.useEffect(() => {
-    setRows([]);
-    setBefore(undefined);
-  }, [scopeId]);
-  React.useEffect(() => {
-    const page = (circle ? data?.circle_timeline : data?.party_timeline)?.messages ?? [];
-    if (page.length === 0) return;
-    setRows((existing) => {
-      const byId = new Map(existing.map((row) => [row.id, row]));
-      for (const row of page) byId.set(row.id, row as TimelineMessage);
-      return [...byId.values()].sort((a, b) =>
+  const rows = React.useMemo(
+    () =>
+      [...timeline.rows].sort((a, b) =>
         orderAt(a) < orderAt(b) ? 1 : orderAt(a) > orderAt(b) ? -1 : b.id.localeCompare(a.id),
-      );
-    });
-  }, [circle, data]);
+      ),
+    [timeline.rows],
+  );
+  const firstPage = timeline.pages[0];
+  const total = (circle ? firstPage?.circle_timeline : firstPage?.party_timeline)?.count
+    ?? rows.length;
+  const exhausted = !timeline.hasMore || rows.length >= total;
 
-  const total = (circle ? data?.circle_timeline : data?.party_timeline)?.count ?? 0;
-  const oldest = rows.at(-1);
-  const exhausted = rows.length >= total;
-
-  if (fetching && rows.length === 0) return <LoadingPanel />;
-  if (error && rows.length === 0) {
-    return <EmptyState icon="triangle-alert" title={error.message} />;
+  if (timeline.fetching && rows.length === 0) return <LoadingPanel />;
+  if (timeline.error && rows.length === 0) {
+    return <EmptyState icon="triangle-alert" title={timeline.error.message} />;
   }
   if (rows.length === 0) {
     return (
@@ -142,8 +143,8 @@ export function TimelinePane(props: TimelinePaneProps): React.ReactElement {
           variant="ghost"
           size="sm"
           className="self-center"
-          disabled={fetching}
-          onClick={() => oldest && setBefore(oldest.id)}
+          disabled={timeline.fetching}
+          onClick={timeline.fetchOlder}
         >
           {t("timeline.loadOlder")}
         </Button>

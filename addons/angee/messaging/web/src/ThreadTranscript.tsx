@@ -1,5 +1,9 @@
 import { senderDisplayName } from "@angee/parties";
-import { useAuthoredQuery } from "@angee/refine";
+import {
+  useAuthoredInfiniteQuery,
+  type DocumentData,
+  type DocumentVariables,
+} from "@angee/refine";
 import * as React from "react";
 import { Button, ChatBubble, EmptyState, Glyph, LoadingPanel, MessagePartsView, ReactionBar, RelativeTime, SectionEyebrow, cn, textRoleVariants, type ChatBubbleRole, type Reaction } from "@angee/ui";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -7,7 +11,6 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useMessagingT } from "./i18n";
 import {
   ThreadTranscriptDocument,
-  ThreadTranscriptOlderDocument,
   type ThreadTranscriptRow,
 } from "./documents";
 
@@ -18,10 +21,13 @@ const MESSAGE_MODELS = ["messaging.Message", "messaging.Reaction"] as const;
 const PAGE_SIZE = 50;
 // Estimated bubble height before measurement; the virtualizer remeasures each row.
 const ESTIMATED_ROW_HEIGHT = 96;
-// Placeholder cursor for the disabled older-page query (never executed).
+// Placeholder cursor for the older field while the first page skips it.
 const EPOCH = "1970-01-01T00:00:00Z";
 
-type TranscriptCursor = { sentAt: string; createdAt: string };
+type ThreadTranscriptData = DocumentData<typeof ThreadTranscriptDocument>;
+type ThreadTranscriptVariables = DocumentVariables<typeof ThreadTranscriptDocument>;
+type TranscriptPageVariables =
+  Pick<ThreadTranscriptVariables, "head" | "beforeSentAt" | "beforeCreatedAt">;
 
 /** Newest-first feed order mirroring the server page order (`sent_at desc,
  *  created_at desc`): Postgres puts NULLs first on a bare DESC, so a row
@@ -37,6 +43,32 @@ function compareNewestFirst(a: ThreadTranscriptRow, b: ThreadTranscriptRow): num
   if (aKey !== bKey) return aKey < bKey ? 1 : -1;
   if (a.created_at !== b.created_at) return a.created_at < b.created_at ? 1 : -1;
   return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+}
+
+function transcriptRows(data: ThreadTranscriptData): readonly ThreadTranscriptRow[] {
+  return data.head_messages ?? data.older_messages ?? [];
+}
+
+function transcriptPageVariables(
+  rows: readonly ThreadTranscriptRow[],
+): TranscriptPageVariables | undefined {
+  // "Load older" keyset page: before the oldest loaded row's (sent_at,
+  // created_at) cursor, boundary-INCLUSIVE on created_at. Rows tying the anchor
+  // refetch and the shared id-keyed infinite read dedupes the overlap, so a tie
+  // at the page cut cannot be skipped (ids are opaque sqids, so they cannot be
+  // the third cursor key server-side).
+  if (rows.length < PAGE_SIZE) return undefined;
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index];
+    if (row?.sent_at) {
+      return {
+        head: false,
+        beforeSentAt: row.sent_at,
+        beforeCreatedAt: row.created_at,
+      };
+    }
+  }
+  return undefined;
 }
 
 type MessagingT = ReturnType<typeof useMessagingT>;
@@ -71,10 +103,7 @@ export function ThreadTranscript({
   threadId,
   order = "conversation",
 }: ThreadTranscriptProps): React.ReactElement {
-  // Remount per thread: with the app-wide `placeholderData: keepPreviousData`,
-  // a reused component would merge the PREVIOUS thread's placeholder rows into
-  // the next thread's archive. A fresh mount has fresh queries and fresh state —
-  // React's own "reset state when a prop changes" idiom.
+  // Remount per thread so scroll anchors and virtualizer measurements reset.
   return <TranscriptBody key={threadId} threadId={threadId} order={order} />;
 }
 
@@ -83,71 +112,31 @@ function TranscriptBody({
   order = "conversation",
 }: ThreadTranscriptProps): React.ReactElement {
   const t = useMessagingT();
-  const [cursor, setCursor] = React.useState<TranscriptCursor | null>(null);
-  // Keyset pages already fetched vanish from this list when their rows change
-  // upstream — accepted staleness for the read-mostly channel transcript. The
-  // page-accumulation owner should eventually be an @angee/refine infinite
-  // read (react-query's useInfiniteQuery), whose invalidation refetches every
-  // held page; this local archive is the interim composition.
-  // Every row ever loaded for this thread, keyed by id: the live head window and
-  // each keyset page merge in (fresh data overwrites), so a head that slides
-  // forward on new arrivals never opens a hole above the archived pages.
-  const [archive, setArchive] = React.useState<ReadonlyMap<string, ThreadTranscriptRow>>(new Map());
-  const [exhausted, setExhausted] = React.useState(false);
-
-  const headVariables = React.useMemo(() => ({ threadId, limit: PAGE_SIZE }), [threadId]);
-  const transcript = useAuthoredQuery(ThreadTranscriptDocument, headVariables, {
-    enabled: Boolean(threadId),
-    models: MESSAGE_MODELS,
-  });
-  const olderVariables = React.useMemo(
+  const variables = React.useMemo<ThreadTranscriptVariables>(
     () => ({
       threadId,
       limit: PAGE_SIZE,
-      beforeSentAt: cursor?.sentAt ?? EPOCH,
-      beforeCreatedAt: cursor?.createdAt ?? EPOCH,
+      head: true,
+      beforeSentAt: EPOCH,
+      beforeCreatedAt: EPOCH,
     }),
-    [threadId, cursor],
+    [threadId],
   );
-  const older = useAuthoredQuery(ThreadTranscriptOlderDocument, olderVariables, {
-    enabled: Boolean(threadId) && cursor !== null,
+  const transcript = useAuthoredInfiniteQuery(ThreadTranscriptDocument, variables, {
+    enabled: Boolean(threadId),
     models: MESSAGE_MODELS,
+    getRows: transcriptRows,
+    getRowId: (row) => row.id,
+    getPageParam: transcriptPageVariables,
   });
-
-  const headRows = transcript.data?.messages;
-  const olderRows = cursor !== null ? older.data?.messages : undefined;
-  React.useEffect(() => {
-    const fresh = [...(headRows ?? []), ...(olderRows ?? [])];
-    if (fresh.length === 0) return;
-    setArchive((previous) => {
-      const next = new Map(previous);
-      let changed = false;
-      for (const row of fresh) {
-        if (next.get(row.id) !== row) {
-          next.set(row.id, row);
-          changed = true;
-        }
-      }
-      return changed ? next : previous;
-    });
-    // An older page whose rows are all already archived means the boundary
-    // cursor cannot advance (an over-page tie block, or a shrunken total):
-    // stop offering "Load older" rather than wedge into a no-op button.
-    if (olderRows !== undefined && olderRows.length > 0) {
-      setArchive((current) => {
-        if (olderRows.every((row) => current.has(row.id))) setExhausted(true);
-        return current;
-      });
-    }
-  }, [headRows, olderRows]);
 
   // Render oldest-to-newest so the latest turn sits at the bottom.
   const messages = React.useMemo(
-    () => [...archive.values()].sort(compareNewestFirst).reverse(),
-    [archive],
+    () => [...transcript.rows].sort(compareNewestFirst).reverse(),
+    [transcript.rows],
   );
-  const total = transcript.data?.messages_aggregate.aggregate?.count ?? messages.length;
-  const hasOlder = !exhausted && messages.length < total;
+  const total = transcript.pages[0]?.messages_aggregate?.aggregate?.count ?? messages.length;
+  const hasOlder = transcript.hasMore && messages.length < total;
   const conversation = order === "conversation";
 
   const scrollRef = React.useRef<HTMLDivElement>(null);
@@ -199,17 +188,14 @@ function TranscriptBody({
   }, [conversation, threadId, messages.length, totalSize]);
 
   function loadOlder(): void {
-    // Anchor the next keyset page on the oldest loaded row that carries a send
-    // time (rows without one sort to the newest end and cannot anchor a cursor).
-    const oldest = messages.find((row) => row.sent_at);
-    if (oldest === undefined || !oldest.sent_at) return;
+    if (!transcript.hasMore) return;
     const scroll = scrollRef.current;
     // Capture the pre-prepend distance from the bottom so the anchor effect can restore it.
     if (conversation && scroll !== null) prependAnchorRef.current = scroll.scrollHeight - scroll.scrollTop;
-    setCursor({ sentAt: oldest.sent_at, createdAt: oldest.created_at });
+    transcript.fetchOlder();
   }
 
-  if (transcript.fetching && headRows === undefined) {
+  if (transcript.fetching && transcript.rows.length === 0) {
     return <LoadingPanel message={t("transcript.loading")} />;
   }
   if (transcript.error) {
@@ -244,7 +230,7 @@ function TranscriptBody({
             type="button"
             variant="secondary"
             size="sm"
-            disabled={transcript.fetching || older.fetching}
+            disabled={transcript.fetching || transcript.fetchingOlder}
             onClick={loadOlder}
           >
             <Glyph name="chevron-up" />

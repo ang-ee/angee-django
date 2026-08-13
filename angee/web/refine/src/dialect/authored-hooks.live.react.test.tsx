@@ -15,6 +15,7 @@ vi.mock("@refinedev/core", () => ({
   useCustom: () => ({
     query: { data: undefined, isFetching: false, error: null, refetch: vi.fn() },
   }),
+  useDataProvider: vi.fn(),
   useSubscription: (props: Record<string, unknown>) => {
     subscriptionMock.calls.push(props);
   },

@@ -2,12 +2,19 @@ import { useCallback, useMemo, useRef } from "react";
 import {
   useCustom,
   useCustomMutation,
+  useDataProvider,
   useInvalidate,
   useSubscription,
   type BaseRecord,
+  type CustomResponse,
   type HttpError,
 } from "@refinedev/core";
-import { useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQueryClient,
+  type InfiniteData,
+  type QueryFunctionContext,
+} from "@tanstack/react-query";
 
 import {
   authoredQueryMeta,
@@ -26,7 +33,10 @@ import { useActiveDataProviderName } from "./data-provider-context";
 import { mutationMeta, queryMeta } from "./wire";
 
 /** Any authored (non-CRUD) GraphQL operation: a generated `TypedDocumentNode`. */
-export type AuthoredDocument = TypedDocumentNode<unknown, any>;
+export type AuthoredDocument = TypedDocumentNode<
+  unknown,
+  never
+>;
 /**
  * The variables an authored document takes, or `Record<string, never>` when it
  * takes none — the parameter type the authored hooks require and the type a
@@ -57,6 +67,40 @@ export interface AuthoredQueryResult<TData> {
   refetch: () => void;
 }
 
+export type AuthoredInfinitePageVariables<
+  TDocument extends AuthoredDocument,
+> = Partial<AuthoredVariables<TDocument>>;
+
+export interface AuthoredInfiniteQueryOptions<
+  TDocument extends AuthoredDocument,
+  TRow,
+  TPageVariables extends AuthoredInfinitePageVariables<TDocument>,
+> extends AuthoredQueryOptions {
+  /** Read the keyset page rows from one authored operation result. */
+  getRows: (data: DocumentData<TDocument>) => readonly TRow[];
+  /** Stable identity for page-level dedupe. */
+  getRowId: (row: TRow) => string;
+  /**
+   * Return cursor variables for the next older page. Returning `undefined`
+   * marks the infinite read exhausted.
+   */
+  getPageParam: (
+    lastPageRows: readonly TRow[],
+    lastPage: DocumentData<TDocument>,
+  ) => TPageVariables | undefined;
+}
+
+export interface AuthoredInfiniteQueryResult<TData, TRow> {
+  rows: readonly TRow[];
+  pages: readonly TData[];
+  fetching: boolean;
+  fetchingOlder: boolean;
+  error: Error | null;
+  hasMore: boolean;
+  fetchOlder: () => void;
+  refetch: () => void;
+}
+
 export function useAuthoredQuery<TDocument extends AuthoredDocument>(
   document: TDocument,
   variables?: AuthoredVariables<TDocument>,
@@ -81,20 +125,7 @@ export function useAuthoredQuery<TDocument extends AuthoredDocument>(
       meta: authoredQueryMeta(models),
     },
   });
-  // An authored read is invisible to the live bridge unless it declares interest:
-  // a page built only from authored queries would open no socket and never go
-  // live. Register each read model so its changes root is subscribed through the
-  // shared fan-out (one upstream per root, joined with any resource hook watching
-  // the same model) and torn down with the hook. refine's useSubscription owns
-  // the lifecycle and no-ops when the app has no live provider; the provider's
-  // consumer invalidates this read on each change, so onLiveEvent stays a noop.
-  useSubscription({
-    channel: authoredLiveChannel(models),
-    params: { models },
-    types: ["*"],
-    enabled: enabled && models.length > 0,
-    onLiveEvent: NO_LIVE_EVENT,
-  });
+  useAuthoredLiveInterest(enabled, models);
   // Stable identity: callers (e.g. the operator token-refresh interval) put
   // `refetch` in effect deps, and react-query churns `run.query`'s identity on
   // every state change — depending on it would tear those effects down.
@@ -108,6 +139,154 @@ export function useAuthoredQuery<TDocument extends AuthoredDocument>(
     data: data as DocumentData<TDocument> | undefined,
     fetching: run.query.isFetching,
     error: run.query.error as Error | null,
+    refetch,
+  };
+}
+
+export function useAuthoredInfiniteQuery<
+  TDocument extends AuthoredDocument,
+  TRow,
+  TPageVariables extends AuthoredInfinitePageVariables<TDocument> =
+    AuthoredInfinitePageVariables<TDocument>,
+>(
+  document: TDocument,
+  variables: AuthoredVariables<TDocument>,
+  options: AuthoredInfiniteQueryOptions<TDocument, TRow, TPageVariables>,
+): AuthoredInfiniteQueryResult<DocumentData<TDocument>, TRow> {
+  type Data = DocumentData<TDocument>;
+  type Variables = AuthoredVariables<TDocument>;
+  type PageParam = TPageVariables | null;
+  type QueryKey = readonly [
+    "angee",
+    "authored",
+    "infinite",
+    string,
+    TDocument,
+    Variables,
+  ];
+
+  const stable = useStableVariables(variables);
+  const enabled = options.enabled ?? true;
+  const models = useStableArray(options.models ?? []);
+  const activeDataProviderName = useActiveDataProviderName();
+  const dataProviderName = options.dataProviderName ?? activeDataProviderName ?? "default";
+  const dataProvider = useDataProvider();
+  const callbacksRef = useRef<{
+    getRows: (data: Data) => readonly TRow[];
+    getRowId: (row: TRow) => string;
+    getPageParam: (
+      lastPageRows: readonly TRow[],
+      lastPage: Data,
+    ) => TPageVariables | undefined;
+  }>({
+    getRows: options.getRows,
+    getRowId: options.getRowId,
+    getPageParam: options.getPageParam,
+  });
+  callbacksRef.current = {
+    getRows: options.getRows,
+    getRowId: options.getRowId,
+    getPageParam: options.getPageParam,
+  };
+  const queryKey = useMemo<QueryKey>(
+    () => [
+      "angee",
+      "authored",
+      "infinite",
+      dataProviderName,
+      document,
+      stable,
+    ],
+    [dataProviderName, document, stable],
+  );
+  const custom = dataProvider(dataProviderName).custom;
+  const query = useInfiniteQuery<Data, Error, InfiniteData<Data, PageParam>, QueryKey, PageParam>({
+    queryKey,
+    queryFn: async ({
+      pageParam,
+    }: QueryFunctionContext<QueryKey, PageParam>) => {
+      if (!custom) {
+        throw new Error(
+          `Data provider "${dataProviderName}" does not support custom authored queries.`,
+        );
+      }
+      const pageVariables = {
+        ...stable,
+        ...(pageParam ?? {}),
+      } as Variables;
+      const response: CustomResponse<BaseRecord> =
+        await custom<BaseRecord, Record<string, unknown>, Record<string, unknown>>({
+          url: "",
+          method: "post",
+          meta: queryMeta(document, pageVariables),
+        });
+      const data = authoredOperationData<Data>(response.data);
+      if (data === undefined) {
+        throw new Error("Authored infinite query returned no data.");
+      }
+      return data;
+    },
+    initialPageParam: null,
+    getNextPageParam: (lastPage, allPages) => {
+      const { getRows, getRowId, getPageParam } = callbacksRef.current;
+      const lastPageRows = getRows(lastPage);
+      if (lastPageRows.length === 0) return undefined;
+      if (lastPageOnlyRepeatsPreviousRows(allPages, getRows, getRowId)) {
+        return undefined;
+      }
+      return getPageParam(lastPageRows, lastPage) ?? undefined;
+    },
+    placeholderData: () => undefined,
+    enabled,
+    meta: authoredQueryMeta(models),
+  });
+  useAuthoredLiveInterest(enabled, models);
+
+  const archiveRef = useRef<{
+    queryKey: QueryKey | null;
+    byId: Map<string, TRow>;
+    rows: readonly TRow[];
+  }>({
+    queryKey: null,
+    byId: new Map<string, TRow>(),
+    rows: [],
+  });
+  if (archiveRef.current.queryKey !== queryKey) {
+    archiveRef.current = {
+      queryKey,
+      byId: new Map<string, TRow>(),
+      rows: [],
+    };
+  }
+  const rows = useMemo(
+    () => accumulateAuthoredInfiniteRows(
+      archiveRef.current,
+      query.data?.pages ?? [],
+      callbacksRef.current.getRows,
+      callbacksRef.current.getRowId,
+    ),
+    [query.data, queryKey],
+  );
+  const pages = query.data?.pages ?? (EMPTY_AUTHORED_INFINITE_PAGES as readonly Data[]);
+  const queryRef = useRef(query);
+  queryRef.current = query;
+  const fetchOlder = useCallback(() => {
+    const current = queryRef.current;
+    if (!current.hasNextPage || current.isFetchingNextPage) return;
+    void current.fetchNextPage();
+  }, []);
+  const refetch = useCallback(() => {
+    void queryRef.current.refetch();
+  }, []);
+
+  return {
+    rows,
+    pages,
+    fetching: query.isFetching,
+    fetchingOlder: query.isFetchingNextPage,
+    error: query.error,
+    hasMore: query.hasNextPage,
+    fetchOlder,
     refetch,
   };
 }
@@ -281,4 +460,66 @@ const NO_LIVE_EVENT = (): void => undefined;
 /** A stable per-model-set channel for the authored read's live subscription. */
 function authoredLiveChannel(models: readonly string[]): string {
   return `angee/authored/${models.join(",")}`;
+}
+
+function useAuthoredLiveInterest(
+  enabled: boolean,
+  models: readonly string[],
+): void {
+  // An authored read is invisible to the live bridge unless it declares interest:
+  // a page built only from authored queries would open no socket and never go
+  // live. Register each read model so its changes root is subscribed through the
+  // shared fan-out (one upstream per root, joined with any resource hook watching
+  // the same model) and torn down with the hook. refine's useSubscription owns
+  // the lifecycle and no-ops when the app has no live provider; the provider's
+  // consumer invalidates this read on each change, so onLiveEvent stays a noop.
+  useSubscription({
+    channel: authoredLiveChannel(models),
+    params: { models },
+    types: ["*"],
+    enabled: enabled && models.length > 0,
+    onLiveEvent: NO_LIVE_EVENT,
+  });
+}
+
+function accumulateAuthoredInfiniteRows<TRow, TData>(
+  archive: {
+    byId: Map<string, TRow>;
+    rows: readonly TRow[];
+  },
+  pages: readonly TData[],
+  getRows: (data: TData) => readonly TRow[],
+  getRowId: (row: TRow) => string,
+): readonly TRow[] {
+  let changed = false;
+  for (const page of pages) {
+    for (const row of getRows(page)) {
+      const id = getRowId(row);
+      if (archive.byId.get(id) !== row) {
+        archive.byId.set(id, row);
+        changed = true;
+      }
+    }
+  }
+  if (changed) archive.rows = [...archive.byId.values()];
+  return archive.rows;
+}
+
+const EMPTY_AUTHORED_INFINITE_PAGES: readonly unknown[] = [];
+
+function lastPageOnlyRepeatsPreviousRows<TRow, TData>(
+  pages: readonly TData[],
+  getRows: (data: TData) => readonly TRow[],
+  getRowId: (row: TRow) => string,
+): boolean {
+  if (pages.length < 2) return false;
+  const previousIds = new Set<string>();
+  for (const page of pages.slice(0, -1)) {
+    for (const row of getRows(page)) previousIds.add(getRowId(row));
+  }
+  const lastPage = pages.at(-1);
+  if (lastPage === undefined) return false;
+  const lastRows = getRows(lastPage);
+  return lastRows.length > 0 &&
+    lastRows.every((row) => previousIds.has(getRowId(row)));
 }

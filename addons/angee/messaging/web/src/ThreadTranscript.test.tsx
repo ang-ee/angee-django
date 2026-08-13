@@ -19,9 +19,12 @@ vi.mock("@tanstack/react-virtual", () => ({
 }));
 
 const mocks = vi.hoisted(() => ({
-  transcriptData: undefined as unknown,
+  transcriptRows: [] as unknown[],
+  total: 0,
+  hasMore: false,
   queryCalls: [] as Array<Record<string, unknown>>,
-  useAuthoredQuery: vi.fn(),
+  fetchOlder: vi.fn(),
+  useAuthoredInfiniteQuery: vi.fn(),
 }));
 
 vi.mock("@angee/ui", async (importOriginal) => {
@@ -37,7 +40,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
 
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
-  useAuthoredQuery: mocks.useAuthoredQuery,
+  useAuthoredInfiniteQuery: mocks.useAuthoredInfiniteQuery,
 }));
 
 import { ThreadTranscript } from "./ThreadTranscript";
@@ -64,21 +67,26 @@ function message(overrides: Partial<ThreadTranscriptRow> = {}): ThreadTranscript
   } as unknown as ThreadTranscriptRow;
 }
 
-function transcriptPayload(rows: ThreadTranscriptRow[]): unknown {
-  // The document returns the window newest-first; the view reverses it.
-  return {
-    messages: [...rows].reverse(),
-    messages_aggregate: { aggregate: { count: rows.length } },
-  };
-}
-
 beforeEach(() => {
+  mocks.transcriptRows = [];
+  mocks.total = 0;
+  mocks.hasMore = false;
   mocks.queryCalls = [];
-  mocks.useAuthoredQuery.mockReset();
-  mocks.useAuthoredQuery.mockImplementation(
+  mocks.fetchOlder.mockReset();
+  mocks.useAuthoredInfiniteQuery.mockReset();
+  mocks.useAuthoredInfiniteQuery.mockImplementation(
     (_document: unknown, variables: Record<string, unknown>) => {
       mocks.queryCalls.push(variables);
-      return { data: mocks.transcriptData, fetching: false, error: null, refetch: vi.fn() };
+      return {
+        rows: mocks.transcriptRows,
+        pages: [{ messages_aggregate: { aggregate: { count: mocks.total } } }],
+        fetching: false,
+        fetchingOlder: false,
+        error: null,
+        hasMore: mocks.hasMore,
+        fetchOlder: mocks.fetchOlder,
+        refetch: vi.fn(),
+      };
     },
   );
 });
@@ -87,11 +95,12 @@ afterEach(cleanup);
 
 describe("ThreadTranscript", () => {
   test("renders inbound, outbound, and internal turns with their distinct treatments", () => {
-    mocks.transcriptData = transcriptPayload([
+    mocks.transcriptRows = [
       message({ id: "in", direction: "INBOUND", parts: [{ role: "BODY", fragment: { text: "Inbound hello" }, file: null }] as never }),
       message({ id: "out", direction: "OUTBOUND", sender: { id: "hnd_2", display_name: "Support", value: "us@example.com", party_link_confirmed: false, party: null }, parts: [{ role: "BODY", fragment: { text: "Outbound reply" }, file: null }] as never }),
       message({ id: "note", direction: "INTERNAL", parts: [{ role: "BODY", fragment: { text: "Internal jotting" }, file: null }] as never }),
-    ]);
+    ];
+    mocks.total = mocks.transcriptRows.length;
 
     render(<ThreadTranscript threadId="thr_1" />);
 
@@ -103,7 +112,7 @@ describe("ThreadTranscript", () => {
   });
 
   test("keeps the envelope name for an unconfirmed 1.0 email-match auto-link", () => {
-    mocks.transcriptData = transcriptPayload([
+    mocks.transcriptRows = [
       message({
         sender: {
           id: "hnd_1",
@@ -113,7 +122,8 @@ describe("ThreadTranscript", () => {
           party: { display_name: "Ada Curated" },
         } as never,
       }),
-    ]);
+    ];
+    mocks.total = mocks.transcriptRows.length;
 
     render(<ThreadTranscript threadId="thr_1" />);
 
@@ -122,7 +132,7 @@ describe("ThreadTranscript", () => {
   });
 
   test("prefers the curated party name after the resolving link is confirmed", () => {
-    mocks.transcriptData = transcriptPayload([
+    mocks.transcriptRows = [
       message({
         sender: {
           id: "hnd_1",
@@ -132,7 +142,8 @@ describe("ThreadTranscript", () => {
           party: { display_name: "Ada Curated" },
         } as never,
       }),
-    ]);
+    ];
+    mocks.total = mocks.transcriptRows.length;
 
     render(<ThreadTranscript threadId="thr_1" />);
 
@@ -141,42 +152,39 @@ describe("ThreadTranscript", () => {
   });
 
   test("renders read-only reaction pills from reaction groups", () => {
-    mocks.transcriptData = transcriptPayload([
+    mocks.transcriptRows = [
       message({
         reaction_groups: [
           { reaction: "👍", count: 2, self_reacted: true, handles: [{ id: "h", display_name: "Ada", value: "ada" }] },
         ] as never,
       }),
-    ]);
+    ];
+    mocks.total = mocks.transcriptRows.length;
 
     render(<ThreadTranscript threadId="thr_1" />);
 
     expect(screen.getByRole("button", { name: "👍 reaction, 2" })).toBeTruthy();
   });
 
-  test("offers Load older only while loaded rows trail the total, cursoring past the oldest row", () => {
-    mocks.transcriptData = {
-      messages: [message()],
-      messages_aggregate: { aggregate: { count: 120 } },
-    };
+  test("offers Load older only while loaded rows trail the total", () => {
+    mocks.transcriptRows = [message()];
+    mocks.total = 120;
+    mocks.hasMore = true;
 
     render(<ThreadTranscript threadId="thr_1" />);
 
-    expect(mocks.queryCalls.at(-1)).toMatchObject({ threadId: "thr_1", limit: 50 });
+    expect(mocks.queryCalls.at(-1)).toMatchObject({
+      threadId: "thr_1",
+      limit: 50,
+      head: true,
+    });
     fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
-    // The next page is a keyset fetch strictly before the oldest loaded row's
-    // (sent_at, created_at) cursor — never a re-fetched growing window.
-    expect(
-      mocks.queryCalls.some(
-        (call) =>
-          call.beforeSentAt === "2026-07-01T10:00:00Z" &&
-          call.beforeCreatedAt === "2026-07-01T10:00:00Z",
-      ),
-    ).toBe(true);
+    expect(mocks.fetchOlder).toHaveBeenCalledTimes(1);
   });
 
   test("shows the empty state when the thread has no messages", () => {
-    mocks.transcriptData = transcriptPayload([]);
+    mocks.transcriptRows = [];
+    mocks.total = 0;
 
     render(<ThreadTranscript threadId="thr_1" />);
 
