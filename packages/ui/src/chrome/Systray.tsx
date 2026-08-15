@@ -13,13 +13,14 @@ export interface SystrayProps {
 export function Systray({
   onHelp,
   onNotifications,
-}: SystrayProps): ReactElement {
+}: SystrayProps): ReactElement | null {
   const t = useUiT();
   const notifications = t("chrome.notifications");
   const help = t("chrome.help");
+  if (!onHelp && !onNotifications) return null;
   return (
     <div className="flex items-center gap-1">
-      <Tooltip label={notifications}>
+      {onNotifications ? <Tooltip label={notifications}>
         <Button
           type="button"
           variant="icon"
@@ -30,8 +31,8 @@ export function Systray({
         >
           <Glyph name="bell" />
         </Button>
-      </Tooltip>
-      <Tooltip label={help}>
+      </Tooltip> : null}
+      {onHelp ? <Tooltip label={help}>
         <Button
           type="button"
           variant="icon"
@@ -42,7 +43,7 @@ export function Systray({
         >
           <Glyph name="help" />
         </Button>
-      </Tooltip>
+      </Tooltip> : null}
     </div>
   );
 }

@@ -62,6 +62,7 @@ import {
   ToastProvider,
   useRefineNotificationProvider,
 } from "@angee/ui/feedback/index";
+import { railDefaultTarget } from "@angee/ui/chrome/app-rail-model";
 import { readAppRailPreferences } from "@angee/ui/chrome/app-rail-preferences";
 import { baseIcons } from "@angee/ui/chrome/icon-registry";
 import { LoadingPanel } from "@angee/ui/fragments/index";
@@ -524,7 +525,7 @@ function HomeRedirect({ fallback }: { fallback: string }): ReactNode {
     const item = menuTree
       .railMenuItems()
       .find((node) => node.id === defaultItemId);
-    return item?.target ?? fallback;
+    return (item && railDefaultTarget(item)) ?? fallback;
   }, [fallback, menuTree, preferences]);
   return <Redirect to={target} />;
 }

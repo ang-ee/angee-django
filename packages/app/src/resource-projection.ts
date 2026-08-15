@@ -141,7 +141,6 @@ function addMenuRouteResource(
       ...(appRoot ? { appRoot: true } : {}),
       ...(item.description ? { description: item.description } : {}),
       ...(item.group ? { group: item.group } : {}),
-      ...(item.sidebar !== undefined ? { sidebar: item.sidebar } : {}),
       ...(item.status ? { status: item.status } : {}),
       ...(item.tone ? { tone: item.tone } : {}),
       ...(item.badge !== undefined ? { badge: item.badge } : {}),

@@ -21,7 +21,7 @@ import { textRoleVariants } from "../ui/text";
 //
 // Owner relationship to the existing recipes (Bars stage wires the consumers):
 // - SUBSUMES the hand-spelled shell strings of the non-recipe bars — `TopBar`,
-//   `Breadcrumb`, `ControlBand`, `Statusline`, chat `ChatBar`/`ChatHeader`:
+//   `ControlBand`, `Statusline`, chat `ChatBar`/`ChatHeader`:
 //   their `cn("flex … bg-sheet px-4", …)` literal becomes `barVariants({…})`.
 // - SUBSUMES `pageFooterVariants` (a pure shell recipe — only its `sticky`
 //   knob stays bar-specific).
@@ -44,7 +44,6 @@ export const barVariants = tv({
     height: {
       none: "",
       topbar: "h-topbar-h",
-      crumbs: "h-crumbs-h",
       control: "h-control-h",
       controlMin: "min-h-control-h",
       status: "h-7",

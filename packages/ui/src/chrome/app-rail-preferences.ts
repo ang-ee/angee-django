@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { dedupeBy } from "../lib/dedupe";
 import {
@@ -11,11 +11,13 @@ export const APP_RAIL_PREFERENCES_KEY = "chrome.rail";
 export interface AppRailPreferences {
   order: readonly string[];
   defaultItemId: string | null;
+  expanded?: boolean;
 }
 
 const EMPTY_RAIL_PREFERENCES: AppRailPreferences = {
   order: [],
   defaultItemId: null,
+  expanded: undefined,
 };
 
 export function readAppRailPreferences(
@@ -28,6 +30,7 @@ export function readAppRailPreferences(
     defaultItemId: typeof raw.defaultItemId === "string"
       ? raw.defaultItemId
       : null,
+    expanded: typeof raw.expanded === "boolean" ? raw.expanded : undefined,
   };
 }
 
@@ -40,6 +43,7 @@ export function writeAppRailPreferences(
     [APP_RAIL_PREFERENCES_KEY]: {
       order: [...rail.order],
       defaultItemId: rail.defaultItemId,
+      ...(rail.expanded === undefined ? {} : { expanded: rail.expanded }),
     },
   };
 }
@@ -50,20 +54,27 @@ export function useAppRailPreferences(): {
 } {
   const { preferences, setPreferences } = useRuntimeUserPreferences();
   const [optimistic, setOptimistic] = useState<AppRailPreferences | null>(null);
+  const latestWrite = useRef(0);
   const stored = useMemo(
     () => readAppRailPreferences(preferences),
     [preferences],
   );
 
   useEffect(() => {
-    setOptimistic(null);
+    setOptimistic((current) =>
+      current && sameAppRailPreferences(current, stored) ? null : current
+    );
   }, [stored]);
 
   const setRailPreferences = useCallback(
     (rail: AppRailPreferences) => {
+      const write = ++latestWrite.current;
       setOptimistic(rail);
       void setPreferences(writeAppRailPreferences(preferences, rail)).catch(() => {
-        setOptimistic(null);
+        if (latestWrite.current !== write) return;
+        setOptimistic((current) =>
+          current && sameAppRailPreferences(current, rail) ? null : current
+        );
       });
     },
     [preferences, setPreferences],
@@ -73,6 +84,16 @@ export function useAppRailPreferences(): {
     railPreferences: optimistic ?? stored,
     setRailPreferences,
   };
+}
+
+function sameAppRailPreferences(
+  left: AppRailPreferences,
+  right: AppRailPreferences,
+): boolean {
+  return left.defaultItemId === right.defaultItemId
+    && left.expanded === right.expanded
+    && left.order.length === right.order.length
+    && left.order.every((item, index) => item === right.order[index]);
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

@@ -31,7 +31,6 @@ export interface RefineResourceMetadata {
   menuId?: string;
   description?: string;
   group?: string;
-  sidebar?: boolean;
   status?: string;
   tone?: string;
   badge?: number;

@@ -64,7 +64,6 @@ export * from "./ui/separator";
 export * from "./ui/popover";
 export * from "./ui/dropdown-menu";
 export * from "./ui/context-menu";
-export * from "./ui/navigation-menu";
 export * from "./ui/command";
 export * from "./ui/selection-bar";
 export * from "./ui/tooltip";

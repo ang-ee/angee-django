@@ -165,13 +165,8 @@ export function SessionRail({
   );
 }
 
-// The dense active-row look is intentionally shared in spirit with the chrome
-// `SubNavLink` (`ConsoleSubNav`), but kept separate per AGENTS.md DRY's
-// "similar code, different intent": `SubNavLink` is a single-label section link
-// bound to the chrome menu tree's route-active matching, whereas this is a generic
-// multi-slot session row (status dot + name + muted handle) the consumer binds to
-// any router `Link` via `render`. Extracting one recipe would couple two unrelated
-// layers (chrome navigation ↔ the communication surface) for a few utility classes.
+// This is a communication-specific multi-slot session row (status dot + name +
+// muted handle) that the consumer binds to any router `Link` via `render`.
 export const sessionRailItemVariants = tv({
   base: "flex h-8 items-center gap-2 rounded-6 px-2 text-13 text-fg-2 no-underline outline-none transition-colors hover:bg-inset hover:text-fg focus-visible:focus-ring",
   variants: {

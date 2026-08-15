@@ -1,4 +1,39 @@
+import type { MouseEvent } from "react";
+
 export type RailDropPlacement = "before" | "after";
+
+export interface ActiveLinkToggleProps {
+  "aria-expanded"?: boolean;
+  onClick?: (event: MouseEvent<HTMLElement>) => void;
+}
+
+/**
+ * The one owner of the second-click contract: a nav link that already points
+ * at the current page toggles the rail on plain left-click instead of
+ * re-navigating, and advertises the toggle via `aria-expanded`. Any other
+ * link — different target, modified click (new tab), non-primary button, or
+ * no toggle available — keeps its browser/router default.
+ */
+export function activeLinkToggleProps(
+  target: string | undefined,
+  pathname: string,
+  toggle: (() => void) | undefined,
+  expanded: boolean,
+): ActiveLinkToggleProps {
+  if (!toggle || !target || target !== pathname) return {};
+  return {
+    "aria-expanded": expanded,
+    onClick: (event) => {
+      if (event.defaultPrevented) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+        return;
+      }
+      if (event.button !== 0) return;
+      event.preventDefault();
+      toggle();
+    },
+  };
+}
 
 export interface RailOrderItem {
   id: string;
@@ -7,6 +42,14 @@ export interface RailOrderItem {
 export interface RailTargetItem {
   id?: string;
   target?: string;
+}
+
+/** Resolve the persisted rail preference at the viewport where expansion exists. */
+export function resolvedRailExpanded(
+  preference: boolean | undefined,
+  largeViewport: boolean,
+): boolean {
+  return largeViewport && (preference ?? true);
 }
 
 export function orderedRailItems<TItem extends RailOrderItem>(
@@ -73,14 +116,6 @@ export function railDefaultTarget(
   const target = item.target?.trim() ?? "";
   if (!target || target === "#") return null;
   return target;
-}
-
-export function railItemIdForTarget<TItem extends RailTargetItem>(
-  items: readonly TItem[],
-  target: string | null | undefined,
-): string | null {
-  if (!target) return null;
-  return items.find((item) => item.id && railDefaultTarget(item) === target)?.id ?? null;
 }
 
 export function sameRailOrder(

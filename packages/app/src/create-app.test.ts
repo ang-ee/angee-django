@@ -548,7 +548,7 @@ describe("createApp route menu refs", () => {
         "agents.group",
         "agents.home",
       ]);
-      expect(tree.appSectionItems("/agents").map((item) => item.id)).toEqual([
+      expect(tree.activeAppRoot("/agents")?.targetedChildren.map((item) => item.id)).toEqual([
         "agents.group",
       ]);
     } finally {
@@ -556,7 +556,7 @@ describe("createApp route menu refs", () => {
     }
   });
 
-  test("preserves same-label grouped app menus for top-nav rendering", async () => {
+  test("preserves same-label grouped app menus for pane-tree rendering", async () => {
     const captured = await captureChrome({
       path: "/agents/skills",
       addons: [
@@ -625,7 +625,7 @@ describe("createApp route menu refs", () => {
       const tree = MenuTree.from(captured.props().menus);
 
       expect(tree.roots.map((item) => item.id)).toEqual(["agents"]);
-      expect(tree.appSectionItems("/agents/skills").map((item) => item.id)).toEqual([
+      expect(tree.activeAppRoot("/agents/skills")?.targetedChildren.map((item) => item.id)).toEqual([
         "agents.group",
         "agents.skills.group",
       ]);
@@ -746,7 +746,7 @@ describe("createApp route menu refs", () => {
     try {
       const tree = MenuTree.from(captured.props().menus);
 
-      expect(tree.appSectionItems("/agents").map((item) => item.id)).toEqual([
+      expect(tree.activeAppRoot("/agents")?.targetedChildren.map((item) => item.id)).toEqual([
         "agents.menu.agents",
         "agents.menu.skills",
         "agents.menu.mcp",

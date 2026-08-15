@@ -1,12 +1,15 @@
 export { AppBrand, type AppBrandProps } from "./AppBrand";
 export {
   AppChooser,
-  appChooserItemsFromMenuItems,
   type AppChooserItem,
   type AppChooserProps,
 } from "./AppChooser";
-export { AppRail, type AppRailProps } from "./AppRail";
-export { ConsoleSubNav, useConsoleSubNav } from "./ConsoleSubNav";
+export {
+  APP_RAIL_COLLAPSED_WIDTH,
+  APP_RAIL_EXPANDED_WIDTH,
+  AppRail,
+  type AppRailProps,
+} from "./AppRail";
 export {
   Breadcrumb,
   BreadcrumbLabelProvider,
@@ -15,6 +18,11 @@ export {
   type BreadcrumbProps,
 } from "./Breadcrumb";
 export { CommandPalette, type CommandPaletteProps } from "./CommandPalette";
+export {
+  AppRailTree,
+  appRailTreeVariants,
+  type AppRailTreeProps,
+} from "./AppRailTree";
 export { DrawerRail } from "./DrawerRail";
 export { Glyph, type GlyphProps } from "./Glyph";
 export {
@@ -33,6 +41,7 @@ export {
   type ChromeMenuStatus,
   type ChromeMenuTone,
   MenuTree,
+  SETTINGS_MENU_ENTRY_DESCRIPTOR,
 } from "./menu-tree";
 export {
   Spotlight,
@@ -43,9 +52,8 @@ export {
 export { Systray, type SystrayProps } from "./Systray";
 export { TopBar, type TopBarProps } from "./TopBar";
 export {
-  TopMenu,
-  type TopMenuItem,
-  type TopMenuProps,
+  TopMenuTabs,
+  type TopMenuTabsProps,
   type TopMenuTab,
-} from "./TopMenu";
+} from "./TopMenuTabs";
 export { UserMenu, type UserMenuProps } from "./UserMenu";

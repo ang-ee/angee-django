@@ -17,6 +17,7 @@ import { setThemePreference, storedThemePreference } from "@angee/ui/lib/theme";
 import { baseIcons } from "@angee/ui/chrome/icon-registry";
 import { ConsoleLayout } from "@angee/ui/layouts/ConsoleLayout";
 import { ControlBand } from "@angee/ui/layouts/ControlBand";
+import { PrimaryPanePublisher } from "@angee/ui/layouts/primary-pane-context";
 import { Statusline, StatusSegment } from "@angee/ui/layouts/Statusline";
 import { useChatterContent } from "@angee/ui/communication/index";
 import { AppRuntimeProvider, type AppRuntime } from "@angee/ui/runtime";
@@ -92,7 +93,6 @@ vi.mock("@refinedev/core", async (importOriginal) => {
             label: "Admin",
             icon: "settings",
             group: "platform",
-            sidebar: true,
           },
           label: "Admin",
           icon: "settings",
@@ -124,6 +124,8 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   };
 });
 
+let largeViewport = true;
+
 function runtimeForConsoleTest(): Partial<AppRuntime> {
   return {
     icons: baseIcons,
@@ -140,6 +142,16 @@ function runtimeForConsoleTest(): Partial<AppRuntime> {
       logout: vi.fn(async () => true),
       fetching: false,
       error: null,
+    },
+    userPreferences: {
+      preferences: {
+        "chrome.rail": {
+          order: [],
+          defaultItemId: null,
+          expanded: true,
+        },
+      },
+      setPreferences: async () => undefined,
     },
   };
 }
@@ -196,9 +208,20 @@ function renderInRouter(children: ReactNode, initialPath = "/notes") {
 describe("ConsoleLayout", () => {
   beforeAll(() => {
     Element.prototype.getAnimations ??= () => [];
+    window.matchMedia = vi.fn((query: string): MediaQueryList => ({
+      matches: query === "(min-width: 64rem)" && largeViewport,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(() => false),
+    }));
   });
   afterEach(() => {
     cleanup();
+    largeViewport = true;
     setThemePreference("system");
     document.documentElement.removeAttribute("data-theme");
   });
@@ -211,30 +234,60 @@ describe("ConsoleLayout", () => {
     );
     await screen.findByText("Body content");
 
-    // The rail is the app switcher: one icon per app (Notes is active here, Ops
-    // is the sibling).
+    // At lg the rail defaults to its in-place tree, with no sibling nav pane.
     const rail = screen.getByRole("navigation", { name: "Primary navigation" });
     const notesLink = within(rail).getByRole("link", { name: "Notes" });
     expect(notesLink.getAttribute("href")).toBe("/notes");
-    expect(notesLink.getAttribute("aria-current")).toBe("page");
+    expect(notesLink.getAttribute("data-active")).toBe("true");
     expect(within(rail).getByRole("link", { name: "Ops" })).toBeTruthy();
-    // The platform app clusters in the rail's bottom zone, still a rail link.
-    expect(within(rail).getByRole("link", { name: "Admin" })).toBeTruthy();
+    const notesDisclosure = within(rail).getByRole("button", {
+      name: "Collapse Notes",
+    });
+    expect(notesDisclosure.getAttribute("aria-expanded")).toBe("true");
+    expect(document.getElementById(notesDisclosure.getAttribute("aria-controls")!))
+      .toBeTruthy();
+    expect(within(rail).getByRole("link", { name: "All notes" })).toBeTruthy();
 
-    // The top bar navigates within the active app: it lists Notes' sections and
-    // never the sibling app's entry.
+    // The rail is one scrolling list: domains, separator, then Settings.
+    const settingsLink = within(rail).getByRole("link", { name: "Settings" });
+    expect(settingsLink.closest('[data-rail-list="true"]')).toBe(rail);
+    expect(rail.className).toContain("overflow-y-auto");
+    expect(rail.querySelector(".overflow-y-auto")).toBeNull();
+    expect(rail.querySelector("[data-rail-zone]")).toBeNull();
+    expect(
+      notesLink.compareDocumentPosition(settingsLink)
+        & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    expect(within(rail).queryByRole("link", { name: "Admin" })).toBeNull();
+
+    // The top bar owns global actions and breadcrumbs. Section navigation stays
+    // in the rail rather than being duplicated here.
     const topBar = screen.getByRole("banner", { name: "Workspace top bar" });
-    expect(within(topBar).getByText("All notes")).toBeTruthy();
-    expect(within(topBar).getByText("Archived")).toBeTruthy();
+    expect(within(topBar).queryByText("All notes")).toBeNull();
+    expect(within(topBar).queryByText("Archived")).toBeNull();
     expect(within(topBar).queryByText("Ops")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Open command palette" }),
     ).toBeTruthy();
-    expect(
-      within(topBar).getByRole("button", { name: "Switch to dark mode" }),
-    ).toBeTruthy();
+    expect(within(topBar).getByRole("button", { name: "User menu" })).toBeTruthy();
+    expect(within(topBar).queryByRole("button", { name: "Notifications" }))
+      .toBeNull();
+    expect(within(topBar).queryByRole("button", { name: "Help" })).toBeNull();
+    // The expansion toggle is pinned at the rail's foot — outside the top bar
+    // and outside the scrolling list, so it can never scroll away.
+    const railToggle = await screen.findByRole("button", {
+      name: "Collapse app navigation",
+    });
+    expect(railToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(topBar.contains(railToggle)).toBe(false);
+    expect(rail.contains(railToggle)).toBe(false);
+    expect(railToggle.closest("aside")).toBe(rail.closest("aside"));
+    expect(within(topBar).queryByRole("button", {
+      name: "Collapse primary panel",
+    })).toBeNull();
 
     const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(topBar.contains(breadcrumb)).toBe(true);
     expect(within(breadcrumb).getByText("Notes").getAttribute("aria-current"))
       .toBe("page");
 
@@ -242,9 +295,21 @@ describe("ConsoleLayout", () => {
     expect(screen.getByRole("tab", { name: "Agents" })).toBeTruthy();
     expect(screen.getByText("No agent yet")).toBeTruthy();
     expect(screen.getByText("Set up your assistant")).toBeTruthy();
+
+    fireEvent.click(railToggle);
+    expect(await screen.findByRole("button", {
+      name: "Expand app navigation",
+    })).toBeTruthy();
+    expect(within(rail).queryByRole("link", { name: "All notes" })).toBeNull();
+    expect(within(rail).getByRole("link", { name: "Settings" })).toBeTruthy();
+
+    // A second click on the already-active app icon re-expands the rail.
+    fireEvent.click(within(rail).getByRole("link", { name: "Notes" }));
+    expect(await within(rail).findByRole("link", { name: "All notes" }))
+      .toBeTruthy();
   });
 
-  test("renders a sidebar app's sections in both the sub-nav and the top bar", async () => {
+  test("swaps the expanded rail tree to the Settings place", async () => {
     renderInRouter(
       <ConsoleLayout>
         <section aria-label="Page body">Admin body</section>
@@ -253,16 +318,73 @@ describe("ConsoleLayout", () => {
     );
     await screen.findByText("Admin body");
 
-    // An app opting into the sidebar (`sidebar: true`) shows its sections in the
-    // settings-style left sub-nav.
-    const subNav = screen.getByRole("navigation", { name: "Section navigation" });
-    expect(within(subNav).getByRole("link", { name: "Overview" })).toBeTruthy();
-    expect(within(subNav).getByRole("link", { name: "Settings" })).toBeTruthy();
+    const rail = screen.getByRole("navigation", { name: "Primary navigation" });
+    expect(within(rail).getByRole("heading", { name: "Settings" })).toBeTruthy();
+    expect(within(rail).getByRole("link", { name: "Back" }).getAttribute("href"))
+      .toBe("/");
+    expect(within(rail).getByRole("button", { name: "Collapse Admin" })
+      .getAttribute("aria-expanded")).toBe("true");
+    expect(within(rail).getByRole("link", { name: "Overview" })).toBeTruthy();
+    expect(within(rail).getAllByRole("link", { name: "Settings" })).toHaveLength(2);
 
-    // …and the top bar keeps them too — the sidebar is additive, not a swap.
+    fireEvent.click(screen.getByRole("button", { name: "Switch app" }));
+    const chooser = await screen.findByRole("dialog", { name: "Switch app" });
+    expect(within(chooser).getByRole("link", { name: "Settings" })
+      .getAttribute("aria-current")).toBe("page");
+    fireEvent.click(within(chooser).getByRole("button", {
+      name: "Close app chooser",
+    }));
+
+    expect(screen.queryByRole("navigation", { name: "Section navigation" }))
+      .toBeNull();
     const topBar = screen.getByRole("banner", { name: "Workspace top bar" });
-    expect(within(topBar).getByText("Overview")).toBeTruthy();
-    expect(within(topBar).getByText("Settings")).toBeTruthy();
+    expect(within(topBar).queryByText("Overview")).toBeNull();
+    expect(within(topBar).queryByText("Settings")).toBeNull();
+    const settingsRailToggle = await screen.findByRole("button", {
+      name: "Collapse app navigation",
+    });
+    expect(topBar.contains(settingsRailToggle)).toBe(false);
+    expect(settingsRailToggle.closest("aside")).toBe(rail.closest("aside"));
+    expect(within(topBar).queryByRole("button", {
+      name: "Collapse primary panel",
+    })).toBeNull();
+  });
+
+  test("renders a page-published explorer as the only primary pane", async () => {
+    renderInRouter(
+      <ConsoleLayout>
+        <TestPrimaryPanePublisher />
+        <section aria-label="Page body">Body with explorer</section>
+      </ConsoleLayout>,
+    );
+    await screen.findByText("Body with explorer");
+
+    expect(screen.getByRole("navigation", { name: "Context explorer" }))
+      .toBeTruthy();
+    expect(within(screen.getByRole("navigation", { name: "Primary navigation" }))
+      .getByRole("link", { name: "All notes" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Collapse primary panel" }))
+      .toBeTruthy();
+  });
+
+  test("keeps an explicit expanded preference collapsed below lg", async () => {
+    largeViewport = false;
+    renderInRouter(
+      <ConsoleLayout>
+        <section aria-label="Page body">Compact body</section>
+      </ConsoleLayout>,
+    );
+    await screen.findByText("Compact body");
+
+    const rail = screen.getByRole("navigation", { name: "Primary navigation" });
+    expect(within(rail).queryByRole("link", { name: "All notes" })).toBeNull();
+    const topBar = screen.getByRole("banner", { name: "Workspace top bar" });
+    expect(within(topBar).queryByRole("button", {
+      name: "Collapse app navigation",
+    })).toBeNull();
+    expect(within(topBar).queryByRole("button", {
+      name: "Expand app navigation",
+    })).toBeNull();
   });
 
   test("portals a ControlBand into the area-control row", async () => {
@@ -300,7 +422,7 @@ describe("ConsoleLayout", () => {
     expect(statusHost?.textContent).toContain("Ready");
   });
 
-  test("toggles the document theme from the top bar", async () => {
+  test("toggles the document theme from the user menu", async () => {
     renderInRouter(
       <ConsoleLayout>
         <section aria-label="Page body">Body content</section>
@@ -308,13 +430,16 @@ describe("ConsoleLayout", () => {
     );
     await screen.findByText("Body content");
 
-    fireEvent.click(screen.getByRole("button", { name: "Switch to dark mode" }));
+    fireEvent.click(screen.getByRole("button", { name: "User menu" }));
+    fireEvent.click(await screen.findByRole("menuitem", {
+      name: "Switch to dark mode",
+    }));
 
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(storedThemePreference()).toBe("dark");
-    expect(
-      screen.getByRole("button", { name: "Switch to light mode" }),
-    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "User menu" }));
+    expect(await screen.findByRole("menuitem", { name: "Switch to light mode" }))
+      .toBeTruthy();
   });
 
   test("leaves the area-control row empty when no ControlBand is mounted", async () => {
@@ -372,4 +497,12 @@ function ChatterPublisher(): null {
   const content = useMemo(() => ({ tabs }), [tabs]);
   useChatterContent(content);
   return null;
+}
+
+function TestPrimaryPanePublisher() {
+  const node = useMemo(
+    () => <nav aria-label="Context explorer">Explorer</nav>,
+    [],
+  );
+  return <PrimaryPanePublisher node={node} />;
 }
