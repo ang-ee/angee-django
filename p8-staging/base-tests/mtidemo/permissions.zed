@@ -1,0 +1,27 @@
+// Authorization schema for the REBAC-gated MTI grant demo (test-only).
+// @rebac_package: mtidemo
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+// A multi-table-inheritance pair (child IS-A parent, shared pk) where each row is
+// reachable by an explicit `reader` grant, with platform admins reaching every row
+// through the const-backed `angee/role:admin` membership. The grant-materialization
+// tests grant `reader` on a child row and assert the read passes through both the
+// child type and the parent type it IS-A.
+definition mtidemo/parent {
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission read   = reader + admin->member
+    permission write  = admin->member
+    permission delete = admin->member
+}
+
+definition mtidemo/child {
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission read   = reader + admin->member
+    permission write  = admin->member
+    permission delete = admin->member
+}

@@ -3,7 +3,7 @@
     // Base-addon fragments typecheck against the example host's generated
     // documents. The addon subtree owns this one fixture path.
     "paths": {
-      "@angee/gql/*": ["../../examples/notes-angee/runtime/gql/*"]
+      "@angee/gql/*": ["../../../angee-django/examples/notes-angee/runtime/gql/*"]
     },
     "target": "ES2022",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],

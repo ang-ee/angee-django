@@ -1,0 +1,208 @@
+"""Addon discovery — the *available* set, sourced from installed bundles.
+
+`available_addons()` is the installed-vs-enabled "available" tier (Django's
+pip-installed packages vs `INSTALLED_APPS`): every addon a bundle advertises via
+its `angee.addons` entry point, independent of which are enabled. The base addons
+ship those entry points (generated from their `addon.toml` by the build hook), so a
+fresh install of `django-angee` enumerates them with no `INSTALLED_APPS` list.
+"""
+
+from __future__ import annotations
+
+import pytest
+from django.core.exceptions import ImproperlyConfigured
+
+from angee.addons import (
+    AddonContract,
+    AddonMigration,
+    AvailableAddon,
+    _read_addon_contract,
+    available_addons,
+)
+
+
+def test_addon_contract_parses_ordered_runtime_migrations(tmp_path) -> None:
+    marker = tmp_path / "addon.toml"
+    marker.write_text(
+        """\
+[addon]
+name = "example.demo"
+
+[[migrations]]
+name = "rename_owner"
+app_label = "demo"
+module = "runtime_migrations.rename_owner"
+
+[[migrations]]
+name = "backfill_owner"
+app_label = "demo"
+module = "example.demo.runtime_migrations.backfill_owner"
+""",
+        encoding="utf-8",
+    )
+
+    contract = _read_addon_contract(str(marker))
+
+    assert contract is not None
+    assert contract.migrations == (
+        AddonMigration("rename_owner", "demo", "runtime_migrations.rename_owner"),
+        AddonMigration(
+            "backfill_owner",
+            "demo",
+            "example.demo.runtime_migrations.backfill_owner",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "body, message",
+    [
+        ("[migrations]\nname = 'bad'\n", "migrations must be an array of tables"),
+        ("[[migrations]]\nname = 'bad'\n", "requires string app_label"),
+        (
+            "[[migrations]]\nname = 3\napp_label = 'demo'\nmodule = 'm.x'\n",
+            "requires string name",
+        ),
+    ],
+)
+def test_addon_contract_rejects_invalid_runtime_migration_entries(
+    tmp_path, body: str, message: str
+) -> None:
+    marker = tmp_path / "addon.toml"
+    marker.write_text(f'[addon]\nname = "example.demo"\n\n{body}', encoding="utf-8")
+
+    with pytest.raises(ImproperlyConfigured, match=message):
+        _read_addon_contract(str(marker))
+
+
+def test_available_addons_enumerates_core_and_folder_addons(settings) -> None:
+    """Core entry points and configured base-addon folders form the available set."""
+
+    available = available_addons(settings.ANGEE_ADDON_DIRS)
+    for name in ("angee.base", "angee.graphql"):
+        assert name in available, f"{name!r} not advertised via angee.addons entry points"
+        assert available[name].source == "installed"
+    for name in ("angee.iam", "angee.storage"):
+        assert name in available, f"{name!r} not discovered from ANGEE_ADDON_DIRS"
+        assert available[name].source == "local"
+    assert isinstance(available["angee.iam"], AvailableAddon)
+
+
+def test_available_addons_includes_local_addon_dirs(tmp_path) -> None:
+    """An `addon.toml` under a configured addon dir is discovered as a local addon."""
+
+    addon = tmp_path / "example" / "demo"
+    addon.mkdir(parents=True)
+    (addon / "addon.toml").write_text('[addon]\nname = "example.demo"\n')
+
+    available = available_addons([tmp_path])
+
+    assert available["example.demo"].source == "local"
+    assert available["example.demo"].anchor == str(addon)
+
+
+def test_available_addons_reads_local_manifest_through_contract_owner(tmp_path, monkeypatch) -> None:
+    """Local catalog discovery reuses the cached manifest reader."""
+
+    addon = tmp_path / "example" / "contract"
+    addon.mkdir(parents=True)
+    marker = addon / "addon.toml"
+    marker.write_text("not valid toml", encoding="utf-8")
+    seen: list[str] = []
+
+    def fake_read_addon_contract(path: str) -> AddonContract:
+        seen.append(path)
+        return AddonContract(name="example.contract")
+
+    monkeypatch.setattr("angee.addons._read_addon_contract", fake_read_addon_contract)
+
+    available = available_addons([tmp_path])
+
+    assert seen == [str(marker)]
+    assert available["example.contract"].source == "local"
+    assert available["example.contract"].anchor == str(addon)
+
+
+def test_registry_facts_full_row_for_enabled_and_zeroed_for_available(db) -> None:
+    """The reconcile's fact-gathering: a complete reflected row for every addon —
+    full counts when enabled, a complete *zeroed* row when available-but-not-enabled
+    (so a state flip never leaves stale counts), with reverse-deps as a list."""
+
+    from angee.platform.models import Addon, AddonManager
+
+    facts = AddonManager._registry_facts()
+    row_keys = {
+        "label", "namespace", "description", "keywords", "category",
+        "kind", "source", "state", "forced", "pending",
+        "model_count", "field_count", "resource_count",
+        "depends_on", "depended_by", "model_labels",
+    }
+
+    enabled = facts["angee.iam"]  # in the test INSTALLED_APPS
+    assert enabled["state"] == Addon.State.ENABLED
+    assert set(enabled) == row_keys  # complete row, no partial dict
+    assert enabled["pending"] is False  # a composed addon is never pending
+    assert enabled["category"] == "Foundation"  # mirrored from the addon.toml manifest
+
+    # an installed bundle that is *not* enabled in the test settings
+    available = facts["angee.knowledge_graph_pgvector"]
+    assert set(available) == row_keys  # complete row even when available-only
+    assert available["state"] == Addon.State.DISABLED
+    assert available["forced"] is False
+    assert available["pending"] is False  # not in the (empty) desired set
+    assert available["category"] == ""  # metadata stays blank until composed
+    assert available["model_count"] == 0
+    assert available["field_count"] == 0
+    assert available["depends_on"] == []
+    assert available["model_labels"] == []
+    assert available["depended_by"] == []
+
+
+def test_registry_facts_pending_reflects_desired_settings_roots(db) -> None:
+    """``pending`` flags an available-but-not-composed addon named in the desired roots.
+
+    ``desired`` is the install owner's ``settings.yaml`` ``INSTALLED_APPS`` view; an
+    available addon listed there but not yet composed is the board's "to install".
+    """
+
+    from angee.platform.models import AddonManager
+
+    facts = AddonManager._registry_facts(desired=frozenset({"angee.knowledge_graph_pgvector"}))
+
+    assert facts["angee.knowledge_graph_pgvector"]["pending"] is True
+    # An addon composed in the test app graph stays non-pending even if named desired.
+    assert facts["angee.iam"]["pending"] is False
+
+
+def test_registry_facts_flags_a_queued_uninstall_for_a_composed_root(db, monkeypatch) -> None:
+    """A composed *root* dropped from the desired roots is ``pending`` (a queued uninstall).
+
+    The symmetric "to install" diff: a composed consumer root no longer named in
+    ``settings.yaml`` leaves on the next boot, so the board shows it pending. A composed
+    *dependency* (``required``) is never in the roots yet is not being uninstalled, so it
+    is never flagged.
+    """
+
+    from dataclasses import replace
+
+    from angee.platform import composed
+    from angee.platform import models as platform_models
+    from angee.platform.models import AddonManager
+
+    root = composed.AddonRollup(
+        name="example.demo", label="demo", namespace="example", kind="consumer",
+        forced=False, model_count=0, field_count=0, resource_count=0,
+        depends_on=[], model_labels=[], description="", keywords=[], category="Example",
+    )
+    monkeypatch.setattr(platform_models, "available_addons", lambda dirs=(): {})
+    monkeypatch.setattr(platform_models.composed, "addon_rollups", lambda: [root])
+
+    # Composed but dropped from the desired roots → queued uninstall.
+    assert AddonManager._registry_facts(desired=frozenset())["example.demo"]["pending"] is True
+    # Still a desired root → not pending.
+    assert AddonManager._registry_facts(desired=frozenset({"example.demo"}))["example.demo"]["pending"] is False
+
+    # A composed dependency (required) is never flagged, even absent from the roots.
+    dependency = replace(root, name="example.dep", kind="required")
+    monkeypatch.setattr(platform_models.composed, "addon_rollups", lambda: [dependency])
+    assert AddonManager._registry_facts(desired=frozenset())["example.dep"]["pending"] is False
