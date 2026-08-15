@@ -180,7 +180,7 @@ cache_dir = ".pytest_cache"
 DJANGO_SETTINGS_MODULE = "tests.settings"
 python_files = ["test_*.py"]
 testpaths = ["tests"]
-pythonpath = [".", "examples/notes-angee/addons"]
+pythonpath = [".", "../angee-examples/addons"]
 addopts = "-ra --strict-markers --import-mode=importlib"
 
 [tool.ruff]
@@ -188,7 +188,7 @@ line-length = 120
 target-version = "py314"
 cache-dir = ".ruff_cache"
 # First-party roots for the framework and the example consumer addon.
-src = [".", "examples/notes-angee/addons"]
+src = [".", "../angee-examples/addons"]
 exclude = [
   ".angee",
   ".git",
@@ -217,7 +217,7 @@ mypy_path = ["."]
 warn_unused_ignores = true
 
 [tool.vulture]
-paths = ["angee", "examples/notes-angee/addons", "tests"]
+paths = ["angee", "../angee-examples/addons", "tests"]
 exclude = [
   "*/runtime/*",
 ]

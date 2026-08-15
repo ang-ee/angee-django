@@ -45,7 +45,7 @@ INSTALLED_APPS:
   - example.notes
 
 ANGEE_ADDON_DIRS:
-  - "{BASE_DIR}/addons"
+  - "{BASE_DIR}/../../../angee-examples/addons"
   - "{BASE_DIR}/../../../angee-base/addons"
   - "{BASE_DIR}/../../../angee-messaging-bridges/addons"
 ANGEE_RUNTIME_DIR: "{BASE_DIR}/runtime"

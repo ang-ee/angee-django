@@ -1011,6 +1011,40 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(@types/node@26.0.1)(happy-dom@20.10.6)(vite@8.1.5(@types/node@26.0.1)(jiti@2.7.0)(yaml@2.9.0))
 
+  ../angee-examples/addons/example/notes/web:
+    dependencies:
+      '@angee/agents':
+        specifier: workspace:*
+        version: link:../../../../../angee-base/addons/angee/agents/web
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../../angee-react/app
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../../angee-react/ui
+      date-fns:
+        specifier: ^4.1.0
+        version: 4.4.0
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.21.0(react@19.2.7)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.16
+        version: 1.170.16(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   ../angee-messaging-bridges/addons/angee/messaging_integrate_discord/web:
     dependencies:
       '@angee/app':
@@ -1551,40 +1585,6 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(@types/node@26.0.1)(happy-dom@20.10.6)(vite@8.1.5(@types/node@26.0.1)(jiti@2.7.0)(yaml@2.9.0))
 
-  examples/notes-angee/addons/example/notes/web:
-    dependencies:
-      '@angee/agents':
-        specifier: workspace:*
-        version: link:../../../../../../../angee-base/addons/angee/agents/web
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../../../../angee-react/app
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../../../../angee-react/ui
-      date-fns:
-        specifier: ^4.1.0
-        version: 4.4.0
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.21.0(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.16(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-
   examples/notes-angee/e2e:
     dependencies:
       '@angee/e2e':
@@ -1605,7 +1605,7 @@ importers:
     dependencies:
       '@angee-example/notes-web':
         specifier: workspace:*
-        version: link:../addons/example/notes/web
+        version: link:../../../../angee-examples/addons/example/notes/web
       '@angee/agents':
         specifier: workspace:*
         version: link:../../../../angee-base/addons/angee/agents/web

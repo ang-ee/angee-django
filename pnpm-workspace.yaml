@@ -12,7 +12,7 @@ packages:
   - "../angee-messaging-bridges/addons/angee/*/web"
   - "examples/*/e2e"
   - "examples/*/web"
-  - "examples/*/addons/*/*/web"
+  - "../angee-examples/addons/*/*/web"
 allowBuilds:
   esbuild: true
   "@tailwindcss/oxide": true
