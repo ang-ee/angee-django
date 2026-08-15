@@ -76,10 +76,12 @@ _angee:
     # Inherit the declared Source kind: Git sources clone, while local sources
     # materialize as symlinks. A fixed `kind: local` here breaks Git stacks.
     # The source name comes from the work_state_source input; when it is empty
-    # the operator skips the slot (private work-state is strictly opt-in).
+    # the slot resolves to its own (undeclared) name and `optional` skips it —
+    # private work-state is strictly opt-in.
     work-state:
       source: "${inputs.work_state_source}"
       subpath: .work
+      optional: true
 
 branch_prefix:
   type: str

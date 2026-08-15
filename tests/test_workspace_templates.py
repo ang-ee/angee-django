@@ -64,7 +64,7 @@ def test_src_workspace_work_state_is_opt_in_via_source_name_input() -> None:
     assert work_state_input["default"] == ""
 
     work_state = manifest["_angee"]["sources"]["work-state"]
-    assert work_state == {"source": "${inputs.work_state_source}", "subpath": ".work"}
+    assert work_state == {"source": "${inputs.work_state_source}", "subpath": ".work", "optional": True}
 
     copier_question = manifest["work_state_source"]
     assert copier_question["type"] == "str"
