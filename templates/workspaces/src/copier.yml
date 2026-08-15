@@ -55,12 +55,16 @@ _angee:
       ref: "${inputs.base_ref}"
       branch: "${inputs.branch_prefix}/${name | slug}"
       subpath: angee-messaging-bridges
+      # Opt-in repo: a base-profile stack declares no source for it; skip.
+      optional: true
     angee-examples:
       source: angee-examples
       mode: worktree
       ref: "${inputs.base_ref}"
       branch: "${inputs.branch_prefix}/${name | slug}"
       subpath: angee-examples
+      # Opt-in repo: a base-profile stack declares no source for it; skip.
+      optional: true
     angee-templates:
       source: angee-templates
       mode: worktree

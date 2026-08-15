@@ -31,6 +31,10 @@ def test_src_workspace_materializes_every_framework_repo_as_a_worktree_slot() ->
         assert record["branch"] == "${inputs.branch_prefix}/${name | slug}"
         assert record["subpath"] == slot
 
+    # The opt-in repos skip when a base-profile stack declares no source.
+    for slot in ("angee-messaging-bridges", "angee-examples"):
+        assert sources[slot]["optional"] is True
+
     # angee-django can pin a ratified branch; every other slot follows base_ref.
     assert sources["angee-django"]["ref"] == "${inputs.angee_django_ref}"
     for slot in SRC_SLOTS - {"angee-django"}:
