@@ -1,7 +1,8 @@
-import { defineBaseAddon } from "@angee/app";
+import { AUTH_LOGIN_PASSWORD_HELP_SLOT, defineBaseAddon } from "@angee/app";
 import { FORM_VIEW_RECORD_CHROME_SLOT } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 
+import { DemoForgotPasswordHint } from "./demo-auth";
 import { RecordChrome } from "./RecordChrome";
 
 /** The notes addon: one console surface and a menu entry pointing at it. The
@@ -30,6 +31,13 @@ const notes = defineBaseAddon({
       slot: FORM_VIEW_RECORD_CHROME_SLOT,
       id: "notes.record-chrome",
       content: <RecordChrome />,
+    },
+    // Example-only login help: the seeded demo credentials surface on the host's
+    // login page through the auth slot, so no host main.tsx wiring is needed.
+    {
+      slot: AUTH_LOGIN_PASSWORD_HELP_SLOT,
+      id: "notes.demo-logins",
+      content: <DemoForgotPasswordHint />,
     },
   ],
 });

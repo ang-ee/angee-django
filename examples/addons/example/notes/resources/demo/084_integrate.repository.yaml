@@ -3,5 +3,5 @@
 - xref: repo_local_templates
   vcs_bridge: notes.vcs_local_templates
   org: local
-  name: angee-django
+  name: angee-templates
   remote: "file:///"
