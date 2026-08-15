@@ -24,7 +24,9 @@ dependencies = [
   "django-simple-history>=3.7",
   "django-sqids>=0.1",
   "django-zed-rebac[strawberry-django]>=0.14",
-  "django>=6.0",
+  # <6.1: Django 6.1 adds fetch_mode to Model.from_db and django-zed-rebac's
+  # override does not accept it yet; lift the cap when rebac supports 6.1.
+  "django>=6.0,<6.1",
   "pydantic>=2.13",
   "pydantic-ai-slim[anthropic,mcp,openai]>=2.13",
   "croniter>=6.0",

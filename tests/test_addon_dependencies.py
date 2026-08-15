@@ -21,7 +21,7 @@ ADDON_ROOTS = tuple(
     for root in (PROJECT_ROOT / "angee", *SIBLING_ADDON_ROOTS)
     if root.is_dir()
 )
-CORE_DEPENDENCIES = {"django>=6.0", "pydantic>=2.13"}
+CORE_DEPENDENCIES = {"django>=6.0,<6.1", "pydantic>=2.13"}
 MATRIX_MANIFEST = (
     SOURCE_ROOT
     / "angee-messaging-bridges"

@@ -882,7 +882,7 @@ requires-dist = [
     { name = "cryptg", specifier = ">=0.6.0" },
     { name = "cryptography", specifier = ">=44" },
     { name = "discord-py", specifier = ">=2.7" },
-    { name = "django", specifier = ">=6.0" },
+    { name = "django", specifier = ">=6.0,<6.1" },
     { name = "django-axes", specifier = ">=8.0" },
     { name = "django-choices-field", specifier = ">=4.0.0" },
     { name = "django-environ", specifier = ">=0.12" },
