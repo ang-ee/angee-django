@@ -164,7 +164,6 @@ artifacts = [
 # Python package, so this also drops the dependency tree the broad artifacts above
 # would otherwise force-include from web/*/node_modules.
 exclude = [
-  "angee/web/**",
   "addons/angee/*/web/**",
   "**/node_modules",
 ]
@@ -172,10 +171,9 @@ exclude = [
 # Build machinery is hatch-angee, via its build backend (no per-repo hook code or
 # tables). The metadata hook generates the `angee.addons` entry points from each
 # addon.toml; the addon-sources hook ships every addon's web/ (remapping the
-# addons/angee/* roots onto the angee namespace). extra-web names the framework's
-# non-addon core web libraries (shared React packages with no addon.toml).
-[tool.hatch-angee]
-extra-web = ["angee/web/*"]
+# addons/angee/* roots onto the angee namespace). The framework's shared React
+# packages live in the angee-react repo and are consumed through the stack's
+# pnpm workspace, not this wheel.
 
 [tool.hatch.build.targets.sdist]
 only-include = [

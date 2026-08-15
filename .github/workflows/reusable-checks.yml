@@ -35,8 +35,20 @@ jobs:
   pnpm:
     if: ${{ inputs.pnpm-enabled }}
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: repo
     steps:
+      # The caller's workspace links the framework React packages from the
+      # sibling angee-react checkout (the stack's sources/ layout), so CI
+      # reproduces that layout: the repo under ./repo, the sibling beside it.
       - uses: actions/checkout@v4
+        with:
+          path: repo
+      - uses: actions/checkout@v4
+        with:
+          repository: ang-ee/angee-react
+          path: angee-react
       - uses: pnpm/action-setup@v4
         with:
           version: 11.1.3
@@ -44,6 +56,7 @@ jobs:
         with:
           node-version: "22.13"
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+          cache-dependency-path: repo/pnpm-lock.yaml
+      - run: pnpm install --no-frozen-lockfile
       - run: pnpm -r typecheck
       - run: pnpm -r test

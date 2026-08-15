@@ -1,7 +1,7 @@
 {
   "extends": "../../../tsconfig.base.json",
   "compilerOptions": {
-    "types": ["vite/client"],
+    "types": ["vite/client", "node"],
     // This project owns its `runtime/gql/<schema>/` tree (its web package
     // generates it), so it supplies its OWN project-relative `@angee/gql/*`
     // resolution. The root base owns compiler policy only; a downstream Angee

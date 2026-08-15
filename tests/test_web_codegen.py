@@ -10,7 +10,20 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-CODEGEN = ROOT / "angee" / "web" / "app" / "bin" / "angee-web-codegen.mjs"
+# The CLI ships in @angee/app (the sibling angee-react checkout); resolve it the
+# way every consumer does — by package name through the example host's workspace
+# link — so the test needs `pnpm install`, not a source-tree path.
+CODEGEN = (
+    ROOT
+    / "examples"
+    / "notes-angee"
+    / "web"
+    / "node_modules"
+    / "@angee"
+    / "app"
+    / "bin"
+    / "angee-web-codegen.mjs"
+)
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is required for frontend codegen")

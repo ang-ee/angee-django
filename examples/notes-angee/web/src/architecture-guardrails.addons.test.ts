@@ -99,7 +99,6 @@ describe.skipIf(!HAS_ADDON_SCOPE)("addon architecture guardrails", () => {
 
   test("critical shared owners are consumed outside their defining package", () => {
     const contents = [
-      ...sourceFiles("angee/web"),
       ...sourceFiles("addons/angee"),
       ...sourceFiles("examples/notes-angee/web"),
       ...sourceFiles("packages/storybook"),
@@ -124,7 +123,6 @@ describe.skipIf(!HAS_ADDON_SCOPE)("addon architecture guardrails", () => {
 
   test("row identity helpers are imported from the metadata owner", () => {
     const violations = [
-      ...sourceFiles("angee/web"),
       ...sourceFiles("addons/angee"),
       ...sourceFiles("examples/notes-angee/web"),
       ...sourceFiles("packages/storybook"),
@@ -140,7 +138,6 @@ describe.skipIf(!HAS_ADDON_SCOPE)("addon architecture guardrails", () => {
 
   test("authored GraphQL hooks are imported from the refine owner", () => {
     const violations = [
-      ...sourceFiles("angee/web"),
       ...sourceFiles("addons/angee"),
       ...sourceFiles("examples/notes-angee/web"),
       ...sourceFiles("packages/storybook"),

@@ -1,7 +1,0 @@
-{
-  "extends": "../../angee/web/tsconfig.base.json",
-  "compilerOptions": {
-    "types": ["node"]
-  },
-  "include": ["src"]
-}
