@@ -37,6 +37,18 @@ def test_src_workspace_materializes_every_framework_repo_as_a_worktree_slot() ->
         assert sources[slot]["ref"] == "${inputs.base_ref}"
 
 
+def test_src_workspace_preserves_its_claude_symlink() -> None:
+    """The template ships CLAUDE.md -> AGENTS.md; without _preserve_symlinks
+    the renderer resolves it against a symlinked template root and dies with
+    "points outside template root" (the P7 ws-update bug)."""
+
+    manifest = yaml.safe_load(SRC_COPIER.read_text(encoding="utf-8"))
+    assert manifest["_preserve_symlinks"] is True
+    claude = SRC_COPIER.parent / "template" / "CLAUDE.md"
+    assert claude.is_symlink()
+    assert str(claude.readlink()) == "AGENTS.md"
+
+
 def test_src_workspace_work_state_is_opt_in_via_source_name_input() -> None:
     """A clean-machine stack has no private work-state source; the slot is opt-in.
 
