@@ -582,11 +582,14 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
     full = _render_project_settings(addons_profile="full", framework_workspace=True)
     for app in (
         "angee.nexus",
+        "angee.spaces",
+        "angee.tags",
         "angee.agents",
         "angee.knowledge",
         "angee.workflows",
         "angee.messaging_integrate_whatsapp",
         "angee.messaging_integrate_telegram",
+        "angee.messaging_integrate_matrix",
         "angee.messaging_integrate_discord",
         "example.notes",
     ):
