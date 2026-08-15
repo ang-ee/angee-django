@@ -42,6 +42,8 @@ INSTALLED_APPS:
 {% if addons_profile == "full" %}
   - angee.messaging_integrate_imap
   - angee.nexus
+  - angee.spaces
+  - angee.tags
   - angee.agents
   - angee.knowledge
   - angee.posts
@@ -82,10 +84,9 @@ INSTALLED_APPS:
   - angee.messaging_integrate_whatsapp
   - angee.messaging_integrate_telegram
   - angee.messaging_integrate_signal
-  # angee.messaging_integrate_matrix is not composed by default: the addon's
-  # mautrix[encryption]/python-olm dependencies live behind django-angee's
-  # optional `matrix` extra. To use it, add the addon here AND depend on
-  # `django-angee[matrix]` in pyproject.toml.
+  # The matrix bridge needs django-angee's optional `matrix` extra
+  # (mautrix[encryption]/python-olm) — the full-profile pyproject selects it.
+  - angee.messaging_integrate_matrix
   - angee.messaging_integrate_slack
   - angee.messaging_integrate_imessage
   - angee.messaging_integrate_meta

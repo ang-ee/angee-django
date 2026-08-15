@@ -7,7 +7,7 @@
 name = "{{ project_name }}"
 version = "0.0.0"
 requires-python = ">=3.14"
-dependencies = ["django-angee[postgres]"]
+dependencies = ["django-angee[postgres{% if addons_profile == "full" %},matrix{% endif %}]"]
 {% if framework_source_path %}
 
 [tool.uv.sources]
@@ -22,3 +22,12 @@ django-angee = { path = "{{ framework_source_path }}", editable = true }
 package = false
 # Stack-owned cache (matches the stack services' UV_CACHE_DIR); gitignored.
 cache-dir = "caches/uv"
+
+[tool.uv.extra-build-variables]
+# python-olm (mautrix[encryption], behind django-angee's `matrix` extra) vendors
+# the EOL libolm C++ source, which modern clang rejects; deferring template
+# semantic checks lets the sdist build unchanged. Inert unless the matrix extra
+# is selected. uv reads [tool.uv] from THIS project root, not the editable
+# framework dep, so the flag must live here. (Copied from the framework
+# pyproject; remove when mautrix moves off libolm.)
+python-olm = { CXXFLAGS = "-fdelayed-template-parsing" }
