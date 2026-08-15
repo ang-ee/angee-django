@@ -1,0 +1,20 @@
+{
+  // The Angee framework development workspace: every folder is a git worktree
+  // slot of a framework source repo. Open THIS file so editors and agents see
+  // all repos side by side. See AGENTS.md beside it for the rules.
+  "folders": [
+    { "name": "angee-django", "path": "angee-django" },
+    { "name": "angee-react", "path": "angee-react" },
+    { "name": "angee-base", "path": "angee-base" },
+    { "name": "angee-messaging-bridges", "path": "angee-messaging-bridges" },
+    { "name": "angee-examples", "path": "angee-examples" },
+    { "name": ".work", "path": ".work" }
+  ],
+  "settings": {
+    "files.watcherExclude": {
+      "**/node_modules/**": true,
+      "**/.venv/**": true,
+      "**/runtime/**": true
+    }
+  }
+}
