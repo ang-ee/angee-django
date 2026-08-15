@@ -1,3 +1,3 @@
-import { defineAngeePackageVitestConfig } from "../../../vitest.shared";
+import { defineAngeePackageVitestConfig } from "../vitest.shared";
 
 export default defineAngeePackageVitestConfig();

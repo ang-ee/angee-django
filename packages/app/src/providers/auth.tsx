@@ -139,10 +139,10 @@ const PUBLIC_USER_SELECTION =
   "id username firstName: first_name lastName: last_name email isStaff: is_staff isActive: is_active preferences";
 const CURRENT_USER_SELECTION = `${PUBLIC_USER_SELECTION} roleRefs: role_refs`;
 
-// Auth is an app-owned bootstrapping concern: it runs before a generated
-// project `@angee/gql/public` fixture is guaranteed to exist for framework
-// package tests. Keep these public operations runtime-narrowed until the wire
-// owner exposes generated public auth documents to framework packages.
+// Auth is an app-owned bootstrapping concern: it runs before a generated public
+// schema module is guaranteed to exist for framework package tests. Keep these
+// public operations runtime-narrowed until the wire owner exposes generated
+// public auth documents to framework packages.
 export const CURRENT_USER_DOCUMENT =
   `query angee_current_user { current_user { ${CURRENT_USER_SELECTION} } }`;
 

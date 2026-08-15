@@ -6,8 +6,8 @@ import react from "@vitejs/plugin-react";
 import { defineConfig, mergeConfig, type Plugin, type UserConfig } from "vite";
 
 // The framework owner of the web Vite defaults: the plugin pair, the dev-server
-// host/port/proxy wiring, the `@angee/gql/<schema>` alias, and the
-// project-derived `optimizeDeps` set. A project's `web/vite.config.ts` imports
+// host/port/proxy wiring, the generated-schema alias, and the project-derived
+// `optimizeDeps` set. A project's `web/vite.config.ts` imports
 // `@angee/app/vite`, calls `defineAngeeWebViteConfig`, and supplies only the two
 // project facts the framework cannot know (its prebundle posture and its own
 // `runtime/gql/` path), so the proxy map and plugin choices live once, here, and
@@ -18,9 +18,9 @@ import { defineConfig, mergeConfig, type Plugin, type UserConfig } from "vite";
 // This module is loaded by Node as a Vite config and therefore imports ONLY the
 // Node-side build plugins and node builtins — never `react`/`react-dom` or any
 // `.tsx`, which would pull the browser runtime into the config graph. The
-// `@angee/gql` alias is inlined (two lines) rather than imported from
-// `@angee/app/vitest`, whose top-level `require.resolve` side effect has no place
-// in the Vite build path.
+// generated-schema alias is inlined (two lines) rather than imported from the
+// Vitest config module, whose top-level `require.resolve` side effect has no
+// place in the Vite build path.
 
 const django = process.env.ANGEE_DJANGO_URL ?? "http://127.0.0.1:8000";
 // The operator daemon (the dev-stack supervisor) the console talks to. The
@@ -156,8 +156,8 @@ export interface AngeeWebViteConfig extends UserConfig {
   /**
    * Absolute path to the project's OWN `runtime/gql/` tree, supplied as
    * `fileURLToPath(new URL("../runtime/gql/", import.meta.url))`. Backs the
-   * `@angee/gql/<schema>` resolve alias — the same target the project declares
-   * in its tsconfig and vitest config.
+   * Generated-schema resolve alias — the same target the project declares in
+   * its tsconfig and vitest config.
    */
   gqlRuntimeDir: string;
   /**
@@ -184,9 +184,9 @@ export function defineAngeeWebViteConfig({
       // `angeePrebundleForcePlugin`).
       ...(prebundleAngeePackages ? [angeePrebundleForcePlugin(webRoot, angeePackages)] : []),
     ],
-    // The `@angee/gql/<schema>` alias for this project's generated typed
-    // operations, pointing at the project's OWN `runtime/gql/<name>/` tree (the
-    // web package generates it via codegen). Project-supplied and
+    // The alias for this project's generated typed operations, pointing at the
+    // project's OWN `runtime/gql/<name>/` tree (the web package generates it via
+    // codegen). Project-supplied and
     // project-relative — the same resolution the project declares in its
     // tsconfig/vitest.
     resolve: {
