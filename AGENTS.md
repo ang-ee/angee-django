@@ -369,6 +369,10 @@ Durable project knowledge is checked in, not held in any agent's private memory
   never mirrored to the public repo, and nothing in it is published. Global
   skill defaults such as `docs/superpowers/**` are overridden and forbidden in
   this repository.
+- **Work-state is history, not reference.** Specs, plans, and notes capture
+  intent at the time of writing and go stale as the code moves. To know how the
+  system works now, read the code; verify any claim a spec or plan makes against
+  the code before acting on it (see "Research" in `docs/guidelines.md`).
 - **Durable rules the team must inherit never live only in `.work/`.** A private
   note is invisible to teammates and to the next agent; capture the durable rule
   in the owning `docs/` guideline instead.

@@ -39,6 +39,12 @@ For Angee work, research is a small architecture inventory, not a broad essay:
 - For structural refactors, record the owner map and expected deletion/reuse path
   in `.work/` or in the handoff note.
 
+Specs, plans, and notes — in `.work/` or anywhere else — are snapshots of intent
+at the moment they were written, and nothing reconciles them when the code moves.
+Use them only to recover intent, history, and decisions; never as a reference for
+how the system works now. The code is the only current reference: verify every
+claim a spec or plan makes against the code before acting on it.
+
 ### 2. Think
 
 Take time to think about the problem and possible solutions. Break down complex
