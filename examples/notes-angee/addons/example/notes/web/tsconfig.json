@@ -1,4 +1,4 @@
 {
-  "extends": "../../../../../../addons/angee/tsconfig.base.json",
+  "extends": "../../../../../../../angee-base/addons/angee/tsconfig.base.json",
   "include": ["src"]
 }

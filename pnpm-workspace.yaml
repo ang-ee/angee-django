@@ -8,10 +8,11 @@ packages:
   - "../angee-react/refine"
   - "../angee-react/metadata"
   - "../angee-react/e2e"
+  - "../angee-base/addons/angee/*/web"
+  - "../angee-messaging-bridges/addons/angee/*/web"
   - "examples/*/e2e"
   - "examples/*/web"
   - "examples/*/addons/*/*/web"
-  - "addons/angee/*/web"
 allowBuilds:
   esbuild: true
   "@tailwindcss/oxide": true

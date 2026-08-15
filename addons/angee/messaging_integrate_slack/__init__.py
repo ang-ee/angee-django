@@ -1,1 +1,0 @@
-"""Slack polling bridge addon."""

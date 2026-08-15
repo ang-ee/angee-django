@@ -4,9 +4,11 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
-const ADDON_TREE = join(REPO_ROOT, "addons/angee");
+const ADDON_TREE = join(REPO_ROOT, "../angee-base/addons/angee");
+const BRIDGE_ADDON_TREE = join(REPO_ROOT, "../angee-messaging-bridges/addons/angee");
+const ADDON_TREES = [ADDON_TREE, BRIDGE_ADDON_TREE].filter((tree) => existsSync(tree));
 const EXAMPLE_TREE = join(REPO_ROOT, "examples/notes-angee");
-const HAS_ADDON_SCOPE = existsSync(ADDON_TREE) && existsSync(EXAMPLE_TREE);
+const HAS_ADDON_SCOPE = ADDON_TREES.length > 0 && existsSync(EXAMPLE_TREE);
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx"]);
 const DELETED_SHELLS = new Set([
   "@angee/base",
@@ -99,7 +101,7 @@ describe.skipIf(!HAS_ADDON_SCOPE)("addon architecture guardrails", () => {
 
   test("critical shared owners are consumed outside their defining package", () => {
     const contents = [
-      ...sourceFiles("addons/angee"),
+      ...addonSourceFiles(),
       ...sourceFiles("examples/notes-angee/web"),
       ...sourceFiles("packages/storybook"),
     ]
@@ -123,7 +125,7 @@ describe.skipIf(!HAS_ADDON_SCOPE)("addon architecture guardrails", () => {
 
   test("row identity helpers are imported from the metadata owner", () => {
     const violations = [
-      ...sourceFiles("addons/angee"),
+      ...addonSourceFiles(),
       ...sourceFiles("examples/notes-angee/web"),
       ...sourceFiles("packages/storybook"),
     ]
@@ -138,7 +140,7 @@ describe.skipIf(!HAS_ADDON_SCOPE)("addon architecture guardrails", () => {
 
   test("authored GraphQL hooks are imported from the refine owner", () => {
     const violations = [
-      ...sourceFiles("addons/angee"),
+      ...addonSourceFiles(),
       ...sourceFiles("examples/notes-angee/web"),
       ...sourceFiles("packages/storybook"),
     ]
@@ -156,11 +158,15 @@ describe.skipIf(!HAS_ADDON_SCOPE)("addon architecture guardrails", () => {
 });
 
 function addonPackageRoots(): string[] {
-  return readdirSync(ADDON_TREE)
-    .map((entry) => join(ADDON_TREE, entry, "web"))
+  return ADDON_TREES
+    .flatMap((tree) => readdirSync(tree).map((entry) => join(tree, entry, "web")))
     .filter((entry) => existsSync(join(entry, "package.json")))
     .map((entry) => relative(REPO_ROOT, entry))
     .sort();
+}
+
+function addonSourceFiles(): string[] {
+  return ADDON_TREES.flatMap((tree) => sourceFiles(relative(REPO_ROOT, tree)));
 }
 
 function packageName(packageRoot: string): string {

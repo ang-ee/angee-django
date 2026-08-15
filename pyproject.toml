@@ -136,27 +136,17 @@ python-olm = { CXXFLAGS = "-fdelayed-template-parsing" }
 strawberry-graphql = { git = "https://github.com/ang-ee/strawberry.git", branch = "codex/input-object-extensions" }
 
 [tool.hatch.build.targets.wheel]
-# Two source roots merge into the one `angee` PEP 420 namespace: the framework
-# core at ./angee, the base addons at ./addons/angee. `dev-mode-dirs` pins both
-# roots on the editable path — hatchling otherwise drops the repo-root entry, so
-# `angee.base` would not resolve when `manage.py` runs from the example dir.
-packages = ["angee", "addons/angee"]
-dev-mode-dirs = [".", "addons"]
+# The distribution contains the framework core only. Folder addons are provided
+# by sibling source repositories and discovered from explicit addon directories.
+packages = ["angee"]
+dev-mode-dirs = ["."]
 artifacts = [
   "angee/**/*.csv",
   "angee/**/*.pyi",
   "angee/**/*.typed",
   "angee/**/*.yaml",
   "angee/**/*.zed",
-  "addons/angee/**/*.csv",
-  "addons/angee/**/*.pyi",
-  "addons/angee/**/*.typed",
-  "addons/angee/**/*.yaml",
-  "addons/angee/**/*.zed",
-  # Addon manifests ship in the wheel so the runtime can read each addon's
-  # contract from its installed package; the entry points only carry identity.
   "angee/**/addon.toml",
-  "addons/angee/**/addon.toml",
 ]
 # The web/ sources are added by hatch-angee's addon-sources hook (the single source
 # of truth for them), so keep hatchling's default walk out of them — otherwise a
@@ -164,16 +154,12 @@ artifacts = [
 # Python package, so this also drops the dependency tree the broad artifacts above
 # would otherwise force-include from web/*/node_modules.
 exclude = [
-  "addons/angee/*/web/**",
   "**/node_modules",
 ]
 
 # Build machinery is hatch-angee, via its build backend (no per-repo hook code or
-# tables). The metadata hook generates the `angee.addons` entry points from each
-# addon.toml; the addon-sources hook ships every addon's web/ (remapping the
-# addons/angee/* roots onto the angee namespace). The framework's shared React
-# packages live in the angee-react repo and are consumed through the stack's
-# pnpm workspace, not this wheel.
+# tables). The framework's shared React packages live in the angee-react repo
+# and are consumed through the stack's pnpm workspace, not this wheel.
 
 [tool.hatch.build.targets.sdist]
 only-include = [
@@ -181,7 +167,6 @@ only-include = [
   "LICENSE",
   "LICENSE.GPL",
   "README.md",
-  "addons",
   "angee",
   "docs",
   "examples",
@@ -194,17 +179,16 @@ only-include = [
 cache_dir = ".pytest_cache"
 DJANGO_SETTINGS_MODULE = "tests.settings"
 python_files = ["test_*.py"]
-testpaths = ["tests", "addons/angee/resources/tests"]
-pythonpath = [".", "addons", "examples/notes-angee/addons"]
+testpaths = ["tests"]
+pythonpath = [".", "examples/notes-angee/addons"]
 addopts = "-ra --strict-markers --import-mode=importlib"
 
 [tool.ruff]
 line-length = 120
 target-version = "py314"
 cache-dir = ".ruff_cache"
-# First-party roots so isort classifies `angee.*` correctly across both source
-# roots (framework at ., base addons at addons/) and the example project.
-src = [".", "addons", "examples/notes-angee/addons"]
+# First-party roots for the framework and the example consumer addon.
+src = [".", "examples/notes-angee/addons"]
 exclude = [
   ".angee",
   ".git",
@@ -227,13 +211,13 @@ select = ["E", "F", "I"]
 python_version = "3.14"
 cache_dir = ".mypy_cache"
 explicit_package_bases = true
-files = ["angee", "addons/angee"]
+files = ["angee"]
 ignore_missing_imports = true
-mypy_path = [".", "addons"]
+mypy_path = ["."]
 warn_unused_ignores = true
 
 [tool.vulture]
-paths = ["angee", "addons/angee", "examples/notes-angee/addons", "tests"]
+paths = ["angee", "examples/notes-angee/addons", "tests"]
 exclude = [
   "*/runtime/*",
 ]

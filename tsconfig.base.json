@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     // Residual host policy only. The React and base-addon subtrees own their
-    // compiler bases in `angee/web` and `addons/angee`, respectively.
+    // compiler bases in the sibling `angee-react` and `angee-base` sources.
     "target": "ES2022",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "module": "ESNext",
