@@ -68,8 +68,8 @@ on top.
 │   └── e2e/                # `@angee/e2e` — Playwright e2e harness (`docs/testing/e2e.md`)
 ├── templates/              # Copier templates — project / stack / workspace / service kinds
 │   ├── projects/web/       # project template — scaffolds the host repo (owns the project root)
-│   ├── stacks/dev/         # dev Stack template — the `.angee/` overlay (`angee init --dev`)
-│   └── workspaces/dev/     # dev Workspace template (created through the workspace workflow)
+│   ├── stacks/dev/         # framework-dev Stack template — project-at-root, process-compose
+│   └── workspaces/src/     # the all-source framework workspace (every repo a worktree slot)
 ├── examples/notes-angee/   # the example project `angee dev` runs from the repo root
 │   ├── manage.py           # Django entrypoint (`uv run examples/notes-angee/manage.py …`)
 │   ├── settings.yaml       # project composition facts and project overrides

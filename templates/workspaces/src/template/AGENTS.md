@@ -9,9 +9,8 @@ there.
 ## The slots
 
 - **`angee-django/`** — the framework core: `angee.{base,compose,graphql,tasks}`,
-  the composer, the Copier templates, the framework docs, and the example
-  host project. The one real Python package. Its `AGENTS.md` carries the
-  constitution that governs work in every slot.
+  the composer, and the framework docs. The one real Python package. Its
+  `AGENTS.md` carries the constitution that governs work in every slot.
 - **`angee-react/`** — the framework React packages (`@angee/app`, `ui`,
   `refine`, `metadata`) with the storybook and e2e workshops.
   Schema-independent by invariant.
@@ -20,11 +19,15 @@ there.
 - **`angee-messaging-bridges/`** — the opt-in personal-messaging and takeout
   bridge addons (matrix, whatsapp, telegram, discord, signal, imessage,
   facebook, meta). Same folder-addon model.
-- **`angee-examples/`** — showcase consumer addons (`example.notes`), the
-  reference for third-party addon authors.
+- **`angee-examples/`** — showcase consumer addons (`example.notes`) and the
+  reference e2e suite; the reference for third-party addon authors.
+- **`angee-templates/`** — the Copier templates that render stacks, projects,
+  workspaces, and services (what `angee init` consumes).
+- **`angee-operator/`** — the `angee` CLI / operator daemon (Go).
 - **`.work/`** — the private work-state repo (plans, notes, memory,
-  handovers). Shared across clones: **commit and push continuously**, or
-  the work is invisible everywhere else.
+  handovers), present only when the stack wires a work-state source. Shared
+  across clones: **commit and push continuously**, or the work is invisible
+  everywhere else.
 
 ## Rules of the workspace
 
@@ -35,5 +38,8 @@ there.
 - Slots reference each other **sibling-relative** (`../angee-react/…`,
   `{BASE_DIR}/../angee-base/addons`); that layout is the contract this
   workspace materializes.
+- **Never `pnpm install` inside a slot** — the stack workspace at the stack
+  root owns the JS install; a private install forks dependency identities
+  for every linked framework package.
 - Work inside a slot is governed by that repo's own `AGENTS.md`; run that
   repo's own checks before handing off.

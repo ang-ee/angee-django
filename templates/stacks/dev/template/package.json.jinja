@@ -1,0 +1,9 @@
+{
+  "name": "{{ project_name }}-host",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Workspace root. The generated runtime/gql modules import @graphql-typed-document-node/core, and pnpm's strict layout only exposes it under {{ web_path }}/node_modules — declaring it here puts it in the root node_modules so the generated files resolve it from runtime/.",
+  "dependencies": {
+    "@graphql-typed-document-node/core": "^3.2.0"
+  }
+}

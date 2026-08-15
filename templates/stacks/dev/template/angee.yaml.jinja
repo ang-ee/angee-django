@@ -1,0 +1,24 @@
+{# stacks/dev wrapper: process-compose framework-dev stack. Set mode + address #}
+{# variables, then include the one shared manifest body. The include path resolves #}
+{# from the template's `_subdirectory` root (the renderer's loader base). #}
+{% set runtime_mode = "process" %}
+{# The OPERATOR owns path-input translation (copierx.ResolvePathInputs): every render #}
+{# flow rewrites a relative `type: path` input to be ANGEE_ROOT-relative before this #}
+{# template sees it, and an absolute input arrives verbatim. The project host IS the #}
+{# stack root (ANGEE_ROOT=.), so the defaults arrive as "." and the src slot path. #}
+{% set app_source = project_path %}
+{% set framework_source = framework_path %}
+{# The rendered project pyproject owns framework resolution (django-angee editable #}
+{# from the framework slot, postgres extra baked into the dep) and pins uv's cache #}
+{# to the stack-owned caches/uv — so process commands run bare `uv run` with no #}
+{# --project, no --extra, and no UV_CACHE_DIR override in any layout. #}
+{# Address variables: process mode reaches postgres/redis/operator on 127.0.0.1:${ports.x} #}
+{# and the host gateway (host.docker.internal) where containers must reach the host. #}
+{% set database_url = "postgres://angee:${secret.db-password}@127.0.0.1:${ports.postgres}/angee" %}
+{% set redis_url = "redis://127.0.0.1:${ports.redis}/0" %}
+{% set celery_broker_url = "redis://127.0.0.1:${ports.redis}/1" %}
+{% set operator_url = "http://127.0.0.1:${ports.operator}" %}
+{% set mcp_url = "http://host.docker.internal:${ports.django}/mcp" %}
+{% set operator_bind = "0.0.0.0" %}
+{% set pgdata_mount = "./pgdata" %}
+{% include "../../_shared/stack-body.yaml.jinja" %}

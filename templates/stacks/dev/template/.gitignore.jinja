@@ -1,0 +1,46 @@
+# Framework-dev stack = a project host at the stack root (ANGEE_ROOT=.). This
+# OVERWRITES the project's .gitignore with the stack-root additions: the operator's
+# materialized machinery (sources, workspaces, caches, run state) and the composed
+# runtime are all regenerable here. Commit what you author; ignore what a tool
+# regenerates.
+
+# Generated composer output — emitted by `manage.py angee build`, never edited.
+/runtime/
+
+# The operator's compiled bring-up artifacts and resolved secrets.
+/.env
+/process-compose.yaml
+/docker-compose.yaml
+/.copier-answers.stack.yml
+/run/
+
+# Operator-materialized source machinery: clone caches, workspace worktree slots,
+# and the `templates` symlink into the angee-templates cache.
+/sources/
+/workspaces/
+/templates
+
+# Stack state the operator materializes on bring-up: app media/static (./data),
+# the Postgres data cluster (./pgdata), and optional Ollama models (./ollama).
+/data/
+/pgdata/
+/ollama/
+
+# Stack-owned tool caches (uv's cache-dir per pyproject.toml and friends).
+/caches/
+
+# Python
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.venv/
+
+# JS
+node_modules/
+/{{ web_path }}/dist/
+/{{ web_path }}/.vite/
+
+# Scratch / reports
+/.playwright-mcp/
+/test-results/
+/playwright-report/

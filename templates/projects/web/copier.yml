@@ -73,6 +73,27 @@ include_operator_installer:
   default: false
   help: Include angee.platform_integrate_operator in INSTALLED_APPS.
 
+# Which addon roster the host composes. `base` is the consumer scaffold: the
+# foundation base addons plus the project's own consumer addons. `full` is the
+# whole platform composition — every base addon, the messaging bridges, and the
+# notes example — the roster the framework-dev stack chains in.
+addons_profile:
+  type: str
+  default: base
+  choices:
+    - base
+    - full
+  help: Addon roster for the host — base (consumer scaffold) or full (the whole platform composition).
+
+# Whether the host sits at the root of a stack that materializes the framework
+# source repos as workspace slots (workspaces/src/<repo>). When true, the addon
+# dirs point into those slots so the composer finds the base (and, per profile,
+# bridge/example) addons in source form.
+framework_workspace:
+  type: bool
+  default: false
+  help: Point ANGEE_ADDON_DIRS at the stack's workspaces/src/* source slots (framework-dev layout).
+
 # The rendered web package reaches the framework's build-config (Vite, Vitest) by
 # PACKAGE NAME — `@angee/app/vite`, `@angee/app/vitest` — not a sibling path.
 # `@angee/app` is a dependency of the web package, so those exports resolve the

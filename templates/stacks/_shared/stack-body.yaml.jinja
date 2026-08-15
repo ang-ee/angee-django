@@ -13,7 +13,8 @@
 {#   container command; Caddy serves the built SPA. #}
 {# Wrapper-provided variables: runtime_mode, database_url, redis_url, #}
 {# celery_broker_url, operator_url, mcp_url, operator_bind, pgdata_mount, and #}
-{# (process only) app_source, framework_source, uv_project. #}
+{# (process only) app_source, framework_source — plus the dev copier inputs #}
+{# addons_profile and work_state_source, which gate sources/workspace blocks. #}
 version: 1
 kind: stack
 {% if runtime_mode == "process" %}
@@ -104,13 +105,13 @@ ports:
 # relative to the stack root.
 persist:
 {% if runtime_mode == "process" %}
-  app-data: { subpath: {{ ANGEE_ROOT }}/data, scope: stack }
+  app-data: { subpath: ./data, scope: stack }
   # Host coding agent's Playwright MCP user-data-dir (docs/stack.md).
-  chrome-profile: { subpath: {{ ANGEE_ROOT }}/data/chrome, scope: stack }
-  pgdata: { subpath: {{ ANGEE_ROOT }}/pgdata, scope: stack }
-{% if enable_ollama %}  ollama: { subpath: {{ ANGEE_ROOT }}/ollama, scope: stack }{% endif %}{% endif %}
+  chrome-profile: { subpath: ./data/chrome, scope: stack }
+  pgdata: { subpath: ./pgdata, scope: stack }
+{% if enable_ollama %}  ollama: { subpath: ./ollama, scope: stack }{% endif %}{% endif %}
 {% if runtime_mode == "docker" %}
-  # App media/static (ANGEE_DATA_DIR -> /app/.angee/data via the django bind mount).
+  # App media/static (ANGEE_DATA_DIR -> /app/data via the django bind mount).
   app-data: { subpath: ./data, scope: stack }
   # The Postgres data volume under ./data so one dir holds the instance's mutable state.
   pgdata: { subpath: ./data/pgdata, scope: stack }
@@ -120,8 +121,7 @@ sources:
   app:
     kind: local
 {% if runtime_mode == "process" %}
-    # project_path translated to a path relative to ANGEE_ROOT so working_dir
-    # (source://app) lands at the project root where manage.py lives.
+    # The application source IS this root — the project host is the stack.
     path: {{ app_source }}
 {% endif %}
 {% if runtime_mode == "docker" %}
@@ -132,6 +132,62 @@ sources:
   framework:
     kind: local
     path: {{ framework_source }}
+  # The framework source repos. `angee dev` materializes each as a clone cache
+  # under sources/ and cuts the `src` workspace's worktree slots from them; the
+  # templates repo also backs the stack's `templates` symlink for name-based
+  # template resolution (ws create, stack update) without a network round-trip.
+  angee-django:
+    kind: git
+    repo: https://github.com/ang-ee/angee-django.git
+    default_ref: main
+    cache_path: sources/angee-django
+  angee-react:
+    kind: git
+    repo: https://github.com/ang-ee/angee-react.git
+    default_ref: main
+    cache_path: sources/angee-react
+  angee-base:
+    kind: git
+    repo: https://github.com/ang-ee/angee-base.git
+    default_ref: main
+    cache_path: sources/angee-base
+  angee-templates:
+    kind: git
+    repo: https://github.com/ang-ee/angee-templates.git
+    default_ref: main
+    cache_path: sources/angee-templates
+  angee-operator:
+    kind: git
+    repo: https://github.com/ang-ee/angee-operator.git
+    default_ref: main
+    cache_path: sources/angee-operator
+{% if addons_profile == "full" %}
+  # The full platform composition opts into the bridge and example repos too.
+  angee-messaging-bridges:
+    kind: git
+    repo: https://github.com/ang-ee/angee-messaging-bridges.git
+    default_ref: main
+    cache_path: sources/angee-messaging-bridges
+  angee-examples:
+    kind: git
+    repo: https://github.com/ang-ee/angee-examples.git
+    default_ref: main
+    cache_path: sources/angee-examples
+{% endif %}
+{% endif %}
+
+{% if runtime_mode == "process" %}
+# The conventional all-source workspace: every framework repo as a sibling
+# worktree slot under workspaces/src/. `angee dev` cuts it from the declared
+# sources on bring-up; the host's pyproject, addon dirs, and pnpm globs all
+# point into its slots.
+workspaces:
+  src:
+    template: workspaces/src
+{% if work_state_source %}
+    inputs:
+      work_state_source: {{ work_state_source }}
+{% endif %}
 {% endif %}
 {% if runtime_mode == "docker" %}
 {% if framework == "source" %}
@@ -166,29 +222,30 @@ jobs:
   # its own wait-for-db), so it declares no depends_on — process-compose starts it
   # with the stack up and it blocks on the DB itself. --demo loads demo resources;
   # --force-rebac makes the source permissions.zed the truth on every re-up.
+  # Bare `uv run`: the rendered project pyproject at the stack root owns framework
+  # resolution (django-angee editable, postgres extra baked into the dep) and pins
+  # uv's cache to the stack-owned caches/uv — no --project, --extra, or UV_CACHE_DIR.
   provision:
     runtime: local
     workdir: source://app
-    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "python", "manage.py", "angee", "provision", "--demo", "--force-rebac"]
+    command: ["uv", "run", "python", "manage.py", "angee", "provision", "--demo", "--force-rebac"]
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
       YAMLCONF_SECRET_KEY: "${secret.secret-key}"
-      {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
 
   # Refresh the operator daemon's committed SDL from the LIVE daemon; the unified
   # codegen reads this SDL, so codegen waits on this refresh.
   operator-schema:
     runtime: local
     workdir: source://app
-    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "python", "manage.py", "operator_schema"]
+    command: ["uv", "run", "python", "manage.py", "operator_schema"]
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
       YAMLCONF_SECRET_KEY: "${secret.secret-key}"
       ANGEE_OPERATOR_URL: "{{ operator_url }}"
       ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
-      {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
     depends_on: [operator, provision]
 
   # Regenerate this project's typed GraphQL operations from the emitted Django SDL
@@ -258,12 +315,11 @@ services:
   django:
     runtime: local
     workdir: source://app
-    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
+    command: ["uv", "run", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
       YAMLCONF_SECRET_KEY: "${secret.secret-key}"
-      {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
       # The browser opens the daemon GraphQL same-origin via /operator/graphql.
       ANGEE_OPERATOR_GRAPHQL_ENDPOINT: "/operator/graphql"
       ANGEE_OPERATOR_URL: "{{ operator_url }}"
@@ -286,9 +342,9 @@ services:
     image: {{ django_image }}
     mounts:
       - source://app:/app
-      # ANGEE_DATA_DIR (/app/.angee/data) lives inside the code mount and is absent in a
+      # ANGEE_DATA_DIR (/app/data) lives inside the code mount and is absent in a
       # fresh checkout; bind the stack's data dir there so media/static survive re-up.
-      - bind://./data:/app/.angee/data
+      - bind://./data:/app/data
     workdir: /app
     env:
       ANGEE_PROJECT_DIR: /app
@@ -326,14 +382,13 @@ services:
 {% if runtime_mode == "process" %}
     runtime: local
     workdir: source://app
-    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "celery", "-A", "angee.tasks.celery:app", {% if role == "beat" %}"beat"{% else %}"worker"{% endif %}{% if role != "worker" and role != "beat" %}, "-Q", "{{ role }}", "--pool", "threads", "--concurrency", "8"{% endif %}, "--loglevel=INFO"]
+    command: ["uv", "run", "celery", "-A", "angee.tasks.celery:app", {% if role == "beat" %}"beat"{% else %}"worker"{% endif %}{% if role != "worker" and role != "beat" %}, "-Q", "{{ role }}", "--pool", "threads", "--concurrency", "8"{% endif %}, "--loglevel=INFO"]
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
       YAMLCONF_SECRET_KEY: "${secret.secret-key}"
       REDIS_URL: "{{ redis_url }}"
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
-      {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
     after: [provision]
 {% endif %}
 {% if runtime_mode == "docker" %}
@@ -341,7 +396,7 @@ services:
     image: {{ django_image }}
     mounts:
       - source://app:/app
-      - bind://./data:/app/.angee/data
+      - bind://./data:/app/data
     workdir: /app
     env:
       ANGEE_PROJECT_DIR: /app
@@ -387,13 +442,14 @@ services:
     after: [deps, provision, django, operator, codegen]
 
   # Storybook component workshop (@angee/storybook): renders @angee/ui with mocked
-  # fixtures. It lives in the FRAMEWORK workspace, which the deps job no longer
-  # necessarily installs (deps installs the workspace owning the project web package),
-  # so it installs its own workspace first — idempotent and fast when satisfied.
+  # fixtures. It runs in the STACK workspace — the deps job installed it as a
+  # member (the pnpm-workspace globs include the angee-react storybook slot). A
+  # private install inside a slot would fork dependency identities for every
+  # linked framework package (two react-query = no QueryClient), so never add one.
   storybook:
     runtime: local
-    workdir: source://framework
-    command: ["sh", "-c", "pnpm install && exec pnpm --filter @angee/storybook dev --no-open"]
+    workdir: source://app
+    command: ["sh", "-c", "exec pnpm --filter @angee/storybook dev --no-open"]
     env:
       STORYBOOK_PORT: "{{ storybook_port }}"
     after: [deps]

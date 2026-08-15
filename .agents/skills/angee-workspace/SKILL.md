@@ -111,12 +111,13 @@ Git repository, and keep the private work-state repository distinct from the
 public source repository. If any check fails, stop; do not fall back to
 `docs/superpowers` or invent another path.
 
-Use the dev workspace template unless the user names another template, and pass
-the validated canonical path through the template's required input:
+Use the src workspace template unless the user names another template — it cuts
+every framework repo as a sibling worktree slot on `workspace/<name>`. Wire the
+private work-state slot by naming the stack's declared work-state source:
 
 ```sh
-angee --root "$angee_root" ws create <name> --template dev --input base_ref=<parent-ref> \
-  --input work_state_path="$work_state_path"
+angee --root "$angee_root" ws create <name> --template src --input base_ref=<parent-ref> \
+  --input work_state_source=work-angee-django
 ```
 
 Choose `<parent-ref>` in this order:

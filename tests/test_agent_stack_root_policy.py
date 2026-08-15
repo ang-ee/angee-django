@@ -47,7 +47,7 @@ def test_setup_docs_guard_init_and_target_the_resolved_workspace_root() -> None:
 
     for document in (readme, guide, templates):
         assert "existing current or ancestor `angee.yaml`" in document
-        assert "do not initialize a nested `.angee/`" in document
+        assert "never initialize a stack under a source checkout" in document
 
     assert 'angee --root "$angee_root" ws create' in guide
     assert 'cd "$angee_root/workspaces/my-feature"' in guide

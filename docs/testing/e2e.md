@@ -12,13 +12,13 @@ free.
 
 ## The owning idea: a workspace is the test environment
 
-Angee already owns environment isolation. An **angee workspace** materialises an
-isolated inner stack with its **own database**, its **own allocated ports**
-(`django`, `ui`, `playwright`, …), and a **persistent browser profile** — all
-declared in `templates/workspaces/dev/copier.yml`. Bringing the workspace up runs
-the full deterministic bootstrap (`build → makemigrations → migrate → rebac sync
-→ resources load install,demo → schema`), which **seeds the demo data** the tests
-assert against.
+Angee already owns environment isolation. The seeded framework-dev stack
+provides the environment: bringing it up runs the full deterministic bootstrap
+(`provision` = build → migrations → rebac sync → resources load install,demo →
+schema), which **seeds the demo data** the tests assert against. (The retired
+`workspaces/dev` template used to chain an isolated inner stack per topic
+workspace; a successor for per-branch inner stacks is planned — until then the
+suite runs against the live stack's allocated UI port.)
 
 So the e2e harness does **not** reinvent test databases, fixtures, login servers,
 or per-run isolation. It inherits them:
@@ -105,21 +105,16 @@ present, two users' scopes are disjoint, an anonymous write is denied with
 
 ## Running e2e
 
-### In a dedicated workspace (the supported path)
+### Against the seeded framework-dev stack (the supported path)
 
 ```sh
-# 1. Materialise an isolated, seeded stack (unique DB + ports + browser profile).
-# Resolve angee_root and work_state_path with .agents/skills/angee-workspace/SKILL.md.
-angee --root "$angee_root" ws create e2e --template dev \
-  --input base_ref=<branch> --input example=notes-angee \
-  --input work_state_path="$work_state_path"
-cd "$angee_root/workspaces/e2e"
-angee dev                      # brings the seeded stack up; note the allocated ui port
+# 1. Bring the seeded stack up (provision seeds the demo data).
+angee --root "$angee_root" dev
 
-# 2. Once, install the browser binaries for this workspace.
+# 2. Once, install the browser binaries.
 pnpm --filter @angee-example/notes-e2e exec playwright install chromium
 
-# 3. Run the suite against the workspace's allocated UI port.
+# 3. Run the suite against the stack's UI port.
 ANGEE_UI_PORT=<ui-port> pnpm --filter @angee-example/notes-e2e test:e2e
 ```
 

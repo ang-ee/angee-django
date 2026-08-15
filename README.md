@@ -74,10 +74,9 @@ are.*
 
 ## Quick start
 
-Before `angee init --dev`, check for an existing current or ancestor
+Before `angee init`, check for an existing current or ancestor
 `angee.yaml`. If one exists, it already owns this checkout: use that
-`ANGEE_ROOT` and do not initialize a nested `.angee/` under the source. The
-repository-local `.angee/` overlay is only for a standalone checkout.
+`ANGEE_ROOT` — never initialize a stack under a source checkout.
 
 ```sh
 git clone https://github.com/ang-ee/angee-django.git

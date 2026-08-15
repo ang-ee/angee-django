@@ -26,7 +26,7 @@ def test_workspace_skill_passes_canonical_work_state_path() -> None:
         'git -C "$work_state_path" rev-parse --show-toplevel',
         'test "$work_state_top" = "$work_state_path" || exit 1',
         'basename "$work_state_path"',
-        '--input work_state_path="$work_state_path"',
+        "--input work_state_source=",
         "Resolved work-state path.",
     ):
         assert contract in skill
