@@ -4,10 +4,8 @@
     "types": ["vite/client"],
     // This project owns its `runtime/gql/<schema>/` tree (its web package
     // generates it), so it supplies its OWN project-relative `@angee/gql/*`
-    // resolution instead of inheriting the framework fixture path from
-    // tsconfig.base.json (TS `paths` override, they do not merge). A downstream
-    // Angee project does the same in its own web tsconfig — this is the
-    // canonical example of that override.
+    // resolution. The root base owns compiler policy only; a downstream Angee
+    // project likewise declares its generated tree in its own web tsconfig.
     "paths": {
       "@angee/gql/*": ["../runtime/gql/*"]
     }

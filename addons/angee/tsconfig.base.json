@@ -1,19 +1,25 @@
 {
   "compilerOptions": {
+    // Base-addon fragments typecheck against the example host's generated
+    // documents. The addon subtree owns this one fixture path.
+    "paths": {
+      "@angee/gql/*": ["../../examples/notes-angee/runtime/gql/*"]
+    },
     "target": "ES2022",
-    "lib": ["ES2023", "DOM"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "jsx": "react-jsx",
     "strict": true,
     "noUnusedLocals": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["node"]
-  },
-  "include": ["tests", "pages", "playwright.config.ts"]
+    "types": []
+  }
 }

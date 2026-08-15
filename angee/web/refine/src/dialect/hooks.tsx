@@ -580,8 +580,8 @@ export function useAngeeRevisions(
 
 /**
  * Run an id-targeted backend action mutation through refine's custom mutation
- * owner. The generated `ActionFieldName` union from `@angee/gql/<schema>/actions`
- * still pins callers to real action fields, while refine owns execution state.
+ * owner. The generated per-schema `ActionFieldName` union still pins callers to
+ * real action fields, while refine owns execution state.
  * The mutate resolves the in-band `ActionOutcome` (`ok`, `message`, and the
  * created record's `id` when the verb returns one) so callers settle success,
  * failure, and deep-linking from one value; registered resource invalidations

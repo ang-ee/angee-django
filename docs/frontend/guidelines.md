@@ -520,9 +520,11 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   Don't copy an older addon and then manually chase drift.
 - **Architecture guardrails are tests, not review folklore.** After changing a
   framework package edge, addon package dependency, or newly exported shared owner,
-  update `angee/web/app/src/architecture-guardrails.test.ts` with the intended
-  package edge or deliberate public-export allowance; do not bypass it with an
-  undeclared import or a second local implementation.
+  update the owning guardrail deliberately:
+  `angee/web/app/src/architecture-guardrails.test.ts` for the React/tooling tree,
+  or its `architecture-guardrails.addons.test.ts` sibling for addon/example
+  scope. Record the intended package edge or deliberate public-export allowance;
+  do not bypass it with an undeclared import or a second local implementation.
 - **`ResourceList` still needs a form declaration, even for read-only records.** Give
   discovered/read-only resources a `<Form>` child or `formFields` with read-only fields;
   an all-read-only form never assembles an update mutation. Delete affordances are
@@ -637,7 +639,7 @@ Run the architecture guardrail when changing package layering, public shared
 owners, or addon manifests:
 
 ```sh
-pnpm --filter @angee/app run test -- architecture-guardrails.test.ts
+pnpm --filter @angee/app run test -- architecture-guardrails
 ```
 
 A hit is not automatically wrong, but it must either compose the shared primitive

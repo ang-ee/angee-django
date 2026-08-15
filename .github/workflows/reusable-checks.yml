@@ -1,0 +1,49 @@
+name: reusable checks
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: Python version for the uv test lane.
+        required: false
+        type: string
+        default: "3.14"
+      pytest-extra-args:
+        description: Optional arguments appended to the pytest command.
+        required: false
+        type: string
+        default: ""
+      pnpm-enabled:
+        description: Run the pnpm typecheck and test lane.
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  uv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ inputs.python-version }}
+      - run: uv run pytest -q ${{ inputs.pytest-extra-args }}
+
+  pnpm:
+    if: ${{ inputs.pnpm-enabled }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.13"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r typecheck
+      - run: pnpm -r test

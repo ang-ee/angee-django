@@ -1,23 +1,7 @@
 {
   "compilerOptions": {
-    // Framework-repo fixture wiring ONLY. Base addon packages
-    // (`addons/angee/*/web`) extend this base and typecheck against the notes
-    // example project's generated typed-document modules — the canonical
-    // in-repo project that owns a `runtime/gql/`. This single wildcard entry is
-    // the `@angee/gql/<schema>` resolution contract: `@angee/gql/*` ->
-    // `<project>/runtime/gql/*` (so `…/<schema>` and `…/<schema>/actions` both
-    // resolve through it).
-    //
-    // A downstream/own project does NOT inherit this fixture path: its own web
-    // `tsconfig.json` inlines the same compiler contract and declares its
-    // project-relative `@angee/gql/*` -> `../runtime/gql/*`. It cannot `extends`
-    // this base by the `@angee/app/...` package specifier: TypeScript resolves a
-    // package-name `extends`, but Vite's oxc tsconfig loader (used by `vite` and
-    // `vitest`) does not. See `examples/notes-angee/web/tsconfig.json` and the
-    // `templates/projects/web` scaffold.
-    "paths": {
-      "@angee/gql/*": ["./examples/notes-angee/runtime/gql/*"]
-    },
+    // Residual host policy only. The React and base-addon subtrees own their
+    // compiler bases in `angee/web` and `addons/angee`, respectively.
     "target": "ES2022",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "module": "ESNext",

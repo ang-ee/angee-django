@@ -4,22 +4,21 @@ import { defineConfig, mergeConfig, type ViteUserConfig } from "vitest/config";
 import type { InlineConfig } from "vitest/node";
 
 // The framework owner of the web/package Vitest defaults: the DOM-inline set, the
-// `src/**` test globs, the `@angee/gql/<schema>` alias builder, and the refine
+// `src/**` test globs, the generated-schema alias builder, and the refine
 // resolution shim. Shipped in `@angee/app` (not a repo-root file) so a project
 // reaches it by package name whether the framework is an editable checkout or an
 // installed wheel. These builders carry NO framework-repo fixture: the gql alias
 // is always supplied by the caller (the repo-root `vitest.shared.ts` wrapper
 // injects the in-repo notes fixture; a project passes its own).
 
-// The `@angee/gql/<schema>` alias for test runs. Vitest does not read tsconfig
-// `paths`, so a test suite that loads a module importing `@angee/gql/<schema>`
-// needs this alias supplied explicitly via Vite `resolve.alias`.
+// The generated-schema module alias for test runs. Vitest does not read
+// tsconfig `paths`, so a suite that loads a generated document import needs
+// this alias supplied explicitly via Vite `resolve.alias`.
 //
 // `gqlAliasFor` is the project-neutral builder: pass the absolute path to a
 // project's `runtime/gql/` tree (the directory it generated) and it returns the
-// single-wildcard alias that maps `@angee/gql/<schema>` (and
-// `@angee/gql/<schema>/actions`) into it. A project's own `vitest.config.ts`
-// calls this with its project-relative path — e.g.
+// single-wildcard alias that maps schema and schema-action modules into it. A
+// project's own `vitest.config.ts` calls this with its project-relative path — e.g.
 // `gqlAliasFor(fileURLToPath(new URL("../runtime/gql/", import.meta.url)))`.
 export function gqlAliasFor(runtimeGqlDir: string) {
   return [
@@ -93,8 +92,8 @@ export function defineAngeePackageVitestConfig(
 
 export interface AngeeWebVitestConfig extends ViteUserConfig {
   /**
-   * The `@angee/gql/<schema>` alias this package's tests resolve against, built
-   * with `gqlAliasFor`. Required — these builders carry no framework fixture, so
+   * The generated-schema alias this package's tests resolve against, built with
+   * `gqlAliasFor`. Required — these builders carry no framework fixture, so
    * the caller always names the `runtime/gql/` its tests resolve into.
    */
   gqlAlias: ReturnType<typeof gqlAliasFor>;

@@ -102,11 +102,13 @@ export function ConnectMountAction<TDocument extends AuthoredDocument>({
     if (!ready || connectState.fetching) return;
     setError(null);
     try {
+      // The concrete variable shape is only known to the authored document the
+      // host passed in; TypeScript cannot relate it to the generic parameter.
       await connect({
         name: name.trim(),
         path,
         mode,
-      } as AuthoredVariables<TDocument>);
+      } as unknown as AuthoredVariables<TDocument>);
       setOpen(false);
     } catch (cause) {
       setError(errorMessage(cause, t(key("error"))));

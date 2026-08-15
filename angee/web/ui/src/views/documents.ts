@@ -1,10 +1,28 @@
-// Bespoke console operations owned by the rendered base view layer. Project
-// codegen scans framework package `documents.ts` files so shared view primitives
-// can consume generated documents without hand-written result shapes.
+// Bespoke console operations owned by the rendered base view layer.
 
-import { graphql, type DocumentType } from "@angee/gql/console";
+import type { TypedDocumentNode } from "@angee/refine";
+import { gql } from "graphql-tag";
 
-export const BaseImplChoices = graphql(`
+/** Mirrors the core-owned `ImplChoice` projection in `angee/graphql/impl.py`. */
+export interface ImplChoice {
+  key: string;
+  category: string;
+  defaults: unknown;
+}
+
+interface BaseImplChoicesResult {
+  impl_choices: ImplChoice[];
+}
+
+type BaseImplChoicesVariables = {
+  model: string;
+  field: string;
+};
+
+export const BaseImplChoices: TypedDocumentNode<
+  BaseImplChoicesResult,
+  BaseImplChoicesVariables
+> = gql`
   query BaseImplChoices($model: String!, $field: String!) {
     impl_choices(model: $model, field: $field) {
       key
@@ -12,7 +30,4 @@ export const BaseImplChoices = graphql(`
       defaults
     }
   }
-`);
-
-export type ImplChoice =
-  DocumentType<typeof BaseImplChoices>["impl_choices"][number];
+`;

@@ -11,6 +11,7 @@ const pageMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@angee/ui", () => ({
+  createNamespaceT: () => () => (key: string) => key,
   Action: () => null,
   Column: (props: { field: string; header?: React.ReactNode; render?: (row: never) => React.ReactNode }) => {
     pageMocks.columns.push(props);
