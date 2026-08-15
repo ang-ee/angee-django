@@ -6,6 +6,11 @@ description = "Matrix sync — signs in a user's account and pulls rooms into me
 keywords = ["matrix", "chat", "sync", "e2ee"]
 category = "Integration"
 depends_on = ["angee.messaging", "angee.integrate", "angee.parties"]
+dependencies = [
+  "aiosqlite>=0.21",
+  "asyncpg>=0.30",
+  "mautrix[encryption]",
+]
 
 [resources]
 master = [{ path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" }]

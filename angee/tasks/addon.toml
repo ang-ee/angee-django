@@ -6,3 +6,6 @@ description = "The framework task seam — Celery-backed deferred and periodic e
 keywords = ["tasks", "queue", "jobs"]
 category = "Foundation"
 depends_on = ["angee.compose"]
+dependencies = [
+  "celery[redis]>=5.5",
+]

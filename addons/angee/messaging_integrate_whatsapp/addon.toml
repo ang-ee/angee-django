@@ -6,6 +6,9 @@ description = "WhatsApp sync — pairs a linked device by QR code and pulls chat
 keywords = ["whatsapp", "chat", "sync"]
 category = "Integration"
 depends_on = ["angee.messaging", "angee.integrate", "angee.integrate_iphone", "angee.parties", "angee.storage", "angee.workflows_integrate"]
+dependencies = [
+  "neonize>=0.4.3.post0",
+]
 
 [resources]
 master = [{ path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" }]

@@ -6,6 +6,9 @@ description = "A markdown-first knowledge base — vaults of pages with versione
 keywords = ["knowledge", "rag", "embeddings"]
 category = "Data"
 depends_on = ["angee.iam"]
+dependencies = [
+  "markdown-it-py>=4.2",
+]
 
 [resources]
 demo = [

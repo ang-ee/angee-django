@@ -6,6 +6,12 @@ description = "The integration substrate — OAuth connections, credentials, and
 keywords = ["integrations", "oauth", "connections"]
 category = "Integration"
 depends_on = ["angee.iam", "angee.resources", "angee.tasks"]
+dependencies = [
+  "authlib>=1.7.2",
+  "httpcore>=1.0,<2",
+  "httpx>=0.28.1,<0.29",
+  "qrcode[pil]>=8.2",
+]
 
 [[migrations]]
 name = "integration_lifecycle_values"

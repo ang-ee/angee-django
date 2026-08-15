@@ -6,6 +6,9 @@ description = "Discord messaging sync — runs a sanctioned bot on the Gateway"
 keywords = ["discord", "bot", "gateway", "chat", "messaging"]
 category = "Integration"
 depends_on = ["angee.messaging", "angee.integrate", "angee.parties"]
+dependencies = [
+  "discord-py>=2.7",
+]
 
 [resources]
 master = [{ path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" }]

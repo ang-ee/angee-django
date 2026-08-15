@@ -6,3 +6,6 @@ description = "Workflow definitions, steps, edges, and triggers"
 keywords = ["workflows", "automation", "orchestration"]
 category = "Workflows"
 depends_on = ["angee.iam", "angee.tasks"]
+dependencies = [
+  "croniter>=6.0",
+]

@@ -6,6 +6,9 @@ description = "Slack messaging sync — polls workspace conversations into chat 
 keywords = ["slack", "chat", "messaging", "sync"]
 category = "Integration"
 depends_on = ["angee.messaging", "angee.integrate", "angee.parties"]
+dependencies = [
+  "slack-sdk>=3.43.0",
+]
 
 [resources]
 master = [{ path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" }]

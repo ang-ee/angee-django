@@ -6,6 +6,9 @@ description = "Contacts — people and organizations, their circles, relationshi
 keywords = ["parties", "contacts", "crm"]
 category = "Data"
 depends_on = ["angee.iam", "angee.integrate", "angee.storage"]
+dependencies = [
+  "phonenumbers>=9.0",
+]
 
 [[migrations]]
 name = "relationship_anchor"

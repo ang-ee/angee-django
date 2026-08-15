@@ -6,3 +6,11 @@ description = "The GraphQL runtime — schema buckets, auto-CRUD, subscriptions,
 keywords = ["graphql", "schema", "api"]
 category = "Foundation"
 depends_on = ["angee.base", "channels"]
+dependencies = [
+  "channels>=4.0",
+  "channels-redis>=4.2",
+  "strawberry-django-aggregates>=0.10.0",
+  "strawberry-django-hasura>=0.6.0",
+  "strawberry-graphql>=0.270",
+  "strawberry-graphql-django>=0.86.7",
+]

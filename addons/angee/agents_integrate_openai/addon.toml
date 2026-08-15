@@ -6,6 +6,9 @@ description = "OpenAI (GPT) inference backend — adds the OpenAI client to the 
 keywords = ["openai", "gpt", "inference"]
 category = "Integration"
 depends_on = ["angee.agents", "angee.integrate"]
+dependencies = [
+  "openai>=2.43.0",
+]
 
 [resources]
 demo = [

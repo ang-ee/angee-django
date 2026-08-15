@@ -6,3 +6,8 @@ description = "Tiered data import/export — load demo and seed data from declar
 keywords = ["resources", "import", "data"]
 category = "Foundation"
 depends_on = ["angee.base"]
+dependencies = [
+  "django-import-export>=4.3",
+  "pyyaml>=6",
+  "tablib>=3",
+]

@@ -6,6 +6,9 @@ description = "Anthropic (Claude) inference backend — adds the Claude client t
 keywords = ["anthropic", "claude", "inference"]
 category = "Integration"
 depends_on = ["angee.agents", "angee.integrate"]
+dependencies = [
+  "anthropic>=0.109.2",
+]
 
 [resources]
 demo = [

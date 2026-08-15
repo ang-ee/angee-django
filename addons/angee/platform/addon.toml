@@ -6,3 +6,6 @@ description = "The admin console — schema/addon explorer, the marketplace boar
 keywords = ["console", "admin", "explorer"]
 category = "Platform"
 depends_on = ["angee.iam", "angee.resources"]
+dependencies = [
+  "ruamel.yaml>=0.18",
+]

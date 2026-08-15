@@ -6,3 +6,8 @@ description = "The build-time composer that turns addon contracts into a runnabl
 keywords = ["composer", "build", "runtime"]
 category = "Foundation"
 depends_on = ["django_yamlconf"]
+dependencies = [
+  "django-environ>=0.12",
+  "django-yamlconf>=1.5.0",
+  "uvicorn[standard]>=0.30",
+]

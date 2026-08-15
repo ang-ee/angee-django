@@ -6,3 +6,6 @@ description = "CardDAV contact sync — pulls address books from a CardDAV serve
 keywords = ["carddav", "contacts", "sync"]
 category = "Integration"
 depends_on = ["angee.parties", "angee.integrate"]
+dependencies = [
+  "vobject>=0.9.9",
+]

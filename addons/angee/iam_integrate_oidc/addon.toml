@@ -6,6 +6,9 @@ description = "OIDC single sign-on — login and account linking over any OpenID
 keywords = ["oidc", "login", "sso"]
 category = "Integration"
 depends_on = ["angee.iam", "angee.integrate", "angee.parties"]
+dependencies = [
+  "pyjwt[crypto]>=2.12",
+]
 
 [resources]
 install = [

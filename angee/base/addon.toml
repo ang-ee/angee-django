@@ -6,3 +6,11 @@ description = "The model toolkit every addon builds on — abstract models, mixi
 keywords = ["models", "toolkit", "orm"]
 category = "Foundation"
 depends_on = ["angee.compose", "django.contrib.contenttypes", "rebac", "reversion", "simple_history"]
+dependencies = [
+  "cryptography>=44",
+  "django-choices-field>=4.0.0",
+  "django-reversion>=5.1",
+  "django-simple-history>=3.7",
+  "django-sqids>=0.1",
+  "django-zed-rebac[strawberry-django]>=0.14",
+]
