@@ -1,0 +1,76 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+
+_angee:
+  schema: 1
+  kind: workspace
+  name: src
+  description: >-
+    Conventional all-source workspace. Each Git slot is a worktree on
+    workspace/<name>, cut from its declared base ref because the cache may
+    already have that ref checked out. Update one slot through
+    workspaceSourcePull (`angee ws source pull`); do not switch the worktree to
+    its base ref.
+  inputs:
+    branch_prefix:
+      type: str
+      default: workspace
+    base_ref:
+      type: str
+      default: main
+      help: Mainline ref for every source slot except angee-django.
+    angee_django_ref:
+      type: str
+      default: main
+      help: Mainline ref for angee-django; override while a ratified change lives on another branch.
+  sources:
+    angee-django:
+      source: angee-django
+      mode: worktree
+      ref: "${inputs.angee_django_ref}"
+      branch: "${inputs.branch_prefix}/${name | slug}"
+      subpath: angee-django
+    angee-react:
+      source: angee-react
+      mode: worktree
+      ref: "${inputs.base_ref}"
+      branch: "${inputs.branch_prefix}/${name | slug}"
+      subpath: angee-react
+    angee-base:
+      source: angee-base
+      mode: worktree
+      ref: "${inputs.base_ref}"
+      branch: "${inputs.branch_prefix}/${name | slug}"
+      subpath: angee-base
+    angee-messaging-bridges:
+      source: angee-messaging-bridges
+      mode: worktree
+      ref: "${inputs.base_ref}"
+      branch: "${inputs.branch_prefix}/${name | slug}"
+      subpath: angee-messaging-bridges
+    angee-examples:
+      source: angee-examples
+      mode: worktree
+      ref: "${inputs.base_ref}"
+      branch: "${inputs.branch_prefix}/${name | slug}"
+      subpath: angee-examples
+    # Inherit the declared Source kind: Git sources clone, while local sources
+    # materialize as symlinks. A fixed `kind: local` here breaks Git stacks.
+    work-state:
+      source: work-angee-django
+      subpath: .work
+
+branch_prefix:
+  type: str
+  default: workspace
+
+base_ref:
+  type: str
+  default: main
+
+angee_django_ref:
+  type: str
+  default: main
+
