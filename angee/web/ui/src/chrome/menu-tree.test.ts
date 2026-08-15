@@ -7,8 +7,7 @@ import {
   type ChromeMenuItem,
 } from "./menu-tree";
 
-// Two apps with sections plus a single-page app. The top bar navigates within
-// the active app, so it shows that app's sections and never a sibling's.
+// Two apps with sections plus a single-page app.
 const MENU: readonly ChromeMenuItem[] = [
   {
     id: "notes",
@@ -30,37 +29,6 @@ const MENU: readonly ChromeMenuItem[] = [
   },
   { id: "single", label: "Single", to: "/single" },
 ];
-
-describe("appSectionItems", () => {
-  test("returns the active app's sections, flat", () => {
-    expect(MenuTree.from(MENU).appSectionItems("/operator/services").map((item) => item.id)).toEqual([
-      "operator.overview",
-      "operator.services",
-    ]);
-  });
-
-  test("scopes to the app the path belongs to — a sibling app never leaks", () => {
-    expect(MenuTree.from(MENU).appSectionItems("/notes").map((item) => item.id)).toEqual([
-      "notes.all",
-      "notes.archive",
-    ]);
-  });
-
-  test("matches the app from a nested section path", () => {
-    expect(MenuTree.from(MENU).appSectionItems("/notes/archive").map((item) => item.id)).toEqual([
-      "notes.all",
-      "notes.archive",
-    ]);
-  });
-
-  test("a single-page app (no children) contributes nothing", () => {
-    expect(MenuTree.from(MENU).appSectionItems("/single")).toEqual([]);
-  });
-
-  test("an unmatched path yields no sections", () => {
-    expect(MenuTree.from(MENU).appSectionItems("/nope")).toEqual([]);
-  });
-});
 
 describe("navigableItems", () => {
   test("returns navigable leaves paired with their root app, in build order", () => {
@@ -116,6 +84,27 @@ describe("navigableItems", () => {
       .map(({ item }) => item.id);
     expect(ids).toEqual(["real"]);
   });
+
+  test("keeps Settings-category leaves available to the command palette", () => {
+    expect(
+      MenuTree.from([
+        {
+          id: "agents.ai",
+          label: "AI",
+          group: "platform",
+          children: [
+            { id: "agents.providers", label: "Providers", to: "/agents/providers" },
+            { id: "agents.models", label: "Models", to: "/agents/models" },
+          ],
+        },
+      ])
+        .navigableItems()
+        .map(({ item, root, target }) => ({ id: item.id, root: root.id, target })),
+    ).toEqual([
+      { id: "agents.providers", root: "agents.ai", target: "/agents/providers" },
+      { id: "agents.models", root: "agents.ai", target: "/agents/models" },
+    ]);
+  });
 });
 
 describe("railMenuItems", () => {
@@ -142,9 +131,51 @@ describe("railMenuItems", () => {
 
     expect(ids).toEqual(["agents", "notes"]);
   });
+
+  test("separates platform roots into the Settings place in declaration order", () => {
+    const tree = MenuTree.from([
+      { id: "notes", label: "Notes", to: "/notes", appRoot: true },
+      {
+        id: "iam",
+        label: "IAM",
+        group: "platform",
+        appRoot: true,
+        children: [{ id: "iam.users", to: "/iam/users" }],
+      },
+      { id: "files", label: "Files", to: "/files", appRoot: true },
+      {
+        id: "platform",
+        label: "Platform",
+        group: "platform",
+        appRoot: true,
+        children: [{ id: "platform.models", to: "/platform/models" }],
+      },
+    ]);
+
+    expect(tree.railMenuItems().map((item) => item.id)).toEqual([
+      "notes",
+      "files",
+    ]);
+    expect(tree.settingsMenuItems().map((item) => item.id)).toEqual([
+      "iam",
+      "platform",
+    ]);
+    expect(tree.settingsEntry()).toMatchObject({
+      id: "settings",
+      icon: "settings",
+      target: "/iam/users",
+      group: "platform",
+    });
+    expect(tree.settingsEntry()?.items.map((item) => item.id)).toEqual([
+      "iam",
+      "platform",
+    ]);
+    expect(tree.isSettingsActive("/platform/models/Note")).toBe(true);
+    expect(tree.isSettingsActive("/notes")).toBe(false);
+  });
 });
 
-describe("isActive / pathMatchesTarget", () => {
+describe("active branches and pathMatchesTarget", () => {
   test("pathMatchesTarget matches an exact or nested path, never missing/#", () => {
     expect(pathMatchesTarget("/notes", "/notes")).toBe(true);
     expect(pathMatchesTarget("/notes/archive", "/notes")).toBe(true);
@@ -153,22 +184,28 @@ describe("isActive / pathMatchesTarget", () => {
     expect(pathMatchesTarget("/x", undefined)).toBe(false);
   });
 
-  test("isActive matches a node's own target or an immediate child's", () => {
+  test("finds the most-specific active child through nested descendants", () => {
     const tree = MenuTree.from([
       {
-        id: "settings",
-        label: "Settings",
-        to: "/settings",
-        children: [{ id: "settings.team", label: "Team", to: "/team" }],
+        id: "agents",
+        to: "/agents",
+        children: [
+          { id: "agents.all", to: "/agents" },
+          {
+            id: "agents.skills",
+            children: [
+              { id: "agents.skills.all", to: "/agents/skills" },
+              { id: "agents.skills.sources", to: "/agents/skills/sources" },
+            ],
+          },
+        ],
       },
     ]);
-    const settings = tree.byId.get("settings");
-    expect(settings?.isActive("/settings")).toBe(true); // own target
-    // own target `/settings` does not prefix `/team`, so this is the child path
-    expect(settings?.isActive("/team")).toBe(true);
-    expect(settings?.hasActiveDescendant("/team")).toBe(true);
-    expect(settings?.hasActiveDescendant("/settings")).toBe(false);
-    expect(settings?.isActive("/other")).toBe(false);
+    const agents = tree.byId.get("agents");
+
+    expect(agents?.activeTargetedChild("/agents/skills/sources/one")?.id)
+      .toBe("agents.skills");
+    expect(tree.activeAppRoot("/agents/skills/sources/one")?.id).toBe("agents");
   });
 });
 
@@ -225,6 +262,11 @@ describe("trailFor", () => {
         { id: "dup", route: "b", to: "/b" },
       ]),
     ).toThrow(/Menu item "dup" is declared more than once/);
+  });
+
+  test("reserves the synthetic Settings place id", () => {
+    expect(() => MenuTree.from([{ id: "settings", to: "/settings" }]))
+      .toThrow(/reserved Settings place id/);
   });
 
   test("throws when parent links cycle", () => {

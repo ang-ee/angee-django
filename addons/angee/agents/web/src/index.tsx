@@ -25,8 +25,8 @@ const agentsRoutes: readonly BaseAddonRoute[] = [
   ...resourcePageRoutes("agents.models", "/agents/models", lazyRouteComponent(() => import("./views/InferencePage"), "InferenceModelsPage"), "agents.InferenceModel", { detailName: "agents.model" }),
 ];
 
-// One rail (app) icon for the addon; its children are the top-bar menus, and a
-// child that itself has children renders as a dropdown (see chrome `TopMenu`).
+// The addon owns a domain Agents root and a separate AI Settings category. Their
+// leaves retain the same routes; only their menu ownership changes.
 const agentsMenu: readonly BaseMenuItem[] = [
   {
     // Route-less app root: the rail icon resolves its target through the first
@@ -35,9 +35,6 @@ const agentsMenu: readonly BaseMenuItem[] = [
     id: AGENTS_ID,
     label: "Agents",
     icon: "agent",
-    // A domain app (top of the rail) that opts into the settings-style left
-    // sub-nav for its grouped sections — they still render as top-bar dropdowns.
-    sidebar: true,
     children: [
       {
         id: "agents.menu.agents",
@@ -68,15 +65,16 @@ const agentsMenu: readonly BaseMenuItem[] = [
           { id: "agents.mcp-tools", label: "Tools", icon: "mcp-tool", route: "agents.mcp-tools" },
         ],
       },
-      {
-        id: "agents.menu.inference",
-        label: "Inference",
-        icon: "inference-provider",
-        children: [
-          { id: "agents.providers", label: "Providers", icon: "inference-provider", route: "agents.providers" },
-          { id: "agents.models", label: "Models", icon: "inference-model", route: "agents.models" },
-        ],
-      },
+    ],
+  },
+  {
+    id: "agents.ai",
+    label: "AI",
+    icon: "inference-provider",
+    group: "platform",
+    children: [
+      { id: "agents.providers", label: "Providers", icon: "inference-provider", route: "agents.providers" },
+      { id: "agents.models", label: "Models", icon: "inference-model", route: "agents.models" },
     ],
   },
 ];

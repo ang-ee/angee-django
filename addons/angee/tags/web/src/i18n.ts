@@ -1,6 +1,6 @@
 import { createNamespaceT } from "@angee/ui";
 
-// Only the keys the pane/page resolve — the sidebar/chatter chrome labels live on
+// Only the keys the pane/page resolve — the shell/chatter chrome labels live on
 // the manifest (index.tsx), and metadata-labelled columns/fields need none.
 export const enTagsMessages: Record<string, string> = {
   "pane.assigned": "Tags",

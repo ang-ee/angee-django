@@ -1,10 +1,9 @@
 import * as React from "react";
 
 import { AppRail } from "../chrome/AppRail";
-import { Breadcrumb, BreadcrumbLabelProvider } from "../chrome/Breadcrumb";
-import { ConsoleSubNav, useConsoleSubNav } from "../chrome/ConsoleSubNav";
+import { BreadcrumbLabelProvider } from "../chrome/Breadcrumb";
 import { DrawerRail } from "../chrome/DrawerRail";
-import { TopBar, type TopBarProps } from "../chrome/TopBar";
+import { TopBar } from "../chrome/TopBar";
 import { Chatter } from "../communication/Chatter";
 import { ChatterProvider, useChatter } from "../communication/chatter-context";
 import { cn } from "../lib/cn";
@@ -18,14 +17,12 @@ import { Workbench } from "./Workbench";
 
 export interface ConsoleLayoutProps {
   children: React.ReactNode;
-  topMenu?: TopBarProps["topMenu"];
   showChatter?: boolean;
   className?: string;
 }
 
 export function ConsoleLayout({
   children,
-  topMenu,
   showChatter = true,
   className,
 }: ConsoleLayoutProps): React.ReactElement {
@@ -35,6 +32,7 @@ export function ConsoleLayout({
     React.useState<HTMLDivElement | null>(null);
   const [primaryController, setPrimaryController] =
     React.useState<CollapsiblePane | null>(null);
+  const [railWidth, setRailWidth] = React.useState<string | null>(null);
   const handlePrimaryController = React.useCallback(
     (controller: CollapsiblePane | null) => {
       setPrimaryController((current) =>
@@ -51,12 +49,6 @@ export function ConsoleLayout({
     },
     [],
   );
-  // Apps that opt into the sidebar (`sidebar: true` on their root menu) render
-  // their sections in a left settings-style sub-nav *in addition to* the top bar.
-  // It now rides the Workbench primary pane (collapsible + resizable), so the
-  // grid stays a fixed rail + content frame whether or not the sub-nav shows.
-  const { show: showSubNav } = useConsoleSubNav();
-
   return (
     <ChatterProvider>
       <PrimaryPaneProvider>
@@ -65,18 +57,19 @@ export function ConsoleLayout({
             <StatuslineProvider host={statusHost}>
               <BreadcrumbLabelProvider>
                 <div
+                  // The CSS var() fallback owns the collapsed default; the
+                  // style entry exists only once the rail has published.
+                  style={railWidth
+                    ? { "--rail-current-w": railWidth } as React.CSSProperties
+                    : undefined}
                   className={cn(
                     "console-grid min-h-screen w-screen bg-canvas text-fg",
                     className,
                   )}
                 >
-                  <AppRail className="area-rail" />
+                  <AppRail onWidthChange={setRailWidth} />
                   <TopBar
                     className="area-topbar"
-                    topMenu={topMenu}
-                    // The toggle shows whenever the primary pane has content —
-                    // a page-published explorer *or* the settings sub-nav — which
-                    // is exactly when the Workbench registers its controller.
                     primaryPane={
                       primaryController
                         ? {
@@ -88,10 +81,8 @@ export function ConsoleLayout({
                     showChatterToggle={showChatter}
                     showUserMenu
                   />
-                  <Breadcrumb className="area-crumbs" />
                   <div ref={setControlHost} className="area-control" />
                   <ConsoleWorkbench
-                    showSubNav={showSubNav}
                     showChatter={showChatter}
                     onPrimaryController={handlePrimaryController}
                   >
@@ -122,38 +113,32 @@ export function ConsoleLayout({
 
 /**
  * The console content region: the single `Workbench` every console page flows
- * through — the settings sub-nav as the (collapsible) primary pane, the page as
- * the content, and the Chatter as the (collapsible) secondary pane. Lives inside
+ * through — page-published context as the (collapsible) primary pane, the page
+ * as content, and Chatter as the (collapsible) secondary pane. Lives inside
  * `ChatterProvider` so it can register the secondary pane's collapse controller
  * with the chatter bridge, letting the chrome `TopBar` toggle drive it (and stay
  * in sync with drag-to-collapse). The primary pane's controller is surfaced up to
  * `ConsoleLayout` so the TopBar's left-panel toggle drives it too.
  *
- * The primary pane is whatever a page publishes through `usePrimaryPane` (an
- * explorer/navigator tree); when no page publishes one, sidebar apps still get
- * their settings sub-nav. A page-published explorer wins over the sub-nav.
+ * The primary pane exists only while a page publishes a contextual explorer.
  */
 function ConsoleWorkbench({
-  showSubNav,
   showChatter,
   onPrimaryController,
   children,
 }: {
-  showSubNav: boolean;
   showChatter: boolean;
   onPrimaryController: (controller: CollapsiblePane | null) => void;
   children: React.ReactNode;
 }): React.ReactElement {
   const { registerSecondaryController } = useChatter();
   const { node: publishedPrimary } = usePrimaryPaneContent();
-  const primary =
-    publishedPrimary ?? (showSubNav ? <ConsoleSubNav /> : undefined);
   return (
     <Workbench
       className="area-content"
       autoSave="console.workbench"
       scrollMode="browser"
-      primary={primary}
+      primary={publishedPrimary ?? undefined}
       secondary={showChatter ? <Chatter /> : undefined}
       onPrimaryController={onPrimaryController}
       onSecondaryController={registerSecondaryController}

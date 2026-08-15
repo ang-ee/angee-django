@@ -31,6 +31,7 @@ import {
   type ChromeMenuStatus,
   type ChromeMenuTone,
   MenuTree,
+  SETTINGS_MENU_ENTRY_DESCRIPTOR,
   pathMatchesTarget,
 } from "./menu-tree";
 import { useChromeMenuItems } from "./refine-menu";
@@ -54,6 +55,8 @@ export interface AppChooserProps {
   className?: string;
   defaultOpen?: boolean;
   items?: readonly AppChooserItem[];
+  /** Menu declarations (or a built tree) to project instead of the composed runtime menu. */
+  menuItems?: readonly ChromeMenuItem[] | MenuTree;
   searchPlaceholder?: string;
   side?: PopoverPositionerProps["side"];
   sideOffset?: PopoverPositionerProps["sideOffset"];
@@ -68,6 +71,7 @@ export function AppChooser({
   className,
   defaultOpen = false,
   items,
+  menuItems,
   searchPlaceholder,
   side = "right",
   sideOffset = 8,
@@ -85,17 +89,25 @@ export function AppChooser({
   });
   const [open, setOpen] = useState(defaultOpen);
   const [query, setQuery] = useState("");
+  const menuTree = useMemo(
+    () => MenuTree.from(menuItems ?? runtimeItems),
+    [menuItems, runtimeItems],
+  );
   const resolvedItems = useMemo(
-    () => items ?? appChooserItemsFromMenuItems(runtimeItems),
-    [items, runtimeItems],
+    () => items ?? appChooserItemsFromMenuTree(menuTree, t("chrome.settings")),
+    [items, menuTree, t],
   );
   const visibleItems = useMemo(
     () => filterAppChooserItems(resolvedItems, query),
     [query, resolvedItems],
   );
   const groups = useMemo(() => appChooserGroups(visibleItems), [visibleItems]);
-  const currentId =
-    activeId ?? resolvedItems.find((item) => pathMatchesTarget(pathname, item.to))?.id;
+  const activeMenuRoot = menuTree.activeAppRoot(pathname);
+  const currentId = activeId ?? (items === undefined
+    ? menuTree.isSettingsActive(pathname)
+      ? SETTINGS_MENU_ENTRY_DESCRIPTOR.id
+      : activeMenuRoot?.id
+    : resolvedItems.find((item) => pathMatchesTarget(pathname, item.to))?.id);
 
   return (
     <PopoverRoot open={open} onOpenChange={setOpen}>
@@ -164,7 +176,7 @@ export function AppChooser({
                 onSelect={() => setOpen(false)}
               />
               <AppChooserGroup
-                title={t("chrome.platform")}
+                title={t("chrome.settings")}
                 items={groups.platform}
                 activeId={currentId}
                 onSelect={() => setOpen(false)}
@@ -184,9 +196,16 @@ export function AppChooser({
 
 export function appChooserItemsFromMenuItems(
   items: readonly ChromeMenuItem[],
+  settingsLabel: string,
 ): readonly AppChooserItem[] {
-  const tree = MenuTree.from(items);
-  return tree.railMenuItems().flatMap((item) => {
+  return appChooserItemsFromMenuTree(MenuTree.from(items), settingsLabel);
+}
+
+function appChooserItemsFromMenuTree(
+  tree: MenuTree,
+  settingsLabel: string,
+): readonly AppChooserItem[] {
+  const domainItems = tree.railMenuItems().flatMap((item) => {
     const target = item.target;
     if (!target) return [];
     return [{
@@ -202,6 +221,20 @@ export function appChooserItemsFromMenuItems(
       tone: item.tone,
     }];
   });
+  const settings = tree.settingsEntry();
+  if (!settings) return domainItems;
+  return [
+    ...domainItems,
+    {
+      id: settings.id,
+      label: settingsLabel,
+      to: settings.target,
+      group: settings.group,
+      icon: settings.icon,
+      searchText: settings.items.map(appChooserSearchText).join(" "),
+      tone: settings.tone,
+    },
+  ];
 }
 
 function AppChooserGroup({
@@ -290,7 +323,12 @@ function AppChooserTile({
   }
 
   return (
-    <Link to={item.to} onClick={onSelect} className={className}>
+    <Link
+      to={item.to}
+      aria-current={active ? "page" : undefined}
+      onClick={onSelect}
+      className={className}
+    >
       {content}
     </Link>
   );

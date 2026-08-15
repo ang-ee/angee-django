@@ -16,7 +16,7 @@ type Story = StoryObj<typeof meta>;
 export const Default: Story = {
   render: () => (
     <div className="rounded-6 bg-rail p-3 text-on-rail">
-      <Systray />
+      <Systray onHelp={() => undefined} onNotifications={() => undefined} />
     </div>
   ),
 };

@@ -21,6 +21,7 @@ export {
 } from "./tones";
 export { useRender } from "./slot";
 export { useLatestRef } from "./use-latest-ref";
+export { LARGE_VIEWPORT_QUERY, useMediaQuery } from "./use-media-query";
 export type {
   UseRenderComponentProps,
   UseRenderRenderProp,

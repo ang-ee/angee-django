@@ -1,4 +1,5 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
+import type { BaseMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import tags from "./index";
@@ -13,6 +14,15 @@ describe("angee.tags addon manifest", () => {
       .map((route) => route.resource)
       .filter((resource): resource is string => Boolean(resource));
     expect(resources).toEqual(["tags.Tag"]);
+  });
+
+  test("contributes Tags as a Settings category", () => {
+    const root = tags.menus?.[0] as BaseMenuItem | undefined;
+    expect(root).toMatchObject({
+      id: "tags",
+      label: "Tags",
+      group: "platform",
+    });
   });
 
   test("contributes the record-scoped Tags chatter tab", () => {

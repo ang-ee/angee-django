@@ -33,7 +33,7 @@ const tagsMenu: readonly BaseMenuItem[] = [
     id: TAGS_ID,
     label: "Tags",
     icon: "tags-group",
-    sidebar: true,
+    group: "platform",
     children: [
       {
         id: "tags.list",

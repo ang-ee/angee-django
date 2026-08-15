@@ -15,10 +15,8 @@ export {
   type IamLoginPageProps,
 } from "./IamLoginPage";
 
-// One top-bar dropdown ("Roles" gathers the REBAC views) plus the "OIDC Providers"
-// item — the inbound sign-in provider admin (the OAuth login refinement; the OAuth
-// connect substrate moved to `@angee/integrate`). `TopMenu` renders a menu item with
-// children as a dropdown; a route-less parent inherits its first child's target.
+// IAM contributes its grouped Settings tree, including the inbound OIDC sign-in
+// provider admin; a route-less parent inherits its first child's target.
 const identityMenu: readonly BaseMenuItem[] = [
   {
     // Route-less app root: the rail icon inherits its target from the first

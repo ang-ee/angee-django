@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 
 import operator from "./index";
 
-// The console's eight sections, in nav order. Routes and the menu sub-nav must
+// The console's eight sections, in nav order. Routes and the menu tree must
 // stay aligned to this list — a missing or extra entry is a wiring bug.
 const SECTION_PATHS = [
   "/operator",
@@ -45,16 +45,13 @@ describe("operator addon manifest", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  test("contributes a single Operator group under platform, children mirror routes", () => {
+  test("contributes one Operator Settings category whose children mirror routes", () => {
     expect(operator.menus).toHaveLength(1);
     const menu = operator.menus?.[0] as BaseMenuItem | undefined;
     expect(menu?.id).toBe("operator");
     expect(menu?.icon).toBe("operator");
-    // Operator contributes into the platform app rather than owning a rail root,
-    // so it nests under platform and carries no `group` of its own; it keeps its
-    // `route` so the route's `menu: "operator"` crumb resolves to it.
-    expect(menu?.parentId).toBe("platform");
-    expect(menu?.group).toBeUndefined();
+    expect(menu?.parentId).toBeUndefined();
+    expect(menu?.group).toBe("platform");
     expect(menu?.route).toBe("operator.overview");
     const sectionNames = (operator.routes ?? [])
       .filter((route) => !route.path.includes("$"))

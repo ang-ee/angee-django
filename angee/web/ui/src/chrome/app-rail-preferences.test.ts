@@ -13,11 +13,13 @@ describe("app rail preferences", () => {
         [APP_RAIL_PREFERENCES_KEY]: {
           order: ["ops", "notes", "ops", 4],
           defaultItemId: "ops",
+          expanded: true,
         },
       }),
     ).toEqual({
       order: ["ops", "notes"],
       defaultItemId: "ops",
+      expanded: true,
     });
   });
 
@@ -26,6 +28,7 @@ describe("app rail preferences", () => {
       .toEqual({
         order: [],
         defaultItemId: null,
+        expanded: undefined,
       });
   });
 
@@ -36,6 +39,7 @@ describe("app rail preferences", () => {
         {
           order: ["integrate", "notes"],
           defaultItemId: "integrate",
+          expanded: false,
         },
       ),
     ).toEqual({
@@ -43,6 +47,7 @@ describe("app rail preferences", () => {
       [APP_RAIL_PREFERENCES_KEY]: {
         order: ["integrate", "notes"],
         defaultItemId: "integrate",
+        expanded: false,
       },
     });
   });

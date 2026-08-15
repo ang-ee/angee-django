@@ -5,19 +5,15 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { enPlatformMessages } from "./i18n";
 import { PlatformGlyph } from "./PlatformGlyph";
 
-// The platform app: a route-less rail root in the bottom platform cluster
-// (`group: "platform"`) that opts into the left settings sub-nav (`sidebar: true`).
-// Its three top-level sections — Platform (the schema explorer), Operator, and
-// Resources — render as top-bar dropdowns *and* in the sidebar. The platform addon
-// owns the "Platform" group; `operator` and `resources` contribute the other two
-// under `parentId: "platform"`.
+// The platform app is a route-less Settings category (`group: "platform"`). The
+// addon owns the schema explorer group; Resources contributes its import ledger
+// under `parentId: "platform"` while other base addons own sibling categories.
 const platformMenu: readonly BaseMenuItem[] = [
   {
     id: "platform",
     label: "Platform",
     icon: "platform",
     group: "platform",
-    sidebar: true,
     children: [
       {
         id: "platform.explore",

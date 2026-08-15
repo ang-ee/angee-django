@@ -17,8 +17,7 @@ import {
  * renders it in the `Workbench` primary pane. One owner symbol per caller —
  * publish on mount, clear on unmount — so unrelated callers never clobber each
  * other and a stale publisher never wins. When nothing is published the value is
- * `null` and the shell falls back to its own primary content (the settings
- * sub-nav, if any).
+ * `null` and the shell omits the primary pane.
  */
 export interface PrimaryPaneContextValue {
   /** The currently published primary-pane node, or `null` when nothing is published. */

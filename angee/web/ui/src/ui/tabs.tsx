@@ -42,6 +42,14 @@ export const tabsVariants = tv({
         indicator: "hidden",
         panel: "pt-3",
       },
+      rail: {
+        root: "w-auto",
+        list: "gap-1",
+        tab:
+          "h-8 min-w-0 rounded-6 px-3 text-on-rail-mut hover:bg-rail-hi hover:text-on-rail-hi data-[active]:bg-rail-hi data-[active]:text-on-rail-hi",
+        indicator: "hidden",
+        panel: "pt-3",
+      },
     },
   },
   defaultVariants: {

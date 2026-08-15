@@ -101,7 +101,7 @@ const storybookRoutes = [
   "/settings/preferences",
 ] as const;
 
-const withAngeeProviders: Decorator = (Story) => {
+const withAngeeProviders: Decorator = (Story, context) => {
   const rootRoute = createRootRoute({ component: Outlet });
   const routes = storybookRoutes.map((path) =>
     createRoute({
@@ -112,7 +112,13 @@ const withAngeeProviders: Decorator = (Story) => {
   );
   const router = createRouter({
     routeTree: rootRoute.addChildren(routes),
-    history: createMemoryHistory({ initialEntries: ["/notes"] }),
+    history: createMemoryHistory({
+      initialEntries: [
+        typeof context.parameters.route === "string"
+          ? context.parameters.route
+          : "/notes",
+      ],
+    }),
     defaultPreload: false,
   });
 

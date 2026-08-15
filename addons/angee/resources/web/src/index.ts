@@ -6,7 +6,7 @@ import { enResourcesMessages } from "./i18n";
 
 // Resources contributes a "Resources" section into the platform console — the
 // import ledger listing. `parentId: "platform"` nests it under the platform app's
-// settings sub-nav, so it has no rail glyph of its own.
+// Settings category, so it has no domain rail glyph of its own.
 const resourcesMenu: readonly BaseMenuItem[] = [
   {
     id: "resources",

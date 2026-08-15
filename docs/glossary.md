@@ -188,3 +188,8 @@ than passing color props or one-off variants.
 
 **Rendered binding** — the single rendered (styled) Angee binding over Refine
 state, owned by `@angee/ui`.
+
+**Settings place** — the one synthetic console destination that groups all menu
+roots declared with `group:"platform"`. It is the last entry after a separator in
+the rail's single scrolling list, plus one chooser entry; inside it, the expanded
+rail shows the contributing platform trees and a back header.

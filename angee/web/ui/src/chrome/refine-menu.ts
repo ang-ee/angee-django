@@ -17,7 +17,6 @@ interface RefineChromeMenuMeta {
   icon?: unknown;
   description?: unknown;
   group?: unknown;
-  sidebar?: unknown;
   status?: unknown;
   tone?: unknown;
   badge?: unknown;
@@ -59,7 +58,6 @@ function chromeMenuItemFromRefine(
     ...(stringValue(meta.icon ?? item.icon) ? { icon: stringValue(meta.icon ?? item.icon) } : {}),
     ...(stringValue(meta.description) ? { description: stringValue(meta.description) } : {}),
     ...(menuGroup(meta.group) ? { group: menuGroup(meta.group) } : {}),
-    ...(typeof meta.sidebar === "boolean" ? { sidebar: meta.sidebar } : {}),
     ...(menuStatus(meta.status) ? { status: menuStatus(meta.status) } : {}),
     ...(menuTone(meta.tone) ? { tone: menuTone(meta.tone) } : {}),
     ...(numberValue(meta.badge) !== undefined ? { badge: numberValue(meta.badge) } : {}),

@@ -5,6 +5,12 @@ import type { Tone } from "../lib/tones";
 
 export type ChromeMenuGroup = "domain" | "platform";
 export type ChromeMenuStatus = "active" | "future";
+export const SETTINGS_MENU_ENTRY_DESCRIPTOR = {
+  id: "settings",
+  group: "platform",
+  icon: "settings",
+  tone: "neutral",
+} as const;
 /** The tones a chrome menu item may carry — the curated `MENU_TONES` slice of the
  *  `Tone` owner (`lib/tones.ts`). `Extract` keeps the nav-tone narrowing rather
  *  than widening to the full palette. */
@@ -15,7 +21,7 @@ export type ChromeMenuTone = Extract<
 
 /**
  * The chrome-extension fields layered onto a menu item by both rendered surfaces.
- * One owner for the nine fields shared by `BaseMenuItem` and `ChromeMenuItem`;
+ * One owner for the fields shared by `BaseMenuItem` and `ChromeMenuItem`;
  * `children` is excluded because its element type differs per surface.
  */
 export interface ChromeMenuExtra {
@@ -24,7 +30,6 @@ export interface ChromeMenuExtra {
   appRoot?: boolean;
   description?: string;
   group?: ChromeMenuGroup;
-  sidebar?: boolean;
   status?: ChromeMenuStatus;
   tone?: ChromeMenuTone;
   badge?: number;
@@ -64,7 +69,6 @@ export class ChromeMenuNode implements ChromeMenuItem {
   appRoot?: boolean;
   description?: string;
   group?: ChromeMenuGroup;
-  sidebar?: boolean;
   status?: ChromeMenuStatus;
   tone?: ChromeMenuTone;
   badge?: number;
@@ -95,18 +99,13 @@ export class ChromeMenuNode implements ChromeMenuItem {
     return (this.children ?? []).filter((child) => child.target);
   }
 
+  /** Most-specific targeted child whose subtree contains `pathname`. */
+  activeTargetedChild(pathname: string): ChromeMenuNode | undefined {
+    return deepestTargetMatch(this.targetedChildren, pathname);
+  }
+
   matchesPath(pathname: string): boolean {
     return pathMatchesTarget(pathname, this.target);
-  }
-
-  /** True when this node's own target, or any immediate child's, matches `pathname`. */
-  isActive(pathname: string): boolean {
-    return this.matchesPath(pathname) || this.hasActiveDescendant(pathname);
-  }
-
-  /** True when an immediate child's target matches `pathname`. */
-  hasActiveDescendant(pathname: string): boolean {
-    return Boolean(this.children?.some((child) => child.matchesPath(pathname)));
   }
 
   appendChild(child: ChromeMenuNode): void {
@@ -153,10 +152,66 @@ export class MenuTree {
   railMenuItems(): readonly ChromeMenuNode[] {
     const targetedRoots = this.roots.filter((item) => {
       if (CHROME_MENU_PARENT_IDS.has(item.id)) return false;
+      if (item.group === "platform") return false;
       return Boolean(item.target);
     });
     const appRoots = targetedRoots.filter((item) => item.appRoot);
     return appRoots.length ? appRoots : targetedRoots;
+  }
+
+  /** Navigable root categories that live in the Settings place. */
+  settingsMenuItems(): readonly ChromeMenuNode[] {
+    return this.roots.filter((item) => {
+      if (CHROME_MENU_PARENT_IDS.has(item.id)) return false;
+      return item.group === "platform" && Boolean(item.target);
+    });
+  }
+
+  /** The one synthetic navigation entry that represents all platform roots. */
+  settingsEntry(): {
+    id: typeof SETTINGS_MENU_ENTRY_DESCRIPTOR.id;
+    group: typeof SETTINGS_MENU_ENTRY_DESCRIPTOR.group;
+    icon: typeof SETTINGS_MENU_ENTRY_DESCRIPTOR.icon;
+    tone: typeof SETTINGS_MENU_ENTRY_DESCRIPTOR.tone;
+    target: string;
+    items: readonly ChromeMenuNode[];
+  } | undefined {
+    const items = this.settingsMenuItems();
+    const target = items[0]?.target;
+    return target
+      ? { ...SETTINGS_MENU_ENTRY_DESCRIPTOR, target, items }
+      : undefined;
+  }
+
+  /** Whether the current path belongs to a root in the Settings place. */
+  isSettingsActive(pathname: string): boolean {
+    return this.activeAppRoot(pathname)?.group === "platform";
+  }
+
+  /**
+   * The rail's place for the current path — the one answer every chrome
+   * surface asks instead of recombining `isSettingsActive`/`activeAppRoot`/
+   * root lists itself: which scope is active, which roots that scope shows,
+   * and which of them is the active one (`null` when the path belongs to
+   * neither, or to the other scope's roots).
+   */
+  railPlace(pathname: string): {
+    scope: "apps" | "settings";
+    roots: readonly ChromeMenuNode[];
+    activeRootId: string | null;
+  } {
+    const scope = this.isSettingsActive(pathname) ? "settings" : "apps";
+    const roots = scope === "settings"
+      ? this.settingsMenuItems()
+      : this.railMenuItems();
+    const active = this.activeAppRoot(pathname);
+    return {
+      scope,
+      roots,
+      activeRootId: roots.some((item) => item.id === active?.id)
+        ? active?.id ?? null
+        : null,
+    };
   }
 
   /**
@@ -185,35 +240,11 @@ export class MenuTree {
   }
 
   /**
-   * The active app's section links for the top bar: the children of the root
-   * the current path belongs to, rendered flat. Apps live in the rail /
-   * app-switcher; the top bar navigates *within* the active app, so a sibling
-   * app's sections never leak here. A single-page app (a root with no children,
-   * e.g. Notes) contributes nothing.
-   */
-  appSectionItems(pathname: string): readonly ChromeMenuNode[] {
-    const active = this.activeAppRoot(pathname);
-    return active?.targetedChildren ?? [];
-  }
-
-  /**
    * The root the current path belongs to — the app whose own target or a
    * child's target is the longest prefix of `pathname` (most-specific wins).
    */
   activeAppRoot(pathname: string): ChromeMenuNode | undefined {
-    let best: ChromeMenuNode | undefined;
-    let bestLength = -1;
-    for (const root of this.roots) {
-      for (const candidate of [root, ...(root.children ?? [])]) {
-        const target = candidate.target;
-        if (!target || !candidate.matchesPath(pathname)) continue;
-        if (target.length > bestLength) {
-          best = root;
-          bestLength = target.length;
-        }
-      }
-    }
-    return best;
+    return deepestTargetMatch(this.roots, pathname);
   }
 
   /** Ancestor stack from root to `itemId`; throws if parent links cycle. */
@@ -242,6 +273,35 @@ export class MenuTree {
 
 const CHROME_MENU_PARENT_IDS = new Set(["systray", "user"]);
 
+function* menuNodeDescendants(
+  root: ChromeMenuNode,
+): Generator<ChromeMenuNode> {
+  yield root;
+  for (const child of root.children ?? []) {
+    yield* menuNodeDescendants(child);
+  }
+}
+
+/** Most-specific matching subtree, returning the root that owns the match. */
+function deepestTargetMatch<T extends ChromeMenuNode>(
+  roots: readonly T[],
+  pathname: string,
+): T | undefined {
+  let best: T | undefined;
+  let bestLength = -1;
+  for (const root of roots) {
+    for (const candidate of menuNodeDescendants(root)) {
+      const target = candidate.target;
+      if (!target || !candidate.matchesPath(pathname)) continue;
+      if (target.length > bestLength) {
+        best = root;
+        bestLength = target.length;
+      }
+    }
+  }
+  return best;
+}
+
 export function buildMenuTree(
   items: readonly ChromeMenuItem[],
 ): MenuTree {
@@ -253,6 +313,11 @@ export function buildMenuTree(
     parent?: ChromeMenuNode,
   ): ChromeMenuNode {
     const clone = new ChromeMenuNode(item);
+    if (clone.id === SETTINGS_MENU_ENTRY_DESCRIPTOR.id) {
+      throw new Error(
+        `Menu item "${clone.id}" uses the reserved Settings place id.`,
+      );
+    }
     if (byId.has(clone.id)) {
       throw new Error(`Menu item "${clone.id}" is declared more than once.`);
     }

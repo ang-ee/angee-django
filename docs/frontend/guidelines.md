@@ -528,8 +528,20 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   an all-read-only form never assembles an update mutation. Delete affordances are
   schema-capability gated: if the resource has no `delete` root, `ResourceList`/`ListView`
   omit record and bulk delete instead of requiring a delete-only `crud(...)`.
-- **An addon contributes one rail (app) root** (`group:"platform"`); its children
-  are the top-bar menus, and a child that itself has children renders as a dropdown.
+- **An addon contributes one menu root.** The app rail is the one navigation
+  column: compact domain icons collapse into, and expand in place as, their
+  descendant accordion tree. A root with `group:"platform"` contributes to the
+  shared **Settings place** instead: the rail and chooser expose one synthetic
+  Settings entry, and the expanded rail swaps to the platform tree with a back
+  header. The rail's one scrolling list is domain roots, a separator, then
+  Settings; the expansion toggle sits in the rail's own footer, outside that
+  scroll, and the rail is viewport-sticky so neither ever scrolls away. A
+  plain second activation of a nav link that already points at the current
+  page toggles the expansion instead of re-navigating
+  (`activeLinkToggleProps` in `chrome/app-rail-model.ts` is the one owner of
+  that contract; modified clicks keep the browser default). Workbench primary
+  panes are reserved for page-published explorers; `TopMenuTabs` is reserved
+  for explicit collection-view state, not derived menu children.
   A route referenced by more than one menu item must set `route.menu` (the owning
   item's id) or the chrome derivation throws "referenced by multiple menu items" —
   or make the root route-less so it inherits its target through a descendant and the
@@ -574,7 +586,7 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   hand-roll a fixed `grid`/`w-60` multi-pane shell or a pointer/arrow resize handle;
   the library owns sizing/collapse/persistence and Workbench owns the composition.
 - **`barVariants` (`layouts/bar.ts`) owns bar chrome.** Bar height/edge/pad/tone/
-  justify/text live once; `TopBar`/`Breadcrumb`/`ControlBand`/`PageToolbar`/
+  justify/text live once; `TopBar` (including its inline Breadcrumb)/`ControlBand`/`PageToolbar`/
   `PageHeader`/`PageFooter`/`Statusline`/`ChatBar` compose it. Never hand-spell a
   bar's `h-*`/`px-*`/`py-*`/`border-b|t`/`bg-sheet*` again — route it through the
   recipe so the bars stay in lockstep.

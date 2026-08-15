@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
+import { useThemePreference, type ThemePreference } from "../lib/theme";
 import { useRuntimeAuth, useRuntimeLogoutAction } from "../runtime";
 import { avatarInitials } from "../ui/avatar";
 import {
@@ -29,6 +30,11 @@ export function UserMenu({
   const { user } = useRuntimeAuth();
   const { logout, fetching } = useRuntimeLogoutAction();
   const navigate = useNavigate();
+  const { resolved, setPreference } = useThemePreference();
+  const nextTheme: ThemePreference = resolved === "dark" ? "light" : "dark";
+  const themeLabel = nextTheme === "dark"
+    ? t("chrome.switchToDarkTheme")
+    : t("chrome.switchToLightTheme");
   const userMenu = t("chrome.userMenu");
   const displayName = user?.name || user?.username || t("chrome.userFallback");
   const email = user?.email;
@@ -60,6 +66,11 @@ export function UserMenu({
                 <div className={textRoleVariants({ role: "caption", truncate: true })}>{email}</div>
               ) : null}
             </div>
+            <DropdownMenu.Item onClick={() => setPreference(nextTheme)}>
+              <Glyph name={nextTheme === "dark" ? "moon" : "sun"} />
+              <span className="flex-1 truncate">{themeLabel}</span>
+            </DropdownMenu.Item>
+            <DropdownMenu.Separator />
             <DropdownMenu.Item
               disabled={fetching}
               onClick={() => {

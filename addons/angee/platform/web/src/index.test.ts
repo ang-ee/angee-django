@@ -24,16 +24,15 @@ describe("platform addon manifest", () => {
     }
   });
 
-  test("is a bottom-cluster app that opts into the sidebar", () => {
+  test("is a Settings category", () => {
     expect(platform.menus).toHaveLength(1);
     const root = platform.menus?.[0] as BaseMenuItem | undefined;
     expect(root?.id).toBe("platform");
     expect(root?.group).toBe("platform");
-    expect(root?.sidebar).toBe(true);
     expect(root?.icon).toBe("platform");
   });
 
-  test("groups the explorer sections under one Platform top menu", () => {
+  test("groups the explorer sections under one Platform tree branch", () => {
     const root = platform.menus?.[0] as BaseMenuItem | undefined;
     const groups = root?.children ?? [];
     expect(groups.map((group) => group.id)).toEqual(["platform.explore"]);

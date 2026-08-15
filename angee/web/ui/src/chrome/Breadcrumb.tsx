@@ -7,7 +7,6 @@ import * as React from "react";
 import type { ReactElement } from "react";
 
 import { useUiT } from "../i18n";
-import { barVariants } from "../layouts/bar";
 import { cn } from "../lib/cn";
 
 export interface BreadcrumbItem {
@@ -73,16 +72,7 @@ function BreadcrumbTrail({
     <nav
       aria-label={t("chrome.breadcrumb")}
       className={cn(
-        barVariants({
-          height: "crumbs",
-          edge: "bottom",
-          tone: "sheet",
-          pad: "flush",
-          gap: 1,
-          text: "13-muted",
-        }),
-        // Grid placement + stacking stay bar-specific.
-        "area-crumbs z-breadcrumb",
+        "flex min-w-0 items-center gap-1 overflow-hidden text-13 text-on-rail-mut",
         className,
       )}
     >
@@ -99,14 +89,14 @@ function BreadcrumbTrail({
             {item.to && !current ? (
               <Link
                 to={item.to}
-                className="min-w-0 truncate rounded-4 outline-none hover:text-fg focus-visible:focus-ring"
+                className="min-w-0 truncate rounded-4 outline-none hover:text-on-rail-hi focus-visible:focus-ring"
               >
                 {item.label}
               </Link>
             ) : (
               <span
                 aria-current={current ? "page" : undefined}
-                className="min-w-0 truncate font-medium text-fg"
+                className="min-w-0 truncate font-medium text-on-rail-hi"
               >
                 {item.label}
               </span>

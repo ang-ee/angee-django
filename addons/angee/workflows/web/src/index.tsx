@@ -47,7 +47,6 @@ const workflowsMenu: readonly BaseMenuItem[] = [
     id: WORKFLOWS_ID,
     label: "Workflows",
     icon: "workflow",
-    sidebar: true,
     children: [
       {
         id: "workflows.workflows",

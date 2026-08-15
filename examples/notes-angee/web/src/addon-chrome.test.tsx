@@ -17,8 +17,7 @@ import { describe, expect, test } from "vitest";
 import publicMetadata from "../../runtime/schemas/public.metadata.json";
 import consoleMetadata from "../../runtime/schemas/console.metadata.json";
 
-// `operator` contributes its console into the `platform` app (parentId), so a
-// valid composition must include platform — without it the contribution dangles.
+// These are the base-addon manifests composed by the navigation fixture.
 const ADDONS: readonly BaseAddon[] = [notes, iam, operator, platform];
 const SCHEMAS = {
   public: {
@@ -82,18 +81,12 @@ describe("addon refine navigation", () => {
     // client form (contributed by the iam addon, gated to OIDC provider types).
   });
 
-  test("projects operator breadcrumbs nested under the platform app", async () => {
-    // Operator contributes into the platform app, so its pages live under the
-    // Platform app and the trail descends Platform › Operator › <section>.
+  test("projects breadcrumbs from the Operator Settings category", async () => {
     await expect(chromeFor("/operator")).resolves.toEqual({
-      breadcrumbs: [
-        { label: "Platform", to: "/platform" },
-        { label: "Operator", to: "/operator" },
-      ],
+      breadcrumbs: [{ label: "Operator", to: "/operator" }],
     });
     await expect(chromeFor("/operator/services")).resolves.toEqual({
       breadcrumbs: [
-        { label: "Platform", to: "/platform" },
         { label: "Operator", to: "/operator" },
         { label: "Services", to: "/operator/services" },
       ],
