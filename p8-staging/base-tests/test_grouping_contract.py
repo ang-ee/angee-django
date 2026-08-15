@@ -16,7 +16,17 @@ from graphql import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-DJANGO_ROOT = ROOT.parent / "angee-django"
+
+
+def _stack_runtime_schema(name: str) -> Path:
+    """The composed host's generated SDL — a stack is the host, so the schema
+    lives at the stack root's runtime/ (this repo is a slot beneath it)."""
+
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "angee.yaml").exists():
+            return parent / "runtime" / "schemas" / name
+    # Bare clone with no rendered stack above: nonexistent → the case skips.
+    return ROOT / "runtime" / "schemas" / name
 
 
 @dataclass(frozen=True)
@@ -36,7 +46,7 @@ class GroupContractCase:
 
 GROUP_CONTRACT_CASES = (
     GroupContractCase(
-        sdl_path=DJANGO_ROOT / "examples/notes-angee/runtime/schemas/public.graphql",
+        sdl_path=_stack_runtime_schema("public.graphql"),
         root_field="notes_groups",
         group_type="notes_group",
         group_by_spec="NoteTypeGroupBySpec",
@@ -63,6 +73,9 @@ GROUP_CONTRACT_CASES = (
 @pytest.mark.parametrize("case", GROUP_CONTRACT_CASES, ids=lambda case: case.root_field)
 def test_grouped_resource_roots_share_hasura_ndc_contract(case: GroupContractCase) -> None:
     """Django and operator grouped roots expose the same typed-key DDN/NDC shape."""
+
+    if not case.sdl_path.exists():
+        pytest.skip(f"composed SDL {case.sdl_path} absent — run `manage.py angee build` at the stack root")
 
     schema = build_schema(case.sdl_path.read_text(encoding="utf-8"))
 

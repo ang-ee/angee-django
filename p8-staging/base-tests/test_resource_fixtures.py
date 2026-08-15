@@ -36,7 +36,7 @@ from angee.resources.entries import GRANT_KIND, ResourceEntry, resource_manifest
 
 ADDON_DIRS = (
     Path(__file__).resolve().parents[1] / "addons",
-    Path(__file__).resolve().parents[2] / "angee-django" / "examples" / "notes-angee" / "addons",
+    Path(__file__).resolve().parents[2] / "angee-examples" / "addons",
 )
 """The repository's two addon source roots — the base addons and the example's consumer addons.
 

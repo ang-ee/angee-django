@@ -1,9 +1,11 @@
 {
   "compilerOptions": {
-    // Base-addon fragments typecheck against the example host's generated
-    // documents. The addon subtree owns this one fixture path.
+    // Base-addon fragments typecheck against the stack's composed generated
+    // documents: a stack is the host, so the fixture is the stack root's own
+    // runtime/gql (this repo is a slot at <stack>/workspaces/<ws>/<repo>).
+    // The addon subtree owns this one fixture path.
     "paths": {
-      "@angee/gql/*": ["../../../angee-django/examples/notes-angee/runtime/gql/*"]
+      "@angee/gql/*": ["../../../../../runtime/gql/*"]
     },
     "target": "ES2022",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],

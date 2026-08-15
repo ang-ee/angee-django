@@ -94,7 +94,7 @@ def test_demo_workflow_resources_publish_lineage_and_leave_trigger_disabled(
 
 
 def _notes_workflow_addon() -> Addon:
-    path = Path("../angee-django/examples/notes-angee/addons/example/notes").resolve()
+    path = Path("../angee-examples/addons/example/notes").resolve()
     resources = {
         "master": (),
         "install": (),

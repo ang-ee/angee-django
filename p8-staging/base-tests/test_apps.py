@@ -300,7 +300,7 @@ def test_ollama_addon_owns_vendor_and_demo_provider_chain() -> None:
 def test_notes_demo_only_composes_reusable_agent_seeds(monkeypatch) -> None:
     """The notes example keeps demo rows separate from master-tier catalogue seeds."""
 
-    notes_addons = Path(__file__).parents[2] / "angee-django" / "examples" / "notes-angee" / "addons"
+    notes_addons = Path(__file__).parents[2] / "angee-examples" / "addons"
     monkeypatch.syspath_prepend(str(notes_addons))
     module = import_module("example.notes")
     config = AppConfig("example.notes", module)
