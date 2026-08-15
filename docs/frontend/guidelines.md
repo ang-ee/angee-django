@@ -514,7 +514,7 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   changed vs a persisted marker — a source edit re-optimizes, an unchanged tree
   stays cached. The in-repo example excludes `@angee/*` (linked source, HMR) so
   this never applies there.
-- **Start new addon web packages from `templates/addons/web`.** The Copier template
+- **Start new addon web packages from the `ang-ee/angee-templates` repo's `templates/addons/web`.** The Copier template
   owns the current ceremony: `defineBaseAddon`, `resourcePageRoutes`, lazy routed
   pages, `createNamespaceT`, `expectValidBaseAddon`, and package/test wiring.
   Don't copy an older addon and then manually chase drift.

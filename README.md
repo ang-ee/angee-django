@@ -101,8 +101,6 @@ the one real Python package, `django-angee`:
 
 - **`angee/`** — composition, GraphQL, REBAC, resources, the Celery seam, and
   the `manage.py angee build` composer.
-- **`templates/`** — the Stack and Workspace Copier templates Angee renders
-  (moving to `ang-ee/angee-templates`).
 - **`docs/`**, **`tests/`** — the intent docs and the framework test suite.
 
 The React packages live in `ang-ee/angee-react`, the base addons in

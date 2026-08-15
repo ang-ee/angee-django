@@ -50,7 +50,6 @@ changing any import.
 │   ├── graphql/            # the GraphQL runtime — schema buckets, auto-CRUD, subscriptions, SDL (`manage.py schema`)
 │   ├── compose/            # the composer — emits the concrete runtime (`manage.py angee build`)
 │   └── tasks/              # the Celery seam (broker wiring, beat, queue routing)
-├── templates/              # Copier templates — project / stack / workspace / service kinds (moving to ang-ee/angee-templates in P7)
 ├── docs/                   # intent docs — glossary, stack, guidelines, and `docs/howto/`
 ├── tests/                  # framework tests (composition, GraphQL, IAM, CRUD, …)
 ├── .agents/                # shared agent methodology — reviewer agents, commands, skills, workflows (`.agents/README.md`; public)
@@ -63,7 +62,7 @@ changing any import.
 ../angee-base/              # the base addons — folders with addon.toml + co-located `web/` fragments
 ../angee-messaging-bridges/ # the opt-in personal-messaging bridge addons
 ../angee-examples/          # showcase consumer addons (`example.notes`) + the reference e2e suite
-../angee-templates/         # the Copier templates repo (once the P7 lift lands)
+../angee-templates/         # the Copier templates — project / stack / workspace / service kinds
 ../angee-operator/          # the `angee` CLI / operator daemon (Go)
 ```
 

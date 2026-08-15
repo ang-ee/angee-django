@@ -41,11 +41,8 @@ def test_setup_docs_guard_init_and_target_the_resolved_workspace_root() -> None:
     guide = " ".join(
         (ROOT / "docs/howto/getstarted.md").read_text(encoding="utf-8").split()
     )
-    templates = " ".join(
-        (ROOT / "templates/README.md").read_text(encoding="utf-8").split()
-    )
 
-    for document in (readme, guide, templates):
+    for document in (readme, guide):
         assert "existing current or ancestor `angee.yaml`" in document
         assert "never initialize a stack under a source checkout" in document
 
