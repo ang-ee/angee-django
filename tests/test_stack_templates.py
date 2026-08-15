@@ -25,9 +25,11 @@ LOCAL_STACK_GITIGNORE = ROOT / "templates" / "stacks" / "local" / "template" / "
 LOCAL_AGENTS_TEMPLATE = ROOT / "templates" / "stacks" / "local" / "template" / "AGENTS.md.jinja"
 LOCAL_CLAUDE_TEMPLATE = ROOT / "templates" / "stacks" / "local" / "template" / "CLAUDE.md"
 DEV_COPIER = ROOT / "templates" / "stacks" / "dev" / "copier.yml"
-DEV_TEMPLATE = ROOT / "templates" / "stacks" / "dev" / "template" / "{{ ANGEE_ROOT }}" / "angee.yaml.jinja"
+DEV_TEMPLATE = ROOT / "templates" / "stacks" / "dev" / "template" / "angee.yaml.jinja"
 DEV_AGENTS_TEMPLATE = DEV_TEMPLATE.with_name("AGENTS.md.jinja")
 DEV_CLAUDE_TEMPLATE = DEV_TEMPLATE.with_name("CLAUDE.md")
+DEV_STACK_GITIGNORE = DEV_TEMPLATE.with_name(".gitignore.jinja")
+DEV_TEMPLATES_SYMLINK = DEV_TEMPLATE.with_name("templates")
 SHARED_BODY = ROOT / "templates" / "stacks" / "_shared" / "stack-body.yaml.jinja"
 SHARED_AGENTS = ROOT / "templates" / "stacks" / "_shared" / "AGENTS.md.jinja"
 PROJECT_GITIGNORE = ROOT / "templates" / "projects" / "web" / "template" / ".gitignore.jinja"
@@ -272,7 +274,7 @@ def _render_local_stack(*, framework: str = "source", celery_queues: str = "") -
     """Render the docker-mode local stack enough for YAML contract tests."""
 
     variables = {
-        "_src_path": "https://github.com/ang-ee/angee-django/tree/v0.1.7/templates/stacks/local",
+        "_src_path": "https://github.com/ang-ee/angee-templates/tree/main/templates/stacks/local",
         "caddy_image": "caddy:2.9-alpine",
         "celery_queues": celery_queues,
         "django_image": "ghcr.io/ang-ee/django-angee-base:latest",
@@ -289,51 +291,64 @@ def _render_local_stack(*, framework: str = "source", celery_queues: str = "") -
 
 def _render_dev_stack(
     *,
-    project_path: str = "../examples/notes-angee",
-    framework_path: str = "..",
+    project_path: str = ".",
+    framework_path: str = "workspaces/src/angee-django",
+    addons_profile: str = "base",
+    work_state_source: str = "",
     celery_queues: str = "",
     enable_ollama: bool = False,
     ollama_port: str = "11434",
 ) -> dict[str, Any]:
-    """Render the process-mode dev stack enough for YAML contract tests.
+    """Render the process-mode framework-dev stack enough for YAML contract tests.
 
     ``project_path`` / ``framework_path`` model what the TEMPLATE receives: the
     operator (copierx.ResolvePathInputs) rewrites relative ``type: path`` inputs to
-    be ANGEE_ROOT-relative in every render flow before the template runs (logical
-    "examples/notes-angee" arrives as "../examples/notes-angee"; repo-layout "."
-    arrives as ".."), and passes absolute inputs through verbatim. The wrapper uses
-    them AS-IS; only the ``uv_project`` guard keys off the rewritten value.
+    be ANGEE_ROOT-relative in every render flow before the template runs. The
+    project host IS the stack root (ANGEE_ROOT=.), so the default "." arrives as
+    "." and the framework default arrives as the src workspace slot path; absolute
+    inputs pass through verbatim.
     """
 
     variables = {
-        "ANGEE_ROOT": ".angee",
+        "addons_profile": addons_profile,
         "celery_queues": celery_queues,
-        "django_port": "8100",
-        "edge_port": "7001",
+        "django_port": "8000",
+        "edge_port": "80",
         "enable_ollama": "true" if enable_ollama else "",
         "framework_path": framework_path,
         "ollama_port": ollama_port,
         "operator_port": "9000",
         "postgres_port": "5433",
-        "process_compose_port": "10000",
-        "project_name": "notes-angee-dev",
+        "process_compose_port": "8080",
+        "project_name": "app",
         "project_path": project_path,
         "redis_port": "6379",
         "storybook_port": "6006",
         "ui_port": "5173",
         "web_path": "web",
+        "work_state_source": work_state_source,
     }
     return _render_stack_manifest(DEV_TEMPLATE, variables)
 
 
-def _render_project_settings(*, addon_installer_backend: str, include_operator_installer: bool) -> dict[str, Any]:
-    """Render project settings enough for stack-owned installer contract tests."""
+def _render_project_settings(
+    *,
+    addon_installer_backend: str = "local",
+    include_operator_installer: bool = False,
+    addons_profile: str = "base",
+    framework_workspace: bool = False,
+) -> dict[str, Any]:
+    """Render project settings enough for stack-owned contract tests."""
 
     text = PROJECT_SETTINGS_TEMPLATE.read_text(encoding="utf-8")
     text = _render_project_settings_conditionals(
         text,
-        addon_installer_backend=addon_installer_backend,
-        include_operator_installer=include_operator_installer,
+        conditions={
+            "{% if include_operator_installer %}": include_operator_installer,
+            '{% if addon_installer_backend != "local" %}': addon_installer_backend != "local",
+            '{% if addons_profile == "full" %}': addons_profile == "full",
+            "{% if framework_workspace %}": framework_workspace,
+        },
     )
     replacements = {
         "addon_installer_backend": addon_installer_backend,
@@ -350,23 +365,15 @@ def _render_project_settings(*, addon_installer_backend: str, include_operator_i
     return rendered
 
 
-def _render_project_settings_conditionals(
-    text: str,
-    *,
-    addon_installer_backend: str,
-    include_operator_installer: bool,
-) -> str:
-    """Evaluate the simple settings-template conditionals these tests need."""
+def _render_project_settings_conditionals(text: str, *, conditions: dict[str, bool]) -> str:
+    """Evaluate the settings-template line conditionals these tests need."""
 
     frames: list[bool] = []
     output: list[str] = []
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped == "{% if include_operator_installer %}":
-            frames.append(include_operator_installer and all(frames))
-            continue
-        if stripped == '{% if addon_installer_backend != "local" %}':
-            frames.append((addon_installer_backend != "local") and all(frames))
+        if stripped in conditions:
+            frames.append(conditions[stripped] and all(frames))
             continue
         if stripped == "{% endif %}":
             frames.pop()
@@ -562,6 +569,43 @@ def test_project_template_defaults_to_local_addon_installer() -> None:
     assert "ANGEE_ADDON_INSTALLER_BACKEND" not in settings
 
 
+def test_project_template_addon_profiles_and_workspace_dirs() -> None:
+    """`base` renders the consumer scaffold; `full` renders the whole platform
+    composition; `framework_workspace` points the addon dirs at the src slots."""
+
+    base = _render_project_settings()
+    assert "example.notes" not in base["INSTALLED_APPS"]
+    assert "angee.messaging_integrate_whatsapp" not in base["INSTALLED_APPS"]
+    assert base["ANGEE_ADDON_DIRS"] == ["{BASE_DIR}/addons"]
+    assert base["ANGEE_DATA_DIR"] == "{BASE_DIR}/data"
+
+    full = _render_project_settings(addons_profile="full", framework_workspace=True)
+    for app in (
+        "angee.nexus",
+        "angee.agents",
+        "angee.knowledge",
+        "angee.workflows",
+        "angee.messaging_integrate_whatsapp",
+        "angee.messaging_integrate_telegram",
+        "angee.messaging_integrate_discord",
+        "example.notes",
+    ):
+        assert app in full["INSTALLED_APPS"]
+    assert full["ANGEE_ADDON_DIRS"] == [
+        "{BASE_DIR}/addons",
+        "{BASE_DIR}/workspaces/src/angee-base/addons",
+        "{BASE_DIR}/workspaces/src/angee-messaging-bridges/addons",
+        "{BASE_DIR}/workspaces/src/angee-examples/addons",
+    ]
+
+    # base profile in the framework-workspace layout still finds the base addons.
+    base_ws = _render_project_settings(framework_workspace=True)
+    assert base_ws["ANGEE_ADDON_DIRS"] == [
+        "{BASE_DIR}/addons",
+        "{BASE_DIR}/workspaces/src/angee-base/addons",
+    ]
+
+
 # --- dev (process) contracts ---------------------------------------------------
 
 
@@ -585,10 +629,11 @@ def test_dev_stack_has_exactly_the_four_lifecycle_jobs() -> None:
     assert stack["services"]["celery-beat"]["after"] == ["provision"]
 
 
-def test_dev_stack_mounts_postgres_data_from_generated_stack_dir() -> None:
+def test_dev_stack_mounts_postgres_data_from_stack_root() -> None:
     stack = _render_dev_stack()
 
-    assert stack["persist"]["pgdata"]["subpath"] == ".angee/pgdata"
+    assert stack["persist"]["pgdata"]["subpath"] == "./pgdata"
+    assert stack["persist"]["app-data"]["subpath"] == "./data"
     assert stack["services"]["postgres"]["mounts"] == ["bind://./pgdata:/var/lib/postgresql/data"]
     assert stack["services"]["postgres"]["ports"] == ["${ports.postgres}:5432"]
 
@@ -630,7 +675,7 @@ def test_dev_stack_ollama_is_opt_in_and_persistent() -> None:
 
     enabled = _render_dev_stack(enable_ollama=True, ollama_port="11435")
     assert enabled["ports"]["ollama"] == {"value": 11435, "export_env": "OLLAMA_PORT"}
-    assert enabled["persist"]["ollama"] == {"subpath": ".angee/ollama", "scope": "stack"}
+    assert enabled["persist"]["ollama"] == {"subpath": "./ollama", "scope": "stack"}
     assert enabled["services"]["ollama"] == {
         "runtime": "container",
         "image": "ollama/ollama",
@@ -649,69 +694,119 @@ def test_dev_stack_keeps_the_process_only_frontend_services() -> None:
     assert stack["services"]["frontend"]["command"] == ["pnpm", "--dir", "web", "dev"]
     assert "provision" in stack["services"]["frontend"]["after"]
 
+    # Storybook runs in the STACK workspace (deps installed the angee-react
+    # storybook slot as a member) — a private install inside a slot would fork
+    # dependency identities for every linked framework package.
+    storybook = stack["services"]["storybook"]
+    assert storybook["workdir"] == "source://app"
+    assert "pnpm install" not in storybook["command"][-1]
+    assert "exec pnpm --filter @angee/storybook dev --no-open" in storybook["command"][-1]
 
-def test_dev_stack_source_paths_pass_through_the_operator_rewritten_inputs() -> None:
-    """The wrapper uses the operator-rewritten inputs AS-IS for the repo-level layout.
 
-    The operator rewrites the logical defaults (project "examples/notes-angee",
-    framework ".") to ANGEE_ROOT-relative values before the template renders; the
-    framework is an ancestor of the project root, so ``uv run`` discovers its
-    pyproject by walking up — no ``--project``. Re-translating in the template
-    (the old ``../``+input math) double-counted the hop in every render flow.
+def test_dev_stack_runs_bare_uv_against_the_project_root_pyproject() -> None:
+    """The project host IS the stack root; its pyproject owns framework resolution.
+
+    The chained projects/web pyproject resolves django-angee editable from the
+    framework slot (postgres extra baked into the dep) and pins uv's cache to the
+    stack-owned caches/uv — so every process command is bare ``uv run``: no
+    ``--project``, no ``--extra``, no UV_CACHE_DIR override, in any layout.
     """
 
     stack = _render_dev_stack()  # operator-rewritten defaults
 
-    assert stack["sources"]["app"]["path"] == "../examples/notes-angee"
-    assert stack["sources"]["framework"]["path"] == ".."
-    provision = stack["jobs"]["provision"]
-    assert provision["workdir"] == "source://app"
-    assert "--project" not in provision["command"]
-    assert "uv run --extra postgres" in " ".join(provision["command"])
+    assert stack["sources"]["app"]["path"] == "."
+    assert stack["sources"]["framework"]["path"] == "workspaces/src/angee-django"
+    for node in (
+        stack["jobs"]["provision"],
+        stack["jobs"]["operator-schema"],
+        stack["services"]["django"],
+        stack["services"]["celery-worker"],
+        stack["services"]["celery-beat"],
+    ):
+        assert node["workdir"] == "source://app"
+        assert node["command"][:2] == ["uv", "run"]
+        assert "--project" not in node["command"]
+        assert "--extra" not in node["command"]
+        assert "UV_CACHE_DIR" not in node.get("env", {})
 
 
-def test_dev_stack_external_framework_checkout_is_absolute_and_drives_uv_project() -> None:
-    """A per-project `.angee/` with the framework as a separate checkout.
+def test_dev_stack_declares_the_framework_sources_and_the_src_workspace() -> None:
+    """`angee dev` owns the whole bring-up: the manifest carries the source records
+    and the src workspace declaration the two-command contract materializes."""
 
-    The framework is not an ancestor of the project root, so every ``uv run``
-    gains ``--project <framework>``. uv resolves --project against the job's
-    workdir (the project root), so an external checkout must be given ABSOLUTE —
-    an ANGEE_ROOT-relative value would point at the wrong directory.
+    stack = _render_dev_stack()
+
+    for name in ("angee-django", "angee-react", "angee-base", "angee-templates", "angee-operator"):
+        record = stack["sources"][name]
+        assert record["kind"] == "git"
+        assert record["repo"] == f"https://github.com/ang-ee/{name}.git"
+        assert record["default_ref"] == "main"
+        assert record["cache_path"] == f"sources/{name}"
+    # The base profile leaves the bridge/example repos out (opt-in per the split).
+    assert "angee-messaging-bridges" not in stack["sources"]
+    assert "angee-examples" not in stack["sources"]
+
+    assert stack["workspaces"]["src"] == {"template": "workspaces/src"}
+
+    full = _render_dev_stack(addons_profile="full")
+    for name in ("angee-messaging-bridges", "angee-examples"):
+        assert full["sources"][name]["repo"] == f"https://github.com/ang-ee/{name}.git"
+
+    wired = _render_dev_stack(work_state_source="work-angee-django")
+    assert wired["workspaces"]["src"]["inputs"] == {"work_state_source": "work-angee-django"}
+
+    # The local docker instance keeps its own source story (framework checkout at
+    # sources/angee-django) — no framework git-source block, no workspace cut.
+    local = _render_local_stack()
+    assert "angee-react" not in local["sources"]
+    assert "workspaces" not in local
+
+
+def test_dev_stack_chains_the_project_host_with_the_framework_slot() -> None:
+    """The dev chain renders the host at the stack root wired to the src slots."""
+
+    manifest = yaml.safe_load(DEV_COPIER.read_text(encoding="utf-8"))
+    chain = manifest["_angee"]["chain"][0]
+
+    assert chain["template"] == "../../projects/web"
+    inputs = chain["inputs"]
+    assert inputs["framework_source_path"] == "${inputs.framework_path}"
+    assert inputs["addons_profile"] == "${inputs.addons_profile}"
+    assert inputs["framework_workspace"] is True
+    assert inputs["addon_installer_backend"] == "operator"
+    assert inputs["include_operator_installer"] is True
+
+    assert manifest["framework_path"]["default"] == "workspaces/src/angee-django"
+    assert manifest["project_path"]["default"] == "."
+    assert manifest["addons_profile"]["choices"] == ["base", "full"]
+    assert manifest["addons_profile"]["default"] == "base"
+    assert manifest["work_state_source"]["default"] == ""
+
+    # The stack root's `templates` symlink resolves name-based template refs from
+    # the angee-templates source cache — never from a framework checkout.
+    assert DEV_TEMPLATES_SYMLINK.is_symlink()
+    assert str(DEV_TEMPLATES_SYMLINK.readlink()) == "sources/angee-templates/templates"
+
+
+def test_uv_caches_are_stack_owned() -> None:
+    """Every stack pins uv's cache inside the stack.
+
+    The dev stack needs no override — the rendered project pyproject pins
+    ``cache-dir = "caches/uv"`` which uv resolves against the job CWD (the stack
+    root). The docker instance overrides UV_CACHE_DIR to the container path of
+    the same stack-owned dir.
     """
 
-    stack = _render_dev_stack(project_path="..", framework_path="/opt/checkouts/angee-django")
-
-    assert stack["sources"]["app"]["path"] == ".."
-    assert stack["sources"]["framework"]["path"] == "/opt/checkouts/angee-django"
-    provision = stack["jobs"]["provision"]
-    assert provision["workdir"] == "source://app"
-    assert provision["command"][:4] == ["uv", "run", "--project", "/opt/checkouts/angee-django"]
-
-
-def test_uv_caches_are_stack_owned_never_a_nested_dot_angee() -> None:
-    """Every stack pins uv's cache inside the stack, never a stray nested `.angee/`.
-
-    The framework pyproject's ``cache-dir = ".angee/caches/uv"`` resolves against
-    the job CWD (the project root / the container's /app), which mints a nested
-    `.angee/` outside the repo layout. Repo-layout dev keeps the pyproject default
-    (it lands in the repo's gitignored .angee); every other shape overrides
-    UV_CACHE_DIR with the stack-owned, gitignored caches dir.
-    """
-
-    repo_dev = _render_dev_stack()
-    assert "UV_CACHE_DIR" not in repo_dev["services"]["django"]["env"]
-
-    consumer_dev = _render_dev_stack(project_path="..", framework_path="/opt/checkouts/angee-django")
-    for node in (consumer_dev["jobs"]["provision"], consumer_dev["services"]["django"],
-                 consumer_dev["services"]["celery-worker"], consumer_dev["services"]["celery-beat"]):
-        assert node["env"]["UV_CACHE_DIR"] == "caches/uv"
+    dev = _render_dev_stack()
+    for name in ("django", "celery-worker", "celery-beat"):
+        assert "UV_CACHE_DIR" not in dev["services"][name]["env"]
 
     local = _render_local_stack()
     for name in ("django", "celery-worker", "celery-beat"):
         assert local["services"][name]["env"]["UV_CACHE_DIR"] == "/app/caches/uv"
 
-    gitignore = LOCAL_STACK_GITIGNORE.read_text(encoding="utf-8")
-    assert "/caches/" in gitignore
+    for gitignore_path in (LOCAL_STACK_GITIGNORE, DEV_STACK_GITIGNORE):
+        assert "/caches/" in gitignore_path.read_text(encoding="utf-8")
 
 
 def test_secret_key_is_mode_invariant() -> None:
@@ -741,7 +836,10 @@ def test_dev_stack_keeps_absolute_source_paths_verbatim() -> None:
 
     assert stack["sources"]["app"]["path"] == "/srv/project"
     assert stack["sources"]["framework"]["path"] == "/opt/angee-django"
-    assert stack["jobs"]["provision"]["command"][:4] == ["uv", "run", "--project", "/opt/angee-django"]
+    # The rendered pyproject (whose framework_source_path follows framework_path)
+    # owns resolution even for an external checkout — commands stay bare `uv run`.
+    assert stack["jobs"]["provision"]["command"][:2] == ["uv", "run"]
+    assert "--project" not in stack["jobs"]["provision"]["command"]
 
 
 def test_dev_stack_keeps_stack_answers_separate_from_workspace_answers() -> None:
@@ -761,7 +859,7 @@ def test_dev_stack_prunes_dead_playwright_inputs() -> None:
 
 
 def test_stack_answer_files_are_ignored_where_stacks_overlay_project_roots() -> None:
-    for path in (ROOT_GITIGNORE, PROJECT_GITIGNORE, LOCAL_STACK_GITIGNORE):
+    for path in (ROOT_GITIGNORE, PROJECT_GITIGNORE, LOCAL_STACK_GITIGNORE, DEV_STACK_GITIGNORE):
         assert "/.copier-answers.stack.yml" in path.read_text(encoding="utf-8")
 
 

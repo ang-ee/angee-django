@@ -34,7 +34,7 @@ _message_after_copy: |
   Login:    admin / the generated admin-password secret in .env
 
   The framework's notes example is NOT installed by default (INSTALLED_APPS is
-  base-only). Add it later by declaring a git source onto angee-django/examples
+  base-only). Add it later by declaring a git source onto ang-ee/angee-examples
   and enabling example.notes in settings.yaml's INSTALLED_APPS.
 
 _angee:
@@ -56,7 +56,7 @@ _angee:
   # template adds only the stack overlay (angee.yaml, .gitignore). The ref is
   # relative to THIS template's directory (the operator's chain resolver joins it
   # against the stack template dir); downstream this can instead pin a remote ref,
-  # e.g. github.com/ang-ee/angee-django//templates/projects/web?ref=<tag>.
+  # e.g. github.com/ang-ee/angee-templates//templates/projects/web?ref=<tag>.
   chain:
     - template: ../../projects/web
       inputs:

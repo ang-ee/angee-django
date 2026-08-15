@@ -1,45 +1,116 @@
 _min_copier_version: "9.0"
 _subdirectory: template
 _templates_suffix: .jinja
-# The dev stack is often chained under a workspace, which owns the canonical
-# .copier-answers.yml. Keep stack-specific answers separate so leases and
-# workspace inputs do not overwrite each other.
+# The stack overlays into the project root (ANGEE_ROOT=.), but the PROJECT owns the
+# canonical .copier-answers.yml (rendered by the chained projects/web). The stack
+# keeps its OWN answers file so it never clobbers the project's.
 _answers_file: .copier-answers.stack.yml
 _preserve_symlinks: true
+
+_message_after_copy: |
+  Framework-dev stack rendered — the root folder IS the stack and a project host
+  (ANGEE_ROOT=.). Operator + Postgres + Redis run as containers with published
+  ports; Django, Celery, Vite, and Storybook run as local processes against the
+  framework source slots in workspaces/src/.
+
+  1. Bring it up. `angee dev` materializes the declared source caches, cuts the
+     `src` workspace (every framework repo as a sibling worktree slot), runs the
+     deps/provision/codegen jobs, and boots:
+       angee dev
+  2. Point an external CLI shell at the tokenized local operator (run from this
+     root; `angee secret reveal` reads the stack's secrets backend):
+       export ANGEE_OPERATOR_URL=http://127.0.0.1:{{ operator_port }}
+       export ANGEE_OPERATOR_TOKEN="$(angee secret reveal operator-token)"
+
+  App:      http://localhost:{{ ui_port }}
+  Frame:    the framework repos live in workspaces/src/ — see its AGENTS.md.
 
 _angee:
   schema: 1
   kind: stack
   name: dev
   include_root: "../.."  # pins templates/ in chain snapshots, so ../../_shared/ includes resolve
-  description: Generic Django+Vite+Storybook process-compose dev stack for any consumer project under angee-django or downstream.
+  description: >-
+    The framework-dev stack: the root folder IS the stack AND the project host
+    (ANGEE_ROOT=.). It chains the `projects/web` project template to scaffold
+    the host (manage.py, settings.yaml, pyproject, addons, web), then overlays
+    a process-compose manifest — operator + postgres (pgvector) + redis as
+    containers, Django/Celery/Vite/Storybook as local `uv run`/pnpm processes
+    against the framework source slots the stack's `src` workspace
+    materializes under workspaces/src/. `angee dev` owns the whole bring-up:
+    caches, the src workspace cut, deps/provision/codegen, boot.
+  # Chain the project template first so the stack overlays a real host, then this
+  # template adds only the stack overlay (angee.yaml, settings/workspace files).
+  # The ref is relative to THIS template's directory; downstream it can pin a
+  # remote ref, e.g. github.com/ang-ee/angee-templates//templates/projects/web?ref=<tag>.
+  chain:
+    - template: ../../projects/web
+      inputs:
+        project_name: "${inputs.project_name}"
+        web_path: "${inputs.web_path}"
+        addon_namespace: "${inputs.addon_namespace}"
+        addon_installer_backend: operator
+        include_operator_installer: true
+        addons_profile: "${inputs.addons_profile}"
+        framework_workspace: true
+        # The rendered pyproject resolves django-angee editable from the same
+        # slot the stack's processes run, so `uv run manage.py` works bare from
+        # the stack root with no --project flag.
+        framework_source_path: "${inputs.framework_path}"
 
 project_name:
   type: str
-  default: notes-angee
+  default: app
+  help: Machine name of the project host; also the chained project's name.
+
+# Directory + import namespace for this project's own consumer addons (addons/<ns>/,
+# referenced in INSTALLED_APPS as <ns>.<app>). Must be a valid Python identifier.
+# Copier-go does not evaluate Jinja defaults before chain-input substitution, so
+# keep this concrete; override it alongside `project_name` for custom projects.
+addon_namespace:
+  type: str
+  default: app
+  help: Import namespace for this project's consumer addons; a valid Python identifier.
 
 project_path:
   type: path
-  default: "examples/notes-angee"
-  help: Path to the consumer project root. Logical (no `..` needed) — angee resolves it relative to where the manifest is being rendered. Default "examples/notes-angee" assumes the repo-level layout (`.angee/` at the angee-django repo root, project under examples/). For per-project layout (`.angee/` lives inside the project dir), pass --input project_path=. Absolute paths are accepted and kept as-is.
+  default: "."
+  help: Path to the project host root. The project IS the stack root (`.`) — the chained projects/web template renders it there. Absolute paths are accepted and kept as-is for an externally-scaffolded host.
 
 framework_path:
   type: path
-  default: "."
-  help: Path to the angee-django monorepo root. Used to reach Storybook (the `@angee/storybook` package under `packages/storybook`), to run `pnpm install` at the workspace root, and as `uv --project` for Python jobs. Logical — angee resolves it relative to where the manifest is being rendered. Default `.` assumes the repo-level layout (manifest at `<repo>/.angee/angee.yaml`), where uv needs no --project (walk-up). Any OTHER checkout must be given as an ABSOLUTE path — uv resolves --project against each job's workdir (the project root), where a relative value would point wrong.
+  default: "workspaces/src/angee-django"
+  help: Path to the angee-django source slot — the editable framework checkout the rendered pyproject resolves and the stack's `framework` source points at. Default is the src workspace slot `angee dev` materializes.
 
 web_path:
   type: str
   default: "web"
   help: Path to the project's Vite web package, relative to `project_path`. Its package owns the `dev` and `codegen` scripts for the composed project's generated GraphQL operation types.
 
-ANGEE_ROOT:
+# Which addon roster the host composes. `base` renders the consumer scaffold
+# (base addons only); `full` renders the whole platform composition — every
+# base addon plus the messaging bridges and the notes example — and declares
+# the bridges/examples source repos so the stack materializes them.
+addons_profile:
   type: str
-  default: .angee
+  default: base
+  choices:
+    - base
+    - full
+  help: Addon roster for the host — base (consumer scaffold) or full (the whole platform composition incl. bridges + examples).
+
+# Stack source name for the src workspace's private work-state slot. Empty (the
+# default) renders no work-state wiring — a clean-machine stack must not depend
+# on a private repository. Framework maintainers set this to their work-state
+# source (and declare that source on the stack) to get `.work/` in the workspace.
+work_state_source:
+  type: str
+  default: ""
+  help: Stack source name for the src workspace's private work-state slot; empty = no work-state.
 
 django_port:
   type: int
-  default: 8100
+  default: 8000
 
 ui_port:
   type: int
