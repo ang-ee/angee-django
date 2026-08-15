@@ -78,39 +78,38 @@ Before `angee init`, check for an existing current or ancestor
 `angee.yaml`. If one exists, it already owns this checkout: use that
 `ANGEE_ROOT` — never initialize a stack under a source checkout.
 
+Angee runs as a **stack**: `angee init` renders a project host whose manifest
+declares the framework repos as sources, and `angee dev` materializes them and
+boots. This repository is one of those sources — you normally work on it inside
+a framework-dev stack's `src` workspace, not as a standalone checkout.
+
 ```sh
-git clone https://github.com/ang-ee/angee-django.git
-cd angee-django
 curl -fsSL https://angee.ai/install.sh | sh   # the angee CLI, if not already installed
-angee init --dev                              # standalone checkout only; set up .angee/
-angee dev                                     # run the examples/notes-angee stack from the repo root
+angee init                                    # render the framework-dev stack
+angee dev                                     # materialize sources + workspaces, boot
 ```
 
-`angee dev` is the only supported way to bring the local stack up — run it from
-the repository root, and never start Django, Vite, Daphne, or workers by hand.
-For the full onboarding path (one-shot management commands and isolated
-workspaces), see **[Get Started → Set it up](docs/howto/getstarted.md#set-it-up)**.
+`angee dev` is the only supported way to bring the local stack up — never start
+Django, Vite, Daphne, or workers by hand. For the full onboarding path
+(one-shot management commands and isolated workspaces), see
+**[Get Started → Set it up](docs/howto/getstarted.md#set-it-up)**.
 
 ## Repository layout
 
-Angee ships its Python and its JavaScript from a **single distribution**: the
-shared React libraries live under the framework core, so they travel inside the
-`django-angee` Python wheel — one release channel for both languages.
+Angee's platform spans sibling repositories; this one holds the framework core —
+the one real Python package, `django-angee`:
 
-- **`angee/`** — the backend framework core and composer, plus the shared React
-  libraries:
-  - Python (`angee/…`) — composition, GraphQL, REBAC, resources, and the
-    `manage.py angee build` composer.
-  - `angee/web/*` — the shared React libraries: `@angee/ui`, `@angee/app`,
-    `@angee/refine`, `@angee/metadata`.
-- **`addons/angee/*`** — the base addons, each a vertical slice: Python
-  (source models · GraphQL · REBAC) plus its React surface under
-  `addons/angee/<name>/web` (`@angee/iam`, `@angee/agents`, `@angee/platform`,
-  `@angee/storage`, …). Core and addons share the one `angee.*` Python namespace.
-- **`packages/*`** — dev-only tooling (`@angee/storybook`, `@angee/e2e`); not
-  shipped in the wheel.
-- **`examples/notes-angee/`** — the example project the root stack runs.
-- **`templates/`** — the Stack and Workspace Copier templates Angee renders.
+- **`angee/`** — composition, GraphQL, REBAC, resources, the Celery seam, and
+  the `manage.py angee build` composer.
+- **`templates/`** — the Stack and Workspace Copier templates Angee renders
+  (moving to `ang-ee/angee-templates`).
+- **`docs/`**, **`tests/`** — the intent docs and the framework test suite.
+
+The React packages live in `ang-ee/angee-react`, the base addons in
+`ang-ee/angee-base`, the messaging bridges in `ang-ee/angee-messaging-bridges`,
+and the showcase consumer addons + reference e2e suite in
+`ang-ee/angee-examples`. A stack's `src` workspace materializes them all side
+by side as worktree slots.
 
 The full annotated layout lives in **[`AGENTS.md`](AGENTS.md)**.
 

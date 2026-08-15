@@ -487,9 +487,9 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   composition is fail-fast on id, so an addon cannot re-register another's glyph,
   **and adding a name to `baseIcons` collides with any addon already contributing
   it** (base composes first). This throws only at app boot — `typecheck`/`build`
-  miss it — so the full addon set is composed in
-  `examples/notes-angee/web/src/addon-composition.test.tsx`; run `pnpm run test`
-  (not just `tsc`) after touching `baseIcons` or an addon's `icons`.
+  miss it — so verify the full composed app still boots (`angee dev`, or the
+  stack CI lane's composed render) after touching `baseIcons` or an addon's
+  `icons`; `tsc` alone cannot catch the collision.
 - **A new web package needs `pnpm install` + a Vite restart** (Vite snapshots
   workspace packages at start) plus registration in the host `main.tsx` addons and
   `package.json`.
@@ -631,8 +631,8 @@ For page/addon changes, run a primitive-drift scan and explain every hit outside
 `@angee/ui`:
 
 ```sh
-rg -n '<table\b|<thead\b|<tbody\b|<tr\b|<td\b|<th\b|role="grid"|useReactTable|manualPagination' angee/web addons examples/notes-angee/web -g '*.tsx'
-rg -n 'useAuthored(Query|Mutation)<|interface .*Data|interface .*Variables|fetch\([^)]*graphql|gql`' angee/web addons examples/notes-angee/web packages -g '*.ts' -g '*.tsx'
+rg -n '<table\b|<thead\b|<tbody\b|<tr\b|<td\b|<th\b|role="grid"|useReactTable|manualPagination' ../angee-react ../angee-base/addons ../angee-messaging-bridges/addons -g '*.tsx'
+rg -n 'useAuthored(Query|Mutation)<|interface .*Data|interface .*Variables|fetch\([^)]*graphql|gql`' ../angee-react ../angee-base/addons ../angee-messaging-bridges/addons -g '*.ts' -g '*.tsx'
 ```
 
 Run the architecture guardrail when changing package layering, public shared

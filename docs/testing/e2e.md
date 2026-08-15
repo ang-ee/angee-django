@@ -40,7 +40,7 @@ harness only wires them.
 
 Two pieces, at the two levels that own them:
 
-- **`@angee/e2e`** (`packages/e2e`) — the inherited harness. A consumer's
+- **`@angee/e2e`** (the angee-react repo's `e2e/`) — the inherited harness. A consumer's
   `playwright.config.ts` is one line. It provides:
   - `defineE2EConfig()` — the framework Playwright config. `baseURL` is read from
     the workspace environment, so one config drives every workspace unchanged. It
@@ -56,7 +56,7 @@ Two pieces, at the two levels that own them:
     API and persist its `storageState`, used by the setup project.
   - `PageObject` — the base for the **Page Object Model**, Angee's default
     authoring style (see below).
-- **Reference specs** (`examples/notes-angee/e2e`) — the worked example a consumer
+- **Reference specs** (the `angee-examples` repo's `e2e/`) — the worked example a consumer
   copies. `playwright.config.ts`, an `auth.setup.ts` that authenticates the seeded
   `alice`/`bob`, Page Objects under `pages/`, and specs under `tests/`.
 
@@ -89,7 +89,7 @@ the deliberate "lighter easy lift" tradeoff:
 - **Concurrent writes are handled by project settings, not the harness.** SQLite locks
   the whole file on write, which surfaces as "database is locked" under parallel
   access. The fix lives at the owner — the project's `DATABASES["OPTIONS"]`
-  (`examples/notes-angee/settings.yaml` + `angee.compose.defaults`) enables WAL, an `IMMEDIATE`
+  (the stack host's `settings.yaml` + `angee.compose.defaults`) enables WAL, an `IMMEDIATE`
   transaction mode, and a busy `timeout`, so concurrent readers and writers wait
   rather than fail. The harness adds no serialisation of its own.
 
@@ -101,7 +101,7 @@ parallel mutation flakiness ever demands it, the seam to add it is the workspace
 dozens of notes, not three). Specs assert durable invariants — a known record is
 present, two users' scopes are disjoint, an anonymous write is denied with
 `PERMISSION_DENIED` — never a volatile row count. See
-`examples/notes-angee/e2e/tests/notes.spec.ts`.
+the angee-examples suite's `e2e/tests/notes.spec.ts`.
 
 ## Running e2e
 

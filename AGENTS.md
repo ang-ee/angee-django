@@ -5,8 +5,8 @@ boring, proven libraries into one deterministic product surface. Before adding,
 replacing, or hand-rolling a capability, check the opinionated stack in
 `docs/stack.md`; it is the single source of truth for which library owns what.
 The dependency manifests lock the install shape: `pyproject.toml` + `uv.lock`
-for Python, and `package.json` + `pnpm-workspace.yaml` + `pnpm-lock.yaml` for
-TypeScript.
+for Python here, and the stack host's `package.json` + `pnpm-workspace.yaml` +
+`pnpm-lock.yaml` for TypeScript (the JS packages live in sibling repos).
 
 The framework owns the seams, not the concerns. Product logic belongs in addons.
 The composer turns addon contracts and project settings into a runnable project.
@@ -14,9 +14,9 @@ A project declares the root apps it composes through Django `INSTALLED_APPS`.
 
 ## Repository Role
 
-This repository holds the Angee framework itself together with the base addons
-shipped with it. The framework core is an addon like any other; the base addons
-build on it, and consumer addons (a product team's own code) build on those. See
+This repository holds the Angee framework core. The framework core is an addon
+like any other; the base addons (the sibling `angee-base` repo) build on it, and
+consumer addons (a product team's own code) build on those. See
 `docs/glossary.md` for these terms.
 
 Because everything is an addon, the first question for any change is *what level
@@ -37,53 +37,34 @@ stack DRY.
 
 A map by role, not a file inventory — each addon's `AppConfig` and module
 docstrings own the current contract, and this points to the owner. Everything is
-an addon: the framework core lives at `angee/` and the base addons at
-`addons/angee/` — two source roots sharing the one `angee.*` namespace, so the
-directories mirror the eventual `django-angee` / `django-angee-addons` split
-without changing any import. The example shows a host composing a consumer addon
-on top.
+an addon: the framework core at `angee/` is the one real Python package
+(`django-angee`); every other piece of the platform lives in a sibling source
+repo, materialized side by side as workspace slots by a stack's `src` workspace.
+The `angee.*` namespace spans the core and the base addons across repos without
+changing any import.
 
 ```text
-.
+.                           # a workspace slot: <stack>/workspaces/<ws>/angee-django
 ├── angee/                  # `django-angee` — framework core + composer (PEP 420 namespace, no __init__.py)
 │   ├── base/               # framework core: the model toolkit (abstract models, mixins, fields, managers)
 │   ├── graphql/            # the GraphQL runtime — schema buckets, auto-CRUD, subscriptions, SDL (`manage.py schema`)
-│   └── compose/            # the composer — emits the concrete runtime (`manage.py angee build`)
-├── addons/angee/           # base addons shipped with Angee — same `angee.*` namespace, built on the core
-│   ├── iam/                # IAM base addon — identity, the swappable user model, the REBAC permission hub
-│   ├── resources/          # resources base addon — tiered data import/export (`resources` command)
-│   ├── storage/            # storage base addon — drives, folders, content-addressed files, uploads
-│   ├── operator/           # operator base addon — bridge to the local operator daemon + admin console
-│   ├── integrate/          # integration base addon — the OAuth connection substrate + capability/bridge runtime seam
-│   ├── agents_integrate_anthropic/ # Anthropic inference backend addon — SDK client + model sync
-│   └── iam_integrate_oidc/ # OIDC login addon — extends integrate's OAuthClient with login fields + composes iam
-│       └── …               # an addon may carry a co-located `web/` (e.g. `iam/web` = `@angee/iam`)
-├── angee/web/              # frontend framework packages shipped with `django-angee`
-│   ├── app/                # `@angee/app` — composition root, routes, providers, addon manifests
-│   ├── refine/             # `@angee/refine` — Refine/Hasura transport, live, router, typed-doc glue
-│   ├── metadata/           # `@angee/metadata` — `angee.resources` metadata bridge and projection
-│   └── ui/                 # `@angee/ui` — rendered binding, primitives, runtime context, views
-├── packages/               # dev-only frontend workspace packages
-│   ├── storybook/          # `@angee/storybook` — the storybook-first component workshop
-│   └── e2e/                # `@angee/e2e` — Playwright e2e harness (`docs/testing/e2e.md`)
-├── templates/              # Copier templates — project / stack / workspace / service kinds
-│   ├── projects/web/       # project template — scaffolds the host repo (owns the project root)
-│   ├── stacks/dev/         # framework-dev Stack template — project-at-root, process-compose
-│   └── workspaces/src/     # the all-source framework workspace (every repo a worktree slot)
-├── examples/notes-angee/   # the example project `angee dev` runs from the repo root
-│   ├── manage.py           # Django entrypoint (`uv run examples/notes-angee/manage.py …`)
-│   ├── settings.yaml       # project composition facts and project overrides
-│   ├── addons/             # consumer addons for the example
-│   │   └── example/notes/  # product logic for the example
-│   ├── web/                # the project frontend (Vite + React)
-│   └── runtime/            # concrete apps + SDL emitted by the composer — output, not source
+│   ├── compose/            # the composer — emits the concrete runtime (`manage.py angee build`)
+│   └── tasks/              # the Celery seam (broker wiring, beat, queue routing)
+├── templates/              # Copier templates — project / stack / workspace / service kinds (moving to ang-ee/angee-templates in P7)
 ├── docs/                   # intent docs — glossary, stack, guidelines, and `docs/howto/`
 ├── tests/                  # framework tests (composition, GraphQL, IAM, CRUD, …)
 ├── .agents/                # shared agent methodology — reviewer agents, commands, skills, workflows (`.agents/README.md`; public)
 ├── .work/                  # private agent work-state — plans, notes, handovers (gitignored symlink to a separate private repo; never mirrored)
 ├── README.md               # human entry point; `AGENTS.md` is the agent/contributor entry point
-├── pyproject.toml, uv.lock                             # Python package + locked graph
-└── package.json, pnpm-workspace.yaml, pnpm-lock.yaml   # JS workspace + locked graph
+└── pyproject.toml, uv.lock # the Python package + locked graph
+
+# Sibling workspace slots (their own repos, side by side):
+../angee-react/             # `@angee/app`, `ui`, `refine`, `metadata` + the storybook and e2e workshops
+../angee-base/              # the base addons — folders with addon.toml + co-located `web/` fragments
+../angee-messaging-bridges/ # the opt-in personal-messaging bridge addons
+../angee-examples/          # showcase consumer addons (`example.notes`) + the reference e2e suite
+../angee-templates/         # the Copier templates repo (once the P7 lift lands)
+../angee-operator/          # the `angee` CLI / operator daemon (Go)
 ```
 
 You edit **source models** in addons; the composer emits the concrete apps and
@@ -252,62 +233,44 @@ smaller and clearer.
 ## Run From The Root
 
 Resolve the stack that owns lifecycle before running `angee init`, `angee ws`,
-or another stack command. An existing current or ancestor `angee.yaml` wins over
-this checkout's `.angee/angee.yaml` dev overlay. When this checkout lives under
-a self-contained `ANGEE_ROOT` (for example `ANGEE_ROOT/sources/angee-django`),
-use that ancestor root for stack and workspace commands and do not initialize
-another `.angee/` inside this source checkout. Load
+or another stack command. An existing current or ancestor `angee.yaml` owns
+this checkout: this repository is normally a workspace slot
+(`<stack>/workspaces/<ws>/angee-django`) of a framework-dev stack whose root
+manifest declares the project host, the sources, and the workspaces. Never
+initialize a stack under a source checkout. Load
 `.agents/skills/angee-workspace/SKILL.md` for the canonical resolution flow; it
 binds the result as `angee_root` and runs lifecycle commands as
 `angee --root "$angee_root" ws ...`.
 
-The repository-local overlay described below is the fallback for a standalone
-checkout only: use it when no current or ancestor stack already owns the
-checkout.
-
 `angee dev` is the only supported way to bring the local stack up — do not start
 Django, Vite, Daphne, workers, or watchers by hand. Run it against the resolved
-stack root. For a standalone checkout, that is the repository-local overlay
-wired to `examples/notes-angee`; for a checkout below a self-contained stack,
-the ancestor manifest owns the project and sources.
-
-This repo-root `.angee/` is a **dev-stack overlay** — `ANGEE_ROOT=.angee` with
-`local` sources pointing at this checkout. It is one of two stack layouts (the
-other being a self-contained instance that clones its sources in); the project
-owns the repository root, the stack overlays into `.angee/`. See `docs/glossary.md`
-(Project / Project template / Host).
+stack root; the stack's project host composes this checkout editable (the
+rendered pyproject resolves `django-angee` from this slot).
 
 ```sh
 angee --root "$angee_root" dev
 ```
 
 `angee dev` is for bringing the long-running stack up. To run a one-shot Django
-management command against the example, drive its `manage.py` through `uv` from
-the repository root, never by `cd`-ing into the project. The composer is
-emit-only; migrations, permission sync, resource data, and GraphQL SDL checks
-are separate later steps (a fresh process loads the freshly emitted concrete
-models):
+management command, drive the stack host's `manage.py` through `uv` from the
+STACK root, never by `cd`-ing into a slot. The composer is emit-only;
+migrations, permission sync, resource data, and GraphQL SDL checks are separate
+later steps (a fresh process loads the freshly emitted concrete models):
 
 ```sh
-uv run examples/notes-angee/manage.py angee build              # emit runtime sources
-uv run examples/notes-angee/manage.py makemigrations base notes
-uv run examples/notes-angee/manage.py migrate
-uv run examples/notes-angee/manage.py rebac sync               # permissions, after migrate
-uv run examples/notes-angee/manage.py resources load           # data, after migrate
-uv run examples/notes-angee/manage.py schema                  # write SDL
-uv run examples/notes-angee/manage.py schema --check           # SDL, after runtime load
+cd "$angee_root"
+uv run manage.py angee build              # emit runtime sources
+uv run manage.py makemigrations base notes
+uv run manage.py migrate
+uv run manage.py rebac sync               # permissions, after migrate
+uv run manage.py resources load           # data, after migrate
+uv run manage.py schema                   # write SDL
+uv run manage.py schema --check           # SDL, after runtime load
 ```
 
 For an isolated branch, load `.agents/skills/angee-workspace/SKILL.md` and
-follow its **Create Workspace** workflow to create the workspace with validated
-work-state. Then run the stack inside it. `angee dev` walks up to the nearest
-`.angee`, so it works from the workspace root too.
-
-```sh
-cd "$angee_root/workspaces/<name>"
-angee dev
-angee --root "$angee_root" ws status <name>
-```
+follow its **Create Workspace** workflow — the src template cuts every
+framework repo as a sibling worktree slot on `workspace/<name>`.
 
 A workspace is pinned to `workspace/<name>` — never `git checkout`/`switch`
 inside it; make a new workspace for a different branch.

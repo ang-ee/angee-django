@@ -693,8 +693,8 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **Each running stack needs a unique compose project name *and* edge port.** The
   stack `name:` becomes the docker-compose project name, and the agent chat
   WebSocket the browser opens rides the stack's `ingress.port` (the leased
-  `edge_port`). Two stacks sharing a `name:` — e.g. every dev workspace defaulting
-  to `notes-angee` — make Compose merge their containers into one project: one
+  `edge_port`). Two stacks sharing a `name:` make Compose merge their containers
+  into one project: one
   stack's agent ends up fronted by another stack's edge (or none), and the chat
   socket 1006s ("no response from the edge"). The dev workspace template scopes
   both per workspace (`project_name: "${inputs.example}-${workspace.name}"` and a
@@ -969,7 +969,7 @@ uv run python -m ruff check . --no-cache
 uv run python -m mypy angee addons
 uv run python -m vulture
 uv run python -m pytest
-uv run examples/notes-angee/manage.py angee build --check
+(cd "$angee_root" && uv run manage.py angee build --check)   # against the stack host
 ```
 
 Use the `python -m` module form (see Pitfalls: bare `uv run pytest`/`mypy` fail to

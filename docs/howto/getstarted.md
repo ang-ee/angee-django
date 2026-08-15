@@ -182,44 +182,43 @@ example project, so it brings the whole stack up for you.
    local Services), and **git** (for git Sources). See the operator's
    [Getting started](https://docs.angee.ai/guide/getting-started) for details.
 
-3. **Set up and bring up the stack from the repo root.**
+3. **Render and bring up a stack.**
 
    Before `angee init`, check for an existing current or ancestor
    `angee.yaml`. If one exists, it already owns this checkout: use that
    `ANGEE_ROOT` — never initialize a stack under a source checkout.
 
    ```sh
-   angee init --dev   # standalone checkout only; render .angee/ once
-   angee dev          # run the examples/notes-angee stack
+   angee init         # render the framework-dev stack (project host at the root)
+   angee dev          # materialize sources + the src workspace, provision, boot
    ```
 
    `angee dev` is the only supported way to run the local stack — don't start
-   Django, Vite, Daphne, or workers by hand. Run from the repository root: the
-   root stack is wired to the `examples/notes-angee` project, so `angee dev`
-   runs that example against the framework.
+   Django, Vite, Daphne, or workers by hand. The rendered manifest declares the
+   framework repos as sources; `angee dev` clones them, cuts the `src`
+   workspace (every repo a sibling worktree slot), and runs the composed host
+   at the stack root against those slots.
 
-   `angee init --dev` renders a **dev-stack overlay** into a gitignored `.angee/`,
-   with `local` sources pointing at the checkout you already have — one of the
-   [two stack layouts](/operator/concepts#two-stack-layouts). The other is a
-   **self-contained instance** you `angee stack init` in its own folder, which
-   clones its sources in; that is how a downstream project or a shared local
-   platform is run.
+   The other stack layout is a **self-contained instance** you
+   `angee stack init` from the `local` stack template, which runs everything on
+   docker-compose; that is how a downstream project or a shared local platform
+   is run.
 
 ### Optional Ollama inference
 
 The dev stack can run one shared, operator-managed Ollama container for local
 inference. It is disabled by default because the image and model store are large.
-Enable it when rendering a standalone dev overlay:
+Enable it when rendering the stack:
 
 ```sh
-angee init --dev --input enable_ollama=true --input ollama_port=11434
+angee init --input enable_ollama=true --input ollama_port=11434
 angee dev
 # In another shell after the stack is up:
-docker compose -f .angee/docker-compose.yaml exec ollama ollama pull llama3.2
+docker compose -f docker-compose.yaml exec ollama ollama pull llama3.2
 ```
 
 The model pull is deliberately manual; downloaded models persist in the stack's
-`.angee/ollama` store across restarts. The `ollama` inference backend defaults to
+`./ollama` store across restarts. The `ollama` inference backend defaults to
 `http://localhost:11434/v1`, which reaches the published port from the local
 Django and Celery processes. If `ollama_port` is changed or leased to a workspace,
 set the Ollama inference provider row's `base_url` to

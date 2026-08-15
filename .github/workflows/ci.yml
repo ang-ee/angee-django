@@ -12,3 +12,6 @@ jobs:
     uses: ./.github/workflows/reusable-checks.yml
     with:
       python-version: "3.14"
+      # No JS remains in this repo since the example host dissolved (P7); the
+      # composed-web lane returns as the stack lane in the P7 CI rework.
+      pnpm-enabled: false

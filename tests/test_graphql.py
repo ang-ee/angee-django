@@ -774,7 +774,7 @@ def test_revisions_query_surface_exposes_revision_mixin_versions() -> None:
     Asserts the emitted schema surface — the bounded query field and its
     revisioned-field projection. The runtime data path (public id -> instance ->
     newest-first projection) is covered end-to-end against the real, reversion-
-    registered notes.Note in examples/notes-angee/e2e (notes-form-interactions
+    registered notes.Note in the angee-examples e2e suite (notes-form-interactions
     "the Activity tab renders the revision timeline"); reversion cannot resolve
     a ContentType for a schema_editor-created throwaway model, so the version
     round-trip is not exercised as a unit test.

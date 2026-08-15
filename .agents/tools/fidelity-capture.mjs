@@ -16,20 +16,31 @@
 // Usage:
 //   node .agents/tools/fidelity-capture.mjs <base-url> <route> <name> [--hash]
 //   node .agents/tools/fidelity-capture.mjs http://127.0.0.1:5174 /notes/1 form --hash
-// Output: examples/notes-angee/e2e/test-results/fidelity/<name>.{png,json}
+// Output: <stack>/test-results/fidelity/<name>.{png,json} (stack root = nearest angee.yaml ancestor)
 
 import { createRequire } from "node:module";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
-// This tool lives at .agents/tools/; the repo root is two levels up.
+// This tool lives at .agents/tools/; the repo root is two levels up, and the
+// stack root (the working surface post-host-dissolution) is the nearest
+// ancestor with an angee.yaml — its workspace install owns Playwright.
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const stackRoot = (() => {
+  let dir = repoRoot;
+  for (;;) {
+    if (existsSync(resolve(dir, "angee.yaml"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return repoRoot;
+    dir = parent;
+  }
+})();
 
-// Resolve Playwright from the e2e package (the only place it's installed),
+// Resolve Playwright from the stack's e2e suite (the angee-examples slot),
 // so this tool runs from any cwd.
 const require = createRequire(
-  resolve(repoRoot, "examples/notes-angee/e2e/package.json"),
+  resolve(stackRoot, "workspaces/src/angee-examples/e2e/package.json"),
 );
 const { chromium } = require("@playwright/test");
 
@@ -42,10 +53,7 @@ const hash = flags.includes("--hash");
 const dirty = flags.includes("--dirty"); // type into the form to surface dirty-only controls
 const storageState = (flags.find((f) => f.startsWith("--storage=")) || "").split("=")[1]; // capture an authenticated app screen
 const login = (flags.find((f) => f.startsWith("--login=")) || "").split("=")[1]; // live-login as <user> on baseUrl/login before capturing
-const outDir = resolve(
-  repoRoot,
-  "examples/notes-angee/e2e/test-results/fidelity",
-);
+const outDir = resolve(stackRoot, "test-results/fidelity");
 mkdirSync(outDir, { recursive: true });
 
 const url = hash ? `${baseUrl}/#${route}` : `${baseUrl}${route}`;

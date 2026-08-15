@@ -12,6 +12,8 @@ references — follow this before restarting anything.
 | `addons/angee/*` (base addons) | the **angee-base** repo (`addons/angee/*`, layout unchanged) |
 | matrix, whatsapp, telegram, discord, signal, imessage, facebook, meta bridges | the **angee-messaging-bridges** repo — **opt-in by cloning** |
 | `examples/notes-angee/addons` (`example.notes`) | the **angee-examples** repo |
+| `examples/notes-angee` (the example host itself) | **dissolved** — a stack is the host: `angee init` renders the host at the stack root (`ang-ee/angee-templates`, `projects/web` + `stacks/dev`); the reference e2e suite lives in **angee-examples** `e2e/` |
+| `templates/` | the **angee-templates** repo (in flight — P7) |
 
 What did **not** change: addon names, `INSTALLED_APPS` entries, the
 `django-angee` distribution's dependencies and the `matrix` extra (they stay

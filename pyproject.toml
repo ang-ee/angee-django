@@ -169,7 +169,6 @@ only-include = [
   "README.md",
   "angee",
   "docs",
-  "examples",
   "pyproject.toml",
   "tests",
   "uv.lock",

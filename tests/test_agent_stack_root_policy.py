@@ -31,8 +31,8 @@ def test_workspace_skill_prefers_an_existing_ancestor_stack_root() -> None:
 def test_repository_agents_defers_stack_lifecycle_to_an_existing_parent_root() -> None:
     agents = " ".join((ROOT / "AGENTS.md").read_text(encoding="utf-8").split())
 
-    assert "An existing current or ancestor `angee.yaml` wins" in agents
-    assert "do not initialize another `.angee/` inside this source checkout" in agents
+    assert "An existing current or ancestor `angee.yaml` owns" in agents
+    assert "Never initialize a stack under a source checkout" in agents
     assert 'angee --root "$angee_root" ws' in agents
 
 
