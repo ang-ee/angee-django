@@ -517,10 +517,11 @@ def test_local_stack_renders_single_caddy_frontend_ingress() -> None:
     assert "try_files {path} /index.html" in caddyfile_command
 
     frontend_command = stack["services"]["frontend-build"]["command"][-1]
-    # source-mode graft: overlay each @angee package's src/ from the framework checkout,
+    # source-mode graft: overlay each @angee package's src/ from the sibling checkouts,
     # then symlink each package into the mounted project's node_modules.
-    assert "project/sources/angee-django/angee/web" in frontend_command
-    assert "project/sources/angee-django/addons/angee" in frontend_command
+    assert "project/sources/angee-react" in frontend_command
+    assert "project/sources/angee-base/addons/angee" in frontend_command
+    assert "project/sources/angee-messaging-bridges/addons/angee" in frontend_command
     assert "fs.cpSync(srcDir,dstDir" in frontend_command
     assert 'path.join(root,"project/web/node_modules/@angee")' in frontend_command
     assert "fs.symlinkSync" in frontend_command
