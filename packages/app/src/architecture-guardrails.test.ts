@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx"]);
 const DELETED_SHELLS = new Set([
   "@angee/base",
@@ -12,10 +12,10 @@ const DELETED_SHELLS = new Set([
   "@angee/resources-addon",
 ]);
 const FRAMEWORK_PACKAGES = new Map([
-  ["@angee/app", "angee/web/app"],
-  ["@angee/refine", "angee/web/refine"],
-  ["@angee/metadata", "angee/web/metadata"],
-  ["@angee/ui", "angee/web/ui"],
+  ["@angee/app", "app"],
+  ["@angee/refine", "refine"],
+  ["@angee/metadata", "metadata"],
+  ["@angee/ui", "ui"],
 ]);
 const FRAMEWORK_IMPORT_RULES: Record<string, readonly string[]> = {
   "@angee/refine": [],
@@ -76,13 +76,11 @@ describe("React architecture guardrails", () => {
 });
 
 function toolingPackageRoots(): string[] {
-  const root = join(REPO_ROOT, "packages");
-  if (!existsSync(root)) return [];
-  return readdirSync(root)
-    .map((entry) => join(root, entry))
-    .filter((entry) => existsSync(join(entry, "package.json")))
-    .map((entry) => relative(REPO_ROOT, entry))
-    .sort();
+  // The tooling packages are named deliberately, not discovered: this repo's
+  // tree is the contract, and a stray directory must not join the layering.
+  return ["storybook", "e2e"].filter((entry) =>
+    existsSync(join(REPO_ROOT, entry, "package.json")),
+  );
 }
 
 function packageName(packageRoot: string): string {
