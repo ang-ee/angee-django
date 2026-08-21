@@ -43,6 +43,7 @@ import {
   ListEmpty,
   ListHeaderCell,
   ListLoadingFooter,
+  RowActionsHeader,
   ListSkeletonRows,
   MeasureFooter,
   RecordRow,
@@ -86,6 +87,7 @@ export interface GroupedListBodyProps<TRow extends Row> {
   selectedIds: ReadonlySet<string>;
   interactive: boolean;
   rowHref?: (row: TRow) => string;
+  renderRowActions?: (row: TRow) => React.ReactNode;
   onRowClick?: (row: TRow) => void;
   draggableRow?: (row: TRow) => DndPayload | null;
   onListStateChange?: (state: ResourceListSnapshot<TRow>) => void;
@@ -110,6 +112,7 @@ export function GroupedListBody<TRow extends Row>({
   setScopePage,
   interactive,
   rowHref,
+  renderRowActions,
   onRowClick,
   draggableRow,
   onListStateChange,
@@ -119,7 +122,11 @@ export function GroupedListBody<TRow extends Row>({
 }: GroupedListBodyProps<TRow>): React.ReactElement {
   const t = useUiT();
   // Grouped mode keeps a sticky chevron column in place of the select-all box.
-  const colSpan = Math.max(1, visibleColumnCount + 1);
+  const hasRowActions = renderRowActions !== undefined;
+  const colSpan = Math.max(
+    1,
+    visibleColumnCount + 1 + (hasRowActions ? 1 : 0),
+  );
   const measures = React.useMemo(
     () => groupMeasuresFromColumns(columns),
     [columns],
@@ -173,12 +180,17 @@ export function GroupedListBody<TRow extends Row>({
                     withVisibleFields={index === group.headers.length - 1}
                   />
                 ))}
+                {hasRowActions ? <RowActionsHeader /> : null}
               </TableRow>
             ))}
           </TableHeader>
           <TableBody>
             {fetching && listItems.length === 0 ? (
-              <ListSkeletonRows table={table} loadingLabel={t("list.loading")} />
+              <ListSkeletonRows
+                table={table}
+                trailingColumn={hasRowActions}
+                loadingLabel={t("list.loading")}
+              />
             ) : error && listItems.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={colSpan} className="py-6 text-danger-text">
@@ -209,6 +221,7 @@ export function GroupedListBody<TRow extends Row>({
                       resourceView={resourceView}
                       interactive={interactive}
                       rowHref={rowHref}
+                      renderRowActions={renderRowActions}
                       onRowClick={onRowClick}
                       draggableRow={draggableRow}
                       onRecordOpen={handleRecordOpen}
@@ -231,6 +244,7 @@ export function GroupedListBody<TRow extends Row>({
               aggregate={footerAggregate}
               selectable
               labelInSelectionColumn
+              trailingColumn={hasRowActions}
             />
           ) : null}
         </Table>
@@ -263,6 +277,7 @@ function GroupedItemRow<TRow extends Row>({
   resourceView,
   interactive,
   rowHref,
+  renderRowActions,
   onRowClick,
   draggableRow,
   onRecordOpen,
@@ -278,6 +293,7 @@ function GroupedItemRow<TRow extends Row>({
   resourceView: ResourceViewContextValue;
   interactive: boolean;
   rowHref?: (row: TRow) => string;
+  renderRowActions?: (row: TRow) => React.ReactNode;
   onRowClick?: (row: TRow) => void;
   draggableRow?: (row: TRow) => DndPayload | null;
   onRecordOpen: (row: TRow) => void;
@@ -293,6 +309,7 @@ function GroupedItemRow<TRow extends Row>({
           visibleColumns={visibleColumns}
           measuresByColumn={measuresByColumn}
           onToggle={onToggleGroup}
+          trailingColumn={renderRowActions !== undefined}
         />
       );
     case "record":
@@ -306,6 +323,7 @@ function GroupedItemRow<TRow extends Row>({
           onRowClick={onRowClick}
           draggableRow={draggableRow}
           onRecordOpen={onRecordOpen}
+          renderRowActions={renderRowActions}
         />
       );
     case "pager":
@@ -317,6 +335,7 @@ function GroupedItemRow<TRow extends Row>({
         <ListSkeletonRows
           table={table}
           rowCount={item.rowCount}
+          trailingColumn={renderRowActions !== undefined}
           loadingLabel={loadingLabel}
         />
       );
@@ -330,11 +349,13 @@ function GroupedHeaderRow<TRow extends Row>({
   visibleColumns,
   measuresByColumn,
   onToggle,
+  trailingColumn,
 }: {
   item: Extract<GroupedListItem<TRow>, { kind: "groupHeader" }>;
   visibleColumns: readonly TableColumn<TRow, unknown>[];
   measuresByColumn: ReadonlyMap<string, GroupMeasure>;
   onToggle: (key: string) => void;
+  trailingColumn: boolean;
 }): React.ReactElement {
   const headerId = React.useId();
   const { bucket, bucketKey, depth, label, count, expandable, expanded } = item;
@@ -399,6 +420,7 @@ function GroupedHeaderRow<TRow extends Row>({
           </TableCell>
         );
       })}
+      {trailingColumn ? <TableCell className="h-9 bg-sheet-2" /> : null}
     </TableRow>
   );
 }

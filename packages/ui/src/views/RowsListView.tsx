@@ -31,6 +31,10 @@ import {
   useResourceViewToolbarInputs,
 } from "./resource-view-toolbar-inputs";
 import { useResourceViewGroupState } from "./resource-view-group-state";
+import {
+  useRowActionsSurface,
+  type RowActionDeclaration,
+} from "./RowActions";
 
 export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   rows: readonly TRow[];
@@ -46,6 +50,8 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   activeRowId?: string | null;
   onListStateChange?: (state: ResourceListSnapshot<TRow>) => void;
   rowHref?: (row: TRow) => string;
+  /** Authored and page-owned verbs rendered in the shared trailing action column. */
+  rowActions?: readonly RowActionDeclaration<TRow>[];
   emptyContent?: ListEmptyContent;
   className?: string;
   selectable?: boolean;
@@ -112,6 +118,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   activeRowId,
   onListStateChange,
   rowHref,
+  rowActions,
   emptyContent,
   className,
   selectable = false,
@@ -124,6 +131,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   resourceView: ResourceViewContextValue;
 }): React.ReactElement {
   const t = useUiT();
+  const rowActionSurface = useRowActionsSurface(rowActions);
   const [layout, setLayout] = React.useState<RowLayout>("list");
   const effectiveGroupStack = useResourceViewGroupState({
     resourceView,
@@ -204,6 +212,9 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
           titleField={gallery.title}
           subtitleField={gallery.subtitle}
           renderCard={gallery.renderCard}
+          cardActions={
+            rowActionSurface.hasActions ? rowActionSurface.render : undefined
+          }
           cardHref={rowHref}
           onCardClick={onRowClick}
           draggableRow={draggableRow}
@@ -232,6 +243,9 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
           onRowClick={onRowClick}
           activeRowId={activeRowId}
           draggableRow={draggableRow}
+          renderRowActions={
+            rowActionSurface.hasActions ? rowActionSurface.render : undefined
+          }
           emptyContent={resolvedEmptyContent}
           fetching={fetching}
         />

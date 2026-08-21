@@ -289,6 +289,7 @@ export interface FlatListBodyProps<TRow extends Row> {
   interactive: boolean;
   selectable?: boolean;
   rowHref?: (row: TRow) => string;
+  renderRowActions?: (row: TRow) => React.ReactNode;
   onRowClick?: (row: TRow) => void;
   activeRowId?: string | null;
   draggableRow?: (row: TRow) => DndPayload | null;
@@ -313,6 +314,7 @@ export function FlatListBody<TRow extends Row>({
   interactive,
   selectable = true,
   rowHref,
+  renderRowActions,
   onRowClick,
   activeRowId,
   draggableRow,
@@ -321,7 +323,11 @@ export function FlatListBody<TRow extends Row>({
   footerAggregate,
 }: FlatListBodyProps<TRow>): React.ReactElement {
   const t = useUiT();
-  const colSpan = Math.max(1, visibleColumnCount + (selectable ? 1 : 0));
+  const hasRowActions = renderRowActions !== undefined;
+  const colSpan = Math.max(
+    1,
+    visibleColumnCount + (selectable ? 1 : 0) + (hasRowActions ? 1 : 0),
+  );
   const measures = React.useMemo(
     () => groupMeasuresFromColumns(columns),
     [columns],
@@ -363,6 +369,7 @@ export function FlatListBody<TRow extends Row>({
                   withVisibleFields={index === group.headers.length - 1}
                 />
               ))}
+              {hasRowActions ? <RowActionsHeader /> : null}
             </TableRow>
           ))}
         </TableHeader>
@@ -371,6 +378,7 @@ export function FlatListBody<TRow extends Row>({
             <ListSkeletonRows
               table={table}
               selectable={selectable}
+              trailingColumn={hasRowActions}
               loadingLabel={t("list.loading")}
             />
           ) : rowModels.length === 0 ? (
@@ -403,6 +411,7 @@ export function FlatListBody<TRow extends Row>({
                       onRowClick,
                       activeRowId,
                       draggableRow,
+                      renderRowActions,
                     })
                   : null;
               })}
@@ -421,6 +430,7 @@ export function FlatListBody<TRow extends Row>({
             measures={measures}
             aggregate={footerAggregate}
             selectable={selectable}
+            trailingColumn={hasRowActions}
           />
         ) : null}
       </Table>
@@ -434,12 +444,14 @@ export function MeasureFooter<TRow extends Row>({
   aggregate,
   selectable,
   labelInSelectionColumn = false,
+  trailingColumn = false,
 }: {
   table: TableModel<TRow>;
   measures: readonly GroupMeasure[];
   aggregate: AggregateBucket;
   selectable: boolean;
   labelInSelectionColumn?: boolean;
+  trailingColumn?: boolean;
 }): React.ReactElement {
   const t = useUiT();
   const byColumn = new Map(measures.map((measure) => [measure.columnId, measure]));
@@ -477,8 +489,19 @@ export function MeasureFooter<TRow extends Row>({
             </TableCell>
           );
         })}
+        {trailingColumn ? <TableCell /> : null}
       </TableRow>
     </TableFooter>
+  );
+}
+
+/** Accessible, non-sortable header for the framework-owned row-action column. */
+export function RowActionsHeader(): React.ReactElement {
+  const t = useUiT();
+  return (
+    <TableHead sticky className="text-right">
+      <span className="sr-only">{t("list.actions")}</span>
+    </TableHead>
   );
 }
 
@@ -734,6 +757,7 @@ function RecordRowInner<TRow extends Row>({
   onRecordOpen,
   active,
   draggableRow,
+  renderRowActions,
 }: {
   row: TableRowModel<TRow>;
   selected: boolean;
@@ -745,6 +769,7 @@ function RecordRowInner<TRow extends Row>({
   onRecordOpen?: (row: TRow) => void;
   active?: boolean;
   draggableRow?: (row: TRow) => DndPayload | null;
+  renderRowActions?: (row: TRow) => React.ReactNode;
 }): React.ReactElement {
   const dragProps = dragSourceProps(draggableRow?.(row.original) ?? null);
   const href = rowHref?.(row.original);
@@ -759,6 +784,7 @@ function RecordRowInner<TRow extends Row>({
         onRecordOpen={onRecordOpen}
         active={active}
         dragProps={dragProps}
+        rowActions={renderRowActions?.(row.original)}
       />
     );
   }
@@ -773,6 +799,7 @@ function RecordRowInner<TRow extends Row>({
       onRecordOpen={onRecordOpen}
       active={active}
       dragProps={dragProps}
+      rowActions={renderRowActions?.(row.original)}
     />
   );
 }
@@ -792,6 +819,7 @@ function LinkedRecordRow<TRow extends Row>({
   onRecordOpen,
   active = false,
   dragProps,
+  rowActions,
 }: {
   row: TableRowModel<TRow>;
   selected: boolean;
@@ -801,6 +829,7 @@ function LinkedRecordRow<TRow extends Row>({
   onRecordOpen?: (row: TRow) => void;
   active?: boolean;
   dragProps?: DragSourceProps;
+  rowActions?: React.ReactNode;
 }): React.ReactElement {
   const t = useUiT();
   const id = row.id;
@@ -878,6 +907,9 @@ function LinkedRecordRow<TRow extends Row>({
           )}
         </TableCell>
       ))}
+      {rowActions !== undefined ? (
+        <TableCell className="text-right">{rowActions}</TableCell>
+      ) : null}
     </TableRow>
   );
 }
@@ -892,6 +924,7 @@ function PlainRecordRow<TRow extends Row>({
   onRecordOpen,
   active = false,
   dragProps,
+  rowActions,
 }: {
   row: TableRowModel<TRow>;
   selected: boolean;
@@ -902,6 +935,7 @@ function PlainRecordRow<TRow extends Row>({
   onRecordOpen?: (row: TRow) => void;
   active?: boolean;
   dragProps?: DragSourceProps;
+  rowActions?: React.ReactNode;
 }): React.ReactElement {
   const t = useUiT();
   const id = row.id;
@@ -954,6 +988,9 @@ function PlainRecordRow<TRow extends Row>({
           )}
         </TableCell>
       ))}
+      {rowActions !== undefined ? (
+        <TableCell className="text-right">{rowActions}</TableCell>
+      ) : null}
     </TableRow>
   );
 }
@@ -968,6 +1005,7 @@ function renderListRow<TRow extends Row>({
   onRowClick,
   activeRowId,
   draggableRow,
+  renderRowActions,
 }: {
   row: TableRowModel<TRow>;
   colSpan: number;
@@ -978,6 +1016,7 @@ function renderListRow<TRow extends Row>({
   onRowClick?: (row: TRow) => void;
   activeRowId?: string | null;
   draggableRow?: (row: TRow) => DndPayload | null;
+  renderRowActions?: (row: TRow) => React.ReactNode;
 }): React.ReactElement {
   if (row.getIsGrouped()) {
     return (
@@ -1000,6 +1039,7 @@ function renderListRow<TRow extends Row>({
       onRowClick={onRowClick}
       active={activeRowId != null && String(row.original.id) === activeRowId}
       draggableRow={draggableRow}
+      renderRowActions={renderRowActions}
     />
   );
 }
@@ -1552,14 +1592,16 @@ export function ListSkeletonRows<TRow extends Row>({
   selectable = true,
   rowCount = 8,
   loadingLabel,
+  trailingColumn = false,
 }: {
   table: TableModel<TRow>;
   selectable?: boolean;
   rowCount?: number;
   loadingLabel?: React.ReactNode;
+  trailingColumn?: boolean;
 }): React.ReactElement {
   const columns = table.getVisibleLeafColumns();
-  const colSpan = columns.length + (selectable ? 1 : 0);
+  const colSpan = columns.length + (selectable ? 1 : 0) + (trailingColumn ? 1 : 0);
   return (
     <>
       {loadingLabel ? (
@@ -1598,6 +1640,11 @@ export function ListSkeletonRows<TRow extends Row>({
               </TableCell>
             );
           })}
+          {trailingColumn ? (
+            <TableCell className="text-right">
+              <Skeleton shape="text" size="sm" className="ml-auto w-8" />
+            </TableCell>
+          ) : null}
         </TableRow>
       ))}
     </>

@@ -29,6 +29,8 @@ export interface GalleryViewProps<TRow extends Row = Row> {
   rowKey?: keyof TRow & string;
   /** Override the card body. */
   renderCard?: (row: TRow) => ReactNode;
+  /** Optional actions rendered in a footer outside the card's navigation target. */
+  cardActions?: (row: TRow) => ReactNode;
   /** Navigation target for a card — renders it as a link (mirrors `rowHref`). */
   cardHref?: (row: TRow) => string;
   onCardClick?: (row: TRow) => void;
@@ -50,6 +52,7 @@ export function GalleryView<TRow extends Row = Row>({
   subtitleField,
   rowKey = "id" as keyof TRow & string,
   renderCard,
+  cardActions,
   cardHref,
   onCardClick,
   draggableRow,
@@ -82,6 +85,7 @@ export function GalleryView<TRow extends Row = Row>({
               titleField={titleField}
               subtitleField={subtitleField}
               renderCard={renderCard}
+              actions={cardActions?.(row)}
               href={cardHref?.(row)}
               dragPayload={draggableRow?.(row) ?? null}
               onClick={onCardClick}
@@ -143,6 +147,7 @@ function GalleryCard<TRow extends Row>({
   titleField,
   subtitleField,
   renderCard,
+  actions,
   href,
   dragPayload,
   onClick,
@@ -154,6 +159,7 @@ function GalleryCard<TRow extends Row>({
   titleField?: keyof TRow & string;
   subtitleField?: keyof TRow & string;
   renderCard?: (row: TRow) => ReactNode;
+  actions?: ReactNode;
   href?: string;
   dragPayload?: DndPayload | null;
   onClick?: (row: TRow) => void;
@@ -200,35 +206,82 @@ function GalleryCard<TRow extends Row>({
     </>
   );
 
-  // A href makes the card a real link (mirrors the list's `rowHref`); otherwise
-  // an `onClick` makes it a button.
-  if (href) {
-    return (
-      <Card asChild density="sm" className={cardClass}>
-        <a href={href} {...dragProps}>
-          {content}
-        </a>
-      </Card>
-    );
-  }
-  const interactive = onClick
-    ? {
-        role: "button" as const,
-        tabIndex: 0,
-        onClick: () => onClick(row),
-        onKeyDown: (event: React.KeyboardEvent) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            onClick(row);
-          }
-        },
-      }
-    : {};
   return (
-    <Card {...dragProps} {...interactive} density="sm" className={cardClass}>
+    <GalleryCardFrame
+      row={row}
+      href={href}
+      onClick={onClick}
+      actions={actions}
+      dragProps={dragProps}
+      cardClass={cardClass}
+    >
       {content}
+    </GalleryCardFrame>
+  );
+}
+
+interface GalleryCardFrameProps<TRow extends Row> {
+  row: TRow;
+  href?: string;
+  onClick?: (row: TRow) => void;
+  actions?: ReactNode;
+  dragProps: ReturnType<typeof dragSourceProps>;
+  cardClass: string;
+  children: ReactNode;
+}
+
+/** One interactive body/frame owner for cards with and without an action footer. */
+function GalleryCardFrame<TRow extends Row>({
+  row,
+  href,
+  onClick,
+  actions,
+  dragProps,
+  cardClass,
+  children,
+}: GalleryCardFrameProps<TRow>): ReactElement {
+  const bodyClass = cn(
+    "block outline-none focus-visible:focus-ring",
+    actions ? "rounded-t-8" : "rounded-inherit",
+  );
+  return (
+    <Card {...dragProps} density="sm" className={cardClass}>
+      {href ? (
+        <a href={href} className={bodyClass}>
+          {children}
+        </a>
+      ) : (
+        <div
+          {...interactiveCardBodyProps(row, onClick)}
+          className={bodyClass}
+        >
+          {children}
+        </div>
+      )}
+      {actions ? (
+        <footer className="flex items-center justify-end gap-1 border-t border-border-subtle p-2">
+          {actions}
+        </footer>
+      ) : null}
     </Card>
   );
+}
+
+function interactiveCardBodyProps<TRow extends Row>(
+  row: TRow,
+  onClick: ((row: TRow) => void) | undefined,
+): React.HTMLAttributes<HTMLDivElement> {
+  if (!onClick) return {};
+  return {
+    role: "button",
+    tabIndex: 0,
+    onClick: () => onClick(row),
+    onKeyDown: (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      onClick(row);
+    },
+  };
 }
 
 function cardTitle<TRow extends Row>(

@@ -42,4 +42,28 @@ describe("GalleryView", () => {
     expect(screen.getByText("O")).toBeTruthy();
     expect(screen.getByText("Q")).toBeTruthy();
   });
+
+  test("uses the shared interactive frame with actions and omits empty footers", () => {
+    const onCardClick = vi.fn();
+    const view = render(
+      <GalleryView<Cover>
+        rows={[ROWS[0]!]}
+        onCardClick={onCardClick}
+        cardActions={() => <button type="button">Archive</button>}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Onboarding map"));
+    expect(onCardClick).toHaveBeenCalledWith(ROWS[0]);
+    expect(view.container.querySelector("footer")).toBeTruthy();
+
+    view.rerender(
+      <GalleryView<Cover>
+        rows={[ROWS[0]!]}
+        onCardClick={onCardClick}
+        cardActions={() => null}
+      />,
+    );
+    expect(view.container.querySelector("footer")).toBeNull();
+  });
 });

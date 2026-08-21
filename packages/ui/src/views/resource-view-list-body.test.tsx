@@ -7,6 +7,7 @@ import { expect, test, vi } from "vitest";
 import {
   buildColumns,
   groupMeasuresFromColumns,
+  RowActionsHeader,
 } from "./resource-view-list-body";
 
 vi.mock("../i18n", () => ({
@@ -31,6 +32,20 @@ test("renders a visually hidden list-column header", () => {
   render(<>{renderHeader?.()}</>);
 
   expect(screen.getByText("Actions").classList.contains("sr-only")).toBe(true);
+});
+
+test("renders the framework row-actions header as visually hidden copy", () => {
+  render(
+    <table>
+      <thead>
+        <tr>
+          <RowActionsHeader />
+        </tr>
+      </thead>
+    </table>,
+  );
+
+  expect(screen.getByText("list.actions").classList.contains("sr-only")).toBe(true);
 });
 
 test("projects count columns into aggregate measures", () => {

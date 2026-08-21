@@ -22,6 +22,18 @@ export {
 } from "./use-list-record-navigation";
 export { RowsListView, type RowsListViewProps } from "./RowsListView";
 export {
+  defineRowAction,
+  rowIdVariables,
+  type AuthoredRowActionDeclaration,
+  type PageRowActionDeclaration,
+  type RowActionConfirmCopy,
+  type RowActionDeclaration,
+  type RowActionPendingPolicy,
+  type RowActionToastCopy,
+  type TypedAuthoredRowActionDeclaration,
+  type TypedPageRowActionDeclaration,
+} from "./RowActions";
+export {
   RelationPicker,
   type RelationPickerProps,
   type RelationCreateConfig,

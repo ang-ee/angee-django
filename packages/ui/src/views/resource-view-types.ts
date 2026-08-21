@@ -28,6 +28,7 @@ import type { ColumnDescriptor, FacetDescriptor } from "./page";
 import type { Occurrence } from "./CalendarView";
 import type { AnyCalendarWindowSource } from "./use-calendar-window";
 import type { DndPayload } from "../lib/dnd";
+import type { RowActionDeclaration } from "./RowActions";
 
 /**
  * The calendar kind's data declaration. The windowed-collection surface fetches
@@ -121,6 +122,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   navigationScope?: ListViewNavigationScope;
   /** Optional href for a row, used when rows should render as links. */
   rowHref?: (row: TRow) => string;
+  /** Authored and page-owned verbs rendered in the shared trailing action column. */
+  rowActions?: readonly RowActionDeclaration<TRow>[];
   /** Native cross-pane drag payload for each record row, including grouped rows. */
   draggableRow?: (row: TRow) => DndPayload | null;
   /** Controls rendered in the toolbar's leading slot, beside the filter — e.g. a

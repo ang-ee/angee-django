@@ -1,5 +1,10 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { ListView, type ListColumn } from "@angee/ui";
+import {
+  ListView,
+  defineRowAction,
+  type ListColumn,
+  type RowActionDeclaration,
+} from "@angee/ui";
 
 import { RuntimeFixture, jsonResponse, storySchema } from "./runtime-fixtures";
 
@@ -52,6 +57,18 @@ const columns = [
   { field: "updatedAt", header: "Updated" },
 ] satisfies readonly ListColumn<StoryRow>[];
 
+const rowActions: readonly RowActionDeclaration<StoryRow>[] = [
+  defineRowAction({
+    kind: "page",
+    id: "open-note",
+    label: "Open note",
+    icon: "pencil",
+    variant: "ghost",
+    pendingPolicy: "disable-actions",
+    onSelect: () => undefined,
+  }),
+];
+
 const storySchemas = storySchema(async () =>
   jsonResponse({
     data: {
@@ -84,6 +101,7 @@ function ListFixture() {
         <ListView
           resource="notes.Note"
           columns={columns}
+          rowActions={rowActions}
           createLabel="New note"
           onCreate={() => undefined}
         />

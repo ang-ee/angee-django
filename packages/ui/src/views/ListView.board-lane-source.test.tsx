@@ -7,10 +7,13 @@ import {
   type SchemaFieldMetadata,
   type Row,
 } from "@angee/metadata";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { BoardViewProps } from "./BoardView";
 import type { ColumnDescriptor } from "./page";
+import { defineRowAction, type RowActionDeclaration } from "./RowActions";
+import type { CardActionContext } from "./resource-view-types";
 
 type LeadRow = Row & {
   id: string;
@@ -281,6 +284,30 @@ describe("ListView board laneSource", () => {
     });
   });
 
+  test("does not synthesize a board footer when page and declared actions are empty", async () => {
+    const hidden = defineRowAction<LeadRow>({
+      kind: "page",
+      id: "hidden",
+      label: "Hidden",
+      variant: "ghost",
+      visible: () => false,
+      pendingPolicy: "disable-actions",
+      onSelect: () => undefined,
+    });
+    renderLeadBoard({
+      rowActions: [hidden],
+      cardActions: () => null,
+    });
+
+    await waitFor(() => expect(harness.boardProps).not.toBeNull());
+    expect(
+      harness.boardProps?.cardActions?.(
+        harness.tableRows[0]!,
+        { refresh: vi.fn() },
+      ),
+    ).toBeNull();
+  });
+
   test("disables dropping on the empty lane when the lane field is not nullable", async () => {
     harness.tableRows = [
       { id: "led_1", name: "Upgrade", stage: null },
@@ -370,6 +397,8 @@ function renderLeadBoard(options: {
   metadata?: SchemaFieldMetadata;
   columns?: readonly ColumnDescriptor<LeadRow>[];
   withDefaultGroup?: boolean;
+  rowActions?: readonly RowActionDeclaration<LeadRow>[];
+  cardActions?: (row: LeadRow, context: CardActionContext) => ReactNode;
 } = {}) {
   const laneSource = Object.prototype.hasOwnProperty.call(options, "laneSource")
     ? options.laneSource
@@ -383,6 +412,8 @@ function renderLeadBoard(options: {
         defaultView="board"
         defaultGroup={options.withDefaultGroup === false ? undefined : { field: "stage" }}
         laneSource={laneSource}
+        rowActions={options.rowActions}
+        cardActions={options.cardActions}
         scope="local"
       />
     </ModelMetadataProvider>,

@@ -50,7 +50,11 @@ import {
   type GroupMeasure,
 } from "./resource-view-list-body";
 import { ResourceListFrame } from "./ResourceListFrame";
-import type { ListEmptyContent, ListViewProps } from "./resource-view-types";
+import type {
+  CardActionContext,
+  ListEmptyContent,
+  ListViewProps,
+} from "./resource-view-types";
 import {
   createLabelForResource,
   mergeFilterFields,
@@ -73,6 +77,7 @@ import {
   useResourceViewToolbarInputs,
 } from "./resource-view-toolbar-inputs";
 import { useResourceViewGroupState } from "./resource-view-group-state";
+import { useRowActionsSurface } from "./RowActions";
 
 export type {
   ListViewNavigationScope,
@@ -153,6 +158,7 @@ function ListViewBody<TRow extends Row = Row>({
   onRowClick,
   onListStateChange,
   rowHref,
+  rowActions,
   draggableRow,
   toolbarActions,
   bulkActions,
@@ -165,6 +171,7 @@ function ListViewBody<TRow extends Row = Row>({
   resourceView: ResourceViewContextValue;
 }): React.ReactElement {
   const t = useUiT();
+  const rowActionSurface = useRowActionsSurface(rowActions);
   const resolvedEmptyContent = emptyContent ?? t("list.empty");
   // The Calendar kind is offered only where the page declares occurrence sources;
   // the switcher's options derive from that (list + board always).
@@ -284,6 +291,9 @@ function ListViewBody<TRow extends Row = Row>({
       onRowClick={onRowClick}
       onListStateChange={onListStateChange}
       rowHref={rowHref}
+      renderRowActions={
+        rowActionSurface.hasActions ? rowActionSurface.render : undefined
+      }
       draggableRow={draggableRow}
       toolbarActions={toolbarActions}
       bulkActions={bulkActions}
@@ -375,6 +385,7 @@ interface ListViewContentProps<TRow extends Row> {
   onRowClick: ListViewProps<TRow>["onRowClick"];
   onListStateChange: ListViewProps<TRow>["onListStateChange"];
   rowHref: ListViewProps<TRow>["rowHref"];
+  renderRowActions: ((row: TRow) => React.ReactNode) | undefined;
   draggableRow: ListViewProps<TRow>["draggableRow"];
   toolbarActions: ListViewProps<TRow>["toolbarActions"];
   bulkActions: ListViewProps<TRow>["bulkActions"];
@@ -407,6 +418,7 @@ function ListViewContent<TRow extends Row = Row>({
   onRowClick,
   onListStateChange,
   rowHref,
+  renderRowActions,
   draggableRow,
   toolbarActions,
   bulkActions,
@@ -456,6 +468,20 @@ function ListViewContent<TRow extends Row = Row>({
   const cardActionContext = React.useMemo(
     () => ({ refresh: surface.list.refetch }),
     [surface.list.refetch],
+  );
+  const boardCardActions = React.useCallback(
+    (row: TRow, context: CardActionContext) => {
+      const pageActions = cardActions?.(row, context);
+      const declaredActions = renderRowActions?.(row);
+      if (!pageActions && !declaredActions) return null;
+      return (
+        <>
+          {pageActions}
+          {declaredActions}
+        </>
+      );
+    },
+    [cardActions, renderRowActions],
   );
   const toolbar = useResourceToolbarProps({
     actions: toolbarActions,
@@ -538,6 +564,7 @@ function ListViewContent<TRow extends Row = Row>({
           selectedIds={surface.selectedIds}
           interactive={interactive}
           rowHref={rowHref}
+          renderRowActions={renderRowActions}
           onRowClick={onRowClick}
           draggableRow={draggableRow}
           onListStateChange={onListStateChange}
@@ -556,7 +583,9 @@ function ListViewContent<TRow extends Row = Row>({
           emptyContent={emptyContent}
           rowHref={rowHref}
           onRowClick={onRowClick}
-          cardActions={cardActions}
+          cardActions={
+            cardActions || renderRowActions ? boardCardActions : undefined
+          }
           cardActionContext={cardActionContext}
           renderCard={renderCard}
           dragEnabled={surface.boardDragEnabled}
@@ -582,6 +611,7 @@ function ListViewContent<TRow extends Row = Row>({
           resourceView={resourceView}
           interactive={interactive}
           rowHref={rowHref}
+          renderRowActions={renderRowActions}
           onRowClick={onRowClick}
           emptyContent={emptyContent}
           fetching={surface.list.fetching}
@@ -603,6 +633,7 @@ function ListViewContent<TRow extends Row = Row>({
           resourceView={resourceView}
           interactive={interactive}
           rowHref={rowHref}
+          renderRowActions={renderRowActions}
           onRowClick={onRowClick}
           emptyContent={emptyContent}
           fetching={surface.list.fetching}

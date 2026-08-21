@@ -97,6 +97,7 @@ export const enUiMessages: Record<string, string> = {
   "list.openRecord": "Open {label}",
   "list.selectAllOnPage": "Select all rows on this page",
   "list.selectRow": "Select row",
+  "list.actions": "Actions",
   "list.visibleFields": "Visible fields",
   "list.sortAscending": "Sort {label} (currently ascending)",
   "list.sortDescending": "Sort {label} (currently descending)",
