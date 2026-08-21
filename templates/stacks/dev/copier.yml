@@ -52,6 +52,7 @@ _angee:
         addon_installer_backend: operator
         include_operator_installer: true
         addons_profile: "${inputs.addons_profile}"
+        olm_cxxflags: "${inputs.olm_cxxflags}"
         framework_workspace: true
         # The rendered pyproject resolves django-angee editable from the same
         # slot the stack's processes run, so `uv run manage.py` works bare from
@@ -107,6 +108,11 @@ work_state_source:
   type: str
   default: ""
   help: Stack source name for the src workspace's private work-state slot; empty = no work-state.
+
+olm_cxxflags:
+  type: str
+  default: "-fdelayed-template-parsing"
+  help: CXXFLAGS for the python-olm sdist build (matrix extra); empty renders no override — pass empty on GCC/Linux.
 
 django_port:
   type: int

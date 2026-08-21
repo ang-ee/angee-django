@@ -94,6 +94,15 @@ framework_workspace:
   default: false
   help: Point ANGEE_ADDON_DIRS at the stack's workspaces/src/* source slots (framework-dev layout).
 
+# CXXFLAGS for the python-olm sdist build (the matrix extra; no cp314 wheels
+# exist). The default is the clang workaround the macOS toolchain needs;
+# GCC rejects the flag and needs none, so pass --input olm_cxxflags= (empty)
+# on Linux — an empty value renders no build-variables block at all.
+olm_cxxflags:
+  type: str
+  default: "-fdelayed-template-parsing"
+  help: CXXFLAGS for the python-olm sdist build; empty renders no override (GCC/Linux needs none).
+
 # The rendered web package reaches the framework's build-config (Vite, Vitest) by
 # PACKAGE NAME — `@angee/app/vite`, `@angee/app/vitest` — not a sibling path.
 # `@angee/app` is a dependency of the web package, so those exports resolve the

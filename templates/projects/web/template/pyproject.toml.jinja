@@ -23,11 +23,14 @@ package = false
 # Stack-owned cache (matches the stack services' UV_CACHE_DIR); gitignored.
 cache-dir = "caches/uv"
 
+{% if olm_cxxflags %}
 [tool.uv.extra-build-variables]
 # python-olm (mautrix[encryption], behind django-angee's `matrix` extra) vendors
 # the EOL libolm C++ source, which modern clang rejects; deferring template
 # semantic checks lets the sdist build unchanged. Inert unless the matrix extra
 # is selected. uv reads [tool.uv] from THIS project root, not the editable
-# framework dep, so the flag must live here. (Copied from the framework
-# pyproject; remove when mautrix moves off libolm.)
-python-olm = { CXXFLAGS = "-fdelayed-template-parsing" }
+# framework dep, so the flag must live here. GCC rejects the clang flag and
+# needs none — a Linux render passes olm_cxxflags empty, which drops this
+# block. (Remove when mautrix moves off libolm.)
+python-olm = { CXXFLAGS = "{{ olm_cxxflags }}" }
+{% endif %}
