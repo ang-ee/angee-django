@@ -25,6 +25,8 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from strawberry_django.fields.types import field_type_map
 
+from angee.base.fields import FractionalRankField
+
 
 def register_field_type(field_class: type[models.Field[Any, Any]], wire_type: type) -> None:
     """Map one Django model field subclass to the GraphQL type it projects under ``auto``.
@@ -47,3 +49,6 @@ def register_field_type(field_class: type[models.Field[Any, Any]], wire_type: ty
             f"with GraphQL type {existing!r}, not {wire_type!r}."
         )
     field_type_map[field_class] = wire_type
+
+
+register_field_type(FractionalRankField, float)

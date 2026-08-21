@@ -6,8 +6,10 @@ import re
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Self, TypeVar, cast
 
+from django.apps import apps
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import connections, models
@@ -26,11 +28,11 @@ from rebac import (
 )
 from rebac.actors import is_sudo as ambient_is_sudo
 from rebac.actors import to_subject_ref
-from rebac.backends import backend as rebac_backend
 from rebac.errors import MissingActorError, NoActorResolvedError, PermissionDenied
 from rebac.managers import RebacManager, RebacQuerySet
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
+from rebac.schema.parser import parse_zed
 from rebac.types import RelationshipFilter
 
 from angee.base.fields import SqidField
@@ -484,7 +486,14 @@ class AngeeModel(TimestampMixin, RebacMixin):
             return []
 
         resource_type = model_resource_type(cls)
-        definition = rebac_backend().schema().get_definition(resource_type or "")
+        app_config = apps.get_app_config(cls._meta.app_label)
+        schema_setting = getattr(app_config, "rebac_schema", "permissions.zed")
+        schema_path = Path(app_config.path) / schema_setting
+        definition = None
+        if schema_path.exists():
+            definition = parse_zed(schema_path.read_text(encoding="utf-8")).get_definition(
+                resource_type or ""
+            )
         if definition is None:
             return [
                 checks.Error(
