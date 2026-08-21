@@ -30,7 +30,7 @@ INSTALLED_APPS = [
     "tests.settings.BareComposeConfig",
     "angee.base",
     "tests.settings.BareGraphQLConfig",
-    "angee.tasks",
+    "angee.jobs",
     "angee.resources",
     "tests.iam_app.TestIAMConfig",
     "angee.integrate",

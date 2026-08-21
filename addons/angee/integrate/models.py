@@ -68,7 +68,7 @@ from angee.integrate.sync import bridge_progress_context, bridge_sync_context
 from angee.integrate.vcs.backend import VCSBackend
 from angee.integrate.vcs.templates import parse_template_meta
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
-from angee.tasks.locks import LockKey, record_lock_key, task_locks_are_cross_process
+from angee.jobs.locks import LockKey, record_lock_key, task_locks_are_cross_process
 
 if TYPE_CHECKING:
     from collections.abc import Callable

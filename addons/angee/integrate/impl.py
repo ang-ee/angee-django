@@ -20,8 +20,8 @@ from angee.base.impl import ImplBase
 from angee.integrate.connect import enabled_oauth_client_from_hint
 from angee.integrate.constants import RUN_SESSION_TASK, SESSION_START_EXPIRES
 from angee.integrate.live import PairingProjection, PairingState, SessionLoggedOut, armed_material_key
-from angee.tasks.enqueue import enqueue_task
-from angee.tasks.locks import LockKey, task_lock
+from angee.jobs.enqueue import enqueue_task
+from angee.jobs.locks import LockKey, task_lock
 
 
 class IntegrationImpl(ImplBase):

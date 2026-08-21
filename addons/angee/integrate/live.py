@@ -19,7 +19,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
 from angee.integrate.locks import bridge_is_locked
-from angee.tasks.locks import task_locks_are_cross_process
+from angee.jobs.locks import task_locks_are_cross_process
 
 WAKE_SECONDS = 20.0
 """Upper bound between live-session desired-state / shutdown / lock checks."""

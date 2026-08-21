@@ -1,4 +1,4 @@
-"""Smoke tests for the framework task seam."""
+"""Smoke tests for the framework jobs app."""
 
 from __future__ import annotations
 
@@ -8,12 +8,12 @@ from typing import Any
 from django.apps import apps
 
 
-def test_tasks_app_exports_celery_app() -> None:
-    """The framework task seam exposes one configured Celery application."""
+def test_jobs_app_exports_celery_app() -> None:
+    """The framework jobs app exposes one configured Celery application."""
 
-    from angee.tasks.celery import app
+    from angee.jobs.celery import app
 
-    assert apps.is_installed("angee.tasks")
+    assert apps.is_installed("angee.jobs")
     assert app.main == "angee"
     assert app.conf.task_ignore_result is True
 
@@ -33,9 +33,9 @@ def test_enqueue_task_sends_named_task(monkeypatch: Any) -> None:
     ) -> None:
         calls.append((name, kwargs, eta, queue, expires))
 
-    monkeypatch.setattr("angee.tasks.enqueue.celery_app.send_task", fake_send_task)
+    monkeypatch.setattr("angee.jobs.enqueue.celery_app.send_task", fake_send_task)
 
-    from angee.tasks.enqueue import enqueue_task
+    from angee.jobs.enqueue import enqueue_task
 
     eta = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
 
@@ -59,10 +59,10 @@ def test_enqueue_task_sends_named_task(monkeypatch: Any) -> None:
     ]
 
 
-def test_task_autoconfig_declares_celery_defaults_only() -> None:
-    """The framework task app owns Celery defaults, not addon task schedules."""
+def test_job_autoconfig_declares_celery_defaults_only() -> None:
+    """The framework jobs app owns Celery defaults, not addon task schedules."""
 
-    from angee.tasks.autoconfig import SETTINGS
+    from angee.jobs.autoconfig import SETTINGS
 
     assert "CELERY_BEAT_SCHEDULE" not in SETTINGS
     assert "CELERY_BEAT_SCHEDULE:append" not in SETTINGS

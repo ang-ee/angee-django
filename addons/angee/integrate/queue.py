@@ -9,7 +9,7 @@ from django.db import transaction
 from django.utils import timezone
 from rebac import system_context
 
-from angee.tasks.enqueue import enqueue_task
+from angee.jobs.enqueue import enqueue_task
 
 
 def queue_bridge_sync(bridge: Any, *, now: datetime | None = None, persist: bool = True) -> None:

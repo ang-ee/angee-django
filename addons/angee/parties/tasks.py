@@ -12,7 +12,7 @@ from django.apps import apps
 from django.utils import timezone
 from rebac import system_context
 
-from angee.tasks.locks import LockKey, task_lock
+from angee.jobs.locks import LockKey, task_lock
 
 
 @shared_task(

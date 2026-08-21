@@ -12,7 +12,7 @@ from django.db import transaction
 from django.utils import timezone
 from rebac import system_context
 
-from angee.tasks.locks import record_lock_key, task_lock
+from angee.jobs.locks import record_lock_key, task_lock
 from angee.workflows import engine, triggers
 from angee.workflows.models import StepRunStatus
 from angee.workflows.steps import StepRetryPolicy, TransientStepError, retry_policy_from_config

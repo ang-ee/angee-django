@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-from angee.tasks.locks import LockKey, record_lock_key, task_lock, task_lock_is_held
+from angee.jobs.locks import LockKey, record_lock_key, task_lock, task_lock_is_held
 
 
 def bridge_lock_key(bridge: Any) -> LockKey:

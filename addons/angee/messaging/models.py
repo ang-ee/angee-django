@@ -62,6 +62,7 @@ from angee.base.models import AngeeModel
 from angee.base.refs import RecordRefMixin
 from angee.integrate.models import Bridge
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
+from angee.jobs.autoconfig import SETTINGS as _JOB_SETTINGS
 from angee.messaging.backends import ChannelBackend
 from angee.messaging.managers import (
     ChannelManager,
@@ -80,7 +81,6 @@ from angee.messaging.managers import (
 )
 from angee.messaging.tracking import FieldTracker, TrackingChange
 from angee.parties.models import Handle
-from angee.tasks.autoconfig import SETTINGS as _TASK_SETTINGS
 
 # Partitioned channel syncs (IMAP mailboxes) drain up to this many partitions
 # concurrently unless config["sync_parallelism"] says otherwise.
@@ -1005,7 +1005,7 @@ class Channel(Bridge):
                 getattr(
                     settings,
                     "CELERY_TASK_SOFT_TIME_LIMIT",
-                    _TASK_SETTINGS["CELERY_TASK_SOFT_TIME_LIMIT"],
+                    _JOB_SETTINGS["CELERY_TASK_SOFT_TIME_LIMIT"],
                 ),
             )
         )

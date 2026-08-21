@@ -22,7 +22,7 @@ from angee.integrate.models import Bridge, IntegrationRuntimeStatus
 from angee.integrate.registry import bridge_models
 from angee.integrate.sync import bridge_progress_context
 from angee.integrate.sync_runner import run_bridge_sync_job
-from angee.tasks.locks import task_locks_are_cross_process
+from angee.jobs.locks import task_locks_are_cross_process
 
 logger = logging.getLogger(__name__)
 

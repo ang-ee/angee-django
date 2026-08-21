@@ -31,7 +31,7 @@ from rebac.types import RelationshipTuple
 
 from angee.base.actors import actor_user_id
 from angee.base.models import instance_from_public_id, read_scoped_queryset
-from angee.tasks.enqueue import enqueue_task
+from angee.jobs.enqueue import enqueue_task
 from angee.workflows.models import JoinRule, RunStatus, StepRunStatus, Verdict, WorkflowStatus
 from angee.workflows.steps import DecisionSpec, MapStep, StepResult, TransientStepError
 

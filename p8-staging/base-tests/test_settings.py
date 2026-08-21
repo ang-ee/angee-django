@@ -190,9 +190,9 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "django.contrib.auth.apps.AuthConfig",
         "django.contrib.sessions.apps.SessionsConfig",
         "angee.iam.apps.IAMConfig",
-        # integrate depends on angee.tasks (its periodic bridge tick), pulling the
-        # task seam ahead of every integration addon.
-        "angee.tasks",
+        # integrate depends on angee.jobs (its periodic bridge tick), pulling the
+        # job seam ahead of every integration addon.
+        "angee.jobs",
         "angee.integrate.apps.IntegrateConfig",
         "angee.mcp.apps.MCPConfig",
         "angee.operator",
@@ -324,11 +324,11 @@ def test_graphql_uses_channels_redis_when_redis_url_is_set(
     }
 
 
-def test_tasks_use_celery_broker_url_from_environment(
+def test_jobs_use_celery_broker_url_from_environment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Celery uses the task broker URL injected by the stack."""
+    """Celery uses the job broker URL injected by the stack."""
 
     monkeypatch.setenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/1")
 
