@@ -2,6 +2,7 @@ import * as React from "react";
 import {
   crudFiltersFromFilterRecord,
   hasuraWhereFromCrudFilters,
+  stableSerialize,
   useAngeeAggregate,
 } from "@angee/refine";
 import {
@@ -14,21 +15,15 @@ import type {
 } from "@angee/metadata";
 
 import { useUiT } from "../i18n";
-import type { PagerState } from "../ui/pager";
 import { BoardView } from "./BoardView";
 import {
-  ResourceViewProvider,
-  useResourceView,
+  withResourceViewScope,
   useResourceViewMaybe,
   type ResourceViewContextValue,
 } from "./resource-view-context";
 import {
-  RESOURCE_VIEW_KINDS,
   Filter,
   availableResourceViewKinds,
-  resourceViewGroupsEqual,
-  stableSerialize,
-  type ResourceViewDefaultGroups,
   type ResourceViewGroup,
   type ResourceViewKind,
 } from "./resource-view-model";
@@ -38,10 +33,11 @@ import {
   useClientResourceViewSurface,
   useGroupedResourceViewSurface,
   useResourceViewSurface,
-  type ResolvedBoardLaneSource,
+  type GroupedResourceViewSurface,
   type ResourceViewSurface,
   type UseResourceViewSurfaceProps,
 } from "./resource-view-surface";
+import type { ResolvedBoardLaneSource } from "./resource-view-board-lanes";
 import {
   GroupedListBody,
 } from "./GroupedList";
@@ -56,27 +52,27 @@ import {
 import { ResourceListFrame } from "./ResourceListFrame";
 import type { ListEmptyContent, ListViewProps } from "./resource-view-types";
 import {
-  activeFilterIdsFor,
-  buildFilterFields,
-  buildFilterOptions,
-  buildGroupOptions,
   createLabelForResource,
-  customFilterChipsFor,
   mergeFilterFields,
   mergeFilterOptions,
-  mergeGroupOptions,
   resolveResourceViewGroup,
   resolveTextFilterField,
-  textFilterValue,
-  validResourceViewGroupStack,
 } from "./resource-view-utils";
 import { columnsWithMetadataDefaults, relationFieldInfo } from "./model-metadata-defaults";
 import type { ColumnDescriptor } from "./page";
 import { useRelationFacets } from "./relation-facet";
 import { useScalarFacets } from "./scalar-facet";
 import { useBulkDelete } from "./useBulkDelete";
-import { useAggregateOperation } from "./resource-operations";
+import {
+  requireDataResource,
+  useAggregateOperation,
+} from "./resource-operations";
 import { useResourceToolbarProps } from "./resource-toolbar-props";
+import {
+  defaultGroupForView,
+  useResourceViewToolbarInputs,
+} from "./resource-view-toolbar-inputs";
+import { useResourceViewGroupState } from "./resource-view-group-state";
 
 export type {
   ListViewNavigationScope,
@@ -95,8 +91,6 @@ export type {
   ListEmptyState,
   ListViewProps,
 } from "./resource-view-types";
-
-const EMPTY_GROUP_STACK = [] as const;
 
 export function ListView<TRow extends Row = Row>(
   props: ListViewProps<TRow>,
@@ -127,39 +121,17 @@ function ListViewFrame<TRow extends Row = Row>(
     }),
     [navigationScope?.page, props.defaultView, resolvedProps.pageSize],
   );
-  if (navigationScope) {
-    return (
-      <ResourceViewProvider
-        key={stableSerialize(navigationScope)}
-        initialState={initialState}
-        resource={props.resource}
-        scope="local"
-      >
-        <ListViewBound {...resolvedProps} />
-      </ResourceViewProvider>
-    );
-  }
-  // A local-scoped list (an embedded related list on a detail panel) owns its own
-  // view state instead of inheriting — and fighting over — the surrounding route
-  // data view. The default "inherit" keeps the routed-page behaviour unchanged.
-  if (scope !== "local" && resourceView) {
-    return <ListViewBody {...props} resourceView={resourceView} />;
-  }
-  return (
-    <ResourceViewProvider
-      initialState={initialState}
-      resource={props.resource}
-      scope={scope === "local" ? "local" : "route"}
-    >
-      <ListViewBound {...resolvedProps} />
-    </ResourceViewProvider>
-  );
-}
-
-function ListViewBound<TRow extends Row = Row>(
-  props: ListViewProps<TRow>,
-): React.ReactElement {
-  return <ListViewBody {...props} resourceView={useResourceView()} />;
+  return withResourceViewScope({
+    ambient: resourceView,
+    resource: props.resource,
+    scope,
+    initialState,
+    isolated: navigationScope !== undefined,
+    providerKey: navigationScope ? stableSerialize(navigationScope) : undefined,
+    children: (scopedResourceView) => (
+      <ListViewBody {...resolvedProps} resourceView={scopedResourceView} />
+    ),
+  });
 }
 
 function ListViewBody<TRow extends Row = Row>({
@@ -172,7 +144,6 @@ function ListViewBody<TRow extends Row = Row>({
   customFilterFields: explicitCustomFilterFields,
   groupOptions: explicitGroupOptions,
   order,
-  pageSize,
   defaultGroup,
   defaultGroups,
   calendar,
@@ -250,105 +221,12 @@ function ListViewBody<TRow extends Row = Row>({
         defaultGroups,
         resourceView.state.view,
       );
-  const activeDefaultGroup = React.useMemo(
-    () =>
-      rawActiveDefaultGroup
-        ? resolveResourceViewGroup(rawActiveDefaultGroup, modelMetadata)
-        : null,
-    [modelMetadata, rawActiveDefaultGroup],
-  );
-  const validDefaultGroupStack = React.useMemo(
-    () =>
-      activeDefaultGroup
-        ? validResourceViewGroupStack([activeDefaultGroup], modelMetadata)
-        : EMPTY_GROUP_STACK,
-    [activeDefaultGroup, modelMetadata],
-  );
-  const validCurrentGroupStack = React.useMemo(
-    () => validResourceViewGroupStack(resourceView.state.groupStack, modelMetadata),
-    [resourceView.state.groupStack, modelMetadata],
-  );
-  const hasInvalidGroupStack =
-    !resourceViewGroupStacksEqual(resourceView.state.groupStack, validCurrentGroupStack);
-  const handledDefaultGroupRef = React.useRef<ResourceViewGroup | null>(null);
-  const defaultGroupPending =
-    activeDefaultGroup !== null
-    && resourceView.state.group === null
-    && (
-      handledDefaultGroupRef.current === null
-      || !resourceViewGroupsEqual(handledDefaultGroupRef.current, activeDefaultGroup)
-    );
-  const effectiveGroupStack = React.useMemo(() => {
-    if (boardGroupingPinned && validDefaultGroupStack.length > 0) {
-      return validDefaultGroupStack;
-    }
-    if (validCurrentGroupStack.length > 0) return validCurrentGroupStack;
-    if (hasInvalidGroupStack || defaultGroupPending) return validDefaultGroupStack;
-    return resourceView.state.groupStack;
-  }, [
-    resourceView.state.groupStack,
-    boardGroupingPinned,
-    hasInvalidGroupStack,
-    defaultGroupPending,
-    validCurrentGroupStack,
-    validDefaultGroupStack,
-  ]);
-  React.useEffect(() => {
-    if (!activeDefaultGroup) {
-      const previousDefault = handledDefaultGroupRef.current;
-      handledDefaultGroupRef.current = null;
-      if (
-        previousDefault
-        && resourceView.state.group
-        && resourceViewGroupsEqual(resourceView.state.group, previousDefault)
-      ) {
-        resourceView.setGroup(null);
-      }
-      return;
-    }
-    if (
-      handledDefaultGroupRef.current
-      && resourceViewGroupsEqual(handledDefaultGroupRef.current, activeDefaultGroup)
-      && (
-        !boardGroupingPinned
-        || (
-          resourceView.state.group !== null
-          && resourceViewGroupsEqual(resourceView.state.group, activeDefaultGroup)
-        )
-      )
-    ) {
-      return;
-    }
-    const previousDefault = handledDefaultGroupRef.current;
-    if (
-      boardGroupingPinned
-      || resourceView.state.group === null
-      || (
-        previousDefault
-        && resourceViewGroupsEqual(resourceView.state.group, previousDefault)
-      )
-    ) {
-      handledDefaultGroupRef.current = activeDefaultGroup;
-      resourceView.setGroup(activeDefaultGroup);
-    }
-  }, [
-    activeDefaultGroup,
-    boardGroupingPinned,
-    resourceView.setGroup,
-    resourceView.state.group,
-  ]);
-  React.useEffect(() => {
-    if (!hasInvalidGroupStack) return;
-    if (resourceViewGroupStacksEqual(resourceView.state.groupStack, effectiveGroupStack)) {
-      return;
-    }
-    resourceView.setGroupStack(effectiveGroupStack);
-  }, [
-    resourceView.setGroupStack,
-    resourceView.state.groupStack,
-    effectiveGroupStack,
-    hasInvalidGroupStack,
-  ]);
+  const effectiveGroupStack = useResourceViewGroupState({
+    resourceView,
+    defaultGroup: rawActiveDefaultGroup,
+    modelMetadata,
+    pinned: boardGroupingPinned,
+  });
 
   // A client resource holds the whole set in the browser, so it groups through
   // TanStack row models — never the server _groups/GroupedListBody path (the
@@ -373,7 +251,6 @@ function ListViewBody<TRow extends Row = Row>({
     fields,
     filter: baseFilter,
     order,
-    pageSize,
     resourceView,
     modelMetadata,
     groupStack: effectiveGroupStack,
@@ -381,7 +258,9 @@ function ListViewBody<TRow extends Row = Row>({
     enabled: !groupedListMode,
     onListStateChange,
   };
-  const content = (surface: ResourceViewSurface<TRow>) => (
+  const content = (
+    surface: ResourceViewSurface<TRow> | GroupedResourceViewSurface<TRow>,
+  ) => (
     <ListViewContent<TRow>
       surface={surface}
       resource={resource}
@@ -400,7 +279,6 @@ function ListViewBody<TRow extends Row = Row>({
       explicitCustomFilterFields={explicitCustomFilterFields}
       defaultGroup={defaultGroup}
       defaultGroups={defaultGroups}
-      order={order}
       onCreate={onCreate}
       createLabel={createLabel}
       onRowClick={onRowClick}
@@ -448,6 +326,11 @@ interface SurfaceBodyProps<TRow extends Row> {
   children: (surface: ResourceViewSurface<TRow>) => React.ReactElement;
 }
 
+interface GroupedSurfaceBodyProps<TRow extends Row> {
+  surfaceProps: UseResourceViewSurfaceProps<TRow>;
+  children: (surface: GroupedResourceViewSurface<TRow>) => React.ReactElement;
+}
+
 function ServerSurfaceBody<TRow extends Row>({
   surfaceProps,
   children,
@@ -458,7 +341,7 @@ function ServerSurfaceBody<TRow extends Row>({
 function GroupedServerSurfaceBody<TRow extends Row>({
   surfaceProps,
   children,
-}: SurfaceBodyProps<TRow>): React.ReactElement {
+}: GroupedSurfaceBodyProps<TRow>): React.ReactElement {
   return children(useGroupedResourceViewSurface(surfaceProps));
 }
 
@@ -470,7 +353,7 @@ function ClientSurfaceBody<TRow extends Row>({
 }
 
 interface ListViewContentProps<TRow extends Row> {
-  surface: ResourceViewSurface<TRow>;
+  surface: ResourceViewSurface<TRow> | GroupedResourceViewSurface<TRow>;
   resource: string;
   resolvedColumns: readonly ColumnDescriptor<TRow>[];
   modelMetadata: ReturnType<typeof useModelMetadata>;
@@ -487,7 +370,6 @@ interface ListViewContentProps<TRow extends Row> {
   explicitCustomFilterFields: ListViewProps<TRow>["customFilterFields"];
   defaultGroup: ListViewProps<TRow>["defaultGroup"];
   defaultGroups: ListViewProps<TRow>["defaultGroups"];
-  order: ListViewProps<TRow>["order"];
   onCreate: ListViewProps<TRow>["onCreate"];
   createLabel: ListViewProps<TRow>["createLabel"];
   onRowClick: ListViewProps<TRow>["onRowClick"];
@@ -520,7 +402,6 @@ function ListViewContent<TRow extends Row = Row>({
   explicitCustomFilterFields,
   defaultGroup,
   defaultGroups,
-  order,
   onCreate,
   createLabel,
   onRowClick,
@@ -538,90 +419,34 @@ function ListViewContent<TRow extends Row = Row>({
     () => groupMeasuresFromColumns(resolvedColumns),
     [resolvedColumns],
   );
-  const toolbarPager = React.useMemo<PagerState>(() => {
-    return {
-      total: surface.list.total,
-      page: surface.list.page,
-      pageSize: surface.list.pageSize,
-      hasPrev: surface.list.hasPrev,
-      hasNext: surface.list.hasNext,
-    };
-  }, [
-    surface.list.hasNext,
-    surface.list.hasPrev,
-    surface.list.page,
-    surface.list.pageSize,
-    surface.list.total,
-  ]);
-  const explicitAndFacetGroupOptions = React.useMemo(
-    () => mergeGroupOptions(explicitGroupOptions, declaredFacets.groupOptions),
-    [declaredFacets.groupOptions, explicitGroupOptions],
-  );
-  const toolbarGroupOptions = React.useMemo(
-    () =>
-      mergeGroupOptions(
-        explicitAndFacetGroupOptions,
-        buildGroupOptions(
-          resolvedColumns,
-          modelMetadata,
-          defaultGroupsForToolbar(defaultGroup, defaultGroups),
-        ),
-      ),
-    [
-      defaultGroup,
-      defaultGroups,
-      explicitAndFacetGroupOptions,
-      modelMetadata,
-      resolvedColumns,
-    ],
-  );
-  const inferredCustomFilterFields = React.useMemo(
-    () => buildFilterFields(resolvedColumns, surface.rows, modelMetadata),
-    [modelMetadata, resolvedColumns, surface.rows],
-  );
-  const inferredFilterOptions = React.useMemo(
-    () => buildFilterOptions(resolvedColumns, surface.rows, inferredCustomFilterFields),
-    [inferredCustomFilterFields, resolvedColumns, surface.rows],
-  );
   const facetFilters = React.useMemo(
     () => mergeFilterOptions(declaredFacets.filters, scalarFacets.filters),
     [declaredFacets.filters, scalarFacets.filters],
-  );
-  const explicitAndFacetFilters = React.useMemo(
-    () => mergeFilterOptions(explicitFilterOptions, facetFilters),
-    [explicitFilterOptions, facetFilters],
-  );
-  const filterOptions = React.useMemo(
-    () => mergeFilterOptions(explicitAndFacetFilters, inferredFilterOptions),
-    [explicitAndFacetFilters, inferredFilterOptions],
   );
   const facetCustomFilterFields = React.useMemo(
     () => mergeFilterFields(declaredFacets.filterFields, scalarFacets.filterFields),
     [declaredFacets.filterFields, scalarFacets.filterFields],
   );
-  const explicitAndFacetCustomFilterFields = React.useMemo(
-    () => mergeFilterFields(explicitCustomFilterFields, facetCustomFilterFields),
-    [explicitCustomFilterFields, facetCustomFilterFields],
-  );
-  const customFilterFields = React.useMemo(
-    () => mergeFilterFields(explicitAndFacetCustomFilterFields, inferredCustomFilterFields),
-    [explicitAndFacetCustomFilterFields, inferredCustomFilterFields],
-  );
-  const activeFilterIds = activeFilterIdsFor(
-    resourceView.state.filter,
-    filterOptions,
-  );
   // Search the model's real title field (recordRepresentation → e.g. displayName
   // for Person), not the hardcoded "title" that non-title models lack.
   const textFilterField = resolveTextFilterField(modelMetadata);
-  const customFilterChips = customFilterChipsFor(
-    resourceView.state.filter,
-    filterOptions,
-    customFilterFields,
+  const toolbarInputs = useResourceViewToolbarInputs({
+    columns: resolvedColumns,
+    rows: surface.rows,
+    modelMetadata,
+    resourceView,
+    list: surface.list,
+    defaultGroup,
+    defaultGroups,
+    groupOptions: explicitGroupOptions,
+    contributedGroupOptions: declaredFacets.groupOptions,
+    filterOptions: explicitFilterOptions,
+    contributedFilterOptions: facetFilters,
+    customFilterFields: explicitCustomFilterFields,
+    contributedCustomFilterFields: facetCustomFilterFields,
     textFilterField,
-  );
-
-  const filterText = textFilterValue(resourceView.state.filter, textFilterField);
+    groupStack: effectiveGroupStack,
+  });
   const interactive = Boolean(onRowClick || rowHref);
   const bulkDelete = useBulkDelete(
     resource,
@@ -635,17 +460,17 @@ function ListViewContent<TRow extends Row = Row>({
   const toolbar = useResourceToolbarProps({
     actions: toolbarActions,
     availableViews,
-    pager: toolbarPager,
+    pager: toolbarInputs.pager,
     view: resourceView.state.view,
     group: effectiveGroupStack[0] ?? null,
     groupStack: effectiveGroupStack,
-    groupOptions: toolbarGroupOptions,
-    filterOptions,
-    customFilterFields,
-    customFilterChips,
+    groupOptions: toolbarInputs.groupOptions,
+    filterOptions: toolbarInputs.filterOptions,
+    customFilterFields: toolbarInputs.customFilterFields,
+    customFilterChips: toolbarInputs.customFilterChips,
     favorites: resourceView.savedFavorites,
-    activeFilterIds,
-    filterText,
+    activeFilterIds: toolbarInputs.activeFilterIds,
+    filterText: toolbarInputs.filterText,
     textFilterField,
     createLabel: createLabel ?? createLabelForResource(resource),
     onCreate,
@@ -693,7 +518,7 @@ function ListViewContent<TRow extends Row = Row>({
         ) : null
       }
     >
-      {groupedListMode ? (
+      {surface.kind === "grouped" ? (
         <GroupedListBody
           columns={resolvedColumns}
           table={surface.table}
@@ -817,55 +642,4 @@ function FlatListBodyWithAggregate<TRow extends Row>({
     enabled: queryMeasures.length > 0,
   });
   return <FlatListBody {...props} footerAggregate={aggregate.aggregate} />;
-}
-
-function requireDataResource(
-  resourceId: string,
-  metadata: ReturnType<typeof useModelMetadata>,
-): NonNullable<NonNullable<ReturnType<typeof useModelMetadata>>["resource"]> {
-  const dataResource = metadata?.resource;
-  if (!dataResource) {
-    throw new Error(`Resource "${resourceId}" has no data resource metadata.`);
-  }
-  return dataResource;
-}
-
-function defaultGroupForView(
-  defaultGroup: ResourceViewGroup | null | undefined,
-  defaultGroups: ResourceViewDefaultGroups | undefined,
-  view: ResourceViewKind,
-): ResourceViewGroup | null {
-  if (
-    defaultGroups
-    && Object.prototype.hasOwnProperty.call(defaultGroups, view)
-  ) {
-    return defaultGroups[view] ?? null;
-  }
-  return defaultGroup ?? null;
-}
-
-function defaultGroupsForToolbar(
-  defaultGroup: ResourceViewGroup | null | undefined,
-  defaultGroups: ResourceViewDefaultGroups | undefined,
-): readonly ResourceViewGroup[] {
-  const groups: ResourceViewGroup[] = [];
-  if (defaultGroup) groups.push(defaultGroup);
-  for (const view of RESOURCE_VIEW_KINDS) {
-    const group = defaultGroups?.[view];
-    if (group) groups.push(group);
-  }
-  return groups;
-}
-
-function resourceViewGroupStacksEqual(
-  left: readonly ResourceViewGroup[],
-  right: readonly ResourceViewGroup[],
-): boolean {
-  return (
-    left.length === right.length
-    && left.every((group, index) => {
-      const other = right[index];
-      return other !== undefined && resourceViewGroupsEqual(group, other);
-    })
-  );
 }

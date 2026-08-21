@@ -2,6 +2,7 @@ import { format } from "date-fns";
 import {
   ANGEE_FILTER_LOOKUP_OPERATORS,
   clampPageSize,
+  stableSerialize,
   type AngeeFilterLookupOperator,
 } from "@angee/refine";
 import { dedupeBy } from "../lib/dedupe";
@@ -25,6 +26,7 @@ export const RESOURCE_VIEW_GROUP_GRANULARITIES = [
 export const DEFAULT_RESOURCE_VIEW_PAGE_SIZE = DEFAULT_PAGE_SIZE;
 
 export type ResourceViewKind = (typeof RESOURCE_VIEW_KINDS)[number];
+export type ResourceListOrder = Record<string, unknown>;
 
 /**
  * Which data-controls a kind can carry — the owner map on the kind. The toolbar
@@ -883,21 +885,6 @@ export function resourceViewGroupsEqual(
     && left.aggregateField === right.aggregateField
     && left.aggregateKey === right.aggregateKey
     && left.granularity === right.granularity;
-}
-
-export function stableSerialize(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableSerialize).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`)
-      .join(",")}}`;
-  }
-  if (value === undefined) return "undefined";
-  return JSON.stringify(value);
 }
 
 function isGroupGranularity(value: string): value is ResourceViewGroupGranularity {

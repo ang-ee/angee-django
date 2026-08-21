@@ -16,6 +16,7 @@ import type {
 } from "@angee/metadata";
 import type { ColumnDef } from "@tanstack/react-table";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { OperationDocumentsProvider } from "@angee/refine";
 
 import { ToastProvider } from "../feedback";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
@@ -37,6 +38,20 @@ const tableMocks = vi.hoisted(() => ({
 
 vi.mock("@refinedev/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@refinedev/core")>();
+  interface KeyBuilder {
+    data: () => KeyBuilder;
+    resource: () => KeyBuilder;
+    action: () => KeyBuilder;
+    params: () => KeyBuilder;
+    get: () => readonly unknown[];
+  }
+  const keyBuilder: KeyBuilder = {
+    data: () => keyBuilder,
+    resource: () => keyBuilder,
+    action: () => keyBuilder,
+    params: () => keyBuilder,
+    get: () => [],
+  };
   return {
     ...actual,
     useList: () => ({
@@ -44,6 +59,31 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       query: { isFetching: false, refetch: vi.fn() },
     }),
     useUpdate: () => ({ mutateAsync: tableMocks.mutateAsync }),
+    useDataProvider: () => () => ({
+      custom: vi.fn(),
+      getList: vi.fn(),
+    }),
+    useKeys: () => ({ keys: () => keyBuilder }),
+    useResourceSubscription: () => undefined,
+  };
+});
+
+vi.mock("@tanstack/react-query", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-query")>();
+  return {
+    ...actual,
+    useQueries: ({ queries }: { queries: readonly unknown[] }) =>
+      queries.map(() => ({
+        data: {
+          notes_groups: [
+            { key: { status: "active" }, aggregate: { count: 1 } },
+          ],
+          totalCount: 1,
+        },
+        error: null,
+        isFetching: false,
+        refetch: vi.fn(),
+      })),
   };
 });
 
@@ -126,9 +166,6 @@ vi.mock("@tanstack/react-virtual", () => ({
   }),
 }));
 
-// The grouped surface's server-grouped data hooks are stubbed empty: the emit it
-// publishes (the navigation scope) is independent of the group data, and empty
-// batches keep the render model trivial without a Refine/react-query provider.
 vi.mock("@angee/refine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/refine")>();
   return {
@@ -139,8 +176,6 @@ vi.mock("@angee/refine", async (importOriginal) => {
       error: null,
       refetch: vi.fn(),
     }),
-    useAngeeGroupByBatch: () => new Map(),
-    useAngeeListBatch: () => new Map(),
   };
 });
 
@@ -196,13 +231,7 @@ describe("useGroupedResourceViewSurface", () => {
   test("publishes a snapshot carrying its own scope so the record pager never keeps a stale flat scope", () => {
     const onListStateChange = vi.fn();
     const filter = { drive: { exact: "drive-a" }, is_trashed: { exact: false } };
-    render(
-      <ToastProvider>
-        <ResourceViewProvider resource="notes.Note" scope="local">
-          <GroupedProbe filter={filter} onListStateChange={onListStateChange} />
-        </ResourceViewProvider>
-      </ToastProvider>,
-    );
+    renderGroupedProbe(filter, onListStateChange);
 
     // The flat surface emits on mount; the grouped surface must too, or the pager
     // hook retains whatever flat (single-folder) snapshot was last published.
@@ -215,7 +244,32 @@ describe("useGroupedResourceViewSurface", () => {
     expect(snapshot?.rows).toEqual([]);
     expect(snapshot?.navigationScope?.filter).toEqual(filter);
   });
+
+  test("renders non-empty grouped buckets through the real batch hook", async () => {
+    renderGroupedProbe({}, vi.fn());
+
+    await waitFor(() => {
+      expect(screen.getByTestId("grouped-kinds").textContent).toContain("groupHeader");
+    });
+  });
 });
+
+function renderGroupedProbe(
+  filter: Record<string, unknown>,
+  onListStateChange: (state: ResourceListSnapshot<Row>) => void,
+): void {
+  render(
+    <ToastProvider>
+      <OperationDocumentsProvider
+        documents={{ console: { groups: { "notes.Note": {} } } }}
+      >
+        <ResourceViewProvider resource="notes.Note" scope="local">
+          <GroupedProbe filter={filter} onListStateChange={onListStateChange} />
+        </ResourceViewProvider>
+      </OperationDocumentsProvider>
+    </ToastProvider>,
+  );
+}
 
 function GroupedProbe({
   filter,
@@ -225,7 +279,7 @@ function GroupedProbe({
   onListStateChange: (state: ResourceListSnapshot<Row>) => void;
 }): React.ReactElement {
   const resourceView = useResourceView();
-  useGroupedResourceViewSurface({
+  const surface = useGroupedResourceViewSurface({
     resource: "notes.Note",
     columns: NOTE_COLUMNS,
     filter,
@@ -234,7 +288,11 @@ function GroupedProbe({
     groupStack: [{ field: "status" }],
     onListStateChange,
   });
-  return <div />;
+  return (
+    <div data-testid="grouped-kinds">
+      {surface.groupedItems.map((item) => item.kind).join(",")}
+    </div>
+  );
 }
 
 const NOTE_COLUMNS: readonly ColumnDescriptor<Row>[] = [
@@ -266,7 +324,7 @@ const NOTE_RESOURCE: DataResourceMetadata = {
   appLabel: "notes",
   modelName: "note",
   publicIdField: "id",
-  roots: { list: "notes" },
+  roots: { list: "notes", groups: "notes_groups" },
   typeNames: { node: "NoteType" },
   capabilities: ["list"],
   fields: [
@@ -279,7 +337,18 @@ const NOTE_RESOURCE: DataResourceMetadata = {
   aggregateFields: [],
   groupByFields: ["status"],
   groupDimensions: [
-    { field: "status", input: "status", key: "status", kind: "column", scalar: "String" },
+    {
+      field: "status",
+      input: "status",
+      key: "status",
+      kind: "column",
+      scalar: "String",
+      filter: {
+        kind: "equality",
+        field: "status",
+        valueKey: "status",
+      },
+    },
   ],
   relationAxes: [],
 };

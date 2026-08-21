@@ -18,6 +18,7 @@ import {
   type GroupByDimension,
 } from "./resource-view-list-body";
 import {
+  requireDataResource,
   useAggregateOperation,
   useGroupOperation,
 } from "./resource-operations";
@@ -143,17 +144,6 @@ function bucketKey(
   dimension: GroupByDimension,
 ): unknown {
   return bucket.key?.[dimension.key ?? dimension.field] ?? null;
-}
-
-function requireDataResource(
-  resourceId: string,
-  metadata: ReturnType<typeof useModelMetadata>,
-): NonNullable<NonNullable<ReturnType<typeof useModelMetadata>>["resource"]> {
-  const dataResource = metadata?.resource;
-  if (!dataResource) {
-    throw new Error(`Resource "${resourceId}" has no data resource metadata.`);
-  }
-  return dataResource;
 }
 
 function AggregateSkeleton({

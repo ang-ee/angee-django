@@ -4,6 +4,7 @@ import {
   resourceOperationTarget,
   type DataResourceMetadata,
   type DataResourceRootMetadata,
+  type ModelMetadata,
 } from "@angee/metadata";
 import {
   maybeOperationDocument,
@@ -19,6 +20,18 @@ export interface ResourceOperation {
 }
 
 const ABSENT_OPERATION: ResourceOperation = { target: null, document: null };
+
+/** Fail-fast owner for render paths that require model data-resource metadata. */
+export function requireDataResource(
+  resourceId: string,
+  metadata: ModelMetadata | null | undefined,
+): DataResourceMetadata {
+  const dataResource = metadata?.resource;
+  if (!dataResource) {
+    throw new Error(`Resource "${resourceId}" has no data resource metadata.`);
+  }
+  return dataResource;
+}
 
 /**
  * Capability probe for one generated resource operation: absent root or

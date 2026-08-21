@@ -1,4 +1,5 @@
 export {
+  ANGEE_FILTER_CODEC_LOOKUP_OPERATORS,
   ANGEE_FILTER_LOOKUP_OPERATORS,
   ANGEE_TEXT_FILTER_LOOKUP_OPERATORS,
   crudFiltersFromFilterRecord,
@@ -6,6 +7,7 @@ export {
   hasuraWhereFromCrudFilters,
   refineFieldsFromPaths,
   refineSortersFromAngeeOrder,
+  type AngeeFilterCodecLookupOperator,
   type AngeeFilterLookupOperator,
 } from "./filter-codec";
 // Story/test consumers that pair these bindings with providers returned by this
@@ -164,6 +166,7 @@ export {
 } from "./query-invalidation";
 export {
   stableKey,
+  stableSerialize,
   useStableArray,
   useStableValue,
   useStableVariables,

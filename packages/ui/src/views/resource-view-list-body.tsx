@@ -68,6 +68,7 @@ import { useResolvedWidget } from "../widgets";
 import { dateFromUnknown } from "../widgets/date-format";
 import type { ResourceViewContextValue } from "./resource-view-context";
 import type {
+  ResourceListOrder,
   ResourceViewFilter,
   ResourceViewGroup,
   ResourceViewSort,
@@ -148,7 +149,7 @@ export interface GroupMeasure extends AggregateMeasure {
  */
 export interface GroupedRecordNav {
   filter: ResourceViewFilter | undefined;
-  order: Record<string, unknown> | undefined;
+  order: ResourceListOrder | undefined;
   page: number;
   pageSize: number;
   rows: readonly Row[];

@@ -213,56 +213,57 @@ type HasuraOperatorValue =
   | typeof KEEP_VALUE
   | ((value: unknown) => unknown);
 
+/**
+ * Every lookup spelling accepted by the transport codec, including wire
+ * aliases. This table is the dispatch owner; the public vocabulary is derived
+ * from it so a newly-supported spelling cannot be omitted from parity checks.
+ */
+const LOOKUP_OPERATOR_CODECS = {
+  exact: "eq",
+  sqid: "eq",
+  pk: "eq",
+  _eq: "eq",
+  ne: "ne",
+  _neq: "ne",
+  gt: "gt",
+  _gt: "gt",
+  gte: "gte",
+  _gte: "gte",
+  lt: "lt",
+  _lt: "lt",
+  lte: "lte",
+  _lte: "lte",
+  inList: "in",
+  _in: "in",
+  _nin: "nin",
+  isNull: "null",
+  _is_null: "null",
+  jsonContains: "jsonContains" as LogicalFilter["operator"],
+  _contains: "jsonContains" as LogicalFilter["operator"],
+  contains: "containss",
+  iContains: "contains",
+  startsWith: "startswiths",
+  iStartsWith: "startswith",
+  endsWith: "endswiths",
+  iEndsWith: "endswith",
+} as const satisfies Record<string, LogicalFilter["operator"]>;
+
+export type AngeeFilterCodecLookupOperator = keyof typeof LOOKUP_OPERATOR_CODECS;
+
+export const ANGEE_FILTER_CODEC_LOOKUP_OPERATORS = Object.freeze(
+  Object.keys(LOOKUP_OPERATOR_CODECS) as AngeeFilterCodecLookupOperator[],
+);
+
 function lookupOperator(
   operator: string,
 ): { operator: LogicalFilter["operator"]; value: unknown | typeof KEEP_VALUE } | null {
-  switch (operator) {
-    case "exact":
-    case "sqid":
-    case "pk":
-    case "_eq":
-      return { operator: "eq", value: KEEP_VALUE };
-    case "ne":
-    case "_neq":
-      return { operator: "ne", value: KEEP_VALUE };
-    case "gt":
-    case "_gt":
-      return { operator: "gt", value: KEEP_VALUE };
-    case "gte":
-    case "_gte":
-      return { operator: "gte", value: KEEP_VALUE };
-    case "lt":
-    case "_lt":
-      return { operator: "lt", value: KEEP_VALUE };
-    case "lte":
-    case "_lte":
-      return { operator: "lte", value: KEEP_VALUE };
-    case "inList":
-    case "_in":
-      return { operator: "in", value: KEEP_VALUE };
-    case "_nin":
-      return { operator: "nin", value: KEEP_VALUE };
-    case "isNull":
-    case "_is_null":
-      return { operator: "null", value: KEEP_VALUE };
-    case "jsonContains":
-    case "_contains":
-      return { operator: "jsonContains" as LogicalFilter["operator"], value: KEEP_VALUE };
-    case "contains":
-      return { operator: "containss", value: KEEP_VALUE };
-    case "iContains":
-      return { operator: "contains", value: KEEP_VALUE };
-    case "startsWith":
-      return { operator: "startswiths", value: KEEP_VALUE };
-    case "iStartsWith":
-      return { operator: "startswith", value: KEEP_VALUE };
-    case "endsWith":
-      return { operator: "endswiths", value: KEEP_VALUE };
-    case "iEndsWith":
-      return { operator: "endswith", value: KEEP_VALUE };
-    default:
-      return null;
+  if (!Object.prototype.hasOwnProperty.call(LOOKUP_OPERATOR_CODECS, operator)) {
+    return null;
   }
+  return {
+    operator: LOOKUP_OPERATOR_CODECS[operator as AngeeFilterCodecLookupOperator],
+    value: KEEP_VALUE,
+  };
 }
 
 function isUnsupportedRefineLookupOperator(operator: string): boolean {

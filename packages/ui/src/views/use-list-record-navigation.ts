@@ -1,12 +1,12 @@
 import * as React from "react";
 import { rowPublicId, type Row } from "@angee/metadata";
+import { stableSerialize } from "@angee/refine";
 
 import type { RecordNavigation } from "./RecordPager";
 import type {
   ListViewNavigationScope,
   ResourceListSnapshot,
 } from "./resource-view-surface";
-import { stableSerialize } from "./resource-view-model";
 
 interface PendingRecordNavigation {
   page: number;

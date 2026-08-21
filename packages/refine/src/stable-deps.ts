@@ -6,6 +6,28 @@ export function stableKey(value: unknown): string {
   return hashKey([value]);
 }
 
+/**
+ * Deterministic structural serialization that preserves `undefined`.
+ *
+ * Unlike {@link stableKey}, this intentionally distinguishes `undefined` from
+ * `null`; react-query's array-key hash coalesces those values. Use this owner
+ * only where that distinction participates in state equality or identity.
+ */
+export function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableSerialize).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`)
+      .join(",")}}`;
+  }
+  if (value === undefined) return "undefined";
+  return JSON.stringify(value);
+}
+
 /** Stabilize a string array by contents so hook inputs do not churn per render. */
 export function useStableArray(items: readonly string[]): readonly string[] {
   const key = items.join("\u0001");

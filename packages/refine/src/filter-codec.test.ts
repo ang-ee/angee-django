@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
   ANGEE_FILTER_LOOKUP_OPERATORS,
+  ANGEE_FILTER_CODEC_LOOKUP_OPERATORS,
   ANGEE_TEXT_FILTER_LOOKUP_OPERATORS,
   crudFiltersFromFilterRecord,
   hasuraOrderByFromAngeeOrder,
@@ -142,6 +143,51 @@ describe("refine/Hasura filter codec", () => {
       "iEndsWith",
       "isNull",
     ]);
+  });
+
+  test("derives the complete accepted lookup vocabulary from dispatch", () => {
+    expect(ANGEE_FILTER_CODEC_LOOKUP_OPERATORS).toEqual([
+      "exact",
+      "sqid",
+      "pk",
+      "_eq",
+      "ne",
+      "_neq",
+      "gt",
+      "_gt",
+      "gte",
+      "_gte",
+      "lt",
+      "_lt",
+      "lte",
+      "_lte",
+      "inList",
+      "_in",
+      "_nin",
+      "isNull",
+      "_is_null",
+      "jsonContains",
+      "_contains",
+      "contains",
+      "iContains",
+      "startsWith",
+      "iStartsWith",
+      "endsWith",
+      "iEndsWith",
+    ]);
+    for (const operator of ANGEE_FILTER_CODEC_LOOKUP_OPERATORS) {
+      const value = operator === "inList" || operator === "_in" || operator === "_nin"
+        ? ["ACTIVE"]
+        : operator === "isNull" || operator === "_is_null"
+          ? true
+          : operator === "jsonContains" || operator === "_contains"
+            ? { state: "ACTIVE" }
+            : "ACTIVE";
+      expect(
+        crudFiltersFromFilterRecord({ status: { [operator]: value } }),
+        operator,
+      ).toHaveLength(1);
+    }
   });
 
   test("maps Angee order objects to refine sorters", () => {

@@ -5,6 +5,8 @@ import {
   useMemo,
   useState,
   useSyncExternalStore,
+  type Key,
+  type ReactElement,
   type ReactNode,
 } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
@@ -53,6 +55,16 @@ export interface ResourceViewProviderProps {
 
 export type ResourceViewProviderScope = "route" | "local";
 
+export interface ResourceViewScopeMountOptions {
+  ambient: ResourceViewContextValue | null;
+  resource?: string;
+  scope: "inherit" | "local";
+  initialState?: ResourceViewInitialState;
+  isolated?: boolean;
+  providerKey?: Key;
+  children: (resourceView: ResourceViewContextValue) => ReactElement;
+}
+
 const ResourceViewContext = createContext<ResourceViewContextValue | null>(null);
 const EMPTY_FAVORITES: readonly ResourceViewFavorite[] = [];
 const favoriteListeners = new Map<string, Set<() => void>>();
@@ -87,6 +99,37 @@ export function ResourceViewProvider({
       {children}
     </RouteResourceViewProvider>
   );
+}
+
+/** Mount under an ambient view when allowed, otherwise create the one state owner. */
+export function withResourceViewScope({
+  ambient,
+  resource,
+  scope,
+  initialState,
+  isolated = false,
+  providerKey,
+  children,
+}: ResourceViewScopeMountOptions): ReactElement {
+  if (!isolated && scope !== "local" && ambient) return children(ambient);
+  return (
+    <ResourceViewProvider
+      key={providerKey}
+      initialState={initialState}
+      resource={resource}
+      scope={isolated || scope === "local" ? "local" : "route"}
+    >
+      <ResourceViewScopeBound>{children}</ResourceViewScopeBound>
+    </ResourceViewProvider>
+  );
+}
+
+function ResourceViewScopeBound({
+  children,
+}: {
+  children: (resourceView: ResourceViewContextValue) => ReactElement;
+}): ReactElement {
+  return children(useResourceView());
 }
 
 function RouteResourceViewProvider({

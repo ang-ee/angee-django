@@ -9,17 +9,12 @@ import {
   type ResourceToolbarFilterOption,
   type ResourceToolbarGroupOption,
 } from "../toolbars";
-import type { PagerState } from "../ui/pager";
 import {
-  ResourceViewProvider,
-  useResourceView,
+  withResourceViewScope,
   useResourceViewMaybe,
   type ResourceViewContextValue,
 } from "./resource-view-context";
-import {
-  resourceViewGroupsEqual,
-  type ResourceViewGroup,
-} from "./resource-view-model";
+import type { ResourceViewGroup } from "./resource-view-model";
 import {
   useRowsResourceViewSurface,
   type ResourceListSnapshot,
@@ -31,17 +26,11 @@ import {
 } from "./resource-view-list-body";
 import { ResourceListFrame } from "./ResourceListFrame";
 import type { ListEmptyContent } from "./resource-view-types";
-import {
-  activeFilterIdsFor,
-  buildFilterFields,
-  buildFilterOptions,
-  buildGroupOptions,
-  customFilterChipsFor,
-  mergeFilterFields,
-  mergeFilterOptions,
-  textFilterValue,
-} from "./resource-view-utils";
 import { useResourceToolbarProps } from "./resource-toolbar-props";
+import {
+  useResourceViewToolbarInputs,
+} from "./resource-view-toolbar-inputs";
+import { useResourceViewGroupState } from "./resource-view-group-state";
 
 export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   rows: readonly TRow[];
@@ -100,21 +89,14 @@ export function RowsListView<TRow extends StringIdRow = StringIdRow>(
     }),
     [props.pageSize],
   );
-  if (scope !== "local" && resourceView) {
-    return <RowsListViewBody {...props} resourceView={resourceView} />;
-  }
-  const providerScope = scope === "local" ? "local" : "route";
-  return (
-    <ResourceViewProvider initialState={initialState} scope={providerScope}>
-      <RowsListViewBound {...props} />
-    </ResourceViewProvider>
-  );
-}
-
-function RowsListViewBound<TRow extends StringIdRow = StringIdRow>(
-  props: RowsListViewProps<TRow>,
-): React.ReactElement {
-  return <RowsListViewBody {...props} resourceView={useResourceView()} />;
+  return withResourceViewScope({
+    ambient: resourceView,
+    scope,
+    initialState,
+    children: (scopedResourceView) => (
+      <RowsListViewBody {...props} resourceView={scopedResourceView} />
+    ),
+  });
 }
 
 function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
@@ -124,7 +106,6 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   customFilterFields: explicitCustomFilterFields,
   groupOptions,
   defaultGroup,
-  pageSize,
   fetching = false,
   error = null,
   onRowClick,
@@ -144,79 +125,35 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
 }): React.ReactElement {
   const t = useUiT();
   const [layout, setLayout] = React.useState<RowLayout>("list");
-  const handledDefaultGroupRef = React.useRef<ResourceViewGroup | null>(null);
-  React.useEffect(() => {
-    if (!defaultGroup) {
-      handledDefaultGroupRef.current = null;
-      return;
-    }
-    if (
-      handledDefaultGroupRef.current
-      && resourceViewGroupsEqual(handledDefaultGroupRef.current, defaultGroup)
-    ) {
-      return;
-    }
-    handledDefaultGroupRef.current = defaultGroup;
-    if (resourceView.state.group === null) resourceView.setGroup(defaultGroup);
-  }, [resourceView.setGroup, resourceView.state.group, defaultGroup]);
+  const effectiveGroupStack = useResourceViewGroupState({
+    resourceView,
+    defaultGroup,
+    modelMetadata: null,
+    clearRemovedDefault: false,
+  });
 
   const surface = useRowsResourceViewSurface({
     rows,
     columns,
-    pageSize,
     resourceView,
+    groupStack: effectiveGroupStack,
     fetching,
     error,
     onListStateChange,
   });
-  const toolbarPager = React.useMemo<PagerState>(
-    () => ({
-      total: surface.list.total,
-      page: surface.list.page,
-      pageSize: surface.list.pageSize,
-      hasPrev: surface.list.hasPrev,
-      hasNext: surface.list.hasNext,
-    }),
-    [
-      surface.list.hasNext,
-      surface.list.hasPrev,
-      surface.list.page,
-      surface.list.pageSize,
-      surface.list.total,
-    ],
-  );
-  const toolbarGroupOptions = React.useMemo(
-    () => groupOptions ?? buildGroupOptions(columns, null, defaultGroup),
-    [columns, defaultGroup, groupOptions],
-  );
-  const groupingEnabled =
-    toolbarGroupOptions.length > 0 || resourceView.state.groupStack.length > 0;
-  const inferredCustomFilterFields = React.useMemo(
-    () => buildFilterFields(columns, surface.sourceRows, null),
-    [columns, surface.sourceRows],
-  );
-  const customFilterFields = React.useMemo(
-    () => mergeFilterFields(explicitCustomFilterFields, inferredCustomFilterFields),
-    [explicitCustomFilterFields, inferredCustomFilterFields],
-  );
-  const inferredFilterOptions = React.useMemo(
-    () => buildFilterOptions(columns, surface.sourceRows, inferredCustomFilterFields),
-    [columns, inferredCustomFilterFields, surface.sourceRows],
-  );
-  const filterOptions = React.useMemo(
-    () => mergeFilterOptions(explicitFilterOptions, inferredFilterOptions),
-    [explicitFilterOptions, inferredFilterOptions],
-  );
-  const activeFilterIds = activeFilterIdsFor(
-    resourceView.state.filter,
-    filterOptions,
-  );
-  const customFilterChips = customFilterChipsFor(
-    resourceView.state.filter,
-    filterOptions,
-    customFilterFields,
-  );
-  const filterText = textFilterValue(resourceView.state.filter);
+  const toolbarInputs = useResourceViewToolbarInputs({
+    columns,
+    rows: surface.sourceRows,
+    modelMetadata: null,
+    resourceView,
+    list: surface.list,
+    defaultGroup,
+    groupOptions,
+    explicitGroupOptionsReplaceInferred: true,
+    filterOptions: explicitFilterOptions,
+    customFilterFields: explicitCustomFilterFields,
+    groupStack: effectiveGroupStack,
+  });
   const interactive = Boolean(onRowClick || rowHref);
   const resolvedEmptyContent = emptyContent ?? t("list.empty");
   const toolbar = useResourceToolbarProps({
@@ -228,17 +165,17 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
         onViewChange={setLayout}
       />
     ) : undefined,
-    pager: toolbarPager,
-    group: resourceView.state.group,
-    groupStack: resourceView.state.groupStack,
-    groupOptions: toolbarGroupOptions,
-    groupingEnabled,
-    filterOptions,
-    customFilterFields,
-    customFilterChips,
+    pager: toolbarInputs.pager,
+    group: effectiveGroupStack[0] ?? null,
+    groupStack: effectiveGroupStack,
+    groupOptions: toolbarInputs.groupOptions,
+    groupingEnabled: toolbarInputs.groupingEnabled,
+    filterOptions: toolbarInputs.filterOptions,
+    customFilterFields: toolbarInputs.customFilterFields,
+    customFilterChips: toolbarInputs.customFilterChips,
     favorites: resourceView.savedFavorites,
-    activeFilterIds,
-    filterText,
+    activeFilterIds: toolbarInputs.activeFilterIds,
+    filterText: toolbarInputs.filterText,
     resourceView,
   });
 
