@@ -1,0 +1,16 @@
+_meta:
+  model: projects.Task
+rows:
+  - xref: opening_day_signs
+    fields:
+      project: projects.neighborhood_garden
+      parent: projects.opening_day
+      title: Print plot and welcome signs
+      note: Include the shared-tool rules and an accessible map.
+      assignee: iam.user_bob
+      priority: medium
+      due_date: 2026-11-27
+      sort_order: 4096.0
+      sub_sort_order: 1024.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

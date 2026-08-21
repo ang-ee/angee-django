@@ -1,0 +1,21 @@
+[addon]
+name = "angee.projects"
+description = "Bounded projects, milestones, and the platform's one human-action task table."
+keywords = ["projects", "milestones", "tasks", "planning"]
+category = "Productivity"
+depends_on = [
+  "angee.iam",
+  "angee.messaging",
+  "angee.parties",
+  "angee.scheduling",
+  "angee.storage",
+]
+
+[resources]
+master = []
+demo = [
+  { path = "resources/demo/010_projects.project.yaml", depends_on = "iam:resources/demo/010_iam.user.yaml" },
+  { path = "resources/demo/020_projects.milestone.yaml", depends_on = "resources/demo/010_projects.project.yaml" },
+  { path = "resources/demo/030_projects.task.yaml", depends_on = ["resources/demo/010_projects.project.yaml", "resources/demo/020_projects.milestone.yaml"] },
+  { path = "resources/demo/031_projects.task.yaml", depends_on = "resources/demo/030_projects.task.yaml" },
+]
