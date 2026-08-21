@@ -287,6 +287,8 @@ TanStack apply the URL-owned filter object to in-memory rows.
   action controls or hooks, but they do not own table mechanics, duplicate route
   params, cache state, bespoke loading/error surfaces, or local copies of shared
   resource-view state.
+- A row verb is a `rowActions` declaration on `ListView`/`RowsListView`, never a
+  hand-rolled trailing column with local `useConfirm`/`toast.danger` ceremony.
 - **Two-collection settings pages are a sanctioned family, not a double toolbar.**
   A `SettingsShell` may stack several `SettingsSection`s, each wrapping its own
   `ResourceList`/`DrawerResourceList` (integrate Templates: template sources +
