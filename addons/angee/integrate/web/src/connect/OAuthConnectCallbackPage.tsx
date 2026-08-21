@@ -1,5 +1,6 @@
 import { OAuthCallback, type CallbackExchange, type OAuthCallbackCopy, } from "@angee/app/auth";
 import { useAuthoredMutation } from "@angee/refine";
+import { useRouteHref } from "@angee/ui";
 import { useCallback, useMemo, type ReactNode } from "react";
 
 import { useIntegrateT } from "../i18n";
@@ -9,18 +10,19 @@ import { currentConnectCallbackRedirectUri } from "./redirects";
 /** OAuth account-connect redirect handler: completes the connect code exchange. */
 export function OAuthConnectCallbackPage(): ReactNode {
   const t = useIntegrateT();
+  const routeHref = useRouteHref();
   const copy = useMemo<OAuthCallbackCopy>(
     () => ({
       pendingTitle: t("connectCallback.completing"),
       pendingBody: t("connectCallback.confirming"),
       errorTitle: t("connectCallback.failedTitle"),
-      backHref: "/integrate/providers",
+      backHref: routeHref("integrate.providers"),
       backLabel: t("connectCallback.backToProviders"),
       serverError: t("connectCallback.browserOnly"),
       missingInfo: t("connectCallback.missingInfo"),
       failure: t("connectCallback.completeError"),
     }),
-    [t],
+    [routeHref, t],
   );
   const [connectAccountComplete] = useAuthoredMutation(
     IntegrateConnectAccountComplete,
@@ -39,7 +41,7 @@ export function OAuthConnectCallbackPage(): ReactNode {
     <OAuthCallback
       complete={complete}
       copy={copy}
-      fallbackRedirect="/integrate/accounts"
+      fallbackRedirect={routeHref("integrate.accounts")}
       redirectUri={currentConnectCallbackRedirectUri()}
     />
   );

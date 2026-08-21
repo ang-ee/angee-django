@@ -1,5 +1,6 @@
 import { OAuthCallback, type CallbackExchange, type OAuthCallbackCopy, } from "@angee/app/auth";
 import { useAuthoredMutation } from "@angee/refine";
+import { useLoginPath } from "@angee/ui";
 import { useCallback, useMemo, type ReactNode } from "react";
 
 import { IamLoginComplete } from "./documents.public";
@@ -9,18 +10,19 @@ import { loginCallbackRedirectUri } from "./redirects";
 /** OIDC sign-in redirect handler: completes the login code exchange. */
 export function OAuthCallbackPage(): ReactNode {
   const t = useIamT();
+  const loginPath = useLoginPath();
   const copy = useMemo<OAuthCallbackCopy>(
     () => ({
       pendingTitle: t("callback.completing"),
       pendingBody: t("callback.confirming"),
       errorTitle: t("callback.signInFailed"),
-      backHref: "/login",
+      backHref: loginPath,
       backLabel: t("callback.backToSignIn"),
       serverError: t("callback.browserOnly"),
       missingInfo: t("callback.missingInfo"),
       failure: t("callback.completeError"),
     }),
-    [t],
+    [loginPath, t],
   );
   const [loginComplete] = useAuthoredMutation(IamLoginComplete);
 

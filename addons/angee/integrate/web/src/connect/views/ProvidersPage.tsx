@@ -1,6 +1,6 @@
 import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
-import { Action, Column, ResourceList, Field, Form, Group, List, recordActionId, useEnumOptions, useImplPrefill, useRecordActionMutation, type ActionContext } from "@angee/ui";
+import { Action, Column, ResourceList, Field, Form, Group, List, recordActionId, useEnumOptions, useImplPrefill, useRecordActionMutation, useRouteHref, type ActionContext } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useIntegrateT } from "../../i18n";
@@ -41,6 +41,7 @@ function fieldString(value: unknown): string {
 /** OAuth connect providers (full CRUD plus discovery and account connect). */
 export function ProvidersPage(): React.ReactElement {
   const t = useIntegrateT();
+  const routeHref = useRouteHref();
   const [connectAccountStart] = useAuthoredMutation(IntegrateConnectAccountStart);
   const [connectAccountComplete] = useAuthoredMutation(
     IntegrateConnectAccountComplete,
@@ -60,7 +61,7 @@ export function ProvidersPage(): React.ReactElement {
       const result = await connectAccountStart({
         id,
         redirectUri: connectCallbackRedirectUri(),
-        next: "/integrate/accounts",
+        next: routeHref("integrate.accounts"),
       });
       const payload = result?.connect_account_start;
       if (!payload?.authorize_url) {
@@ -114,7 +115,7 @@ export function ProvidersPage(): React.ReactElement {
       ctx.refresh();
       return t("providers.connect.connected");
     },
-    [connectAccountStart, connectAccountComplete, t],
+    [connectAccountStart, connectAccountComplete, routeHref, t],
   );
 
   // Provider type is an ImplClassField (Google / Generic OIDC / Generic OAuth);

@@ -2,15 +2,14 @@ import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
 import { rowPublicId, type Row, } from "@angee/metadata";
 import {
-  Column, ResourceList, Field, Form, Group, List, useEnumOptions, useImplPrefill } from "@angee/ui";
+  Column, ResourceList, Field, Form, Group, List, useEnumOptions, useImplPrefill,
+  useRouteHref } from "@angee/ui";
 
 import { canConnectRecord, ConnectOAuthButton } from "../connect/ConnectOAuthButton";
 import { ConnectIntegration } from "../documents";
 import { useIntegrateT } from "../i18n";
 
 const MODEL = "integrate.Integration";
-const CONNECT_NEXT = "/integrate";
-
 export function IntegrationsPage(): React.ReactElement {
   const t = useIntegrateT();
   const implClassOptions = useEnumOptions(MODEL, "impl_class");
@@ -101,6 +100,7 @@ function IntegrationConnectButton({
   refresh: () => void;
 }): React.ReactElement | null {
   const t = useIntegrateT();
+  const routeHref = useRouteHref();
   const [connectIntegration] = useAuthoredMutation(ConnectIntegration);
   const id = rowPublicId(row) ?? "";
   if (!id) return null;
@@ -110,7 +110,7 @@ function IntegrationConnectButton({
       label={t("integrations.action.connect")}
       connectedTitle={t("integrations.connect.connected")}
       startErrorTitle={t("integrations.connect.startError")}
-      next={CONNECT_NEXT}
+      next={routeHref("integrate.integrations")}
       onConnected={refresh}
       start={async ({ redirectUri, next }) => {
         const result = await connectIntegration({

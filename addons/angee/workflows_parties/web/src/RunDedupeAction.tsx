@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
-import { Button, useToast } from "@angee/ui";
+import { Button, useRouteHref, useToast } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 
 import { StartDedupeRun, SubjectlessWorkflows } from "./documents";
@@ -18,6 +18,7 @@ export function RunDedupeAction(): React.ReactElement | null {
   const t = useWorkflowsPartiesT();
   const toast = useToast();
   const navigate = useNavigate();
+  const routeHref = useRouteHref();
   const workflows = useAuthoredQuery(
     SubjectlessWorkflows,
     { subjectDeclaration: "" },
@@ -26,6 +27,9 @@ export function RunDedupeAction(): React.ReactElement | null {
   const [start, { fetching }] = useAuthoredMutation(StartDedupeRun, {
     invalidateModels: ["workflows.WorkflowRun"],
   });
+  const runRouteAvailable = routeHref.maybe("workflows.run", {
+    id: "route-probe",
+  }) !== undefined;
 
   const dedupe = (workflows.data?.workflows_for_subject_declaration ?? []).find(
     (workflow) => workflow.name === DEDUPE_WORKFLOW_NAME,
@@ -38,7 +42,7 @@ export function RunDedupeAction(): React.ReactElement | null {
     <Button
       variant="secondary"
       size="sm"
-      disabled={fetching}
+      disabled={fetching || !runRouteAvailable}
       title={t("dedupe.description")}
       onClick={() => {
         void (async () => {
@@ -48,7 +52,12 @@ export function RunDedupeAction(): React.ReactElement | null {
             toast.danger({ title: result?.message || t("dedupe.failed") });
             return;
           }
-          void navigate({ to: `/workflows/runs/${result.id}` });
+          const target = routeHref.maybe("workflows.run", { id: result.id });
+          if (!target) {
+            toast.danger({ title: t("dedupe.failed") });
+            return;
+          }
+          void navigate({ to: target });
         })();
       }}
     >

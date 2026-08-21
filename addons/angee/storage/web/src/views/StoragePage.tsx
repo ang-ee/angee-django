@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactElement } from "re
 import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
 
 import {
-  Button, buttonVariants, ControlBand, EmptyState, formatSize, Glyph, LoadingPanel, PreviewPane, RecordPager, ScopedExplorerPane, recordPath, SelectionBarAction, SurfaceHeader, TreeView, useBreadcrumbLeafLabel, useChatterContent, useConfirm, useLatestRef, useListRecordNavigation, useRouteRecordId, type ChatterTab, type FieldDescriptor, type PreviewFile, type ScopedExplorerController } from "@angee/ui";
+  Button, buttonVariants, ControlBand, EmptyState, formatSize, Glyph, LoadingPanel, PreviewPane, RecordPager, ScopedExplorerPane, SelectionBarAction, SurfaceHeader, TreeView, useBreadcrumbLeafLabel, useChatterContent, useConfirm, useLatestRef, useListRecordNavigation, useRouteHref, useRouteRecordId, type ChatterTab, type FieldDescriptor, type PreviewFile, type ScopedExplorerController } from "@angee/ui";
 
 import {
   StorageBackends,
@@ -85,6 +85,8 @@ export function StoragePage(): ReactElement {
   // The open file is route state: `/storage/$id` swaps the content to the large
   // preview and the aside to editable metadata; `/storage` is the list.
   const navigate = useNavigate();
+  const routeHref = useRouteHref();
+  const filesHref = routeHref("storage.files");
   // The navigator scope (All files / Trash / a folder) lives in the URL beside
   // the `group` view param, so it is deep-linkable and back/forward works.
   const search = useSearch({ strict: false }) as Readonly<Record<string, unknown>>;
@@ -95,7 +97,7 @@ export function StoragePage(): ReactElement {
     (scope: string | null) => {
       const folder = folderScopeToParam(scope ?? ALL_SCOPE);
       void navigate({
-        to: "/storage",
+        to: filesHref,
         // All files is the absent default: drop the `folder` key rather than
         // writing `undefined`, keeping the address bar clean and every other
         // param intact — the same typed updater shape as openFileRoute/closeDetail.
@@ -107,7 +109,7 @@ export function StoragePage(): ReactElement {
         },
       });
     },
-    [navigate],
+    [filesHref, navigate],
   );
   const openFileId = useRouteRecordId() ?? null;
   const openFileQuery = useAuthoredQuery(
@@ -218,10 +220,10 @@ export function StoragePage(): ReactElement {
   );
   const closeDetail = useCallback(() => {
     void navigate({
-      to: "/storage",
+      to: filesHref,
       search: (current: Record<string, unknown>) => current,
     });
-  }, [navigate]);
+  }, [filesHref, navigate]);
 
   useBreadcrumbLeafLabel(openFile ? openFile.title || openFile.filename : null);
   const openFileRoute = useCallback(
@@ -229,11 +231,11 @@ export function StoragePage(): ReactElement {
       // Keep the folder/group scope in the URL across the preview round-trip so
       // closing the file returns to the same folder.
       void navigate({
-        to: recordPath("/storage", id),
+        to: routeHref("storage.file", { id }),
         search: (current: Record<string, unknown>) => current,
       });
     },
-    [navigate],
+    [navigate, routeHref],
   );
   const getTreeRows = useCallback(
     (rootId: string) =>
@@ -500,6 +502,7 @@ function StorageExplorerContent({
   onOpenFile: (id: string) => void;
 }): ReactElement {
   const t = useStorageT();
+  const routeHref = useRouteHref();
   const driveId = controller.rootId;
   const effectiveScope = controller.selectedId ?? ALL_SCOPE;
   const baseFilter = useMemo(
@@ -537,8 +540,9 @@ function StorageExplorerContent({
     select: (state) => state.location.searchStr,
   });
   const rowHref = useCallback(
-    (row: StorageFileRow) => `${recordPath("/storage", row.id)}${searchStr}`,
-    [searchStr],
+    (row: StorageFileRow) =>
+      routeHref("storage.file", { id: row.id }, searchStr),
+    [routeHref, searchStr],
   );
   // The selection bar's bulk verbs: Restore in the Trash scope, else Trash.
   const renderBulkActions = useCallback(

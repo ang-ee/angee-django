@@ -1,6 +1,6 @@
 import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Card, CardContent, EmptyState, LazyBoundary, buttonVariants, cn, textRoleVariants } from "@angee/ui";
+import { Card, CardContent, EmptyState, LazyBoundary, buttonVariants, cn, textRoleVariants, useRouteHref } from "@angee/ui";
 
 import type { ChatterView } from "@angee/ui/runtime";
 import { Link } from "@tanstack/react-router";
@@ -47,6 +47,7 @@ export function AgentChatterPane({
   view?: ChatterView | AgentChatView;
 }): React.ReactElement {
   const t = useAgentsT();
+  const routeHref = useRouteHref();
   // The shared running-agents owner (same hook the sessions page uses) — live-refreshing,
   // already filtered to the running, non-template agents.
   const { running: agents } = useRunningAgents();
@@ -99,7 +100,10 @@ export function AgentChatterPane({
         title={t("agent.noRunningAgent")}
         description={t("agent.chatUnavailable")}
         actions={
-          <Link className={buttonVariants({ variant: "primary", size: "sm" })} to="/agents">
+          <Link
+            className={buttonVariants({ variant: "primary", size: "sm" })}
+            to={routeHref("agents.agents")}
+          >
             {t("agent.setupAssistant")}
           </Link>
         }

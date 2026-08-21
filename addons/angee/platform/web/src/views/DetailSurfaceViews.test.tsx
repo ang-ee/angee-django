@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { createRouteHref } from "@angee/ui/runtime";
 
 const routerMocks = vi.hoisted(() => ({
   params: {} as Record<string, string>,
@@ -9,20 +10,24 @@ const routerMocks = vi.hoisted(() => ({
 
 const platformMocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  routeHref: vi.fn(),
   usePlatformAddon: vi.fn(),
   usePlatformModel: vi.fn(),
 }));
 
-vi.mock("@tanstack/react-router", () => ({
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useParams: () => routerMocks.params,
 }));
 
 vi.mock("@angee/ui", async () => ({
   ...(await vi.importActual<typeof import("@angee/ui")>("@angee/ui")),
+  useRouteHref: () => platformMocks.routeHref,
   useRouteRecordId: () => routerMocks.params.id,
 }));
 
-vi.mock("../i18n", () => ({
+vi.mock("../i18n", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../i18n")>()),
   usePlatformT: () => (key: string, vars?: Record<string, number>) =>
     vars?.count ? `${key}:${vars.count}` : key,
 }));
@@ -64,10 +69,15 @@ vi.mock("../lib/explorer", () => ({
 
 import { AddonDetail } from "./AddonDetail";
 import { ModelDetail } from "./ModelDetail";
+import platform from "../index";
 
 beforeEach(() => {
   routerMocks.params = {};
   platformMocks.navigate.mockClear();
+  platformMocks.routeHref.mockReset();
+  const routeHref = createRouteHref(platform.routes ?? []);
+  platformMocks.routeHref.mockImplementation(routeHref);
+  Object.assign(platformMocks.routeHref, { maybe: routeHref.maybe });
   platformMocks.usePlatformAddon.mockReset();
   platformMocks.usePlatformModel.mockReset();
 });
@@ -137,6 +147,10 @@ describe("platform detail surfaces", () => {
       (screen.getByRole("link", { name: "storage.File" }) as HTMLAnchorElement)
         .pathname,
     ).toBe("/platform/models/storage.File");
+    expect(platformMocks.routeHref).toHaveBeenCalledWith(
+      "platform.models.record",
+      { id: "storage.File" },
+    );
   });
 
   test("ModelDetail keeps metric links navigable", () => {
@@ -163,6 +177,11 @@ describe("platform detail surfaces", () => {
     fireEvent.click(screen.getByRole("link", { name: /col.graph/ }));
     expect(platformMocks.navigate).toHaveBeenCalledWith(
       "/platform?model=notes.Note",
+    );
+    expect(platformMocks.routeHref).toHaveBeenCalledWith(
+      "platform.graph",
+      undefined,
+      { model: "notes.Note" },
     );
     expect(screen.getByText("detail.definition")).toBeTruthy();
     expect(screen.getByText("notes_note")).toBeTruthy();

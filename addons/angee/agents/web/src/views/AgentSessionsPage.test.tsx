@@ -3,22 +3,29 @@
 import * as React from "react";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { createRouteHref } from "@angee/ui/runtime";
 import {
   PrimaryPaneTestHost,
   ShellPageTestProviders,
 } from "@angee/app/testing";
 
 import type { AgentRosterItem } from "../documents";
+import agents from "../index";
 
 const routerMocks = vi.hoisted(() => ({
-  navigate: vi.fn(), params: {} as Record<string, string>, }));
+  navigate: vi.fn(),
+  params: {} as Record<string, string>,
+  routeHref: vi.fn(),
+}));
 
 const sdkMocks = vi.hoisted(() => ({
   useAuthoredQuery: vi.fn(), }));
 
-vi.mock("@tanstack/react-router", async () => {
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-router")>();
   const React = await import("react");
   return {
+    ...actual,
     useNavigate: () => routerMocks.navigate, useParams: () => routerMocks.params, // A capturing anchor: keeps the `to` href and spreads the merged props (className, // aria-current, data-active) that `SessionRailItem`'s `useRender` injects.
     Link: React.forwardRef<HTMLAnchorElement, { to?: unknown; children?: React.ReactNode }>(
       function Link({ to, children, ...rest }, ref) {
@@ -32,13 +39,14 @@ vi.mock("@angee/refine", async (importOriginal) => ({
   useAuthoredQuery: sdkMocks.useAuthoredQuery,
 }));
 
-// `@angee/ui` carries the real rail/empty/skeleton primitives + `recordPath`; only the
-// route-id helper and namespace translator are overridden.
+// `@angee/ui` carries the real rail/empty/skeleton primitives; only the route
+// owners and namespace translator are overridden.
 vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   const React = await import("react");
   return {
     ...actual,
+    useRouteHref: () => routerMocks.routeHref,
     useRouteRecordId: () => routerMocks.params.id,
     // Mirror the real `useNamespaceT` contract: a STABLE translator identity (memoized
     // on its inputs). AgentSessionsPage publishes a `t`-derived node into the shell
@@ -96,6 +104,10 @@ function queryResult(data: unknown, fetching = false) {
 beforeEach(() => {
   routerMocks.params = {};
   routerMocks.navigate.mockReset();
+  routerMocks.routeHref.mockReset();
+  const routeHref = createRouteHref(agents.routes ?? []);
+  routerMocks.routeHref.mockImplementation(routeHref);
+  Object.assign(routerMocks.routeHref, { maybe: routeHref.maybe });
   sdkMocks.useAuthoredQuery.mockReset();
 });
 
@@ -188,6 +200,9 @@ describe("AgentSessionsPage", () => {
     expect(routerMocks.navigate).toHaveBeenCalledWith({
       to: "/agents/sessions/a1",
       replace: true,
+    });
+    expect(routerMocks.routeHref).toHaveBeenCalledWith("agents.session", {
+      id: "a1",
     });
   });
 

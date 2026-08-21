@@ -3,7 +3,7 @@ import { useCallback, useMemo, type ReactElement } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 import {
-  EmptyState, LoadingPanel, ScopedExplorerPane, recordPath, TreeView, WikilinkProvider, useChatterContent, useConfirm, useRouteRecordId, type ChatterTab, type ScopedExplorerController, type WikilinkResolver } from "@angee/ui";
+  EmptyState, LoadingPanel, ScopedExplorerPane, TreeView, WikilinkProvider, useChatterContent, useConfirm, useRouteHref, useRouteRecordId, type ChatterTab, type ScopedExplorerController, type WikilinkResolver } from "@angee/ui";
 
 import {
   KnowledgePage as KnowledgePageQuery,
@@ -65,16 +65,17 @@ export function KnowledgePage(): ReactElement {
   // The open page is route state: `/knowledge/$id` reads that page into the
   // content + aside; `/knowledge` is the empty reader.
   const navigate = useNavigate();
+  const routeHref = useRouteHref();
   const openPageId = useRouteRecordId() ?? null;
   const openPage = useCallback(
     (id: string) => {
-      void navigate({ to: recordPath("/knowledge", id) });
+      void navigate({ to: routeHref("knowledge.page", { id }) });
     },
-    [navigate],
+    [navigate, routeHref],
   );
   const closePage = useCallback(() => {
-    void navigate({ to: "/knowledge" });
-  }, [navigate]);
+    void navigate({ to: routeHref("knowledge.home") });
+  }, [navigate, routeHref]);
 
   const detailVariables = useMemo(
     () => ({ id: openPageId ?? "" }),

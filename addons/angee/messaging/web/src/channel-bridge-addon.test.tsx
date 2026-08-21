@@ -42,6 +42,7 @@ import {
 } from "./channel-bridge-addon";
 import { CHANNEL_MODEL } from "./documents";
 import { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
+import { expectValidChannelBridgeAddon } from "./testing";
 
 describe("defineChannelBridgeAddon live bridges", () => {
   afterEach(() => {
@@ -62,12 +63,13 @@ describe("defineChannelBridgeAddon live bridges", () => {
       instructionKey: "channel.example.scan",
     });
     const recordSlot = formViewRecordActionsSlot(CHANNEL_MODEL, "example");
+    expect(() => expectValidChannelBridgeAddon(manifest)).not.toThrow();
 
     expect(manifest.menus?.[0]).toMatchObject({
       id: "messaging.example",
       label: "Example",
       parentId: "messaging",
-      to: "/messaging/channels",
+      route: "messaging.channels",
     });
     expect(manifest.slots).toMatchObject([
       {
@@ -192,10 +194,12 @@ describe("defineChannelPollBridgeAddon poll bridges", () => {
         "channel.example.menu.description": "Sync Example accounts",
       },
     });
+    expect(() => expectValidChannelBridgeAddon(manifest)).not.toThrow();
 
     expect(manifest.menus?.[0]).toMatchObject({
       id: "messaging.example",
       label: "Example",
+      route: "messaging.channels",
       description: "Sync Example accounts",
     });
     expect(manifest.slots?.map(({ slot, id, sequence }) => ({ slot, id, sequence }))).toEqual([

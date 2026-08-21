@@ -1,15 +1,13 @@
 import * as React from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
-  EmptyState, Glyph, PrimaryPanePublisher, SessionRail, SessionRailItem, Skeleton, StatusDot, buttonVariants, recordPath, statusTone, useRouteRecordId } from "@angee/ui";
+  EmptyState, Glyph, PrimaryPanePublisher, SessionRail, SessionRailItem, Skeleton, StatusDot, buttonVariants, statusTone, useRouteHref, useRouteRecordId } from "@angee/ui";
 
 import { useAgentsT } from "../i18n";
 import { type AgentChatView } from "../documents";
 import { AgentChat } from "./AgentChat";
 import { KeptAliveAgents, useOpenedAgents } from "./useOpenedAgents";
 import { useRunningAgents } from "./useRunningAgents";
-
-const SESSIONS_BASE = "/agents/sessions";
 
 /**
  * The full-page agent sessions view: a left rail of the running agents (the
@@ -29,7 +27,13 @@ const SESSIONS_BASE = "/agents/sessions";
 export function AgentSessionsPage(): React.ReactElement {
   const t = useAgentsT();
   const navigate = useNavigate();
+  const routeHref = useRouteHref();
   const selectedId = useRouteRecordId() ?? null;
+  const agentsHref = routeHref("agents.agents");
+  const sessionHref = React.useCallback(
+    (id: string) => routeHref("agents.session", { id }),
+    [routeHref],
+  );
 
   // The shared running-agents owner (same hook the side-chatter uses) — live-refreshing,
   // already filtered to the running, non-template agents.
@@ -44,9 +48,9 @@ export function AgentSessionsPage(): React.ReactElement {
   React.useEffect(() => {
     const first = agents[0];
     if (first && (!selectedId || !selectedRunning)) {
-      void navigate({ to: recordPath(SESSIONS_BASE, first.id), replace: true });
+      void navigate({ to: sessionHref(first.id), replace: true });
     }
-  }, [selectedId, selectedRunning, agents, navigate]);
+  }, [selectedId, selectedRunning, agents, navigate, sessionHref]);
 
   // Feed only a valid running id into the keep-alive substrate.
   const activeId = selectedRunning?.id;
@@ -87,7 +91,7 @@ export function AgentSessionsPage(): React.ReactElement {
       <SessionRail
         label={t("sessions.railLabel")}
         action={
-          <Link className={buttonVariants({ variant: "ghost", size: "sm" })} to="/agents">
+          <Link className={buttonVariants({ variant: "ghost", size: "sm" })} to={agentsHref}>
             <Glyph name="plus" />
             {t("sessions.new")}
           </Link>
@@ -104,14 +108,14 @@ export function AgentSessionsPage(): React.ReactElement {
               />
             }
             handle={agent.model?.name ?? undefined}
-            render={<Link to={recordPath(SESSIONS_BASE, agent.id)} />}
+            render={<Link to={sessionHref(agent.id)} />}
           >
             {agent.name}
           </SessionRailItem>
         ))}
       </SessionRail>
     );
-  }, [loading, agents, selectedId, t]);
+  }, [agentsHref, loading, agents, selectedId, sessionHref, t]);
   // Loading: a skeleton conversation pane beside the skeleton rail rows above.
   if (loading) {
     return (
@@ -134,7 +138,7 @@ export function AgentSessionsPage(): React.ReactElement {
           title={t("agent.noRunningAgent")}
           description={t("agent.chatUnavailable")}
           actions={
-            <Link className={buttonVariants({ variant: "primary", size: "sm" })} to="/agents">
+            <Link className={buttonVariants({ variant: "primary", size: "sm" })} to={agentsHref}>
               {t("agent.setupAssistant")}
             </Link>
           }

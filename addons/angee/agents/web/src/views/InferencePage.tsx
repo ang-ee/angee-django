@@ -1,7 +1,7 @@
 import * as React from "react";
 import { rowPublicId, type Row, } from "@angee/metadata";
 import {
-  Action, Column, ResourceList, Facet, Field, Form, Group, List, useAuthoredResourceMutation, useRecordActionMutation, useEnumOptions, useImplPrefill, type FormSubmit } from "@angee/ui";
+  Action, Column, ResourceList, Facet, Field, Form, Group, List, useAuthoredResourceMutation, useRecordActionMutation, useEnumOptions, useImplPrefill, useRouteHref, type FormSubmit } from "@angee/ui";
 import { canConnectRecord, ConnectOAuthButton, } from "@angee/integrate";
 import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
 import type { ActionFieldName } from "@angee/gql/console/actions";
@@ -98,6 +98,7 @@ function ProviderConnectButton({
   refresh: () => void;
 }): React.ReactElement | null {
   const t = useAgentsT();
+  const routeHref = useRouteHref();
   const [connectProvider] = useAuthoredMutation(ConnectInferenceProvider);
   const id = rowPublicId(row) ?? "";
   if (!id) return null;
@@ -107,7 +108,7 @@ function ProviderConnectButton({
       label={t("inference.connect.action")}
       connectedTitle={t("inference.connect.connected")}
       startErrorTitle={t("inference.connect.startError")}
-      next="/agents/providers"
+      next={routeHref("agents.providers")}
       onConnected={refresh}
       start={async ({ redirectUri, next }) => {
         const result = await connectProvider({ id, redirectUri, next });

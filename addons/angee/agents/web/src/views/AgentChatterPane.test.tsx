@@ -3,8 +3,10 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { createRouteHref } from "@angee/ui/runtime";
 
 import type { AgentRosterItem, AgentSession } from "../documents";
+import agents from "../index";
 
 const sdkMocks = vi.hoisted(() => ({
   calls: [] as Array<{
@@ -17,11 +19,14 @@ const sdkMocks = vi.hoisted(() => ({
   sessionData: undefined as unknown,
   sessionFetching: false,
   useAuthoredQuery: vi.fn(),
+  routeHref: vi.fn(),
 }));
 
-vi.mock("@tanstack/react-router", async () => {
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-router")>();
   const ReactModule = await import("react");
   return {
+    ...actual,
     Link: ReactModule.forwardRef<
       HTMLAnchorElement,
       { to?: unknown; children?: React.ReactNode }
@@ -39,6 +44,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
+    useRouteHref: () => sdkMocks.routeHref,
     useNamespaceT:
       (_namespace: string, messages: Record<string, string>) =>
       (key: string) =>
@@ -120,6 +126,10 @@ beforeEach(() => {
   sdkMocks.sessionData = undefined;
   sdkMocks.sessionFetching = false;
   sdkMocks.useAuthoredQuery.mockReset();
+  sdkMocks.routeHref.mockReset();
+  const routeHref = createRouteHref(agents.routes ?? []);
+  sdkMocks.routeHref.mockImplementation(routeHref);
+  Object.assign(sdkMocks.routeHref, { maybe: routeHref.maybe });
   sdkMocks.useAuthoredQuery.mockImplementation(
     (document: unknown, variables: unknown, options: unknown) => {
       const operation = operationName(document);
@@ -154,6 +164,10 @@ describe("AgentChatterPane", () => {
     const view = render(<AgentChatterPane resource="notes/note" recordId="nte_1" />);
 
     expect(screen.getByText("No agent yet")).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "Set up your assistant" }).getAttribute("href"),
+    ).toBe("/agents");
+    expect(sdkMocks.routeHref).toHaveBeenCalledWith("agents.agents");
 
     sdkMocks.rosterData = {
       agents: [agent("agt_running", "Demo Agent")],

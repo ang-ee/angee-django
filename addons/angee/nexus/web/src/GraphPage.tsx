@@ -1,5 +1,4 @@
 import * as React from "react";
-import { partyMergePath } from "@angee/parties";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   Badge,
@@ -15,8 +14,11 @@ import {
   RelationPicker,
   SegmentedControl,
   Tag,
-  recordPath,
   useChatter,
+  useResourceRecordHrefLookup,
+  useRouteHref,
+  type ResourceRecordHrefLookup,
+  type RouteHref,
 } from "@angee/ui";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 
@@ -42,6 +44,8 @@ export function GraphPage(): React.ReactElement {
   const t = useNexusT();
   const search = useSearch({ strict: false }) as Readonly<Record<string, unknown>>;
   const navigate = useNavigate();
+  const routeHref = useRouteHref();
+  const recordHref = useResourceRecordHrefLookup();
   const { setActiveTab, setCollapsed } = useChatter();
   const roots = useAuthoredQuery(
     NexusGraphParties,
@@ -181,10 +185,12 @@ export function GraphPage(): React.ReactElement {
             <Inspector
               nodes={selectedNodes}
               edge={selectedEdge}
+              routeHref={routeHref}
+              recordHref={recordHref}
               openTimeline={(node) => {
                 setActiveTab(isCircleNode(node) ? "feed" : "timeline");
                 setCollapsed(false);
-                const path = nodePath(node);
+                const path = nodePath(recordHref, node);
                 if (path) void navigate({ to: path });
               }}
             />
@@ -198,22 +204,32 @@ export function GraphPage(): React.ReactElement {
 function Inspector({
   nodes,
   edge,
+  routeHref,
+  recordHref,
   openTimeline,
 }: {
   nodes: readonly NexusNode[];
   edge: NexusEdge | null;
+  routeHref: RouteHref;
+  recordHref: ResourceRecordHrefLookup;
   openTimeline: (node: NexusNode) => void;
 }): React.ReactElement {
   const t = useNexusT();
   const selectedParties = nodes.filter((node) => isPartyNode(node));
+  const mergeHref = selectedParties[0] && selectedParties[1]
+    ? routeHref.maybe("parties.merge", {
+        left: selectedParties[0].id,
+        right: selectedParties[1].id,
+      })
+    : undefined;
   return (
     <aside className="min-h-0 overflow-auto bg-sheet-1 p-3">
       <RailPanel title={t("graph.inspector")} count={nodes.length || (edge ? 1 : undefined)} empty={t("graph.inspector.empty")}>
-        {edge ? <EdgeDetails edge={edge} /> : null}
+        {edge ? <EdgeDetails edge={edge} recordHref={recordHref} /> : null}
         {!edge && nodes.length > 0 ? (
           <div className="grid gap-3">
             {nodes.map((node) => {
-              const path = nodePath(node);
+              const path = nodePath(recordHref, node);
               return (
                 <div key={node.id} className="rounded-6 border border-border-subtle bg-sheet p-3">
                   <div className="font-medium text-fg">{node.title}</div>
@@ -232,9 +248,11 @@ function Inspector({
                 </div>
               );
             })}
-            {nodes.length === 2 && selectedParties[0] && selectedParties[1] ? (
+            {nodes.length === 2 && mergeHref ? (
               <Button asChild variant="primary">
-                <Link to={partyMergePath(selectedParties[0].id, selectedParties[1].id)}>{t("graph.merge")}</Link>
+                <Link to={mergeHref}>
+                  {t("graph.merge")}
+                </Link>
               </Button>
             ) : (
               <p className="text-2xs text-fg-muted">{t("graph.mergeHint")}</p>
@@ -246,9 +264,15 @@ function Inspector({
   );
 }
 
-function EdgeDetails({ edge }: { edge: NexusEdge }): React.ReactElement {
+function EdgeDetails({
+  edge,
+  recordHref,
+}: {
+  edge: NexusEdge;
+  recordHref: ResourceRecordHrefLookup;
+}): React.ReactElement {
   const t = useNexusT();
-  const path = edgePath(edge);
+  const path = edgePath(recordHref, edge);
   const relationshipLabel = edge.kind === "relationship" && edge.meta?.kind_name
     ? [edge.meta.kind_name, edge.meta.kind_inverse_name].filter(Boolean).join(" ↔ ")
     : null;
@@ -264,25 +288,21 @@ function EdgeDetails({ edge }: { edge: NexusEdge }): React.ReactElement {
   );
 }
 
-function nodePath(node: NexusNode): string | null {
-  const routes: Record<string, string> = {
-    "parties.Person": "/parties/people",
-    "parties.Organization": "/parties/organizations",
-    "parties.Circle": "/parties/circles",
-    "parties.Handle": "/parties/handles",
-  };
-  const base = typeof node.meta?.model === "string" ? routes[node.meta.model] : undefined;
-  return base ? recordPath(base, node.id) : null;
+function nodePath(
+  recordHref: ResourceRecordHrefLookup,
+  node: NexusNode,
+): string | undefined {
+  const model = typeof node.meta?.model === "string" ? node.meta.model : "";
+  return recordHref(model, node.id);
 }
 
-function edgePath(edge: NexusEdge): string | null {
-  const routes: Record<string, string> = {
-    "nexus.Tie": "/nexus/ties",
-    "parties.Relationship": "/parties/relationships",
-  };
+function edgePath(
+  recordHref: ResourceRecordHrefLookup,
+  edge: NexusEdge,
+): string | undefined {
   const model = typeof edge.meta?.model === "string" ? edge.meta.model : "";
   const recordId = typeof edge.meta?.record_id === "string" ? edge.meta.record_id : "";
-  return routes[model] && recordId ? recordPath(routes[model], recordId) : null;
+  return recordHref(model, recordId);
 }
 
 function isLens(value: unknown): value is GraphLens {

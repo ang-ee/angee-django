@@ -63,19 +63,28 @@ describe("OAuthCallbackPage", () => {
     });
 
     render(
-      <Runtime>
+      <Runtime loginPath="/sign-in">
         <OAuthCallbackPage />
       </Runtime>,
     );
 
     expect(await screen.findByText("Account disabled")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Back to sign in" }).getAttribute("href"),
+    ).toBe("/sign-in");
     expect(vi.mocked(window.location.assign)).not.toHaveBeenCalled();
   });
 });
 
-function Runtime({ children }: { children: ReactNode }): ReactElement {
+function Runtime({
+  children,
+  loginPath,
+}: {
+  children: ReactNode;
+  loginPath?: string;
+}): ReactElement {
   return (
-    <AppRuntimeProvider runtime={{ icons: baseIcons }}>
+    <AppRuntimeProvider runtime={{ icons: baseIcons, ...(loginPath ? { loginPath } : {}) }}>
       {children}
     </AppRuntimeProvider>
   );

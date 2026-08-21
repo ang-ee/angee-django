@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { createRouteHref } from "@angee/ui/runtime";
 import {
   ChatterTabsTestHost,
   PrimaryPaneTestHost,
@@ -43,6 +44,7 @@ const routerMocks = vi.hoisted(() => ({
     },
   ),
   params: {} as Record<string, string>,
+  routeHref: vi.fn(),
 }));
 
 const sdkMocks = vi.hoisted(() => ({
@@ -50,7 +52,8 @@ const sdkMocks = vi.hoisted(() => ({
   useAuthoredQuery: vi.fn(), useBreadcrumbLeafLabel: vi.fn(), refetch: {
     backends: vi.fn(async () => undefined), drives: vi.fn(async () => undefined), file: vi.fn(async () => undefined), folders: vi.fn(async () => undefined), }, }));
 
-vi.mock("@tanstack/react-router", async () => {
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-router")>();
   const { useSyncExternalStore } = await import("react");
   const useSearchStore = (): Record<string, unknown> =>
     useSyncExternalStore(
@@ -59,6 +62,7 @@ vi.mock("@tanstack/react-router", async () => {
       routerState.getSearch,
     );
   return {
+    ...actual,
     useNavigate: () => routerMocks.navigate,
     useParams: () => routerMocks.params,
     useSearch: () => useSearchStore(),
@@ -92,6 +96,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const confirmAlways = async () => true;
   return {
     ...actual,
+    useRouteHref: () => routerMocks.routeHref,
     useRouteRecordId: () => routerMocks.params.id,
     // Mirror the real (memoized) translator so a published node keeps a stable
     // identity across renders — an unstable `t` would republish every commit.
@@ -204,11 +209,12 @@ vi.mock("./FileBrowserContent", async () => {
   const React = await import("react");
   return {
   FileBrowserContent: ({
-    baseFilter, defaultGroup, hidden, onListStateChange, uploadTarget, canUpload, }: {
+    baseFilter, defaultGroup, hidden, onListStateChange, rowHref, uploadTarget, canUpload, }: {
     baseFilter: Record<string, { exact: unknown }>;
     defaultGroup: { field: string } | null;
     hidden?: boolean;
     onListStateChange: (state: Record<string, unknown>) => void;
+    rowHref?: (row: { id: string }) => string;
     uploadTarget: { driveId: string; folderId: string | null };
     canUpload: boolean;
   }) => {
@@ -244,6 +250,7 @@ vi.mock("./FileBrowserContent", async () => {
       data-testid="file-list"
       data-hidden={String(Boolean(hidden))}
       data-row-ids={rows.map((row) => row.id).join(", ")}
+      data-row-hrefs={rows.map((row) => rowHref?.(row) ?? "").join(", ")}
       data-group={defaultGroup?.field ?? ""}
       data-filter={JSON.stringify(baseFilter)}
       data-upload-drive={uploadTarget.driveId}
@@ -277,6 +284,7 @@ import {
   StorageFolderChildren,
   StorageFolderRoots,
 } from "../data/documents";
+import storage from "../index";
 import { StoragePage } from "./StoragePage";
 
 function pageTree() {
@@ -296,6 +304,10 @@ beforeEach(() => {
   routerMocks.params = {};
   routerState.reset();
   routerMocks.navigate.mockClear();
+  routerMocks.routeHref.mockReset();
+  const routeHref = createRouteHref(storage.routes ?? []);
+  routerMocks.routeHref.mockImplementation(routeHref);
+  Object.assign(routerMocks.routeHref, { maybe: routeHref.maybe });
   sdkMocks.folderDrives.length = 0;
   sdkMocks.useBreadcrumbLeafLabel.mockClear();
   for (const refetch of Object.values(sdkMocks.refetch)) {
@@ -461,6 +473,14 @@ describe("StoragePage explorer wiring", () => {
       is_trashed: { exact: false },
       folder: { exact: "folder-a" },
     });
+    expect(fileListAttribute("data-row-hrefs")).toBe(
+      "/storage/file-a-folder?folder=folder-a",
+    );
+    expect(routerMocks.routeHref).toHaveBeenCalledWith(
+      "storage.file",
+      { id: "file-a-folder" },
+      "?folder=folder-a",
+    );
   });
 
   test("selects the Trash scope from the `?folder=trash` sentinel, keeping group", () => {

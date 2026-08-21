@@ -19,6 +19,7 @@ import {
   type ListColumn,
   type StringIdRow,
   useAuthoredResourceMutation,
+  useRouteHref,
   useSlot,
 } from "@angee/ui";
 import { Link } from "@tanstack/react-router";
@@ -30,7 +31,6 @@ import {
   PartyReviewCounts,
 } from "./documents";
 import { usePartiesT } from "./i18n";
-import { partyMergePath } from "./routes";
 import { PARTIES_REVIEW_TOOLBAR_SLOT } from "./slots";
 
 type SuggestionRow = StringIdRow;
@@ -41,6 +41,7 @@ type SuggestionRow = StringIdRow;
  */
 export function ReviewPage(): React.ReactElement {
   const t = usePartiesT();
+  const routeHref = useRouteHref();
   const counts = useAuthoredQuery(PartyReviewCounts, undefined, {
     models: ["parties.PartyHandle"],
   });
@@ -165,7 +166,12 @@ export function ReviewPage(): React.ReactElement {
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {duplicateCandidates.map((candidate) => (
                   <TextLink key={`${candidate.left.id}:${candidate.right.id}`} asChild variant="block-card">
-                    <Link to={partyMergePath(candidate.left.id, candidate.right.id)}>
+                    <Link
+                      to={routeHref("parties.merge", {
+                        left: candidate.left.id,
+                        right: candidate.right.id,
+                      })}
+                    >
                       <span className="grid gap-3">
                         <span className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
                           <PartySummary name={candidate.left.display_name} />

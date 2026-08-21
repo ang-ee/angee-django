@@ -123,7 +123,7 @@ function channelBridgeMenu(i18n: Record<string, string>, key: string) {
   return {
     id: `messaging.${key}`,
     label: vendorMenuMessage(i18n, key, "label"),
-    to: "/messaging/channels",
+    route: "messaging.channels",
     parentId: "messaging",
     icon: "channel",
     description: vendorMenuMessage(i18n, key, "description"),

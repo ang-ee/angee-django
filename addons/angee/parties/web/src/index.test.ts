@@ -1,4 +1,5 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
+import { createRouteHref } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import parties from "./index";
@@ -32,5 +33,22 @@ describe("parties addon manifest", () => {
     const menu = (parties.menus ?? []).find((item) => item.id === "parties");
     expect(menu?.children?.[0]?.route).toBe("parties.overview");
     expect(menu?.children?.map((item) => item.route)).toContain("parties.review");
+    expect(
+      (parties.routes ?? []).find((route) => route.name === "parties.merge")
+        ?.parent,
+    ).toBe("parties.review");
+  });
+
+  test("builds list, record, and merge hrefs from its declared route templates", () => {
+    const routeHref = createRouteHref(
+      (parties.routes ?? []).map(({ name, path }) => ({ name, path })),
+    );
+
+    expect(routeHref("parties.people")).toBe("/parties/people");
+    expect(routeHref("parties.people.record", { id: "person 1" })).toBe(
+      "/parties/people/person%201",
+    );
+    expect(routeHref("parties.merge", { left: "left/1", right: "right 2" }))
+      .toBe("/parties/merge/left%2F1/right%202");
   });
 });
