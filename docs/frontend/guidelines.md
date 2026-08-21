@@ -44,7 +44,7 @@ rented libs   @refinedev/core · @refinedev/hasura · graphql-request/ws ·
 |---|---|
 | `@angee/refine` | the parts of a Refine+Hasura app every project shares, with **zero domain/metadata knowledge**: data/transport/live providers, the router bridge, typed-document contracts, and the `dialect/` hooks (action, aggregate, groupBy, facets, deletePreview, revisions) over `useCustom`. |
 | `@angee/metadata` | the **only** consumer of `angee.resources` metadata: artifact load/validate, projection to Refine `resources[]` + `meta`, the one field kind/scalar/widget classifier, group/facet/drill-down dimension specs, and per-action capabilities → accessControl. |
-| `@angee/ui` | the single rendered binding + headless view-state: `views/{list,form,record,relation,visualizations}` + headless view-models, chrome (rail/topbar/breadcrumb/spotlight), widgets, feedback (toast), the Base UI primitives binding, and the `runtime/` contracts it consumes — the `AppRuntime` registry/session context + its lookup hooks, `makeContext`, and the menu/slot/preview/widget/form contribution types (the binding owns the runtime it renders against; `@angee/app` only mounts the provider). |
+| `@angee/ui` | the single rendered binding + headless view-state: resource list/form/record/relation/visualization surfaces under `views/`, chrome (rail/topbar/breadcrumb/spotlight), widgets, feedback (toast), the Base UI primitives binding, and the `runtime/` contracts it consumes — the `AppRuntime` registry/session context + its lookup hooks, `makeContext`, and the menu/slot/preview/widget/form contribution types (the binding owns the runtime it renders against; `@angee/app` only mounts the provider). |
 | `@angee/app` | assembles the app: `define-addon`, `defineBaseAddon`, `createApp`, the `providers/{auth,i18n,notification,accessControl}`, addon-route → TanStack tree routing, the slot/widget/form/preview/icon registries, and the app shell. |
 | `@angee/<domain>` | a domain addon: its pages and codegen `documents*.ts`. |
 
@@ -583,7 +583,7 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   writes only (no live push, no error). Add the subscription to opt a model into
   live updates; omit it and you simply get local-write invalidation.
 - **A `createDefaults` seed submits on create even when `readOnly`.** `ResourceList`'s
-  `createDefaults` seeds the create form, and `FormView.mutationData` submits a create
+  `createDefaults` seeds the create form, and `form-view-model.ts`'s `mutationData` submits a create
   seed even for a `readOnly`/`createOnly` field — whether the seed is the field's own
   `defaultValue` or a page-level `createDefaults` entry — so a seeded read-only field is
   no longer silently dropped from the create payload. Prefer `createOnly` (editable on
