@@ -25,37 +25,32 @@ Angee workspace; a workspace is pinned to its `workspace/<name>` branch.
 
 ## Resolve The Controlling Stack Root
 
-An existing current or ancestor stack owns workspace lifecycle. Search upward
-from the repository root for `angee.yaml` first; only when no ancestor stack
-exists may this repository's `.angee/angee.yaml` dev overlay be the owner:
+An existing current or ancestor stack owns workspace lifecycle. A workspace
+root is not a git repository (its repo slots are), so walk up from the current
+directory — never from `git rev-parse --show-toplevel`:
 
 ```sh
-repo_root=$(git rev-parse --show-toplevel) || exit 1
 angee_root=
-candidate=$repo_root
+candidate=$(pwd -P)
 while :; do
   if test -f "$candidate/angee.yaml"; then
-    angee_root=$(cd "$candidate" && pwd -P)
+    angee_root=$candidate
     break
   fi
   parent=$(dirname "$candidate")
   test "$parent" != "$candidate" || break
   candidate=$parent
 done
-if test -z "$angee_root" && test -f "$repo_root/.angee/angee.yaml"; then
-  angee_root=$(cd "$repo_root/.angee" && pwd -P)
-fi
 test -n "$angee_root" || exit 1
 ```
 
-If neither location exists, stop and ask the user how the stack should be
-initialized; do not run `angee init` unless the user explicitly requested a new
-stack. Never initialize `.angee/` inside a checkout that already sits below a
-stack root.
+If no ancestor stack exists, stop and ask the user how the stack should be
+initialized; do not run `angee init` unless the user explicitly requested a
+new stack. Never initialize a stack under a source checkout.
 
 Use `angee --root "$angee_root" ...` for every workspace and GitOps command
 below. The explicit root is intentional: the CLI otherwise defaults to the
-current directory, which can silently select a checkout-local dev overlay.
+current directory, which is rarely the stack root.
 
 ## Resolve The Current Workspace
 
@@ -94,22 +89,17 @@ are committed first.
 
 ## Create Workspace
 
-Resolve and validate the shared work-state repository before choosing the
-workspace parent:
+The private work-state is wired by stack source NAME, not by path: the src
+template's `work-state` slot materializes `<workspace>/.work` as its own git
+clone of the named source. Before creating, verify the stack declares that
+source; if it does not, create without `work_state_source` (the slot is
+optional and skips) — do not fall back to `docs/superpowers` or invent
+another path:
 
 ```sh
-test -L "$repo_root/.work" || exit 1
-work_state_path=$(cd "$repo_root/.work" && pwd -P) || exit 1
-work_state_top=$(git -C "$work_state_path" rev-parse --show-toplevel) || exit 1
-test "$work_state_top" = "$work_state_path" || exit 1
-test "$(basename "$work_state_path")" != "$(basename "$repo_root")" || exit 1
+work_state_source=work-angee-django
+angee --root "$angee_root" gitops topology --json | grep -q "\"$work_state_source\"" || work_state_source=
 ```
-
-These checks require the repository-root `.work` symlink, resolve it to an
-absolute canonical directory, verify that directory is the top level of a valid
-Git repository, and keep the private work-state repository distinct from the
-public source repository. If any check fails, stop; do not fall back to
-`docs/superpowers` or invent another path.
 
 Use the src workspace template unless the user names another template — it cuts
 every framework repo as a sibling worktree slot on `workspace/<name>`. Wire the
@@ -117,7 +107,7 @@ private work-state slot by naming the stack's declared work-state source:
 
 ```sh
 angee --root "$angee_root" ws create <name> --template src --input base_ref=<parent-ref> \
-  --input work_state_source=work-angee-django
+  --input work_state_source=$work_state_source
 ```
 
 Choose `<parent-ref>` in this order:
@@ -131,10 +121,10 @@ Choose `<parent-ref>` in this order:
 After creation, report:
 
 - Workspace path.
-- Branch name.
+- Branch name (every repo slot is a worktree pinned to it).
 - Parent ref.
-- Resolved work-state path.
-- `angee dev` command from the workspace root.
+- Whether `.work/` was materialized at the workspace root.
+- `angee --root "$angee_root" ws git <name>` for the per-slot state.
 - `angee --root "$angee_root" ws status <name>` for follow-up inspection.
 
 ## Pull: Bring Changes Into Current Workspace
@@ -154,8 +144,11 @@ With no argument, pull from the current workspace's parent ref:
    parent workspace as the source and apply the workspace-to-workspace pull flow
    below.
 5. Apply the pull-source worktree validation above to the parent ref.
-6. If the parent branch is behind upstream and clean, fast-forward it with
-     `git -C <parent-path> pull --ff-only` when network approval is available.
+6. Each slot's parent ref lives in the stack's source cache
+   (`$angee_root/sources/<name>`). If that cache branch is behind upstream and
+   clean, fast-forward it with `git -C $angee_root/sources/<name> pull
+   --ff-only` when network approval is available — the merge below reads the
+   cache, not the remote.
 7. Merge the parent into the workspace with Angee:
 
 ```sh
@@ -188,7 +181,9 @@ angee --root "$angee_root" ws source merge <current-workspace> <slot> <source-br
 ```
 
 For a workspace argument, `<source-branch-or-ref>` is the source slot's reported
-`branch`, usually `workspace/<source>`.
+`branch`, usually `workspace/<source>`. Repeat the merge for every slot present
+in BOTH workspaces; a slot only one side has (e.g. an opt-in repo) is skipped
+and reported, never invented.
 
 If the merge conflicts, inspect the conflict files, resolve them according to
 the repo's owners and `AGENTS.md`, then commit the merge. If the user wants to
@@ -204,8 +199,9 @@ angee --root "$angee_root" ws source merge-abort <current-workspace> <slot>
 branch." It does not merge into the parent branch.
 
 1. Resolve the current workspace and source slots.
-2. Inspect `angee --root "$angee_root" ws git <name> --json` and
-   `git -C <workspace-path> status --short --branch`.
+2. Inspect `angee --root "$angee_root" ws git <name> --json`, then
+   `git -C <slot-path> status --short --branch` per slot — the workspace root
+   itself is not a git repository.
 3. If there are changes, review them before staging.
    - Stage source changes deliberately.
    - Do not stage generated runtime output, scratch artifacts, `.vite`, test
@@ -228,7 +224,10 @@ angee --root "$angee_root" ws source publish <workspace> <slot> --remote origin 
 ```
 
    `<branch>` comes from the source slot's reported `branch`.
-6. Re-run `angee --root "$angee_root" ws git <name> --json` and report whether
+6. The `work-state` slot is a slot like any other, on its own `main`: commit
+   and push `.work/` continuously (`ws source push <workspace> work-state`),
+   or the work is invisible everywhere else.
+7. Re-run `angee --root "$angee_root" ws git <name> --json` and report whether
    each slot is clean and pushed.
 
 Publishing usually needs network access. If the command fails because of
