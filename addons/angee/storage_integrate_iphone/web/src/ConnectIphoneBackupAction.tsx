@@ -10,7 +10,6 @@ export function ConnectIphoneBackupAction(): React.ReactElement {
       mutationDocument={ConnectIphoneBackup}
       backendClass="iphone_backup"
       i18nPrefix="iphone.mount.connect"
-      idPrefix="mount-iphone-backup"
       invalidateModel={MOUNT_MODEL}
     />
   );

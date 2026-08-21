@@ -6,14 +6,14 @@ import {
 import {
   Button,
   ErrorBanner,
-  FieldLabel,
-  FieldRoot,
   Glyph,
   Input,
   Spinner,
   cn,
   errorMessage,
+  mutationDialogValueCodecs,
   textRoleVariants,
+  type MutationDialogControlProps,
 } from "@angee/ui";
 import * as React from "react";
 
@@ -28,25 +28,24 @@ type BrowseResult = DocumentData<
 >["browse_mount_source"];
 type MountLocation = BrowseResult["entries"][number];
 
-export interface MountSourceBrowserProps {
+export interface MountSourceBrowserProps extends MutationDialogControlProps {
   backendClass: string;
-  credentialId?: string | null;
-  value: string;
-  onChange: (token: string) => void;
-  open: boolean;
 }
 
-/** Browse and select an opaque source-root token through a registered Mount backend. */
+/** Bare MutationDialog control for an opaque source-root token. */
 export function MountSourceBrowser({
   backendClass,
-  credentialId = null,
+  id,
+  readOnly,
+  describedBy,
+  labelledBy,
   value,
   onChange,
-  open,
 }: MountSourceBrowserProps): React.ReactElement {
   const t = useStorageIntegrateT();
-  const [token, setToken] = React.useState(value || "");
-  const [manualToken, setManualToken] = React.useState(value || "");
+  const currentValue = mutationDialogValueCodecs.string(value) ?? "";
+  const [token, setToken] = React.useState(currentValue);
+  const [manualToken, setManualToken] = React.useState(currentValue);
 
   React.useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -55,23 +54,14 @@ export function MountSourceBrowser({
     return () => window.clearTimeout(timer);
   }, [manualToken]);
 
-  React.useEffect(() => {
-    if (!open) {
-      const resetToken = value || "";
-      setToken(resetToken);
-      setManualToken(resetToken);
-    }
-  }, [open, value]);
-
   const variables = React.useMemo<BrowseVariables>(
     () => ({
       backendClass,
-      credentialId,
       token,
     }),
-    [backendClass, credentialId, token],
+    [backendClass, token],
   );
-  const query = useAuthoredQuery(BrowseMountSource, variables, { enabled: open });
+  const query = useAuthoredQuery(BrowseMountSource, variables);
   const result = query.data?.browse_mount_source;
 
   const navigate = React.useCallback(
@@ -82,23 +72,27 @@ export function MountSourceBrowser({
     },
     [onChange],
   );
-  const selected = Boolean(result && value === result.location.token);
+  const selected = Boolean(result && currentValue === result.location.token);
   const currentReason = result
     ? displayBlockedReason(result.location, t)
     : "";
 
   return (
-    <FieldRoot>
+    <div
+      role="group"
+      aria-labelledby={labelledBy}
+      aria-describedby={describedBy}
+      className="grid gap-3"
+    >
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <FieldLabel>{t("mount.browse.currentFolder")}</FieldLabel>
           <p className="truncate text-13 text-fg">{result?.location.label ?? ""}</p>
         </div>
         <Button
           type="button"
           variant="secondary"
           size="sm"
-          disabled={!result?.parent_token}
+          disabled={readOnly || !result?.parent_token}
           onClick={() => navigate(result?.parent_token ?? "")}
         >
           <Glyph decorative name="arrow-up" />
@@ -108,9 +102,11 @@ export function MountSourceBrowser({
 
       {result?.supports_manual_token ? (
         <Input
-          aria-label={t("mount.browse.currentFolder")}
+          id={id}
+          aria-labelledby={labelledBy}
           placeholder={t("mount.browse.manualHint")}
           value={manualToken}
+          disabled={readOnly}
           onChange={(event) => {
             setManualToken(event.currentTarget.value);
             onChange("");
@@ -126,6 +122,7 @@ export function MountSourceBrowser({
       <LocationList
         entries={result?.entries ?? []}
         fetching={query.fetching}
+        readOnly={readOnly}
         onNavigate={navigate}
       />
 
@@ -144,7 +141,7 @@ export function MountSourceBrowser({
           size="sm"
           active={selected}
           aria-pressed={selected}
-          disabled={!result?.location.is_mountable}
+          disabled={readOnly || !result?.location.is_mountable}
           onClick={() => {
             if (result?.location.is_mountable) onChange(result.location.token);
           }}
@@ -153,17 +150,19 @@ export function MountSourceBrowser({
           {t("mount.browse.useThisFolder")}
         </Button>
       </div>
-    </FieldRoot>
+    </div>
   );
 }
 
 function LocationList({
   entries,
   fetching,
+  readOnly,
   onNavigate,
 }: {
   entries: readonly MountLocation[];
   fetching: boolean;
+  readOnly: boolean;
   onNavigate: (token: string) => void;
 }): React.ReactElement {
   const t = useStorageIntegrateT();
@@ -191,7 +190,7 @@ function LocationList({
           <li key={entry.token}>
             <button
               type="button"
-              disabled={!entry.is_navigable}
+              disabled={readOnly || !entry.is_navigable}
               onClick={() => onNavigate(entry.token)}
               className="flex w-full items-center gap-3 rounded-6 border border-border bg-sheet px-3 py-2 text-left outline-none transition-colors hover:border-border-strong focus-visible:focus-ring disabled:cursor-not-allowed disabled:opacity-60"
             >

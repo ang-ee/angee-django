@@ -5,10 +5,12 @@ import {
   ListView,
   MutationDialog,
   defineRowAction,
+  mutationDialogValueCodecs,
   rowIdVariables,
   useAuthoredResourceMutation,
   type ListColumn,
   type MutationDialogField,
+  type MutationDialogValues,
   type RowActionDeclaration,
   type StringIdRow,
 } from "@angee/ui";
@@ -141,13 +143,23 @@ function CircleMembershipList({
         submitLabel={t("circle.membership.add")}
         submittingLabel={t("circle.membership.adding")}
         errorFallback={t("circle.membership.addError")}
+        parseValues={parseMembershipValues}
         onSubmit={(values) =>
           add({
-            circle: anchor === "circle" ? anchorId : String(values.circle ?? ""),
-            party: anchor === "person" ? anchorId : String(values.party ?? ""),
+            circle: anchor === "circle" ? anchorId : values.selection,
+            party: anchor === "person" ? anchorId : values.selection,
           })
         }
       />
     </>
   );
+}
+
+function parseMembershipValues(values: MutationDialogValues) {
+  return {
+    selection: mutationDialogValueCodecs.requiredString(
+      values.circle ?? values.party,
+      "membership",
+    ),
+  };
 }

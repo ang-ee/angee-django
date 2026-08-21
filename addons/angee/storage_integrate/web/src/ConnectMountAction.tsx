@@ -1,176 +1,135 @@
 import {
   useAuthoredMutation,
-  type AuthoredDocument,
-  type AuthoredVariables,
-  type DocumentVariables,
+  type TypedDocumentNode,
 } from "@angee/refine";
 import {
   Button,
-  DialogForm,
-  ErrorBanner,
-  FieldLabel,
-  FieldRoot,
   Glyph,
-  Input,
-  Select,
-  errorMessage,
+  MutationDialog,
+  mutationDialogValueCodecs,
+  type MutationDialogControlProps,
+  type MutationDialogField,
+  type MutationDialogValues,
 } from "@angee/ui";
 import * as React from "react";
 
 import { useStorageIntegrateT } from "./i18n";
 import { MountSourceBrowser } from "./MountSourceBrowser";
 
-type MountMode<TDocument extends AuthoredDocument> = NonNullable<
-  DocumentVariables<TDocument> extends { mode: infer TMode } ? TMode : never
->;
+export type MountConnectMode = "COPY" | "REFERENCE";
 
-export interface ConnectMountActionProps<TDocument extends AuthoredDocument> {
-  mutationDocument: TDocument;
+export type MountConnectVariables = {
+  name: string;
+  path: string;
+  mode: MountConnectMode;
+};
+
+export interface ConnectMountActionProps {
+  mutationDocument: TypedDocumentNode<unknown, MountConnectVariables>;
   backendClass: string;
   i18nPrefix: string;
-  idPrefix: string;
   invalidateModel: string;
 }
 
-/** Shared dialog action for provisioning a browsable external-source Mount. */
-export function ConnectMountAction<TDocument extends AuthoredDocument>({
+/**
+ * Canonical economy for browsable Mount connection: this factory owns the
+ * button, typed dialog, browser field, generic labels, busy copy, mutation, and
+ * invalidation. Backends supply only their operation/class and genuinely varying
+ * button/title/description/placeholder/error range.
+ *
+ * Backend message ranges arrive through addon composition. Providerless raw-key
+ * renders are intentional; copying backend strings into this owner is not.
+ */
+export function ConnectMountAction({
   mutationDocument,
   backendClass,
   i18nPrefix,
-  idPrefix,
   invalidateModel,
-}: ConnectMountActionProps<TDocument>): React.ReactElement {
-  type Mode = MountMode<TDocument>;
-
+}: ConnectMountActionProps): React.ReactElement {
   const t = useStorageIntegrateT();
-  const key = React.useCallback(
-    (suffix: string) => `${i18nPrefix}.${suffix}`,
-    [i18nPrefix],
-  );
   const [open, setOpen] = React.useState(false);
-  const [name, setName] = React.useState("");
-  const [path, setPath] = React.useState("");
-  const [mode, setMode] = React.useState<Mode>("REFERENCE" as Mode);
-  const [error, setError] = React.useState<string | null>(null);
-  const [connect, connectState] = useAuthoredMutation(mutationDocument, {
+  const [connect] = useAuthoredMutation(mutationDocument, {
     invalidateModels: [invalidateModel],
   });
-
-  React.useEffect(() => {
-    if (!open) {
-      setName("");
-      setPath("");
-      setMode("REFERENCE" as Mode);
-      setError(null);
-    }
-  }, [open]);
-
-  const modeOptions = React.useMemo(
+  const sourceControl = React.useCallback(
+    (props: MutationDialogControlProps) => (
+      <MountSourceBrowser {...props} backendClass={backendClass} />
+    ),
+    [backendClass],
+  );
+  const fields = React.useMemo<readonly MutationDialogField[]>(
     () => [
-      { value: "COPY", label: t(key("modeCopy")) },
-      { value: "REFERENCE", label: t(key("modeReference")) },
+      {
+        name: "name",
+        label: t("mount.connect.name"),
+        placeholder: t(`${i18nPrefix}.namePlaceholder`),
+        required: true,
+      },
+      {
+        name: "path",
+        label: t("mount.connect.sourceFolder"),
+        required: true,
+        controlLabelMode: "group",
+        control: sourceControl,
+      },
+      {
+        name: "mode",
+        label: t("mount.connect.mode"),
+        widget: "select",
+        options: [
+          { value: "COPY", label: t("mount.connect.modeCopy") },
+          { value: "REFERENCE", label: t("mount.connect.modeReference") },
+        ],
+        required: true,
+      },
     ],
-    [key, t],
+    [i18nPrefix, sourceControl, t],
   );
-  const ready = name.trim() !== "" && path !== "";
-  const footer = (
-    <>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        disabled={connectState.fetching}
-        onClick={() => setOpen(false)}
-      >
-        {t(key("cancel"))}
-      </Button>
-      <Button
-        type="submit"
-        variant="primary"
-        size="sm"
-        disabled={!ready || connectState.fetching}
-        loading={connectState.fetching}
-        loadingText={t(key("submitting"))}
-      >
-        {t(key("submit"))}
-      </Button>
-    </>
-  );
-
-  async function submit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (!ready || connectState.fetching) return;
-    setError(null);
-    try {
-      // The concrete variable shape is only known to the authored document the
-      // host passed in; TypeScript cannot relate it to the generic parameter.
-      await connect({
-        name: name.trim(),
-        path,
-        mode,
-      } as unknown as AuthoredVariables<TDocument>);
-      setOpen(false);
-    } catch (cause) {
-      setError(errorMessage(cause, t(key("error"))));
-    }
-  }
+  const errorFallback = optionalTranslation(t, `${i18nPrefix}.error`);
 
   return (
     <>
       <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
         <Glyph decorative name="plus" />
-        {t(key("button"))}
+        {t(`${i18nPrefix}.button`)}
       </Button>
-      <DialogForm
+      <MutationDialog
         open={open}
         onOpenChange={setOpen}
-        title={t(key("title"))}
-        description={t(key("description"))}
+        title={t(`${i18nPrefix}.title`)}
+        description={t(`${i18nPrefix}.description`)}
+        fields={fields}
+        initialValues={{ mode: "REFERENCE" }}
+        submitLabel={t("mount.connect.submit")}
+        submittingLabel={t("mount.connect.submitting")}
+        errorFallback={errorFallback}
+        parseValues={parseMountConnectValues}
+        onSubmit={connect}
         size="lg"
-        footer={footer}
-        onSubmit={(event) => void submit(event)}
-      >
-        <FieldRoot>
-          <FieldLabel htmlFor={`${idPrefix}-name`} required>
-            {t(key("name"))}
-          </FieldLabel>
-          <Input
-            id={`${idPrefix}-name`}
-            placeholder={t(key("namePlaceholder"))}
-            value={name}
-            required
-            disabled={connectState.fetching}
-            onChange={(event) => setName(event.currentTarget.value)}
-          />
-        </FieldRoot>
-
-        <MountSourceBrowser
-          backendClass={backendClass}
-          open={open}
-          value={path}
-          onChange={setPath}
-        />
-
-        <FieldRoot>
-          <FieldLabel htmlFor={`${idPrefix}-mode`} required>
-            {t(key("mode"))}
-          </FieldLabel>
-          <Select
-            id={`${idPrefix}-mode`}
-            aria-label={t(key("mode"))}
-            options={modeOptions}
-            value={mode as string}
-            disabled={connectState.fetching}
-            onValueChange={(value) => setMode(mountModeValue<Mode>(value))}
-          />
-        </FieldRoot>
-        <ErrorBanner description={error} />
-      </DialogForm>
+      />
     </>
   );
 }
 
-function mountModeValue<TMode>(value: string): TMode {
-  if (value === "COPY" || value === "REFERENCE") return value as TMode;
-  throw new Error("A mount mode is required.");
+function optionalTranslation(
+  t: ReturnType<typeof useStorageIntegrateT>,
+  key: string,
+): string | undefined {
+  const translated = t(key);
+  return translated === key ? undefined : translated;
+}
+
+function parseMountConnectValues(
+  values: MutationDialogValues,
+): MountConnectVariables {
+  return {
+    name: mutationDialogValueCodecs.requiredString(values.name, "name"),
+    path: mutationDialogValueCodecs.requiredString(values.path, "path"),
+    mode: mountModeValue(values.mode),
+  };
+}
+
+function mountModeValue(value: unknown): MountConnectMode {
+  if (value === "COPY" || value === "REFERENCE") return value;
+  throw new TypeError("A mount mode is required.");
 }

@@ -1,6 +1,6 @@
 import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Button, Dialog, Glyph, MutationDialog, Spinner, errorMessage, textRoleVariants, useAuthoredResourceMutation, useRelationOptions, useToast, type MutationDialogField } from "@angee/ui";
+import { Button, Dialog, Glyph, MutationDialog, Spinner, errorMessage, mutationDialogValueCodecs, textRoleVariants, useAuthoredResourceMutation, useRelationOptions, useToast, type MutationDialogField, type MutationDialogValues } from "@angee/ui";
 import { RepositoryPicker, VCS_BRIDGE_RELATION } from "@angee/integrate";
 
 import {
@@ -78,19 +78,23 @@ function AddSourceDialog({
         // Repositories are host candidates, not rows — integrate owns that search,
         // so the picker comes from there rather than being retyped here as a bare
         // `owner/repo` text field the user has to already know.
-        control: ({ id, value, readOnly, describedBy, onChange, dialogValues }) => (
-          <RepositoryPicker
-            id={id}
-            describedBy={describedBy}
-            readOnly={readOnly}
-            vcsBridgeId={stringValue(dialogValues.vcsBridgeId)}
-            onPick={(candidate) => onChange(candidate.name)}
-            pickedNames={
-              stringValue(value) === "" ? undefined : new Set([stringValue(value)])
-            }
-            pickedLabel={t("apps.addSource.selected")}
-          />
-        ),
+        control: ({ id, value, readOnly, describedBy, onChange, dialogValues }) => {
+          const bridgeId = mutationDialogValueCodecs.string(
+            dialogValues.vcsBridgeId,
+          );
+          const selectedName = mutationDialogValueCodecs.string(value);
+          return (
+            <RepositoryPicker
+              id={id}
+              describedBy={describedBy}
+              readOnly={readOnly}
+              vcsBridgeId={bridgeId ?? ""}
+              onPick={(candidate) => onChange(candidate.name)}
+              pickedNames={selectedName ? new Set([selectedName]) : undefined}
+              pickedLabel={t("apps.addSource.selected")}
+            />
+          );
+        },
       },
       {
         name: "ref",
@@ -116,18 +120,11 @@ function AddSourceDialog({
       initialValues={{ vcsBridgeId }}
       submitLabel={t("apps.add")}
       submittingLabel={t("apps.adding")}
-      cancelLabel={t("apps.cancel")}
       errorFallback={t("apps.actionFailed")}
+      parseValues={parseAddonSourceValues}
       onSubmit={async (values) => {
         const result = (
-          await addSource({
-            data: {
-              vcs_bridge_id: stringValue(values.vcsBridgeId),
-              name: stringValue(values.name).trim(),
-              ref: stringValue(values.ref).trim(),
-              path: stringValue(values.path).trim(),
-            },
-          })
+          await addSource(values)
         )?.add_source;
         if (result?.ok) {
           toast.success({ title: result.message });
@@ -139,8 +136,20 @@ function AddSourceDialog({
   );
 }
 
-function stringValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
+export function parseAddonSourceValues(values: MutationDialogValues) {
+  const ref = mutationDialogValueCodecs.string(values.ref);
+  const path = mutationDialogValueCodecs.string(values.path);
+  return {
+    data: {
+      vcs_bridge_id: mutationDialogValueCodecs.requiredString(
+        values.vcsBridgeId,
+        "vcsBridgeId",
+      ),
+      name: mutationDialogValueCodecs.requiredString(values.name, "name"),
+      ...(ref === null ? {} : { ref }),
+      ...(path === null ? {} : { path }),
+    },
+  };
 }
 
 function ScanSourcesDialog({

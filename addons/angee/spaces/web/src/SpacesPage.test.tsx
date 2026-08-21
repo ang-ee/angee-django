@@ -32,7 +32,11 @@ const pageMocks = vi.hoisted(() => ({
   ] as MockThreadRow[],
 }));
 
-vi.mock("@angee/ui", () => ({
+vi.mock("@angee/ui", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@angee/ui")>();
+  const { createMutationDialogTestDouble } = await import("@angee/ui/testing");
+  return {
+  ...original,
   Action: () => null,
   Column: ({ field }: { field: string }) => {
     pageMocks.columnFields.push(field);
@@ -98,30 +102,17 @@ vi.mock("@angee/ui", () => ({
   ),
   Chip: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
   Glyph: () => null,
-  MutationDialog: (props: Record<string, unknown>) => {
-    pageMocks.mutationDialogs.push(props);
-    if (!props.open) return null;
-    const title = String(props.title);
-    return (
-      <button
-        type="button"
-        onClick={() => {
-          const initialValues = props.initialValues as Record<string, unknown> | undefined;
-          const onSubmit = props.onSubmit as
-            | ((values: Record<string, unknown>) => unknown)
-            | undefined;
-          const onSubmitted = props.onSubmitted as (() => void) | undefined;
-          void Promise.resolve(
-            onSubmit?.({
-              role: pageMocks.dialogRoleValue ?? initialValues?.role,
-            }),
-          ).then(() => onSubmitted?.());
-        }}
-      >
-        Submit {title}
-      </button>
-    );
-  },
+  MutationDialog: createMutationDialogTestDouble({
+    capture: (props) => {
+      pageMocks.mutationDialogs.push(props);
+    },
+    values: (props) => ({
+      role:
+        pageMocks.dialogRoleValue
+        ?? (props.initialValues as Record<string, unknown> | undefined)?.role,
+    }),
+    submitLabel: (props) => `Submit ${String(props.title)}`,
+  }),
   cn: (...classes: Array<string | false | null | undefined>) =>
     classes.filter(Boolean).join(" "),
   defineRowAction: (declaration: Record<string, unknown>) => declaration,
@@ -139,7 +130,8 @@ vi.mock("@angee/ui", () => ({
     error: vi.fn(),
     danger: vi.fn(),
   }),
-}));
+  };
+});
 
 vi.mock("@angee/messaging", () => ({
   ThreadTranscript: ({ threadId }: { threadId: string }) => {

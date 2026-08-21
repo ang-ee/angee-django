@@ -9,8 +9,7 @@ export function ConnectLocalFolderAction(): React.ReactElement {
     <ConnectMountAction
       mutationDocument={ConnectLocalFolder}
       backendClass="local_folder"
-      i18nPrefix="mount.connect"
-      idPrefix="mount-local-folder"
+      i18nPrefix="mount.localFolder"
       invalidateModel={MOUNT_MODEL}
     />
   );

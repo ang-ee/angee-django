@@ -1,6 +1,6 @@
 import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
-import { Action, Button, Column, ResourceList, Field, Form, Glyph, Group, List, MutationDialog, useRecordActionMutation, type MutationDialogField } from "@angee/ui";
+import { Action, Button, Column, ResourceList, Field, Form, Glyph, Group, List, MutationDialog, mutationDialogValueCodecs, useRecordActionMutation, type MutationDialogField, type MutationDialogValues } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { ConnectCardDavDirectory } from "./documents";
@@ -86,6 +86,7 @@ function ConnectDialog({
         name: "name",
         label: t("directory.connect.name"),
         placeholder: t("directory.connect.namePlaceholder"),
+        required: true,
       },
       {
         name: "serverUrl",
@@ -117,20 +118,21 @@ function ConnectDialog({
       fields={fields}
       submitLabel={t("directory.connect.submit")}
       submittingLabel={t("directory.connect.submitting")}
-      cancelLabel={t("directory.connect.cancel")}
       errorFallback={t("directory.connect.error")}
-      onSubmit={(values) =>
-        connect({
-          name: stringValue(values.name),
-          serverUrl: stringValue(values.serverUrl),
-          username: stringValue(values.username),
-          password: stringValue(values.password),
-        })
-      }
+      parseValues={parseDirectoryValues}
+      onSubmit={connect}
     />
   );
 }
 
-function stringValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
+function parseDirectoryValues(values: MutationDialogValues) {
+  return {
+    name: mutationDialogValueCodecs.requiredString(values.name, "name"),
+    serverUrl: mutationDialogValueCodecs.requiredString(
+      values.serverUrl,
+      "serverUrl",
+    ),
+    username: mutationDialogValueCodecs.requiredString(values.username, "username"),
+    password: mutationDialogValueCodecs.verbatimString(values.password, "password"),
+  };
 }

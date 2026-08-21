@@ -11,6 +11,7 @@ import {
   List,
   ListView,
   MutationDialog,
+  mutationDialogValueCodecs,
   ResourceList,
   SplitPane,
   SplitPaneHandle,
@@ -21,6 +22,7 @@ import {
   rowIdVariables,
   type ListColumn,
   type MutationDialogField,
+  type MutationDialogValues,
   type RecordPanelContext,
   type RecordTabDescriptor,
   type ResourceListSnapshot,
@@ -58,15 +60,6 @@ function membershipRole(value: unknown): SpaceMembershipRole {
   )
     ? value
     : "MEMBER";
-}
-
-/**
- * Lowercase wire value for the update `_set` surface: the writable String
- * takes the lowercase model value (the read/write casing asymmetry pitfall),
- * unlike the add mutation's real enum which takes the uppercase name.
- */
-function membershipRoleWireValue(value: unknown): string {
-  return membershipRole(value).toLowerCase();
 }
 
 function threadColumns(
@@ -231,11 +224,12 @@ function GroupRosterTab({ recordId, ...context }: RecordPanelContext): React.Rea
         submitLabel={t("group.roster.add")}
         submittingLabel={t("group.roster.adding")}
         errorFallback={t("group.roster.addError")}
+        parseValues={parseAddMembershipValues}
         onSubmit={(values) =>
           add({
             group: recordId,
-            party: String(values.party ?? ""),
-            role: membershipRole(values.role),
+            party: values.party,
+            role: values.role,
           })
         }
       />
@@ -250,16 +244,30 @@ function GroupRosterTab({ recordId, ...context }: RecordPanelContext): React.Rea
         submitLabel={t("group.roster.saveRole")}
         submittingLabel={t("group.roster.savingRole")}
         errorFallback={t("group.roster.roleError")}
+        parseValues={parseMembershipRoleValues}
         onSubmit={(values) =>
           updateRole({
             id: roleRow?.id ?? "",
-            role: membershipRoleWireValue(values.role),
+            role: values.role,
           })
         }
         onSubmitted={() => setRoleRow(null)}
       />
     </>
   );
+}
+
+function parseAddMembershipValues(values: MutationDialogValues) {
+  return {
+    party: mutationDialogValueCodecs.requiredString(values.party, "party"),
+    role: membershipRole(values.role),
+  };
+}
+
+function parseMembershipRoleValues(values: MutationDialogValues) {
+  // The update `_set` surface writes the lowercase model value, unlike the add
+  // mutation's real enum. Parsing owns that wire casing; submit adds row context.
+  return { role: membershipRole(values.role).toLowerCase() };
 }
 
 function GroupThreadsTab({ recordId, ...context }: RecordPanelContext): React.ReactElement {

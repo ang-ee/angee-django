@@ -15,5 +15,31 @@ describe("angee.storage_integrate addon manifest", () => {
       id: "storage-integrate.connect-local-folder",
       sequence: 10,
     });
+    expect(Object.keys(storageIntegrate.i18n?.storage ?? {}).sort()).toEqual([
+      "mount.action.sync",
+      "mount.browse.alreadyMounted",
+      "mount.browse.empty",
+      "mount.browse.error",
+      "mount.browse.loading",
+      "mount.browse.manualHint",
+      "mount.browse.notReadable",
+      "mount.browse.truncated",
+      "mount.browse.up",
+      "mount.browse.useThisFolder",
+      "mount.connect.mode",
+      "mount.connect.modeCopy",
+      "mount.connect.modeReference",
+      "mount.connect.name",
+      "mount.connect.sourceFolder",
+      "mount.connect.submit",
+      "mount.connect.submitting",
+      "mount.group.sync",
+      "mount.localFolder.button",
+      "mount.localFolder.description",
+      "mount.localFolder.error",
+      "mount.localFolder.namePlaceholder",
+      "mount.localFolder.title",
+      "mount.name",
+    ]);
   });
 });

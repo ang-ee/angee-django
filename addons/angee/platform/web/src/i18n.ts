@@ -43,7 +43,6 @@ export const enPlatformMessages: Record<string, string> = {
   "apps.forcedHint": "Required by another installed addon — cannot be uninstalled.",
   "apps.remoteHint": "Discovered from a marketplace source — materialise it before installing.",
   "apps.actionFailed": "The action could not be completed.",
-  "apps.cancel": "Cancel",
   "apps.add": "Add",
   "apps.adding": "Adding…",
   "apps.scan": "Scan",

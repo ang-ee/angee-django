@@ -9,7 +9,11 @@ const mocks = vi.hoisted(() => ({
   add: vi.fn(),
 }));
 
-vi.mock("@angee/ui", () => ({
+vi.mock("@angee/ui", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@angee/ui")>();
+  const { createMutationDialogTestDouble } = await import("@angee/ui/testing");
+  return {
+  ...original,
   Button: ({
     children,
     onClick,
@@ -24,24 +28,15 @@ vi.mock("@angee/ui", () => ({
     mocks.listProps = props;
     return <>{props.toolbarActions as React.ReactNode}</>;
   },
-  MutationDialog: (props: Record<string, unknown>) =>
-    props.open ? (
-      <button
-        type="button"
-        onClick={() => {
-          const submit = props.onSubmit as
-            | ((values: Record<string, unknown>) => unknown)
-            | undefined;
-          void submit?.({ circle: "circle-2" });
-        }}
-      >
-        Submit membership
-      </button>
-    ) : null,
+  MutationDialog: createMutationDialogTestDouble({
+    values: { circle: "circle-2" },
+    submitLabel: "Submit membership",
+  }),
   defineRowAction: (declaration: Record<string, unknown>) => declaration,
   rowIdVariables: (row: { id: string }) => ({ id: row.id }),
   useAuthoredResourceMutation: () => [mocks.add, { fetching: false, error: null }],
-}));
+  };
+});
 
 vi.mock("./i18n", () => ({
   usePartiesT: () => (key: string) => key,

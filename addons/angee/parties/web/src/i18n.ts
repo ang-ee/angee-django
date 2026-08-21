@@ -46,7 +46,6 @@ export const enPartiesMessages: Record<string, string> = {
   "directory.connect.serverUrlPlaceholder": "https://dav.example.com/",
   "directory.connect.username": "Username",
   "directory.connect.password": "Password",
-  "directory.connect.cancel": "Cancel",
   "directory.connect.submit": "Connect",
   "directory.connect.submitting": "Connecting…",
   "directory.connect.error": "Could not connect the directory.",
