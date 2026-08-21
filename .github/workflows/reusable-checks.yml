@@ -149,6 +149,7 @@ jobs:
           "$GITHUB_WORKSPACE/stack" --force --yes
           --input project_name=ci-stack
           --input addons_profile=full
+          --input olm_cxxflags=
       - name: Compose the runtime and SDL (no database needed)
         working-directory: stack
         run: |
