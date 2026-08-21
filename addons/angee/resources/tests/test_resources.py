@@ -1466,6 +1466,230 @@ def test_resource_adoption_accepts_composite_unique_fields(tmp_path: Path) -> No
 
 
 @pytest.mark.django_db(transaction=True)
+def test_resource_adoption_accepts_a_single_conditional_unique_field(tmp_path: Path) -> None:
+    """String adoption selects only the row inside a conditional key's scope."""
+
+    class ConditionalKeyRow(AngeeModel):
+        """Lineage-shaped row whose stable key is unique only on its head."""
+
+        key = models.SlugField(blank=True, default="")
+        label = models.CharField(max_length=80, blank=True)
+        lineage_head = models.ForeignKey(
+            "self",
+            blank=True,
+            null=True,
+            on_delete=models.CASCADE,
+            related_name="versions",
+        )
+
+        class Meta:
+            """Django model options for conditional string adoption."""
+
+            app_label = "base"
+            constraints = (
+                models.UniqueConstraint(
+                    fields=("key",),
+                    condition=models.Q(lineage_head__isnull=True) & ~models.Q(key=""),
+                    name="uniq_resource_conditional_key_head",
+                ),
+            )
+
+    class ConditionalKeyLedger(Resource):
+        """Concrete resource ledger for conditional string adoption."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    resource_dir = tmp_path / "resources"
+    resource_dir.mkdir()
+    (resource_dir / "010_base.conditionalkeyrow.csv").write_text(
+        "_xref,key,label\nseeded,stable-key,Seeded\n",
+        encoding="utf-8",
+    )
+    owner = addon(
+        tmp_path,
+        manifest={
+            "master": (),
+            "install": (
+                {
+                    "path": "resources/010_base.conditionalkeyrow.csv",
+                    "adopt": "key",
+                },
+            ),
+            "demo": (),
+        },
+    )
+
+    models_to_create = (ConditionalKeyRow, ConditionalKeyLedger)
+    with connection.schema_editor() as schema_editor:
+        for model in models_to_create:
+            schema_editor.create_model(model)
+    try:
+        head = ConditionalKeyRow.objects.create(key="stable-key", label="Existing head")
+        version = ConditionalKeyRow.objects.create(
+            key="stable-key",
+            label="Published version",
+            lineage_head=head,
+        )
+
+        result = ConditionalKeyLedger.objects.load_addons(
+            (owner,),
+            tiers=[Resource.Tier.INSTALL],
+        )
+
+        assert result.created == 0
+        assert result.updated == 1
+        head.refresh_from_db()
+        version.refresh_from_db()
+        assert head.label == "Seeded"
+        assert version.label == "Published version"
+        assert ConditionalKeyLedger.objects.get(xref="seeded").target_id == head.public_id
+    finally:
+        with connection.schema_editor() as schema_editor:
+            for model in reversed(models_to_create):
+                schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resource_adoption_rejects_ambiguous_conditional_key_matches(tmp_path: Path) -> None:
+    """A corrupted conditional-key scope fails fast instead of declining adoption."""
+
+    class AmbiguousConditionalKeyRow(AngeeModel):
+        """Row whose database constraint is removed to simulate corrupt legacy data."""
+
+        key = models.SlugField(blank=True, default="")
+        is_head = models.BooleanField(default=True)
+
+        class Meta:
+            """Django model options for ambiguous conditional-key adoption."""
+
+            app_label = "base"
+            constraints = (
+                models.UniqueConstraint(
+                    fields=("key",),
+                    condition=models.Q(is_head=True) & ~models.Q(key=""),
+                    name="uniq_resource_ambiguous_conditional_key",
+                ),
+            )
+
+    class AmbiguousConditionalKeyLedger(Resource):
+        """Concrete resource ledger for ambiguous conditional-key adoption."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    resource_dir = tmp_path / "resources"
+    resource_dir.mkdir()
+    (resource_dir / "010_base.ambiguousconditionalkeyrow.csv").write_text(
+        "_xref,key,is_head\nseeded,stable-key,true\n",
+        encoding="utf-8",
+    )
+    owner = addon(
+        tmp_path,
+        manifest={
+            "master": (),
+            "install": (
+                {
+                    "path": "resources/010_base.ambiguousconditionalkeyrow.csv",
+                    "adopt": "key",
+                },
+            ),
+            "demo": (),
+        },
+    )
+
+    models_to_create = (AmbiguousConditionalKeyRow, AmbiguousConditionalKeyLedger)
+    constraint = AmbiguousConditionalKeyRow._meta.constraints[0]
+    with connection.schema_editor() as schema_editor:
+        for model in models_to_create:
+            schema_editor.create_model(model)
+    try:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.remove_constraint(AmbiguousConditionalKeyRow, constraint)
+        AmbiguousConditionalKeyRow.objects.bulk_create(
+            (
+                AmbiguousConditionalKeyRow(key="stable-key", is_head=True),
+                AmbiguousConditionalKeyRow(key="stable-key", is_head=True),
+            )
+        )
+
+        with pytest.raises(ImproperlyConfigured, match="adopt field 'key' matched multiple rows"):
+            AmbiguousConditionalKeyLedger.objects.load_addons(
+                (owner,),
+                tiers=[Resource.Tier.INSTALL],
+            )
+    finally:
+        with connection.schema_editor() as schema_editor:
+            for model in reversed(models_to_create):
+                schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resource_adoption_rejects_an_uncovered_string_field(tmp_path: Path) -> None:
+    """String adoption still rejects fields without either supported uniqueness form."""
+
+    class UncoveredAdoptRow(AngeeModel):
+        """Row whose key has no uniqueness guarantee."""
+
+        key = models.SlugField()
+
+        class Meta:
+            """Django model options for uncovered adoption fields."""
+
+            app_label = "base"
+
+    class UncoveredAdoptLedger(Resource):
+        """Concrete resource ledger for uncovered adoption fields."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    resource_dir = tmp_path / "resources"
+    resource_dir.mkdir()
+    (resource_dir / "010_base.uncoveredadoptrow.csv").write_text(
+        "_xref,key\nseeded,stable-key\n",
+        encoding="utf-8",
+    )
+    owner = addon(
+        tmp_path,
+        manifest={
+            "master": (),
+            "install": (
+                {
+                    "path": "resources/010_base.uncoveredadoptrow.csv",
+                    "adopt": "key",
+                },
+            ),
+            "demo": (),
+        },
+    )
+
+    models_to_create = (UncoveredAdoptRow, UncoveredAdoptLedger)
+    with connection.schema_editor() as schema_editor:
+        for model in models_to_create:
+            schema_editor.create_model(model)
+    try:
+        with pytest.raises(ImproperlyConfigured, match="adopt field 'key' must be a unique model field"):
+            UncoveredAdoptLedger.objects.load_addons(
+                (owner,),
+                tiers=[Resource.Tier.INSTALL],
+            )
+    finally:
+        with connection.schema_editor() as schema_editor:
+            for model in reversed(models_to_create):
+                schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_resource_adoption_accepts_conditional_composite_unique_fields(tmp_path: Path) -> None:
     """Resource adoption can reuse rows governed by a conditional composite unique key."""
 

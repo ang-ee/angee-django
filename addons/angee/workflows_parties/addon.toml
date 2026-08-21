@@ -9,7 +9,7 @@ depends_on = ["angee.workflows", "angee.parties"]
 
 [resources]
 install = [
-  { path = "resources/install/100_workflows.workflow.yaml", publish = true },
+  { path = "resources/install/100_workflows.workflow.yaml", publish = true, adopt = "key" },
   { path = "resources/install/101_workflows.step.yaml", depends_on = "resources/install/100_workflows.workflow.yaml" },
   { path = "resources/install/102_workflows.edge.yaml", depends_on = "resources/install/101_workflows.step.yaml" },
 ]

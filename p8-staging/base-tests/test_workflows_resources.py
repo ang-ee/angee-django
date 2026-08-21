@@ -10,11 +10,13 @@ from typing import Any
 import pytest
 from rebac import system_context
 
-from angee.addons import AddonContract
+from angee.addons import AddonContract, addon_contract
 from angee.graphql.schema import GraphQLSchemas
 from angee.resources.models import Resource
 from angee.workflows import models as workflow_models
 from tests.workflows import WORKFLOW_DEFINITION_MODELS, Trigger, Workflow, workflow_table_setup
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class WorkflowResourceLedger(Resource):
@@ -35,7 +37,7 @@ class Addon:
     name: str
     label: str
     path: str
-    _addon_contract: AddonContract
+    _addon_contract: AddonContract | None = None
 
 
 @pytest.fixture()
@@ -93,8 +95,63 @@ def test_demo_workflow_resources_publish_lineage_and_leave_trigger_disabled(
         assert Workflow.objects.filter(published_from=draft).count() == 1
 
 
+def test_workflows_parties_resource_backfills_key_across_existing_lineage(
+    workflow_resource_tables: None,
+    tmp_path: Path,
+) -> None:
+    """Adding the resource stable key initializes the head and its old versions."""
+
+    del workflow_resource_tables
+    source = _REPO_ROOT / "addons/angee/workflows_parties"
+    target = tmp_path / "workflows_parties"
+    resources = target / "resources" / "install"
+    resources.mkdir(parents=True)
+    (target / "addon.toml").write_text((source / "addon.toml").read_text())
+    for filename in (
+        "100_workflows.workflow.yaml",
+        "101_workflows.step.yaml",
+        "102_workflows.edge.yaml",
+    ):
+        content = (source / "resources" / "install" / filename).read_text()
+        if filename == "100_workflows.workflow.yaml":
+            content = content.replace("      key: dedupe_parties\n", "")
+        (resources / filename).write_text(content)
+
+    owner = _workflows_parties_addon(target)
+    contract = addon_contract(owner)
+    assert contract is not None
+    assert contract.resources["install"][0]["adopt"] == "key"
+    first = WorkflowResourceLedger.objects.load_addons(
+        (owner,),
+        tiers=[Resource.Tier.INSTALL],
+    )
+
+    assert first.created == 9
+    with system_context(reason="test legacy workflow resource load"):
+        draft = Workflow.objects.get(name="Deduplicate contacts", status=workflow_models.WorkflowStatus.DRAFT)
+        published = Workflow.objects.get(published_from=draft)
+    assert draft.key == ""
+    assert published.key == ""
+
+    current = (source / "resources" / "install" / "100_workflows.workflow.yaml").read_text()
+    (resources / "100_workflows.workflow.yaml").write_text(current)
+    second = WorkflowResourceLedger.objects.load_addons(
+        (owner,),
+        tiers=[Resource.Tier.INSTALL],
+    )
+
+    assert second.updated == 1
+    assert second.skipped == 8
+    draft.refresh_from_db()
+    published.refresh_from_db()
+    assert draft.key == "dedupe_parties"
+    assert published.key == draft.key
+    with system_context(reason="test workflow resource backfill idempotency"):
+        assert Workflow.objects.filter(published_from=draft).count() == 1
+
+
 def _notes_workflow_addon() -> Addon:
-    path = Path("../angee-examples/addons/example/notes").resolve()
+    path = _REPO_ROOT.parent / "angee-examples/addons/example/notes"
     resources = {
         "master": (),
         "install": (),
@@ -119,4 +176,12 @@ def _notes_workflow_addon() -> Addon:
         label="notes",
         path=str(path),
         _addon_contract=AddonContract(name="example.notes", resources=resources),
+    )
+
+
+def _workflows_parties_addon(path: Path) -> Addon:
+    return Addon(
+        name="angee.workflows_parties",
+        label="workflows_parties",
+        path=str(path),
     )

@@ -1,13 +1,16 @@
 import * as React from "react";
-import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
-import { Button, useRouteHref, useToast } from "@angee/ui";
-import { useNavigate } from "@tanstack/react-router";
+import {
+  extractActionOutcome,
+  useAuthoredMutation,
+  useAuthoredQuery,
+} from "@angee/refine";
+import { Button, useActionResultRun } from "@angee/ui";
 
 import { StartDedupeRun, SubjectlessWorkflows } from "./documents";
 import { useWorkflowsPartiesT } from "./i18n";
 
-/** The seeded workflow's display name — kept in lockstep with the install yaml. */
-export const DEDUPE_WORKFLOW_NAME = "Deduplicate contacts";
+/** The seeded workflow stable key — kept in lockstep with the install yaml. */
+const DEDUPE_WORKFLOW_KEY = "dedupe_parties";
 
 /**
  * The Review-toolbar launcher: starts one dedupe run and lands the user on its
@@ -16,9 +19,6 @@ export const DEDUPE_WORKFLOW_NAME = "Deduplicate contacts";
  */
 export function RunDedupeAction(): React.ReactElement | null {
   const t = useWorkflowsPartiesT();
-  const toast = useToast();
-  const navigate = useNavigate();
-  const routeHref = useRouteHref();
   const workflows = useAuthoredQuery(
     SubjectlessWorkflows,
     { subjectDeclaration: "" },
@@ -27,12 +27,13 @@ export function RunDedupeAction(): React.ReactElement | null {
   const [start, { fetching }] = useAuthoredMutation(StartDedupeRun, {
     invalidateModels: ["workflows.WorkflowRun"],
   });
-  const runRouteAvailable = routeHref.maybe("workflows.run", {
-    id: "route-probe",
-  }) !== undefined;
+  const settle = useActionResultRun({
+    linkTo: "workflows.WorkflowRun",
+    noResultTitle: t("dedupe.failed"),
+  });
 
   const dedupe = (workflows.data?.workflows_for_subject_declaration ?? []).find(
-    (workflow) => workflow.name === DEDUPE_WORKFLOW_NAME,
+    (workflow) => workflow.key === DEDUPE_WORKFLOW_KEY,
   );
   // No published dedupe workflow reachable by this actor: contribute nothing
   // rather than a dead button.
@@ -42,24 +43,16 @@ export function RunDedupeAction(): React.ReactElement | null {
     <Button
       variant="secondary"
       size="sm"
-      disabled={fetching || !runRouteAvailable}
+      disabled={fetching}
       title={t("dedupe.description")}
-      onClick={() => {
-        void (async () => {
-          const data = await start({ id: dedupe.id });
-          const result = data?.start_workflow_run;
-          if (!result?.ok || !result.id) {
-            toast.danger({ title: result?.message || t("dedupe.failed") });
-            return;
-          }
-          const target = routeHref.maybe("workflows.run", { id: result.id });
-          if (!target) {
-            toast.danger({ title: t("dedupe.failed") });
-            return;
-          }
-          void navigate({ to: target });
-        })();
-      }}
+      onClick={() =>
+        void settle(async () =>
+          extractActionOutcome(
+            await start({ id: dedupe.id }),
+            "start_workflow_run",
+          ),
+        )
+      }
     >
       {fetching ? t("dedupe.running") : t("dedupe.run")}
     </Button>

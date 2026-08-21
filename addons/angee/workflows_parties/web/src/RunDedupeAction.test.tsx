@@ -2,80 +2,67 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { createRouteHref } from "@angee/ui/runtime";
-import workflows from "../../../workflows/web/src/index";
 
 const mocks = vi.hoisted(() => ({
-  navigate: vi.fn(),
-  routeHref: vi.fn(),
-  start: vi.fn(),
-  toast: { danger: vi.fn() },
-}));
-
-vi.mock("@tanstack/react-router", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
-  useNavigate: () => mocks.navigate,
+  workflows: [] as { id: string; key: string; name: string }[],
+  start: vi.fn(async () => ({
+    start_workflow_run: { ok: true, message: "Started", id: "workflow-run-1" },
+  })),
+  settle: vi.fn(async (fire: () => Promise<unknown>) => fire()),
+  settleOptions: null as Record<string, unknown> | null,
 }));
 
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQuery: () => ({
-    data: {
-      workflows_for_subject_declaration: [
-        { id: "workflow-1", name: "Deduplicate contacts" },
-      ],
-    },
+    data: { workflows_for_subject_declaration: mocks.workflows },
   }),
   useAuthoredMutation: () => [mocks.start, { fetching: false }],
 }));
 
 vi.mock("@angee/ui", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/ui")>()),
-  useRouteHref: () => mocks.routeHref,
-  useToast: () => mocks.toast,
+  useActionResultRun: (options: Record<string, unknown>) => {
+    mocks.settleOptions = options;
+    return mocks.settle;
+  },
 }));
 
 import { RunDedupeAction } from "./RunDedupeAction";
 
 beforeEach(() => {
-  mocks.navigate.mockReset();
-  mocks.routeHref.mockReset();
-  const routeHref = createRouteHref(workflows.routes ?? []);
-  mocks.routeHref.mockImplementation(routeHref);
-  Object.assign(mocks.routeHref, { maybe: routeHref.maybe });
-  mocks.start.mockReset();
-  mocks.start.mockResolvedValue({
-    start_workflow_run: { ok: true, message: "Started", id: "workflow-run-1" },
-  });
-  mocks.toast.danger.mockReset();
+  mocks.workflows = [
+    { id: "workflow-1", key: "dedupe_parties", name: "Renamed display label" },
+  ];
+  mocks.start.mockClear();
+  mocks.settle.mockClear();
+  mocks.settleOptions = null;
 });
 
 afterEach(cleanup);
 
 describe("RunDedupeAction", () => {
-  test("navigates to the composed workflow run route without changing display-name selection", async () => {
+  test("selects the seeded lineage by stable key and delegates outcome handling", async () => {
     render(<RunDedupeAction />);
 
+    expect(mocks.settleOptions).toEqual({
+      linkTo: "workflows.WorkflowRun",
+      noResultTitle: "Could not start the dedupe run.",
+    });
     fireEvent.click(screen.getByRole("button", { name: "Run dedupe" }));
 
-    await waitFor(() => {
-      expect(mocks.navigate).toHaveBeenCalledWith({
-        to: "/workflows/runs/workflow-run-1",
-      });
-    });
+    await waitFor(() => expect(mocks.settle).toHaveBeenCalledOnce());
+    expect(mocks.start).toHaveBeenCalledWith({ id: "workflow-1" });
   });
 
-  test("disables without throwing when the workflows addon is not composed", () => {
-    const routeHref = createRouteHref([]);
-    mocks.routeHref.mockImplementation(routeHref);
-    Object.assign(mocks.routeHref, { maybe: routeHref.maybe });
+  test("does not select a workflow that only retains the old display name", () => {
+    mocks.workflows = [
+      { id: "workflow-1", key: "another_lineage", name: "Deduplicate contacts" },
+    ];
 
-    render(<RunDedupeAction />);
+    const { container } = render(<RunDedupeAction />);
 
-    const button = screen.getByRole("button", { name: "Run dedupe" });
-    expect((button as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(button);
+    expect(container.innerHTML).toBe("");
     expect(mocks.start).not.toHaveBeenCalled();
-    expect(mocks.navigate).not.toHaveBeenCalled();
   });
 });

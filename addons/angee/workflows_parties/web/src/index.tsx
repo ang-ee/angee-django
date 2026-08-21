@@ -4,7 +4,7 @@ import { PARTIES_REVIEW_TOOLBAR_SLOT } from "@angee/parties";
 import { RunDedupeAction } from "./RunDedupeAction";
 import { enWorkflowsPartiesMessages } from "./i18n";
 
-export { DEDUPE_WORKFLOW_NAME, RunDedupeAction } from "./RunDedupeAction";
+export { RunDedupeAction } from "./RunDedupeAction";
 
 const workflowsParties = defineBaseAddon({
   id: "workflows-parties",

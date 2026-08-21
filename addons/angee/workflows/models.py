@@ -23,6 +23,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import OperationalError, ProgrammingError, models, transaction
+from django.utils import timezone
 from rebac import system_context
 
 from angee.base.fields import StateField
@@ -214,11 +215,16 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
 
 
 class Workflow(AuditMixin, AngeeDataModel):
-    """Editable workflow lineage head or immutable published workflow version."""
+    """Editable workflow lineage head or immutable published workflow version.
+
+    A resource-assigned stable key identifies the lineage independently of its
+    mutable display name and is shared by every published version.
+    """
 
     runtime = True
 
     sqid_prefix = "wfl_"
+    key = models.SlugField(max_length=100, blank=True, default="")
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True)
     subject_declaration = models.CharField(max_length=200, blank=True, default="")
@@ -258,6 +264,15 @@ class Workflow(AuditMixin, AngeeDataModel):
         ordering = ("name", "version")
         rebac_resource_type = "workflows/workflow"
         rebac_id_attr = "sqid"
+        constraints = (
+            models.UniqueConstraint(
+                fields=("key",),
+                condition=models.Q(published_from__isnull=True) & ~models.Q(key=""),
+                name="uniq_workflows_workflow_head_key",
+                violation_error_code="unique",
+                violation_error_message="A workflow with this key already exists.",
+            ),
+        )
 
     def __str__(self) -> str:
         """Return the workflow's display label."""
@@ -273,13 +288,14 @@ class Workflow(AuditMixin, AngeeDataModel):
         source: str,
         publish: bool = False,
     ) -> None:
-        """Publish loaded draft lineages when the resource declaration asks for it."""
+        """Reconcile stable keys and publish loaded drafts when requested."""
 
         del tier, source
-        if not publish:
-            return
         for workflow in sorted(instances, key=lambda instance: instance.pk or 0):
-            if workflow.status == WorkflowStatus.DRAFT and workflow.published_from_id is None:
+            if workflow.published_from_id is not None:
+                continue
+            workflow._propagate_resource_key_backfill()
+            if publish and workflow.status == WorkflowStatus.DRAFT:
                 workflow.publish_if_changed()
 
     @transition(status, source=WorkflowStatus.DRAFT, target=WorkflowStatus.PUBLISHED, on_success=_save_workflow_status)
@@ -296,9 +312,12 @@ class Workflow(AuditMixin, AngeeDataModel):
         """Archive a published workflow version."""
 
     def clean(self) -> None:
-        """Validate lineage-owned workflow links and normalize the subject declaration."""
+        """Validate lineage-owned links and normalize stable and subject keys."""
 
         super().clean()
+        self.key = (self.key or "").lower()
+        if self.published_from_id is not None and self.key != self.published_from.key:
+            raise ValidationError({"key": "Published workflow versions must share their lineage stable key."})
         if self.error_workflow_id is not None and self.error_workflow.published_from_id is not None:
             raise ValidationError({"error_workflow": "Error workflow must point to a workflow lineage head."})
         # Mirror Trigger.event_model_label: store the canonical label_lower form
@@ -338,14 +357,26 @@ class Workflow(AuditMixin, AngeeDataModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the workflow after enforcing immutability and model validation."""
 
-        self._raise_if_immutable_save()
+        persisted = self._persisted_save_snapshot()
+        self._raise_if_immutable_save(persisted)
         self.full_clean()
-        super().save(*args, **kwargs)
+        self._raise_if_key_changed(persisted)
+        update_fields = kwargs.get("update_fields")
+        assigns_stable_key = (
+            persisted is not None
+            and not persisted.key
+            and bool(self.key)
+            and (update_fields is None or "key" in update_fields)
+        )
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+            if assigns_stable_key:
+                self._propagate_resource_key_backfill()
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Delete only mutable workflow rows."""
 
-        self._raise_if_immutable_save()
+        self._raise_if_immutable_save(self._persisted_save_snapshot())
         return super().delete(*args, **kwargs)
 
     def publish(self) -> Self:
@@ -363,6 +394,7 @@ class Workflow(AuditMixin, AngeeDataModel):
             draft._validate_publishable()
             version = draft._next_published_version()
             published = type(self)(
+                key=draft.key,
                 name=draft.name,
                 description=draft.description,
                 subject_declaration=draft.subject_declaration,
@@ -470,17 +502,41 @@ class Workflow(AuditMixin, AngeeDataModel):
         if entry_count != 1:
             raise ValidationError({"steps": "A workflow must have exactly one entry step before publishing."})
 
-    def _raise_if_immutable_save(self) -> None:
+    def _persisted_save_snapshot(self) -> Self | None:
+        """Return the persisted status and stable key for save guards."""
+
+        if self._state.adding:
+            return None
+        try:
+            return cast(Self, type(self)._base_manager.only("status", "key").get(pk=self.pk))
+        except ObjectDoesNotExist:
+            return None
+
+    def _raise_if_immutable_save(self, persisted: Self | None) -> None:
         """Reject writes to persisted published or archived workflow definitions."""
 
-        if self._state.adding or getattr(self, "_allow_immutable_status_save", False):
-            return
-        try:
-            persisted = type(self)._base_manager.only("status").get(pk=self.pk)
-        except ObjectDoesNotExist:
+        if persisted is None or getattr(self, "_allow_immutable_status_save", False):
             return
         if persisted.is_immutable:
             raise ValidationError("Published workflow versions are immutable.")
+
+    def _raise_if_key_changed(self, persisted: Self | None) -> None:
+        """Keep an assigned stable key immutable while allowing legacy backfill."""
+
+        if persisted is None:
+            return
+        if persisted.key and self.key != persisted.key:
+            raise ValidationError({"key": "Workflow stable keys are immutable once assigned."})
+
+    def _propagate_resource_key_backfill(self) -> None:
+        """Copy a resource-assigned stable key to legacy published versions."""
+
+        if not self.key:
+            return
+        versions = type(self)._base_manager.filter(published_from=self)
+        if versions.exclude(key__in=("", self.key)).exists():
+            raise ValidationError({"key": "Published workflow versions disagree with their lineage stable key."})
+        versions.filter(key="").update(key=self.key, updated_at=timezone.now())
 
     @property
     def is_immutable(self) -> bool:

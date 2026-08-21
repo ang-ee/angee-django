@@ -75,6 +75,7 @@ class DecisionVerb(Enum):
 class WorkflowType(AngeeNode):
     """Admin projection of a workflow definition."""
 
+    key: auto
     name: auto
     description: auto
     subject_declaration: auto
@@ -295,6 +296,7 @@ _WORKFLOW_RESOURCE = hasura_model_resource(
     name="workflows",
     filterable=[
         "id",
+        "key",
         "name",
         "subject_declaration",
         "status",
@@ -303,11 +305,11 @@ _WORKFLOW_RESOURCE = hasura_model_resource(
         "error_workflow",
         "updated_at",
     ],
-    sortable=["name", "status", "version", "created_at", "updated_at"],
+    sortable=["key", "name", "status", "version", "created_at", "updated_at"],
     aggregatable=["id", "version", "max_steps"],
     groupable=["status", "updated_at"],
-    insertable=["name", "description", "subject_declaration", "error_workflow", "max_steps", "budget"],
-    updatable=["name", "description", "subject_declaration", "error_workflow", "max_steps", "budget"],
+    insertable=["key", "name", "description", "subject_declaration", "error_workflow", "max_steps", "budget"],
+    updatable=["key", "name", "description", "subject_declaration", "error_workflow", "max_steps", "budget"],
     field_id_decode={
         "published_from": public_pk_decoder(Workflow),
         "error_workflow": public_pk_decoder(Workflow),

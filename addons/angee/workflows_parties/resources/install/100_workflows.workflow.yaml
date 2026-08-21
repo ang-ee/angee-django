@@ -6,6 +6,7 @@ _meta:
 rows:
   - xref: dedupe_parties
     fields:
+      key: dedupe_parties
       name: Deduplicate contacts
       description: >-
         Scan for contacts sharing a normalized handle, review the proposed
