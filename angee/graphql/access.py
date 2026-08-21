@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from rebac import ObjectRef, SubjectRef, current_actor
 from rebac.backends import backend
@@ -51,11 +51,18 @@ def _is_gated_read_axis(model: type[models.Model], axis: str) -> bool:
     *path, leaf = axis.split("__")
     leaf_model: type[models.Model] = model
     for step in path:
-        related = getattr(leaf_model._meta.get_field(step), "related_model", None)
+        field_name = step.split(".", maxsplit=1)[0]
+        if field_name in gated_read_fields(leaf_model):
+            return True
+        try:
+            field = leaf_model._meta.get_field(field_name)
+        except FieldDoesNotExist:
+            return False
+        related = getattr(field, "related_model", None)
         if related is None:
             return False
         leaf_model = related
-    return leaf in gated_read_fields(leaf_model)
+    return leaf.split(".", maxsplit=1)[0] in gated_read_fields(leaf_model)
 
 
 class ChangeReadGate:

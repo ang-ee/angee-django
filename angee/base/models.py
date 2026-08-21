@@ -15,16 +15,21 @@ from django.db.models.signals import class_prepared, post_delete
 from django.db.models.utils import make_model_tuple
 from rebac import (
     RebacMixin,
+    RelationshipTuple,
     SubjectRef,
     check_new,
     current_actor,
+    delete_relationship,
     delete_relationships,
     to_object_ref,
+    write_relationships,
 )
 from rebac.actors import is_sudo as ambient_is_sudo
 from rebac.actors import to_subject_ref
+from rebac.backends import backend as rebac_backend
 from rebac.errors import MissingActorError, NoActorResolvedError, PermissionDenied
 from rebac.managers import RebacManager, RebacQuerySet
+from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 from rebac.types import RelationshipFilter
 
@@ -81,6 +86,15 @@ Mirrors :class:`angee.resources.tiers.ResourceTier`, the authoritative resource
 tier owner. ``angee.base`` cannot import the resources addon without reversing the
 dependency direction, so the resources test suite pins these literals in sync.
 """
+
+
+@dataclass(frozen=True, slots=True)
+class DirectRecordAccess:
+    """One direct declared-relation tuple on a shareable record."""
+
+    relation: str
+    subject: SubjectRef
+
 
 EXTENSION_DONOR_STRUCTURAL_MEMBERS = frozenset(
     {
@@ -276,6 +290,15 @@ class AngeeModel(TimestampMixin, RebacMixin):
     catalogue_tier: str = CATALOGUE_TIERS[0]
     """Resource tier the catalogue rows belong to; read non-inherited."""
 
+    rebac_grantable: Mapping[str, str] = {}
+    """Direct relations clients may manage, mapped to their required permission.
+
+    Models opt in explicitly, for example ``{"reader": "share"}``. The
+    composer carries the declaration onto the concrete runtime class and masks
+    inherited declarations on materialized child models, so an undeclared model
+    has no record-share surface.
+    """
+
     class Meta:
         """Django model options for Angee's abstract model base."""
 
@@ -306,11 +329,132 @@ class AngeeModel(TimestampMixin, RebacMixin):
         return str(cls.__dict__.get("catalogue_tier", CATALOGUE_TIERS[0]))
 
     @classmethod
+    def get_rebac_grantable(cls) -> dict[str, str]:
+        """Return and validate this model's declared record-share relations."""
+
+        raw = cls.__dict__.get("rebac_grantable", {})
+        if not isinstance(raw, Mapping):
+            raise ImproperlyConfigured(f"{cls._meta.label}.rebac_grantable must be a mapping.")
+        declaration: dict[str, str] = {}
+        for relation, permission in raw.items():
+            if not isinstance(relation, str) or not relation:
+                raise ImproperlyConfigured(
+                    f"{cls._meta.label}.rebac_grantable relation names must be non-empty strings."
+                )
+            if not isinstance(permission, str) or not permission:
+                raise ImproperlyConfigured(f"{cls._meta.label}.rebac_grantable[{relation!r}] must name a permission.")
+            declaration[relation] = permission
+        return declaration
+
+    @classmethod
+    def record_access_permission(cls, relation: str) -> str:
+        """Return the permission required to manage one declared relation.
+
+        An unknown relation is a hard error before any relationship tuple is
+        constructed, making the share surface unable to mint undeclared tuples.
+        """
+
+        try:
+            return cls.get_rebac_grantable()[relation]
+        except KeyError as error:
+            raise ValueError(f"{cls._meta.label} does not declare grantable relation {relation!r}.") from error
+
+    def grant_record_access(self, relation: str, subject: models.Model | SubjectRef) -> None:
+        """Idempotently grant ``subject`` one declared direct relation."""
+
+        self._grant_declared_record_access(type(self), relation, subject)
+
+    def _grant_declared_record_access(
+        self,
+        declaration_owner: type[AngeeModel],
+        relation: str,
+        subject: models.Model | SubjectRef,
+    ) -> None:
+        """Grant through one model class's own record-share declaration."""
+
+        permission = declaration_owner.record_access_permission(relation)
+        self._require_record_access(permission)
+        write_relationships(
+            [
+                RelationshipTuple(
+                    resource=to_object_ref(self),
+                    relation=relation,
+                    subject=_relationship_subject(subject),
+                )
+            ]
+        )
+
+    def revoke_record_access(self, relation: str, subject: models.Model | SubjectRef) -> None:
+        """Idempotently revoke ``subject`` from one declared direct relation."""
+
+        self._revoke_declared_record_access(type(self), relation, subject)
+
+    def _revoke_declared_record_access(
+        self,
+        declaration_owner: type[AngeeModel],
+        relation: str,
+        subject: models.Model | SubjectRef,
+    ) -> None:
+        """Revoke through one model class's own record-share declaration."""
+
+        permission = declaration_owner.record_access_permission(relation)
+        self._require_record_access(permission)
+        delete_relationship(
+            RelationshipTuple(
+                resource=to_object_ref(self),
+                relation=relation,
+                subject=_relationship_subject(subject),
+            )
+        )
+
+    def direct_record_access(self) -> tuple[DirectRecordAccess, ...]:
+        """Return authorized direct tuples for this record's declared relations.
+
+        This deliberately reads only stored relationship rows. It does not walk
+        usersets, groups, roles, relation arrows, or effective permissions.
+        """
+
+        declaration = type(self).get_rebac_grantable()
+        if not declaration:
+            raise ValueError(f"{type(self)._meta.label} declares no grantable relations.")
+        for permission in sorted(set(declaration.values())):
+            self._require_record_access(permission)
+
+        resource = to_object_ref(self)
+        rows = (
+            active_relationship_model()
+            .objects.filter(
+                resource_type=resource.resource_type,
+                resource_id=resource.resource_id,
+                relation__in=tuple(sorted(declaration)),
+            )
+            .order_by("relation", "subject_type", "subject_id", "optional_subject_relation")
+        )
+        return tuple(
+            DirectRecordAccess(
+                relation=str(row.relation),
+                subject=SubjectRef.of(
+                    str(row.subject_type),
+                    str(row.subject_id),
+                    str(row.optional_subject_relation),
+                ),
+            )
+            for row in rows
+        )
+
+    def _require_record_access(self, permission: str) -> None:
+        """Raise when the ambient actor lacks a declared share permission."""
+
+        if not self.has_access(permission):
+            raise PermissionDenied(f"Denied: the current actor lacks {permission!r} on {to_object_ref(self)}.")
+
+    @classmethod
     def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
         """Run Django model checks plus Angee structural declaration checks."""
 
         errors = super().check(**kwargs)
         errors.extend(cls._check_catalogue_tier())
+        errors.extend(cls._check_rebac_grantable())
         return errors
 
     @classmethod
@@ -330,6 +474,60 @@ class AngeeModel(TimestampMixin, RebacMixin):
                 id="angee.E014",
             )
         ]
+
+    @classmethod
+    def _check_rebac_grantable(cls) -> list[checks.CheckMessage]:
+        """Return system-check errors for invalid record-share declarations."""
+
+        declaration = cls.get_rebac_grantable()
+        if not declaration:
+            return []
+
+        resource_type = model_resource_type(cls)
+        definition = rebac_backend().schema().get_definition(resource_type or "")
+        if definition is None:
+            return [
+                checks.Error(
+                    f"{cls._meta.label}.rebac_grantable has no compiled zed definition "
+                    f"for {resource_type!r}.",
+                    obj=cls,
+                    id="angee.E015",
+                )
+            ]
+
+        relations = {relation.name: relation for relation in definition.relations}
+        permissions = {permission.name for permission in definition.permissions}
+        errors: list[checks.CheckMessage] = []
+        for relation_name, permission_name in declaration.items():
+            relation = relations.get(relation_name)
+            if relation is None:
+                errors.append(
+                    checks.Error(
+                        f"{cls._meta.label}.rebac_grantable relation {relation_name!r} "
+                        f"is not defined on {resource_type!r}.",
+                        obj=cls,
+                        id="angee.E015",
+                    )
+                )
+            elif relation.backing is not None:
+                errors.append(
+                    checks.Error(
+                        f"{cls._meta.label}.rebac_grantable relation {relation_name!r} "
+                        f"must store direct tuples, not use {relation.backing.kind!r} backing.",
+                        obj=cls,
+                        id="angee.E016",
+                    )
+                )
+            if permission_name not in permissions:
+                errors.append(
+                    checks.Error(
+                        f"{cls._meta.label}.rebac_grantable permission {permission_name!r} "
+                        f"is not defined on {resource_type!r}.",
+                        obj=cls,
+                        id="angee.E017",
+                    )
+                )
+        return errors
 
     @classmethod
     def impl_key_for(cls, field_name: str, value: Any, *, default: str | None = None) -> str:

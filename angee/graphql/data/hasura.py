@@ -41,6 +41,7 @@ from angee.base.models import (
     public_id_for,
     requires_angee_rebac_contract,
 )
+from angee.graphql.access import assert_no_gated_read_fields
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.field_classification import model_field_scalar
 from angee.graphql.data.metadata import (
@@ -893,6 +894,19 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     lines-aware :class:`AngeeHasuraWriteBackend`; a caller supplying its own
     ``write_backend`` must make it lines-aware.
     """
+
+    for axis, fields in (
+        ("filterable", filterable),
+        ("sortable", sortable),
+        ("groupable", groupable),
+        ("aggregatable", aggregatable),
+    ):
+        assert_no_gated_read_fields(
+            model,
+            fields,
+            f"hasura_model_resource {axis} axis",
+            "field-gated reads cannot be query axes",
+        )
 
     resource_name = name or model.__name__.lower()
     read_queryset = get_queryset or _model_queryset(model)

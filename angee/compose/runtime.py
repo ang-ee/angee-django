@@ -418,6 +418,12 @@ class Runtime:
             ]
             body_lines.extend(self._catalogue_marker_source(plan.model_class))
             body_lines.extend(
+                self._rebac_grantable_marker_source(
+                    plan.model_class,
+                    masks_runtime_parent=plan.runtime_parent_alias is not None,
+                )
+            )
+            body_lines.extend(
                 line for attribute in plan.attributes for line in (*self._model_attribute_source(attribute), "")
             )
             decorator_lines = [
@@ -455,6 +461,20 @@ class Runtime:
             f"    catalogue_tier = {json.dumps(model_class.get_catalogue_tier())}",
             "",
         )
+
+    def _rebac_grantable_marker_source(
+        self,
+        model_class: type[AngeeModel],
+        *,
+        masks_runtime_parent: bool,
+    ) -> tuple[str, ...]:
+        """Carry a declared record-share marker onto the concrete runtime model."""
+
+        declared = model_class.__dict__.get("rebac_grantable")
+        if declared is None and not masks_runtime_parent:
+            return ()
+        grantable = model_class.get_rebac_grantable() if declared is not None else {}
+        return (f"    rebac_grantable = {json.dumps(grantable, sort_keys=True)}", "")
 
     def _after_resource_load_aliases(
         self,
