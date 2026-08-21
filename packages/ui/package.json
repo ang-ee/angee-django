@@ -225,6 +225,10 @@
       "types": "./src/views/facet-query.ts",
       "import": "./src/views/facet-query.ts"
     },
+    "./views/form-view-surface": {
+      "types": "./src/views/form-view-surface.ts",
+      "import": "./src/views/form-view-surface.ts"
+    },
     "./views/index": {
       "types": "./src/views/index.ts",
       "import": "./src/views/index.ts"

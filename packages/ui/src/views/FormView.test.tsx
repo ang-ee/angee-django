@@ -39,7 +39,13 @@ import { OperationDocumentsProvider } from "@angee/refine";
 import type {
   Row,
 } from "@angee/metadata";
-import { useMemo, useState, type ComponentProps, type ReactElement } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentProps,
+  type ReactElement,
+} from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../feedback";
@@ -2124,6 +2130,192 @@ describe("FormView", () => {
     await waitFor(() => expect(router?.state.location.pathname).toBe("/next"));
     expect(await screen.findByText("Next route")).toBeTruthy();
     expect(screen.queryByText(/Unsaved changes/)).toBeNull();
+  });
+
+  test("preserves the current URL while dirty navigation is blocked and leaves only after confirmation", async () => {
+    let router: ReturnType<typeof createRouter> | undefined;
+
+    function Root(): ReactElement {
+      const queryClient = useMemo(() => createTestQueryClient(), []);
+      return (
+        <QueryClientProvider client={queryClient}>
+          <ModalsHost>
+            <ToastProvider>
+              <ModelMetadataProvider metadata={withDefaultResourceMetadata(undefined)}>
+                <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+                  <Outlet />
+                </AppRuntimeProvider>
+              </ModelMetadataProvider>
+            </ToastProvider>
+          </ModalsHost>
+        </QueryClientProvider>
+      );
+    }
+
+    const rootRoute = createRootRoute({ component: Root });
+    const indexRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/",
+      component: () => <FormView resource="notes.Note" id="note-1" fields={fields} />,
+    });
+    const nextRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/next",
+      component: () => <span>Next route</span>,
+    });
+    router = createRouter({
+      routeTree: rootRoute.addChildren([indexRoute, nextRoute]),
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+    render(<RouterProvider router={router} />);
+
+    const title = await screen.findByLabelText("Title");
+    fireEvent.change(title, { target: { value: "Unsaved" } });
+    void router.navigate({ to: "/next" });
+
+    expect(await screen.findByText("Unsaved changes - leave without saving?")).toBeTruthy();
+    expect(router.state.location.pathname).toBe("/");
+    fireEvent.click(screen.getByRole("button", { name: "Stay" }));
+    await waitFor(() => expect(router?.state.location.pathname).toBe("/"));
+
+    void router.navigate({ to: "/next" });
+    fireEvent.click(await screen.findByRole("button", { name: "Leave" }));
+    await waitFor(() => expect(router?.state.location.pathname).toBe("/next"));
+  });
+
+  test("seeds a new record clean after leaving a dirty record", async () => {
+    const records: Record<string, Row> = {
+      "note-1": { id: "note-1", title: "First", status: "ACTIVE" },
+      "note-2": { id: "note-2", title: "Second", status: "ACTIVE" },
+    };
+
+    function Root(): ReactElement {
+      const queryClient = useMemo(() => createTestQueryClient(), []);
+      return (
+        <QueryClientProvider client={queryClient}>
+          <ModalsHost>
+            <ToastProvider>
+              <ModelMetadataProvider metadata={withDefaultResourceMetadata(undefined)}>
+                <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+                  <Outlet />
+                </AppRuntimeProvider>
+              </ModelMetadataProvider>
+            </ToastProvider>
+          </ModalsHost>
+        </QueryClientProvider>
+      );
+    }
+
+    function RecordPage(): ReactElement {
+      const { recordId } = recordRoute.useParams();
+      sdkMocks.record = records[recordId] ?? null;
+      return <FormView resource="notes.Note" id={recordId} fields={fields} />;
+    }
+
+    const rootRoute = createRootRoute({ component: Root });
+    const recordRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/$recordId",
+      component: RecordPage,
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([recordRoute]),
+      history: createMemoryHistory({ initialEntries: ["/note-1"] }),
+    });
+    render(<RouterProvider router={router} />);
+
+    const firstTitle = await screen.findByLabelText("Title");
+    await waitFor(() =>
+      expect((firstTitle as HTMLInputElement).value).toBe("First"),
+    );
+    fireEvent.change(firstTitle, { target: { value: "A edit must not bleed" } });
+
+    void router.navigate({ to: "/$recordId", params: { recordId: "note-2" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Leave" }));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/note-2"));
+    const secondTitle = await screen.findByLabelText("Title");
+    await waitFor(() =>
+      expect((secondTitle as HTMLInputElement).value).toBe("Second"),
+    );
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+
+    fireEvent.change(secondTitle, { target: { value: "Second edited" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { title: "Second edited", id: "note-2" },
+    });
+    expect(JSON.stringify(sdkMocks.mutate.mock.calls)).not.toContain(
+      "A edit must not bleed",
+    );
+  });
+
+  test("mounts record tab panels lazily and returns to the overview form", async () => {
+    const mountPanel = vi.fn();
+    const unmountPanel = vi.fn();
+    function ActivityPanel(): ReactElement {
+      useEffect(() => {
+        mountPanel();
+        return unmountPanel;
+      }, []);
+      return <span>Activity panel</span>;
+    }
+    const renderPanel = vi.fn(() => <ActivityPanel />);
+    renderWithProviders(
+      <FormView
+        resource="notes.Note"
+        id="note-1"
+        fields={fields}
+        recordTabs={[{ id: "activity", label: "Activity", render: renderPanel }]}
+      />,
+    );
+
+    await screen.findByLabelText("Title");
+    // The descriptor factory constructs the panel element as FormView renders;
+    // the returned component itself stays inert until its tab is activated.
+    expect(renderPanel).toHaveBeenCalled();
+    expect(mountPanel).not.toHaveBeenCalled();
+    expect(screen.queryByText("Activity panel")).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    expect(await screen.findByText("Activity panel")).toBeTruthy();
+    expect(mountPanel).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(screen.getByLabelText("Title")).toBeTruthy();
+    expect(screen.queryByText("Activity panel")).toBeNull();
+    expect(unmountPanel).toHaveBeenCalledTimes(1);
+  });
+
+  test("mounts keepMounted record panels eagerly from the first render", async () => {
+    const mountPanel = vi.fn();
+    function ActivityPanel(): ReactElement {
+      useEffect(() => {
+        mountPanel();
+      }, []);
+      return <span>Keep-mounted activity</span>;
+    }
+
+    renderWithProviders(
+      <FormView
+        resource="notes.Note"
+        id="note-1"
+        fields={fields}
+        recordTabs={[
+          {
+            id: "activity",
+            label: "Activity",
+            keepMounted: true,
+            render: () => <ActivityPanel />,
+          },
+        ]}
+      />,
+    );
+
+    await screen.findByLabelText("Title");
+    expect(mountPanel).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Keep-mounted activity")).toBeTruthy();
   });
 
   test("projects only fields the SDL read type exposes (skips write-only inputs)", async () => {

@@ -8,6 +8,8 @@ import {
   Field,
   fieldWidgetId,
   Group,
+  hasDirectPageElement,
+  hasPageField,
   isRelationIdField,
   parsePageActions,
   parsePageColumns,
@@ -142,6 +144,23 @@ describe("page element markers", () => {
         kind: "selection",
       },
     ]);
+  });
+
+  test("identify nested fields and direct group/action declarations", () => {
+    const declaration = (
+      <>
+        <Group label="Details">
+          <Field name="title" />
+        </Group>
+        <Action id="archive" label="Archive" />
+      </>
+    );
+
+    expect(hasPageField(declaration)).toBe(true);
+    expect(hasDirectPageElement(declaration, "group")).toBe(true);
+    expect(hasDirectPageElement(declaration, "action")).toBe(true);
+    expect(hasDirectPageElement(<Group><Field name="title" /></Group>, "action"))
+      .toBe(false);
   });
 
   test("parse raw slot contents wrapped in keyed fragments", () => {

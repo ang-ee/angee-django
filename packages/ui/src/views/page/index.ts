@@ -95,6 +95,26 @@ export function parsePageFields(children: ReactNode): FieldDescriptor[] {
   });
 }
 
+/** Whether a declaration tree contains a field, including fields in groups. */
+export function hasPageField(children: ReactNode): boolean {
+  for (const child of pageChildren(children)) {
+    if (pageElementProps<FieldProps>(child, "field")) return true;
+    const group = pageElementProps<GroupProps>(child, "group");
+    if (group && hasPageField(group.children)) return true;
+  }
+  return false;
+}
+
+/** Whether a declaration's direct children contain the requested marker. */
+export function hasDirectPageElement(
+  children: ReactNode,
+  kind: "action" | "group",
+): boolean {
+  return pageChildren(children).some((child) =>
+    Boolean(pageElementProps<unknown>(child, kind)),
+  );
+}
+
 export function parsePageGroups(children: ReactNode): GroupDescriptor[] {
   return cachedChildDescriptors(groupListCache, children, () =>
     pageChildren(children).flatMap((child) => {

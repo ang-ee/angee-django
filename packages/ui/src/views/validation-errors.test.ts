@@ -5,11 +5,32 @@ import { describe, expect, test } from "vitest";
 
 import {
   directDottedPathMessages,
+  lineRowErrorsFromDottedPaths,
   messagesForDottedPath,
   useDottedPathFieldErrors,
   validationErrorMap,
   validationErrorsFromError,
 } from "./validation-errors";
+
+describe("lineRowErrorsFromDottedPaths", () => {
+  test("projects indexed child paths and ignores unrelated or malformed paths", () => {
+    expect(
+      lineRowErrorsFromDottedPaths(
+        {
+          "lines.0.label": ["Required"],
+          "lines.2.quantity": ["Invalid"],
+          "lines.summary": ["Ignored"],
+          title: ["Unrelated"],
+        },
+        "lines",
+      ),
+    ).toEqual([
+      { fieldErrors: { label: ["Required"] }, formErrors: [] },
+      undefined,
+      { fieldErrors: { quantity: ["Invalid"] }, formErrors: [] },
+    ]);
+  });
+});
 
 describe("dotted path message scoping", () => {
   const messages = [

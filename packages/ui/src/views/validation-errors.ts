@@ -20,6 +20,36 @@ export interface ValidationErrors {
   formErrors: string[];
 }
 
+/**
+ * Project `<field>.<row index>.<child field>` errors into the row-indexed
+ * validation contract consumed by editable line cells.
+ */
+export function lineRowErrorsFromDottedPaths(
+  errors: DottedPathFieldErrorMap,
+  field: string,
+): readonly (ValidationErrors | undefined)[] | undefined {
+  const prefix = `${field}.`;
+  const byRow = new Map<number, ValidationErrors>();
+  for (const [path, messages] of Object.entries(errors)) {
+    if (!path.startsWith(prefix)) continue;
+    const match = /^(\d+)\.(.+)$/.exec(path.slice(prefix.length));
+    if (!match) continue;
+    const index = Number(match[1]);
+    const childField = match[2] as string;
+    const entry = byRow.get(index) ?? { fieldErrors: {}, formErrors: [] };
+    entry.fieldErrors[childField] = [
+      ...(entry.fieldErrors[childField] ?? []),
+      ...messages,
+    ];
+    byRow.set(index, entry);
+  }
+  if (byRow.size === 0) return undefined;
+  const rows: (ValidationErrors | undefined)[] = [];
+  const maxIndex = Math.max(...byRow.keys());
+  for (let index = 0; index <= maxIndex; index += 1) rows.push(byRow.get(index));
+  return rows;
+}
+
 interface GraphQLErrorLike {
   message?: unknown;
   extensions?: Record<string, unknown> | null;

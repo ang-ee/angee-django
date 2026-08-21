@@ -54,6 +54,7 @@ export {
 } from "./use-action-form";
 export {
   useDottedPathFieldErrors,
+  lineRowErrorsFromDottedPaths,
   validationErrorMap,
   validationErrorsFromError,
   type DottedPathFieldErrorMap,
