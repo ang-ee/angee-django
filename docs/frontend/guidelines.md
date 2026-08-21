@@ -368,7 +368,10 @@ TanStack apply the URL-owned filter object to in-memory rows.
 - Toolbar/action dialogs with ordinary field inputs compose `MutationDialog` from
   `@angee/ui`. It owns the `DialogForm` scaffold, value reset, required gating,
   submit busy/error state, and FieldDescriptor widget rendering; addons provide
-  fields, mutation variables, and domain result handling. A **record action that
+  fields, mutation variables, and domain result handling. Decode raw controls at
+  that boundary with `parseValues` and `mutationDialogValueCodecs`; ordinary text
+  trims and maps empty input to `null`, while explicit required/verbatim codecs
+  guard their authored field contracts. A **record action that
   collects typed args** — relation pickers, a relation list prefilled from the
   invoking selection/record, scalars — instead declares `args` + `submit` on its
   `<Action>`; `RecordActionBar` opens `ActionFormDialog`, which fires the authored
