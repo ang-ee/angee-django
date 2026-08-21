@@ -108,8 +108,8 @@ persist:
   app-data: { subpath: ./data, scope: stack }
   # Host coding agent's Playwright MCP user-data-dir (docs/stack.md).
   chrome-profile: { subpath: ./data/chrome, scope: stack }
-  pgdata: { subpath: ./pgdata, scope: stack }
-{% if enable_ollama %}  ollama: { subpath: ./ollama, scope: stack }{% endif %}{% endif %}
+  pgdata: { subpath: ./data/pgdata, scope: stack }
+{% if enable_ollama %}  ollama: { subpath: ./data/ollama, scope: stack }{% endif %}{% endif %}
 {% if runtime_mode == "docker" %}
   # App media/static (ANGEE_DATA_DIR -> /app/data via the django bind mount).
   app-data: { subpath: ./data, scope: stack }
@@ -304,7 +304,7 @@ services:
     runtime: container
     image: ollama/ollama
     mounts:
-      - bind://./ollama:/root/.ollama
+      - bind://./data/ollama:/root/.ollama
     ports:
       - "${ports.ollama}:11434"
 {% endif %}{% endif %}{% if runtime_mode == "process" %}

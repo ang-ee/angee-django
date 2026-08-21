@@ -20,11 +20,9 @@
 /workspaces/
 /templates
 
-# Stack state the operator materializes on bring-up: app media/static (./data),
-# the Postgres data cluster (./pgdata), and optional Ollama models (./ollama).
+# Stack state the operator materializes on bring-up — app media/static, the
+# Postgres data cluster, and optional Ollama models all live under ./data.
 /data/
-/pgdata/
-/ollama/
 
 # Stack-owned tool caches (uv's cache-dir per pyproject.toml and friends).
 /caches/

@@ -138,6 +138,17 @@ sed -i.bak \
 angee stack update --root ~/.angee --template
 ```
 
+For the framework-dev (`stacks/dev`) data-layout change — everything lives
+under `./data` now — stop the stack, move the cluster, and re-render (or edit
+`persist.pgdata.subpath` and the postgres bind to `./data/pgdata` by hand):
+
+```sh
+angee down
+mv pgdata data/pgdata
+angee stack update --template
+angee dev
+```
+
 For the `0.1.5` local-stack layout change, stop the stack before moving the
 database directory:
 

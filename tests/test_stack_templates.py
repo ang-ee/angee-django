@@ -635,9 +635,9 @@ def test_dev_stack_has_exactly_the_four_lifecycle_jobs() -> None:
 def test_dev_stack_mounts_postgres_data_from_stack_root() -> None:
     stack = _render_dev_stack()
 
-    assert stack["persist"]["pgdata"]["subpath"] == "./pgdata"
+    assert stack["persist"]["pgdata"]["subpath"] == "./data/pgdata"
     assert stack["persist"]["app-data"]["subpath"] == "./data"
-    assert stack["services"]["postgres"]["mounts"] == ["bind://./pgdata:/var/lib/postgresql/data"]
+    assert stack["services"]["postgres"]["mounts"] == ["bind://./data/pgdata:/var/lib/postgresql/data"]
     assert stack["services"]["postgres"]["ports"] == ["${ports.postgres}:5432"]
 
 
@@ -678,11 +678,11 @@ def test_dev_stack_ollama_is_opt_in_and_persistent() -> None:
 
     enabled = _render_dev_stack(enable_ollama=True, ollama_port="11435")
     assert enabled["ports"]["ollama"] == {"value": 11435, "export_env": "OLLAMA_PORT"}
-    assert enabled["persist"]["ollama"] == {"subpath": "./ollama", "scope": "stack"}
+    assert enabled["persist"]["ollama"] == {"subpath": "./data/ollama", "scope": "stack"}
     assert enabled["services"]["ollama"] == {
         "runtime": "container",
         "image": "ollama/ollama",
-        "mounts": ["bind://./ollama:/root/.ollama"],
+        "mounts": ["bind://./data/ollama:/root/.ollama"],
         "ports": ["${ports.ollama}:11434"],
     }
 

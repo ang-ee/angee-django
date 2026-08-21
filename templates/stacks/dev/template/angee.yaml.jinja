@@ -20,5 +20,5 @@
 {% set operator_url = "http://127.0.0.1:${ports.operator}" %}
 {% set mcp_url = "http://host.docker.internal:${ports.django}/mcp" %}
 {% set operator_bind = "0.0.0.0" %}
-{% set pgdata_mount = "./pgdata" %}
+{% set pgdata_mount = "./data/pgdata" %}
 {% include "../../_shared/stack-body.yaml.jinja" %}
