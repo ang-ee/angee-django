@@ -404,6 +404,7 @@ TanStack apply the URL-owned filter object to in-memory rows.
 
 Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 
+- **A nested list must pass `scope="local"` to keep its own `pageSize` and view;** the default inherited scope intentionally reuses the ambient resource-view state.
 - **A filtered `pnpm typecheck`/`test` skips the root `pretypecheck: codegen` hook.**
   The root `typecheck`/`test` scripts run `pnpm codegen` first; `pnpm --filter <pkg>
   typecheck` (and filtered vitest) does not. After any SDL change it then runs against
