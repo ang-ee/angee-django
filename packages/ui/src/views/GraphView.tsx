@@ -376,11 +376,20 @@ function layoutGraph<
   graph.setDefaultEdgeLabel(() => ({}));
   graph.setGraph(layout);
 
+  const nodeIds = new Set(nodes.map((node) => node.id));
   for (const node of nodes) {
     const style = nodeStyleFor(node.data.node.kind, nodeStyles);
     graph.setNode(node.id, { width: style.width, height: style.height });
   }
   for (const edge of edges) {
+    // Dagre throws "Not possible to find intersection inside of the
+    // rectangle" for edges it cannot lay out: an endpoint that is not a
+    // declared node (setEdge would auto-create it dimensionless) or a
+    // self-loop. Live graph data contains both (filtered-out endpoints,
+    // self-referential relations), so the layout skips them; self-loops
+    // still render — React Flow draws them without dagre's help.
+    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) continue;
+    if (edge.source === edge.target) continue;
     graph.setEdge(edge.source, edge.target, { weight: 1 }, edge.id);
   }
 
@@ -399,7 +408,9 @@ function layoutGraph<
         },
       };
     }),
-    edges: [...edges],
+    edges: edges.filter(
+      (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target),
+    ),
   };
 }
 

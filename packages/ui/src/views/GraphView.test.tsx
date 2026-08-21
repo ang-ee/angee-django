@@ -86,6 +86,44 @@ describe("GraphView", () => {
     expect(props.elementsSelectable).toBe(false);
   });
 
+  test("lays out self-loops and dangling edges instead of crashing", () => {
+    render(
+      <GraphView
+        nodes={nodes}
+        edges={[
+          ...edges,
+          {
+            id: "draft-self",
+            source: "draft",
+            target: "draft",
+            kind: "success",
+            label: "self",
+          },
+          {
+            id: "draft-ghost",
+            source: "draft",
+            target: "ghost",
+            kind: "success",
+            label: "dangling",
+          },
+        ]}
+        nodeStyles={nodeStyles}
+      />,
+    );
+
+    const props = currentProps();
+    const flowNodes = props.nodes as { id: string }[];
+    const flowEdges = props.edges as { id: string }[];
+    // Dagre positions both declared nodes; the self-loop still renders
+    // (React Flow draws it without dagre); the dangling edge is dropped —
+    // React Flow could not draw an edge to a node that does not exist.
+    expect(flowNodes.map((node) => node.id)).toEqual(["draft", "review"]);
+    expect(flowEdges.map((edge) => edge.id)).toEqual([
+      "draft-review",
+      "draft-self",
+    ]);
+  });
+
   test("uses persisted node positions before dagre layout positions", () => {
     render(
       <GraphView
