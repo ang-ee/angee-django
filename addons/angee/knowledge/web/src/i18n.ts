@@ -18,7 +18,6 @@ export const enKnowledgeMessages: Record<string, string> = {
   "page.notFoundDescription": "This page is no longer available.",
   "page.selectTitle": "Select a page",
   "page.selectDescription": "Choose a page from the tree to read it.",
-  "page.crumbFallback": "Page",
   "page.deleteConfirmTitle": 'Delete "{title}"?',
   "page.deleteConfirmBody":
     "Deleting a folder removes the pages inside it too.",

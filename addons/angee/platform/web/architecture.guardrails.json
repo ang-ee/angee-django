@@ -1,0 +1,22 @@
+{
+  "dynamicI18nKeyFamilies": [
+    {
+      "namespace": "platform",
+      "owner": "addon state labels",
+      "prefix": "state.",
+      "values": ["enabled", "disabled", "removed"]
+    },
+    {
+      "namespace": "platform",
+      "owner": "addon source labels",
+      "prefix": "source.",
+      "values": ["installed", "local", "remote"]
+    },
+    {
+      "namespace": "platform",
+      "owner": "addon kind labels",
+      "prefix": "kind.",
+      "values": ["consumer", "required"]
+    }
+  ]
+}

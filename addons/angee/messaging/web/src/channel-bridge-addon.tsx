@@ -24,8 +24,8 @@ export interface ChannelPollBridgeAddonOptions {
   sequence: number;
   /** Vendor-owned channel creation action. */
   connectAction: ReactNode;
-  /** Messaging-namespace messages, including this vendor's menu copy. */
-  i18n: Record<string, string>;
+  /** Explicit messaging-namespace contribution, including vendor menu copy. */
+  i18n: { messaging: Record<string, string> };
 }
 
 export interface ChannelBridgeAddonOptions extends ChannelPollBridgeAddonOptions {
@@ -70,8 +70,8 @@ export function defineChannelBridgeAddon({
 
   return defineBaseAddon({
     id,
-    i18n: { messaging: i18n },
-    menus: [channelBridgeMenu(i18n, key)],
+    i18n,
+    menus: [channelBridgeMenu(i18n.messaging, key)],
     slots: [
       channelBridgeConnectSlot(id, sequence, connectAction),
       {
@@ -112,8 +112,8 @@ export function defineChannelPollBridgeAddon({
 }: ChannelPollBridgeAddonOptions): BaseAddon {
   return defineBaseAddon({
     id,
-    i18n: { messaging: i18n },
-    menus: [channelBridgeMenu(i18n, key)],
+    i18n,
+    menus: [channelBridgeMenu(i18n.messaging, key)],
     slots: [channelBridgeConnectSlot(id, sequence, connectAction)],
   });
 }

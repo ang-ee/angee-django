@@ -79,11 +79,6 @@ export const enIamMessages: Record<string, string> = {
   "overview.unassigned.empty": "Every principal has a role.",
 
   // OIDC sign-in providers page — form-section labels and the discover action.
-  "oidc.group.provider": "Provider",
-  "oidc.group.loginPolicy": "Login policy",
-  "oidc.action.discover": "Discover endpoints",
-  "oidc.column.provider": "Provider",
-  "oidc.column.status": "Status",
 
   // Grants page.
   "grants.column.principal": "Principal",
@@ -96,9 +91,6 @@ export const enIamMessages: Record<string, string> = {
   "grants.revoke.failedTitle": "Role was not revoked",
 
   // Relationships page.
-  "relationships.group.resourceType": "Resource Type",
-  "relationships.group.subjectType": "Subject Type",
-  "relationships.group.relation": "Relation",
   "relationships.column.resourceRef": "Resource Ref",
   "relationships.column.subjectRef": "Subject Ref",
   "relationships.column.resourceType": "Resource Type",

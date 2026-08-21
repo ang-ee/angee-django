@@ -9,7 +9,6 @@ export const enPlatformMessages: Record<string, string> = {
   "col.field": "Field",
   "col.fields": "Fields",
   "col.graph": "Graph",
-  "col.hash": "Hash",
   "col.kind": "Kind",
   "col.model": "Model",
   "col.models": "Models",

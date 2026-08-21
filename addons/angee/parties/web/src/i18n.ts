@@ -83,7 +83,6 @@ export const enPartiesMessages: Record<string, string> = {
   "review.party": "Contact",
   "review.handle": "Handle",
   "review.platform": "Platform",
-  "review.empty": "Nothing to review — every identity claim is decided.",
   "merge.title": "Merge duplicates",
   "merge.description":
     "Choose the surviving record, then pick which differing values it should keep.",

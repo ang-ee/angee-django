@@ -1,0 +1,10 @@
+{
+  "dynamicI18nKeyFamilies": [
+    {
+      "namespace": "agents",
+      "owner": "AcpStatus",
+      "prefix": "chat.status.",
+      "values": ["idle", "connecting", "ready", "error", "closed"]
+    }
+  ]
+}

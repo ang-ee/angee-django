@@ -99,7 +99,7 @@ function threadColumns(
   ];
 }
 
-function GroupRosterTab({ recordId, ...context }: RecordPanelContext): React.ReactElement {
+function GroupRosterTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = useSpacesT();
   const [addOpen, setAddOpen] = React.useState(false);
   const [roleRow, setRoleRow] = React.useState<MembershipRow | null>(null);
@@ -196,8 +196,6 @@ function GroupRosterTab({ recordId, ...context }: RecordPanelContext): React.Rea
     ],
     [busy, t],
   );
-  void context;
-
   return (
     <>
       <ListView<MembershipRow>
@@ -270,7 +268,7 @@ function parseMembershipRoleValues(values: MutationDialogValues) {
   return { role: membershipRole(values.role).toLowerCase() };
 }
 
-function GroupThreadsTab({ recordId, ...context }: RecordPanelContext): React.ReactElement {
+function GroupThreadsTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = useSpacesT();
   const [selectedThread, setSelectedThread] = React.useState<{
     groupId: string;
@@ -278,7 +276,6 @@ function GroupThreadsTab({ recordId, ...context }: RecordPanelContext): React.Re
   } | null>(null);
   const [listState, setListState] =
     React.useState<ResourceListSnapshot<SpaceThreadRow> | null>(null);
-  void context;
   const selectedThreadId =
     selectedThread?.groupId === recordId ? selectedThread.threadId : null;
   const threadRows = listState?.rows ?? EMPTY_THREAD_ROWS;

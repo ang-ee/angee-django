@@ -57,8 +57,10 @@ describe("defineChannelBridgeAddon live bridges", () => {
       sequence: 22,
       connectAction: <span>Connect example</span>,
       i18n: {
-        "channel.example.menu.label": "Example",
-        "channel.example.menu.description": "Link Example accounts",
+        messaging: {
+          "channel.example.menu.label": "Example",
+          "channel.example.menu.description": "Link Example accounts",
+        },
       },
       instructionKey: "channel.example.scan",
     });
@@ -112,8 +114,10 @@ describe("defineChannelBridgeAddon live bridges", () => {
       sequence: 22,
       connectAction: <span>Connect example</span>,
       i18n: {
-        "channel.example.menu.label": "Example",
-        "channel.example.menu.description": "Link Example accounts",
+        messaging: {
+          "channel.example.menu.label": "Example",
+          "channel.example.menu.description": "Link Example accounts",
+        },
       },
       instructionKey: "channel.example.scan",
       disconnectAction: override,
@@ -129,8 +133,10 @@ describe("defineChannelBridgeAddon live bridges", () => {
       sequence: 22,
       connectAction: <span>Connect example</span>,
       i18n: {
-        "channel.example.menu.label": "Example",
-        "channel.example.menu.description": "Link Example accounts",
+        messaging: {
+          "channel.example.menu.label": "Example",
+          "channel.example.menu.description": "Link Example accounts",
+        },
       },
     });
 
@@ -152,8 +158,10 @@ describe("defineChannelBridgeAddon live bridges", () => {
       sequence: 22,
       connectAction: <span>Connect example</span>,
       i18n: {
-        "channel.example.menu.label": "Example",
-        "channel.example.menu.description": "Link Example accounts",
+        messaging: {
+          "channel.example.menu.label": "Example",
+          "channel.example.menu.description": "Link Example accounts",
+        },
       },
     });
     const pairing = manifest.slots?.slice(1, 4).map((entry) =>
@@ -190,8 +198,10 @@ describe("defineChannelPollBridgeAddon poll bridges", () => {
       sequence: 22,
       connectAction: <span>Connect example</span>,
       i18n: {
-        "channel.example.menu.label": "Example",
-        "channel.example.menu.description": "Sync Example accounts",
+        messaging: {
+          "channel.example.menu.label": "Example",
+          "channel.example.menu.description": "Sync Example accounts",
+        },
       },
     });
     expect(() => expectValidChannelBridgeAddon(manifest)).not.toThrow();
@@ -218,7 +228,7 @@ describe("defineChannelPollBridgeAddon poll bridges", () => {
         key: "example",
         sequence: 22,
         connectAction: <span>Connect example</span>,
-        i18n: { "channel.example.menu.label": "Example" },
+        i18n: { messaging: { "channel.example.menu.label": "Example" } },
       }),
     ).toThrowError(
       "Channel bridge example is missing i18n message channel.example.menu.description.",

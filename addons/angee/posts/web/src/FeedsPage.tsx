@@ -40,7 +40,7 @@ const FEED_POST_LIMIT = 50;
 type PostsT = ReturnType<typeof usePostsT>;
 type FeedFollowRow = StringIdRow;
 
-function FeedPostsTab({ recordId, ...context }: RecordPanelContext): React.ReactElement {
+function FeedPostsTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = usePostsT();
   const variables = React.useMemo(
     () => ({ feedId: recordId, limit: FEED_POST_LIMIT }),
@@ -50,8 +50,6 @@ function FeedPostsTab({ recordId, ...context }: RecordPanelContext): React.React
     enabled: recordId !== "",
     models: FEED_MESSAGE_MODELS,
   });
-  void context;
-
   if (query.fetching && !query.data) {
     return <LoadingPanel density="inline" message={t("feed.postsLoading")} />;
   }
@@ -159,11 +157,9 @@ function followColumns(t: PostsT): readonly ListColumn<FeedFollowRow>[] {
   ];
 }
 
-function FeedFollowsTab({ recordId, ...context }: RecordPanelContext): React.ReactElement {
+function FeedFollowsTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = usePostsT();
   const columns = React.useMemo(() => followColumns(t), [t]);
-  void context;
-
   return (
     <ListView<FeedFollowRow>
       resource={FEED_FOLLOW_MODEL}

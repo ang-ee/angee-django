@@ -8,7 +8,7 @@ const messagingIntegrateSlack = defineChannelPollBridgeAddon({
   key: "slack",
   sequence: 24,
   connectAction: <ConnectSlackChannelAction />,
-  i18n: enMessagingSlackMessages,
+  i18n: { messaging: enMessagingSlackMessages },
 });
 
 export default messagingIntegrateSlack;

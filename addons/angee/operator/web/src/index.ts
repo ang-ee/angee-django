@@ -2,6 +2,7 @@ import type { BaseMenuItem } from "@angee/ui";
 import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute } from "@angee/app";
 import { lazyRouteComponent, type RouteComponent } from "@tanstack/react-router";
 import { createElement, type ReactNode } from "react";
+import { Server } from "lucide-react";
 
 import {
   createOperatorDataProvider,
@@ -166,7 +167,11 @@ const operator = defineBaseAddon({
       ...enOperatorMessages,
     },
   },
-  icons: { operator: OperatorGlyph, "operator-logs": OperatorLogsGlyph },
+  icons: {
+    operator: OperatorGlyph,
+    "operator-logs": OperatorLogsGlyph,
+    server: Server,
+  },
   // The first console-shell drawer adopter: a non-modal bottom drawer streaming
   // a chosen service/workspace's logs. Sticky across navigation (mounted once
   // above the router outlet) and not route-scoped — it picks its own target.

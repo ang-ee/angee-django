@@ -34,7 +34,6 @@ export const enOperatorMessages: Record<string, string> = {
   "logs.empty": "Waiting for log output…",
 
   // Logs drawer (console-shell drawer adopter).
-  "logs.drawerTitle": operatorLogsDrawerTitle,
   "logs.target.label": "Log source",
   "logs.target.placeholder": "Select a service or workspace…",
   "logs.target.empty.title": "No log source selected",
@@ -46,7 +45,6 @@ export const enOperatorMessages: Record<string, string> = {
   "transport.unavailable.title": "Operator daemon unavailable",
   "transport.unavailable.description":
     "Operator daemon is not configured for this user.",
-  "transport.noConsoleClient": 'No "console" GraphQL client is configured.',
   "transport.unknownError": "Unknown operator error.",
 
   // Overview.
@@ -128,8 +126,6 @@ export const enOperatorMessages: Record<string, string> = {
   "sources.detail.error": "Error",
 
   // GitOps.
-  "gitops.loading": "Loading GitOps topology",
-  "gitops.empty.title": "No GitOps topology",
   "gitops.links.empty": "No GitOps links.",
   "gitops.summary.clean": "Clean",
   "gitops.summary.dirty": "Dirty",
@@ -148,7 +144,6 @@ export const enOperatorMessages: Record<string, string> = {
   "gitops.pushed.no": "no",
 
   // Operations.
-  "operations.loading": "Loading operations",
   "operations.empty": "No jobs.",
   "operations.column.name": "Name",
   "operations.column.runtime": "Runtime",
@@ -163,26 +158,19 @@ export const enOperatorMessages: Record<string, string> = {
     "All services and runtime state are removed. This cannot be undone.",
 
   // Templates.
-  "templates.loading": "Loading templates",
   "templates.empty.title": "No templates",
   "templates.column.name": "Template",
   "templates.column.kind": "Kind",
   "templates.column.path": "Path",
   "templates.inputs": "Inputs",
-  "templates.input.required": "required",
-  "templates.input.optional": "optional",
-  "templates.input.immutable": "immutable",
-  "templates.input.generated": "generated",
 
   // Secrets.
-  "secrets.loading": "Loading secrets",
   "secrets.empty": "No declared secrets.",
   "secrets.column.name": "Name",
   "secrets.column.declared": "Declared",
   "secrets.column.hasValue": "Has value",
   "secrets.column.required": "Required",
   "secrets.column.envVar": "Env var",
-  "secrets.column.actions": "Actions",
   "secrets.yes": "yes",
   "secrets.no": "no",
   "secrets.value.set": "set",

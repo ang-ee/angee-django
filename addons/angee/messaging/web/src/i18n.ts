@@ -61,7 +61,6 @@ export const enMessagingMessages: Record<string, string> = {
   "composer.comment": "Comment",
   "composer.note": "Note",
   "composer.cancelReply": "Cancel reply",
-  "composer.recipients": "Recipients",
   "composer.addRecipient": "Add recipient",
   "composer.loadingRecipients": "Loading recipients",
   "composer.noRecipients": "No recipients",
@@ -91,7 +90,6 @@ export const enMessagingMessages: Record<string, string> = {
   "subtype.legend": "Notification types",
 
   // Chatter transport / mutation errors.
-  "error.generic": "Something went wrong. Try again.",
   "error.load": "Could not load the conversation.",
   "error.dismiss": "Dismiss",
   "error.postComment": "Could not post comment.",
@@ -106,7 +104,6 @@ export const enMessagingMessages: Record<string, string> = {
   "error.markDone": "Could not mark message done.",
 
   // ThreadTranscript — the channel conversation transcript on the Thread detail.
-  "transcript.tab": "Conversation",
   "transcript.label": "Conversation transcript",
   "transcript.loading": "Loading conversation",
   "transcript.error": "Could not load the conversation.",

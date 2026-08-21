@@ -20,10 +20,8 @@ export const enIntegrateMessages: Record<string, string> = {
     "It stops syncing and its live session ends. Its configuration is kept, so you can connect it again later.",
 
   // Shared list/group column labels.
-  "col.status": "Status",
   "col.lifecycle": "Lifecycle",
   "col.runtimeStatus": "Runtime",
-  "col.implementation": "Implementation",
   "col.type": "Type",
   "col.vendor": "Vendor",
   "col.credential": "Credential",
@@ -36,8 +34,6 @@ export const enIntegrateMessages: Record<string, string> = {
   "integrations.identity": "Identity",
   "integrations.authentication": "Authentication",
   "integrations.runtime": "Runtime",
-  "integrations.inference": "Inference provider",
-  "integrations.vcs": "VCS bridge",
   "integrations.implClass": "Implementation",
   "integrations.typeGroup": "Type",
   "integrations.action.connect": "Connect",
@@ -103,7 +99,6 @@ export const enIntegrateMessages: Record<string, string> = {
   "providers.action.connect": "Connect account",
   "providers.action.discover": "Discover endpoints",
   "providers.discover.done": "Discovered endpoints.",
-  "providers.discover.failed": "Discovery failed.",
   "providers.connect.startError": "Could not start account connection.",
   "providers.connect.redirecting": "Redirecting...",
   "providers.connect.openAuthorize": "Open the authorization page",

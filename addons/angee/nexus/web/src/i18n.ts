@@ -15,7 +15,6 @@ export const enNexusMessages: Record<string, string> = {
   "cadences.days": "Stay in touch (days)",
   "cadences.touchDue": "Touch due",
   "cadences.group.schedule": "Schedule",
-  "timeline.tab": "Timeline",
   "timeline.count": "{count} messages across every channel",
   "timeline.loadOlder": "Load older",
   "timeline.empty": "No messages exchanged with this contact yet.",
