@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ResourceList, Form, List, Column, Field, Group, REFINE_CREATE_ID, RevisionsTab, Statusline, StatusSegment, StatuslineSpacer, useResourceRevisions, type ChatterTab, type ResourceViewDefaultGroups, type RecordSmartButtonDescriptor, useChatterContent } from "@angee/ui";
+import { ResourceList, Form, List, Column, Field, Group, REFINE_CREATE_ID, RevisionsTab, Statusline, StatusSegment, StatuslineSpacer, useResourceRevisions, useRouteHref, type ChatterTab, type ResourceViewDefaultGroups, type RecordSmartButtonDescriptor, useChatterContent } from "@angee/ui";
 import { useParams } from "@tanstack/react-router";
 
 const MODEL = "notes.Note";
@@ -17,29 +17,35 @@ const RECORD_SUBTITLE_FIELDS: readonly string[] = [
   "word_count",
 ];
 
-const noteList = (
-  <List
-    resource={MODEL}
-    defaultGroups={NOTE_DEFAULT_GROUPS}
-    order={{ updated_at: "DESC" }}
-    emptyContent={{
-      icon: "agent",
-      title: "No notes yet",
-      description: "The agent isn't running yet — provision it to start chatting.",
-      action: {
-        label: "Set up your assistant",
-        href: "/agents",
+function noteList(agentsHref: string | undefined): React.ReactElement {
+  return (
+    <List
+      resource={MODEL}
+      defaultGroups={NOTE_DEFAULT_GROUPS}
+      order={{ updated_at: "DESC" }}
+      emptyContent={{
         icon: "agent",
-      },
-    }}
-  >
-    <Column field="title" />
-    <Column field="tags" sortable={false} />
-    <Column field="status" widget="statusBadge" />
-    <Column field="word_count" align="right" aggregate="sum" />
-    <Column field="updated_at" />
-  </List>
-);
+        title: "No notes yet",
+        description: "The agent isn't running yet — provision it to start chatting.",
+        ...(agentsHref
+          ? {
+              action: {
+                label: "Set up your assistant",
+                href: agentsHref,
+                icon: "agent",
+              },
+            }
+          : {}),
+      }}
+    >
+      <Column field="title" />
+      <Column field="tags" sortable={false} />
+      <Column field="status" widget="statusBadge" />
+      <Column field="word_count" align="right" aggregate="sum" />
+      <Column field="updated_at" />
+    </List>
+  );
+}
 
 const noteForm = (
   <Form resource={MODEL} returning={RECORD_SUBTITLE_FIELDS}>
@@ -56,6 +62,8 @@ const noteForm = (
 
 /** The notes console page: a count-by-status panel above the data table. */
 export function NotePage(): React.ReactElement {
+  const routeHref = useRouteHref();
+  const agentsHref = routeHref.maybe("agents.agents");
   // The nested record route (`notes.record`) carries no component; this parent
   // surface reads its `$id` param directly.
   const params = useParams({ strict: false });
@@ -104,7 +112,7 @@ export function NotePage(): React.ReactElement {
         placement="inline"
         routed
       >
-        {noteList}
+        {noteList(agentsHref)}
         {noteForm}
       </ResourceList>
       <Statusline>
