@@ -1,4 +1,4 @@
-"""Settings fragments required by Angee's task seam."""
+"""Settings fragments required by Angee's job seam."""
 
 from __future__ import annotations
 
@@ -16,11 +16,11 @@ SETTINGS = {
     "CELERY_TASK_TRACK_STARTED": True,
     "CELERY_TIMEZONE": "UTC",
 }
-"""Django settings contributed when the framework task seam is installed."""
+"""Django settings contributed when the framework job seam is installed."""
 
 
 def settings(namespace: Mapping[str, Any]) -> dict[str, Any]:
-    """Return environment-sensitive task settings."""
+    """Return environment-sensitive job settings."""
 
     result: dict[str, Any] = {}
     # Beat's schedule state file belongs in the stack's data dir, never in beat's

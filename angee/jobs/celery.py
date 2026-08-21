@@ -1,4 +1,4 @@
-"""Celery application for Angee task execution."""
+"""Celery application for Angee job execution."""
 
 from __future__ import annotations
 

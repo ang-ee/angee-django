@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
-from angee.tasks.celery import app as celery_app
+from angee.jobs.celery import app as celery_app
 
 
 def enqueue_task(

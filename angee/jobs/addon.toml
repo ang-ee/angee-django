@@ -1,9 +1,9 @@
 # Angee addon manifest. The declarative contract hatch-angee compiles into
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
-name = "angee.tasks"
-description = "The framework task seam — Celery-backed deferred and periodic execution"
-keywords = ["tasks", "queue", "jobs"]
+name = "angee.jobs"
+description = "The framework job seam — Celery-backed deferred and periodic execution"
+keywords = ["jobs", "queue", "tasks"]
 category = "Foundation"
 depends_on = ["angee.compose"]
 dependencies = [

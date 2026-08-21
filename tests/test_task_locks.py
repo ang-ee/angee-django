@@ -1,8 +1,8 @@
-"""Tests for the framework task lock abstraction."""
+"""Tests for the jobs app's task lock abstraction."""
 
 from __future__ import annotations
 
-from angee.tasks.locks import LocalLockBackend, _advisory_pair, record_lock_key, task_lock, task_lock_is_held
+from angee.jobs.locks import LocalLockBackend, _advisory_pair, record_lock_key, task_lock, task_lock_is_held
 
 
 def test_record_lock_key_is_stable() -> None:
@@ -41,7 +41,7 @@ def test_postgres_advisory_pair_uses_positive_int4_values() -> None:
 def test_task_lock_releases_after_context(settings) -> None:
     """The context helper releases an acquired lock when the task body exits."""
 
-    settings.ANGEE_TASK_LOCK_BACKEND = "angee.tasks.locks.LocalLockBackend"
+    settings.ANGEE_TASK_LOCK_BACKEND = "angee.jobs.locks.LocalLockBackend"
     key = record_lock_key("messaging.Channel", 42, "sync")
 
     with task_lock(key) as acquired:
@@ -56,7 +56,7 @@ def test_task_lock_releases_after_context(settings) -> None:
 def test_task_lock_reports_held_state(settings) -> None:
     """Read-side lock checks use the same configured backend."""
 
-    settings.ANGEE_TASK_LOCK_BACKEND = "angee.tasks.locks.LocalLockBackend"
+    settings.ANGEE_TASK_LOCK_BACKEND = "angee.jobs.locks.LocalLockBackend"
     key = record_lock_key("messaging.Channel", 84, "sync")
 
     assert task_lock_is_held(key) is False

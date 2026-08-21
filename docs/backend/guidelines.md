@@ -768,7 +768,7 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   backend-gated. `HierarchyMixin` path maintenance and `save_state`'s transition
   guard both route their lock through it.
 - **Task locks are advisory, row locks are authoritative.** Celery task bodies may
-  use `angee.tasks.locks.task_lock()` to prevent duplicate workers from doing the
+  use `angee.jobs.locks.task_lock()` to prevent duplicate workers from doing the
   same external work, but persisted state transitions still use model/queryset row
   locks, constraints, and idempotent managers. Do not hold row locks during network
   IO.

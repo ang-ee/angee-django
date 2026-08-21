@@ -49,7 +49,7 @@ changing any import.
 │   ├── base/               # framework core: the model toolkit (abstract models, mixins, fields, managers)
 │   ├── graphql/            # the GraphQL runtime — schema buckets, auto-CRUD, subscriptions, SDL (`manage.py schema`)
 │   ├── compose/            # the composer — emits the concrete runtime (`manage.py angee build`)
-│   └── tasks/              # the Celery seam (broker wiring, beat, queue routing)
+│   └── jobs/               # the Celery seam (broker wiring, beat, queue routing)
 ├── docs/                   # intent docs — glossary, stack, guidelines, and `docs/howto/`
 ├── tests/                  # framework tests (composition, GraphQL, IAM, CRUD, …)
 ├── .agents/                # shared agent methodology — reviewer agents, commands, skills, workflows (`.agents/README.md`; public)
