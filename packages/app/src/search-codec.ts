@@ -1,3 +1,5 @@
+import { routeSearchString } from "@angee/ui/runtime";
+
 // Keep search values flat and unquoted so login next round-trips raw and
 // resource-view values read like status:year.
 export function parseFlatSearch(searchStr: string): Record<string, string> {
@@ -11,11 +13,6 @@ export function parseFlatSearch(searchStr: string): Record<string, string> {
 }
 
 export function stringifyFlatSearch(search: Record<string, unknown>): string {
-  const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(search)) {
-    if (value == null || value === "") continue;
-    params.set(key, String(value));
-  }
-  const query = params.toString();
+  const query = routeSearchString(search);
   return query ? `?${query}` : "";
 }

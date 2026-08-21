@@ -10,9 +10,12 @@ import { testDataResource } from "@angee/metadata/testing";
 
 import {
   AppRuntimeProvider,
+  useAppRuntime,
   useDrawers,
   useModelSlot,
   useResourceRecordHref,
+  useResourceRecordHrefLookup,
+  useRouteHref,
   useRuntimeAuth,
   useRuntimeUserPreferences,
   useSlot,
@@ -21,6 +24,7 @@ import {
   type AppRuntime,
   type RuntimeI18n,
 } from "./runtime";
+import { createRouteHref } from "./route-href";
 
 function wrapperFor(runtime: Partial<AppRuntime>) {
   return ({ children }: { children: ReactNode }) =>
@@ -54,7 +58,16 @@ describe("useWidget", () => {
 describe("useResourceRecordHref", () => {
   test("builds an encoded record href from the resource's composed route", () => {
     const wrapper = wrapperFor({
-      routesByResource: { "messaging.Thread": "/messaging/threads" },
+      routesByResource: {
+        "messaging.Thread": {
+          collection: "messaging.threads",
+          record: { name: "messaging.thread", param: "threadId" },
+        },
+      },
+      routeHref: createRouteHref([
+        { name: "messaging.threads", path: "/messaging/threads" },
+        { name: "messaging.thread", path: "/messaging/threads/$threadId" },
+      ]),
     });
     const { result } = renderHook(() => useResourceRecordHref("messaging.Thread"), {
       wrapper,
@@ -92,7 +105,9 @@ describe("useResourceRecordHref", () => {
   test("degrades a resource known only to another schema to undefined", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const wrapper = wrapperFor({
-      routesByResource: { "integrate.OAuthClient": "/integrate/oauth" },
+      routesByResource: {
+        "integrate.OAuthClient": { collection: "integrate.oauth" },
+      },
     });
 
     const { result } = renderHook(
@@ -105,6 +120,59 @@ describe("useResourceRecordHref", () => {
       expect.stringMatching(/Unknown model spelling "integrate\.OAuthClient"/),
     );
     warn.mockRestore();
+  });
+
+  test("dynamically resolves composed record routes and degrades absent resources", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const wrapper = wrapperFor({
+      routesByResource: {
+        "messaging.Thread": {
+          collection: "messaging.threads",
+          record: { name: "messaging.thread", param: "threadId" },
+        },
+      },
+      routeHref: createRouteHref([
+        { name: "messaging.threads", path: "/messaging/threads" },
+        { name: "messaging.thread", path: "/messaging/threads/$threadId" },
+      ]),
+    });
+    const { result } = renderHook(() => useResourceRecordHrefLookup(), { wrapper });
+
+    expect(result.current("messaging.Thread", "thr 1")).toBe(
+      "/messaging/threads/thr%201",
+    );
+    expect(result.current("messaging.Message", "msg-1")).toBeUndefined();
+    expect(result.current("missing.Model", "record-1")).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/resource record route lookup.*missing\.Model/),
+    );
+    warn.mockRestore();
+  });
+});
+
+describe("useRouteHref", () => {
+  test("returns the app-composed route href owner", () => {
+    const descriptors = [{ name: "notes.record", path: "/notes/$id" }];
+    const routeHref = createRouteHref(descriptors);
+    const wrapper = wrapperFor({ routeHref });
+    const { result } = renderHook(() => useRouteHref(), { wrapper });
+
+    expect(result.current("notes.record", { id: "note 1" })).toBe(
+      "/notes/note%201",
+    );
+  });
+
+  test("throws the named context error without a provider", () => {
+    expect(() => renderHook(() => useRouteHref())).toThrow(
+      /AppRuntime is unavailable: render within its <AppRuntime> provider/,
+    );
+  });
+
+  test("the optional empty runtime probe degrades", () => {
+    const { result } = renderHook(() =>
+      useAppRuntime().routeHref.maybe("missing.route")
+    );
+    expect(result.current).toBeUndefined();
   });
 });
 

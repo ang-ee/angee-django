@@ -1,4 +1,5 @@
 import type { BaseAddonRoute } from "./define-base-addon";
+import { routeParameterName } from "@angee/ui/runtime";
 
 export function routeChildHasTrailingParam(
   route: BaseAddonRoute,
@@ -43,15 +44,7 @@ export function normalizeRoutePath(path: string): string {
 
 export function trailingRouteParamName(path: string): string | undefined {
   const segment = normalizeRoutePath(path).split("/").at(-1);
-  return segment?.startsWith("$") ? segment.slice(1) || undefined : undefined;
-}
-
-export function resolvePath(
-  nameOrPath: string | undefined,
-  pathByName: ReadonlyMap<string, string>,
-): string | undefined {
-  if (!nameOrPath) return undefined;
-  return pathByName.get(nameOrPath) ?? nameOrPath;
+  return segment ? routeParameterName(segment) : undefined;
 }
 
 export function childRoutesByParentName(

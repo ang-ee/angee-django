@@ -4,7 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { useThemePreference, type ThemePreference } from "../lib/theme";
-import { useRuntimeAuth, useRuntimeLogoutAction } from "../runtime";
+import { useLoginPath, useRuntimeAuth, useRuntimeLogoutAction } from "../runtime";
 import { avatarInitials } from "../ui/avatar";
 import {
   DropdownMenu,
@@ -29,6 +29,7 @@ export function UserMenu({
   const t = useUiT();
   const { user } = useRuntimeAuth();
   const { logout, fetching } = useRuntimeLogoutAction();
+  const loginPath = useLoginPath();
   const navigate = useNavigate();
   const { resolved, setPreference } = useThemePreference();
   const nextTheme: ThemePreference = resolved === "dark" ? "light" : "dark";
@@ -42,7 +43,7 @@ export function UserMenu({
   // The menu closes itself on item select; navigate once logout succeeds.
   async function signOut(): Promise<void> {
     if (await logout()) {
-      void navigate({ to: "/login" });
+      void navigate({ to: loginPath });
     }
   }
 

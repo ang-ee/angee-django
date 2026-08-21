@@ -1,14 +1,13 @@
 import { useMemo, useState, type ReactElement } from "react";
 
 import {
-  useResourceRoute,
+  useResourceRecordHref,
 } from "../runtime";
 import {
   useModelMetadata,
 } from "@angee/metadata";
 
 import type { RelationOption } from "../widgets/RelationField";
-import { recordPath } from "./resource-routing";
 import {
   formFieldsFromMetadata,
   type RelationFieldInfo,
@@ -76,8 +75,8 @@ export function RelationFieldWidget({
 
   // A "follow" arrow appears only when the related resource has a routed detail page
   // and a record is selected — navigating to it turns the relation into a link.
-  const basePath = useResourceRoute(relation.resource);
-  const followHref = basePath && value ? recordPath(basePath, value) : undefined;
+  const recordHref = useResourceRecordHref(relation.resource);
+  const followHref = recordHref && value ? recordHref(value) : undefined;
 
   return (
     <RelationPicker

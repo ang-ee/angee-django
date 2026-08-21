@@ -28,6 +28,7 @@ import {
   type AngeeHasuraClientOptions,
 } from "@angee/refine";
 import { errorFromUnknown as sharedErrorFromUnknown } from "@angee/ui/data/errors";
+import { DEFAULT_LOGIN_PATH } from "@angee/ui/runtime";
 
 export type UserPreferences = Record<string, unknown>;
 
@@ -184,7 +185,7 @@ export function createAngeeAuthProviderFromRequest(
   request: GraphQLRequest,
   options: Pick<AngeeAuthProviderOptions, "loginPath" | "onAuthChange"> = {},
 ): RefineAuthProvider {
-  const loginPath = options.loginPath ?? "/login";
+  const loginPath = options.loginPath ?? DEFAULT_LOGIN_PATH;
   const currentUser = async (): Promise<CurrentUserPayload | null> => {
     const data = await request<CurrentUserQueryResult>(CURRENT_USER_DOCUMENT);
     return parseCurrentUser(recordValue(data)?.current_user);

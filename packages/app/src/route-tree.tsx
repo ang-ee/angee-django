@@ -33,6 +33,7 @@ export function createLayoutRoutes({
   defaultSchema,
   authProvider,
   queryClient,
+  loginPath,
 }: {
   rootRoute: AnyRoute;
   layoutNames: readonly string[];
@@ -41,6 +42,7 @@ export function createLayoutRoutes({
   defaultSchema: string;
   authProvider: RefineAuthProvider;
   queryClient: QueryClient;
+  loginPath: string;
 }): Map<string, AnyRoute> {
   const layoutRoutes = new Map<string, AnyRoute>();
   for (const layoutName of layoutNames) {
@@ -51,7 +53,7 @@ export function createLayoutRoutes({
         getParentRoute: () => rootRoute,
         id: refineLayoutRouteId(layoutName),
         ...(requireAuth
-          ? { beforeLoad: authBeforeLoad(authProvider, queryClient) }
+          ? { beforeLoad: authBeforeLoad(authProvider, queryClient, loginPath) }
           : {}),
         component: () => (
           <RefineLayoutRoute
@@ -181,6 +183,7 @@ function layoutRequiresAuth(
 function authBeforeLoad(
   authProvider: RefineAuthProvider,
   queryClient: QueryClient,
+  loginPath: string,
 ) {
   return async ({ location }: { location: { href: string } }): Promise<void> => {
     const identity = await queryClient
@@ -188,7 +191,7 @@ function authBeforeLoad(
       .catch(() => null);
     if (identity) return;
     throw redirect({
-      to: "/login",
+      to: loginPath,
       search: { next: location.href },
       replace: true,
     });

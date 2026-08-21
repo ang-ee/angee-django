@@ -4,8 +4,7 @@ import type { ActionOutcome } from "@angee/refine";
 
 import { errorMessage, useToast } from "../feedback";
 import { useUiT } from "../i18n";
-import { useResourceRoute } from "../runtime";
-import { recordPath } from "./resource-routing";
+import { useResourceRecordHref } from "../runtime";
 
 /** Django's non-field key: in-band reasons a preflight surfaces at form level. */
 const NON_FIELD_ERRORS = "__all__";
@@ -58,7 +57,7 @@ export function useActionResultRun(
   const t = useUiT();
   const toast = useToast();
   const navigate = useNavigate();
-  const targetPath = useResourceRoute(options.linkTo ?? "");
+  const targetRecordHref = useResourceRecordHref(options.linkTo ?? "");
   const noResultTitle = options.noResultTitle;
   return React.useCallback<ActionResultRun>(
     async (fire) => {
@@ -83,11 +82,12 @@ export function useActionResultRun(
         return outcome;
       }
       toast.success({ title: outcome.message });
-      if (outcome.id && targetPath) {
-        void navigate({ to: recordPath(targetPath, outcome.id) });
+      const target = outcome.id ? targetRecordHref?.(outcome.id) : undefined;
+      if (target) {
+        void navigate({ to: target });
       }
       return outcome;
     },
-    [navigate, noResultTitle, t, targetPath, toast],
+    [navigate, noResultTitle, t, targetRecordHref, toast],
   );
 }

@@ -8,7 +8,7 @@ import {
 } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 
-import { AppRuntimeProvider } from "../runtime";
+import { AppRuntimeProvider, createRouteHref } from "../runtime";
 import { useActionResultRun } from "./action-result-run";
 
 const mocks = vi.hoisted(() => ({
@@ -40,7 +40,18 @@ function wrapper({ children }: { children: React.ReactNode }) {
       }}
     >
       <AppRuntimeProvider
-        runtime={{ routesByResource: { "inventory.Transfer": "/inventory/transfers" } }}
+        runtime={{
+          routesByResource: {
+            "inventory.Transfer": {
+              collection: "inventory.transfers",
+              record: { name: "inventory.transfer", param: "id" },
+            },
+          },
+          routeHref: createRouteHref([
+            { name: "inventory.transfers", path: "/inventory/transfers" },
+            { name: "inventory.transfer", path: "/inventory/transfers/$id" },
+          ]),
+        }}
       >
         {children}
       </AppRuntimeProvider>
@@ -113,7 +124,18 @@ describe("useActionResultRun", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const noMetadataWrapper = ({ children }: { children: React.ReactNode }) => (
       <AppRuntimeProvider
-        runtime={{ routesByResource: { "inventory.Transfer": "/inventory/transfers" } }}
+        runtime={{
+          routesByResource: {
+            "inventory.Transfer": {
+              collection: "inventory.transfers",
+              record: { name: "inventory.transfer", param: "id" },
+            },
+          },
+          routeHref: createRouteHref([
+            { name: "inventory.transfers", path: "/inventory/transfers" },
+            { name: "inventory.transfer", path: "/inventory/transfers/$id" },
+          ]),
+        }}
       >
         {children}
       </AppRuntimeProvider>

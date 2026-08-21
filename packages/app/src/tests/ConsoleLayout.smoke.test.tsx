@@ -292,9 +292,9 @@ describe("ConsoleLayout", () => {
       .toBe("page");
 
     expect(screen.getByRole("main").textContent).toContain("Body content");
-    expect(screen.getByRole("tab", { name: "Agents" })).toBeTruthy();
-    expect(screen.getByText("No agent yet")).toBeTruthy();
-    expect(screen.getByText("Set up your assistant")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Comments" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Activity" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Agents" })).toBeNull();
 
     fireEvent.click(railToggle);
     expect(await screen.findByRole("button", {

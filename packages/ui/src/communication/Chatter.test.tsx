@@ -27,6 +27,26 @@ beforeAll(() => {
 afterEach(() => cleanup());
 
 describe("Chatter", () => {
+  test("only renders the agents tab when an addon contributes it", async () => {
+    renderChatter({});
+
+    expect(await screen.findByRole("tab", { name: "Comments" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Agents" })).toBeNull();
+
+    cleanup();
+    renderChatter({
+      chatter: [{
+        id: "agents",
+        label: "Agents",
+        icon: "agent",
+        render: () => <span>Agents-owned empty state</span>,
+      }],
+    });
+
+    expect(await screen.findByRole("tab", { name: "Agents" })).toBeTruthy();
+    expect(screen.getByText("Agents-owned empty state")).toBeTruthy();
+  });
+
   test("prefers reactive contribution counts while preserving static counts", async () => {
     renderChatter({
       chatterRoutes: [

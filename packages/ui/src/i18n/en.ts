@@ -146,9 +146,6 @@ export const enUiMessages: Record<string, string> = {
   "chatter.commentsHint": "Comments will appear here.",
   "chatter.noActivity": "No activity yet",
   "chatter.activityHint": "Record activity will appear here.",
-  "chatter.noAgent": "No agent yet",
-  "chatter.agentHint": "The agent isn't running yet — provision it to start chatting.",
-  "chatter.agentAction": "Set up your assistant",
   // Message + chat surface primitives (communication/message, communication/chat).
   "message.composer.send": "send",
   "message.composer.newline": "newline",

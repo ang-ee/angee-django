@@ -20,11 +20,11 @@ import {
   PassthroughChrome,
   createApp,
   type BaseAddon,
-  type BaseAddonRoute,
   type CreateAppInput,
 } from "./create-app";
 import type { BaseMenuItem, ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
 import { useChromeMenuItems } from "@angee/ui/chrome/refine-menu";
+import { trailingRouteParamName } from "./route-paths";
 
 export interface ShellPageTestProvidersProps {
   children: ReactNode;
@@ -79,7 +79,9 @@ interface CapturedBreadcrumbItem {
   to?: string;
 }
 
-export function expectValidBaseAddon(addon: BaseAddon): void {
+export function expectValidBaseAddon(
+  addon: BaseAddon,
+): void {
   const routes = addon.routes ?? [];
   const routesByName = new Map(routes.map((route) => [route.name, route]));
   const resourceOwners = new Map<string, string>();
@@ -110,7 +112,7 @@ export function expectValidBaseAddon(addon: BaseAddon): void {
     }
   }
   for (const item of addon.menus ?? []) {
-    assertValidMenuItem(addon.id, item, routesByName);
+    assertValidMenuItem(addon.id, item);
   }
   for (const iconName of Object.keys(addon.icons ?? {})) {
     if (!isKebabCase(iconName)) {
@@ -122,22 +124,13 @@ export function expectValidBaseAddon(addon: BaseAddon): void {
 function assertValidMenuItem(
   addonId: string,
   item: BaseMenuItem,
-  routesByName: ReadonlyMap<string, BaseAddonRoute>,
 ): void {
-  if (item.route && !routesByName.has(item.route)) {
-    throw new Error(
-      `Addon "${addonId}" menu item "${item.id ?? item.route}" references unknown route "${item.route}".`,
-    );
-  }
   if (item.icon && !isKebabCase(item.icon)) {
     throw new Error(`Addon "${addonId}" menu icon "${item.icon}" must be kebab-case.`);
   }
-  item.children?.forEach((child) => assertValidMenuItem(addonId, child, routesByName));
-}
-
-function trailingRouteParamName(path: string): string | undefined {
-  const segment = path.replace(/\/+$/, "").split("/").at(-1);
-  return segment?.startsWith("$") ? segment.slice(1) || undefined : undefined;
+  item.children?.forEach((child) =>
+    assertValidMenuItem(addonId, child)
+  );
 }
 
 function isKebabCase(value: string): boolean {

@@ -8,6 +8,7 @@ import {
   type AnyRouteMatch,
 } from "@tanstack/react-router";
 import { rowPublicId, type Row } from "@angee/metadata";
+import { routeParameterName } from "../runtime";
 
 import type { ResourceRecordController } from "./ResourceList";
 
@@ -128,7 +129,7 @@ function collectionBasePathFromRoute(fullPath: string): string {
 
 function trailingRouteParamName(fullPath: string): string | undefined {
   const segment = normalizeRoutePath(fullPath).split("/").at(-1);
-  return segment?.startsWith("$") ? segment.slice(1) || undefined : undefined;
+  return segment ? routeParameterName(segment) : undefined;
 }
 
 function normalizeRoutePath(path: string): string {
@@ -136,9 +137,8 @@ function normalizeRoutePath(path: string): string {
   return path.replace(/\/+$/, "") || "/";
 }
 
-/** Join a collection base path with a record id (shared by routed navigation and
- * the relation "follow" affordance, so id-encoding lives in one place). */
-export function recordPath(basePath: string, id: string): string {
+/** Join the active routed collection base path with a record id. */
+function recordPath(basePath: string, id: string): string {
   if (basePath === "/") return `/${encodeURIComponent(id)}`;
   return `${basePath}/${encodeURIComponent(id)}`;
 }

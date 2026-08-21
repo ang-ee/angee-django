@@ -4,7 +4,12 @@ import { createElement, type ReactNode } from "react";
 import { cleanup, waitFor } from "@testing-library/react";
 import { createAngeeHasuraDataProvider } from "@angee/refine";
 import { useAuthoredQuery } from "@angee/refine";
-import { useChatterRoutes, useResourceRoute } from "@angee/ui/runtime";
+import {
+  useChatterRoutes,
+  useResourceRecordHrefLookup,
+  useResourceRoute,
+  useRouteHref,
+} from "@angee/ui/runtime";
 import { useParams } from "@tanstack/react-router";
 import { afterEach, describe, expect, test } from "vitest";
 
@@ -291,7 +296,7 @@ describe("createApp auth routing", () => {
           routes: [
             {
               name: "auth.login",
-              path: "/login",
+              path: "/sign-in",
               layout: "public",
               component: LoginPage,
             },
@@ -307,6 +312,7 @@ describe("createApp auth routing", () => {
       defaultSchema: "console",
       subscriptionSchema: "console",
       home: "/private",
+      loginPath: "/sign-in",
       layouts: {
         public: {
           chrome: TestChrome,
@@ -324,7 +330,7 @@ describe("createApp auth routing", () => {
     const root = app.mount(host);
     try {
       await waitFor(() => {
-        expect(window.location.pathname).toBe("/login");
+        expect(window.location.pathname).toBe("/sign-in");
       });
 
       expect(new URLSearchParams(window.location.search).get("next")).toBe(
@@ -842,6 +848,25 @@ describe("createApp route menu refs", () => {
     ).toThrow(/references unknown route "missing.home"/);
   });
 
+  test("identifies the menu item when its route requires params", () => {
+    expect(() =>
+      createApp(testAppInput([
+        {
+          id: "record-menu",
+          routes: [
+            {
+              name: "records.record",
+              path: "/records/$id",
+              layout: "console",
+              component: EmptyPage,
+            },
+          ],
+          menus: [{ id: "records.open", route: "records.record" }],
+        },
+      ])),
+    ).toThrow(/Menu item "records\.open" cannot resolve its route.*missing params: id/);
+  });
+
   test("rejects a route that references an unknown menu item", () => {
     expect(() =>
       createAppWithResources([
@@ -871,7 +896,14 @@ describe("createApp resource route index", () => {
 
     function ClientsProbe(): ReactNode {
       const path = useResourceRoute("OAuthClient");
-      return createElement("span", null, `route ${path ?? "none"}`);
+      const recordHref = useResourceRecordHrefLookup();
+      const routeHref = useRouteHref();
+      return createElement(
+        "span",
+        null,
+        `route ${path ?? "none"} record ${routeHref("clients.record", { id: "client 1" })} ` +
+          `dynamic ${recordHref("OAuthClient", "client 2") ?? "none"}`,
+      );
     }
 
     const app = createAppWithResources([
@@ -898,7 +930,10 @@ describe("createApp resource route index", () => {
 
     try {
       await waitFor(() => {
-        expect(host.textContent).toContain("route /clients");
+        expect(host.textContent).toContain(
+          "route /clients record /clients/client%201",
+        );
+        expect(host.textContent).toContain("dynamic /clients/client%202");
       });
     } finally {
       root.unmount();

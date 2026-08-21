@@ -174,7 +174,7 @@ export {
   type ResourceRecordPlacement,
   type RecordSmartButtonDescriptor,
 } from "./ResourceList";
-export { recordPath, useRouteRecordId } from "./resource-routing";
+export { useRouteRecordId } from "./resource-routing";
 export {
   AggregatePanel,
   type AggregatePanelProps,

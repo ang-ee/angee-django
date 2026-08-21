@@ -10,12 +10,14 @@ import {
   MenuTree,
   type ChromeMenuNode,
 } from "@angee/ui/chrome/menu-tree";
+import type { RuntimeResourceRoutes } from "@angee/ui/runtime";
 
 import type { BaseAddonRoute } from "./define-base-addon";
 import {
   childRoutesByParentName,
   fullRoutePath,
   routeChildHasTrailingParam,
+  trailingRouteParamName,
 } from "./route-paths";
 
 interface SchemaWithMetadata {
@@ -88,15 +90,16 @@ export function refineRouteResourceProjection(
 }
 
 /**
- * Index each resource to the base path of the collection route that lists it (the
- * `resource`-tagged route), for relation-follow navigation. A resource may be
- * claimed by only one route; a second claim is a build-time error, matching the
- * registry collision discipline elsewhere.
+ * Index each resource to the collection and record route names derived from its
+ * route declarations. A resource may be claimed by only one route; a second
+ * claim is a build-time error, matching the registry collision discipline
+ * elsewhere.
  */
 export function resourceRouteIndex(
   routes: readonly BaseAddonRoute[],
-): Record<string, string> {
-  const byResource: Record<string, string> = {};
+): Record<string, RuntimeResourceRoutes> {
+  const byResource: Record<string, RuntimeResourceRoutes> = {};
+  const childrenByParentName = childRoutesByParentName(routes);
   for (const route of routes) {
     if (!route.resource) continue;
     if (Object.prototype.hasOwnProperty.call(byResource, route.resource)) {
@@ -104,7 +107,18 @@ export function resourceRouteIndex(
         `Route "${route.name}" claims resource "${route.resource}" already claimed by another route.`,
       );
     }
-    byResource[route.resource] = route.path;
+    const recordRoute = childrenByParentName
+      .get(route.name)
+      ?.find((candidate) => trailingRouteParamName(candidate.path));
+    const recordParam = recordRoute
+      ? trailingRouteParamName(recordRoute.path)
+      : undefined;
+    byResource[route.resource] = {
+      collection: route.name,
+      ...(recordRoute && recordParam
+        ? { record: { name: recordRoute.name, param: recordParam } }
+        : {}),
+    };
   }
   return byResource;
 }

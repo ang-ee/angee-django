@@ -1,6 +1,5 @@
 import * as React from "react";
 import {
-  Link,
   useMatches,
   useRouterState,
   type AnyRouteMatch,
@@ -17,21 +16,18 @@ import {
   type ChatterView,
   type ChatterViewContext,
 } from "../runtime";
-import { buttonVariants } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tabs } from "../ui/tabs";
 import { useChatter, type ChatterTab } from "./chatter-context";
 
 export interface ChatterProps {
   tabs?: readonly ChatterTab[];
-  children?: React.ReactNode;
   composer?: React.ReactNode;
   className?: string;
 }
 
 export function Chatter({
   tabs,
-  children,
   composer,
   className,
 }: ChatterProps): React.ReactElement | null {
@@ -55,7 +51,7 @@ export function Chatter({
     },
     [],
   );
-  // Tabs merge by id (last wins): the default agent/comments/activity tabs are the
+  // Tabs merge by id (last wins): the default comments/activity tabs are the
   // base, runtime chatter contributions render for the active view on top, and a
   // page's published tabs (explicit prop or context) win last. A same-id tab
   // replaces its predecessor in place; a new id appends. So a page contributing a
@@ -66,7 +62,7 @@ export function Chatter({
     [runtime.chatter, viewContext, counts],
   );
   const resolvedTabs = mergeChatterTabs(
-    defaultTabs(children, t),
+    defaultTabs(t),
     contributedTabs,
     tabs ?? content?.tabs ?? [],
   );
@@ -255,31 +251,9 @@ function mergeChatterTabs(
 }
 
 function defaultTabs(
-  children: React.ReactNode,
   t: (key: string, vars?: UiMessageVars) => string,
 ): readonly ChatterTab[] {
   return [
-    {
-      id: "agents",
-      label: "Agents",
-      icon: "agent",
-      children: children ?? (
-        <EmptyState
-          icon="agent"
-          title={t("chatter.noAgent")}
-          description={t("chatter.agentHint")}
-          actions={
-            <Link
-              className={buttonVariants({ variant: "primary", size: "sm" })}
-              to="/agents"
-            >
-              {t("chatter.agentAction")}
-            </Link>
-          }
-          className="min-h-48 p-4"
-        />
-      ),
-    },
     {
       id: "comments",
       label: t("chatter.tabComments"),

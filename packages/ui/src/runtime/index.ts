@@ -12,6 +12,9 @@ export {
   useFormOverride,
   useResourceRoute,
   useResourceRecordHref,
+  useResourceRecordHrefLookup,
+  useRouteHref,
+  useLoginPath,
   useRuntimeAuth,
   useRuntimeLogoutAction,
   useRuntimeUserPreferences,
@@ -27,9 +30,23 @@ export {
   type RuntimeAuthUser,
   type RuntimeI18n,
   type RuntimeLogoutAction,
+  type ResourceRecordHrefLookup,
+  type RuntimeResourceRoutes,
   type RuntimeUserPreferences,
   type RuntimeUserPreferencesState,
+  DEFAULT_LOGIN_PATH,
 } from "./runtime";
+export {
+  createRouteHref,
+  routeParameterName,
+  routeSearchString,
+  UnknownRouteError,
+  type RouteHref,
+  type RouteHrefParams,
+  type RouteHrefSearch,
+  type RouteHrefSearchValue,
+  type RuntimeRouteDescriptor,
+} from "./route-href";
 export { isModelScopedSlot } from "./contracts";
 export type {
   ChatterContribution,

@@ -63,4 +63,13 @@ describe("expectValidBaseAddon", () => {
 
     expect(() => expectValidBaseAddon(addon)).toThrow(/has no parent/);
   });
+
+  test("leaves cross-addon menu route validation to full app composition", () => {
+    const addon = defineBaseAddon({
+      id: "notes-extension",
+      menus: [{ id: "notes.extra", label: "Extra", route: "notes.home" }],
+    });
+
+    expect(() => expectValidBaseAddon(addon)).not.toThrow();
+  });
 });

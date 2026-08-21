@@ -51,8 +51,12 @@ import {
 import { NuqsAdapter } from "nuqs/adapters/tanstack-router";
 import {
   AppRuntimeProvider,
+  DEFAULT_LOGIN_PATH,
+  UnknownRouteError,
+  createRouteHref,
   type AppRuntime,
   type ComposedMenuItem,
+  type RouteHref,
   type SlotContribution,
 } from "@angee/ui/runtime";
 import { composeAddons } from "./define-addon";
@@ -92,9 +96,6 @@ import {
   stringifyFlatSearch,
 } from "./search-codec";
 import {
-  resolvePath,
-} from "./route-paths";
-import {
   refineResourcesForSchemas,
   refineRouteResourceProjection,
   resourceRouteIndex,
@@ -133,6 +134,8 @@ export interface CreateAppInput {
   subscriptionSchema?: string;
   /** Where `/` redirects. Defaults to the first non-public route's path. */
   home?: string;
+  /** Auth-owned sign-in destination. Defaults to `/login`. */
+  loginPath?: string;
   /** Host-level UI slot contributions, merged with the addons'. */
   slots?: readonly SlotContribution[];
 }
@@ -209,13 +212,20 @@ export function createApp(input: CreateAppInput): AngeeApp {
     },
   );
   const routes = composed.routes as readonly BaseAddonRoute[];
-  const pathByName = new Map(
-    routes.map((route) => [route.name, route.path]),
-  );
   const routesByName = new Map(routes.map((route) => [route.name, route]));
+  const routeDescriptors = routes.map(({ name, path }) => ({ name, path }));
+  const routeHref = createRouteHref(routeDescriptors);
+  const routesByResource = resourceRouteIndex(routes);
+  const pathsByResource = Object.fromEntries(
+    Object.entries(routesByResource).map(([resource, routeNames]) => [
+      resource,
+      routeHref(routeNames.collection),
+    ]),
+  );
+  const loginPath = input.loginPath ?? DEFAULT_LOGIN_PATH;
   const menus = resolveMenuRouteTargets(
     composed.menus as readonly ChromeMenuItem[],
-    pathByName,
+    routeHref,
   );
   const menuTree = MenuTree.from(menus);
 
@@ -242,12 +252,14 @@ export function createApp(input: CreateAppInput): AngeeApp {
     // runtime carries only addon-contributed providers.
     previews: composed.previews,
     drawers: composed.drawers,
-    routesByResource: resourceRouteIndex(routes),
+    routesByResource,
+    routeHref,
+    loginPath,
   };
   const operationDocuments = operationDocumentsForSchemas(schemas);
   const refineResources = refineResourcesForSchemas(
     schemas,
-    runtime.routesByResource,
+    pathsByResource,
     routeResourceProjection.metadataByResource,
   );
   // Menu route resources seed refine's tree in authored addon/menu order; schema
@@ -271,13 +283,17 @@ export function createApp(input: CreateAppInput): AngeeApp {
     queryClient,
   );
   const authSchema = authSchemaNameForSchemas(schemas, defaultSchema);
-  const refineAuthProvider = createAuthProviderForSchema(schemas, authSchema);
+  const refineAuthProvider = createAuthProviderForSchema(
+    schemas,
+    authSchema,
+    loginPath,
+  );
   const refineI18nProvider = i18n.provider;
   const refineAccessControlProvider = createAngeeAccessControlProvider(
     refineResourceRegistry,
   );
   const home =
-    resolvePath(input.home, pathByName) ??
+    (input.home ? routeHref.maybe(input.home) ?? input.home : undefined) ??
     routes.find((route) => route.layout !== "public")?.path ??
     "/";
 
@@ -317,6 +333,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
       >
         <AppFrame
           authSchema={authSchema}
+          loginPath={loginPath}
         >
           <Outlet />
         </AppFrame>
@@ -340,6 +357,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     defaultSchema,
     authProvider: refineAuthProvider,
     queryClient,
+    loginPath,
   });
   createAddonRouteNodes({
     routes,
@@ -474,12 +492,13 @@ function authSchemaNameForSchemas(
 function createAuthProviderForSchema(
   schemas: Readonly<Record<string, NormalizedAngeeAppSchemaConfig>>,
   authSchema: string,
+  loginPath: string,
 ): RefineAuthProvider {
   const schema = schemas[authSchema];
   if (!schema) {
     throw new Error(`No GraphQL schema config for auth schema "${authSchema}".`);
   }
-  return createAngeeAuthProvider(schema);
+  return createAngeeAuthProvider({ ...schema, loginPath });
 }
 
 /**
@@ -489,9 +508,11 @@ function createAuthProviderForSchema(
  */
 function AppFrame({
   authSchema,
+  loginPath,
   children,
 }: {
   authSchema: string;
+  loginPath: string;
   children: ReactNode;
 }): ReactNode {
   const { auth } = useRuntimeAuthState();
@@ -499,7 +520,11 @@ function AppFrame({
   return (
     <AuthStateProvider auth={auth}>
       <UserPreferencesProvider dataProviderName={authSchema}>
-        <RuntimeSessionProvider auth={auth} logoutAction={logoutAction}>
+        <RuntimeSessionProvider
+          auth={auth}
+          logoutAction={logoutAction}
+          loginPath={loginPath}
+        >
           {children}
         </RuntimeSessionProvider>
       </UserPreferencesProvider>
@@ -510,16 +535,18 @@ function AppFrame({
 function RuntimeSessionProvider({
   auth,
   logoutAction,
+  loginPath,
   children,
 }: {
   auth: AuthState;
   logoutAction: ReturnType<typeof useLogoutAction>;
+  loginPath: string;
   children: ReactNode;
 }): ReactNode {
   const userPreferences = useUserPreferences();
   const runtime = useMemo<Partial<AppRuntime>>(
-    () => ({ auth, logoutAction, userPreferences }),
-    [auth, logoutAction, userPreferences],
+    () => ({ auth, logoutAction, userPreferences, loginPath }),
+    [auth, loginPath, logoutAction, userPreferences],
   );
   return <AppRuntimeProvider runtime={runtime}>{children}</AppRuntimeProvider>;
 }
@@ -548,14 +575,14 @@ function Redirect({ to }: { to: string }): ReactNode {
 
 function resolveMenuRouteTargets(
   items: readonly ComposedMenuItem[],
-  pathByName: ReadonlyMap<string, string>,
+  routeHref: RouteHref,
 ): readonly ComposedMenuItem[] {
-  return items.map((item) => resolveMenuRouteTarget(item, pathByName));
+  return items.map((item) => resolveMenuRouteTarget(item, routeHref));
 }
 
 function resolveMenuRouteTarget(
   item: ComposedMenuItem,
-  pathByName: ReadonlyMap<string, string>,
+  routeHref: RouteHref,
 ): ComposedMenuItem {
   const itemId = item.id;
   if (item.route && item.to !== undefined) {
@@ -563,17 +590,27 @@ function resolveMenuRouteTarget(
       `Menu item "${itemId}" declares both route and to; use exactly one target owner.`,
     );
   }
-  const routePath = item.route ? pathByName.get(item.route) : undefined;
-  if (item.route && !routePath) {
-    throw new Error(
-      `Menu item "${itemId}" references unknown route "${item.route}".`,
-    );
+  let routePath: string | undefined;
+  if (item.route) {
+    try {
+      routePath = routeHref(item.route);
+    } catch (error) {
+      if (error instanceof UnknownRouteError) {
+        throw new Error(
+          `Menu item "${itemId}" references unknown route "${item.route}".`,
+        );
+      }
+      if (error instanceof Error) {
+        throw new Error(`Menu item "${itemId}" cannot resolve its route: ${error.message}`);
+      }
+      throw error;
+    }
   }
   return {
     ...item,
     to: routePath ?? item.to,
     children: item.children
-      ? resolveMenuRouteTargets(item.children, pathByName)
+      ? resolveMenuRouteTargets(item.children, routeHref)
       : item.children,
   };
 }

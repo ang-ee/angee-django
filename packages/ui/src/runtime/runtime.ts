@@ -20,6 +20,26 @@ import type {
   WidgetMap,
 } from "./contracts";
 import { makeContext } from "./make-context";
+import {
+  createRouteHref,
+  type RouteHref,
+} from "./route-href";
+
+export const DEFAULT_LOGIN_PATH = "/login";
+
+/** Route names derived from one resource-tagged collection declaration. */
+export interface RuntimeResourceRoutes {
+  collection: string;
+  record?: {
+    name: string;
+    param: string;
+  };
+}
+
+export type ResourceRecordHrefLookup = (
+  resource: string,
+  id: string,
+) => string | undefined;
 
 /**
  * The merged app runtime an app composes once from its addon manifests. The
@@ -39,8 +59,12 @@ export interface AppRuntime {
   slots: readonly SlotContribution[];
   previews: readonly PreviewContribution[];
   drawers: readonly DrawerContribution[];
-  /** Collection route base path per resource id, for relation-follow navigation. */
-  routesByResource: Readonly<Record<string, string>>;
+  /** Composed collection/record route names per resource id. */
+  routesByResource: Readonly<Record<string, RuntimeResourceRoutes>>;
+  /** Resolve a composed route name to an encoded href. */
+  routeHref: RouteHref;
+  /** App-owned sign-in destination shared by auth gates and chrome. */
+  loginPath: string;
 }
 
 export interface RuntimeI18n {
@@ -111,6 +135,8 @@ const EMPTY_RUNTIME: AppRuntime = {
   previews: [],
   drawers: [],
   routesByResource: {},
+  routeHref: createRouteHref([]),
+  loginPath: DEFAULT_LOGIN_PATH,
 };
 
 const RuntimeContext = makeContext<AppRuntime>("AppRuntime");
@@ -151,6 +177,12 @@ export function useFormOverride(resource: string): unknown {
  * relation-follow affordance; a resource without a routed list offers no link.
  */
 export function useResourceRoute(resource: string): string | undefined {
+  const route = useResourceRoutes(resource);
+  const routeHref = useAppRuntime().routeHref;
+  return route ? routeHref.maybe(route.collection) : undefined;
+}
+
+function useResourceRoutes(resource: string): RuntimeResourceRoutes | undefined {
   const metadata = useSchemaFieldMetadata();
   const canonicalResource = useMemo(() => {
     if (!resource) return "";
@@ -167,15 +199,51 @@ export function useResourceRoute(resource: string): string | undefined {
 /** Build record hrefs from a resource's composed collection route, when routed. */
 export function useResourceRecordHref(
   resource: string,
-): ((id: string) => string) | undefined {
-  const route = useResourceRoute(resource);
+): ((id: string) => string | undefined) | undefined {
+  const record = useResourceRoutes(resource)?.record;
+  const routeHref = useAppRuntime().routeHref;
   return useMemo(
     () =>
-      route === undefined
+      record === undefined
         ? undefined
-        : (id: string) => `${route.replace(/\/$/, "")}/${encodeURIComponent(id)}`,
-    [route],
+        : (id: string) => routeHref.maybe(record.name, {
+            [record.param]: id,
+          }),
+    [record, routeHref],
   );
+}
+
+/** Resolve any resource-backed record href, degrading when its addon is absent. */
+export function useResourceRecordHrefLookup(): ResourceRecordHrefLookup {
+  const metadata = useSchemaFieldMetadata();
+  const { routesByResource, routeHref } = useAppRuntime();
+  return useCallback(
+    (resource: string, id: string) => {
+      if (!resource || !id) return undefined;
+      const canonicalResource = canonicalModelLabelOrNull(
+        metadata.resources ?? [],
+        resource,
+        "resource record route lookup",
+      );
+      const record = canonicalResource
+        ? routesByResource?.[canonicalResource]?.record
+        : undefined;
+      return record
+        ? routeHref.maybe(record.name, { [record.param]: id })
+        : undefined;
+    },
+    [metadata, routeHref, routesByResource],
+  );
+}
+
+/** The app-composed, fail-fast route href builder. */
+export function useRouteHref(): RouteHref {
+  return RuntimeContext.use().routeHref;
+}
+
+/** The app-owned login destination used by shell and IAM surfaces. */
+export function useLoginPath(): string {
+  return useAppRuntime().loginPath ?? DEFAULT_LOGIN_PATH;
 }
 
 /** The shell-readable auth state supplied by the app-owned auth provider. */
