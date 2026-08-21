@@ -49,7 +49,7 @@ describe("expectValidBaseAddon", () => {
     const addon = defineBaseAddon({
       id: "notes",
       routes: resourcePageRoutes("notes", "/notes", Page, "notes.Note"),
-      menus: [{ id: "notes", label: "Notes", route: "notes", icon: "book-open" }],
+      menus: [{ id: "notes", label: "Notes", route: "notes", icon: "notes" }],
     });
 
     expect(() => expectValidBaseAddon(addon)).not.toThrow();
@@ -67,7 +67,7 @@ describe("expectValidBaseAddon", () => {
   test("leaves cross-addon menu route validation to full app composition", () => {
     const addon = defineBaseAddon({
       id: "notes-extension",
-      menus: [{ id: "notes.extra", label: "Extra", route: "notes.home" }],
+      menus: [{ id: "notes.extra", label: "Extra", route: "notes.home", icon: "notes" }],
     });
 
     expect(() => expectValidBaseAddon(addon)).not.toThrow();

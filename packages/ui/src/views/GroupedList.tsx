@@ -22,7 +22,7 @@ import type {
   ModelMetadata,
 } from "@angee/metadata";
 import { Glyph } from "../chrome/Glyph";
-import { useUiT } from "../i18n";
+import { useUiT, type UiTranslate } from "../i18n";
 import { cn } from "../lib/cn";
 import type { DndPayload } from "../lib/dnd";
 import { CountBadge } from "../ui/badge";
@@ -228,6 +228,7 @@ export function GroupedListBody<TRow extends Row>({
                       onToggleGroup={toggleGroup}
                       onPageChange={setScopePage}
                       loadingLabel={t("list.loading")}
+                      t={t}
                     />
                   ) : null;
                 })}
@@ -268,6 +269,25 @@ function groupedItemKey<TRow extends Row>(item: GroupedListItem<TRow>): string {
   }
 }
 
+interface GroupedItemRowProps<TRow extends Row> {
+  item: GroupedListItem<TRow>;
+  colSpan: number;
+  table: TableModel<TRow>;
+  visibleColumns: readonly TableColumn<TRow, unknown>[];
+  measuresByColumn: ReadonlyMap<string, GroupMeasure>;
+  resourceView: ResourceViewContextValue;
+  interactive: boolean;
+  rowHref?: (row: TRow) => string;
+  renderRowActions?: (row: TRow) => React.ReactNode;
+  onRowClick?: (row: TRow) => void;
+  draggableRow?: (row: TRow) => DndPayload | null;
+  onRecordOpen: (row: TRow) => void;
+  onToggleGroup: (key: string) => void;
+  onPageChange: (key: string, page: number) => void;
+  loadingLabel: React.ReactNode;
+  t: UiTranslate;
+}
+
 function GroupedItemRow<TRow extends Row>({
   item,
   colSpan,
@@ -284,23 +304,8 @@ function GroupedItemRow<TRow extends Row>({
   onToggleGroup,
   onPageChange,
   loadingLabel,
-}: {
-  item: GroupedListItem<TRow>;
-  colSpan: number;
-  table: TableModel<TRow>;
-  visibleColumns: readonly TableColumn<TRow, unknown>[];
-  measuresByColumn: ReadonlyMap<string, GroupMeasure>;
-  resourceView: ResourceViewContextValue;
-  interactive: boolean;
-  rowHref?: (row: TRow) => string;
-  renderRowActions?: (row: TRow) => React.ReactNode;
-  onRowClick?: (row: TRow) => void;
-  draggableRow?: (row: TRow) => DndPayload | null;
-  onRecordOpen: (row: TRow) => void;
-  onToggleGroup: (key: string) => void;
-  onPageChange: (key: string, page: number) => void;
-  loadingLabel: React.ReactNode;
-}): React.ReactElement {
+  t,
+}: GroupedItemRowProps<TRow>): React.ReactElement {
   switch (item.kind) {
     case "groupHeader":
       return (
@@ -310,6 +315,7 @@ function GroupedItemRow<TRow extends Row>({
           measuresByColumn={measuresByColumn}
           onToggle={onToggleGroup}
           trailingColumn={renderRowActions !== undefined}
+          unavailableLabel={t("list.itemsUnavailable")}
         />
       );
     case "record":
@@ -328,7 +334,12 @@ function GroupedItemRow<TRow extends Row>({
       );
     case "pager":
       return (
-        <GroupedPagerRow item={item} colSpan={colSpan} onPageChange={onPageChange} />
+        <GroupedPagerRow
+          item={item}
+          colSpan={colSpan}
+          onPageChange={onPageChange}
+          t={t}
+        />
       );
     case "skeleton":
       return (
@@ -344,19 +355,23 @@ function GroupedItemRow<TRow extends Row>({
   }
 }
 
+interface GroupedHeaderRowProps<TRow extends Row> {
+  item: Extract<GroupedListItem<TRow>, { kind: "groupHeader" }>;
+  visibleColumns: readonly TableColumn<TRow, unknown>[];
+  measuresByColumn: ReadonlyMap<string, GroupMeasure>;
+  onToggle: (key: string) => void;
+  trailingColumn: boolean;
+  unavailableLabel: string;
+}
+
 function GroupedHeaderRow<TRow extends Row>({
   item,
   visibleColumns,
   measuresByColumn,
   onToggle,
   trailingColumn,
-}: {
-  item: Extract<GroupedListItem<TRow>, { kind: "groupHeader" }>;
-  visibleColumns: readonly TableColumn<TRow, unknown>[];
-  measuresByColumn: ReadonlyMap<string, GroupMeasure>;
-  onToggle: (key: string) => void;
-  trailingColumn: boolean;
-}): React.ReactElement {
+  unavailableLabel,
+}: GroupedHeaderRowProps<TRow>): React.ReactElement {
   const headerId = React.useId();
   const { bucket, bucketKey, depth, label, count, expandable, expanded } = item;
   return (
@@ -412,7 +427,7 @@ function GroupedHeaderRow<TRow extends Row>({
                 <CountBadge value={count} />
                 {!expandable ? (
                   <span className={cn(textRoleVariants({ role: "meta" }), "font-normal")}>
-                    Items unavailable
+                    {unavailableLabel}
                   </span>
                 ) : null}
               </span>
@@ -425,17 +440,21 @@ function GroupedHeaderRow<TRow extends Row>({
   );
 }
 
+interface GroupedPagerRowProps<TRow extends Row> {
+  item: Extract<GroupedListItem<TRow>, { kind: "pager" }>;
+  colSpan: number;
+  onPageChange: (key: string, page: number) => void;
+  t: UiTranslate;
+}
+
 function GroupedPagerRow<TRow extends Row>({
   item,
   colSpan,
   onPageChange,
-}: {
-  item: Extract<GroupedListItem<TRow>, { kind: "pager" }>;
-  colSpan: number;
-  onPageChange: (key: string, page: number) => void;
-}): React.ReactElement {
+  t,
+}: GroupedPagerRowProps<TRow>): React.ReactElement {
   const { pageKey, label, page, pageSize, total, unit } = item;
-  const navLabel = unit === "groups" ? `${label} groups` : `${label} records`;
+  const navLabel = `${label} ${t(unit === "groups" ? "list.groups" : "list.records")}`;
   return (
     <TableRow>
       <TableCell colSpan={colSpan} className="bg-sheet py-2">
@@ -450,8 +469,8 @@ function GroupedPagerRow<TRow extends Row>({
             onPageChange={(next) => onPageChange(pageKey, next)}
             unit={unit === "groups" ? "groups" : undefined}
             labelElement="span"
-            previousLabel={`Previous ${navLabel}`}
-            nextLabel={`Next ${navLabel}`}
+            previousLabel={t("pager.previousSubject", { subject: navLabel })}
+            nextLabel={t("pager.nextSubject", { subject: navLabel })}
             formatNumber={formatPagerNumber}
           />
         </nav>

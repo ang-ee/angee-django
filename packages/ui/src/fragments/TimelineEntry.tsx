@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { textRoleVariants } from "../ui/text";
 import { RelativeTime } from "./RelativeTime";
@@ -15,12 +16,16 @@ export interface TimelineEntryProps
 export function TimelineEntry({
   body,
   className,
-  emptyBody = "No snapshot.",
+  emptyBody,
   timestamp,
   title,
   ...props
 }: TimelineEntryProps): React.ReactElement {
+  const t = useUiT();
   const text = excerpt(body);
+  const resolvedEmptyBody = emptyBody === undefined
+    ? t("timeline.emptySnapshot")
+    : emptyBody;
 
   return (
     <li
@@ -38,7 +43,7 @@ export function TimelineEntry({
         />
       </div>
       <p className={cn(textRoleVariants({ role: "description" }), "mt-2 line-clamp-3")}>
-        {text || emptyBody}
+        {text || resolvedEmptyBody}
       </p>
     </li>
   );

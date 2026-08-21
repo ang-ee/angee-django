@@ -6,6 +6,7 @@ import { expect, test, vi } from "vitest";
 
 import {
   buildColumns,
+  cellContent,
   groupMeasuresFromColumns,
   RowActionsHeader,
 } from "./resource-view-list-body";
@@ -25,7 +26,7 @@ test("renders a visually hidden list-column header", () => {
       },
     ],
     { sort: null, setSort: vi.fn() },
-    { emptyValueLabel: "Empty" },
+    {},
   );
   const renderHeader = column?.header as (() => ReactNode) | undefined;
 
@@ -64,4 +65,11 @@ test("projects count columns into aggregate measures", () => {
       unit: "",
     },
   ]);
+});
+
+test("routes boolean cell copy through the UI translator", () => {
+  const t = (key: string) => ({ "list.yes": "Sí", "list.no": "No" })[key] ?? key;
+
+  expect(cellContent({ field: "enabled" }, { id: "1", enabled: true }, t)).toBe("Sí");
+  expect(cellContent({ field: "enabled" }, { id: "2", enabled: false }, t)).toBe("No");
 });

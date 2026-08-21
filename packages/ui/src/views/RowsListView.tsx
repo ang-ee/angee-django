@@ -237,6 +237,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
           visibleFields={surface.visibleFields}
           onVisibleFieldToggle={surface.toggleVisibleField}
           resourceView={resourceView}
+          groupStack={effectiveGroupStack}
           interactive={interactive}
           selectable={selectable}
           rowHref={rowHref}

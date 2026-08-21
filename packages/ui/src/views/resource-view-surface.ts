@@ -436,7 +436,6 @@ function useResourceViewTableState<TRow extends Row>({
   handleSortingChange: OnChangeFn<SortingState>;
   handleRowSelectionChange: OnChangeFn<RowSelectionState>;
 } {
-  const t = useUiT();
   const tableColumns = React.useMemo(
     () =>
       buildColumns(columns, {
@@ -445,9 +444,8 @@ function useResourceViewTableState<TRow extends Row>({
       }, {
         groupStack,
         metadata: modelMetadata,
-        emptyValueLabel: t("list.emptyValue"),
       }),
-    [columns, groupStack, modelMetadata, resourceView.state.sort, resourceView.setSort, t],
+    [columns, groupStack, modelMetadata, resourceView.state.sort, resourceView.setSort],
   );
   const [columnVisibility, setColumnVisibility] =
     React.useState<VisibilityState>({});
@@ -636,6 +634,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
           ).toLocaleLowerCase(),
         }),
       allRecordsLabel: t("list.allRecords"),
+      t,
     }),
     [
       rowGroupStack,
@@ -1322,6 +1321,7 @@ function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
             table.getGroupedRowModel().rows,
             rowGroupStack,
             t("list.emptyValue"),
+            t,
           ),
     [table, rowGroupStack, rows, boardLaneState, t],
   );

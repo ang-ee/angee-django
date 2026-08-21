@@ -9,10 +9,18 @@ import type {
 import {
   bucketFilterForGroup,
   bucketValueLabels,
+  groupLabel,
+  groupKey,
   resourceViewGroupToAggregateDimension,
   groupLabelDimension,
 } from "./resource-view-list-body";
 import { validResourceViewGroupStack } from "./resource-view-utils";
+
+const TEST_T = (key: string, vars?: Record<string, unknown>): string => {
+  if (key === "list.quarter") return `Q${vars?.quarter} ${vars?.year}`;
+  if (key === "list.weekOf") return `Week of ${vars?.date}`;
+  return key;
+};
 
 // A model whose resource artifact owns group dimensions, including a relation
 // label axis for `party__display_name`.
@@ -335,7 +343,7 @@ describe("relation group display label (Odoo (id, display_name))", () => {
 
   test("bucketValueLabels renders the carried name, not the raw id", () => {
     const bucket = { key: { partyId: "4422", party_DisplayName: "PRG Iva" }, count: 1 };
-    expect(bucketValueLabels(bucket, [PARTY_GROUP], GROUP_METADATA, "No value")).toEqual([
+    expect(bucketValueLabels(bucket, [PARTY_GROUP], GROUP_METADATA, "No value", TEST_T)).toEqual([
       "PRG Iva",
     ]);
   });
@@ -348,6 +356,7 @@ describe("relation group display label (Odoo (id, display_name))", () => {
         [PARTY_GROUP],
         GROUP_METADATA,
         "No value",
+        TEST_T,
         (field) => `No ${field}`,
       ),
     ).toEqual(["No party"]);
@@ -355,9 +364,55 @@ describe("relation group display label (Odoo (id, display_name))", () => {
 
   test("bucketValueLabels needs resource metadata for grouped buckets", () => {
     const bucket = { key: { partyId: "pty_abc", party_DisplayName: "PRG Iva" }, count: 1 };
-    expect(() => bucketValueLabels(bucket, [PARTY_GROUP], null, "No value")).toThrow(
+    expect(() => bucketValueLabels(bucket, [PARTY_GROUP], null, "No value", TEST_T)).toThrow(
       'group dimension "party"',
     );
+  });
+});
+
+describe("translated date bucket labels", () => {
+  test("keeps quarter, month, and ISO-week identities locale-independent", () => {
+    expect(
+      groupKey(
+        "2026-08-22T12:00:00Z",
+        { field: "createdAt", granularity: "quarter" },
+        GROUP_METADATA,
+      ),
+    ).toBe("2026-Q3");
+    expect(
+      groupKey(
+        "2026-08-22T12:00:00Z",
+        { field: "createdAt", granularity: "month" },
+        GROUP_METADATA,
+      ),
+    ).toBe("2026-08");
+    expect(
+      groupKey(
+        "2026-08-22T12:00:00Z",
+        { field: "createdAt", granularity: "week" },
+        GROUP_METADATA,
+      ),
+    ).toBe("2026-08-17");
+  });
+
+  test("translates date identities only when rendering their labels", () => {
+    const quarterGroup = { field: "createdAt", granularity: "quarter" } as const;
+    const alternateT = (key: string, vars?: Record<string, unknown>): string =>
+      key === "list.quarter" ? `${vars?.year} trimestre ${vars?.quarter}` : key;
+
+    expect(groupLabel("2026-08-22T12:00:00Z", quarterGroup, GROUP_METADATA, "None", TEST_T))
+      .toBe("Q3 2026");
+    expect(groupLabel("2026-08-22T12:00:00Z", quarterGroup, GROUP_METADATA, "None", alternateT))
+      .toBe("2026 trimestre 3");
+    expect(
+      groupLabel(
+        "2026-08-22T12:00:00Z",
+        { field: "createdAt", granularity: "week" },
+        GROUP_METADATA,
+        "None",
+        TEST_T,
+      ),
+    ).toBe("Week of August 17, 2026");
   });
 });
 

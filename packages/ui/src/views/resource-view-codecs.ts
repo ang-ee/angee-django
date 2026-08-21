@@ -16,6 +16,7 @@ import type {
   ResourceViewGroup,
   ResourceViewSort,
 } from "./resource-view-model";
+import type { UiTranslate } from "../i18n";
 
 interface LaneFieldSource {
   field: string;
@@ -120,6 +121,7 @@ export function rowGroupsFromTableRows<TRow extends Row>(
   rows: readonly TableRowModel<TRow>[],
   groupStack: readonly ResourceViewGroup[],
   emptyValueLabel: string,
+  t: UiTranslate,
 ): readonly RowGroup<TRow>[] {
   if (groupStack.length === 0) {
     return [{
@@ -131,15 +133,17 @@ export function rowGroupsFromTableRows<TRow extends Row>(
       children: [],
     }];
   }
-  return rows.map((row) => rowGroupFromTableRow(row, [], emptyValueLabel));
+  return rows.map((row) => rowGroupFromTableRow(row, [], groupStack, emptyValueLabel, t));
 }
 
 function rowGroupFromTableRow<TRow extends Row>(
   row: TableRowModel<TRow>,
   parentPath: readonly string[],
+  groupStack: readonly ResourceViewGroup[],
   emptyValueLabel: string,
+  t: UiTranslate,
 ): RowGroup<TRow> {
-  const label = groupedRowLabel(row, emptyValueLabel);
+  const label = groupedRowLabel(row, groupStack, emptyValueLabel, t);
   const path = [...parentPath, label];
   const children = row.subRows.filter((child) => child.getIsGrouped());
   return {
@@ -149,7 +153,7 @@ function rowGroupFromTableRow<TRow extends Row>(
     depth: row.depth,
     rows: leafTableRows(row.subRows),
     children: children.map((child) =>
-      rowGroupFromTableRow(child, path, emptyValueLabel),
+      rowGroupFromTableRow(child, path, groupStack, emptyValueLabel, t),
     ),
   };
 }

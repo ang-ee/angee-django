@@ -36,12 +36,12 @@ import {
   relationFilterForRelation,
   resourceFieldPathToSnake,
 } from "@angee/metadata";
-import { format } from "date-fns";
+import { format, startOfISOWeek } from "date-fns";
 import { Spinner } from "../ui/spinner";
 
 import { Glyph } from "../chrome/Glyph";
 import { EmptyState } from "../fragments/EmptyState";
-import { useUiT } from "../i18n";
+import { useUiT, type UiTranslate } from "../i18n";
 import { RelativeTime } from "../fragments/RelativeTime";
 import { cn } from "../lib/cn";
 import { dragSourceProps, type DndPayload, type DragSourceProps } from "../lib/dnd";
@@ -286,6 +286,7 @@ export interface FlatListBodyProps<TRow extends Row> {
   visibleFields?: readonly VisibleFieldOption[];
   onVisibleFieldToggle?: (id: string, visible: boolean) => void;
   resourceView: ResourceViewContextValue;
+  groupStack: readonly ResourceViewGroup[];
   interactive: boolean;
   selectable?: boolean;
   rowHref?: (row: TRow) => string;
@@ -311,6 +312,7 @@ export function FlatListBody<TRow extends Row>({
   visibleFields = [],
   onVisibleFieldToggle,
   resourceView,
+  groupStack,
   interactive,
   selectable = true,
   rowHref,
@@ -405,6 +407,7 @@ export function FlatListBody<TRow extends Row>({
                       row,
                       colSpan,
                       resourceView,
+                      groupStack,
                       interactive,
                       selectable,
                       rowHref,
@@ -594,16 +597,17 @@ export function VisibleFieldsMenu({
   );
 }
 
+export interface BuildColumnsOptions {
+  groupStack?: readonly ResourceViewGroup[];
+  metadata?: ModelMetadata | null;
+}
+
 export function buildColumns<TRow extends Row>(
   columns: readonly ColumnDescriptor<TRow>[],
   sortController: Pick<ResourceViewContextValue, "setSort"> & {
     sort: ResourceViewSort | null;
   },
-  options: {
-    groupStack?: readonly ResourceViewGroup[];
-    metadata?: ModelMetadata | null;
-    emptyValueLabel: string;
-  },
+  options: BuildColumnsOptions,
 ): ColumnDef<TRow>[] {
   // TanStack grouping requires a column def per grouping id; a group axis that
   // is not a display column gets a grouping-only accessor column (never
@@ -618,7 +622,6 @@ export function buildColumns<TRow extends Row>(
           readPath(row, group.field),
           group,
           options.metadata ?? null,
-          options.emptyValueLabel,
         ),
       enableHiding: false,
       meta: {
@@ -636,11 +639,7 @@ function displayColumns<TRow extends Row>(
   sortController: Pick<ResourceViewContextValue, "setSort"> & {
     sort: ResourceViewSort | null;
   },
-  options: {
-    groupStack?: readonly ResourceViewGroup[];
-    metadata?: ModelMetadata | null;
-    emptyValueLabel: string;
-  },
+  options: BuildColumnsOptions,
 ): ColumnDef<TRow>[] {
   return columns.map((column) => ({
     id: column.field,
@@ -652,7 +651,6 @@ function displayColumns<TRow extends Row>(
         readPath(row, column.field),
         group,
         options.metadata ?? null,
-        options.emptyValueLabel,
       );
     },
     header: () => {
@@ -686,6 +684,7 @@ export function ListCellContent<TRow extends Row>({
   column: ColumnDescriptor<TRow>;
   row: TRow;
 }): React.ReactNode {
+  const t = useUiT();
   const widget = useResolvedWidget(column.widget ?? "");
   if (!column.render && widget?.cell) {
     const Cell = widget.cell;
@@ -704,7 +703,7 @@ export function ListCellContent<TRow extends Row>({
       />
     );
   }
-  return cellContent(column, row);
+  return cellContent(column, row, t);
 }
 
 function SortHeader<TRow extends Row>({
@@ -896,7 +895,7 @@ function LinkedRecordRow<TRow extends Row>({
               href={href}
               className="block min-w-0 rounded-4 text-inherit outline-none focus-visible:focus-ring"
               aria-label={t("list.openRecord", {
-                label: rowActionLabelForTableColumn(cell.column, row.original),
+                label: rowActionLabelForTableColumn(cell.column, row.original, t),
               })}
               onClick={openLink}
             >
@@ -973,7 +972,7 @@ function PlainRecordRow<TRow extends Row>({
               type="button"
               className="block w-full min-w-0 rounded-4 text-left text-inherit outline-none focus-visible:focus-ring"
               aria-label={t("list.openRecord", {
-                label: rowActionLabelForTableColumn(cell.column, row.original),
+                label: rowActionLabelForTableColumn(cell.column, row.original, t),
               })}
               onClick={(event) => {
                 event.stopPropagation();
@@ -999,6 +998,7 @@ function renderListRow<TRow extends Row>({
   row,
   colSpan,
   resourceView,
+  groupStack,
   interactive,
   selectable,
   rowHref,
@@ -1010,6 +1010,7 @@ function renderListRow<TRow extends Row>({
   row: TableRowModel<TRow>;
   colSpan: number;
   resourceView: ResourceViewContextValue;
+  groupStack: readonly ResourceViewGroup[];
   interactive: boolean;
   selectable: boolean;
   rowHref?: (row: TRow) => string;
@@ -1024,6 +1025,7 @@ function renderListRow<TRow extends Row>({
         key={row.id}
         row={row}
         colSpan={colSpan}
+        groupStack={groupStack}
       />
     );
   }
@@ -1100,14 +1102,16 @@ export function useVirtualWindow(
 function GroupHeader<TRow extends Row>({
   row,
   colSpan,
+  groupStack,
 }: {
   row: TableRowModel<TRow>;
   colSpan: number;
+  groupStack: readonly ResourceViewGroup[];
 }): React.ReactElement {
   const t = useUiT();
   const canExpand = row.getCanExpand();
   const expanded = row.getIsExpanded();
-  const label = groupedRowLabel(row, t("list.emptyValue"));
+  const label = groupedRowLabel(row, groupStack, t("list.emptyValue"), t);
   const rowCount = row.getLeafRows().length;
   const indent = { paddingLeft: `calc(0.75rem + ${row.depth * 1.25}rem)` };
   // The chevron only appears when the header is a toggle; the lead/trailing
@@ -1158,19 +1162,21 @@ function GroupHeader<TRow extends Row>({
 }
 
 /**
- * The display label of a TanStack grouped row — the one owner. The grouping
- * value is the display form (the column's `getGroupingValue` routes through
- * `groupKey`: title-cased statuses, date buckets); `getValue` would return the
- * raw accessor value of the first leaf.
+ * The display label of a TanStack grouped row — the one owner. TanStack groups
+ * on the locale-stable `groupKey`; only this render boundary translates it.
  */
 export function groupedRowLabel<TRow extends Row>(
   row: TableRowModel<TRow>,
+  groupStack: readonly ResourceViewGroup[],
   emptyValueLabel: string,
+  t: UiTranslate,
 ): string {
   const columnId = row.groupingColumnId;
   const value = columnId ? row.getGroupingValue(columnId) : undefined;
-  if (value == null || value === "") return emptyValueLabel;
-  return String(value);
+  const group = groupStack.find((candidate) => candidate.field === columnId)
+    ?? groupStack[row.depth];
+  if (!group) return value == null || value === "" ? emptyValueLabel : String(value);
+  return groupLabelFromKey(value, group, emptyValueLabel, t);
 }
 
 export function resourceViewGroupToAggregateDimension(
@@ -1238,6 +1244,7 @@ export function bucketValueLabels(
   groupStack: readonly ResourceViewGroup[],
   metadata: ModelMetadata | null,
   emptyValueLabel: string,
+  t: UiTranslate,
   emptyRelationLabel?: (field: string) => string,
 ): string[] {
   return groupStack.map((group) => {
@@ -1250,17 +1257,18 @@ export function bucketValueLabels(
     }
     const dimension = resourceViewGroupToAggregateDimension(group, metadata);
     const value = bucket.key?.[dimension.key ?? dimension.field];
-    return groupKey(value, group, metadata, emptyValueLabel);
+    return groupLabel(value, group, metadata, emptyValueLabel, t);
   });
 }
+
+const EMPTY_GROUP_KEY = "__angee_empty_group__";
 
 export function groupKey(
   value: unknown,
   group: ResourceViewGroup,
   metadata: ModelMetadata | null,
-  emptyValueLabel: string,
 ): string {
-  if (value == null) return emptyValueLabel;
+  if (value == null) return EMPTY_GROUP_KEY;
   const enumLabel = typeof value === "string"
     ? enumLabelFromMetadata(metadata, group.field, value)
     : null;
@@ -1278,15 +1286,73 @@ export function groupKey(
   if (group.granularity === "year") return String(date.getFullYear());
   if (group.granularity === "quarter") {
     const quarter = Math.floor(date.getMonth() / 3) + 1;
-    return `Q${quarter} ${date.getFullYear()}`;
+    return `${date.getFullYear()}-Q${quarter}`;
   }
   if (group.granularity === "month") {
-    return format(date, "MMMM yyyy");
+    return format(date, "yyyy-MM");
   }
   if (group.granularity === "week") {
-    return `Week of ${format(date, "MMMM d, yyyy")}`;
+    return format(startOfISOWeek(date), "yyyy-MM-dd");
   }
-  return format(date, "MMMM d, yyyy");
+  return format(date, "yyyy-MM-dd");
+}
+
+export function groupLabel(
+  value: unknown,
+  group: ResourceViewGroup,
+  metadata: ModelMetadata | null,
+  emptyValueLabel: string,
+  t: UiTranslate,
+): string {
+  return groupLabelFromKey(
+    groupKey(value, group, metadata),
+    group,
+    emptyValueLabel,
+    t,
+  );
+}
+
+function groupLabelFromKey(
+  value: unknown,
+  group: ResourceViewGroup,
+  emptyValueLabel: string,
+  t: UiTranslate,
+): string {
+  if (value == null || value === "" || value === EMPTY_GROUP_KEY) return emptyValueLabel;
+  const key = String(value);
+  if (group.granularity === "quarter") {
+    const match = /^(\d{4})-Q([1-4])$/.exec(key);
+    if (match) {
+      return t("list.quarter", {
+        year: Number(match[1]),
+        quarter: Number(match[2]),
+      });
+    }
+  }
+  if (group.granularity === "month") {
+    const date = dateFromGroupKey(key);
+    if (date) return format(date, "MMMM yyyy");
+  }
+  if (group.granularity === "week") {
+    const date = dateFromGroupKey(key);
+    if (date) return t("list.weekOf", { date: format(date, "MMMM d, yyyy") });
+  }
+  if (!group.granularity) {
+    const date = dateFromGroupKey(key);
+    if (date) return format(date, "MMMM d, yyyy");
+  }
+  return key;
+}
+
+function dateFromGroupKey(key: string): Date | null {
+  const match = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(key);
+  if (!match) return null;
+  const date = new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3] ?? "1"),
+  );
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function enumLabelFromMetadata(
@@ -1312,6 +1378,7 @@ function normalizeEnumValue(value: string): string {
 export function cellContent<TRow extends Row>(
   column: ColumnDescriptor<TRow>,
   row: TRow,
+  t: UiTranslate,
 ): React.ReactNode {
   if (column.render) return column.render(row);
   const value = readPath(row, column.field);
@@ -1333,7 +1400,7 @@ export function cellContent<TRow extends Row>(
   }
   const date = looksLikeDateField(column.field) ? dateFromUnknown(value) : null;
   if (date) return <RelativeTime value={date} />;
-  return displayValue(value);
+  return displayValue(value, t);
 }
 
 function renderCell<TRow extends Row>(
@@ -1360,16 +1427,17 @@ export function ariaSortForColumn<TRow extends Row>(
 function rowActionLabelForTableColumn<TRow extends Row>(
   column: TableColumn<TRow, unknown>,
   row: TRow,
+  t: UiTranslate,
 ): string {
   const value = readPath(row, column.id);
   if (Array.isArray(value)) {
     const label = value.map((item) => String(item)).join(", ").trim();
-    return label || "record";
+    return label || t("list.record");
   }
   if (typeof value === "string" && value.trim()) return value;
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (typeof value === "boolean") return value ? "Yes" : "No";
-  return "record";
+  if (typeof value === "boolean") return t(value ? "list.yes" : "list.no");
+  return t("list.record");
 }
 
 export function readPath(row: Row, path: string): unknown {
@@ -1484,9 +1552,9 @@ function formatMeasureValue(value: unknown): string {
   return value == null ? "" : String(value);
 }
 
-function displayValue(value: unknown): React.ReactNode {
+function displayValue(value: unknown, t: UiTranslate): React.ReactNode {
   if (value == null) return "";
-  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "boolean") return t(value ? "list.yes" : "list.no");
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
 }

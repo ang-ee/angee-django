@@ -20,9 +20,10 @@ import type {
 import type { ResourceViewFilter, ResourceViewGroup } from "./resource-view-model";
 import { facetRequestSpec } from "./facet-query";
 import { useUiT } from "../i18n";
+import type { UiTranslate } from "../i18n";
 import {
   resourceViewGroupToAggregateDimension,
-  groupKey,
+  groupLabel,
   hasuraGroupDimension,
   hasuraGroupOrderForDimensions,
 } from "./resource-view-list-body";
@@ -86,7 +87,7 @@ export function useScalarFacets<TRow extends object>(
       facets.flatMap((facet) => {
         const result = facetQuery.facets[facet.id];
         return (result?.options ?? []).map((option) =>
-          scalarFilterOption(facet, option, metadata, t("list.emptyValue")),
+          scalarFilterOption(facet, option, metadata, t("list.emptyValue"), t),
         );
       }),
     [facetQuery.facets, facets, metadata, t],
@@ -103,7 +104,13 @@ export function useScalarFacets<TRow extends object>(
           type: "selection",
           options: result.options.map((option) => ({
             value: option.value,
-            label: scalarFacetOptionLabel(facet, option, metadata, t("list.emptyValue")),
+            label: scalarFacetOptionLabel(
+              facet,
+              option,
+              metadata,
+              t("list.emptyValue"),
+              t,
+            ),
           })),
         }];
       }),
@@ -124,8 +131,9 @@ function scalarFilterOption(
   option: ResourceFacetOption,
   metadata: ModelMetadata | null,
   emptyValueLabel: string,
+  t: UiTranslate,
 ): ResourceToolbarFilterOption {
-  const label = scalarFacetOptionLabel(facet, option, metadata, emptyValueLabel);
+  const label = scalarFacetOptionLabel(facet, option, metadata, emptyValueLabel, t);
   return {
     id: `${facet.field}:${option.value}`,
     label,
@@ -139,9 +147,10 @@ function scalarFacetOptionLabel(
   option: ResourceFacetOption,
   metadata: ModelMetadata | null,
   emptyValueLabel: string,
+  t: UiTranslate,
 ): React.ReactNode {
   const value = option.key[facet.spec.valueKey ?? facet.field] ?? option.value;
-  return groupKey(value, facet.group, metadata, emptyValueLabel);
+  return groupLabel(value, facet.group, metadata, emptyValueLabel, t);
 }
 
 export function scalarFacetDeclarations<TRow extends object>(

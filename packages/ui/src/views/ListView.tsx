@@ -427,6 +427,7 @@ function ListViewContent<TRow extends Row = Row>({
   emptyContent,
   className,
 }: ListViewContentProps<TRow>): React.ReactElement {
+  const t = useUiT();
   const flatMeasures = React.useMemo(
     () => groupMeasuresFromColumns(resolvedColumns),
     [resolvedColumns],
@@ -502,7 +503,7 @@ function ListViewContent<TRow extends Row = Row>({
     onCreate,
     resourceView,
     groupingEnabled: !boardGroupingPinned,
-    pagerSubject: groupedListMode ? "Groups" : undefined,
+    pagerSubject: groupedListMode ? t("pager.groups") : undefined,
     pagerTotalUnit: groupedListMode ? "groups" : undefined,
   });
 
@@ -609,6 +610,7 @@ function ListViewContent<TRow extends Row = Row>({
           visibleFields={surface.visibleFields}
           onVisibleFieldToggle={surface.toggleVisibleField}
           resourceView={resourceView}
+          groupStack={effectiveGroupStack}
           interactive={interactive}
           rowHref={rowHref}
           renderRowActions={renderRowActions}
@@ -631,6 +633,7 @@ function ListViewContent<TRow extends Row = Row>({
           visibleFields={surface.visibleFields}
           onVisibleFieldToggle={surface.toggleVisibleField}
           resourceView={resourceView}
+          groupStack={effectiveGroupStack}
           interactive={interactive}
           rowHref={rowHref}
           renderRowActions={renderRowActions}

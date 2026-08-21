@@ -57,6 +57,11 @@ function params(overrides: Partial<GroupedRenderParams> = {}): GroupedRenderPara
     emptyValueLabel: "Empty",
     emptyRelationLabel: (field) => `No ${field}`,
     allRecordsLabel: "All records",
+    t: (key, vars) => {
+      if (key === "list.quarter") return `Q${vars?.quarter} ${vars?.year}`;
+      if (key === "list.weekOf") return `Week of ${vars?.date}`;
+      return key;
+    },
     ...overrides,
   };
 }

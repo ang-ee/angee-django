@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { TimelineEntry } from "./TimelineEntry";
@@ -22,5 +22,11 @@ describe("TimelineEntry", () => {
 
     expect(container.textContent).toContain(`${"b".repeat(157)}...`);
     expect(container.textContent).not.toContain(over);
+  });
+
+  test("uses the translated UI fallback for an empty snapshot", () => {
+    render(<TimelineEntry title="Updated" timestamp={null} />);
+
+    expect(screen.getByText("No snapshot.")).toBeTruthy();
   });
 });

@@ -22,7 +22,11 @@ import {
   type BaseAddon,
   type CreateAppInput,
 } from "./create-app";
-import type { BaseMenuItem, ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
+import {
+  ChromeMenuNode,
+  type BaseMenuItem,
+  type ChromeMenuItem,
+} from "@angee/ui/chrome/menu-tree";
 import { useChromeMenuItems } from "@angee/ui/chrome/refine-menu";
 import { trailingRouteParamName } from "./route-paths";
 
@@ -79,6 +83,14 @@ interface CapturedBreadcrumbItem {
   to?: string;
 }
 
+/**
+ * Assert the invariants a rendered addon can satisfy in isolation. Menu icons
+ * follow {@link ChromeMenuNode.iconName}: the runtime resolves `icon ?? id` and
+ * renders that value as a glyph. An icon-less menu id must therefore itself be
+ * a kebab-case, composition-registered glyph name; global registration is
+ * checked by the architecture composition guard because addons may own icons
+ * consumed by declared dependants.
+ */
 export function expectValidBaseAddon(
   addon: BaseAddon,
 ): void {
@@ -110,6 +122,7 @@ export function expectValidBaseAddon(
         `Addon "${addon.id}" route "${route.name}" component must be a function.`,
       );
     }
+    if (route.icon) assertValidIconName(addon.id, `route "${route.name}"`, route.icon);
   }
   for (const item of addon.menus ?? []) {
     assertValidMenuItem(addon.id, item);
@@ -119,18 +132,37 @@ export function expectValidBaseAddon(
       throw new Error(`Addon "${addon.id}" icon "${iconName}" must be kebab-case.`);
     }
   }
+  for (const chatter of addon.chatter ?? []) {
+    if (chatter.icon) {
+      assertValidIconName(addon.id, `chatter "${chatter.id}"`, chatter.icon);
+    }
+  }
+  for (const drawer of addon.drawers ?? []) {
+    if (drawer.icon) {
+      assertValidIconName(addon.id, `drawer "${drawer.id}"`, drawer.icon);
+    }
+  }
 }
 
 function assertValidMenuItem(
   addonId: string,
   item: BaseMenuItem,
 ): void {
-  if (item.icon && !isKebabCase(item.icon)) {
-    throw new Error(`Addon "${addonId}" menu icon "${item.icon}" must be kebab-case.`);
-  }
+  const iconName = new ChromeMenuNode(item as ChromeMenuItem).iconName;
+  assertValidIconName(addonId, `menu "${item.id}"`, iconName);
   item.children?.forEach((child) =>
     assertValidMenuItem(addonId, child)
   );
+}
+
+function assertValidIconName(
+  addonId: string,
+  owner: string,
+  iconName: string,
+): void {
+  if (!isKebabCase(iconName)) {
+    throw new Error(`Addon "${addonId}" ${owner} icon "${iconName}" must be kebab-case.`);
+  }
 }
 
 function isKebabCase(value: string): boolean {

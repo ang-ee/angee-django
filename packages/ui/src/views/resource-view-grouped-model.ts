@@ -32,6 +32,7 @@ import {
   type ResourceViewFilter,
   type ResourceViewGroup,
 } from "./resource-view-model";
+import type { UiTranslate } from "../i18n";
 
 /** Leaf record page size inside a server-grouped bucket. */
 const GROUPED_LEAF_PAGE_SIZE = 20;
@@ -52,6 +53,7 @@ export interface GroupedRenderParams {
   emptyValueLabel: string;
   emptyRelationLabel: (field: string) => string;
   allRecordsLabel: string;
+  t: UiTranslate;
 }
 
 export interface GroupedRenderModel<TRow extends Row> {
@@ -87,6 +89,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
     emptyValueLabel,
     emptyRelationLabel,
     allRecordsLabel,
+    t,
   } = params;
   const groupScopes: GroupByBatchScope[] = [];
   const leafScopes: AngeeListBatchScope[] = [];
@@ -242,6 +245,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
         modelMetadata,
         allRecordsLabel,
         emptyValueLabel,
+        t,
         emptyRelationLabel,
       );
       items.push({
@@ -284,6 +288,7 @@ function bucketLabel(
   metadata: ModelMetadata | null,
   allRecordsLabel: string,
   emptyValueLabel: string,
+  t: UiTranslate,
   emptyRelationLabel: (field: string) => string,
 ): string {
   if (!group) return allRecordsLabel;
@@ -292,6 +297,7 @@ function bucketLabel(
     [group],
     metadata,
     emptyValueLabel,
+    t,
     emptyRelationLabel,
   );
   return label ?? allRecordsLabel;
