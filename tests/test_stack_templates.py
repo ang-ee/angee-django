@@ -508,8 +508,8 @@ def test_local_stack_renders_single_caddy_frontend_ingress() -> None:
     assert "redis" in stack["services"]
     assert stack["services"]["django"]["env"]["REDIS_URL"] == "redis://redis:6379/0"
     assert stack["services"]["django"]["env"]["CELERY_BROKER_URL"] == "redis://redis:6379/1"
-    assert "celery -A angee.tasks.celery:app worker" in stack["services"]["celery-worker"]["command"][-1]
-    assert "celery -A angee.tasks.celery:app beat" in stack["services"]["celery-beat"]["command"][-1]
+    assert "celery -A angee.jobs.celery:app worker" in stack["services"]["celery-worker"]["command"][-1]
+    assert "celery -A angee.jobs.celery:app beat" in stack["services"]["celery-beat"]["command"][-1]
 
     caddy = stack["services"]["caddy"]
     assert caddy["ports"] == ["5173:80"]

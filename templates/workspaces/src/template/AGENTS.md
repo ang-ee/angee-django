@@ -8,7 +8,7 @@ there.
 
 ## The slots
 
-- **`angee-django/`** — the framework core: `angee.{base,compose,graphql,tasks}`,
+- **`angee-django/`** — the framework core: `angee.{base,compose,graphql,jobs}`,
   the composer, and the framework docs. The one real Python package. Its
   `AGENTS.md` carries the constitution that governs work in every slot.
 - **`angee-react/`** — the framework React packages (`@angee/app`, `ui`,

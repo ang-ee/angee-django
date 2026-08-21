@@ -382,7 +382,7 @@ services:
 {% if runtime_mode == "process" %}
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "celery", "-A", "angee.tasks.celery:app", {% if role == "beat" %}"beat"{% else %}"worker"{% endif %}{% if role != "worker" and role != "beat" %}, "-Q", "{{ role }}", "--pool", "threads", "--concurrency", "8"{% endif %}, "--loglevel=INFO"]
+    command: ["uv", "run", "celery", "-A", "angee.jobs.celery:app", {% if role == "beat" %}"beat"{% else %}"worker"{% endif %}{% if role != "worker" and role != "beat" %}, "-Q", "{{ role }}", "--pool", "threads", "--concurrency", "8"{% endif %}, "--loglevel=INFO"]
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
@@ -422,7 +422,7 @@ services:
         [ "$$n" -ge 300 ] && { echo 'django migrations not ready after 300s:' >&2; cat /tmp/migratewait.err >&2; exit 1; };
         echo "waiting for django migrations ($$n/300)..."; sleep 1;
         done;
-        exec celery -A angee.tasks.celery:app {% if role == "beat" %}beat{% else %}worker{% endif %}{% if role != "worker" and role != "beat" %} -Q {{ role }} --pool threads --concurrency 8{% endif %} --loglevel=INFO
+        exec celery -A angee.jobs.celery:app {% if role == "beat" %}beat{% else %}worker{% endif %}{% if role != "worker" and role != "beat" %} -Q {{ role }} --pool threads --concurrency 8{% endif %} --loglevel=INFO
     after: [django, redis]
 {% endif %}
 {% endif %}{% endfor %}
