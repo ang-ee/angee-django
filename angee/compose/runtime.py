@@ -412,6 +412,21 @@ class Runtime:
                 "        abstract = False",
                 f"        app_label = {label!r}",
             ]
+            # Donor Metas must stay standalone: subclassing the source Meta
+            # would make this explicit merge duplicate inherited constraints.
+            constraint_aliases = [
+                alias
+                for extension, alias in plan.extension_aliases
+                if extension._meta.constraints
+            ]
+            if constraint_aliases:
+                inherited_constraints = ", ".join(
+                    f"*{alias}._meta.constraints" for alias in constraint_aliases
+                )
+                meta_lines.append(
+                    f"        constraints = [*getattr({meta_name}, 'constraints', []), "
+                    f"{inherited_constraints}]"
+                )
             meta_lines.extend(self._rebac_meta_source(plan.model_class))
             body_lines = [
                 line for name in plan.override_removed_fields for line in (f"    {name} = None", "")
