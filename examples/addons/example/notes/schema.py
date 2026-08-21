@@ -77,7 +77,7 @@ _NOTE_RESOURCE = hasura_model_resource(
     NoteType,
     model=Note,
     name="notes",
-    filterable=["id", "title", "status", "tags", "is_starred", "updated_at"],
+    filterable=["id", "title", "status", "tags", "updated_at"],
     sortable=["title", "status", "updated_at", "created_at", "word_count"],
     aggregatable=["id", "word_count"],
     groupable=["status", "tags", "updated_at"],
