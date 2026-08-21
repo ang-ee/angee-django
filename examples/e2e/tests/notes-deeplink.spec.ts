@@ -1,21 +1,12 @@
 import { test, expect, roleStatePath, GraphQLClient } from "@angee/e2e";
 
 import { NotesPage } from "../pages/notes-page";
-
-const NOTES_QUERY = `query Notes {
-  notes {
-    results { id }
-  }
-}`;
-
-interface NotesData {
-  notes: { results: { id: string }[] };
-}
+import { NOTES_QUERY, type NotesData } from "./fixtures/notes";
 
 async function firstNoteId(api: GraphQLClient): Promise<string> {
   const result = await api.query<NotesData>(NOTES_QUERY);
   expect(result.errors).toBeUndefined();
-  const id = result.data?.notes.results[0]?.id;
+  const id = result.data?.notes[0]?.id;
   expect(id).toBeTruthy();
   return id!;
 }

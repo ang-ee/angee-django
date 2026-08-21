@@ -2,16 +2,7 @@ import type { APIRequestContext } from "@playwright/test";
 import { test, expect, roleStatePath, GraphQLClient } from "@angee/e2e";
 
 import { NotesPage } from "../pages/notes-page";
-
-const NOTES_QUERY = `query Notes {
-  notes { id title }
-  notes_aggregate { aggregate { count } }
-}`;
-
-interface NotesData {
-  notes: { id: string; title: string }[];
-  notes_aggregate: { aggregate: { count: number } };
-}
+import { NOTES_QUERY, type NotesData } from "./fixtures/notes";
 
 // Stable curated notes from the demo seed (`resources load demo`), all owned by
 // alice. The dev stack also bulk-seeds thousands of lorem notes, so these are
