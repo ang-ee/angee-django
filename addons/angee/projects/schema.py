@@ -7,7 +7,12 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
-from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data import (
+    AngeeHasuraWriteBackend,
+    declared_hasura_resource_fields,
+    hasura_model_resource,
+    public_pk_decoder,
+)
 from angee.graphql.ids import PublicID, optional_public_id, require_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
@@ -33,6 +38,46 @@ ThreadActivity = apps.get_model("messaging", "ThreadActivity")
 Folder = apps.get_model("storage", "Folder")
 Party = apps.get_model("parties", "Party")
 User = get_user_model()
+
+_TASK_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(
+    Task,
+    "hasura_readable_fields",
+)
+_TASK_EXTENSION_FILTER_FIELDS = declared_hasura_resource_fields(
+    Task,
+    "hasura_filterable_fields",
+)
+_TASK_EXTENSION_ORDER_FIELDS = declared_hasura_resource_fields(
+    Task,
+    "hasura_sortable_fields",
+)
+_TASK_EXTENSION_AGGREGATE_FIELDS = declared_hasura_resource_fields(
+    Task,
+    "hasura_aggregatable_fields",
+)
+_TASK_EXTENSION_GROUP_FIELDS = declared_hasura_resource_fields(
+    Task,
+    "hasura_groupable_fields",
+)
+_TASK_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(
+    Task,
+    "hasura_insertable_fields",
+)
+_TASK_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(
+    Task,
+    "hasura_updatable_fields",
+)
+_TASK_EXTENSION_FORBIDDEN_INSERT_FIELDS = set(
+    declared_hasura_resource_fields(Task, "hasura_forbidden_insertable_fields")
+)
+_TASK_EXTENSION_WRITE_FIELDS = tuple(
+    dict.fromkeys((*_TASK_EXTENSION_INSERT_FIELDS, *_TASK_EXTENSION_UPDATE_FIELDS))
+)
+_TASK_EXTENSION_PUBLIC_ID_FIELDS = tuple(
+    name
+    for name in _TASK_EXTENSION_WRITE_FIELDS
+    if Task._meta.get_field(name).is_relation
+)
 
 DroppedReason = Task._meta.get_field("dropped_reason").choices_enum
 strawberry.enum(cast(Any, DroppedReason))
@@ -353,6 +398,7 @@ _TASK_RESOURCE = hasura_model_resource(
         "converted_from_activity",
         "created_at",
         "updated_at",
+        *_TASK_EXTENSION_FILTER_FIELDS,
     ],
     sortable=[
         "project",
@@ -368,8 +414,14 @@ _TASK_RESOURCE = hasura_model_resource(
         "dropped_at",
         "created_at",
         "updated_at",
+        *_TASK_EXTENSION_ORDER_FIELDS,
     ],
-    aggregatable=["id", "sort_order", "sub_sort_order"],
+    aggregatable=[
+        "id",
+        "sort_order",
+        "sub_sort_order",
+        *_TASK_EXTENSION_AGGREGATE_FIELDS,
+    ],
     groupable=[
         "project",
         "milestone",
@@ -380,22 +432,30 @@ _TASK_RESOURCE = hasura_model_resource(
         "delegate",
         "priority",
         "due_date",
+        *_TASK_EXTENSION_GROUP_FIELDS,
     ],
     insertable=[
-        "project",
-        "milestone",
-        "parent",
-        "title",
-        "note",
-        "status",
-        "dropped_reason",
-        "assignee",
-        "delegate",
-        "priority",
-        "due_date",
-        "recurrence",
-        "sort_order",
-        "sub_sort_order",
+        *(
+            field
+            for field in (
+                "project",
+                "milestone",
+                "parent",
+                "title",
+                "note",
+                "status",
+                "dropped_reason",
+                "assignee",
+                "delegate",
+                "priority",
+                "due_date",
+                "recurrence",
+                "sort_order",
+                "sub_sort_order",
+            )
+            if field not in _TASK_EXTENSION_FORBIDDEN_INSERT_FIELDS
+        ),
+        *_TASK_EXTENSION_INSERT_FIELDS,
     ],
     updatable=[
         "project",
@@ -410,6 +470,7 @@ _TASK_RESOURCE = hasura_model_resource(
         "recurrence",
         "sort_order",
         "sub_sort_order",
+        *_TASK_EXTENSION_UPDATE_FIELDS,
     ],
     field_id_decode={
         "project": public_pk_decoder(Project),
@@ -418,11 +479,23 @@ _TASK_RESOURCE = hasura_model_resource(
         "assignee": public_pk_decoder(User),
         "delegate": public_pk_decoder(User),
         "converted_from_activity": public_pk_decoder(ThreadActivity),
+        **{
+            name: public_pk_decoder(Task._meta.get_field(name).related_model)
+            for name in _TASK_EXTENSION_PUBLIC_ID_FIELDS
+        },
     },
     write_backend=AngeeHasuraWriteBackend(
         Task,
-        public_id_fields=("project", "milestone", "parent", "assignee", "delegate"),
+        public_id_fields=(
+            "project",
+            "milestone",
+            "parent",
+            "assignee",
+            "delegate",
+            *_TASK_EXTENSION_PUBLIC_ID_FIELDS,
+        ),
     ),
+    declared_fields=_TASK_EXTENSION_READ_FIELDS,
 )
 
 _TASK_RELATION_RESOURCE = hasura_model_resource(

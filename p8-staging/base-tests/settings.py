@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     "angee.projects",
     "angee.messaging_integrate_slack",
     "angee.spaces",
+    "angee.work",
     "angee.nexus",
     "angee.posts",
     "angee.platform",

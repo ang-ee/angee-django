@@ -1,0 +1,23 @@
+_meta:
+  model: work.Queue
+rows:
+  - xref: eng
+    fields:
+      name: Engineering
+      slug: engineering
+      description: Engineering delivery and maintenance work.
+      visibility: private
+      key: ENG
+      triage_enabled: true
+      cycles_enabled: true
+      cycle_weeks: 2
+      cycle_cooldown_weeks: 0
+      cycle_start_day: 0
+      upcoming_cycle_count: 2
+      estimate_scale: fibonacci
+      estimate_allow_zero: true
+      default_estimate: 3.0
+      auto_archive_months: 6
+      auto_close_months: 3
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
