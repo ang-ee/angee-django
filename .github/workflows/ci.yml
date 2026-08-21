@@ -16,7 +16,4 @@ jobs:
       # No JS remains in this repo since the example host dissolved (P7); the
       # composed-web coverage lives in the stack lane.
       pnpm-enabled: false
-      # Flip on once the sibling repos are public (P5) or a SIBLINGS_TOKEN
-      # org secret can read them — the lane's cross-repo checkouts need one
-      # of the two.
-      stack-enabled: false
+      stack-enabled: true
