@@ -4,12 +4,12 @@ import {
   Glyph,
   ListView,
   MutationDialog,
-  errorMessage,
+  defineRowAction,
+  rowIdVariables,
   useAuthoredResourceMutation,
-  useConfirm,
-  useToast,
   type ListColumn,
   type MutationDialogField,
+  type RowActionDeclaration,
   type StringIdRow,
 } from "@angee/ui";
 
@@ -40,16 +40,11 @@ function CircleMembershipList({
   anchorId: string;
 }): React.ReactElement {
   const t = usePartiesT();
-  const confirm = useConfirm();
-  const toast = useToast();
   const [addOpen, setAddOpen] = React.useState(false);
   const [add, addState] = useAuthoredResourceMutation(AddCircleMember, {
     invalidateModels: CIRCLE_MEMBER_INVALIDATES,
   });
-  const [remove, removeState] = useAuthoredResourceMutation(RemoveCircleMember, {
-    invalidateModels: CIRCLE_MEMBER_INVALIDATES,
-  });
-  const busy = addState.fetching || removeState.fetching;
+  const busy = addState.fetching;
 
   const fields = React.useMemo<readonly MutationDialogField[]>(
     () => [
@@ -76,50 +71,35 @@ function CircleMembershipList({
         : { field: "party.display_name", header: t("circle.memberParty") },
       { field: "source" },
       { field: "confidence" },
-      {
-        field: "id",
-        header: t("circle.membership.actions"),
-        headerVisuallyHidden: true,
-        sortable: false,
-        align: "right",
-        render: (row) => (
-          <Button
-            type="button"
-            variant="ghost"
-            size="iconSm"
-            aria-label={t("circle.membership.remove")}
-            title={t("circle.membership.remove")}
-            disabled={busy}
-            onClick={(event) => {
-              event.stopPropagation();
-              void removeMembership(row);
-            }}
-          >
-            <Glyph decorative name="trash" />
-          </Button>
-        ),
-      },
     ],
-    [anchor, busy, t],
+    [anchor, t],
   );
-
-  async function removeMembership(row: MembershipRow): Promise<void> {
-    const accepted = await confirm({
-      title: t("circle.membership.removeTitle"),
-      body: t("circle.membership.removeDescription"),
-      confirm: t("circle.membership.remove"),
-      danger: true,
-    });
-    if (!accepted) return;
-    try {
-      await remove({ id: row.id });
-    } catch (cause) {
-      toast.danger({
-        title: t("circle.membership.removeError"),
-        description: errorMessage(cause, t("circle.membership.removeError")),
-      });
-    }
-  }
+  const rowActions = React.useMemo<readonly RowActionDeclaration<MembershipRow>[]>(
+    () => [
+      defineRowAction({
+        kind: "authored",
+        id: "remove-membership",
+        label: t("circle.membership.remove"),
+        document: RemoveCircleMember,
+        variables: rowIdVariables,
+        invalidateModels: CIRCLE_MEMBER_INVALIDATES,
+        confirm: {
+          title: () => t("circle.membership.removeTitle"),
+          body: () => t("circle.membership.removeDescription"),
+          confirm: () => t("circle.membership.remove"),
+        },
+        toast: {
+          title: () => t("circle.membership.removeError"),
+          description: () => t("circle.membership.removeError"),
+        },
+        icon: "trash",
+        variant: "ghost",
+        disabled: () => busy,
+        pendingPolicy: "disable-actions",
+      }),
+    ],
+    [busy, t],
+  );
 
   return (
     <>
@@ -136,6 +116,7 @@ function CircleMembershipList({
           [anchor === "person" ? "party" : "circle"]: { exact: anchorId },
         }}
         columns={columns}
+        rowActions={rowActions}
         toolbarActions={
           <Button type="button" variant="primary" size="sm" onClick={() => setAddOpen(true)}>
             <Glyph decorative name="plus" />

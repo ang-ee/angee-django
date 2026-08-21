@@ -1,4 +1,14 @@
-import { Badge, Button, cn, RowsListView, textRoleVariants, useConfirm, usePrompt, type ListColumn } from "@angee/ui";
+import {
+  Badge,
+  Button,
+  RowsListView,
+  defineRowAction,
+  textRoleVariants,
+  useConfirm,
+  usePrompt,
+  type ListColumn,
+  type RowActionDeclaration,
+} from "@angee/ui";
 import { useCallback, useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
@@ -27,35 +37,57 @@ export function SecretsPage(): ReactNode {
   // The set form is a prompt (a form surface), not a panel crammed above the list.
   // A row's name pre-fills it; the toolbar action collects an arbitrary name.
   const promptSet = useCallback(
-    (presetName?: string): void => {
-      void (async () => {
-        const values = await prompt({
-          title: t("secrets.form.title"),
-          confirm: t("secrets.form.submit"),
-          fields: [
-            {
-              name: "name",
-              label: t("secrets.form.name"),
-              placeholder: t("secrets.form.namePlaceholder"),
-              defaultValue: presetName,
-              readOnly: presetName !== undefined,
-            },
-            {
-              name: "value",
-              label: t("secrets.form.value"),
-              placeholder: t("secrets.form.valuePlaceholder"),
-              type: "password",
-            },
-          ],
-        });
-        if (!values) return;
-        const name = (values.name ?? "").trim();
-        const value = values.value ?? "";
-        if (name.length === 0 || value.length === 0) return;
-        await setSecret(name, value);
-      })();
+    async (presetName?: string): Promise<void> => {
+      const values = await prompt({
+        title: t("secrets.form.title"),
+        confirm: t("secrets.form.submit"),
+        fields: [
+          {
+            name: "name",
+            label: t("secrets.form.name"),
+            placeholder: t("secrets.form.namePlaceholder"),
+            defaultValue: presetName,
+            readOnly: presetName !== undefined,
+          },
+          {
+            name: "value",
+            label: t("secrets.form.value"),
+            placeholder: t("secrets.form.valuePlaceholder"),
+            type: "password",
+          },
+        ],
+      });
+      if (!values) return;
+      const name = (values.name ?? "").trim();
+      const value = values.value ?? "";
+      if (name.length === 0 || value.length === 0) return;
+      await setSecret(name, value);
     },
     [prompt, setSecret, t],
+  );
+  const rowActions = useMemo<readonly RowActionDeclaration<SecretRowData>[]>(
+    () => [
+      defineRowAction({
+        kind: "page",
+        id: "set-secret",
+        label: t("secrets.form.submit"),
+        variant: "ghost",
+        disabled: () => busy,
+        pendingPolicy: "active-row",
+        onSelect: (secret) => promptSet(secret.name),
+      }),
+      defineRowAction({
+        kind: "page",
+        id: "delete-secret",
+        label: t("secrets.delete"),
+        variant: "ghost",
+        visible: (secret) => !secret.required && !secret.generated,
+        disabled: () => busy,
+        pendingPolicy: "active-row",
+        onSelect: deleteSecret,
+      }),
+    ],
+    [busy, deleteSecret, promptSet, t],
   );
 
   const columns = useMemo<readonly ListColumn<SecretRowData>[]>(
@@ -88,9 +120,21 @@ export function SecretsPage(): ReactNode {
         header: t("secrets.column.required"),
         render: (secret) =>
           secret.required ? (
-            <Badge density="compact" shape="pill" tone="warning">
+            <Badge
+              density="compact"
+              shape="pill"
+              tone="warning"
+              title={t("secrets.protected.hint")}
+            >
               {t("secrets.yes")}
             </Badge>
+          ) : secret.generated ? (
+            <span
+              className={textRoleVariants({ role: "meta" })}
+              title={t("secrets.protected.hint")}
+            >
+              {t("secrets.protected")}
+            </span>
           ) : (
             <span className="text-fg-muted">—</span>
           ),
@@ -102,45 +146,17 @@ export function SecretsPage(): ReactNode {
           <span className={textRoleVariants({ role: "meta", mono: true })}>{secret.envVar ?? "—"}</span>
         ),
       },
-      {
-        field: "actions",
-        header: t("table.actions"),
-        sortable: false,
-        align: "right",
-        render: (secret) =>
-          secret.required || secret.generated ? (
-            // Required/generated secrets are control-plane (e.g. the generated
-            // operator bearer shared by Django + the daemon); deleting one can
-            // brick minting, so the console withholds it but still allows a re-set.
-            <div className="flex justify-end gap-1">
-              <Button disabled={busy} onClick={() => promptSet(secret.name)} size="sm" variant="ghost">
-                {t("secrets.form.submit")}
-              </Button>
-              <span className={cn(textRoleVariants({ role: "meta" }), "self-center")} title={t("secrets.protected.hint")}>
-                {t("secrets.protected")}
-              </span>
-            </div>
-          ) : (
-            <div className="flex justify-end gap-1">
-              <Button disabled={busy} onClick={() => promptSet(secret.name)} size="sm" variant="ghost">
-                {t("secrets.form.submit")}
-              </Button>
-              <Button disabled={busy} onClick={() => deleteSecret(secret)} size="sm" variant="ghost">
-                {t("secrets.delete")}
-              </Button>
-            </div>
-          ),
-      },
     ],
-    [busy, deleteSecret, promptSet, t],
+    [t],
   );
 
   return (
     <RowsListView<SecretRowData>
       rows={rows}
       columns={columns}
+      rowActions={rowActions}
       toolbarActions={
-        <Button disabled={busy} onClick={() => promptSet()} size="sm" variant="secondary">
+        <Button disabled={busy} onClick={() => void promptSet()} size="sm" variant="secondary">
           {t("secrets.form.title")}
         </Button>
       }
@@ -154,7 +170,7 @@ export function SecretsPage(): ReactNode {
 /** Secret mutations: prompt-driven set plus per-row confirmed delete. */
 function useSecretActions(refetch: () => void): {
   setSecret: (name: string, value: string) => Promise<boolean>;
-  deleteSecret: (secret: SecretRef) => void;
+  deleteSecret: (secret: SecretRef) => Promise<void>;
   busy: boolean;
 } {
   const t = useOperatorT();
@@ -177,22 +193,20 @@ function useSecretActions(refetch: () => void): {
   );
 
   const deleteSecret = useCallback(
-    (secret: SecretRef): void => {
-      void (async () => {
-        const ok = await confirm({
-          title: t("secrets.delete.confirm.title"),
-          body: t("secrets.delete.confirm.body", { name: secret.name }),
-          confirm: t("secrets.delete"),
-          danger: true,
-        });
-        if (!ok) return;
-        await runDaemon({
-          run: remove.run,
-          field: "delete_secrets_by_pk",
-          variables: { id: secret.id },
-          label: t("secrets.delete.label"),
-        });
-      })();
+    async (secret: SecretRef): Promise<void> => {
+      const ok = await confirm({
+        title: t("secrets.delete.confirm.title"),
+        body: t("secrets.delete.confirm.body", { name: secret.name }),
+        confirm: t("secrets.delete"),
+        danger: true,
+      });
+      if (!ok) return;
+      await runDaemon({
+        run: remove.run,
+        field: "delete_secrets_by_pk",
+        variables: { id: secret.id },
+        label: t("secrets.delete.label"),
+      });
     },
     [confirm, remove.run, runDaemon, t],
   );

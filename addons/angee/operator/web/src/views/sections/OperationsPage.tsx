@@ -1,4 +1,16 @@
-import { Button, Card, CardContent, CardHeader, CardTitle, RowsListView, textRoleVariants, useConfirm, type ListColumn } from "@angee/ui";
+import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  RowsListView,
+  defineRowAction,
+  textRoleVariants,
+  useConfirm,
+  type ListColumn,
+  type RowActionDeclaration,
+} from "@angee/ui";
 import { useMemo, type ReactNode } from "react";
 
 import {
@@ -35,6 +47,20 @@ export function OperationsPage(): ReactNode {
     (snapshot) => daemonRowsByName(snapshot.jobs),
   );
   const { runJob, stackActions, runStack, busy } = useOperationActions(refetch);
+  const rowActions = useMemo<readonly RowActionDeclaration<JobRowData>[]>(
+    () => [
+      defineRowAction({
+        kind: "page",
+        id: "run-job",
+        label: t("operations.run"),
+        variant: "secondary",
+        disabled: () => busy,
+        pendingPolicy: "active-row",
+        onSelect: runJob,
+      }),
+    ],
+    [busy, runJob, t],
+  );
 
   const columns = useMemo<readonly ListColumn<JobRowData>[]>(
     () => [
@@ -48,26 +74,8 @@ export function OperationsPage(): ReactNode {
         header: t("operations.column.runtime"),
         render: (job) => <span className={textRoleVariants({ role: "meta" })}>{job.runtime}</span>,
       },
-      {
-        field: "actions",
-        header: t("table.actions"),
-        sortable: false,
-        align: "right",
-        render: (job) => (
-          <div className="flex justify-end gap-1">
-            <Button
-              disabled={busy}
-              onClick={() => runJob(job)}
-              size="sm"
-              variant="secondary"
-            >
-              {t("operations.run")}
-            </Button>
-          </div>
-        ),
-      },
     ],
-    [busy, runJob, t],
+    [t],
   );
 
   return (
@@ -75,6 +83,7 @@ export function OperationsPage(): ReactNode {
       <RowsListView<JobRowData>
         rows={rows}
         columns={columns}
+        rowActions={rowActions}
         fetching={fetching}
         error={error}
         emptyContent={t("operations.empty")}
@@ -106,7 +115,7 @@ export function OperationsPage(): ReactNode {
 
 /** Operations actions: per-job run plus stack lifecycle controls. */
 function useOperationActions(refetch: () => void): {
-  runJob: (job: JobState) => void;
+  runJob: (job: JobState) => Promise<void>;
   stackActions: readonly StackAction[];
   runStack: (action: StackAction) => void;
   busy: boolean;
@@ -128,8 +137,8 @@ function useOperationActions(refetch: () => void): {
     jobRun.result.fetching;
 
   const runJob = useMemo(
-    () => (job: JobState) => {
-      void runDaemon({
+    () => async (job: JobState): Promise<void> => {
+      await runDaemon({
         run: jobRun.run,
         field: "jobRun",
         variables: { name: job.name },

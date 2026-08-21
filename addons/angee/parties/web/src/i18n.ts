@@ -65,6 +65,8 @@ export const enPartiesMessages: Record<string, string> = {
   "identity.state.suggested": "Suggested",
   "identity.confirm": "Confirm this handle belongs to the contact",
   "identity.dismiss": "Dismiss — never suggest this link again",
+  "identity.confirmError": "Could not confirm this identity claim.",
+  "identity.dismissError": "Could not dismiss this identity claim.",
   "identity.empty": "No identity claims for this contact yet.",
   "review.title": "Review",
   "review.description":
@@ -82,7 +84,6 @@ export const enPartiesMessages: Record<string, string> = {
   "review.party": "Contact",
   "review.handle": "Handle",
   "review.platform": "Platform",
-  "review.actions": "Actions",
   "review.empty": "Nothing to review — every identity claim is decided.",
   "merge.title": "Merge duplicates",
   "merge.description":
@@ -151,7 +152,6 @@ export const enPartiesMessages: Record<string, string> = {
   "circle.field.color": "Color",
   "circle.field.icon": "Icon",
   "circle.field.position": "Position",
-  "circle.membership.actions": "Membership actions",
   "circle.membership.add": "Add",
   "circle.membership.adding": "Adding…",
   "circle.membership.addCircle": "Add to circle",

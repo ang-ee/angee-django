@@ -12,10 +12,10 @@ import { useOperatorT } from "../../i18n";
 import { useOperatorAction } from "../../data/transport";
 import type { ServiceState } from "../../data/types";
 import { useRunDaemonAction } from "../parts/run-action";
-import type { RowAction } from "../parts/RowActions";
+import type { OperatorAction } from "../parts/OperatorActionButtons";
 
 /** A lifecycle action for a service: its label, tone, and bound handler. */
-export type ServiceRowAction = RowAction<ServiceState>;
+export type ServiceRowAction = OperatorAction<ServiceState>;
 
 /** Service lifecycle actions shared by the list row, detail page, and embedded ServiceRow. */
 export function useServiceActions(refetch: () => void): {

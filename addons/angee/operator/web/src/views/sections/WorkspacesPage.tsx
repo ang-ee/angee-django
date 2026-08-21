@@ -11,7 +11,7 @@ import type { WorkspaceRef, WorkspaceSourceStatus } from "../../data/types";
 import { workspaceDetailPath } from "../../lib/paths";
 import { daemonRows, daemonRowsByName, type DaemonRow } from "../parts/daemon-rows";
 import { OperatorSection } from "../parts/OperatorSection";
-import { RowActions } from "../parts/RowActions";
+import { OperatorActionButtons } from "../parts/OperatorActionButtons";
 import { StateTag } from "../parts/StateTag";
 import {
   useWorkspaceActions,
@@ -231,7 +231,7 @@ function WorkspaceControlRow({
       <span className="min-w-0 truncate font-mono text-fg-muted" title={workspace.path}>
         {workspace.path}
       </span>
-      <RowActions actions={actions} busy={busy} subject={workspace} />
+      <OperatorActionButtons actions={actions} busy={busy} subject={workspace} />
     </div>
   );
 }

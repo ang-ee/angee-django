@@ -26,7 +26,6 @@ export const operatorLogsDrawerTitle = "Logs";
  */
 export const enOperatorMessages: Record<string, string> = {
   // Shared table chrome.
-  "table.actions": "Actions",
 
   // Shared live-log panel.
   "logs.live": "Live",

@@ -9,10 +9,10 @@ import { useOperatorT } from "../../i18n";
 import { useOperatorAction } from "../../data/transport";
 import type { SourceState } from "../../data/types";
 import { useRunDaemonAction } from "../parts/run-action";
-import type { RowAction } from "../parts/RowActions";
+import type { OperatorAction } from "../parts/OperatorActionButtons";
 
 /** A git action for a source: its label, tone, and bound handler. */
-export type SourceRowAction = RowAction<SourceState>;
+export type SourceRowAction = OperatorAction<SourceState>;
 
 /** Source git actions shared by the source detail page. */
 export function useSourceActions(refetch: () => void): {

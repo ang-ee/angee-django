@@ -17,7 +17,7 @@ const pageMocks = vi.hoisted(() => ({
   transcriptThreadIds: [] as string[],
   mutationDialogs: [] as Record<string, unknown>[],
   mutationHookCalls: 0,
-  mutations: [vi.fn(), vi.fn(), vi.fn()],
+  mutations: [vi.fn(), vi.fn()],
   dialogRoleValue: undefined as string | undefined,
   threadRows: [
     { id: "thr_1", title: { text: "Primary" }, groups: [{ id: "grp_1", name: "Community" }] },
@@ -124,9 +124,11 @@ vi.mock("@angee/ui", () => ({
   },
   cn: (...classes: Array<string | false | null | undefined>) =>
     classes.filter(Boolean).join(" "),
+  defineRowAction: (declaration: Record<string, unknown>) => declaration,
+  rowIdVariables: (row: { id: string }) => ({ id: row.id }),
   errorMessage: (error: unknown) => String(error),
   useAuthoredResourceMutation: () => {
-    const mutation = pageMocks.mutations[pageMocks.mutationHookCalls % 3]!;
+    const mutation = pageMocks.mutations[pageMocks.mutationHookCalls % 2]!;
     pageMocks.mutationHookCalls += 1;
     return [mutation, { fetching: false, error: null }];
   },
@@ -189,6 +191,22 @@ describe("SpacesPage", () => {
       scope: "local",
       baseFilter: { group: { exact: "grp_1" } },
     });
+    const rosterActions = pageMocks.listViews[0]?.rowActions as Array<Record<string, unknown>>;
+    expect(rosterActions).toHaveLength(2);
+    expect(rosterActions[0]).toMatchObject({
+      kind: "page",
+      id: "change-membership-role",
+      pendingPolicy: "disable-actions",
+    });
+    const remove = rosterActions[1] as {
+      variables: (row: { id: string }) => unknown;
+      pendingPolicy: string;
+    };
+    expect(remove.variables({ id: "mem_1" })).toEqual({ id: "mem_1" });
+    expect(remove).toMatchObject({
+      kind: "authored",
+      pendingPolicy: "disable-actions",
+    });
     expect(pageMocks.listViews[1]).toMatchObject({
       resource: "spaces.GroupThread",
       scope: "local",
@@ -218,16 +236,10 @@ describe("SpacesPage", () => {
     const membershipList = pageMocks.listViews.find(
       (props) => props.resource === "spaces.Membership",
     );
-    const columns = membershipList?.columns as Array<{
-      field: string;
-      render?: (row: Record<string, unknown>) => React.ReactNode;
+    const [changeRole] = membershipList?.rowActions as Array<{
+      onSelect: (row: Record<string, unknown>) => void;
     }>;
-    const actions = columns.find((column) => column.field === "id");
-    render(<>{actions?.render?.({ id: "mem_1" })}</>);
-
-    fireEvent.click(screen.getByRole("button", {
-      name: "group.roster.changeRole",
-    }));
+    act(() => changeRole?.onSelect({ id: "mem_1" }));
 
     const roleDialog = pageMocks.mutationDialogs.find(
       (dialog) => dialog.open && dialog.title === "group.roster.changeRole",

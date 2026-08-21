@@ -2,7 +2,6 @@ import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   Avatar,
-  Button,
   EmptyState,
   ErrorBanner,
   Glyph,
@@ -18,19 +17,13 @@ import {
   avatarInitials,
   type ListColumn,
   type StringIdRow,
-  useAuthoredResourceMutation,
   useRouteHref,
   useSlot,
 } from "@angee/ui";
 import { Link } from "@tanstack/react-router";
-import {
-  ConfirmPartyHandle,
-  DismissPartyHandle,
-  DuplicatePartyCandidates,
-  PARTY_HANDLE_DECISION_INVALIDATES,
-  PartyReviewCounts,
-} from "./documents";
+import { DuplicatePartyCandidates, PartyReviewCounts } from "./documents";
 import { usePartiesT } from "./i18n";
+import { usePartyHandleRowActions } from "./party-handle-row-actions";
 import { PARTIES_REVIEW_TOOLBAR_SLOT } from "./slots";
 
 type SuggestionRow = StringIdRow;
@@ -48,15 +41,7 @@ export function ReviewPage(): React.ReactElement {
   const duplicates = useAuthoredQuery(DuplicatePartyCandidates, { limit: 50 }, {
     models: ["parties.Party", "parties.Handle", "parties.MergeVeto"],
   });
-  const [confirm, { fetching: confirming }] = useAuthoredResourceMutation(
-    ConfirmPartyHandle,
-    { invalidateModels: PARTY_HANDLE_DECISION_INVALIDATES },
-  );
-  const [dismiss, { fetching: dismissing }] = useAuthoredResourceMutation(
-    DismissPartyHandle,
-    { invalidateModels: PARTY_HANDLE_DECISION_INVALIDATES },
-  );
-  const busy = confirming || dismissing;
+  const rowActions = usePartyHandleRowActions<SuggestionRow>("all");
 
   const columns = React.useMemo<readonly ListColumn<SuggestionRow>[]>(
     () => [
@@ -65,45 +50,8 @@ export function ReviewPage(): React.ReactElement {
       { field: "party.display_name", header: t("review.party") },
       { field: "confidence" },
       { field: "source" },
-      {
-        field: "id",
-        header: t("review.actions"),
-        headerVisuallyHidden: true,
-        sortable: false,
-        align: "right",
-        render: (row) => (
-          <span className="inline-flex gap-1">
-            <Button
-              variant="ghost"
-              size="iconSm"
-              aria-label={t("identity.confirm")}
-              title={t("identity.confirm")}
-              disabled={busy}
-              onClick={(event) => {
-                event.stopPropagation();
-                void confirm({ id: row.id });
-              }}
-            >
-              <Glyph name="check" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="iconSm"
-              aria-label={t("identity.dismiss")}
-              title={t("identity.dismiss")}
-              disabled={busy}
-              onClick={(event) => {
-                event.stopPropagation();
-                void dismiss({ id: row.id });
-              }}
-            >
-              <Glyph name="x" />
-            </Button>
-          </span>
-        ),
-      },
     ],
-    [busy, confirm, dismiss, t],
+    [t],
   );
   const handleCount = counts.data?.party_handles_aggregate.aggregate?.count ?? 0;
   const duplicateCandidates = duplicates.data?.duplicate_party_candidates ?? [];
@@ -139,6 +87,7 @@ export function ReviewPage(): React.ReactElement {
                 confidence: { lt: 0.5 },
               }}
               columns={columns}
+              rowActions={rowActions}
               emptyContent={{
                 icon: "user-check",
                 title: t("review.handleLinks.empty.title"),

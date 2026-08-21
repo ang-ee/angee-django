@@ -6,10 +6,10 @@ import { SERVICE_ENDPOINT_QUERY } from "../../data/documents.daemon";
 import { OPERATOR_PROVIDER } from "../../data/operator-provider";
 import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
-import { RowActions } from "../parts/RowActions";
 import { StateTag } from "../parts/StateTag";
 import { ServiceLogs } from "./logs";
 import { useServiceActions } from "./service-actions";
+import { OperatorActionButtons } from "../parts/OperatorActionButtons";
 
 /** Service detail: state + lifecycle actions + the live log tail. */
 export function ServiceDetail(): ReactElement {
@@ -49,7 +49,7 @@ export function ServiceDetail(): ReactElement {
       }
       actions={
         service ? (
-          <RowActions
+          <OperatorActionButtons
             actions={actions}
             busy={busy}
             subject={service}

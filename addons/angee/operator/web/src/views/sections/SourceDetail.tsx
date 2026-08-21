@@ -3,9 +3,9 @@ import { type ReactElement } from "react";
 
 import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
-import { RowActions } from "../parts/RowActions";
 import { StateTag } from "../parts/StateTag";
 import { useSourceActions } from "./source-actions";
+import { OperatorActionButtons } from "../parts/OperatorActionButtons";
 
 /** Source detail: drift readout + the source's git actions (no log stream). */
 export function SourceDetail(): ReactElement {
@@ -40,7 +40,7 @@ export function SourceDetail(): ReactElement {
       }
       actions={
         source ? (
-          <RowActions
+          <OperatorActionButtons
             actions={actions}
             busy={busy}
             subject={source}
