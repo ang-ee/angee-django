@@ -43,14 +43,10 @@ from django.utils import timezone
 from django.utils.text import capfirst
 from rebac import (
     PermissionDenied,
-    RelationshipTuple,
     SubjectRef,
     current_actor,
-    delete_relationship,
     system_context,
-    to_object_ref,
     to_subject_ref,
-    write_relationships,
 )
 
 from angee.base.actors import actor_user_id
@@ -576,6 +572,8 @@ class ThreadedModelMixin(models.Model):
         follower's state unless a value is passed. ``grant_read`` also grants the user
         ``reader`` on the thread in the same write (a chat-room membership) — a consumer
         that manages room membership composes this rather than writing the tuple itself.
+        The ambient actor must hold ``share`` on the thread when ``grant_read=True``;
+        denial rolls back the whole subscribe transaction.
         """
 
         follower_model = apps.get_model("messaging", "ThreadFollower")
@@ -1208,6 +1206,7 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
     """
 
     runtime = True
+    rebac_grantable = {"reader": "share"}
 
     class Modality(models.TextChoices):
         """The structural shape of a thread."""
@@ -1310,35 +1309,21 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
         return self.host_broadcasts_changes or not self.is_record_attached()
 
     def grant_reader(self, *, user: models.Model | None = None, user_id: Any = None) -> None:
-        """Grant a user direct ``reader`` access to this thread.
+        """Grant a user direct ``reader`` access through the declared share surface."""
 
-        The one owner of the ``messaging/thread#reader`` write: the relation name and
-        the tuple shape live here beside ``permissions.zed``, so a consumer that manages
-        room membership composes this instead of hand-writing the tuple with a literal
-        relation name. :meth:`revoke_reader` is the mirror, and
-        :meth:`~angee.messaging.managers.ThreadFollowerManager.subscribe` with
-        ``grant_read`` writes it atomically with the follower row.
-        """
-
-        write_relationships(
-            [
-                RelationshipTuple(
-                    resource=to_object_ref(self),
-                    relation="reader",
-                    subject=_user_subject_ref(user=user, user_id=user_id),
-                )
-            ]
+        self._grant_declared_record_access(
+            Thread,
+            "reader",
+            _user_subject_ref(user=user, user_id=user_id),
         )
 
     def revoke_reader(self, *, user: models.Model | None = None, user_id: Any = None) -> None:
         """Revoke a user's direct ``reader`` access to this thread (mirror of :meth:`grant_reader`)."""
 
-        delete_relationship(
-            RelationshipTuple(
-                resource=to_object_ref(self),
-                relation="reader",
-                subject=_user_subject_ref(user=user, user_id=user_id),
-            )
+        self._revoke_declared_record_access(
+            Thread,
+            "reader",
+            _user_subject_ref(user=user, user_id=user_id),
         )
 
 
