@@ -179,6 +179,14 @@ TanStack apply the URL-owned filter object to in-memory rows.
   the default `"console"` layout. Addon manifest tests call
   `expectValidBaseAddon(manifest)` from `@angee/app/testing` and keep only
   genuinely addon-specific assertions.
+- Route declarations are the only place a URL path is spelled. Menus name their
+  target with `route:`; components resolve addon-local routes with
+  `useRouteHref`, and resource-backed links use the runtime resource lookup.
+  Cross-addon render/event links use the non-throwing route probe and disappear
+  or disable when their dependency is not composed; full app composition still
+  fails fast on invalid declarations. Keep query-string codecs addon-local.
+  `resourcePageRoutes` names record children `${collectionName}.record` by
+  default; use `detailName` only when preserving a deliberate established name.
 - Compose addon capabilities at build time through the manifest + `composeAddons`
   (widgets, i18n, icons, forms, slots, previews, and menu declarations); never
   register or mutate a module-global at runtime. `usePreviews`/`useWidget`/
