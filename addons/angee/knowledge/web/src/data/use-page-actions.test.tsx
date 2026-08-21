@@ -12,6 +12,7 @@ import { beforeEach,
 import {
   ModelMetadataProvider,
 } from "@angee/metadata";
+import { withTestResourceInventory } from "@angee/metadata/testing";
 import { OperationDocumentsProvider } from "@angee/refine";
 import type {
   SchemaFieldMetadata,
@@ -170,7 +171,7 @@ describe("knowledge page actions", () => {
   });
 });
 
-const PAGE_METADATA: SchemaFieldMetadata = {
+const PAGE_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     PageType: {
       typeName: "PageType",
@@ -210,7 +211,7 @@ const PAGE_METADATA: SchemaFieldMetadata = {
       },
     },
   },
-};
+});
 
 function MetadataWrapper({ children }: { children: ReactNode }): ReactElement {
   return (

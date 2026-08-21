@@ -49,7 +49,7 @@ const EMPTY_THREAD_ROWS: readonly SpaceThreadRow[] = [];
 type SpaceMembershipRole = "OWNER" | "MODERATOR" | "MEMBER" | "VIEWER";
 
 /** Narrow a dialog value onto the wire's MembershipRole enum, defaulting MEMBER. */
-export function membershipRole(value: unknown): SpaceMembershipRole {
+function membershipRole(value: unknown): SpaceMembershipRole {
   return (
     value === "OWNER"
     || value === "MODERATOR"
@@ -65,7 +65,7 @@ export function membershipRole(value: unknown): SpaceMembershipRole {
  * takes the lowercase model value (the read/write casing asymmetry pitfall),
  * unlike the add mutation's real enum which takes the uppercase name.
  */
-export function membershipRoleWireValue(value: unknown): string {
+function membershipRoleWireValue(value: unknown): string {
   return membershipRole(value).toLowerCase();
 }
 

@@ -75,25 +75,25 @@ export function defineChannelBridgeAddon({
     slots: [
       channelBridgeConnectSlot(id, sequence, connectAction),
       {
-        slot: channelActions,
+        ...channelActions,
         id: connectActionId,
         sequence: 10,
         content: pairingAction("disconnected", "channel.pairing.connect", true),
       },
       {
-        slot: channelActions,
+        ...channelActions,
         id: pairingActionId,
         sequence: 10,
         content: pairingAction("connected", "channel.pairing.status"),
       },
       {
-        slot: channelActions,
+        ...channelActions,
         id: INTEGRATION_RESUME_ACTION_ID,
         sequence: 12,
         content: pairingAction("paused", "channel.pairing.resume", true),
       },
       {
-        slot: channelActions,
+        ...channelActions,
         id: INTEGRATION_DISCONNECT_ACTION_ID,
         sequence: 13,
         content: disconnectAction,

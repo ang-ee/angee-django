@@ -41,7 +41,7 @@ const knowledge = defineBaseAddon({
   i18n: { knowledge: enKnowledgeMessages },
   // The Vault create form, used wherever a vault is created (the wiki's
   // relation-picker inline create resolves it via the model name).
-  forms: { Vault: vaultCreateForm },
+  forms: { "knowledge.Vault": vaultCreateForm },
   icons: {
     knowledge: BookOpen,
     vault: Library,

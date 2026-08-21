@@ -303,7 +303,7 @@ export function StoragePage(): ReactElement {
       "aria-label": t("drive.label"),
       placeholder: t("drive.placeholder"),
       searchPlaceholder: t("drive.searchPlaceholder"),
-      create: { resource: "Drive", fields: driveCreateFields },
+      create: { resource: "storage.Drive", fields: driveCreateFields },
       onCreated: (id: string) => {
         setActiveDriveId(id);
         void refetchDrives();

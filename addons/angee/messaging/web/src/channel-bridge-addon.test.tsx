@@ -69,24 +69,24 @@ describe("defineChannelBridgeAddon live bridges", () => {
       parentId: "messaging",
       to: "/messaging/channels",
     });
-    expect(manifest.slots?.map(({ slot, id, sequence }) => ({ slot, id, sequence }))).toEqual([
+    expect(manifest.slots).toMatchObject([
       {
         slot: MESSAGING_CHANNEL_TOOLBAR_SLOT,
         id: "messaging-integrate-example.connect",
         sequence: 22,
       },
       {
-        slot: recordSlot,
+        ...recordSlot,
         id: "messaging-integrate-example.connect",
         sequence: 10,
       },
       {
-        slot: recordSlot,
+        ...recordSlot,
         id: "messaging-integrate-example.pairing",
         sequence: 10,
       },
-      { slot: recordSlot, id: INTEGRATION_RESUME_ACTION_ID, sequence: 12 },
-      { slot: recordSlot, id: INTEGRATION_DISCONNECT_ACTION_ID, sequence: 13 },
+      { ...recordSlot, id: INTEGRATION_RESUME_ACTION_ID, sequence: 12 },
+      { ...recordSlot, id: INTEGRATION_DISCONNECT_ACTION_ID, sequence: 13 },
     ]);
 
     render(manifest.slots?.[4]?.content as React.ReactElement);
@@ -141,6 +141,42 @@ describe("defineChannelBridgeAddon live bridges", () => {
         )
         .hasAttribute("data-instruction"),
     ).toBe(false);
+  });
+
+  test("owns the pairing lifecycle matrix and resume-on-open policy", () => {
+    const manifest = defineChannelBridgeAddon({
+      id: "messaging-integrate-example",
+      key: "example",
+      sequence: 22,
+      connectAction: <span>Connect example</span>,
+      i18n: {
+        "channel.example.menu.label": "Example",
+        "channel.example.menu.description": "Link Example accounts",
+      },
+    });
+    const pairing = manifest.slots?.slice(1, 4).map((entry) =>
+      (entry.content as React.ReactElement<{
+        when: (context: { record: Record<string, unknown> }) => boolean;
+        resumeOnOpen?: boolean;
+      }>).props
+    ) ?? [];
+    const lifecycles = ["DISCONNECTED", "CONNECTED", "PAUSED"];
+
+    expect(pairing).toHaveLength(3);
+    expect(
+      pairing.map((props) =>
+        lifecycles.map((lifecycle) => props.when({ record: { lifecycle } }))
+      ),
+    ).toEqual([
+      [true, false, false],
+      [false, true, false],
+      [false, false, true],
+    ]);
+    expect(pairing.map((props) => props.resumeOnOpen ?? false)).toEqual([
+      true,
+      false,
+      true,
+    ]);
   });
 });
 

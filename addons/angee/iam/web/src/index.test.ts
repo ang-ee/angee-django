@@ -98,7 +98,7 @@ describe("iam addon manifest", () => {
     expect(login?.content).toBeDefined();
     // The OIDC login tab the iam addon adds to integrate's OAuth client form.
     const oidc = iam.slots?.[1];
-    expect(oidc?.slot).toBe(formViewSectionsSlot("OAuthClient"));
+    expect(oidc).toMatchObject(formViewSectionsSlot("integrate.OAuthClient"));
     expect(oidc?.id).toBe("iam.oidc-login");
     expect(oidc?.content).toBeDefined();
   });

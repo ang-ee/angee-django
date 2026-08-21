@@ -140,7 +140,7 @@ export function KnowledgePage(): ReactElement {
       "aria-label": t("vault.label"),
       placeholder: t("vault.placeholder"),
       searchPlaceholder: t("vault.searchPlaceholder"),
-      create: { resource: "Vault" },
+      create: { resource: "knowledge.Vault" },
       onCreated: () => {
         void refetchVaults();
         closePage();

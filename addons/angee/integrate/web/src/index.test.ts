@@ -161,7 +161,7 @@ describe("integrate addon manifest", () => {
   });
 
   test("registers the Credential create form override", () => {
-    expect(integrate.forms?.Credential).toBeDefined();
+    expect(integrate.forms?.["integrate.Credential"]).toBeDefined();
   });
 
   test("references the landing route from exactly one menu item (chrome derivation)", () => {
@@ -190,7 +190,10 @@ describe("integrate addon manifest", () => {
     // specialize one by id without this addon naming the subtype.
     const integrationSlot = formViewRecordActionsSlot(INTEGRATION_MODEL);
     const recordActions = (integrate.slots ?? []).filter(
-      (entry) => entry.slot === integrationSlot,
+      (entry) =>
+        entry.slot === integrationSlot.slot
+        && entry.model === integrationSlot.model
+        && entry.impl === integrationSlot.impl,
     );
 
     expect(recordActions.map((entry) => entry.id)).toEqual([

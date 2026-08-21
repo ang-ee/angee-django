@@ -12,6 +12,7 @@ import { beforeEach,
 import {
   ModelMetadataProvider,
 } from "@angee/metadata";
+import { withTestResourceInventory } from "@angee/metadata/testing";
 import { OperationDocumentsProvider } from "@angee/refine";
 import type {
   SchemaFieldMetadata,
@@ -200,7 +201,7 @@ describe("storage file/folder actions", () => {
   });
 });
 
-const STORAGE_METADATA: SchemaFieldMetadata = {
+const STORAGE_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     FileType: {
       typeName: "FileType",
@@ -277,7 +278,7 @@ const STORAGE_METADATA: SchemaFieldMetadata = {
       },
     },
   },
-};
+});
 
 function MetadataWrapper({ children }: { children: ReactNode }): ReactElement {
   return (

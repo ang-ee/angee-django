@@ -11,7 +11,7 @@ import {
 import { parseManualCode } from "../ConnectOAuthButton";
 import { connectCallbackRedirectUri } from "../redirects";
 
-const MODEL = "OAuthClient";
+const MODEL = "integrate.OAuthClient";
 
 const providerList = (
   <List resource={MODEL}>
