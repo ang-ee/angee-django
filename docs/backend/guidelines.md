@@ -523,6 +523,8 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **Run every changed test module standalone.** A full suite's file order can
   leak concrete test models into the shared registry and mask a missing
   registration; a broad run does not replace the direct module run.
+- **Seeded rows selected by clients carry a resource-assigned stable key.**
+  Select them by that stable key, never by a mutable display name.
 - **GraphQL authorization tests include a non-admin reader.** Admin-only tests
   neither pin deny-hard-fail behavior nor expose a leaked `sudo()` scope.
 - **Foreign write paths defer parties bookkeeping until commit and contain its
