@@ -243,6 +243,12 @@ Rules that follow from the layering:
   `angee_widget`, `angee_scalar_hint`, and `angee_currency_field` on the field;
   `angee.graphql.data.field_classification` reads those declarations and does
   not special-case addon-owned field classes.
+- Manually ordered rows use `FractionalRankField` (NOT NULL) plus a database
+  `UniqueConstraint` over their context fields and rank. Use the field's
+  append/between API; `FractionalRankExhausted` means enqueue
+  `jobs.rebalance_fractional_ranks`, never guess an epsilon or reuse a rank.
+  Rebalance context keys are model *field names*, not attnames —
+  `{"project": pk}`, never `{"project_id": pk}`.
 - `runtime/`, generated schemas, migrations, and codegen stubs are output.
   Change the source, not the artifact.
 - REBAC is structural and owned by `django-zed-rebac`. Addons declare

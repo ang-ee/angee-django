@@ -5,7 +5,7 @@ name = "angee.jobs"
 description = "The framework job seam — Celery-backed deferred and periodic execution"
 keywords = ["jobs", "queue", "tasks"]
 category = "Foundation"
-depends_on = ["angee.compose"]
+depends_on = ["angee.base"]
 dependencies = [
   "celery[redis]>=5.5",
 ]

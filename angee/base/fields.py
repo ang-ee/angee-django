@@ -8,19 +8,37 @@ Fields may also declare projection facts for data-resource metadata:
 ``angee_widget``, ``angee_scalar_hint``, and ``angee_currency_field``. The
 GraphQL classifier reads those inert attributes before falling back to stock
 Django field types, so a field's owner states its own wire vocabulary.
+
+``FractionalRankField`` is the framework's manual-ordering contract. An ordered
+row stores one finite binary64 rank; its model defines the surrounding context
+and must enforce ``UniqueConstraint(fields=(*context_fields, rank_field))``
+(``nulls_distinct=False`` when a context field is nullable). Append with
+``get_append_rank(last_rank)`` and insert or move with
+``get_rank_between(previous_rank, next_rank)``. Ranks start and rebalance at
+``1024.0`` intervals, a power-of-two spread whose midpoints stay exact until the
+available binary64 values are genuinely exhausted. ``FractionalRankExhausted``
+is the signal to enqueue the durable ``jobs.rebalance_fractional_ranks`` task
+with the concrete model label, exact context values, and rank-field name; callers
+must not guess an epsilon or silently reuse a rank. Rebalance rewrites only that
+context under one transaction, preserves its visible ``(rank, pk)`` order, and
+is idempotent. Allocation is optimistic: the contextual unique constraint
+arbitrates concurrent writers, and a losing writer rereads its neighbors before
+retrying.
 """
 
 from __future__ import annotations
 
 import base64
+import math
+from collections.abc import Mapping
 from typing import Any, cast
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from django.conf import settings
-from django.core.exceptions import FieldError, ImproperlyConfigured
-from django.db import models
+from django.core.exceptions import FieldDoesNotExist, FieldError, ImproperlyConfigured, ValidationError
+from django.db import models, router, transaction
 from django.db.models.query_utils import DeferredAttribute
 from django_choices_field import TextChoicesField
 from django_sqids import SqidsField
@@ -211,6 +229,212 @@ class StateField(TextChoicesField):
         value = self.to_python(super().pre_save(model_instance, add))
         setattr(model_instance, self.attname, value)
         return value
+
+
+class FractionalRankExhausted(ValueError):
+    """Raised when binary64 cannot represent another safe fractional rank."""
+
+
+class FractionalRankField(models.FloatField):
+    """Finite float rank for manual ordering inside a model-defined context.
+
+    The field owns rank arithmetic and transactional rebalance. The consumer
+    model owns the context columns and their database uniqueness constraint;
+    the field cannot infer whether a list is scoped by a lane, parent, project,
+    or another domain fact.
+    """
+
+    STEP = 1024.0
+    angee_scalar_hint = "Float"
+    angee_widget = "float"
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Default ranks to indexed because ordered contexts query by them."""
+
+        kwargs.setdefault("db_index", True)
+        super().__init__(*args, **kwargs)
+
+    def to_python(self, value: Any) -> float | None:
+        """Coerce a rank and reject NaN or infinity at validation boundaries."""
+
+        rank = super().to_python(value)
+        if rank is not None and not math.isfinite(rank):
+            raise ValidationError("Fractional ranks must be finite.", code="non_finite_rank")
+        return rank
+
+    def get_prep_value(self, value: Any) -> float | None:
+        """Reject non-finite ranks on every ORM write path."""
+
+        rank = super().get_prep_value(value)
+        if rank is not None and not math.isfinite(rank):
+            raise ValidationError("Fractional ranks must be finite.", code="non_finite_rank")
+        return rank
+
+    @classmethod
+    def get_append_rank(cls, previous: float | None) -> float:
+        """Return the initial rank, or one clean step after ``previous``."""
+
+        if previous is None:
+            return cls.STEP
+        lower = cls._coerce_endpoint(previous, name="previous")
+        candidate = lower + cls.STEP
+        if not math.isfinite(candidate) or candidate <= lower:
+            raise FractionalRankExhausted("No finite append rank remains; rebalance the context.")
+        return candidate
+
+    @classmethod
+    def get_rank_between(cls, previous: float | None, following: float | None) -> float:
+        """Return a rank strictly between optional neighboring ranks.
+
+        ``None`` denotes the corresponding edge: both edges absent returns the
+        initial rank, no following neighbor appends, and no previous neighbor
+        prepends by one clean step.
+        """
+
+        if following is None:
+            return cls.get_append_rank(previous)
+        upper = cls._coerce_endpoint(following, name="following")
+        if previous is None:
+            candidate = upper - cls.STEP
+            if not math.isfinite(candidate) or candidate >= upper:
+                raise FractionalRankExhausted("No finite prepend rank remains; rebalance the context.")
+            return candidate
+
+        lower = cls._coerce_endpoint(previous, name="previous")
+        if lower >= upper:
+            raise ValueError("previous rank must be strictly less than following rank.")
+        if math.nextafter(lower, upper) >= upper:
+            raise FractionalRankExhausted(
+                "No binary64 rank exists strictly between the neighbors; rebalance the context."
+            )
+        candidate = lower / 2.0 + upper / 2.0
+        if not lower < candidate < upper:
+            raise FractionalRankExhausted(
+                "No binary64 midpoint exists strictly between the neighbors; rebalance the context."
+            )
+        return candidate
+
+    def rebalance(self, *, context: Mapping[str, Any], using: str | None = None) -> int:
+        """Rewrite this field to a clean spread inside one exact context.
+
+        Returns the number of rows whose rank changed. Rows are ordered by their
+        committed ``(rank, pk)`` values, read through ``_base_manager`` (the
+        unscoped framework writer — a consumer's filtered default manager must
+        not hide context rows from a rewrite), locked through Angee's queryset
+        owner where supported, and staged outside both the old and final ranges
+        before the clean ranks are written. Staging prevents an immediate
+        contextual unique constraint from observing a transient collision
+        during the rewrite; the enclosing transaction keeps concurrent readers
+        on either the complete old order or the complete new order. A row
+        inserted into the context mid-rebalance is not covered by the lock —
+        the contextual unique constraint arbitrates it, and that writer rereads
+        and retries. The rank column must be NOT NULL; a NULL rank is a
+        consumer modelling error this rewrite does not repair.
+        """
+
+        model = getattr(self, "model", None)
+        if model is None or self.name is None:
+            raise ImproperlyConfigured("FractionalRankField must be bound to a model before rebalance().")
+        context_filter = self._context_filter(context)
+        database = using or router.db_for_write(model)
+
+        with transaction.atomic(using=database):
+            writer = model._base_manager.using(database).filter(**context_filter)
+            sudo = getattr(writer, "sudo", None)
+            if callable(sudo):
+                writer = sudo()
+            locker = getattr(writer, "lock_if_supported", None)
+            reader = locker(of=()) if callable(locker) else writer
+            rows = list(
+                reader.only(model._meta.pk.name, self.name).order_by(self.name, model._meta.pk.name)
+            )
+            current = [self._coerce_endpoint(getattr(row, self.attname), name=self.attname) for row in rows]
+            clean = self._clean_ranks(len(rows))
+            changed = sum(rank != target for rank, target in zip(current, clean, strict=True))
+            if not changed:
+                return 0
+
+            temporary = self._temporary_ranks(current, clean)
+            for row, rank in zip(rows, temporary, strict=True):
+                setattr(row, self.attname, rank)
+            writer.bulk_update(rows, [self.name])
+            for row, rank in zip(rows, clean, strict=True):
+                setattr(row, self.attname, rank)
+            writer.bulk_update(rows, [self.name])
+        return changed
+
+    def _context_filter(self, context: Mapping[str, Any]) -> dict[str, Any]:
+        """Return an exact direct-field filter for this field's bound model."""
+
+        model = getattr(self, "model", None)
+        if model is None:
+            raise ImproperlyConfigured("FractionalRankField must be bound before resolving a context.")
+        result: dict[str, Any] = {}
+        for name, value in context.items():
+            if not isinstance(name, str) or "__" in name:
+                raise ImproperlyConfigured("Fractional-rank context keys must be direct model field names.")
+            try:
+                field = model._meta.get_field(name)
+            except FieldDoesNotExist as error:
+                raise ImproperlyConfigured(
+                    f"{model._meta.label}.{name} is not a fractional-rank context field."
+                ) from error
+            if field is self or not field.concrete or field.many_to_many:
+                raise ImproperlyConfigured(
+                    f"{model._meta.label}.{name} cannot be a fractional-rank context field."
+                )
+            result[name] = value
+        return result
+
+    @classmethod
+    def _clean_ranks(cls, count: int) -> list[float]:
+        """Return ``count`` positive, evenly-spaced finite ranks."""
+
+        ranks = [index * cls.STEP for index in range(1, count + 1)]
+        if any(not math.isfinite(rank) for rank in ranks):
+            raise FractionalRankExhausted("The context is too large for a finite clean rank spread.")
+        return ranks
+
+    @staticmethod
+    def _temporary_ranks(current: list[float], clean: list[float]) -> list[float]:
+        """Return unique ranks outside both current and final ranges."""
+
+        if not current:
+            return []
+        high = max((*current, *clean))
+        above: list[float] = []
+        candidate = high
+        for _ in current:
+            candidate = math.nextafter(candidate, math.inf)
+            if not math.isfinite(candidate):
+                break
+            above.append(candidate)
+        if len(above) == len(current):
+            return above
+
+        low = min((*current, *clean))
+        below: list[float] = []
+        candidate = low
+        for _ in current:
+            candidate = math.nextafter(candidate, -math.inf)
+            if not math.isfinite(candidate):
+                break
+            below.append(candidate)
+        if len(below) == len(current):
+            return below
+        raise FractionalRankExhausted("No finite staging range remains for rebalance.")
+
+    @staticmethod
+    def _coerce_endpoint(value: Any, *, name: str) -> float:
+        """Return one finite rank endpoint or reject it."""
+
+        try:
+            rank = float(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"{name} rank must be a finite float.") from error
+        if not math.isfinite(rank):
+            raise ValueError(f"{name} rank must be a finite float.")
+        return rank
 
 
 class _InvalidEncryptedValue:
