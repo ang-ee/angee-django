@@ -93,6 +93,10 @@ convenience.
 
 - `@angee/refine` imports **only rented libs** — never `@angee/metadata`,
   `@angee/ui`, `@angee/app`, and never any `angee.resources` metadata.
+- Import provider-adjacent Refine bindings (providers, dialect hooks, typed
+  operation contracts) through `@angee/refine`; import ordinary framework hooks
+  such as `useInvalidate` and `useList` directly from `@refinedev/core`. Do not
+  widen `@angee/refine` into a general Refine re-export surface.
 - `@angee/metadata` must **NOT** import `@angee/refine`.
 - `@angee/ui` may import `@angee/refine` + `@angee/metadata`, but **not**
   `@angee/app`.
@@ -180,6 +184,13 @@ TanStack apply the URL-owned filter object to in-memory rows.
   register or mutate a module-global at runtime. `usePreviews`/`useWidget`/
   `useSlot` read the composed `AppRuntime`; menu declarations project into refine
   resources and chrome renders refine `useMenu`.
+- **A resource registry key is the emitted canonical `modelLabel`** (for example
+  `"integrate.OAuthClient"`). Addon composition may accept a unique bare or
+  lowercase spelling only because `createApp` canonicalizes it fail-fast against
+  the merged schema inventory; runtime render lookups degrade with a development
+  warning when a spelling is unavailable in the active schema. Durable manifests,
+  authored-operation labels, routes, forms, and runtime maps store the canonical
+  qualified label.
 - Shell-published surfaces (`usePrimaryPane`/`PrimaryPanePublisher`,
   `useChatterContent`) are effect publishers. Publish memoized nodes/content,
   and keep any callbacks they close over stable; when a callback wraps
@@ -205,7 +216,7 @@ TanStack apply the URL-owned filter object to in-memory rows.
   view.
 - One component tree. Extend or register; do not fork.
 - **Slots are additive extension points.** Use them before copying a component.
-  A slot entry is uniquely keyed by `(slot, id)` and a second addon claiming one
+  A slot entry is uniquely keyed by `(slot, model?, impl?, id)` and a second addon claiming one
   **collides** at composition — it is never a silent override decided by addon
   array order. So an addon contributes only to a key it owns. To vary a
   contribution per row, key it on the fact the row already carries (an
@@ -327,12 +338,12 @@ TanStack apply the URL-owned filter object to in-memory rows.
   duplicated. Group your fields for the stacked layout and tabbing is one prop away.
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
-  "OAuthClient" }` (one route per resource, build-time fail-fast) — and the
+  "integrate.OAuthClient" }` (one route per resource, build-time fail-fast) — and the
   relation widget resolves it through `useResourceRoute(resource)` to show a
   "follow" arrow to the selected record's detail page (breadcrumbs come from
   refine). A resource with no routed page simply shows no arrow.
 - Register a resource's create form once via `defineAddon`'s
-  `forms: { Model: <…Field/Group children…> }`; the standard renderer uses it
+  `forms: { "integrate.OAuthClient": <…Field/Group children…> }`; the standard renderer uses it
   wherever that resource is created, including the relation-picker inline create. Use
   it when the create input diverges from the read projection (write-only secrets,
   scalar-id pickers, a kind discriminator). With a registered form,
