@@ -6,7 +6,9 @@ import {
   MutationDialog,
   baseIcons,
   defaultWidgets,
+  mutationDialogValueCodecs,
   type MutationDialogField,
+  type MutationDialogValues,
 } from "@angee/ui";
 
 const fields: readonly MutationDialogField[] = [
@@ -20,6 +22,24 @@ const fields: readonly MutationDialogField[] = [
   { name: "username", label: "Username", required: true },
   { name: "password", label: "Password", widget: "password", required: true },
 ];
+type DirectoryConnectStoryValues = Record<string, unknown> & {
+  name: string;
+  serverUrl: string;
+  username: string;
+  password: string;
+};
+
+const parseValues = (
+  values: MutationDialogValues,
+): DirectoryConnectStoryValues => ({
+  name: mutationDialogValueCodecs.requiredString(values.name, "name"),
+  serverUrl: mutationDialogValueCodecs.requiredString(
+    values.serverUrl,
+    "serverUrl",
+  ),
+  username: mutationDialogValueCodecs.requiredString(values.username, "username"),
+  password: mutationDialogValueCodecs.verbatimString(values.password, "password"),
+});
 
 const meta = {
   title: "Views/MutationDialog",
@@ -57,6 +77,7 @@ function MutationDialogDemo(): React.ReactElement {
         fields={fields}
         submitLabel="Connect"
         submittingLabel="Connecting"
+        parseValues={parseValues}
         onSubmit={async (values) => {
           setSubmitted(values);
         }}

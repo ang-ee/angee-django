@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   QueryClient,
   QueryClientProvider,
@@ -15,7 +15,10 @@ import {
   LabeledDescriptorField,
   MutationDialog,
   emptyValueForField,
+  mutationDialogValueCodecs,
 } from "./MutationDialog";
+
+const parseRawValues = (values: Readonly<Record<string, unknown>>) => values;
 
 describe("MutationDialog", () => {
   afterEach(cleanup);
@@ -36,6 +39,7 @@ describe("MutationDialog", () => {
             },
           ]}
           submitLabel="Connect"
+          parseValues={parseRawValues}
           onSubmit={vi.fn()}
         />
       </AppRuntimeProvider>,
@@ -112,6 +116,7 @@ describe("MutationDialog", () => {
                 },
               ]}
               submitLabel="Assign"
+              parseValues={parseRawValues}
               onSubmit={vi.fn()}
             />
           </AppRuntimeProvider>
@@ -126,5 +131,110 @@ describe("MutationDialog", () => {
       expect.stringMatching(/mutation dialog relation.*missing\.Person/),
     );
     warn.mockRestore();
+  });
+
+  test("decodes raw controls before submitting typed values", async () => {
+    const onSubmit = vi.fn();
+    render(
+      <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+        <MutationDialog
+          open
+          onOpenChange={vi.fn()}
+          title="Create"
+          fields={[
+            { name: "name", label: "Name", required: true },
+            { name: "note", label: "Note" },
+          ]}
+          submitLabel="Create"
+          parseValues={(values) => ({
+            name: mutationDialogValueCodecs.requiredString(values.name, "name"),
+            note: mutationDialogValueCodecs.string(values.note),
+          })}
+          onSubmit={onSubmit}
+        />
+      </AppRuntimeProvider>,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "  Ada  " },
+    });
+    fireEvent.change(screen.getByLabelText("Note"), {
+      target: { value: "   " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith({ name: "Ada", note: null }),
+    );
+  });
+
+  test("keeps whitespace only through the explicit verbatim-string codec", () => {
+    expect(mutationDialogValueCodecs.string("  secret  ")).toBe("secret");
+    expect(mutationDialogValueCodecs.string("   ")).toBeNull();
+    expect(mutationDialogValueCodecs.string({ value: "secret" })).toBeNull();
+    expect(() =>
+      mutationDialogValueCodecs.requiredString({ value: "secret" }, "name"),
+    ).toThrow('MutationDialog invariant: required field "name"');
+    expect(
+      mutationDialogValueCodecs.integer(
+        " 4 ",
+        "Count",
+        (label) => `${label} must be a whole number.`,
+      ),
+    ).toBe(4);
+    expect(mutationDialogValueCodecs.verbatimString("  secret  ", "secret")).toBe(
+      "  secret  ",
+    );
+    expect(() => mutationDialogValueCodecs.verbatimString("", "secret")).toThrow(
+      'MutationDialog invariant: required verbatim field "secret"',
+    );
+    expect(() =>
+      mutationDialogValueCodecs.integer(
+        "4.5",
+        "Port",
+        (label) => `${label} must be a whole number.`,
+      ),
+    ).toThrow("Port must be a whole number.");
+  });
+
+  test("shows owner-level busy feedback and locks both footer actions", async () => {
+    let finishSubmit: (() => void) | undefined;
+    const pendingSubmit = new Promise<void>((resolve) => {
+      finishSubmit = resolve;
+    });
+    render(
+      <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+        <MutationDialog
+          open
+          onOpenChange={vi.fn()}
+          title="Connect"
+          fields={[{ name: "name", label: "Name", required: true }]}
+          submitLabel="Connect"
+          submittingLabel="Connecting…"
+          parseValues={parseRawValues}
+          onSubmit={() => pendingSubmit}
+        />
+      </AppRuntimeProvider>,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Ada" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("button", { name: "Connecting…" })
+          .getAttribute("aria-busy"),
+      ).toBe("true"),
+    );
+    expect(
+      (screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+
+    finishSubmit?.();
+    await pendingSubmit;
   });
 });

@@ -13,6 +13,10 @@
       "import": "./src/index.ts"
     },
     "./styles.css": "./src/styles/index.css",
+    "./testing": {
+      "types": "./src/testing.tsx",
+      "import": "./src/testing.tsx"
+    },
     "./lib": {
       "types": "./src/lib/index.ts",
       "import": "./src/lib/index.ts"

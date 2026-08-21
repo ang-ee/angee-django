@@ -5,6 +5,7 @@ import {
   useSchemaFieldMetadata,
 } from "@angee/metadata";
 import type { CrudFilter } from "@refinedev/core";
+import { stringValue as wireStringValue } from "@angee/refine";
 
 import { errorMessage } from "../feedback";
 import { DialogForm } from "../fragments/DialogForm";
@@ -71,6 +72,8 @@ export interface MutationDialogField extends FieldDescriptor {
    * the dialog's other fields (a picker scoped by a bridge chosen above it).
    */
   control?: (props: MutationDialogControlProps) => React.ReactElement;
+  /** How a custom control receives its authored field label. */
+  controlLabelMode?: "input" | "group";
 }
 
 /** What {@link MutationDialogField.control} receives to render one dialog field. */
@@ -79,13 +82,76 @@ export interface MutationDialogControlProps {
   value: unknown;
   readOnly: boolean;
   describedBy: string | undefined;
+  /** Present when the custom control declares `controlLabelMode: "group"`. */
+  labelledBy: string | undefined;
   onChange: (value: unknown) => void;
   /** Every current dialog value, so a control can scope itself by a sibling field. */
   dialogValues: Record<string, unknown>;
 }
 
+/** Raw values held by dialog controls before the authored mutation boundary. */
+export type MutationDialogValues = Readonly<Record<string, unknown>>;
+
+/** Decode dialog-control values into one mutation's typed variable shape. */
+export type MutationDialogParseValues<TValues> = (
+  values: MutationDialogValues,
+) => TValues;
+
+/**
+ * Shared scalar codecs for {@link MutationDialogParseValues} implementations.
+ * Text follows the GraphQL wire boundary: actual string values are trimmed and
+ * empty text is `null`, unlike the old vendor-local coercers that silently
+ * produced `""`. `requiredString` and `verbatimString` are invariant guards for
+ * developer-authored required fields, so their errors deliberately name the
+ * declaration field rather than presenting translated user validation copy.
+ * `verbatimString` is the explicit exception for whitespace-sensitive secrets;
+ * `integer` takes a label-aware translated formatter because malformed numeric
+ * input is reachable user validation.
+ */
+export const mutationDialogValueCodecs = {
+  string(value: unknown): string | null {
+    return typeof value === "string" ? wireStringValue(value) : null;
+  },
+  requiredString(value: unknown, fieldName: string): string {
+    const parsed = typeof value === "string" ? wireStringValue(value) : null;
+    if (parsed === null) {
+      throw new TypeError(
+        `MutationDialog invariant: required field "${fieldName}" did not contain a non-empty string.`,
+      );
+    }
+    return parsed;
+  },
+  verbatimString(value: unknown, fieldName: string): string {
+    if (typeof value !== "string" || value === "") {
+      throw new TypeError(
+        `MutationDialog invariant: required verbatim field "${fieldName}" did not contain a non-empty string.`,
+      );
+    }
+    return value;
+  },
+  integer(
+    value: unknown,
+    fieldLabel: string,
+    invalidMessage: (fieldLabel: string) => string,
+  ): number | null {
+    if (value == null || (typeof value === "string" && value.trim() === "")) {
+      return null;
+    }
+    const parsed =
+      typeof value === "number"
+        ? value
+        : typeof value === "string"
+          ? Number(value)
+          : Number.NaN;
+    if (!Number.isInteger(parsed)) {
+      throw new TypeError(invalidMessage(fieldLabel));
+    }
+    return parsed;
+  },
+} as const;
+
 export interface MutationDialogProps<
-  TValues extends Record<string, unknown> = Record<string, unknown>,
+  TValues extends Record<string, unknown>,
   TResult = unknown,
 > {
   open: boolean;
@@ -93,13 +159,14 @@ export interface MutationDialogProps<
   title: React.ReactNode;
   description?: React.ReactNode;
   fields: readonly MutationDialogField[];
-  /** Seeds a subset of the field values; `fields` defines the value keys, so a
-   * partial seed must not narrow `TValues` via inference. */
-  initialValues?: NoInfer<Partial<TValues>>;
+  /** Seeds raw control state; parsed mutation variables may use different keys. */
+  initialValues?: Readonly<Record<string, unknown>>;
   submitLabel: React.ReactNode;
   submittingLabel?: React.ReactNode;
   cancelLabel?: React.ReactNode;
   errorFallback?: string;
+  /** Decode raw control state before it crosses the authored-mutation boundary. */
+  parseValues: MutationDialogParseValues<TValues>;
   onSubmit: (values: TValues) => TResult | Promise<TResult>;
   onSubmitted?: (result: TResult, values: TValues) => void;
   closeOnSubmit?: boolean;
@@ -114,7 +181,7 @@ export interface MutationDialogProps<
  * widget registry.
  */
 export function MutationDialog<
-  TValues extends Record<string, unknown> = Record<string, unknown>,
+  TValues extends Record<string, unknown>,
   TResult = unknown,
 >({
   open,
@@ -127,6 +194,7 @@ export function MutationDialog<
   submittingLabel,
   cancelLabel,
   errorFallback,
+  parseValues,
   onSubmit,
   onSubmitted,
   closeOnSubmit = true,
@@ -163,6 +231,7 @@ export function MutationDialog<
         type="button"
         variant="ghost"
         size="sm"
+        disabled={submitting}
         onClick={() => onOpenChange(false)}
       >
         {cancelLabel ?? t("dialog.cancel")}
@@ -172,8 +241,10 @@ export function MutationDialog<
         variant="primary"
         size="sm"
         disabled={!ready || submitting}
+        loading={submitting}
+        loadingText={submittingLabel ?? submitLabel}
       >
-        {submitting ? (submittingLabel ?? submitLabel) : submitLabel}
+        {submitLabel}
       </Button>
     </>
   );
@@ -185,8 +256,8 @@ export function MutationDialog<
     if (!ready || submitting) return;
     setSubmitting(true);
     setError(null);
-    const submittedValues = values as TValues;
     try {
+      const submittedValues = parseValues(values);
       const result = await onSubmit(submittedValues);
       onSubmitted?.(result, submittedValues);
       if (closeOnSubmit) onOpenChange(false);
@@ -255,7 +326,9 @@ export function LabeledDescriptorField({
 }): React.ReactElement {
   const generatedId = React.useId();
   const controlId = `mutation-field-${generatedId}`;
+  const labelId = `${controlId}-label`;
   const isRowsField = field.rowTemplate !== undefined;
+  const groupLabel = field.controlLabelMode === "group";
   const displayedMessages = isRowsField
     ? directDottedPathMessages(messages, field.name)
     : messages;
@@ -272,7 +345,8 @@ export function LabeledDescriptorField({
     <FieldRoot invalid={displayedMessages.length > 0}>
       {showLabel ? (
         <FieldLabel
-          htmlFor={isRowsField ? undefined : controlId}
+          id={groupLabel ? labelId : undefined}
+          htmlFor={isRowsField || groupLabel ? undefined : controlId}
           required={field.required}
         >
           {field.label ?? field.name}
@@ -284,6 +358,7 @@ export function LabeledDescriptorField({
           value,
           readOnly: Boolean(readOnly),
           describedBy,
+          labelledBy: groupLabel ? labelId : undefined,
           onChange,
           dialogValues: dialogValues ?? {},
         })
@@ -429,7 +504,7 @@ function MutationDialogRelationControl({
 
 function initialDialogValues(
   fields: readonly MutationDialogField[],
-  initialValues: Record<string, unknown> | undefined,
+  initialValues: Readonly<Record<string, unknown>> | undefined,
 ): Record<string, unknown> {
   const values: Record<string, unknown> = {};
   for (const field of fields) {
