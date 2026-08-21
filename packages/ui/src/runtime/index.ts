@@ -16,6 +16,7 @@ export {
   useRuntimeLogoutAction,
   useRuntimeUserPreferences,
   useSlot,
+  useModelSlot,
   usePreviews,
   useDrawers,
   useChatterRoutes,
@@ -29,6 +30,7 @@ export {
   type RuntimeUserPreferences,
   type RuntimeUserPreferencesState,
 } from "./runtime";
+export { isModelScopedSlot } from "./contracts";
 export type {
   ChatterContribution,
   ChatterRoute,
@@ -39,6 +41,7 @@ export type {
   DrawerEdge,
   FormOverrideMap,
   MenuItem,
+  ModelSlotTarget,
   PreviewContribution,
   SlotContribution,
   WidgetMap,

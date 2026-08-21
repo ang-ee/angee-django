@@ -1,9 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import {
-  createAngeeI18nProvider,
-  createAngeeI18nRuntime,
-} from "./i18n";
+import { createAngeeI18nRuntime } from "./i18n";
 
 const resources = {
   ui: {
@@ -26,7 +23,7 @@ describe("Angee app i18n runtime", () => {
   });
 
   test("preserves namespace fallback and interpolation", () => {
-    const provider = createAngeeI18nProvider(resources);
+    const { provider } = createAngeeI18nRuntime(resources);
 
     expect(provider.translate("greeting", { namespace: "ui", name: "Ada" })).toBe(
       "Hello Ada",
@@ -34,14 +31,14 @@ describe("Angee app i18n runtime", () => {
   });
 
   test("falls back to default messages and then keys", () => {
-    const provider = createAngeeI18nProvider(resources);
+    const { provider } = createAngeeI18nRuntime(resources);
 
     expect(provider.translate("missing.title", {}, "Untitled")).toBe("Untitled");
     expect(provider.translate("missing.title")).toBe("missing.title");
   });
 
   test("tracks Refine locale state", async () => {
-    const provider = createAngeeI18nProvider(resources);
+    const { provider } = createAngeeI18nRuntime(resources);
 
     expect(provider.getLocale()).toBe("en");
     await provider.changeLocale("fr");

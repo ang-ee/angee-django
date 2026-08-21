@@ -1,5 +1,9 @@
 import * as React from "react";
-import { useModelMetadata } from "@angee/metadata";
+import {
+  canonicalModelLabelOrNull,
+  modelMetadataForLabel,
+  useSchemaFieldMetadata,
+} from "@angee/metadata";
 import type { CrudFilter } from "@refinedev/core";
 
 import { errorMessage } from "../feedback";
@@ -25,7 +29,7 @@ import { directDottedPathMessages } from "./validation-errors";
 
 /** What a dialog field needs to offer (and optionally create) a related row. */
 export interface MutationDialogRelation {
-  /** Related model label, e.g. `"Credential"`. */
+  /** Related model label, e.g. `"integrate.Credential"`. */
   resource: string;
   /** Field shown as the option label; defaults to the model's record representation. */
   labelField?: string;
@@ -344,10 +348,37 @@ function MutationDialogRelationControl({
   onChange: (value: unknown) => void;
 }): React.ReactElement {
   const [opened, setOpened] = React.useState(false);
-  const model = useModelMetadata(relation.resource);
+  const metadata = useSchemaFieldMetadata();
+  const resource = React.useMemo(
+    () =>
+      canonicalModelLabelOrNull(
+        metadata.resources ?? [],
+        relation.resource,
+        "mutation dialog relation",
+      ) ?? "",
+    [metadata, relation.resource],
+  );
+  const model = React.useMemo(
+    () => modelMetadataForLabel(metadata, resource),
+    [metadata, resource],
+  );
   const info = React.useMemo(
-    () => relationFieldInfoForResource(relation.resource, model),
-    [relation.resource, model],
+    () => relationFieldInfoForResource(resource, model),
+    [resource, model],
+  );
+  const create = React.useMemo(
+    () => {
+      if (!relation.create) return undefined;
+      const createResource = canonicalModelLabelOrNull(
+        metadata.resources ?? [],
+        relation.create.resource,
+        "mutation dialog relation create",
+      );
+      return createResource
+        ? { ...relation.create, resource: createResource }
+        : undefined;
+    },
+    [metadata, relation.create],
   );
   const selectedValue = relationValueId(value);
   const { list, options } = useRelationOptions(info, {
@@ -359,18 +390,19 @@ function MutationDialogRelationControl({
     ...(relation.filters ? { filters: relation.filters } : {}),
   });
   if (!info) {
-    // Metadata not yet loaded / the resource exposes no list root: fall back to
-    // the descriptor's own widget rather than render a picker with no options.
+    // Metadata not yet loaded / the resource is unknown in this schema: retain
+    // the relation control's shape, but disable it rather than throwing from
+    // render or presenting a text input that could submit an unvalidated id.
     return (
-      <FieldDescriptorControl
-        field={field}
-        value={value}
-        readOnly={readOnly}
-        controlProps={{
-          id: controlId,
-          ...(describedBy ? { "aria-describedby": describedBy } : {}),
-          ...(field.required ? { "aria-required": true } : {}),
-        }}
+      <RelationPicker
+        id={controlId}
+        value={selectedValue}
+        options={[]}
+        readOnly
+        placeholder={field.placeholder}
+        aria-label={typeof field.label === "string" ? field.label : field.name}
+        aria-describedby={describedBy}
+        aria-required={field.required || undefined}
         onChange={onChange}
       />
     );
@@ -386,7 +418,7 @@ function MutationDialogRelationControl({
       aria-label={typeof field.label === "string" ? field.label : field.name}
       aria-describedby={describedBy}
       aria-required={field.required || undefined}
-      {...(relation.create ? { create: relation.create } : {})}
+      {...(create ? { create } : {})}
       onCreated={() => list.refetch()}
       onOpenChange={(open) => {
         if (open) setOpened(true);

@@ -3,9 +3,9 @@ import type { ReactNode } from "react";
 import { PAGE_ELEMENT_SLOT } from "./types";
 
 /**
- * `Tab` — one section of a `Notebook` (the form `Notebook`/`Tab` Element).
- * Render-less marker: the `Notebook` reads its props and renders the tab strip +
- * panel. Compose `Group`/`Field`/any content inside. Like the other page
+ * `Tab` — one declared tab section. The owning page/form parser reads its props
+ * and renders the tab strip + panel. Compose `Group`/`Field`/any content inside.
+ * Like the other page
  * elements it carries `[PAGE_ELEMENT_SLOT]`, so an addon can export reusable
  * `<Tab>` constants and `parsePageTabs` discovers them (flattening fragments and
  * asserting unique ids) wherever they are composed.

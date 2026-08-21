@@ -29,6 +29,7 @@ import {
   mergeResourceViewSearch,
 } from "@angee/ui/views/resource-view-model";
 import type { DataResourceMetadata } from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
 
 afterEach(() => cleanup());
 
@@ -800,7 +801,7 @@ describe("createApp route menu refs", () => {
 
   test("requires resource route.menu to select one of the route's menu refs when refs exist", () => {
     expect(() =>
-      createApp(testAppInput([
+      createAppWithResources([
         {
           id: "wrong-menu",
           routes: [
@@ -818,7 +819,7 @@ describe("createApp route menu refs", () => {
             { id: "wrong.other", label: "Other" },
           ],
         },
-      ])),
+      ], [testDataResource("example.Wrong")]),
     ).toThrow(/does not reference the route/);
   });
 
@@ -843,7 +844,7 @@ describe("createApp route menu refs", () => {
 
   test("rejects a route that references an unknown menu item", () => {
     expect(() =>
-      createApp(testAppInput([
+      createAppWithResources([
         {
           id: "unknown-menu",
           routes: [
@@ -857,7 +858,7 @@ describe("createApp route menu refs", () => {
             },
           ],
         },
-      ])),
+      ], [testDataResource("example.Known")]),
     ).toThrow(/references unknown menu item "missing-menu"/);
   });
 });
@@ -873,7 +874,7 @@ describe("createApp resource route index", () => {
       return createElement("span", null, `route ${path ?? "none"}`);
     }
 
-    const app = createApp(testAppInput([
+    const app = createAppWithResources([
       {
         id: "clients",
         routes: [
@@ -892,7 +893,7 @@ describe("createApp resource route index", () => {
           },
         ],
       },
-    ]));
+    ], [testDataResource("integrate.OAuthClient")]);
     const root = app.mount(host);
 
     try {
@@ -907,7 +908,7 @@ describe("createApp resource route index", () => {
 
   test("rejects two routes claiming the same resource", () => {
     expect(() =>
-      createApp(testAppInput([
+      createAppWithResources([
         {
           id: "dup-model",
           routes: [
@@ -923,12 +924,50 @@ describe("createApp resource route index", () => {
               path: "/b",
               layout: "console",
               component: EmptyPage,
-              resource: "OAuthClient",
+              resource: "integrate.OAuthClient",
+            },
+          ],
+        },
+      ], [testDataResource("integrate.OAuthClient")]),
+    ).toThrow(/claims resource "integrate\.OAuthClient"/);
+  });
+
+  test("rejects an unknown route resource during composition", () => {
+    expect(() =>
+      createAppWithResources([
+        {
+          id: "unknown-model",
+          routes: [
+            {
+              name: "missing.home",
+              path: "/missing",
+              layout: "console",
+              component: EmptyPage,
+              resource: "Missing",
+            },
+          ],
+        },
+      ], [testDataResource("notes.Note")]),
+    ).toThrow(/Unknown model spelling "Missing"/);
+  });
+
+  test("reports absent schema resources distinctly during composition", () => {
+    expect(() =>
+      createApp(testAppInput([
+        {
+          id: "notes",
+          routes: [
+            {
+              name: "notes.home",
+              path: "/notes",
+              layout: "console",
+              component: EmptyPage,
+              resource: "notes.Note",
             },
           ],
         },
       ])),
-    ).toThrow(/claims resource "OAuthClient"/);
+    ).toThrow(/schema metadata exposes no resources/);
   });
 
   test("exposes inherited model and canonical labels on chatter record routes", async () => {
@@ -954,7 +993,7 @@ describe("createApp resource route index", () => {
             path: "/notes",
             layout: "console",
             component: ChatterRouteProbe,
-            resource: "notes.Note",
+            resource: "Note",
           },
           {
             name: "notes.record",
@@ -1203,31 +1242,13 @@ function testSchemasWithConsoleResources(
   };
 }
 
-function testDataResource(modelLabel: string): DataResourceMetadata {
-  const modelName = modelLabel.split(".").at(-1) ?? modelLabel;
-  const list = `${modelName.toLowerCase()}s`;
-  return {
-    schemaName: "console",
-    modelLabel,
-    appLabel: modelLabel.includes(".") ? modelLabel.split(".")[0] ?? "" : "",
-    modelName,
-    publicIdField: "id",
-    roots: {
-      list,
-      detail: `${list}_by_pk`,
-      create: `insert_${list}_one`,
-      update: `update_${list}_by_pk`,
-      delete: `delete_${list}_by_pk`,
-    },
-    typeNames: { node: `${modelName}Type` },
-    capabilities: ["list", "detail", "create", "update", "delete"],
-    fields: [],
-    filterFields: [],
-    orderFields: [],
-    aggregateFields: [],
-    groupByFields: [],
-    relationAxes: [],
-  };
+function createAppWithResources(
+  addons: readonly BaseAddon[],
+  resources: readonly DataResourceMetadata[],
+) {
+  const input = testAppInput(addons);
+  input.schemas = testSchemasWithConsoleResources(resources);
+  return createApp(input);
 }
 
 function routesByFullPath(router: unknown): Map<string, TestRoute> {

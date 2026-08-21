@@ -40,13 +40,6 @@ export function createAngeeI18nRuntime(
   };
 }
 
-export function createAngeeI18nProvider(
-  resources: I18nResources,
-  options: AngeeI18nProviderOptions = {},
-): I18nProvider {
-  return createAngeeI18nRuntime(resources, options).provider;
-}
-
 function createAngeeI18nInstance(
   resources: I18nResources,
   locale: string,

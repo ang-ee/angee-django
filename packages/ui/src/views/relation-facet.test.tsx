@@ -7,8 +7,13 @@ import {
   ModelMetadataProvider,
 } from "@angee/metadata";
 import type {
+  DataResourceMetadata,
   SchemaFieldMetadata,
 } from "@angee/metadata";
+import {
+  testDataResource,
+  withTestResourceInventory,
+} from "@angee/metadata/testing";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -196,7 +201,7 @@ describe("useRelationFacets", () => {
   });
 });
 
-const METADATA: SchemaFieldMetadata = {
+const METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     InferenceModelType: {
       typeName: "InferenceModelType",
@@ -269,12 +274,28 @@ const METADATA: SchemaFieldMetadata = {
       typeName: "InferenceProviderType",
       recordRepresentation: "name",
       rootFields: { list: "inference_providers" },
+      resource: relationResource(
+        "agents.InferenceProvider",
+        "inference_providers",
+      ),
       fields: {
         name: { name: "name", kind: "scalar", scalar: "String" },
       },
     },
   },
-};
+});
+
+function relationResource(
+  modelLabel: string,
+  list: string,
+): DataResourceMetadata {
+  return testDataResource(modelLabel, {
+    publicIdField: "sqid",
+    roots: { list },
+    typeNames: {},
+    capabilities: ["list"],
+  });
+}
 
 function Metadata({ children }: { children: ReactNode }): ReactNode {
   return (

@@ -288,6 +288,8 @@ export const enUiMessages: Record<string, string> = {
   "relation.create": "Create “{query}”",
   "relation.follow": "Open record",
   "relation.edit": "Edit record",
+  "relation.createTitle": "New {model}",
+  "relation.editTitle": "Edit {model}",
   "preview.loading": "Loading preview…",
   "preview.loadError": "Could not load file",
   "preview.noInline": "No inline preview.",

@@ -1,7 +1,6 @@
 import {
-  dataResourcesFromAngeeSchemaMetadata,
   snakeCaseIdentifier,
-  type AngeeSchemaMetadata,
+  type DataResourceMetadata,
 } from "@angee/metadata";
 import type { ChatterRoute } from "@angee/ui/runtime";
 
@@ -12,10 +11,6 @@ import {
   trailingRouteParamName,
 } from "./route-paths";
 
-interface SchemaWithMetadata {
-  metadata?: AngeeSchemaMetadata;
-}
-
 interface ResourceFacts {
   resourceType?: string | null;
   canonicalLabel?: string | null;
@@ -23,9 +18,9 @@ interface ResourceFacts {
 
 export function chatterRouteIndex(
   routes: readonly BaseAddonRoute[],
-  schemas: Readonly<Record<string, SchemaWithMetadata>>,
+  resources: readonly DataResourceMetadata[],
 ): readonly ChatterRoute[] {
-  const resourceFactsByModel = resourceFactsByModelLabel(schemas);
+  const resourceFactsByModel = resourceFactsByModelLabel(resources);
   const routesByName = new Map(routes.map((route) => [route.name, route]));
   const childrenByParentName = childRoutesByParentName(routes);
   return routes.map((route) => {
@@ -60,7 +55,13 @@ function routeChatterViewType(
 ): string {
   const resource = inheritedRouteResource(route, routesByName);
   if (resource) {
-    return resourceFactsByModel[resource]?.resourceType ?? resourceTypeFromModelLabel(resource);
+    const facts = resourceFactsByModel[resource];
+    if (!facts) {
+      throw new Error(
+        `Chatter route "${route.name}" references unknown model "${resource}".`,
+      );
+    }
+    return facts.resourceType ?? resourceTypeFromModelLabel(resource);
   }
   if (!trailingRouteParamName(route.path)) {
     const recordChild = childrenByParentName
@@ -82,18 +83,15 @@ function inheritedRouteResource(
 }
 
 function resourceFactsByModelLabel(
-  schemas: Readonly<Record<string, SchemaWithMetadata>>,
+  resources: readonly DataResourceMetadata[],
 ): Record<string, ResourceFacts> {
   const byModel: Record<string, ResourceFacts> = {};
-  for (const schema of Object.values(schemas)) {
-    for (const resource of dataResourcesFromAngeeSchemaMetadata(schema.metadata)) {
-      const facts = {
-        resourceType: resource.resourceType,
-        canonicalLabel: resource.canonicalLabel,
-      };
-      byModel[resource.modelLabel] = facts;
-      byModel[resource.modelName] = facts;
-    }
+  for (const resource of resources) {
+    const facts = {
+      resourceType: resource.resourceType,
+      canonicalLabel: resource.canonicalLabel,
+    };
+    byModel[resource.modelLabel] ??= facts;
   }
   return byModel;
 }

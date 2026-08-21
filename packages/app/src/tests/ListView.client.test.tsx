@@ -37,6 +37,7 @@ import {
   type Row,
   type SchemaFieldMetadata,
 } from "@angee/metadata";
+import { withTestResourceInventory } from "@angee/metadata/testing";
 
 const ADDON_ROWS: readonly Row[] = [
   { id: "a", label: "Notes", namespace: "example", kind: "consumer" },
@@ -98,7 +99,7 @@ const columns = [
   { field: "kind", header: "Kind" },
 ] satisfies readonly ListColumn[];
 
-const ADDON_SCHEMA_METADATA: SchemaFieldMetadata = {
+const ADDON_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     AddonType: {
       typeName: "AddonType",
@@ -139,7 +140,7 @@ const ADDON_SCHEMA_METADATA: SchemaFieldMetadata = {
       },
     },
   },
-};
+});
 
 describe("ListView client row model", () => {
   beforeAll(() => {

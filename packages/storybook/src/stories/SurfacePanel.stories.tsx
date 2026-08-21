@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, Glyph, ListItem, SurfacePanel } from "@angee/ui";
+import { Badge, Button, Glyph, SurfacePanel } from "@angee/ui";
 
 const meta = {
   title: "Fragments/SurfacePanel",
@@ -24,16 +24,14 @@ export const Panel: Story = {
       title="Release queue"
     >
       <div className="divide-y divide-border-subtle">
-        <ListItem
-          meta="Framework build"
-          status={{ label: "Ready", tone: "success" }}
-          title="Base fragments"
-        />
-        <ListItem
-          meta="Storybook review"
-          status={{ label: "Draft", tone: "info" }}
-          title="Console panels"
-        />
+        <div className="flex items-center justify-between gap-3 px-4 py-3">
+          <span>Base fragments</span>
+          <Badge tone="success">Ready</Badge>
+        </div>
+        <div className="flex items-center justify-between gap-3 px-4 py-3">
+          <span>Console panels</span>
+          <Badge tone="info">Draft</Badge>
+        </div>
       </div>
     </SurfacePanel>
   ),

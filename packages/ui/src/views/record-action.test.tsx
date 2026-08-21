@@ -46,6 +46,10 @@ vi.mock("./action-result-run", () => ({
 // there owns testing that fold. What the tests below own is which labels reach it,
 // and in what order — so the fake keeps the label visible in its output.
 vi.mock("@angee/metadata", () => ({
+  useCanonicalResourceModelLabels: (modelLabels: readonly string[] | undefined) =>
+    (modelLabels ?? []).map((modelLabel) =>
+      modelLabel === "Skill" ? "agents.Skill" : modelLabel
+    ),
   useResourceInvalidates: (modelLabels: readonly string[] | undefined) =>
     (modelLabels ?? []).map((modelLabel) => ({
       dataProviderName: "console",
@@ -147,7 +151,7 @@ describe("record action helpers", () => {
     const refresh = vi.fn();
     const { result } = renderHook(() =>
       useRecordActionMutation("refresh_source", {
-        invalidateModels: ["agents.Skill"],
+        invalidateModels: ["Skill"],
       }),
     );
 

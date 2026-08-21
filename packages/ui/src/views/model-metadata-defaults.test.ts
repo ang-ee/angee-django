@@ -1,9 +1,11 @@
 import { describe, expect, test } from "vitest";
 import type {
+  DataResourceMetadata,
   ModelMetadata,
   Row,
   SchemaFieldMetadata,
 } from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
 
 import {
   buildFilterFields,
@@ -578,12 +580,14 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
         recordRepresentation: "name",
         fields: {},
         rootFields: { list: "taxes", create: "insert_taxes_one" },
+        resource: relationResource("taxes.Tax", "taxes"),
       },
       ProductVariantType: {
         typeName: "ProductVariantType",
         recordRepresentation: "displayName",
         fields: {},
         rootFields: { list: "product_variants" },
+        resource: relationResource("catalog.ProductVariant", "product_variants"),
       },
       UnlistableType: { typeName: "UnlistableType", fields: {}, rootFields: {} },
       ScopeType: {
@@ -591,6 +595,7 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
         recordRepresentation: "name",
         fields: {},
         rootFields: { list: "scopes" },
+        resource: relationResource("accounting.Scope", "scopes"),
       },
     },
   };
@@ -616,7 +621,9 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
   };
 
   test("resolves a to-one relation, but not a to-many, for relationFieldInfo", () => {
-    expect(relationFieldInfo("product", model, schema)?.resource).toBe("ProductVariant");
+    expect(relationFieldInfo("product", model, schema)?.resource).toBe(
+      "catalog.ProductVariant",
+    );
     // An M2M is `kind: "list"`, so the to-one resolver ignores it (else it would
     // render a single picker over a many field).
     expect(relationFieldInfo("taxes", model, schema)).toBeNull();
@@ -626,7 +633,7 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
     // A `scope` FK the node projects as a bare `ID!` still wires the picker/label
     // through the relation metadata, so the form gets a usable relation widget.
     const info = relationFieldInfo("scope", model, schema);
-    expect(info?.resource).toBe("Scope");
+    expect(info?.resource).toBe("accounting.Scope");
     expect(info?.labelField).toBe("name");
     // Its metadata widget is `select` (not `many2one`), so the form selects it as a
     // scalar leaf — a valid detail query, never an object sub-selection.
@@ -638,7 +645,7 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
 
   test("resolves an M2M relation target for relationListFieldInfo", () => {
     const info = relationListFieldInfo("taxes", model, schema);
-    expect(info?.resource).toBe("Tax");
+    expect(info?.resource).toBe("taxes.Tax");
     expect(info?.labelField).toBe("name");
     expect(info?.canCreate).toBe(true);
     // The to-many resolver ignores a to-one field.
@@ -874,3 +881,14 @@ describe("relation label axes are not groups of their own", () => {
     });
   });
 });
+
+function relationResource(
+  modelLabel: string,
+  list: string,
+): DataResourceMetadata {
+  return testDataResource(modelLabel, {
+    roots: { list },
+    typeNames: {},
+    capabilities: ["list"],
+  });
+}

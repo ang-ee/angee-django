@@ -17,13 +17,6 @@ const statusOptions = [
   { value: "ARCHIVED", label: "Archived" },
 ];
 
-const stageOptions = [
-  { value: "new", label: "New" },
-  { value: "qualified", label: "Qualified" },
-  { value: "proposal", label: "Proposal" },
-  { value: "won", label: "Won" },
-];
-
 const runtimeOptions = [
   { value: "STOPPED", label: "Stopped" },
   { value: "RUNNING", label: "Running" },
@@ -42,8 +35,6 @@ const recordOptions = [
   { value: "rec-1002", label: "Globex renewal" },
   { value: "rec-1003", label: "Initech rollout" },
 ];
-
-type ThemeValue = "light" | "dark" | "system";
 
 type OwnerCellStoryValue =
   | string
@@ -178,23 +169,11 @@ export const EditAndRead: Story = {
               initialValue={64}
               field={{ label: "Completion" }}
             />
-            <WidgetExample
-              kind="ribbon"
-              widget={defaultWidgets.ribbon}
-              initialValue="proposal"
-              field={{ label: "Stage", options: stageOptions }}
-            />
             <WidgetExample<OwnerCellStoryValue>
               kind="ownerCell"
               widget={defaultWidgets.ownerCell}
               initialValue={{ id: "ada", name: "Ada Lovelace" }}
               field={{ label: "Owner", options: ownerOptions }}
-            />
-            <WidgetExample<ThemeValue>
-              kind="themePicker"
-              widget={defaultWidgets.themePicker}
-              initialValue="system"
-              field={{ label: "Theme" }}
             />
             <WidgetExample<unknown>
               kind="many2one"

@@ -102,9 +102,10 @@ function resolveRelationTarget(
 ): RelationFieldInfo | null {
   if (!field.relationTarget) return null;
   const related = schemaMetadata.types[field.relationTarget];
-  if (!related?.rootFields?.list) return null;
+  const resource = related?.resource;
+  if (!related?.rootFields?.list || !resource) return null;
   return {
-    resource: stripTypeSuffix(field.relationTarget),
+    resource: resource.modelLabel,
     labelField: related.recordRepresentation ?? "id",
     canCreate: Boolean(related.rootFields.create),
     ...(field.relationFilter ? { filter: field.relationFilter } : {}),
@@ -153,17 +154,12 @@ function formFieldDescriptor(field: ModelFieldMetadata): FieldDescriptor {
   return widget ? { name: field.name, widget } : { name: field.name };
 }
 
-function stripTypeSuffix(typeName: string): string {
-  return typeName.endsWith("Type") ? typeName.slice(0, -4) : typeName;
-}
-
 const ENUM_OPTION_WIDGETS = new Set([
   "select",
   "selection",
   "statusbar",
   "statusBadge",
   "colorDot",
-  "ribbon",
 ]);
 
 /** Apply metadata-derived column labels and enum options without overriding props. */

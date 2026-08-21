@@ -118,7 +118,6 @@ export {
   type CalendarCollectionSurfaceProps,
   type CalendarWindowFetch,
 } from "./calendar-collection-surface";
-export { Notebook, type NotebookProps } from "./Notebook";
 export {
   Tree,
   FolderTree,

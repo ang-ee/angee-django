@@ -157,7 +157,6 @@ export const spotlightCommands: readonly SpotlightCommand[] = [
     title: "Open notes",
     icon: "notes",
     group: "Navigation",
-    hint: "G N",
     run: () => undefined,
   },
   {
@@ -165,7 +164,6 @@ export const spotlightCommands: readonly SpotlightCommand[] = [
     title: "Open reports",
     icon: "reports",
     group: "Navigation",
-    hint: "G R",
     run: () => undefined,
   },
   {
@@ -173,7 +171,6 @@ export const spotlightCommands: readonly SpotlightCommand[] = [
     title: "Star current record",
     icon: "star",
     group: "Record",
-    hint: "S",
     run: () => undefined,
   },
   {
@@ -181,7 +178,6 @@ export const spotlightCommands: readonly SpotlightCommand[] = [
     title: "Sync resources",
     icon: "archive",
     group: "System",
-    hint: "Cmd+Shift+R",
     run: () => undefined,
   },
 ];

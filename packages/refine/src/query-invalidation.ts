@@ -8,6 +8,10 @@ export function authoredQueryMeta(
   return modelLabels.length > 0 ? { angeeModels: [...modelLabels] } : undefined;
 }
 
+/**
+ * Exact-match authored query metadata against canonical model labels supplied by
+ * the caller; this metadata-free layer deliberately performs no alias mapping.
+ */
 export function authoredQueryReadsAnyModel(
   meta: unknown,
   modelLabels: readonly string[],

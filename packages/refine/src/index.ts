@@ -8,6 +8,9 @@ export {
   refineSortersFromAngeeOrder,
   type AngeeFilterLookupOperator,
 } from "./filter-codec";
+// Story/test consumers that pair these bindings with providers returned by this
+// package must resolve Refine's provider types through the same package identity.
+export { Refine, type ResourceProps } from "@refinedev/core";
 export {
   OperationDocumentsProvider,
   actionDocumentForSchema,

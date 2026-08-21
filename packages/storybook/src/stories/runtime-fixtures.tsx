@@ -1,7 +1,6 @@
 import { ModelMetadataProvider, defineAngeeSchemaMetadata, schemaFieldMetadataFromAngeeSchemaMetadata, type AngeeSchemaMetadata, } from "@angee/metadata";
 import {
   useMemo, type ReactNode } from "react";
-import { Refine } from "@refinedev/core";
 import {
   AppRuntimeProvider,
   baseIcons,
@@ -10,7 +9,10 @@ import {
 } from "@angee/ui";
 import { ActiveGraphQLSchemaProvider, } from "@angee/metadata";
 import {
-  createAngeeHasuraDataProviders, type AngeeHasuraSchemaConfig, } from "@angee/refine";
+  createAngeeHasuraDataProviders,
+  Refine,
+  type AngeeHasuraSchemaConfig,
+} from "@angee/refine";
 import { ModalsHost } from "@angee/ui";
 
 /**

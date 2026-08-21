@@ -4,7 +4,10 @@ import {
   useActionMutation,
   type ActionArguments,
 } from "@angee/refine";
-import { useResourceInvalidates } from "@angee/metadata";
+import {
+  useCanonicalResourceModelLabels,
+  useResourceInvalidates,
+} from "@angee/metadata";
 
 import {
   useActionResultRun,
@@ -81,10 +84,13 @@ export function useRecordActionMutation<TField extends string = string>(
   field: TField,
   options?: UseRecordActionOptions,
 ): [RecordAction, { fetching: boolean; error: Error | null }] {
-  const invalidates = useResourceInvalidates(options?.invalidateModels);
+  const canonicalInvalidateModels = useCanonicalResourceModelLabels(
+    options?.invalidateModels,
+  );
+  const invalidates = useResourceInvalidates(canonicalInvalidateModels);
   const [mutate, state] = useActionMutation<TField>(field, {
     ...(options?.invalidateModels !== undefined
-      ? { invalidateModels: options.invalidateModels }
+      ? { invalidateModels: canonicalInvalidateModels }
       : {}),
     invalidates,
   });
@@ -147,11 +153,14 @@ export function useActionResultMutation<TField extends string = string>(
   options: UseActionResultMutationOptions = {},
 ): [ActionResultMutation, { fetching: boolean; error: Error | null }] {
   const { dataProviderName } = options;
-  const invalidates = useResourceInvalidates(options.invalidateModels);
+  const canonicalInvalidateModels = useCanonicalResourceModelLabels(
+    options.invalidateModels,
+  );
+  const invalidates = useResourceInvalidates(canonicalInvalidateModels);
   const [mutate, state] = useActionMutation<TField>(field, {
     ...(dataProviderName !== undefined ? { dataProviderName } : {}),
     ...(options.invalidateModels !== undefined
-      ? { invalidateModels: options.invalidateModels }
+      ? { invalidateModels: canonicalInvalidateModels }
       : {}),
     invalidates,
   });

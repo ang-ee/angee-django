@@ -4,8 +4,9 @@
 //
 // - Registry facts (routes, menu ids, widgets, icons, i18n keys, forms, previews,
 //   data providers) and the keyed contribution lists that are extension points
-//   (slot entries by `(slot, id)`, drawers by `(edge, id)`) are unique — a second
-//   addon claiming one is a collision, and a composition-time error (app boot;
+//   (slot entries by `(slot, model?, impl?, id)`, drawers by `(edge, id)`) are
+//   unique — a second addon claiming one is a collision, and a composition-time
+//   error (app boot;
 //   `pnpm run test` composes the full addon set — `typecheck`/`build` do not).
 // - Chatter tabs dedupe by `id`, last addon wins, so a later addon can override a
 //   default.
@@ -23,10 +24,12 @@ import type {
   DrawerEdge,
   FormOverrideMap,
   MenuItem,
+  ModelSlotTarget,
   PreviewContribution,
   SlotContribution,
   WidgetMap,
 } from "@angee/ui/runtime";
+import { isModelScopedSlot } from "@angee/ui/runtime";
 
 export type {
   ChatterContribution,
@@ -35,6 +38,7 @@ export type {
   DrawerEdge,
   FormOverrideMap,
   MenuItem,
+  ModelSlotTarget,
   PreviewContribution,
   SlotContribution,
   WidgetMap,
@@ -51,7 +55,8 @@ export interface AddonRoute {
   /** Which refine layout renders this route's chrome (`console`, `public`, ...). */
   layout?: string;
   /**
-   * Resource whose collection this route lists, e.g. `"OAuthClient"`. Set it on
+   * Resource whose collection this route lists, e.g. `"integrate.OAuthClient"`.
+   * Set it on
    * a routed collection action (not its `$id` child) to make the resource
    * followable: a relation field targeting it resolves this route as the detail
    * destination. One route per resource — a second claim is a build-time error.
@@ -103,6 +108,11 @@ export interface ComposedAddons {
   dataProviders: Readonly<Record<string, unknown>>;
 }
 
+export interface ComposeAddonsOptions {
+  /** Required composition-root model normalizer. */
+  canonicalModelLabel: (spelling: string) => string;
+}
+
 /** Brand an object as an addon manifest, giving one greppable declaration site. */
 export function defineAddon(manifest: AddonManifest): AddonManifest {
   return manifest;
@@ -119,7 +129,8 @@ export function defineAddon(manifest: AddonManifest): AddonManifest {
  * addon claiming one silently deciding the winner by array order is a collision,
  * not an override. An addon that needs to vary a contribution per row keys it on
  * the fact the row already carries — an `ImplClassField` value — through the
- * record-verb slot's impl key (`formViewRecordActionsSlot(resource, implValue)`),
+ * record-verb slot's typed impl address
+ * (`formViewRecordActionsSlot(resource, implValue)`),
  * which resolves by declared specificity rather than by array order. Two vendors
  * then specialize the same verb on the same model as siblings, each reaching only
  * its own rows.
@@ -155,7 +166,12 @@ export function mergeChatterContributions(
 export function mergeSlotContributions(
   ...groups: readonly (readonly SlotContribution[])[]
 ): SlotContribution[] {
-  return mergeByKey(groups, (entry) => `${entry.slot}\0${entry.id}`, "slot entry");
+  return mergeByKey(
+    groups,
+    (entry) =>
+      `${entry.slot}\0${entry.model ?? ""}\0${entry.impl ?? ""}\0${entry.id}`,
+    "slot entry",
+  );
 }
 
 export function mergeDrawerContributions(
@@ -182,7 +198,11 @@ function assertUnclaimed(
  * Fold addon manifests into one runtime. Registry facts must be unique; ordered
  * contribution lists are merged by key and sorted by sequence.
  */
-export function composeAddons(addons: readonly AddonManifest[]): ComposedAddons {
+export function composeAddons(
+  addons: readonly AddonManifest[],
+  options: ComposeAddonsOptions,
+): ComposedAddons {
+  const canonicalizeModel = options.canonicalModelLabel;
   const routes: AddonRoute[] = [];
   const menus: ComposedMenuItem[] = [];
   const widgets: WidgetMap = {};
@@ -200,7 +220,11 @@ export function composeAddons(addons: readonly AddonManifest[]): ComposedAddons 
       for (const route of addon.routes) {
         assertUnclaimed(routeNames, route.name, addon.id, "route name");
         routeNames[route.name] = true;
-        routes.push(route);
+        routes.push(
+          route.resource
+            ? { ...route, resource: canonicalizeModel(route.resource) }
+            : route,
+        );
       }
     }
     if (addon.menus) {
@@ -220,8 +244,9 @@ export function composeAddons(addons: readonly AddonManifest[]): ComposedAddons 
     }
     if (addon.forms) {
       for (const [model, form] of Object.entries(addon.forms)) {
-        assertUnclaimed(forms, model, addon.id, "form override");
-        forms[model] = form;
+        const canonicalModel = canonicalizeModel(model);
+        assertUnclaimed(forms, canonicalModel, addon.id, "form override");
+        forms[canonicalModel] = form;
       }
     }
     if (addon.dataProviders) {
@@ -256,10 +281,41 @@ export function composeAddons(addons: readonly AddonManifest[]): ComposedAddons 
     forms,
     dataProviders,
     chatter: mergeChatterContributions(...addons.map((a) => a.chatter ?? [])),
-    slots: mergeSlotContributions(...addons.map((a) => a.slots ?? [])),
+    slots: mergeSlotContributions(
+      ...addons.map((addon) =>
+        normalizeSlotContributions(
+          addon.slots ?? [],
+          canonicalizeModel,
+          addon.id,
+        ),
+      ),
+    ),
     drawers: mergeDrawerContributions(...addons.map((a) => a.drawers ?? [])),
     previews,
   };
+}
+
+function normalizeSlotContributions(
+  slots: readonly SlotContribution[],
+  canonicalizeModel: (spelling: string) => string,
+  addonId: string,
+): SlotContribution[] {
+  return slots.map((entry) => {
+    if (isModelScopedSlot(entry.slot) && entry.model === undefined) {
+      throw new Error(
+        `Addon "${addonId}" declares model-scoped slot "${entry.slot}" without a model.`,
+      );
+    }
+    if (entry.impl !== undefined && entry.model === undefined) {
+      throw new Error(
+        `Addon "${addonId}" declares slot "${entry.slot}" impl "${entry.impl}" ` +
+          "without a model.",
+      );
+    }
+    return entry.model === undefined
+      ? entry
+      : { ...entry, model: canonicalizeModel(entry.model) };
+  });
 }
 
 function normalizeMenuItems(

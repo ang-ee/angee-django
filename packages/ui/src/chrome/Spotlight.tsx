@@ -23,7 +23,6 @@ export interface SpotlightCommand {
   id: string;
   title: ReactNode;
   searchValue?: string;
-  hint?: ReactNode;
   icon?: ReactNode | string;
   group?: string;
   run: () => void | Promise<void>;

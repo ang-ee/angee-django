@@ -2,8 +2,14 @@
 
 import { cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { createElement, type ReactNode } from "react";
 
 import type { TypedDocumentNode } from "@angee/refine";
+import {
+  ModelMetadataProvider,
+  schemaFieldMetadataFromDataResources,
+} from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
 
 import type { CalendarWindow, Occurrence } from "./CalendarView";
 import {
@@ -43,8 +49,17 @@ const SOURCE: CalendarWindowSource<typeof DOCUMENT> = {
   document: DOCUMENT,
   variables: (window) => calendarWindowBounds(window),
   select: (data) => data?.event_occurrences,
-  models: ["calendar/event"],
+  models: ["Event"],
 };
+
+function Metadata({ children }: { children: ReactNode }): ReactNode {
+  return createElement(ModelMetadataProvider, {
+    metadata: schemaFieldMetadataFromDataResources([
+      testDataResource("calendar.Event"),
+    ]),
+    children,
+  });
+}
 
 const JUNE: CalendarWindow = {
   start: new Date("2026-06-01T00:00:00.000Z"),
@@ -74,7 +89,9 @@ afterEach(cleanup);
 describe("useCalendarWindow", () => {
   test("maps the occurrence rows out of the authored result", () => {
     authored.data = { event_occurrences: [OCC] };
-    const { result } = renderHook(() => useCalendarWindow(SOURCE, JUNE));
+    const { result } = renderHook(() => useCalendarWindow(SOURCE, JUNE), {
+      wrapper: Metadata,
+    });
 
     expect(result.current.occurrences).toEqual([OCC]);
     expect(result.current.fetching).toBe(false);
@@ -87,14 +104,16 @@ describe("useCalendarWindow", () => {
 
   test("returns an empty array when the result has no occurrences yet", () => {
     authored.data = undefined;
-    const { result } = renderHook(() => useCalendarWindow(SOURCE, JUNE));
+    const { result } = renderHook(() => useCalendarWindow(SOURCE, JUNE), {
+      wrapper: Metadata,
+    });
     expect(result.current.occurrences).toEqual([]);
   });
 
   test("refetches with the new bounds when the window changes", () => {
     const { rerender } = renderHook(
       ({ window }: { window: CalendarWindow }) => useCalendarWindow(SOURCE, window),
-      { initialProps: { window: JUNE } },
+      { initialProps: { window: JUNE }, wrapper: Metadata },
     );
     const first = authored.calls.at(-1)?.variables;
 
@@ -109,7 +128,7 @@ describe("useCalendarWindow", () => {
   });
 
   test("passes the source's invalidation models through to the query owner", () => {
-    renderHook(() => useCalendarWindow(SOURCE, JUNE));
-    expect(authored.calls.at(-1)?.options).toMatchObject({ models: ["calendar/event"] });
+    renderHook(() => useCalendarWindow(SOURCE, JUNE), { wrapper: Metadata });
+    expect(authored.calls.at(-1)?.options).toMatchObject({ models: ["calendar.Event"] });
   });
 });

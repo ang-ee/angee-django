@@ -12,7 +12,6 @@ import { many2oneWidget } from "./many2one";
 import { floatWidget, integerWidget } from "./number";
 import { ownerCellWidget } from "./ownerCell";
 import { progressBarWidget } from "./progressBar";
-import { ribbonWidget } from "./ribbon";
 import { emailWidget, passwordWidget, phoneWidget, urlWidget } from "./scalarText";
 import { selectionWidget, selectWidget } from "./select";
 import { slugWidget } from "./slug";
@@ -22,7 +21,6 @@ import { booleanToggleWidget, switchWidget } from "./switch";
 import { tagInputWidget } from "./tagInput";
 import { textareaWidget } from "./textarea";
 import { textWidget } from "./text";
-import { themePickerWidget } from "./themePicker";
 import { userRefWidget } from "./userRef";
 import type { WidgetDefinition } from "./types";
 
@@ -114,7 +112,6 @@ export const defaultWidgets = {
   statusBadge: statusBadgeWidget,
   progressBar: progressBarWidget,
   statusbar: statusbarWidget,
-  ribbon: ribbonWidget,
   tagInput: tagInputWidget,
   "markdown.editor": markdownEditorWidget,
   "markdown.preview": markdownPreviewWidget,
@@ -124,7 +121,6 @@ export const defaultWidgets = {
   switch: switchWidget,
   userRef: userRefWidget,
   ownerCell: ownerCellWidget,
-  themePicker: themePickerWidget,
   many2one: many2oneWidget,
   many2many: many2manyWidget,
   rows: rowsWidget,

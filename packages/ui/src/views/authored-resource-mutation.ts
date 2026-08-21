@@ -7,7 +7,10 @@ import {
   type AuthoredVariables,
   type DocumentData,
 } from "@angee/refine";
-import { useResourceInvalidates } from "@angee/metadata";
+import {
+  useCanonicalResourceModelLabels,
+  useResourceInvalidates,
+} from "@angee/metadata";
 
 /**
  * `useAuthoredMutation` with resource-backed invalidation wired in.
@@ -22,10 +25,10 @@ import { useResourceInvalidates } from "@angee/metadata";
  * `invalidates`, so the contribution inherits resource invalidation without
  * re-deriving it.
  *
- * Each `invalidateModels` entry must be a model exposed in resource metadata (the
- * mapping throws otherwise); a non-resource authored read model stays on plain
- * `useAuthoredMutation`. `invalidateModels` is still forwarded, so any authored
- * read registered on those models refetches too.
+ * Each `invalidateModels` entry is canonicalized at this rendered metadata edge;
+ * unknown spellings warn in development and are omitted. A non-resource authored
+ * read model stays on plain `useAuthoredMutation`. The canonical labels are also
+ * forwarded, so authored reads registered on those exact models refetch too.
  */
 export function useAuthoredResourceMutation<TDocument extends AuthoredDocument>(
   document: TDocument,
@@ -34,10 +37,19 @@ export function useAuthoredResourceMutation<TDocument extends AuthoredDocument>(
     AuthoredVariables<TDocument>
   > = {},
 ): [AuthoredMutate<TDocument>, { fetching: boolean; error: Error | null }] {
-  const resourceInvalidates = useResourceInvalidates(options.invalidateModels);
+  const canonicalInvalidateModels = useCanonicalResourceModelLabels(
+    options.invalidateModels,
+  );
+  const resourceInvalidates = useResourceInvalidates(canonicalInvalidateModels);
   const invalidates = React.useMemo(
     () => [...(options.invalidates ?? []), ...resourceInvalidates],
     [options.invalidates, resourceInvalidates],
   );
-  return useAuthoredMutation(document, { ...options, invalidates });
+  return useAuthoredMutation(document, {
+    ...options,
+    ...(options.invalidateModels !== undefined
+      ? { invalidateModels: canonicalInvalidateModels }
+      : {}),
+    invalidates,
+  });
 }

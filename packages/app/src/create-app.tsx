@@ -1,7 +1,9 @@
 import {
+  canonicalModelLabel,
   createAngeeAccessControlProvider,
   dataResourcesFromAngeeSchemaMetadata,
   defineAngeeSchemaMetadata,
+  mergeModelLabelInventory,
   schemaFieldMetadataFromAngeeSchemaMetadata,
   type AngeeSchemaMetadata,
   type SchemaFieldMetadata,
@@ -53,10 +55,7 @@ import {
   type ComposedMenuItem,
   type SlotContribution,
 } from "@angee/ui/runtime";
-import {
-  composeAddons,
-  mergeSlotContributions,
-} from "./define-addon";
+import { composeAddons } from "./define-addon";
 import {
   ModalsHost,
   ToastProvider,
@@ -194,10 +193,21 @@ const APP_QUERY_CLIENT_CONFIG: QueryClientConfig = {
  * `createApp({...}).mount(...)`.
  */
 export function createApp(input: CreateAppInput): AngeeApp {
-  const composed = composeAddons([
-    { id: "base", icons: baseIcons },
-    ...input.addons,
-  ]);
+  const schemas = normalizeSchemaConfigs(input.schemas);
+  const modelLabelInventory = mergeModelLabelInventory(
+    Object.values(schemas).map((schema) => schema.fieldMetadata),
+  );
+  const composed = composeAddons(
+    [
+      { id: "base", icons: baseIcons },
+      ...input.addons,
+      ...(input.slots ? [{ id: "host", slots: input.slots }] : []),
+    ],
+    {
+      canonicalModelLabel: (spelling) =>
+        canonicalModelLabel(modelLabelInventory, spelling),
+    },
+  );
   const routes = composed.routes as readonly BaseAddonRoute[];
   const pathByName = new Map(
     routes.map((route) => [route.name, route.path]),
@@ -216,8 +226,6 @@ export function createApp(input: CreateAppInput): AngeeApp {
 
   const defaultSchema = input.defaultSchema ?? "public";
   const subscriptionSchema = input.subscriptionSchema ?? "console";
-  const schemas = normalizeSchemaConfigs(input.schemas);
-
   const i18n = createAngeeI18nRuntime(mergeI18n(enUiBundle, composed.i18n));
 
   // The static composition; the session fields (auth, logoutAction,
@@ -228,8 +236,8 @@ export function createApp(input: CreateAppInput): AngeeApp {
     icons: composed.icons,
     forms: composed.forms,
     chatter: composed.chatter,
-    chatterRoutes: chatterRouteIndex(routes, schemas),
-    slots: mergeSlotContributions(composed.slots, input.slots ?? []),
+    chatterRoutes: chatterRouteIndex(routes, modelLabelInventory),
+    slots: composed.slots,
     // Built-in renderers are universal (PreviewPane always includes them); the
     // runtime carries only addon-contributed providers.
     previews: composed.previews,

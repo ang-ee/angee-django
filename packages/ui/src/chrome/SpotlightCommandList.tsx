@@ -62,9 +62,6 @@ export default function SpotlightCommandList({
                   <span className="min-w-0 flex-1 truncate">
                     {command.title}
                   </span>
-                  {command.hint ? (
-                    <Command.Shortcut>{command.hint}</Command.Shortcut>
-                  ) : null}
                 </Command.Item>
               ))}
             </Command.Group>

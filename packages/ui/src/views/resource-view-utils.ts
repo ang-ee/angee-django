@@ -7,6 +7,7 @@ import {
   isRelationLabelAxis,
   isToOneRelationField,
   looksLikeDateField,
+  modelLabelSegment,
   relationFilterForRelation,
   resourceGroupDimensionForField,
   supportsChoiceFacet as metadataSupportsChoiceFacet,
@@ -636,7 +637,7 @@ export function mergeFilterFields(
 }
 
 export function createLabelForResource(resource: string): string {
-  const name = resource.split(".").at(-1) ?? "record";
+  const name = modelLabelSegment(resource) || "record";
   return `New ${groupFieldLabel(name).toLowerCase()}`;
 }
 

@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
 
-import { resourceFieldPathToSnake, snakeCaseIdentifier } from "./naming";
+import {
+  modelLabelSegment,
+  resourceFieldPathToSnake,
+  snakeCaseIdentifier,
+} from "./naming";
 
 describe("metadata naming", () => {
   test("snake-cases identifier segments", () => {
@@ -12,5 +16,10 @@ describe("metadata naming", () => {
     expect(resourceFieldPathToSnake("oauthClient_IsEnabled")).toBe(
       "oauth_client__is_enabled",
     );
+  });
+
+  test("returns the final segment of a qualified model label", () => {
+    expect(modelLabelSegment("integrate.OAuthClient")).toBe("OAuthClient");
+    expect(modelLabelSegment("Note")).toBe("Note");
   });
 });

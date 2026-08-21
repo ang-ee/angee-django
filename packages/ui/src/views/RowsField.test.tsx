@@ -5,6 +5,7 @@ import {
   type Row,
   type SchemaFieldMetadata,
 } from "@angee/metadata";
+import { withTestResourceInventory } from "@angee/metadata/testing";
 import {
   cleanup,
   fireEvent,
@@ -36,7 +37,7 @@ const channelRows: Row[] = [
   { id: "chn-general", name: "General" },
 ];
 
-const metadata: SchemaFieldMetadata = {
+const metadata: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     ChannelType: {
       typeName: "ChannelType",
@@ -70,7 +71,7 @@ const metadata: SchemaFieldMetadata = {
       },
     },
   },
-};
+});
 
 describe("rows widget", () => {
   afterEach(cleanup);

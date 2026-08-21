@@ -56,7 +56,12 @@ export interface AuthoredOperationOptions {
 
 export interface AuthoredQueryOptions extends AuthoredOperationOptions {
   enabled?: boolean;
-  /** Model labels this bespoke read depends on; local writes and live changes refetch it. */
+  /**
+   * Exact canonical model labels this bespoke read depends on; local writes and
+   * live changes refetch it. This metadata-free package does no alias resolution:
+   * a rendered caller accepts friendly spellings only by canonicalizing at its
+   * `@angee/metadata` edge before calling this hook.
+   */
   models?: readonly string[];
 }
 
@@ -299,7 +304,11 @@ export interface AuthoredMutationOptions<
   TData = unknown,
   TVariables = Record<string, unknown>,
 > extends AuthoredOperationOptions {
-  /** Models whose registered reads should refetch after this mutation succeeds. */
+  /**
+   * Exact canonical model labels whose registered reads should refetch after
+   * success. This metadata-free package exact-matches the strings; callers that
+   * accept aliases canonicalize them before this boundary.
+   */
   invalidateModels?: readonly string[];
   /** Resource invalidations prepared by the caller that owns resource metadata. */
   invalidates?: readonly InvalidateParams[];

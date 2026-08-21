@@ -34,6 +34,7 @@ import {
 import {
   ModelMetadataProvider,
 } from "@angee/metadata";
+import { withTestResourceInventory } from "@angee/metadata/testing";
 import { OperationDocumentsProvider } from "@angee/refine";
 import type {
   Row,
@@ -387,6 +388,28 @@ describe("FormView", () => {
         </FormView>,
       ),
     ).toThrow(/cannot mix the fields\/groups props with element children/);
+  });
+
+  test("an unknown model spelling degrades to a disabled form with a development warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    expect(() =>
+      renderWithProviders(
+        <FormView
+          resource="missing.Note"
+          id={null}
+          fields={[{ name: "title", label: "Title" }]}
+        />,
+      ),
+    ).not.toThrow();
+
+    expect(
+      (screen.getByRole("button", { name: "Create" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/model metadata lookup.*missing\.Note/),
+    );
+    warn.mockRestore();
   });
 
   test("renders declared record actions in the action menu", async () => {
@@ -1557,7 +1580,7 @@ describe("FormView", () => {
       {
         slots: [
           {
-            slot: formViewRecordActionsSlot("notes.Note"),
+            ...formViewRecordActionsSlot("notes.Note"),
             id: "notes.pause",
             content: <ActionProbe />,
           },
@@ -1585,7 +1608,7 @@ describe("FormView", () => {
       {
         slots: [
           {
-            slot: formViewRecordActionsSlot("parties.Party"),
+            ...formViewRecordActionsSlot("parties.Party"),
             id: "parties.pause",
             content: <button type="button">Inherited pause</button>,
           },
@@ -1608,17 +1631,17 @@ describe("FormView", () => {
       {
         slots: [
           {
-            slot: formViewRecordActionsSlot("parties.Party"),
+            ...formViewRecordActionsSlot("parties.Party"),
             id: "lifecycle.pause",
             content: <button type="button">Generic pause</button>,
           },
           {
-            slot: formViewRecordActionsSlot("parties.Party"),
+            ...formViewRecordActionsSlot("parties.Party"),
             id: "lifecycle.disconnect",
             content: <button type="button">Generic disconnect</button>,
           },
           {
-            slot: formViewRecordActionsSlot("notes.Note"),
+            ...formViewRecordActionsSlot("notes.Note"),
             id: "lifecycle.pause",
             content: <button type="button">Note pause</button>,
           },
@@ -1645,12 +1668,12 @@ describe("FormView", () => {
       {
         slots: [
           {
-            slot: formViewRecordActionsSlot("parties.Party"),
+            ...formViewRecordActionsSlot("parties.Party"),
             id: "lifecycle.pause",
             content: <button type="button">Generic pause</button>,
           },
           {
-            slot: formViewRecordActionsSlot("notes.Note"),
+            ...formViewRecordActionsSlot("notes.Note"),
             id: "lifecycle.pause",
             content: <button type="button">Note pause</button>,
           },
@@ -1677,17 +1700,17 @@ describe("FormView", () => {
       {
         slots: [
           {
-            slot: formViewRecordActionsSlot("parties.Party"),
+            ...formViewRecordActionsSlot("parties.Party"),
             id: "lifecycle.disconnect",
             content: <button type="button">Generic disconnect</button>,
           },
           {
-            slot: formViewRecordActionsSlot("notes.Note"),
+            ...formViewRecordActionsSlot("notes.Note"),
             id: "lifecycle.disconnect",
             content: <button type="button">Note disconnect</button>,
           },
           {
-            slot: formViewRecordActionsSlot("notes.Note", "whatsapp"),
+            ...formViewRecordActionsSlot("notes.Note", "whatsapp"),
             id: "lifecycle.disconnect",
             content: <button type="button">WhatsApp disconnect</button>,
           },
@@ -1723,7 +1746,7 @@ describe("FormView", () => {
       {
         slots: [
           {
-            slot: formViewRecordActionsSlot("notes.Note", "whatsapp"),
+            ...formViewRecordActionsSlot("notes.Note", "whatsapp"),
             id: "lifecycle.disconnect",
             content: <button type="button">WhatsApp disconnect</button>,
           },
@@ -1754,7 +1777,7 @@ describe("FormView", () => {
       {
         slots: [
           {
-            slot: formViewRecordActionsSlot("notes.Note", "whatsapp"),
+            ...formViewRecordActionsSlot("notes.Note", "whatsapp"),
             id: "lifecycle.disconnect",
             content: <button type="button">WhatsApp disconnect</button>,
           },
@@ -1780,12 +1803,12 @@ describe("FormView", () => {
       {
         slots: [
           {
-            slot: formViewRecordActionsSlot("parties.Party"),
+            ...formViewRecordActionsSlot("parties.Party"),
             id: "lifecycle.disconnect",
             content: <button type="button">Generic disconnect</button>,
           },
           {
-            slot: formViewRecordActionsSlot("notes.Note", "whatsapp"),
+            ...formViewRecordActionsSlot("notes.Note", "whatsapp"),
             id: "lifecycle.disconnect",
             content: <button type="button">WhatsApp disconnect</button>,
           },
@@ -1813,7 +1836,7 @@ describe("FormView", () => {
       {
         slots: [
           {
-            slot: formViewRecordActionsSlot("notes.Note", "whatsapp"),
+            ...formViewRecordActionsSlot("notes.Note", "whatsapp"),
             id: "whatsapp.connect",
             content: <button type="button">Pair WhatsApp</button>,
           },
@@ -1838,12 +1861,12 @@ describe("FormView", () => {
       {
         slots: [
           {
-            slot: formViewRecordActionsSlot("notes.Note", "whatsapp"),
+            ...formViewRecordActionsSlot("notes.Note", "whatsapp"),
             id: "lifecycle.disconnect",
             content: <button type="button">WhatsApp disconnect</button>,
           },
           {
-            slot: formViewRecordActionsSlot("notes.Note", "imap"),
+            ...formViewRecordActionsSlot("notes.Note", "imap"),
             id: "lifecycle.disconnect",
             content: <button type="button">IMAP disconnect</button>,
           },
@@ -1869,19 +1892,19 @@ describe("FormView", () => {
       {
         slots: [
           {
-            slot: formViewRecordActionsSlot("parties.Party"),
+            ...formViewRecordActionsSlot("parties.Party"),
             id: "lifecycle.pause",
             sequence: 11,
             content: <button type="button">Pause</button>,
           },
           {
-            slot: formViewRecordActionsSlot("parties.Party"),
+            ...formViewRecordActionsSlot("parties.Party"),
             id: "lifecycle.disconnect",
             sequence: 13,
             content: <button type="button">Disconnect</button>,
           },
           {
-            slot: formViewRecordActionsSlot("notes.Note", "whatsapp"),
+            ...formViewRecordActionsSlot("notes.Note", "whatsapp"),
             id: "whatsapp.connect",
             sequence: 10,
             content: <button type="button">Connect</button>,
@@ -1909,7 +1932,7 @@ describe("FormView", () => {
       {
         slots: [
           {
-            slot: formViewSectionsSlot("notes.Note"),
+            ...formViewSectionsSlot("notes.Note"),
             id: "notes.extra",
             content: (
               <Group label="Extra">
@@ -2635,7 +2658,7 @@ function withDefaultResourceMetadata(
       resource: model.resource ?? defaultResource(typeName, modelLabel),
     };
   }
-  return { ...seed, types };
+  return withTestResourceInventory({ ...seed, types });
 }
 
 function defaultModel(typeName: string, modelLabel: string): ModelMetadata {

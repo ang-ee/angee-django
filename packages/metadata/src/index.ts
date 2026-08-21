@@ -3,8 +3,14 @@ export {
   createAngeeAccessControlProvider,
 } from "./access-control";
 export {
+  canonicalModelLabel,
+  canonicalModelLabelOrNull,
+  mergeModelLabelInventory,
+} from "./canonical-model-label";
+export {
   refineInvalidationParams,
   resourceInvalidationTargets,
+  useCanonicalResourceModelLabels,
   useResourceInvalidates,
   type ResourceInvalidationTarget,
 } from "./invalidation";
@@ -54,6 +60,7 @@ export {
   dataResourcesFromAngeeSchemaMetadata,
 } from "./projection";
 export {
+  modelLabelSegment,
   resourceFieldPathToSnake,
   snakeCaseIdentifier,
 } from "./naming";

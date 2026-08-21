@@ -1,7 +1,13 @@
 // @vitest-environment happy-dom
 
 import { cleanup, render, screen } from "@testing-library/react";
+import {
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { ModelMetadataProvider } from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
 
 import { AppRuntimeProvider } from "../runtime";
 import { defaultWidgets } from "../widgets";
@@ -78,5 +84,47 @@ describe("MutationDialog", () => {
     expect(emptyValueForField({ kind: "boolean" })).toBe(false);
     expect(emptyValueForField({ kind: "any", widget: "select" })).toBe("");
     expect(emptyValueForField({ kind: "string" })).toBe("");
+  });
+
+  test("an unknown relation degrades to a disabled control and development warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ModelMetadataProvider
+          metadata={{ types: {}, resources: [testDataResource("parties.Party")] }}
+        >
+          <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+            <MutationDialog
+              open
+              onOpenChange={vi.fn()}
+              title="Assign owner"
+              fields={[
+                {
+                  name: "owner",
+                  label: "Owner",
+                  relation: {
+                    resource: "missing.Person",
+                    labelField: "display_name",
+                  },
+                },
+              ]}
+              submitLabel="Assign"
+              onSubmit={vi.fn()}
+            />
+          </AppRuntimeProvider>
+        </ModelMetadataProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(
+      (screen.getByRole("button", { name: "Owner" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/mutation dialog relation.*missing\.Person/),
+    );
+    warn.mockRestore();
   });
 });

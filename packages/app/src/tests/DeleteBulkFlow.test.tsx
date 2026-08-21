@@ -49,6 +49,7 @@ import {
 import {
   type SchemaFieldMetadata,
 } from "@angee/metadata";
+import { withTestResourceInventory } from "@angee/metadata/testing";
 
 import { baseIcons } from "@angee/ui/chrome/icon-registry";
 import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
@@ -380,7 +381,7 @@ function TestLayout({ children }: { children: ReactNode }): ReactElement {
 function NoDeleteMetadata({ children }: { children: ReactNode }): ReactElement {
   return (
     <ModelMetadataProvider
-      metadata={{
+      metadata={withTestResourceInventory({
         types: {
           SaleType: {
             typeName: "SaleType",
@@ -418,14 +419,14 @@ function NoDeleteMetadata({ children }: { children: ReactNode }): ReactElement {
             },
           },
         },
-      }}
+      })}
     >
       {children}
     </ModelMetadataProvider>
   );
 }
 
-const SALE_METADATA: SchemaFieldMetadata = {
+const SALE_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     SaleType: {
       typeName: "SaleType",
@@ -467,7 +468,7 @@ const SALE_METADATA: SchemaFieldMetadata = {
       },
     },
   },
-};
+});
 
 const SALE_OPERATION_DOCUMENTS = {
   console: {

@@ -1,11 +1,17 @@
 // @vitest-environment happy-dom
 import { renderHook } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+import {
+  ModelMetadataProvider,
+  type SchemaFieldMetadata,
+} from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
 
 import {
   AppRuntimeProvider,
   useDrawers,
+  useModelSlot,
   useResourceRecordHref,
   useRuntimeAuth,
   useRuntimeUserPreferences,
@@ -18,8 +24,19 @@ import {
 
 function wrapperFor(runtime: Partial<AppRuntime>) {
   return ({ children }: { children: ReactNode }) =>
-    createElement(AppRuntimeProvider, { runtime, children });
+    createElement(ModelMetadataProvider, {
+      metadata: TEST_METADATA,
+      children: createElement(AppRuntimeProvider, { runtime, children }),
+    });
 }
+
+const TEST_METADATA: SchemaFieldMetadata = {
+  types: {},
+  resources: [
+    testDataResource("messaging.Thread"),
+    testDataResource("messaging.Message"),
+  ],
+};
 
 describe("useWidget", () => {
   test("returns a registered widget by id", () => {
@@ -46,10 +63,48 @@ describe("useResourceRecordHref", () => {
     expect(result.current?.("thr 1")).toBe("/messaging/threads/thr%201");
   });
 
-  test("returns undefined when no route owns the resource", () => {
-    const { result } = renderHook(() => useResourceRecordHref("missing.Resource"));
+  test("returns undefined when no route owns a known resource", () => {
+    const wrapper = wrapperFor({});
+    const { result } = renderHook(
+      () => useResourceRecordHref("messaging.Message"),
+      { wrapper },
+    );
 
     expect(result.current).toBeUndefined();
+  });
+
+  test("degrades an unknown relation-follow resource to undefined with a development warning", () => {
+    const wrapper = wrapperFor({});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const { result } = renderHook(
+      () => useResourceRecordHref("missing.Resource"),
+      { wrapper },
+    );
+
+    expect(result.current).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/resource route lookup.*missing\.Resource/),
+    );
+    warn.mockRestore();
+  });
+
+  test("degrades a resource known only to another schema to undefined", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const wrapper = wrapperFor({
+      routesByResource: { "integrate.OAuthClient": "/integrate/oauth" },
+    });
+
+    const { result } = renderHook(
+      () => useResourceRecordHref("integrate.OAuthClient"),
+      { wrapper },
+    );
+
+    expect(result.current).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/Unknown model spelling "integrate\.OAuthClient"/),
+    );
+    warn.mockRestore();
   });
 });
 
@@ -96,6 +151,33 @@ describe("useSlot", () => {
     });
     const { result } = renderHook(() => useSlot("header"), { wrapper });
     expect(result.current.map((entry) => entry.id)).toEqual(["a", "c"]);
+  });
+});
+
+describe("useModelSlot", () => {
+  test("matches slot, model, and impl in target order", () => {
+    const wrapper = wrapperFor({
+      slots: [
+        { slot: "form-view.record-actions", model: "messaging.Thread", id: "base" },
+        {
+          slot: "form-view.record-actions",
+          model: "messaging.Thread",
+          impl: "matrix",
+          id: "specialized",
+        },
+        { slot: "form-view.record-actions", model: "messaging.Message", id: "other" },
+      ],
+    });
+    const targets = [
+      { slot: "form-view.record-actions", model: "messaging.Thread" },
+      { slot: "form-view.record-actions", model: "messaging.Thread", impl: "matrix" },
+    ];
+    const { result } = renderHook(() => useModelSlot(targets), { wrapper });
+
+    expect(result.current.map((entry) => entry.id)).toEqual([
+      "base",
+      "specialized",
+    ]);
   });
 });
 

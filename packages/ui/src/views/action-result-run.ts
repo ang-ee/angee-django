@@ -14,8 +14,9 @@ export interface ActionResultRunOptions {
   /**
    * Model label whose routed collection page a returned `id` deep-links into
    * (e.g. `"inventory.Transfer"`). Resolved through the runtime's
-   * `routesByResource`; when the model has no routed page — or the outcome
-   * carries no `id` — the run only toasts.
+   * `routesByResource`; when metadata is absent, the spelling is unknown in the
+   * active schema, the model has no routed page, or the outcome carries no `id`,
+   * the run warns in development as applicable and only toasts.
    */
   linkTo?: string;
   /** Toast title when the verb resolves without an outcome payload. */

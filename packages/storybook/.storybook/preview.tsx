@@ -6,8 +6,6 @@ import type {
   Preview } from "@storybook/react-vite";
 import { withThemeByDataAttribute } from "@storybook/addon-themes";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
-import { Refine,
-  type ResourceProps } from "@refinedev/core";
 import {
   AppRuntimeProvider,
   type AppRuntime,
@@ -17,8 +15,10 @@ import {
 } from "@angee/metadata";
 import {
   createAngeeHasuraDataProviders,
+  Refine,
   tanStackRouterProvider,
   type AngeeHasuraSchemaConfig,
+  type ResourceProps,
 } from "@angee/refine";
 import { ToastProvider, baseIcons } from "@angee/ui";
 import {

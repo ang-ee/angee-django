@@ -21,3 +21,8 @@ export function snakeCaseIdentifier(value: string): string {
 export function resourceFieldPathToSnake(value: string): string {
   return snakeCaseIdentifier(value.replace(/_([A-Z])/g, "__$1"));
 }
+
+/** Return the final model-name segment of a qualified Angee model label. */
+export function modelLabelSegment(modelLabel: string): string {
+  return modelLabel.split(".").at(-1) ?? "";
+}

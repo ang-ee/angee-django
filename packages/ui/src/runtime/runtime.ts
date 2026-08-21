@@ -3,6 +3,10 @@ import type {
   MessageResources,
   MessageVars,
 } from "@angee/refine";
+import {
+  canonicalModelLabelOrNull,
+  useSchemaFieldMetadata,
+} from "@angee/metadata";
 
 import type {
   ChatterContribution,
@@ -10,6 +14,7 @@ import type {
   DrawerContribution,
   DrawerEdge,
   FormOverrideMap,
+  ModelSlotTarget,
   PreviewContribution,
   SlotContribution,
   WidgetMap,
@@ -141,13 +146,22 @@ export function useFormOverride(resource: string): unknown {
 }
 
 /**
- * The collection route base path for a resource (e.g. `"OAuthClient"` →
+ * The collection route base path for a resource (e.g. `"integrate.OAuthClient"` →
  * `"/integrate/providers"`), or `undefined` when no route lists it. Drives the
  * relation-follow affordance; a resource without a routed list offers no link.
  */
 export function useResourceRoute(resource: string): string | undefined {
+  const metadata = useSchemaFieldMetadata();
+  const canonicalResource = useMemo(() => {
+    if (!resource) return "";
+    return canonicalModelLabelOrNull(
+      metadata.resources ?? [],
+      resource,
+      "resource route lookup",
+    ) ?? "";
+  }, [metadata, resource]);
   // `?.` guards a `Partial<AppRuntime>` provider that spread `routesByResource: undefined`.
-  return useAppRuntime().routesByResource?.[resource];
+  return useAppRuntime().routesByResource?.[canonicalResource];
 }
 
 /** Build record hrefs from a resource's composed collection route, when routed. */
@@ -182,11 +196,8 @@ export function useRuntimeUserPreferences(): RuntimeUserPreferencesState {
 /**
  * The slot entries contributed to one slot, in merged order.
  *
- * Given several keys, the entries for each are concatenated in key order — for a
- * caller resolving one surface from a key list whose *length* varies (the
- * record-verb slot adds one key per impl field the model declares), which a
- * `useSlot` per key could not do without varying hook order. Memoize the array
- * you pass; a fresh identity each render recomputes the filter.
+ * Given several slot names, the entries for each are concatenated in name order.
+ * Memoize the array you pass; a fresh identity each render recomputes the filter.
  */
 export function useSlot(
   slot: string | readonly string[],
@@ -199,6 +210,30 @@ export function useSlot(
         : slot.flatMap((key) => slots.filter((entry) => entry.slot === key)),
     [slots, slot],
   );
+}
+
+/**
+ * Look up contributions addressed to one or more typed model-slot targets.
+ * Target order is preserved so a render owner can apply its own specificity
+ * policy without reimplementing the slot/model/impl match.
+ */
+export function useModelSlot(
+  target: ModelSlotTarget | readonly ModelSlotTarget[],
+): readonly SlotContribution[] {
+  const { slots } = useAppRuntime();
+  return useMemo(() => {
+    const targets: readonly ModelSlotTarget[] = Array.isArray(target)
+      ? target as readonly ModelSlotTarget[]
+      : [target as ModelSlotTarget];
+    return targets.flatMap((candidate) =>
+      slots.filter(
+        (entry) =>
+          entry.slot === candidate.slot
+          && entry.model === candidate.model
+          && entry.impl === candidate.impl,
+      ),
+    );
+  }, [slots, target]);
 }
 
 /** The addon-contributed file-preview renderers, in composed order. */

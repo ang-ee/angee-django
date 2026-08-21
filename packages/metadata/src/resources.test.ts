@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import {
   refineResourceName,
@@ -40,12 +40,12 @@ describe("refine resource metadata", () => {
     ]);
   });
 
-  test("accepts short resource route keys", () => {
+  test("does not fall back to short resource route keys", () => {
     const [mapped] = refineResourcesFromDataResources([resource()], {
       pathsByResource: { Note: "/notes" },
     });
 
-    expect(mapped?.list).toBe("/notes");
+    expect(mapped?.list).toBeUndefined();
   });
 
   test("keeps a model-label fallback when no explicit node type claims it", () => {
@@ -66,6 +66,34 @@ describe("refine resource metadata", () => {
     // The node type name stays addressable too (relation/aggregate joins use it).
     expect(metadata.types.PlatformAddonRow?.resource).toBe(computed);
     expect(metadata.types.AddonType?.resource).toBe(computed);
+  });
+
+  test("routes legacy bare-label lookup through the canonical alias resolver", () => {
+    const computed: DataResourceMetadata = {
+      ...resource(),
+      modelLabel: "platform.Addon",
+      modelName: "addon",
+      typeNames: { node: "PlatformAddonRow" },
+    };
+    const projected = schemaFieldMetadataFromDataResources([computed]);
+    const legacy = { ...projected, labels: undefined };
+
+    expect(modelMetadataForLabel(legacy, "Addon")?.resource).toBe(computed);
+  });
+
+  test("an ambiguous legacy bare label degrades to null with a development warning", () => {
+    const { iamRelationships, partyRelationships } = relationshipResources();
+    const metadata = schemaFieldMetadataFromDataResources([
+      iamRelationships,
+      partyRelationships,
+    ]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    expect(modelMetadataForLabel(metadata, "Relationship")).toBeNull();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/model metadata lookup.*ambiguous/),
+    );
+    warn.mockRestore();
   });
 
   test("lets an explicit node type beat another model's label-derived fallback", () => {

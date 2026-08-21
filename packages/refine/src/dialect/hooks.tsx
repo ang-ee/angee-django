@@ -164,7 +164,10 @@ export type ActionMutate = (
 
 export interface UseActionMutationOptions {
   dataProviderName?: string;
-  /** Angee model labels whose authored reads this action moves. */
+  /**
+   * Exact canonical Angee model labels whose authored reads this action moves.
+   * This metadata-free package exact-matches them and does not resolve aliases.
+   */
   invalidateModels?: readonly string[];
   /** Refine invalidation calls this action should trigger after success. */
   invalidates?: readonly InvalidateParams[];

@@ -1,3 +1,6 @@
+import { canonicalModelLabelOrNull } from "./canonical-model-label";
+import { modelLabelSegment } from "./naming";
+
 /** Field shape classes the backend resource artifact exposes. */
 export type ModelFieldKind = "scalar" | "enum" | "relation" | "list";
 
@@ -399,7 +402,7 @@ export function schemaFieldMetadataFromDataResources(
 }
 
 export function typeNameForModel(modelLabel: string): string {
-  const segment = modelLabel.split(".").pop() ?? "";
+  const segment = modelLabelSegment(modelLabel);
   const name = assertGraphQLName(segment);
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
@@ -412,9 +415,22 @@ export function modelMetadataForLabel(
   // node names can differ from the model-label-derived fallback
   // (`iam.Relationship` declares `RebacRelationshipType`), and those fallbacks
   // exist only for hand-built metadata without a label index.
-  const exact = metadata.labels?.[modelLabel];
+  const canonicalLabel = canonicalModelLabelOrNull(
+    metadata.resources ?? [],
+    modelLabel,
+    "model metadata lookup",
+  );
+  if (!canonicalLabel) return null;
+  const exact = metadata.labels?.[canonicalLabel];
   if (exact) return exact;
-  const typeName = typeNameForModel(modelLabel);
+  const resource = metadata.resources?.find(
+    (candidate) => candidate.modelLabel === canonicalLabel,
+  );
+  const declaredType = resource?.typeNames.node;
+  if (declaredType && metadata.types[declaredType]) {
+    return metadata.types[declaredType] ?? null;
+  }
+  const typeName = typeNameForModel(canonicalLabel);
   return metadata.types[`${typeName}Type`] ?? metadata.types[typeName] ?? null;
 }
 

@@ -81,13 +81,8 @@ function refineResourceFromDataResource(
   resource: DataResourceMetadata,
   options: RefineResourceOptions,
 ): AngeeRefineResource {
-  const route =
-    options.pathsByResource?.[resource.modelLabel]
-    ?? options.pathsByResource?.[resource.modelName];
-  const metadata =
-    options.metadataByResource?.[resource.modelLabel]
-    ?? options.metadataByResource?.[resource.modelName]
-    ?? {};
+  const route = options.pathsByResource?.[resource.modelLabel];
+  const metadata = options.metadataByResource?.[resource.modelLabel] ?? {};
   return {
     name: refineResourceName(resource),
     identifier: refineResourceIdentifier(resource),

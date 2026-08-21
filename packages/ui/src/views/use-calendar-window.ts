@@ -6,6 +6,7 @@ import {
   type AuthoredVariables,
   type DocumentData,
 } from "@angee/refine";
+import { useCanonicalResourceModelLabels } from "@angee/metadata";
 
 import type { CalendarWindow, Occurrence } from "./CalendarView";
 
@@ -46,7 +47,7 @@ export interface CalendarWindowSource<TDocument extends AuthoredDocument> {
   select: (
     data: DocumentData<TDocument> | undefined,
   ) => readonly Occurrence[] | null | undefined;
-  /** Model labels whose local writes / live changes refetch this window. */
+  /** Model spellings canonicalized at the metadata edge for live/refetch interest. */
   models?: readonly string[];
   /** Refine data provider (schema bucket); defaults to the active layout schema. */
   dataProviderName?: string;
@@ -94,8 +95,9 @@ export function useCalendarWindow<TDocument extends AuthoredDocument>(
   source: CalendarWindowSource<TDocument>,
   window: CalendarWindow,
 ): UseCalendarWindowResult {
+  const canonicalModels = useCanonicalResourceModelLabels(source.models);
   const options: AuthoredQueryOptions = {
-    models: source.models,
+    models: canonicalModels,
     dataProviderName: source.dataProviderName,
     enabled: source.enabled,
   };

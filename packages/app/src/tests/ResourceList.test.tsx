@@ -86,6 +86,7 @@ import {
 import type {
   SchemaFieldMetadata,
 } from "@angee/metadata";
+import { withTestResourceInventory } from "@angee/metadata/testing";
 import { installTestLocalStorage } from "../testing";
 
 interface ResourceListOptions {
@@ -876,7 +877,7 @@ const formFields = [
   { name: "title", label: "Title", title: true },
 ] satisfies readonly FormField[];
 
-const TEST_SCHEMA_METADATA: SchemaFieldMetadata = {
+const TEST_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     NoteType: {
       typeName: "NoteType",
@@ -1014,9 +1015,9 @@ const TEST_SCHEMA_METADATA: SchemaFieldMetadata = {
       },
     },
   },
-};
+});
 
-const SNAKE_NOTE_SCHEMA_METADATA: SchemaFieldMetadata = {
+const SNAKE_NOTE_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     NoteType: {
       typeName: "NoteType",
@@ -1111,7 +1112,7 @@ const SNAKE_NOTE_SCHEMA_METADATA: SchemaFieldMetadata = {
       },
     },
   },
-};
+});
 
 function render(
   ui: ReactElement,
@@ -2626,7 +2627,7 @@ function TestUrlStateScreen(): ReactElement {
 function NoDeleteMetadata({ children }: { children: ReactNode }): ReactElement {
   return (
     <ModelMetadataProvider
-      metadata={{
+      metadata={withTestResourceInventory({
         types: {
           SaleType: {
             typeName: "SaleType",
@@ -2663,7 +2664,7 @@ function NoDeleteMetadata({ children }: { children: ReactNode }): ReactElement {
             },
           },
         },
-      }}
+      })}
     >
       {children}
     </ModelMetadataProvider>

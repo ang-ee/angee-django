@@ -2,10 +2,14 @@ import { useMemo } from "react";
 import type { UseInvalidateProp } from "@refinedev/core";
 
 import {
+  canonicalModelLabel,
+  canonicalModelLabelOrNull,
+} from "./canonical-model-label";
+import {
   modelMetadataForLabel,
-  useSchemaFieldMetadata,
   type SchemaFieldMetadata,
-} from "./metadata";
+} from "./artifact";
+import { useSchemaFieldMetadata } from "./context";
 import { refineResourceName } from "./resources";
 
 export interface ResourceInvalidationTarget {
@@ -17,13 +21,14 @@ export function resourceInvalidationTargets(
   metadata: SchemaFieldMetadata,
   modelLabels: readonly string[],
 ): readonly ResourceInvalidationTarget[] {
-  if (modelLabels.length === 0 || !metadata.resources?.length) return [];
-  return modelLabels.map((modelLabel) => {
+  if (modelLabels.length === 0) return [];
+  return modelLabels.map((spelling) => {
+    const modelLabel = canonicalModelLabel(metadata.resources ?? [], spelling);
     const model = modelMetadataForLabel(metadata, modelLabel);
     const resource = model?.resource;
     if (!resource) {
       throw new Error(
-        `Action invalidation target "${modelLabel}" is not exposed in resource metadata.`,
+        `Action invalidation target "${spelling}" is not exposed in resource metadata.`,
       );
     }
     return {
@@ -57,13 +62,38 @@ export function useResourceInvalidates(
   modelLabels: readonly string[] | undefined,
 ): readonly UseInvalidateProp[] {
   const metadata = useSchemaFieldMetadata();
-  const key = JSON.stringify(modelLabels ?? []);
+  const canonicalModelLabels = useCanonicalResourceModelLabels(modelLabels);
+  const key = JSON.stringify(canonicalModelLabels);
   return useMemo(
     () =>
-      resourceInvalidationTargets(metadata, modelLabels ?? []).map(
+      resourceInvalidationTargets(metadata, canonicalModelLabels).map(
         refineInvalidationParams,
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [key, metadata],
   );
+}
+
+/**
+ * Resolve authored-operation model labels at the rendered metadata edge.
+ * Refine's authored hooks intentionally stay metadata-free and require exact
+ * canonical labels; render-time unknowns warn in development and are omitted.
+ */
+export function useCanonicalResourceModelLabels(
+  modelLabels: readonly string[] | undefined,
+): readonly string[] {
+  const metadata = useSchemaFieldMetadata();
+  const key = JSON.stringify(modelLabels ?? []);
+  return useMemo(() => {
+    const canonical = (modelLabels ?? []).flatMap((spelling) => {
+      const label = canonicalModelLabelOrNull(
+        metadata.resources ?? [],
+        spelling,
+        "authored-operation model label",
+      );
+      return label ? [label] : [];
+    });
+    return [...new Set(canonical)];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, metadata]);
 }

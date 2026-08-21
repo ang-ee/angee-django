@@ -23,6 +23,7 @@ import {
 import {
   ModelMetadataProvider,
 } from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
 import type {
   Row,
 } from "@angee/metadata";
@@ -171,11 +172,26 @@ const options = [
 ];
 
 const editConfig = {
-  resource: "OAuthClient",
+  resource: "integrate.OAuthClient",
   fields: [{ name: "displayName", label: "Display Name", title: true }],
 };
 
+const oauthResource = testDataResource("integrate.OAuthClient", {
+  modelName: "OAuthClient",
+  roots: {
+    list: "oauth_clients",
+    detail: "oauth_clients_by_pk",
+    create: "insert_oauth_clients_one",
+    update: "update_oauth_clients_by_pk",
+    delete: "delete_oauth_clients_by_pk",
+  },
+  typeNames: { node: "OAuthClientType" },
+  capabilities: ["list", "detail", "create", "update", "delete"],
+  fields: [],
+});
+
 const metadata: SchemaFieldMetadata = {
+  resources: [oauthResource],
   types: {
     OAuthClientType: {
       typeName: "OAuthClientType",
@@ -195,28 +211,7 @@ const metadata: SchemaFieldMetadata = {
         create: "insert_oauth_clients_one",
         update: "update_oauth_clients_by_pk",
       },
-      resource: {
-        schemaName: "console",
-        modelLabel: "OAuthClient",
-        appLabel: "",
-        modelName: "OAuthClient",
-        publicIdField: "id",
-        roots: {
-          list: "oauth_clients",
-          detail: "oauth_clients_by_pk",
-          create: "insert_oauth_clients_one",
-          update: "update_oauth_clients_by_pk",
-          delete: "delete_oauth_clients_by_pk",
-        },
-        typeNames: { node: "OAuthClientType" },
-        capabilities: ["list", "detail", "create", "update", "delete"],
-        fields: [],
-        filterFields: [],
-        orderFields: [],
-        aggregateFields: [],
-        groupByFields: [],
-        relationAxes: [],
-      },
+      resource: oauthResource,
     },
   },
 };
@@ -304,6 +299,27 @@ describe("RelationPicker edit affordance", () => {
         (screen.getByLabelText("Display Name") as HTMLInputElement).value,
       ).toBe("Acme OAuth"),
     );
+  });
+
+  test("localizes the default inline create dialog title", async () => {
+    renderPicker(
+      <RelationPicker
+        options={[]}
+        create={{
+          resource: "integrate.OAuthClient",
+          fields: [{ name: "displayName", label: "Display Name", title: true }],
+        }}
+        aria-label="OAuth Client"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "OAuth Client" }));
+    fireEvent.change(await screen.findByPlaceholderText("Search…"), {
+      target: { value: "Acme" },
+    });
+    fireEvent.click(await screen.findByText("Create “Acme”"));
+
+    expect(await screen.findByText("New oauthclient")).toBeTruthy();
   });
 });
 

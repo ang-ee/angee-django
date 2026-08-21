@@ -2,6 +2,7 @@
 
 import type { Row, SchemaFieldMetadata } from "@angee/metadata";
 import { ModelMetadataProvider } from "@angee/metadata";
+import { withTestResourceInventory } from "@angee/metadata/testing";
 import {
   cleanup,
   fireEvent,
@@ -102,7 +103,7 @@ function resourceMetadata(
   };
 }
 
-const metadata: SchemaFieldMetadata = {
+const metadata: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     JournalType: resourceMetadata("JournalType", "Journal", "journals", "name"),
     InvoiceType: resourceMetadata(
@@ -112,7 +113,7 @@ const metadata: SchemaFieldMetadata = {
       "number",
     ),
   },
-};
+});
 
 const registerPaymentArgs: readonly ActionArg[] = [
   {

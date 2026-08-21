@@ -19,6 +19,10 @@ vi.mock("@angee/refine", () => ({
 // there owns testing that fold. What this file owns is that the mapped targets are
 // *appended* to the caller's own `invalidates` rather than replacing them.
 vi.mock("@angee/metadata", () => ({
+  useCanonicalResourceModelLabels: (modelLabels: readonly string[] | undefined) =>
+    (modelLabels ?? []).map((modelLabel) =>
+      modelLabel === "Product" ? "catalog.Product" : modelLabel
+    ),
   useResourceInvalidates: (modelLabels: readonly string[] | undefined) =>
     (modelLabels ?? []).map((modelLabel) => ({
       dataProviderName: "console",
@@ -42,6 +46,28 @@ describe("useAuthoredResourceMutation", () => {
     renderHook(() =>
       useAuthoredResourceMutation(RateDocument, {
         invalidateModels: ["catalog.Product"],
+      }),
+    );
+
+    expect(dataMocks.useAuthoredMutation).toHaveBeenCalledWith(
+      RateDocument,
+      expect.objectContaining({
+        invalidateModels: ["catalog.Product"],
+        invalidates: [
+          {
+            dataProviderName: "console",
+            invalidates: ["list", "many", "detail"],
+            resource: "catalog.Product",
+          },
+        ],
+      }),
+    );
+  });
+
+  test("canonicalizes aliases before forwarding authored and resource invalidation", () => {
+    renderHook(() =>
+      useAuthoredResourceMutation(RateDocument, {
+        invalidateModels: ["Product"],
       }),
     );
 

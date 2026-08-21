@@ -6,6 +6,19 @@
 
 import type { ReactNode } from "react";
 
+export const FORM_VIEW_RECORD_ACTIONS_SLOT = "form-view.record-actions";
+export const FORM_VIEW_SECTIONS_SLOT = "form-view.sections";
+
+const MODEL_SCOPED_SLOTS: ReadonlySet<string> = new Set([
+  FORM_VIEW_RECORD_ACTIONS_SLOT,
+  FORM_VIEW_SECTIONS_SLOT,
+]);
+
+/** Whether every contribution to this slot must carry a canonical model. */
+export function isModelScopedSlot(slot: string): boolean {
+  return MODEL_SCOPED_SLOTS.has(slot);
+}
+
 /** A navigation entry; many menu items may target one route. */
 export interface MenuItem {
   /** Stable menu id. Defaults to `route` when omitted. */
@@ -78,9 +91,23 @@ export interface ChatterContribution {
   render?: (context: ChatterViewContext) => ReactNode;
 }
 
-/** A contribution into a UI slot another addon owns; merges by `(slot, id)`. */
+/** A model-scoped slot address. The app canonicalizes `model` at composition. */
+export interface ModelSlotTarget {
+  slot: string;
+  model: string;
+  /** Optional `ImplClassField` key for a model+implementation specialization. */
+  impl?: string;
+}
+
+/**
+ * A contribution into a UI slot another addon owns. Model-scoped slots carry
+ * their model and optional impl as typed fields; no composer parses a rendered
+ * surface's private string key. Merges by `(slot, model?, impl?, id)`.
+ */
 export interface SlotContribution {
   slot: string;
+  model?: string;
+  impl?: string;
   id: string;
   sequence?: number;
   content?: unknown;

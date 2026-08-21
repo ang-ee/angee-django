@@ -3,6 +3,10 @@
 import { act, renderHook } from "@testing-library/react";
 import * as React from "react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import {
+  ModelMetadataProvider,
+} from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
 
 import { AppRuntimeProvider } from "../runtime";
 import { useActionResultRun } from "./action-result-run";
@@ -26,11 +30,21 @@ vi.mock("../feedback", async (importOriginal) => ({
 
 function wrapper({ children }: { children: React.ReactNode }) {
   return (
-    <AppRuntimeProvider
-      runtime={{ routesByResource: { "inventory.Transfer": "/inventory/transfers" } }}
+    <ModelMetadataProvider
+      metadata={{
+        types: {},
+        resources: [
+          testDataResource("inventory.Transfer"),
+          testDataResource("accounting.Invoice"),
+        ],
+      }}
     >
-      {children}
-    </AppRuntimeProvider>
+      <AppRuntimeProvider
+        runtime={{ routesByResource: { "inventory.Transfer": "/inventory/transfers" } }}
+      >
+        {children}
+      </AppRuntimeProvider>
+    </ModelMetadataProvider>
   );
 }
 
@@ -93,6 +107,32 @@ describe("useActionResultRun", () => {
 
     expect(mocks.toast.success).toHaveBeenCalledWith({ title: "Billed." });
     expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  test("metadata-absent linkTo only toasts and warns instead of throwing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const noMetadataWrapper = ({ children }: { children: React.ReactNode }) => (
+      <AppRuntimeProvider
+        runtime={{ routesByResource: { "inventory.Transfer": "/inventory/transfers" } }}
+      >
+        {children}
+      </AppRuntimeProvider>
+    );
+    const { result } = renderHook(
+      () => useActionResultRun({ linkTo: "inventory.Transfer" }),
+      { wrapper: noMetadataWrapper },
+    );
+
+    await act(async () => {
+      await result.current(async () => ({ ok: true, message: "Created.", id: "tr_9" }));
+    });
+
+    expect(mocks.toast.success).toHaveBeenCalledWith({ title: "Created." });
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/resource route lookup.*exposes no resources/),
+    );
+    warn.mockRestore();
   });
 
   test("a domain failure toasts danger with its in-band non-field reasons", async () => {

@@ -43,6 +43,7 @@ import {
 import type {
   SchemaFieldMetadata,
 } from "@angee/metadata";
+import { withTestResourceInventory } from "@angee/metadata/testing";
 
 import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
 import { ModalsHost, ToastProvider } from "@angee/ui/feedback/index";
@@ -675,7 +676,7 @@ function TestUrlStateObserver({
   return null;
 }
 
-const TEST_SCHEMA_METADATA: SchemaFieldMetadata = {
+const TEST_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     NoteType: {
       typeName: "NoteType",
@@ -720,4 +721,4 @@ const TEST_SCHEMA_METADATA: SchemaFieldMetadata = {
       },
     },
   },
-};
+});

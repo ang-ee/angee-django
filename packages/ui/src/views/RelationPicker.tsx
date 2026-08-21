@@ -1,6 +1,6 @@
 import { useState, type ReactElement, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { rowPublicId } from "@angee/metadata";
+import { modelLabelSegment, rowPublicId } from "@angee/metadata";
 
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
@@ -17,7 +17,7 @@ import type { FieldDescriptor } from "./page";
 
 /** What the inline create form needs to make a new related record. */
 export interface RelationCreateConfig {
-  /** Related model label, e.g. `"Drive"`. */
+  /** Related model label, e.g. `"storage.Drive"`. */
   resource: string;
   /**
    * Fields the inline create form renders. Optional: when the model registers a
@@ -41,7 +41,7 @@ export interface RelationCreateConfig {
 
 /** What the inline edit form needs to edit the *selected* related record. */
 export interface RelationEditConfig {
-  /** Related model label, e.g. `"OAuthClient"`. */
+  /** Related model label, e.g. `"integrate.OAuthClient"`. */
   resource: string;
   /** Fields the inline edit form renders (the related model's editable fields). */
   fields?: readonly FieldDescriptor[];
@@ -172,7 +172,7 @@ export function RelationPicker({
             <Dialog.Header>
               <div className="flex items-start gap-3">
                 <div className="min-w-0 flex-1">
-                  <Dialog.Title>{dialogTitle(dialog, create, edit)}</Dialog.Title>
+                  <Dialog.Title>{dialogTitle(dialog, create, edit, t)}</Dialog.Title>
                 </div>
                 <Dialog.Close />
               </div>
@@ -224,11 +224,16 @@ function dialogTitle(
   dialog: DialogState | null,
   create: RelationCreateConfig | undefined,
   edit: RelationEditConfig | undefined,
+  t: ReturnType<typeof useUiT>,
 ): ReactNode {
   if (dialog?.mode === "edit") {
-    return edit?.title ?? `Edit ${edit?.resource.toLowerCase() ?? "record"}`;
+    return edit?.title ?? t("relation.editTitle", {
+      model: modelLabelSegment(edit?.resource ?? "").toLowerCase() || "record",
+    });
   }
-  return create?.title ?? `New ${create?.resource.toLowerCase() ?? "record"}`;
+  return create?.title ?? t("relation.createTitle", {
+    model: modelLabelSegment(create?.resource ?? "").toLowerCase() || "record",
+  });
 }
 
 /**
