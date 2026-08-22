@@ -1,0 +1,19 @@
+_meta:
+  model: messaging.Thread
+rows:
+  - xref: flat_cabanyal_offer_thread
+    fields:
+      platform: email
+      modality: email_thread
+      visibility: private
+      external_id: demo:flat:cabanyal
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: flat_russafa_offer_thread
+    fields:
+      platform: email
+      modality: email_thread
+      visibility: private
+      external_id: demo:flat:russafa
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
