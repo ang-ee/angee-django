@@ -91,17 +91,17 @@ export interface StorageTreeRow extends Record<string, unknown> {
 
 /**
  * Build the navigator rows from the folders loaded so far (the lazy-tree
- * accumulator): All files, Trash, then the drive's real folders. `loadedParents`
- * is the set of folder ids whose children have already been fetched — a folder
- * still absent from it shows an optimistic caret; one present with no accumulated
- * children is a leaf. `loadingParentId` is the folder currently fetching.
+ * query results): All files, Trash, then the drive's real folders. `resolvedParents`
+ * is the set of folder ids whose children have already resolved — a folder
+ * still absent from it shows an optimistic caret; one present with no returned
+ * children is a leaf. `loadingParents` are the folders currently fetching.
  */
 export function folderTreeRows(
   folders: readonly StorageFolder[],
   driveId: string,
-  loadedParents: ReadonlySet<string>,
+  resolvedParents: ReadonlySet<string>,
   openFile?: StorageFile | null,
-  loadingParentId?: string | null,
+  loadingParents: ReadonlySet<string> = new Set(),
 ): StorageTreeRow[] {
   // Which loaded folders actually parent a child folder — the fact that turns a
   // just-expanded folder into a leaf when nothing came back.
@@ -148,10 +148,10 @@ export function folderTreeRows(
       parent: folder.parent ?? "",
       icon: "folder",
       kind: "folder",
-      hasChildren: loadedParents.has(folder.id)
+      hasChildren: resolvedParents.has(folder.id)
         ? parentsWithChildren.has(folder.id) || openAnchorParent === folder.id
         : true,
-      loading: loadingParentId === folder.id,
+      loading: loadingParents.has(folder.id),
     });
   }
   if (openFile && openAnchorParent) {

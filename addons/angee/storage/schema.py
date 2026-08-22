@@ -472,7 +472,10 @@ schemas = {
             _DRIVE_RESOURCE.mutation,
             _BACKEND_RESOURCE.mutation,
         ],
-        "subscription": [changes(File, field="fileChanged")],
+        "subscription": [
+            changes(File, field="fileChanged"),
+            changes(Folder, field="folderChanged"),
+        ],
         "types": [*_SHARED_TYPES, BackendType, *_BACKEND_RESOURCE.types],
     },
 }

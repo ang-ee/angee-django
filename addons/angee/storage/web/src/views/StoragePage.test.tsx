@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createRouteHref } from "@angee/ui/runtime";
 import {
@@ -49,7 +49,18 @@ const routerMocks = vi.hoisted(() => ({
 
 const sdkMocks = vi.hoisted(() => ({
   folderDrives: [] as string[],
-  useAuthoredQuery: vi.fn(), useBreadcrumbLeafLabel: vi.fn(), refetch: {
+  folderBatches: [] as Array<
+    Array<{
+      key: string;
+      document: unknown;
+      variables: { drive: string; parent: string; limit: number };
+    }>
+  >,
+  useAuthoredQuery: vi.fn(),
+  useAuthoredQueryBatch: vi.fn(),
+  invalidateAuthoredModels: vi.fn(),
+  treeRows: [] as Array<readonly Record<string, string>[]>,
+  useBreadcrumbLeafLabel: vi.fn(), refetch: {
     backends: vi.fn(async () => undefined), drives: vi.fn(async () => undefined), file: vi.fn(async () => undefined), folders: vi.fn(async () => undefined), }, }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -86,6 +97,8 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQuery: sdkMocks.useAuthoredQuery,
+  useAuthoredQueryBatch: sdkMocks.useAuthoredQueryBatch,
+  useInvalidateAuthoredModels: () => sdkMocks.invalidateAuthoredModels,
 }));
 
 vi.mock("@angee/ui", async (importOriginal) => {
@@ -125,34 +138,37 @@ vi.mock("@angee/ui", async (importOriginal) => {
       onSelect?: (row: Record<string, string>) => void;
       onExpand?: (nodeId: string) => void;
       hasChildren?: string;
-    }) => (
-      <div
-        data-testid="tree"
-        data-row-ids={rows.map((row) => row[rowKey]).join(", ")}
-        data-selected={selectedId ?? ""}
-      >
-        {rows.map((row) => (
-          <span key={row[rowKey]}>
-            <button
-              type="button"
-              data-testid={`tree-row-${row[rowKey]}`}
-              onClick={() => onSelect?.(row)}
-            >
-              {row[label]}
-            </button>
-            {hasChildren && row[hasChildren] ? (
+    }) => {
+      sdkMocks.treeRows.push(rows);
+      return (
+        <div
+          data-testid="tree"
+          data-row-ids={rows.map((row) => row[rowKey]).join(", ")}
+          data-selected={selectedId ?? ""}
+        >
+          {rows.map((row) => (
+            <span key={row[rowKey]}>
               <button
                 type="button"
-                data-testid={`tree-expand-${row[rowKey]}`}
-                onClick={() => onExpand?.(String(row[rowKey]))}
+                data-testid={`tree-row-${row[rowKey]}`}
+                onClick={() => onSelect?.(row)}
               >
-                expand
+                {row[label]}
               </button>
-            ) : null}
-          </span>
-        ))}
-      </div>
-    ), useBreadcrumbLeafLabel: sdkMocks.useBreadcrumbLeafLabel, useConfirm: () => confirmAlways, };
+              {hasChildren && row[hasChildren] ? (
+                <button
+                  type="button"
+                  data-testid={`tree-expand-${row[rowKey]}`}
+                  onClick={() => onExpand?.(String(row[rowKey]))}
+                >
+                  expand
+                </button>
+              ) : null}
+            </span>
+          ))}
+        </div>
+      );
+    }, useBreadcrumbLeafLabel: sdkMocks.useBreadcrumbLeafLabel, useConfirm: () => confirmAlways, };
 });
 
 // The explorer pane composes RelationPicker through its own module import, so
@@ -309,6 +325,9 @@ beforeEach(() => {
   routerMocks.routeHref.mockImplementation(routeHref);
   Object.assign(routerMocks.routeHref, { maybe: routeHref.maybe });
   sdkMocks.folderDrives.length = 0;
+  sdkMocks.folderBatches.length = 0;
+  sdkMocks.treeRows.length = 0;
+  sdkMocks.invalidateAuthoredModels.mockClear();
   sdkMocks.useBreadcrumbLeafLabel.mockClear();
   for (const refetch of Object.values(sdkMocks.refetch)) {
     refetch.mockClear();
@@ -326,15 +345,6 @@ beforeEach(() => {
         ),
       });
     }
-    if (document === StorageFolderChildren) {
-      const drive = String((variables as { drive?: string })?.drive ?? "");
-      const parent = String((variables as { parent?: string })?.parent ?? "");
-      return queryResult("folders", {
-        folders: storageData.folders.filter(
-          (row) => row.drive === drive && row.parent === parent,
-        ),
-      });
-    }
     if (document === StorageFileById) {
       const id = String((variables as { id?: string })?.id ?? "");
       return queryResult("file", {
@@ -345,6 +355,26 @@ beforeEach(() => {
       return queryResult("backends", { backends: storageData.backends });
     }
     throw new Error("Unexpected storage query document");
+  });
+  sdkMocks.useAuthoredQueryBatch.mockImplementation((scopes) => {
+    const batch = scopes as Array<{
+      key: string;
+      document: unknown;
+      variables: { drive: string; parent: string; limit: number };
+    }>;
+    sdkMocks.folderBatches.push(batch);
+    return new Map(
+      batch.map((scope) => [
+        scope.key,
+        queryResult("folders", {
+          folders: storageData.folders.filter(
+            (row) =>
+              row.drive === scope.variables.drive &&
+              row.parent === scope.variables.parent,
+          ),
+        }),
+      ]),
+    );
   });
 });
 
@@ -553,7 +583,72 @@ describe("StoragePage explorer wiring", () => {
     );
   });
 
-  test("resets the lazy folder accumulator when the drive switches", () => {
+  test("keeps tree-row identity stable across an unrelated URL-state rerender", () => {
+    const stableQueries = new Map<unknown, ReturnType<typeof queryResult>>([
+      [StorageDrives, queryResult("drives", { drives: storageData.drives })],
+      [StorageFolderRoots, queryResult("folders", {
+        folders: storageData.folders.filter(
+          (row) => row.drive === "drive-a" && row.parent == null,
+        ),
+      })],
+      [StorageFileById, queryResult("file", { files_by_pk: null })],
+      [StorageBackends, queryResult("backends", {
+        backends: storageData.backends,
+      })],
+    ]);
+    sdkMocks.useAuthoredQuery.mockImplementation((document) => {
+      const query = stableQueries.get(document);
+      if (!query) throw new Error("Unexpected storage query document");
+      return query;
+    });
+    sdkMocks.useAuthoredQueryBatch.mockReturnValue(new Map());
+
+    render(pageTree());
+
+    const rowsBefore = sdkMocks.treeRows.at(-1);
+    const renderCountBefore = sdkMocks.treeRows.length;
+    expect(rowsBefore).toBeDefined();
+
+    act(() => {
+      routerState.setSearch({ group: "folder~folder~folder_id" });
+    });
+
+    // The URL-owned list grouping rerenders the page, but stable authored-query
+    // inputs must not republish or reconstruct the navigator tree.
+    expect(sdkMocks.treeRows).toHaveLength(renderCountBefore);
+    expect(sdkMocks.treeRows.at(-1)).toBe(rowsBefore);
+  });
+
+  test("starts simultaneous per-folder reads when two roots expand", () => {
+    storageData = {
+      ...storageData,
+      folders: [
+        ...storageData.folders,
+        folder("folder-c", "Folder C", "drive-a"),
+        folder("folder-c-child", "Folder C Child", "drive-a", "folder-c"),
+      ],
+    };
+    render(pageTree());
+
+    fireEvent.click(screen.getByTestId("tree-expand-folder-a"));
+    fireEvent.click(screen.getByTestId("tree-expand-folder-c"));
+
+    expect(treeAttribute("data-row-ids")).toBe(
+      "__all__, __trash__, folder-a, folder-c, folder-a-child, folder-c-child",
+    );
+    const activeBatch = sdkMocks.folderBatches.at(-1) ?? [];
+    expect(activeBatch).toHaveLength(2);
+    expect(activeBatch.map((scope) => scope.document)).toEqual([
+      StorageFolderChildren,
+      StorageFolderChildren,
+    ]);
+    expect(activeBatch.map((scope) => scope.variables.parent)).toEqual([
+      "folder-a",
+      "folder-c",
+    ]);
+  });
+
+  test("keeps expanded queries keyed by drive without a switch reset effect", () => {
     render(pageTree());
 
     fireEvent.click(screen.getByTestId("tree-expand-folder-a"));
@@ -561,75 +656,91 @@ describe("StoragePage explorer wiring", () => {
       "__all__, __trash__, folder-a, folder-a-child",
     );
 
-    // Switching drives starts the accumulator over at the new drive's roots.
+    // Only current-drive query entries feed the render.
     fireEvent.change(screen.getByLabelText("Drive"), {
       target: { value: "drive-b" },
     });
     expect(treeAttribute("data-row-ids")).toBe("__all__, __trash__, folder-b");
 
-    // Returning to drive-a shows its roots again with the child re-collapsed.
+    // Returning reuses drive-a's correctly-keyed cached children; no component
+    // effect resets or mirrors the server result.
     fireEvent.change(screen.getByLabelText("Drive"), {
       target: { value: "drive-a" },
     });
-    expect(treeAttribute("data-row-ids")).toBe("__all__, __trash__, folder-a");
+    expect(treeAttribute("data-row-ids")).toBe(
+      "__all__, __trash__, folder-a, folder-a-child",
+    );
   });
 
-  test("a failed children fetch drops the head and stays retryable, not wedged", () => {
-    // A stable error like react-query returns; the children query fails until the
-    // flag flips (a permission error / dropped socket that later recovers).
+  test("separates identical folder ids across drives", () => {
+    storageData = {
+      ...storageData,
+      folders: [
+        folder("shared", "Shared A", "drive-a"),
+        folder("child-a", "Child A", "drive-a", "shared"),
+        folder("shared", "Shared B", "drive-b"),
+        folder("child-b", "Child B", "drive-b", "shared"),
+      ],
+    };
+    render(pageTree());
+
+    fireEvent.click(screen.getByTestId("tree-expand-shared"));
+    expect(treeAttribute("data-row-ids")).toBe(
+      "__all__, __trash__, shared, child-a",
+    );
+    fireEvent.change(screen.getByLabelText("Drive"), {
+      target: { value: "drive-b" },
+    });
+    expect(treeAttribute("data-row-ids")).toBe("__all__, __trash__, shared");
+    fireEvent.click(screen.getByTestId("tree-expand-shared"));
+    expect(treeAttribute("data-row-ids")).toBe(
+      "__all__, __trash__, shared, child-b",
+    );
+    expect(
+      (sdkMocks.folderBatches.at(-1) ?? []).map((scope) => scope.variables),
+    ).toEqual([
+      { drive: "drive-b", parent: "shared", limit: 5000 },
+    ]);
+  });
+
+  test("a failed children entry retries through its query owner", () => {
     const denied = new Error("children fetch denied");
     let childrenShouldError = true;
-    sdkMocks.useAuthoredQuery.mockImplementation((document, variables) => {
-      if (document === StorageDrives) {
-        return queryResult("drives", { drives: storageData.drives });
-      }
-      if (document === StorageFolderRoots) {
-        const drive = String((variables as { drive?: string })?.drive ?? "");
-        return queryResult("folders", {
-          folders: storageData.folders.filter(
-            (row) => row.drive === drive && row.parent == null,
-          ),
-        });
-      }
-      if (document === StorageFolderChildren) {
-        if (childrenShouldError) {
-          return {
-            data: undefined,
-            fetching: false,
-            error: denied,
-            refetch: sdkMocks.refetch.folders,
-          };
-        }
-        const drive = String((variables as { drive?: string })?.drive ?? "");
-        const parent = String((variables as { parent?: string })?.parent ?? "");
-        return queryResult("folders", {
-          folders: storageData.folders.filter(
-            (row) => row.drive === drive && row.parent === parent,
-          ),
-        });
-      }
-      if (document === StorageFileById) {
-        return queryResult("file", { files_by_pk: null });
-      }
-      if (document === StorageBackends) {
-        return queryResult("backends", { backends: storageData.backends });
-      }
-      throw new Error("Unexpected storage query document");
+    const retry = vi.fn(() => {
+      childrenShouldError = false;
     });
+    sdkMocks.useAuthoredQueryBatch.mockImplementation((scopes) =>
+      new Map(
+        (scopes as Array<{
+          key: string;
+          variables: { drive: string; parent: string };
+        }>).map((scope) => [
+          scope.key,
+          childrenShouldError
+            ? { data: undefined, fetching: false, error: denied, refetch: retry }
+            : queryResult("folders", {
+                folders: storageData.folders.filter(
+                  (row) =>
+                    row.drive === scope.variables.drive &&
+                    row.parent === scope.variables.parent,
+                ),
+              }),
+        ]),
+      ),
+    );
 
-    render(pageTree());
+    const view = render(pageTree());
     expect(treeAttribute("data-row-ids")).toBe("__all__, __trash__, folder-a");
 
-    // Expanding folder-a fails: the head must drain (no wedge), no child appears,
-    // and folder-a keeps its optimistic caret so the fetch is retryable.
     fireEvent.click(screen.getByTestId("tree-expand-folder-a"));
     expect(treeAttribute("data-row-ids")).toBe("__all__, __trash__, folder-a");
     expect(screen.queryByTestId("tree-expand-folder-a")).not.toBeNull();
 
-    // The error clears; re-expanding now loads the child — proof the queue drained
-    // and re-enqueuing fires a fresh fetch rather than sitting on a dead queue.
-    childrenShouldError = false;
+    // The second expand refetches the existing errored entry rather than adding
+    // another local queue/cache record.
     fireEvent.click(screen.getByTestId("tree-expand-folder-a"));
+    expect(retry).toHaveBeenCalledOnce();
+    view.rerender(pageTree());
     expect(treeAttribute("data-row-ids")).toBe(
       "__all__, __trash__, folder-a, folder-a-child",
     );
