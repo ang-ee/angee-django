@@ -19,6 +19,7 @@ dependencies = [
   "channels-redis>=4.2",
   "cryptography>=44",
   "django-import-export>=4.3",
+  "django-anymail>=15.1",
   "django-axes>=8.0",
   "django-reversion>=5.1",
   "django-simple-history>=3.7",
