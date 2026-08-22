@@ -2,13 +2,21 @@
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
 name = "angee.messaging"
-description = "Threads, messages, and channel bridges that ingest mail and social conversations"
+description = "Threads, messages, and channel bridges that ingest and deliver mail and social conversations"
 keywords = ["messaging", "channels", "chat"]
 category = "Data"
 # django.contrib.postgres backs the Fragment full-text SearchVectorField/GinIndex.
 depends_on = ["angee.iam", "angee.parties", "angee.integrate", "angee.storage", "django.contrib.contenttypes", "django.contrib.postgres"]
+dependencies = [
+  "django-anymail>=15.1",
+]
 
 [[migrations]]
 name = "public_thread_message_kind"
 app_label = "messaging"
 module = "runtime_migrations.public_thread_message_kind"
+
+[[migrations]]
+name = "alter_message_status"
+app_label = "messaging"
+module = "runtime_migrations.alter_message_status"

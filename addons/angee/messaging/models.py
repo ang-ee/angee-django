@@ -866,15 +866,16 @@ class ThreadedModelMixin(models.Model):
 
 
 class Channel(Bridge):
-    """A connected message source that ingests threads/messages from email or social.
+    """A connected message transport for inbound and outbound email or social data.
 
     An ``integrate.Integration`` child (credential / owner / status from the
     connection substrate) and a ``Bridge`` (the scheduler + ``syncIntegration`` drive
     it through ``run_sync``). ``backend_class`` selects the protocol, contributed by
     the ``messaging_integrate_*`` addons (``imap``, the chat bridges), and ``config``
     carries source settings. ``sync()`` fetches + parses, then maps each message onto
-    the messaging managers. Public feeds are not channel backends — ``posts.Feed``
-    owns the public-content overlay.
+    the messaging managers; outbound tasks resolve the same backend and call its
+    ``deliver`` hook. Public feeds are not channel backends — ``posts.Feed`` owns the
+    public-content overlay.
     """
 
     runtime = True
@@ -1848,6 +1849,7 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         """Lifecycle + public moderation state of a message."""
 
         DRAFT = "draft", "Draft"
+        QUEUED = "queued", "Queued"
         SENT = "sent", "Sent"
         SYNCED = "synced", "Synced"
         EDITED = "edited", "Edited"
@@ -2095,6 +2097,18 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         if part is None or part.fragment_id is None:
             return ""
         return part.fragment.text
+
+    def deliver(self) -> bool:
+        """Queue this outbound message for idempotent channel delivery.
+
+        This is the consumer seam: callers compose and persist the message,
+        envelope participants, and parts, then call ``message.deliver()``. The
+        transport always runs through ``angee.jobs``, never in the request.
+        """
+
+        from angee.messaging.delivery import queue_message_delivery
+
+        return queue_message_delivery(self)
 
     def __str__(self) -> str:
         """Return a readable message label for Django displays."""

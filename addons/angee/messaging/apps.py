@@ -8,8 +8,8 @@ from django.apps import AppConfig
 class MessagingConfig(AppConfig):
     """Source app manifest for threads, messages, and channel bridges.
 
-    Owns the chatter thread graph and the channel-sync ingest write path. The one
-    runtime wiring it adds is the chatter-thread teardown receiver (``signals``),
+    Owns the chatter thread graph plus channel ingest and outbound delivery paths.
+    The one runtime wiring it adds is the chatter-thread teardown receiver (``signals``),
     connected after app population so deleting a chattered record never orphans its
     private thread — on the instance or the bulk ``QuerySet.delete()`` path.
     """

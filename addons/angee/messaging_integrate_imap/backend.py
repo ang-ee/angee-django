@@ -47,7 +47,8 @@ from imapclient.exceptions import IMAPClientAbortError
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.net import is_unsafe_address, resolved_addresses
 from angee.integrate.sync import current_bridge_progress
-from angee.messaging.backends import ChannelBackend, ParsedMessage
+from angee.messaging.backends import ParsedMessage
+from angee.messaging.email import AnymailEmailChannelBackend
 from angee.messaging_integrate_imap.parser import fallback_message, parse_message
 
 logger = logging.getLogger(__name__)
@@ -85,7 +86,7 @@ class _MailboxWork:
         return chunk
 
 
-class ImapChannelBackend(ChannelBackend):
+class ImapChannelBackend(AnymailEmailChannelBackend):
     """Sync an IMAP account's mailboxes into messaging, one bounded batch at a time.
 
     ``config`` keys: ``host`` (required), ``port`` (defaults per security),

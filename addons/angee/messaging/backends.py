@@ -1,4 +1,4 @@
-"""Channel backend contract — ingest messages from an external source into messaging.
+"""Channel backend contract — ingest and deliver messages through external sources.
 
 A :class:`~angee.messaging.models.Channel` (an ``integrate.Integration`` child +
 ``Bridge``) selects one ``ChannelBackend`` by registry key. The backend does the
@@ -8,12 +8,15 @@ per-source *transport* + *parse* — ``fetch_messages`` returns neutral
 thread resolution, the idempotent channel-scoped external-id upsert, the Part /
 Fragment tree (including the sparse title/header parts), and the quotation graph —
 is owned by ``Message.objects.ingest`` + the managers, so every source shares one
-write path. ``messaging_integrate_imap`` contributes the ``imap`` backend; the
-``manual`` null-object keeps the registry non-empty when no source is installed.
+write path. Outbound messages take the symmetric ``ChannelBackend.deliver`` path
+through ``angee.jobs``. ``messaging_integrate_imap`` contributes the ``imap``
+backend; the ``manual`` null-object keeps the registry non-empty when no source is
+installed.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, ClassVar
@@ -22,6 +25,8 @@ from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl, LiveBridgeImpl
 
 INLINE_MEDIA_PREFIXES = ("image/", "video/", "audio/")
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -178,7 +183,7 @@ def body_part(
 
 
 class ChannelBackend(BridgeImpl, HttpClientMixin):
-    """Abstract backend that fetches and parses a message source.
+    """Abstract backend that fetches, parses, and optionally delivers messages.
 
     ``self.bridge`` is the ``Channel`` row — its ``config`` carries the source
     settings and ``self.bridge.credential`` authenticates — and ``self.http`` is the
@@ -234,6 +239,21 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
         """
 
         raise NotImplementedError("ChannelBackend subclasses must implement fetch_messages().")
+
+    def deliver(self, message: Any) -> bool:
+        """Deliver one outbound message; return whether a transport accepted it.
+
+        Inbound-only backends inherit this safe, explicit decline so adding the
+        outbound seam does not turn an existing source into a crashing worker.
+        The message delivery owner records the ``False`` result as ``failed``.
+        """
+
+        logger.warning(
+            "Channel backend %s does not support outbound delivery for message %s.",
+            type(self).__name__,
+            getattr(message, "pk", None),
+        )
+        return False
 
     def close(self) -> None:
         """Release any transport this backend holds; called when the drain ends.
