@@ -1,0 +1,12 @@
+_meta:
+  model: work.Cycle
+rows:
+  - xref: eng_active
+    fields:
+      queue: work.eng
+      number: 1
+      name: Active engineering cycle
+      starts_on: 2026-08-17
+      ends_on: 2026-08-30
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

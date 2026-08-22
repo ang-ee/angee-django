@@ -1,7 +1,7 @@
 // Authorization schema for operational queues and their named stages.
 // @rebac_package: work
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 // Queue is an MTI child of spaces/group. Its inherited roster and visibility
 // remain owned by that parent row; this child merely delegates to it.
@@ -15,6 +15,15 @@ definition work/queue {
 }
 
 definition work/stage {
+    relation queue: work/queue // rebac:field=queue
+
+    permission create = queue->write
+    permission read   = queue->read
+    permission write  = queue->write
+    permission delete = queue->write
+}
+
+definition work/cycle {
     relation queue: work/queue // rebac:field=queue
 
     permission create = queue->write

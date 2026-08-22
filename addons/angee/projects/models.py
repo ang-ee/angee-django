@@ -605,9 +605,12 @@ class TaskRelation(AuditMixin, AngeeDataModel):
         DUPLICATE = "duplicate", "Duplicate"
         RELATES = "relates", "Relates"
 
-    SYMMETRIC_KINDS = frozenset(
-        {TaskRelationKind.DUPLICATE, TaskRelationKind.RELATES}
-    )
+    SYMMETRIC_KINDS = frozenset({TaskRelationKind.RELATES})
+    """Kinds whose endpoints have no semantic direction.
+
+    Duplicate edges deliberately keep ``task -> related_task`` direction: the
+    first endpoint is the duplicate and the second is its canonical task.
+    """
 
     task = models.ForeignKey(
         "projects.Task",
@@ -671,7 +674,11 @@ class TaskRelation(AuditMixin, AngeeDataModel):
     def inverse_kind(self) -> str:
         """Return the relation vocabulary seen from ``related_task``."""
 
-        return "blocked_by" if self.kind == self.TaskRelationKind.BLOCKS else str(self.kind)
+        if self.kind == self.TaskRelationKind.BLOCKS:
+            return "blocked_by"
+        if self.kind == self.TaskRelationKind.DUPLICATE:
+            return "duplicated_by"
+        return str(self.kind)
 
     def __str__(self) -> str:
         """Return a readable directed edge."""

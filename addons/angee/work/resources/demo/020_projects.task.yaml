@@ -4,6 +4,7 @@ rows:
   - xref: eng_board_drag
     fields:
       queue: work.eng
+      cycle: work.eng_active
       title: Persist board drag as a stage write
       note: Keep stage as the fine-grained owner and project coarse task status from it.
       assignee: iam.user_alice
@@ -16,6 +17,7 @@ rows:
   - xref: eng_composition_smoke
     fields:
       queue: work.eng
+      cycle: work.eng_active
       title: Exercise the projects plus work composition profile
       note: Confirm donor columns live on projects_task with no donor table.
       assignee: iam.user_bob

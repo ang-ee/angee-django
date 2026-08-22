@@ -44,6 +44,7 @@ from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
 from angee.graphql.publishing import mute_changes
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
+from angee.messaging.events import message_ingested
 from angee.messaging.tracking import TrackingChange
 from angee.parties.mixins import LinkSource
 
@@ -2175,6 +2176,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     thread, user_id=owner_id, message=message
                 )
             self._advance_thread(thread, sent_at)
+            message_ingested.send(sender=self.model, instance=message)
         return message
 
     def set_reaction(self, message: Any, *, reaction: str, action: str = "toggle", user: Any) -> Any:
@@ -2596,6 +2598,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             self._recount_thread(losing_thread)
         if created or thread_changed:
             self._bump_thread(thread_model, thread.pk, parsed.sent_at)
+            message_ingested.send(sender=self.model, instance=message)
         return message, handles
 
     def _resolve_reply_parent(self, parsed: ParsedMessage, *, channel: Any) -> Any:
