@@ -32,6 +32,17 @@ describe("field metadata helpers", () => {
     expect(filterFieldType("amount", field)).toBe("number");
   });
 
+  test("uses date-name inference only when field metadata is absent", () => {
+    const stringField: ModelFieldMetadata = {
+      name: "published_at",
+      kind: "scalar",
+      scalar: "String",
+    };
+
+    expect(filterFieldType("published_at", undefined)).toBe("datetime");
+    expect(filterFieldType("published_at", stringField)).toBe("text");
+  });
+
   test("answers field update capability from one metadata owner", () => {
     const metadata = modelMetadata({
       rootFields: { update: "updateLead", updateFields: ["stage"] },

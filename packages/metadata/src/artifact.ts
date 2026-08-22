@@ -95,6 +95,8 @@ export interface DataResourceMetadata {
   */
   rowModel?: "client" | "server";
   recordRepresentation?: string | null;
+  /** Dotted GraphQL selection paths for semantic record subtitle facts. */
+  subtitle?: DataResourceSubtitleMetadata | null;
   /**
    * Column names on this resource that carry an `ImplClassField` key — the
    * declared per-row fact an addon varies a contribution on (`FormView` resolves
@@ -126,6 +128,16 @@ export interface DataResourceMetadata {
    * diff-apply mutation reads `roots.save`. The wire key is `linesResource`.
    */
   linesResource?: DataResourceLinesMetadata | null;
+}
+
+/**
+ * Closed renderer vocabulary for record subtitles. Adding a fact extends this
+ * contract and its presentation semantics together.
+ */
+export interface DataResourceSubtitleMetadata {
+  created?: string | null;
+  updated?: string | null;
+  wordCount?: string | null;
 }
 
 export interface DataResourceLinesMetadata {
@@ -701,10 +713,30 @@ function validateGeneratedResource(resource: unknown, path: string): void {
   if (value.canonicalLabel != null) {
     expectMetadataString(value.canonicalLabel, `${path}.canonicalLabel`);
   }
+  validateGeneratedSubtitle(value.subtitle, `${path}.subtitle`);
   optionalMetadataArray(value.groupDimensions, `${path}.groupDimensions`)?.forEach(
     (dimension, index) =>
       validateGeneratedGroupDimension(dimension, `${path}.groupDimensions[${index}]`),
   );
+}
+
+function validateGeneratedSubtitle(subtitle: unknown, path: string): void {
+  const value = optionalMetadataObject(subtitle, path);
+  if (!value) return;
+  const properties = new Set(["created", "updated", "wordCount"]);
+  for (const property of Object.keys(value)) {
+    if (!properties.has(property)) {
+      throw new Error(`${path}.${property} is not a supported subtitle fact.`);
+    }
+  }
+  for (const property of properties) {
+    const selectionPath = value[property];
+    if (selectionPath == null) continue;
+    expectMetadataString(selectionPath, `${path}.${property}`);
+    if (!/^[_A-Za-z][_0-9A-Za-z]*(?:\.[_A-Za-z][_0-9A-Za-z]*)*$/.test(selectionPath)) {
+      throw new Error(`${path}.${property} must be a dotted selection path.`);
+    }
+  }
 }
 
 function validateGeneratedField(field: unknown, path: string): void {
@@ -796,7 +828,7 @@ function validateStringArray(value: readonly unknown[], path: string): void {
   );
 }
 
-function expectMetadataString(value: unknown, path: string): void {
+function expectMetadataString(value: unknown, path: string): asserts value is string {
   if (typeof value !== "string") {
     throw new Error(`${path} must be a string.`);
   }

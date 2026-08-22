@@ -46,6 +46,7 @@ export {
   type DataResourceOperationTarget,
   type DataResourceRelationAxisMetadata,
   type DataResourceRootMetadata,
+  type DataResourceSubtitleMetadata,
   type DataResourceTypeMetadata,
   type ModelEnumValueMetadata,
   type ModelFieldKind,
@@ -82,24 +83,21 @@ export {
   defaultWidgetForModelField,
   fieldUpdatable,
   filterFieldType,
+  isDateField,
   isScalarIdRelation,
   isToOneRelationField,
-  looksLikeDateField,
   supportsChoiceFacet,
   type ChoiceFacetSupport,
   type ResourceFilterFieldType,
 } from "./fields";
 export {
   publicIdLabel,
+  rowValueAtPath,
   rowPublicId,
   type PageInfo,
   type PageResult,
   type Row,
 } from "./rows";
-export {
-  recordSubtitleFields,
-  type RecordSubtitleFields,
-} from "./record-subtitle";
 export type {
   ResourceFilter,
   ResourceOrder,

@@ -1,5 +1,17 @@
 export type Row = Record<string, unknown>;
 
+/** Read a dotted GraphQL selection path from a projected resource row. */
+export function rowValueAtPath(row: Row, path: string): unknown {
+  let value: unknown = row;
+  for (const segment of path.split(".")) {
+    if (value == null || typeof value !== "object") {
+      return undefined;
+    }
+    value = (value as Row)[segment];
+  }
+  return value;
+}
+
 /** The public record id carried by resource rows, or null for non-record values. */
 export function rowPublicId(
   row: Row | null | undefined,

@@ -2364,6 +2364,55 @@ describe("FormView", () => {
     expect(selection).not.toContain("password"); // write-only → never read back
   });
 
+  test("selects and renders declared nested subtitle facts", async () => {
+    sdkMocks.projectToSelection = true;
+    sdkMocks.record = {
+      id: "page-1",
+      title: "Metadata",
+      created_at: "2026-08-20T10:00:00Z",
+      updated_at: "2026-08-21T10:00:00Z",
+      markdown: { word_count: 321 },
+    };
+    const resource = {
+      ...defaultResource("PageType", "knowledge.Page"),
+      subtitle: {
+        created: "created_at",
+        updated: "updated_at",
+        wordCount: "markdown.word_count",
+      },
+    };
+    const metadata: SchemaFieldMetadata = {
+      types: {
+        PageType: {
+          typeName: "PageType",
+          fields: {
+            title: { name: "title", kind: "scalar", scalar: "String" },
+            created_at: { name: "created_at", kind: "scalar", scalar: "DateTime" },
+            updated_at: { name: "updated_at", kind: "scalar", scalar: "DateTime" },
+            markdown: { name: "markdown", kind: "relation" },
+          },
+          rootFields: { detail: "pages_by_pk", update: "update_pages_by_pk" },
+          resource,
+        },
+      },
+      resources: [resource],
+    };
+
+    renderWithProviders(
+      <FormView resource="knowledge.Page" id="page-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      metadata,
+    );
+
+    expect(await screen.findByText("321 words")).toBeTruthy();
+    expect(sdkMocks.recordSelection).toEqual(expect.arrayContaining([
+      "created_at",
+      "updated_at",
+      "markdown.word_count",
+    ]));
+  });
+
   test("blocks create and flags a missing required field inline", async () => {
     sdkMocks.record = null;
     sdkMocks.mutate.mockReset();

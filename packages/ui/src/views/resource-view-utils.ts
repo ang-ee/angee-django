@@ -4,9 +4,9 @@ import {
   groupAllowedByResource,
   groupSupportedByResource,
   isClientRowModel,
+  isDateField,
   isRelationLabelAxis,
   isToOneRelationField,
-  looksLikeDateField,
   modelLabelSegment,
   relationFilterForRelation,
   resourceGroupDimensionForField,
@@ -439,10 +439,7 @@ function dateGroupType(
   fieldName: string,
   field: ModelFieldMetadata | undefined,
 ): boolean {
-  if (field?.kind === "scalar") {
-    return field.scalar === "DateTime" || field.scalar === "Date";
-  }
-  return looksLikeDateField(fieldName);
+  return isDateField(field, fieldName);
 }
 
 export function supportsChoiceFacet<TRow extends Row>(

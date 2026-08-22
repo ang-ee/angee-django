@@ -84,9 +84,9 @@ export function filterFieldType(
   ) {
     return "number";
   }
-  if (field?.kind === "scalar" && field.scalar === "DateTime") return "datetime";
-  if (field?.kind === "scalar" && field.scalar === "Date") return "date";
-  if (looksLikeDateField(fieldName)) return "datetime";
+  if (isDateField(field, fieldName)) {
+    return field?.scalar === "Date" ? "date" : "datetime";
+  }
   return supportsChoiceFacet({ fieldName, field, ...support }) ? "selection" : null;
 }
 
@@ -109,7 +109,7 @@ export function supportsChoiceFacet(support: ChoiceFacetSupport): boolean {
   return support.allowStatusFallback === true && support.fieldName === "status";
 }
 
-export function looksLikeDateField(fieldName: string): boolean {
+function looksLikeDateField(fieldName: string): boolean {
   const normalized = fieldName.toLowerCase();
   return normalized.endsWith("at") ||
     normalized.endsWith("_at") ||
@@ -117,4 +117,16 @@ export function looksLikeDateField(fieldName: string): boolean {
     normalized.endsWith("_date") ||
     normalized.endsWith("on") ||
     normalized.endsWith("_on");
+}
+
+/** Resolve date semantics from declared metadata, with a name fallback only when absent. */
+export function isDateField(
+  field: ModelFieldMetadata | undefined,
+  fieldName: string,
+): boolean {
+  if (field) {
+    return field.kind === "scalar" &&
+      (field.scalar === "DateTime" || field.scalar === "Date");
+  }
+  return looksLikeDateField(fieldName);
 }

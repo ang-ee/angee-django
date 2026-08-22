@@ -1,6 +1,16 @@
 import { describe, expect, test } from "vitest";
 
-import { publicIdLabel, rowPublicId } from "./rows";
+import { publicIdLabel, rowPublicId, rowValueAtPath } from "./rows";
+
+describe("rowValueAtPath", () => {
+  test("reads nested projected values by dotted selection path", () => {
+    const row = { markdown: { word_count: 321 } };
+
+    expect(rowValueAtPath(row, "markdown.word_count")).toBe(321);
+    expect(rowValueAtPath(row, "markdown.missing")).toBeUndefined();
+    expect(rowValueAtPath(row, "markdown.word_count.value")).toBeUndefined();
+  });
+});
 
 describe("rowPublicId", () => {
   test("returns a resource row's string id", () => {

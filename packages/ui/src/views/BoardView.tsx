@@ -10,11 +10,9 @@ import {
   type CollisionDetection,
   type DragEndEvent,
 } from "@dnd-kit/core";
-import type {
-  Row as TableRowModel } from "@tanstack/react-table";
+import type { Row as TableRowModel } from "@tanstack/react-table";
 import { useNavigate } from "@tanstack/react-router";
-import type { Row,
-} from "@angee/metadata";
+import type { ModelMetadata, Row } from "@angee/metadata";
 
 import { useUiT } from "../i18n";
 import { Glyph } from "../chrome/Glyph";
@@ -46,6 +44,7 @@ export interface BoardViewProps<TRow extends Row = Row> {
   columns: readonly ColumnDescriptor<TRow>[];
   groups: readonly RowGroup<TRow>[];
   resourceView: ResourceViewContextValue;
+  modelMetadata?: ModelMetadata | null;
   selectedIds: ReadonlySet<string>;
   interactive: boolean;
   fetching?: boolean;
@@ -69,6 +68,7 @@ export function BoardView<TRow extends Row = Row>(
     columns,
     groups,
     resourceView,
+    modelMetadata,
     fetching = false,
     emptyContent,
     rowHref,
@@ -85,6 +85,7 @@ export function BoardView<TRow extends Row = Row>(
       fetching={fetching}
       groups={groups}
       groupStack={resourceView.state.groupStack}
+      modelMetadata={modelMetadata}
       emptyContent={emptyContent}
       rowHref={rowHref}
       onRowClick={onRowClick}
@@ -106,6 +107,7 @@ function BoardRows<TRow extends Row>({
   fetching,
   groups,
   groupStack,
+  modelMetadata,
   emptyContent,
   rowHref,
   onRowClick,
@@ -119,6 +121,7 @@ function BoardRows<TRow extends Row>({
   fetching: boolean;
   groups: readonly RowGroup<TRow>[];
   groupStack: readonly ResourceViewGroup[];
+  modelMetadata?: ModelMetadata | null;
   emptyContent: ListEmptyContent;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
@@ -166,6 +169,7 @@ function BoardRows<TRow extends Row>({
           columns={columns}
           group={group}
           groupStack={groupStack}
+          modelMetadata={modelMetadata}
           groupFields={groupFields}
           rowHref={rowHref}
           onRowClick={onRowClick}
@@ -275,6 +279,7 @@ function BoardLane<TRow extends Row>({
   columns,
   group,
   groupStack,
+  modelMetadata,
   groupFields,
   rowHref,
   onRowClick,
@@ -286,6 +291,7 @@ function BoardLane<TRow extends Row>({
   columns: readonly ColumnDescriptor<TRow>[];
   group: RowGroup<TRow>;
   groupStack: readonly ResourceViewGroup[];
+  modelMetadata?: ModelMetadata | null;
   groupFields: ReadonlySet<string>;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
@@ -327,6 +333,7 @@ function BoardLane<TRow extends Row>({
             key={row.id}
             columns={columns}
             groupFields={groupFields}
+            modelMetadata={modelMetadata}
             row={row}
             rowHref={rowHref}
             onRowClick={onRowClick}
@@ -345,6 +352,7 @@ function BoardLane<TRow extends Row>({
 function BoardRowCard<TRow extends Row>({
   columns,
   groupFields,
+  modelMetadata,
   row,
   rowHref,
   onRowClick,
@@ -356,6 +364,7 @@ function BoardRowCard<TRow extends Row>({
 }: {
   columns: readonly ColumnDescriptor<TRow>[];
   groupFields: ReadonlySet<string>;
+  modelMetadata?: ModelMetadata | null;
   row: TableRowModel<TRow>;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
@@ -408,6 +417,7 @@ function BoardRowCard<TRow extends Row>({
               <DefaultBoardCardBody
                 columns={columns}
                 groupFields={groupFields}
+                modelMetadata={modelMetadata}
                 row={row.original}
               />
             )}
@@ -438,10 +448,12 @@ function BoardRowCard<TRow extends Row>({
 function DefaultBoardCardBody<TRow extends Row>({
   columns,
   groupFields,
+  modelMetadata,
   row,
 }: {
   columns: readonly ColumnDescriptor<TRow>[];
   groupFields: ReadonlySet<string>;
+  modelMetadata?: ModelMetadata | null;
   row: TRow;
 }): React.ReactElement {
   const cardColumns = columns
@@ -452,7 +464,11 @@ function DefaultBoardCardBody<TRow extends Row>({
     <>
       {titleColumn ? (
         <span className="block min-w-0 truncate text-sm font-semibold text-fg">
-          <ListCellContent column={titleColumn} row={row} />
+          <ListCellContent
+            column={titleColumn}
+            row={row}
+            metadata={modelMetadata}
+          />
         </span>
       ) : null}
       {detailColumns.map((column) => (
@@ -464,7 +480,7 @@ function DefaultBoardCardBody<TRow extends Row>({
             {column.header ?? column.field}
           </span>
           <span className="min-w-0 overflow-hidden text-right text-fg [overflow-wrap:anywhere] [&>*]:max-w-full">
-            <ListCellContent column={column} row={row} />
+            <ListCellContent column={column} row={row} metadata={modelMetadata} />
           </span>
         </div>
       ))}

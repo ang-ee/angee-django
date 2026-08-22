@@ -578,6 +578,7 @@ function ListViewContent<TRow extends Row = Row>({
           columns={resolvedColumns}
           groups={surface.groupedRows}
           resourceView={resourceView}
+          modelMetadata={modelMetadata}
           selectedIds={surface.selectedIds}
           interactive={interactive}
           fetching={surface.list.fetching}

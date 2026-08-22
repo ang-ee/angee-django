@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { render, screen } from "@testing-library/react";
+import type { ModelMetadata } from "@angee/metadata";
 import type { ReactNode } from "react";
 import { expect, test, vi } from "vitest";
 
@@ -72,4 +73,47 @@ test("routes boolean cell copy through the UI translator", () => {
 
   expect(cellContent({ field: "enabled" }, { id: "1", enabled: true }, t)).toBe("Sí");
   expect(cellContent({ field: "enabled" }, { id: "2", enabled: false }, t)).toBe("No");
+});
+
+test("renders a metadata-declared date scalar without relying on its name", () => {
+  const metadata: ModelMetadata = {
+    typeName: "ReleaseType",
+    fields: {
+      published: { name: "published", kind: "scalar", scalar: "DateTime" },
+    },
+  };
+
+  const { container } = render(
+    <>{cellContent(
+      { field: "published" },
+      { id: "1", published: "2026-08-22T10:00:00Z" },
+      (key) => key,
+      metadata,
+    )}</>,
+  );
+
+  expect(container.querySelector("time")?.getAttribute("datetime")).toBe(
+    "2026-08-22T10:00:00.000Z",
+  );
+});
+
+test("does not probe a date-looking field declared as a string", () => {
+  const metadata: ModelMetadata = {
+    typeName: "ReleaseType",
+    fields: {
+      published_at: { name: "published_at", kind: "scalar", scalar: "String" },
+    },
+  };
+
+  const { container } = render(
+    <>{cellContent(
+      { field: "published_at" },
+      { id: "1", published_at: "2026-08-22T10:00:00Z" },
+      (key) => key,
+      metadata,
+    )}</>,
+  );
+
+  expect(container.querySelector("time")).toBeNull();
+  expect(screen.getByText("2026-08-22T10:00:00Z")).toBeTruthy();
 });

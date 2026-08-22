@@ -2,8 +2,9 @@ import type { ReactNode } from "react";
 import {
   publicIdLabel,
   rowPublicId,
+  rowValueAtPath,
+  type DataResourceSubtitleMetadata,
   type ModelMetadata,
-  type RecordSubtitleFields,
   type Row,
 } from "@angee/metadata";
 
@@ -416,16 +417,16 @@ function fieldErrorMessage(error: unknown): string {
 export function recordSubtitleParts(
   record: Row | null | undefined,
   id: string | null | undefined,
-  fields: RecordSubtitleFields,
+  fields: DataResourceSubtitleMetadata | null | undefined,
   t: UiTranslate,
 ): ReactNode[] {
   const parts: ReactNode[] = [];
   const recordId = presentValue(record?.id) ?? presentValue(id);
   if (recordId !== undefined) parts.push(recordIdLabel(String(recordId)));
   if (record) {
-    const created = fieldValue(record, fields.created);
-    const updated = fieldValue(record, fields.updated);
-    const words = fieldValue(record, fields.wordCount);
+    const created = fieldValue(record, fields?.created);
+    const updated = fieldValue(record, fields?.updated);
+    const words = fieldValue(record, fields?.wordCount);
     if (created !== undefined) {
       parts.push(t("form.created", { value: formatRecordDate(created) }));
     }
@@ -437,8 +438,12 @@ export function recordSubtitleParts(
   return parts.filter((part) => String(part).trim() !== "");
 }
 
-function fieldValue(record: Row, field: string | undefined): unknown | undefined {
-  return field ? presentValue(record[field]) : undefined;
+function fieldValue(
+  record: Row,
+  field: string | null | undefined,
+): unknown | undefined {
+  if (!field) return undefined;
+  return presentValue(rowValueAtPath(record, field));
 }
 
 function presentValue(value: unknown): unknown | undefined {

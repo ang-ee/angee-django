@@ -32,8 +32,9 @@ import {
   groupDimensionForField,
   groupDimensionForGroup,
   groupExtractionForGroup,
-  looksLikeDateField,
+  isDateField,
   relationFilterForRelation,
+  rowValueAtPath,
   resourceFieldPathToSnake,
 } from "@angee/metadata";
 import { format, startOfISOWeek } from "date-fns";
@@ -84,8 +85,6 @@ import type {
   ColumnDescriptor,
   PageColumnAlign,
 } from "./page";
-
-export { looksLikeDateField } from "@angee/metadata";
 
 export function bucketFilterForGroup(
   bucket: AggregateBucket,
@@ -666,7 +665,11 @@ function displayColumns<TRow extends Row>(
       );
     },
     cell: ({ row }) => (
-      <ListCellContent column={column} row={row.original} />
+      <ListCellContent
+        column={column}
+        row={row.original}
+        metadata={options.metadata}
+      />
     ),
     meta: {
       align: column.align ?? "left",
@@ -680,9 +683,11 @@ function displayColumns<TRow extends Row>(
 export function ListCellContent<TRow extends Row>({
   column,
   row,
+  metadata,
 }: {
   column: ColumnDescriptor<TRow>;
   row: TRow;
+  metadata?: ModelMetadata | null;
 }): React.ReactNode {
   const t = useUiT();
   const widget = useResolvedWidget(column.widget ?? "");
@@ -703,7 +708,7 @@ export function ListCellContent<TRow extends Row>({
       />
     );
   }
-  return cellContent(column, row, t);
+  return cellContent(column, row, t, metadata);
 }
 
 function SortHeader<TRow extends Row>({
@@ -1379,6 +1384,7 @@ export function cellContent<TRow extends Row>(
   column: ColumnDescriptor<TRow>,
   row: TRow,
   t: UiTranslate,
+  metadata?: ModelMetadata | null,
 ): React.ReactNode {
   if (column.render) return column.render(row);
   const value = readPath(row, column.field);
@@ -1398,7 +1404,10 @@ export function cellContent<TRow extends Row>(
       </span>
     );
   }
-  const date = looksLikeDateField(column.field) ? dateFromUnknown(value) : null;
+  const field = metadata?.fields[column.field];
+  const date = isDateField(field, column.field)
+    ? dateFromUnknown(value)
+    : null;
   if (date) return <RelativeTime value={date} />;
   return displayValue(value, t);
 }
@@ -1441,12 +1450,7 @@ function rowActionLabelForTableColumn<TRow extends Row>(
 }
 
 export function readPath(row: Row, path: string): unknown {
-  let current: unknown = row;
-  for (const key of path.split(".")) {
-    if (current == null || typeof current !== "object") return undefined;
-    current = (current as Record<string, unknown>)[key];
-  }
-  return current;
+  return rowValueAtPath(row, path);
 }
 
 export function groupMeasuresFromColumns<TRow extends Row>(

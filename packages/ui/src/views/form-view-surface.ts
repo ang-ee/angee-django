@@ -1,7 +1,6 @@
 import * as React from "react";
 import {
   lineReadSelectionPaths,
-  recordSubtitleFields,
   useModelMetadata,
   useSchemaFieldMetadata,
   type ModelMetadata,
@@ -277,6 +276,9 @@ export function useFormViewSurface({
     // The artifact emits only projected/readable impl columns, so every name is
     // safe to select even when the form does not declare that implementation field.
     for (const field of modelMetadata?.resource?.implFields ?? []) paths.add(field);
+    for (const path of Object.values(modelMetadata?.resource?.subtitle ?? {})) {
+      if (path) paths.add(path);
+    }
     return [...paths];
   }, [formFields, isCreate, modelMetadata, relationByField, returning, schemaMetadata]);
   const refineFields = React.useMemo(
@@ -343,7 +345,7 @@ export function useFormViewSurface({
       recordSubtitleParts(
         save.displayRecord,
         id,
-        recordSubtitleFields(modelMetadata),
+        modelMetadata?.resource?.subtitle,
         t,
       ),
     [id, modelMetadata, save.displayRecord, t],
