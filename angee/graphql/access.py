@@ -34,9 +34,7 @@ def actor_can_read(resource: ObjectRef) -> bool:
     return check_field_access(backend(), subject=actor, action="read", resource=resource).allowed
 
 
-def assert_no_gated_read_fields(
-    model: type[models.Model], field_names: Iterable[str], owner: str, reason: str
-) -> None:
+def assert_no_gated_read_fields(model: type[models.Model], field_names: Iterable[str], owner: str, reason: str) -> None:
     if gated := sorted(name for name in set(field_names) if _is_gated_read_axis(model, name)):
         raise ImproperlyConfigured(f"{model._meta.label}: {owner} {gated} are field-gated reads; {reason}")
 
@@ -130,7 +128,7 @@ class ChangeReadGate:
         if not self.resource_type:
             return self._emit(change)
 
-        resource = ObjectRef(self.resource_type, change.resource_identifier)
+        resource = change.read_resource or ObjectRef(self.resource_type, change.resource_identifier)
         allowed = check_field_access(
             self.active_backend,
             subject=self.actor,

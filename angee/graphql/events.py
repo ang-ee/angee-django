@@ -9,6 +9,7 @@ from typing import Any, cast
 import strawberry
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
+from rebac import ObjectRef
 from rebac.resources import model_resource_id, model_resource_type
 from strawberry.scalars import JSON
 
@@ -38,6 +39,12 @@ class ChangePayload:
     resource_id: str | None = None
     """REBAC resource id when it differs from the public id."""
 
+    read_resource_type: str | None = None
+    """Optional resource type whose ``read`` permission gates this event."""
+
+    read_resource_id: str | None = None
+    """Optional resource id paired with :attr:`read_resource_type`."""
+
     during_ingestion: bool = False
     """Whether the change happened inside a sync ingestion context; not part of the wire message."""
 
@@ -62,6 +69,7 @@ class ChangePayload:
         resource_id = None
         if model_resource_type(type(instance)):
             resource_id = model_resource_id(instance)
+        read_resource = _change_read_resource(instance)
         return cls(
             model=instance._meta.label,
             id=public_id_of(instance),
@@ -69,6 +77,8 @@ class ChangePayload:
             changed_fields=changed_fields,
             changed_values=changed_values,
             resource_id=resource_id,
+            read_resource_type=None if read_resource is None else read_resource.resource_type,
+            read_resource_id=None if read_resource is None else read_resource.resource_id,
             during_ingestion=during_ingestion,
         )
 
@@ -86,6 +96,12 @@ class ChangePayload:
             changed_fields=changed_fields,
             changed_values=dict(values) if isinstance(values, Mapping) else None,
             resource_id=str(payload["resource_id"]) if payload.get("resource_id") is not None else None,
+            read_resource_type=(
+                str(payload["read_resource_type"]) if payload.get("read_resource_type") is not None else None
+            ),
+            read_resource_id=(
+                str(payload["read_resource_id"]) if payload.get("read_resource_id") is not None else None
+            ),
         )
 
     def as_message(self) -> dict[str, Any]:
@@ -100,6 +116,9 @@ class ChangePayload:
         }
         if self.resource_id is not None:
             payload["resource_id"] = self.resource_id
+        if self.read_resource_type is not None and self.read_resource_id is not None:
+            payload["read_resource_type"] = self.read_resource_type
+            payload["read_resource_id"] = self.read_resource_id
         return payload
 
     @property
@@ -107,6 +126,14 @@ class ChangePayload:
         """Return the REBAC resource id, falling back to the public id."""
 
         return self.resource_id or self.id
+
+    @property
+    def read_resource(self) -> ObjectRef | None:
+        """Return the model-selected event read anchor, if one was captured."""
+
+        if self.read_resource_type is None or self.read_resource_id is None:
+            return None
+        return ObjectRef(self.read_resource_type, self.read_resource_id)
 
     def redacted(self, denied_fields: set[str]) -> ChangePayload:
         """Return a payload with denied field-level values removed."""
@@ -136,6 +163,24 @@ def _changed_values(
             continue
         values[name] = json_safe(getattr(instance, field.attname, None))
     return values
+
+
+def _change_read_resource(instance: models.Model) -> ObjectRef | None:
+    """Return an instance-owned change-feed read anchor, if declared.
+
+    Most rows are gated by their own REBAC identity. A child or polymorphic edge
+    whose visibility derives from another row may expose ``change_read_resource``;
+    capturing that :class:`~rebac.ObjectRef` while the instance is still live keeps
+    create, update, and delete events on the same authorization boundary.
+    """
+
+    resolver = getattr(instance, "change_read_resource", None)
+    if not callable(resolver):
+        return None
+    resource = resolver()
+    if resource is not None and not isinstance(resource, ObjectRef):
+        raise TypeError("change_read_resource() must return rebac.ObjectRef or None")
+    return resource
 
 
 def _concrete_local_field(

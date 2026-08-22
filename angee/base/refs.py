@@ -7,10 +7,10 @@ identity; :func:`ancestor_object_refs` owns the read/grant fan-out.
 
 **Placement invariant.** A polymorphic edge that keys on
 :func:`canonical_record_target` — ``storage.FileAttachment``, ``tags.TagAssignment``,
-``messaging.ThreadAttachment``, and every reverse ``GenericRelation`` onto such an edge
-(``messaging.ThreadedModelMixin.thread_attachments``, a future ``tags`` relation on
-``Party``) — must be declared on, and any mixin owning it composed onto, the *same*
-topmost REBAC-typed MTI ancestor the canonical write keys on. A reverse
+``messaging.ThreadAttachment``, ``knowledge.RecordBinding``, and every reverse
+``GenericRelation`` onto such an edge (``messaging.ThreadedModelMixin.thread_attachments``,
+a future ``tags`` relation on ``Party``) — must be declared on, and any mixin owning it
+composed onto, the *same* topmost REBAC-typed MTI ancestor the canonical write keys on. A reverse
 ``GenericRelation`` filters at its declaring model's own content type, so composing the
 mixin on a child while its canonical ancestor does not splits the write content type
 from the collect content type and orphans edge rows on delete.

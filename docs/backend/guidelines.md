@@ -810,6 +810,11 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   `GraphQLSchemas` connects publishers from declared `changes` metadata after
   app population, so building a schema no longer mutates process-global signal
   state.
+- **Change events read through the row unless the model declares another read
+  anchor.** A target-derived child or polymorphic edge may implement
+  `change_read_resource()` and return the `ObjectRef` whose `read` permission
+  governs the event. The publisher captures that anchor before deletion, so
+  create, update, and delete all use the same authorization boundary.
 - **Workflow event triggers consume the declared change feed.** A trigger's
   target model must declare `changes()`; otherwise validation tells the addon to
   declare `changes()` for the model to join the change feed.
