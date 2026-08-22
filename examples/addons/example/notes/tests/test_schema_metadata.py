@@ -23,6 +23,15 @@ class NotesSchemaMetadataTests(SimpleTestCase):
         fields = {field["name"]: field for field in note["fields"]}
 
         self.assertEqual(
+            note["subtitle"],
+            {
+                "created": "created_at",
+                "updated": "updated_at",
+                "wordCount": "word_count",
+            },
+        )
+
+        self.assertEqual(
             note["roots"],
             {
                 "aggregate": "notes_aggregate",
@@ -32,8 +41,10 @@ class NotesSchemaMetadataTests(SimpleTestCase):
                 "deletePreview": "delete_note",
                 "detail": "notes_by_pk",
                 "groups": "notes_groups",
+                "groupsCount": "notes_groups_count",
                 "list": "notes",
                 "revisions": "note_revisions",
+                "save": None,
                 "update": "update_notes_by_pk",
             },
         )

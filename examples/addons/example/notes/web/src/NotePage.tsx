@@ -1,6 +1,8 @@
 import * as React from "react";
-import { ResourceList, Form, List, Column, Field, Group, REFINE_CREATE_ID, RevisionsTab, Statusline, StatusSegment, StatuslineSpacer, useResourceRevisions, type ChatterTab, type ResourceViewDefaultGroups, type RecordSmartButtonDescriptor, useChatterContent } from "@angee/ui";
+import { ResourceList, Form, List, Column, Field, Group, REFINE_CREATE_ID, RevisionsTab, Statusline, StatusSegment, StatuslineSpacer, useResourceRevisions, useRouteHref, type ChatterTab, type ResourceViewDefaultGroups, type RecordSmartButtonDescriptor, useChatterContent } from "@angee/ui";
 import { useParams } from "@tanstack/react-router";
+
+import { useNotesT, type NotesT } from "./i18n";
 
 const MODEL = "notes.Note";
 
@@ -9,53 +11,61 @@ const NOTE_DEFAULT_GROUPS = {
   board: { field: "status" },
 } satisfies ResourceViewDefaultGroups;
 
-// Created/updated timestamps + word count feed the record subtitle (id · created
-// · updated · words); they are queried but kept out of the field grid.
-const RECORD_SUBTITLE_FIELDS: readonly string[] = [
-  "created_at",
-  "updated_at",
-  "word_count",
-];
-
-const noteList = (
-  <List
-    resource={MODEL}
-    defaultGroups={NOTE_DEFAULT_GROUPS}
-    order={{ updated_at: "DESC" }}
-    emptyContent={{
-      icon: "agent",
-      title: "No notes yet",
-      description: "The agent isn't running yet — provision it to start chatting.",
-      action: {
-        label: "Set up your assistant",
-        href: "/agents",
+function noteList(agentsHref: string | undefined, t: NotesT): React.ReactElement {
+  return (
+    <List
+      resource={MODEL}
+      defaultGroups={NOTE_DEFAULT_GROUPS}
+      order={{ updated_at: "DESC" }}
+      emptyContent={{
         icon: "agent",
-      },
-    }}
-  >
-    <Column field="title" />
-    <Column field="tags" sortable={false} />
-    <Column field="status" widget="statusBadge" />
-    <Column field="word_count" align="right" aggregate="sum" />
-    <Column field="updated_at" />
-  </List>
-);
+        title: t("empty.title"),
+        description: t("empty.description"),
+        ...(agentsHref
+          ? {
+              action: {
+                label: t("empty.setupAssistant"),
+                href: agentsHref,
+                icon: "agent",
+              },
+            }
+          : {}),
+      }}
+    >
+      <Column field="title" />
+      <Column field="tags" sortable={false} />
+      <Column field="status" widget="statusBadge" />
+      <Column field="word_count" align="right" aggregate="sum" />
+      <Column field="updated_at" />
+    </List>
+  );
+}
 
-const noteForm = (
-  <Form resource={MODEL} returning={RECORD_SUBTITLE_FIELDS}>
-    <Field name="title" widget="text" title />
-    <Field name="status" widget="statusbar" />
-    <Group label="Details" columns={2}>
-      <Field name="created_by_label" label="Owner" widget="userRef" readOnly />
-      <Field name="reminder_at" label="Reminder" widget="datetime" />
-      <Field name="tags" widget="tagInput" />
-    </Group>
-    <Field name="body" widget="markdown.editor" />
-  </Form>
-);
+function noteForm(t: NotesT): React.ReactElement {
+  return (
+    <Form resource={MODEL}>
+      <Field name="title" widget="text" title />
+      <Field name="status" widget="statusbar" />
+      <Group label={t("form.details")} columns={2}>
+        <Field
+          name="created_by_label"
+          label={t("form.owner")}
+          widget="userRef"
+          readOnly
+        />
+        <Field name="reminder_at" label={t("form.reminder")} widget="datetime" />
+        <Field name="tags" widget="tagInput" />
+      </Group>
+      <Field name="body" widget="markdown.editor" />
+    </Form>
+  );
+}
 
 /** The notes console page: a count-by-status panel above the data table. */
 export function NotePage(): React.ReactElement {
+  const t = useNotesT();
+  const routeHref = useRouteHref();
+  const agentsHref = routeHref.maybe("agents.agents");
   // The nested record route (`notes.record`) carries no component; this parent
   // surface reads its `$id` param directly.
   const params = useParams({ strict: false });
@@ -72,13 +82,13 @@ export function NotePage(): React.ReactElement {
     () => [
       {
         id: "activity",
-        label: "Activity",
+        label: t("record.activity"),
         icon: "activity",
         count: revisions.count,
         children: <RevisionsTab resource={MODEL} recordId={activeRecordId} />,
       },
     ] satisfies readonly ChatterTab[],
-    [activeRecordId, revisions.count],
+    [activeRecordId, revisions.count, t],
   );
   const chatter = React.useMemo(() => ({ tabs }), [tabs]);
   useChatterContent(chatter);
@@ -89,10 +99,10 @@ export function NotePage(): React.ReactElement {
           id: "versions",
           icon: "versions",
           count: revisions.count,
-          label: "Versions",
+          label: t("record.versions"),
         },
       ] satisfies readonly RecordSmartButtonDescriptor[],
-    [revisions.count],
+    [revisions.count, t],
   );
 
   return (
@@ -104,23 +114,23 @@ export function NotePage(): React.ReactElement {
         placement="inline"
         routed
       >
-        {noteList}
-        {noteForm}
+        {noteList(agentsHref, t)}
+        {noteForm(t)}
       </ResourceList>
       <Statusline>
         <StatusSegment icon="check" tone="success">
-          Synced
+          {t("status.synced")}
         </StatusSegment>
         <StatusSegment icon="notes">
           {creating
-            ? "New note"
+            ? t("status.new")
             : activeRecordId
-              ? "Editing note"
-              : "All notes"}
+              ? t("status.editing")
+              : t("status.all")}
         </StatusSegment>
         {activeRecordId ? (
           <StatusSegment icon="versions">
-            {revisions.count} {revisions.count === 1 ? "revision" : "revisions"}
+            {t("status.revision", { count: revisions.count })}
           </StatusSegment>
         ) : null}
         <StatuslineSpacer />

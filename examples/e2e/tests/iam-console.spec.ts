@@ -1,6 +1,6 @@
 import { test, expect, roleStatePath } from "@angee/e2e";
 
-// The IAM/Identity admin console: the menu, the grant composer, the permission
+// The Permissions admin console: the menu, the grant composer, the permission
 // graph, and the admin gate for non-admins. Read-only/non-destructive.
 
 const SECTIONS = [
@@ -14,7 +14,7 @@ const SECTIONS = [
 test.describe("iam console — admin", () => {
   test.use({ storageState: roleStatePath("admin") });
 
-  test("navigates the Identity menu across every section", async ({ page }) => {
+  test("navigates the Permissions menu across every section", async ({ page }) => {
     await page.goto("/iam");
     await expect(page).toHaveURL(/\/iam/);
     await expect(

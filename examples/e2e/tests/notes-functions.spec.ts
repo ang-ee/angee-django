@@ -125,9 +125,19 @@ test.describe("notes list — functions & buttons", () => {
     await expect(signOut).toBeVisible();
   });
 
-  test("the command palette is present in the top chrome", async ({ page }) => {
+  test("the command palette uses the canonical product labels", async ({ page }) => {
     const notes = new NotesPage(page);
     await notes.gotoReady();
     await expect(notes.commandPalette).toBeVisible();
+    await notes.commandPalette.click();
+
+    const palette = page.getByRole("dialog", { name: "Command palette" });
+    for (const label of ["Permissions", "Addons", "Tags"]) {
+      await expect(palette.getByText(label, { exact: true }).first()).toBeVisible();
+    }
+    await expect(palette.getByText("Knowledge", { exact: true }).locator("..").getByText("Settings", { exact: true })).toBeVisible();
+    for (const oldLabel of ["IAM", "Apps", "Vocabulary"]) {
+      await expect(palette.getByText(oldLabel, { exact: true })).toHaveCount(0);
+    }
   });
 });
