@@ -66,6 +66,37 @@ describe("user preferences patch queue", () => {
     });
   });
 
+  test("keeps a live rebase that arrives while persistence is in flight", async () => {
+    const first = deferred<Record<string, unknown>>();
+    const persist = vi.fn()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(async (preferences: Record<string, unknown>) => preferences);
+    const committed = vi.fn();
+    const queue = createUserPreferencesPatchQueue({ persist, committed });
+    queue.rebase({ base: true });
+
+    const inFlight = queue.patch((current) => ({ ...current, local: "stale" }));
+    await Promise.resolve();
+    await Promise.resolve();
+    queue.rebase({ base: true, remote: "newer" });
+    first.resolve({ base: true, local: "stale" });
+    await inFlight;
+
+    expect(committed).not.toHaveBeenCalled();
+
+    await queue.patch((current) => ({ ...current, after: true }));
+    expect(persist).toHaveBeenNthCalledWith(2, {
+      base: true,
+      remote: "newer",
+      after: true,
+    });
+    expect(committed).toHaveBeenCalledWith({
+      base: true,
+      remote: "newer",
+      after: true,
+    });
+  });
+
   test("rolls a failed patch back before applying the next queued write", async () => {
     const persist = vi.fn()
       .mockRejectedValueOnce(new Error("rail write failed"))

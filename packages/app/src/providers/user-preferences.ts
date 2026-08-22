@@ -25,14 +25,20 @@ export function createUserPreferencesPatchQueue({
   let current: RuntimeUserPreferences = {};
   let closed = false;
   let tail = Promise.resolve();
+  let rebaseVersion = 0;
 
   return {
     patch(apply) {
       const operation = tail.catch(() => undefined).then(async () => {
         if (closed) throw new UserPreferencesQueueClosedError();
         const next = apply(current);
+        const startedAtRebase = rebaseVersion;
         const saved = await persist(next);
         if (closed) return;
+        // A live server delivery is newer queue knowledge than this request's
+        // response. Keep that rebase as the base for the next queued patch;
+        // the matching change event already committed the displayed snapshot.
+        if (rebaseVersion !== startedAtRebase) return;
         current = saved;
         committed(saved);
       });
@@ -41,6 +47,7 @@ export function createUserPreferencesPatchQueue({
     },
     rebase(preferences) {
       if (closed) return;
+      rebaseVersion += 1;
       current = preferences;
     },
     // The owning effect re-opens on (re)mount and closes on cleanup, so
