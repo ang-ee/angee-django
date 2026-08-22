@@ -80,6 +80,35 @@ test.describe("addon route smoke", () => {
     });
   }
 
+  test("breadcrumbs use the canonical product labels", async ({ page }) => {
+    const cases = [
+      { path: "/iam/users", labels: ["Permissions", "Users"], oldLabel: "IAM" },
+      { path: "/platform/addons", labels: ["Platform", "Addons"], oldLabel: "Apps" },
+      { path: "/tags", labels: ["Tags"], oldLabel: "Vocabulary" },
+      { path: "/knowledge/settings", labels: ["Knowledge", "Settings"], oldLabel: "Vaults" },
+    ] as const;
+
+    for (const { path, labels, oldLabel } of cases) {
+      await gotoAuthenticatedRoute(page, path);
+      const breadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });
+      for (const label of labels) {
+        await expect(breadcrumb.getByText(label, { exact: true })).toBeVisible();
+      }
+      await expect(breadcrumb.getByText(oldLabel, { exact: true })).toHaveCount(0);
+    }
+  });
+
+  test("parties review uses Party for the party display-name column", async ({ page }) => {
+    await gotoAuthenticatedRoute(page, "/parties/review");
+    const handleLinks = page
+      .getByRole("heading", { name: "Handle links" })
+      .locator("xpath=ancestor::section");
+    const table = handleLinks.getByRole("table");
+
+    await expect(table.getByRole("columnheader", { name: "Party", exact: true })).toBeVisible();
+    await expect(table.getByRole("columnheader", { name: "Contact", exact: true })).toHaveCount(0);
+  });
+
   test("integrate repository detail renders read-only without an update root", async ({ page }) => {
     const issues = captureBrowserIssues(page);
 
