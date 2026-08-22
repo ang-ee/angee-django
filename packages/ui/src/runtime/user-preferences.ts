@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -20,7 +21,7 @@ export interface PreferenceSliceState<TValue> {
 interface OptimisticPreferences {
   operation: object;
   preferences: RuntimeUserPreferences;
-  scope: AbortController;
+  generation: object;
 }
 
 /** Optimistic display and rollback for one slice of the runtime preference document. */
@@ -34,43 +35,51 @@ export function usePreferenceSlice<TValue>(
 ): PreferenceSliceState<TValue> {
   const { available, preferences, patchPreferences } =
     useRuntimeUserPreferences();
-  const scope = useMemo(
-    () => new AbortController(),
+  const generation = useMemo(
+    () => ({}),
     [available, key, patchPreferences],
   );
   const [optimistic, setOptimistic] =
     useState<OptimisticPreferences | null>(null);
+  // Armed while mounted, re-armed by the effect after StrictMode's simulated
+  // remount — a memoized AbortController aborted in cleanup stays dead forever
+  // there, silently swallowing every update.
+  const closedRef = useRef(false);
+  useEffect(() => {
+    closedRef.current = false;
+    return () => {
+      closedRef.current = true;
+    };
+  }, [generation]);
 
-  useEffect(() => () => scope.abort(), [scope]);
-
-  const displayed = optimistic?.scope === scope
+  const displayed = optimistic?.generation === generation
     ? optimistic.preferences
     : preferences;
 
   const update = useCallback(
     async (apply: (current: TValue) => TValue): Promise<void> => {
-      if (!available || scope.signal.aborted) return;
+      if (!available || closedRef.current) return;
       const applyPreferences: RuntimeUserPreferencesPatch = (current) =>
         write(current, apply(read(current)));
       const operation = {};
       setOptimistic((current) => ({
         operation,
-        scope,
+        generation,
         preferences: applyPreferences(
-          current?.scope === scope ? current.preferences : preferences,
+          current?.generation === generation ? current.preferences : preferences,
         ),
       }));
       try {
         await patchPreferences(applyPreferences);
       } finally {
-        if (!scope.signal.aborted) {
+        if (!closedRef.current) {
           setOptimistic((current) =>
             current?.operation === operation ? null : current
           );
         }
       }
     },
-    [available, patchPreferences, preferences, read, scope, write],
+    [available, generation, patchPreferences, preferences, read, write],
   );
 
   return { available, value: read(displayed), update };

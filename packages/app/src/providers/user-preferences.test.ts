@@ -115,6 +115,22 @@ describe("user preferences patch queue", () => {
     expect(persist).toHaveBeenCalledOnce();
     expect(committed).not.toHaveBeenCalled();
   });
+
+  test("survives StrictMode's close-then-reopen effect cycle", async () => {
+    const persist = vi.fn(async (next: Record<string, unknown>) => next);
+    const committed = vi.fn();
+    const queue = createUserPreferencesPatchQueue({ persist, committed });
+
+    // StrictMode runs the owning effect as mount → cleanup → mount, so the
+    // memoized queue sees open(), close(), open() before any user patch.
+    queue.open();
+    queue.close();
+    queue.open();
+
+    await queue.patch(() => ({ marker: true }));
+    expect(persist).toHaveBeenCalledOnce();
+    expect(committed).toHaveBeenCalledWith({ marker: true });
+  });
 });
 
 function deferred<T>(): {

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { act, renderHook } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { describe, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider, type RuntimeUserPreferences } from "../runtime";
@@ -74,6 +74,44 @@ describe("useAppRailPreferences", () => {
       order: ["notes", "ops"],
       defaultItemId: "notes",
       expanded: true,
+    });
+  });
+
+  test("writes still reach patchPreferences under StrictMode", async () => {
+    const patchPreferences = vi.fn().mockResolvedValue(undefined);
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <StrictMode>
+        <AppRuntimeProvider
+          runtime={{
+            userPreferences: {
+              available: true,
+              preferences: {},
+              patchPreferences,
+            },
+          }}
+        >
+          {children}
+        </AppRuntimeProvider>
+      </StrictMode>
+    );
+    const { result } = renderHook(useAppRailPreferences, { wrapper });
+
+    await act(async () => {
+      result.current.setRailPreferences({
+        order: ["ops"],
+        defaultItemId: "ops",
+        expanded: false,
+      });
+    });
+
+    expect(patchPreferences).toHaveBeenCalledTimes(1);
+    const patch = patchPreferences.mock.calls[0]?.[0] as (
+      current: RuntimeUserPreferences,
+    ) => RuntimeUserPreferences;
+    expect(patch({})[APP_RAIL_PREFERENCES_KEY]).toEqual({
+      order: ["ops"],
+      defaultItemId: "ops",
+      expanded: false,
     });
   });
 });

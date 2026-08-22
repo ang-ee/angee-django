@@ -6,6 +6,7 @@ import type {
 export interface UserPreferencesPatchQueue {
   patch: (apply: RuntimeUserPreferencesPatch) => Promise<void>;
   rebase: (preferences: RuntimeUserPreferences) => void;
+  open: () => void;
   close: () => void;
 }
 
@@ -41,6 +42,13 @@ export function createUserPreferencesPatchQueue({
     rebase(preferences) {
       if (closed) return;
       current = preferences;
+    },
+    // The owning effect re-opens on (re)mount and closes on cleanup, so
+    // StrictMode's simulated unmount cannot leave the memoized queue dead;
+    // a superseded queue is closed by its own effect instance and never
+    // re-opened.
+    open() {
+      closed = false;
     },
     close() {
       closed = true;

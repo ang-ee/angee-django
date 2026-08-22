@@ -356,7 +356,10 @@ export function UserPreferencesProvider({
     [userId],
   );
 
-  useEffect(() => () => queue.close(), [queue]);
+  useEffect(() => {
+    queue.open();
+    return () => queue.close();
+  }, [queue]);
 
   useEffect(() => {
     queue.rebase(serverPreferences);
