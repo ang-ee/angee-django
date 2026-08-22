@@ -6,6 +6,7 @@ import logging
 import threading
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
+from functools import partial
 from typing import Any
 
 from asgiref.sync import async_to_sync
@@ -66,14 +67,23 @@ def change_group(model: type[models.Model]) -> str:
     return f"angee.changes.{model._meta.app_label}.{model._meta.model_name}"
 
 
-def connect_publishers(model: type[models.Model]) -> None:
-    """Connect save and delete publishers for ``model`` exactly once."""
+def connect_publishers(
+    model: type[models.Model],
+    *,
+    readable_fields: Iterable[str] = (),
+) -> None:
+    """Connect save/delete publishers with the model's readable projection."""
 
     dispatch_uid = f"angee-changes-{model._meta.label}"
-    post_save.connect(
+    save_receiver = partial(
         _on_save,
+        readable_fields=frozenset(readable_fields),
+    )
+    post_save.connect(
+        save_receiver,
         sender=model,
         dispatch_uid=f"{dispatch_uid}-save",
+        weak=False,
     )
     post_delete.connect(
         _on_delete,
@@ -134,6 +144,7 @@ def _on_save(
     created: bool = False,
     update_fields: Iterable[str] | None = None,
     raw: bool = False,
+    readable_fields: frozenset[str] = frozenset(),
     **kwargs: Any,
 ) -> None:
     """Publish a create or update event after the transaction commits."""
@@ -145,6 +156,7 @@ def _on_save(
         instance,
         action="create" if created else "update",
         update_fields=update_fields,
+        readable_fields=readable_fields,
     )
 
 
@@ -164,6 +176,7 @@ def publish_change(
     *,
     action: str,
     update_fields: Iterable[str] | None,
+    readable_fields: Iterable[str] = (),
 ) -> None:
     """Build and send one observable change payload after commit."""
 
@@ -185,6 +198,7 @@ def publish_change(
         instance,
         action=action,
         update_fields=update_fields,
+        readable_fields=readable_fields,
         during_ingestion=sync_ingestion_active(),
     )
     transaction.on_commit(lambda: _send_change(model, payload))

@@ -22,10 +22,16 @@ from angee.graphql.events import ChangeEvent, ChangePayload
 from angee.graphql.publishing import change_channel_layer, change_group
 
 
-def changes(model: type[models.Model], *, field: str) -> type:
-    """Return a subscription surface streaming changes to ``model``."""
+def changes(
+    model: type[models.Model],
+    *,
+    field: str,
+    read_gate: type[ChangeReadGate] | None = None,
+) -> type:
+    """Return a subscription surface streaming read-gated changes to ``model``."""
 
     label = model._meta.label
+    gate_type = read_gate or ChangeReadGate
 
     async def resolve(
         self: object,
@@ -42,7 +48,11 @@ def changes(model: type[models.Model], *, field: str) -> type:
         # filter concurrently. The wrappers bracket that thread's ORM work with
         # Django's connection lifecycle because long-lived subscriptions do not
         # ride the normal request boundary.
-        gate = await sync_to_async(_change_read_gate, thread_sensitive=False)(model, actor)
+        gate = await sync_to_async(_change_read_gate, thread_sensitive=False)(
+            model,
+            actor,
+            gate_type,
+        )
         async for payload in _subscribe(model):
             event = await sync_to_async(_filter_change_event, thread_sensitive=False)(gate, payload)
             if event is not None:
@@ -64,12 +74,16 @@ def changes(model: type[models.Model], *, field: str) -> type:
     )
 
 
-def _change_read_gate(model: type[models.Model], actor: Any) -> ChangeReadGate:
+def _change_read_gate(
+    model: type[models.Model],
+    actor: Any,
+    read_gate: type[ChangeReadGate] = ChangeReadGate,
+) -> ChangeReadGate:
     """Build a read gate in a sync worker with healthy Django connections."""
 
     close_old_connections()
     try:
-        return ChangeReadGate(model, actor)
+        return read_gate(model, actor)
     finally:
         close_old_connections()
 

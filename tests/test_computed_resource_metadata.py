@@ -18,6 +18,8 @@ from angee.graphql.data.metadata import (
     DataResourceRoots,
     DataResourceSubtitleMetadata,
     DataResourceTypeNames,
+    attach_data_resource_metadata,
+    data_resource_metadata,
     make_data_resource_metadata,
     merge_data_resources,
     serialize_data_resources,
@@ -163,19 +165,84 @@ def test_resource_subtitle_contributions_compose_by_semantic_fact() -> None:
 def test_resource_subtitle_collision_fails_fast() -> None:
     """Conflicting owners of one semantic subtitle fact cannot silently win."""
 
-    def contribution(path: str) -> DataResourceMetadata:
-        return make_data_resource_metadata(
-            model=None,
-            model_label="knowledge.page",
-            node_type=SubtitlePageType,
-            roots=DataResourceRoots(),
-            type_names=DataResourceTypeNames(),
-            capabilities=(),
-            subtitle=DataResourceSubtitleMetadata(created=path),
+    @strawberry.type(name="CreatedSubtitleContribution")
+    class CreatedSubtitleContribution:
+        marker: str
+
+    @strawberry.type(name="PublishedSubtitleContribution")
+    class PublishedSubtitleContribution:
+        marker: str
+
+    def contribution(path: str, surface: type) -> DataResourceMetadata:
+        attach_data_resource_metadata(
+            surface,
+            make_data_resource_metadata(
+                model=None,
+                model_label="knowledge.page",
+                node_type=SubtitlePageType,
+                roots=DataResourceRoots(),
+                type_names=DataResourceTypeNames(),
+                capabilities=(),
+                subtitle=DataResourceSubtitleMetadata(created=path),
+            ),
+        )
+        [metadata] = data_resource_metadata(surface)
+        return metadata
+
+    with pytest.raises(
+        ImproperlyConfigured,
+        match=(
+            "conflicting subtitle.created: 'created_at' from CreatedSubtitleContribution "
+            "and 'published_at' from PublishedSubtitleContribution"
+        ),
+    ):
+        merge_data_resources(
+            (
+                contribution("created_at", CreatedSubtitleContribution),
+                contribution("published_at", PublishedSubtitleContribution),
+            )
         )
 
-    with pytest.raises(ImproperlyConfigured, match="conflicting subtitle.created"):
-        merge_data_resources((contribution("created_at"), contribution("published_at")))
+
+def test_resource_row_model_collision_names_both_contributors() -> None:
+    """The row-model singleton reports both contributing schema surfaces."""
+
+    @strawberry.type(name="ServerRowsContribution")
+    class ServerRowsContribution:
+        marker: str
+
+    @strawberry.type(name="ClientRowsContribution")
+    class ClientRowsContribution:
+        marker: str
+
+    def contribution(row_model: str, surface: type) -> DataResourceMetadata:
+        attach_data_resource_metadata(
+            surface,
+            make_data_resource_metadata(
+                model=None,
+                model_label="platform.addon",
+                roots=DataResourceRoots(),
+                type_names=DataResourceTypeNames(),
+                capabilities=(),
+                row_model=row_model,
+            ),
+        )
+        [metadata] = data_resource_metadata(surface)
+        return metadata
+
+    with pytest.raises(
+        ImproperlyConfigured,
+        match=(
+            "conflicting row_model: 'server' from ServerRowsContribution "
+            "and 'client' from ClientRowsContribution"
+        ),
+    ):
+        merge_data_resources(
+            (
+                contribution("server", ServerRowsContribution),
+                contribution("client", ClientRowsContribution),
+            )
+        )
 
 
 def test_resource_subtitle_rejects_malformed_selection_path() -> None:

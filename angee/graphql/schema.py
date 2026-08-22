@@ -297,8 +297,17 @@ class GraphQLSchemas:
 
         from angee.graphql.publishing import connect_publishers
 
-        for model in self.change_publisher_models():
-            connect_publishers(model)
+        readable_by_model = {
+            model: set[str]() for model in self.change_publisher_models()
+        }
+        for schema_name in self.names():
+            for resource in self.resources(schema_name):
+                if resource.model in readable_by_model:
+                    readable_by_model[resource.model].update(
+                        resource.readable_model_field_names()
+                    )
+        for model, readable_fields in readable_by_model.items():
+            connect_publishers(model, readable_fields=readable_fields)
 
     def _build(
         self,

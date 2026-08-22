@@ -136,7 +136,12 @@ def test_publish_uses_public_id_and_changed_values(
     publishing.connect_change_broadcast_receiver()
     group = Group(id=7, name="editors")
 
-    publishing.publish_change(group, action="update", update_fields=("name",))
+    publishing.publish_change(
+        group,
+        action="update",
+        update_fields=("name",),
+        readable_fields=("name",),
+    )
 
     assert sent == [
         (
@@ -173,7 +178,12 @@ def test_change_signal_receiver_sees_broadcast_payload(
         dispatch_uid="tests.change_signal_receiver_sees_broadcast_payload",
     )
     try:
-        publishing.publish_change(Group(id=8, name="reviewers"), action="update", update_fields=("name",))
+        publishing.publish_change(
+            Group(id=8, name="reviewers"),
+            action="update",
+            update_fields=("name",),
+            readable_fields=("name",),
+        )
     finally:
         publishing.change_published.disconnect(dispatch_uid="tests.change_signal_receiver_sees_broadcast_payload")
 
@@ -491,6 +501,7 @@ def test_change_payload_reads_fk_ids_without_fetching_relations() -> None:
             child,
             action="update",
             update_fields=("parent",),
+            readable_fields=("parent", "parent_id"),
         )
 
     assert len(captured) == 0
