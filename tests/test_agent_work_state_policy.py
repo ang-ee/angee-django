@@ -21,12 +21,12 @@ def test_workspace_skill_passes_canonical_work_state_path() -> None:
     )
 
     for contract in (
-        'test -L "$repo_root/.work" || exit 1',
-        'work_state_path=$(cd "$repo_root/.work" && pwd -P) || exit 1',
-        'git -C "$work_state_path" rev-parse --show-toplevel',
-        'test "$work_state_top" = "$work_state_path" || exit 1',
-        'basename "$work_state_path"',
+        # Work-state is wired by stack source NAME; the src template's
+        # work-state slot materializes <workspace>/.work as its own clone.
+        "wired by stack source NAME",
         "--input work_state_source=",
-        "Resolved work-state path.",
+        "work-state` slot is a slot like any other",
+        "ws source push <workspace> work-state",
+        "do not fall back to `docs/superpowers`",
     ):
         assert contract in skill

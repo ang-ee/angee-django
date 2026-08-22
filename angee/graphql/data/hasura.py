@@ -53,6 +53,7 @@ from angee.graphql.data.metadata import (
     DataLinesMetadata,
     DataResourceFieldMetadata,
     DataResourceRoots,
+    DataResourceSubtitleMetadata,
     DataResourceTypeNames,
     attach_data_resource_metadata,
     make_data_resource_metadata,
@@ -875,6 +876,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
     row_model: str = "server",
+    subtitle: DataResourceSubtitleMetadata | None = None,
 ) -> HasuraResource:
     """Build a Hasura resource and attach Angee's model-resource metadata.
 
@@ -893,6 +895,11 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     patches the parent in one transaction. The default write backend becomes a
     lines-aware :class:`AngeeHasuraWriteBackend`; a caller supplying its own
     ``write_backend`` must make it lines-aware.
+
+    ``subtitle=DataResourceSubtitleMetadata(...)`` declares the renderer's
+    closed created/updated/word-count vocabulary as dotted GraphQL selection
+    paths. Every path resolves against ``node`` during metadata emission; adding
+    another semantic fact extends the declaration and renderer together.
     """
 
     for axis, fields in (
@@ -1015,6 +1022,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         model_label=model_label,
         public_id_field=public_id_field,
         row_model=row_model,
+        subtitle=subtitle,
     )
 
 
@@ -1178,6 +1186,7 @@ def attach_hasura_resource_metadata(
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
     row_model: str = "server",
+    subtitle: DataResourceSubtitleMetadata | None = None,
 ) -> HasuraResource:
     """Attach Angee resource metadata to a built Hasura resource bundle."""
 
@@ -1308,6 +1317,7 @@ def attach_hasura_resource_metadata(
             default_measures=(DataAggregateMeasureMetadata(op="count"),),
             fields=fields,
             row_model=row_model,
+            subtitle=subtitle,
         ),
     )
     mutation_capabilities = _mutation_capabilities(

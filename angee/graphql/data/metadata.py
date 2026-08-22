@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 from dataclasses import dataclass
 from typing import Any, TypeVar, cast
 
@@ -22,6 +23,7 @@ from angee.graphql.data.resource_fields import (
     model_resource_fields,
     require_unique_resource_fields,
     required_input_wire_fields,
+    require_resource_selection_path,
     resource_fields,
     resource_type_name,
     resource_wire_field_name,
@@ -47,6 +49,7 @@ __all__ = [
     "DataResourceFieldMetadata",
     "DataResourceMetadata",
     "DataResourceRoots",
+    "DataResourceSubtitleMetadata",
     "DataResourceTypeNames",
     "attach_data_resource_metadata",
     "data_resource_metadata",
@@ -241,6 +244,41 @@ class DataResourceTypeNames:
 
 
 @dataclass(frozen=True, slots=True)
+class DataResourceSubtitleMetadata:
+    """Declared dotted selection paths for a resource record's subtitle facts.
+
+    The closed ``created``/``updated``/``word_count`` fact set is the renderer's
+    vocabulary; adding a fact extends this declaration and its presentation
+    together at the same seam.
+    """
+
+    created: str | None = None
+    updated: str | None = None
+    word_count: str | None = None
+
+    def merge(
+        self,
+        left: DataResourceMetadata,
+        right: DataResourceMetadata,
+    ) -> DataResourceSubtitleMetadata:
+        """Merge facts using the resource metadata's singleton collision rule."""
+
+        right_subtitle = cast(DataResourceSubtitleMetadata, right.subtitle)
+        return DataResourceSubtitleMetadata(
+            **{
+                field_def.name: _merge_value(
+                    left,
+                    right,
+                    f"subtitle.{field_def.name}",
+                    getattr(self, field_def.name),
+                    getattr(right_subtitle, field_def.name),
+                )
+                for field_def in dataclasses.fields(DataResourceSubtitleMetadata)
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class DataResourceMetadata:
     """Internal metadata for one Angee model data resource."""
 
@@ -255,6 +293,7 @@ class DataResourceMetadata:
     canonical_label: str | None = None
     row_model: str = "server"
     record_representation: str | None = None
+    subtitle: DataResourceSubtitleMetadata | None = None
     impl_fields: tuple[str, ...] = ()
     capabilities: tuple[str, ...] = ()
     fields: tuple[DataResourceFieldMetadata, ...] = ()
@@ -320,6 +359,7 @@ class DataResourceMetadata:
                     other.record_representation,
                 ),
             ),
+            subtitle=_merge_subtitle(self, other),
             impl_fields=self.impl_fields or other.impl_fields,
             capabilities=_merge_capabilities(self.capabilities, other.capabilities),
             fields=merge_resource_fields(self.fields, other.fields),
@@ -389,6 +429,7 @@ def make_data_resource_metadata(
     group_aliases: tuple[DataGroupAliasMetadata, ...] = (),
     lines: DataLinesMetadata | None = None,
     fields: tuple[DataResourceFieldMetadata, ...] = (),
+    subtitle: DataResourceSubtitleMetadata | None = None,
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
     row_model: str = "server",
@@ -461,6 +502,13 @@ def make_data_resource_metadata(
     )
     active_fields = require_unique_resource_fields(exposed_model_label, active_fields)
     record_representation = _record_representation_field(active_fields)
+    active_subtitle = _resource_subtitle(
+        model=model,
+        model_label=exposed_model_label,
+        node_type=node_type,
+        fields=active_fields,
+        declared=subtitle,
+    )
     return DataResourceMetadata(
         model=model,
         model_label=exposed_model_label,
@@ -473,6 +521,7 @@ def make_data_resource_metadata(
         canonical_label=canonical_record_model(model)._meta.label if model is not None else None,
         row_model=row_model,
         record_representation=record_representation,
+        subtitle=active_subtitle,
         impl_fields=_impl_fields(model, node_type, active_fields),
         capabilities=capabilities,
         fields=active_fields,
@@ -586,6 +635,19 @@ def _merge_row_model(
     return left.row_model
 
 
+def _merge_subtitle(
+    left: DataResourceMetadata,
+    right: DataResourceMetadata,
+) -> DataResourceSubtitleMetadata | None:
+    """Return subtitle facts merged with the existing singleton collision rule."""
+
+    if left.subtitle is None:
+        return right.subtitle
+    if right.subtitle is None:
+        return left.subtitle
+    return left.subtitle.merge(left, right)
+
+
 def _merge_value(
     left: DataResourceMetadata,
     right: DataResourceMetadata,
@@ -624,6 +686,81 @@ def _require_unique(
             raise ImproperlyConfigured(f"resource metadata for {model_label} declares duplicate {purpose} '{value}'.")
         seen.add(value)
     return values
+
+
+_SELECTION_PATH = re.compile(r"^[_A-Za-z][_0-9A-Za-z]*(?:\.[_A-Za-z][_0-9A-Za-z]*)*$")
+
+
+def _resource_subtitle(
+    *,
+    model: type[models.Model] | None,
+    model_label: str,
+    node_type: type | None,
+    fields: tuple[DataResourceFieldMetadata, ...],
+    declared: DataResourceSubtitleMetadata | None,
+) -> DataResourceSubtitleMetadata | None:
+    """Return validated subtitle paths plus canonical timestamp defaults.
+
+    Facts are GraphQL dotted selection paths, rather than model-field paths, so
+    an addon may name a nested projection such as ``markdown.word_count``. Exact
+    projected model fields carrying Django's ``auto_now_add``/``auto_now``
+    flags supply the created/updated defaults; every other semantic fact is
+    declared by its owning addon.
+    """
+
+    readable = {field.name for field in fields if field.readable}
+
+    def timestamp_path(flag: str) -> str | None:
+        if model is None:
+            return None
+        candidates = tuple(
+            wire_name
+            for model_field in model._meta.fields
+            if getattr(model_field, flag, False)
+            if (wire_name := resource_wire_field_name(node_type, model_field.name)) in readable
+        )
+        if len(candidates) > 1:
+            raise ImproperlyConfigured(
+                f"resource metadata for {model_label} has multiple projected {flag} "
+                f"subtitle fields: {', '.join(candidates)}."
+            )
+        return candidates[0] if candidates else None
+
+    defaults = DataResourceSubtitleMetadata(
+        created=timestamp_path("auto_now_add"),
+        updated=timestamp_path("auto_now"),
+    )
+    active = DataResourceSubtitleMetadata(
+        created=(
+            declared.created
+            if declared is not None and declared.created is not None
+            else defaults.created
+        ),
+        updated=(
+            declared.updated
+            if declared is not None and declared.updated is not None
+            else defaults.updated
+        ),
+        word_count=declared.word_count if declared is not None else None,
+    )
+    for field_def in dataclasses.fields(DataResourceSubtitleMetadata):
+        path = getattr(active, field_def.name)
+        if path is not None and _SELECTION_PATH.fullmatch(path) is None:
+            raise ImproperlyConfigured(
+                f"resource metadata for {model_label} declares invalid subtitle.{field_def.name} "
+                f"selection path {path!r}."
+            )
+        if path is not None:
+            require_resource_selection_path(
+                node_type,
+                path,
+                model_label=model_label,
+            )
+    has_fact = any(
+        getattr(active, field_def.name) is not None
+        for field_def in dataclasses.fields(active)
+    )
+    return active if has_fact else None
 
 
 def _record_representation_field(fields: tuple[DataResourceFieldMetadata, ...]) -> str | None:

@@ -44,7 +44,7 @@ rented libs   @refinedev/core · @refinedev/hasura · graphql-request/ws ·
 |---|---|
 | `@angee/refine` | the parts of a Refine+Hasura app every project shares, with **zero domain/metadata knowledge**: data/transport/live providers, the router bridge, typed-document contracts, and the `dialect/` hooks (action, aggregate, groupBy, facets, deletePreview, revisions) over `useCustom`. |
 | `@angee/metadata` | the **only** consumer of `angee.resources` metadata: artifact load/validate, projection to Refine `resources[]` + `meta`, the one field kind/scalar/widget classifier, group/facet/drill-down dimension specs, and per-action capabilities → accessControl. |
-| `@angee/ui` | the single rendered binding + headless view-state: `views/{list,form,record,relation,visualizations}` + headless view-models, chrome (rail/topbar/breadcrumb/spotlight), widgets, feedback (toast), the Base UI primitives binding, and the `runtime/` contracts it consumes — the `AppRuntime` registry/session context + its lookup hooks, `makeContext`, and the menu/slot/preview/widget/form contribution types (the binding owns the runtime it renders against; `@angee/app` only mounts the provider). |
+| `@angee/ui` | the single rendered binding + headless view-state: resource list/form/record/relation/visualization surfaces under `views/`, chrome (rail/topbar/breadcrumb/spotlight), widgets, feedback (toast), the Base UI primitives binding, and the `runtime/` contracts it consumes — the `AppRuntime` registry/session context + its lookup hooks, `makeContext`, and the menu/slot/preview/widget/form contribution types (the binding owns the runtime it renders against; `@angee/app` only mounts the provider). |
 | `@angee/app` | assembles the app: `define-addon`, `defineBaseAddon`, `createApp`, the `providers/{auth,i18n,notification,accessControl}`, addon-route → TanStack tree routing, the slot/widget/form/preview/icon registries, and the app shell. |
 | `@angee/<domain>` | a domain addon: its pages and codegen `documents*.ts`. |
 
@@ -93,6 +93,10 @@ convenience.
 
 - `@angee/refine` imports **only rented libs** — never `@angee/metadata`,
   `@angee/ui`, `@angee/app`, and never any `angee.resources` metadata.
+- Import provider-adjacent Refine bindings (providers, dialect hooks, typed
+  operation contracts) through `@angee/refine`; import ordinary framework hooks
+  such as `useInvalidate` and `useList` directly from `@refinedev/core`. Do not
+  widen `@angee/refine` into a general Refine re-export surface.
 - `@angee/metadata` must **NOT** import `@angee/refine`.
 - `@angee/ui` may import `@angee/refine` + `@angee/metadata`, but **not**
   `@angee/app`.
@@ -115,8 +119,15 @@ TanStack apply the URL-owned filter object to in-memory rows.
 ## Rules
 
 - Python ships schema and operations. TypeScript ships UX.
-- **Authored operations are typed, never hand-mirrored.** A bespoke (non-CRUD)
-  operation is a `graphql()` document imported from `@angee/gql/<schema>`; its
+- **Schema dependence stops at the composition boundary.** `@angee/refine`,
+  `@angee/metadata`, and `@angee/ui` stay schema-independent; when they need a
+  bespoke operation they hand-author a typed `TypedDocumentNode` (see
+  `ui/views/documents.ts`) rather than importing a project runtime. `@angee/app`
+  is the sanctioned schema-dependent composition package, and it and addon web
+  packages consume generated documents from the composed stack's `@angee/gql`.
+- **Generated authored operations are typed, never hand-mirrored.** In a
+  schema-dependent package, a bespoke (non-CRUD) operation is a `graphql()`
+  document imported from `@angee/gql/<schema>`; its
   result/variables types come from the generated `TypedDocumentNode` (use
   `DocumentType<typeof Doc>` for named result types and
   `DocumentVariables<typeof Doc>` from `@angee/refine` for named variable types) —
@@ -126,8 +137,9 @@ TanStack apply the URL-owned filter object to in-memory rows.
   `documents.public.ts` → public. An op must live in a `documents*.ts` file (the
   codegen glob does not scan inline ops), and a console op placed in a
   `documents.public.ts` (or vice versa) fails codegen loudly against the wrong
-  schema. Keep valibot only to narrow a `JSON`-scalar field the schema leaves
-  opaque (parse, do not assert).
+  schema. Narrow a `JSON`-scalar object with `recordValue` from `@angee/refine`,
+  then validate its domain fields at their owner; valibot adoption is a deferred
+  stack decision.
 - **Record-targeted action mutations are derived, not authored.** For a
   `<field>(id: ID!, ...required scalar arguments): ActionResult` mutation, call
   `useActionMutation<ActionFieldName>("field")` from `@angee/ui` in headless
@@ -175,11 +187,26 @@ TanStack apply the URL-owned filter object to in-memory rows.
   the default `"console"` layout. Addon manifest tests call
   `expectValidBaseAddon(manifest)` from `@angee/app/testing` and keep only
   genuinely addon-specific assertions.
+- Route declarations are the only place a URL path is spelled. Menus name their
+  target with `route:`; components resolve addon-local routes with
+  `useRouteHref`, and resource-backed links use the runtime resource lookup.
+  Cross-addon render/event links use the non-throwing route probe and disappear
+  or disable when their dependency is not composed; full app composition still
+  fails fast on invalid declarations. Keep query-string codecs addon-local.
+  `resourcePageRoutes` names record children `${collectionName}.record` by
+  default; use `detailName` only when preserving a deliberate established name.
 - Compose addon capabilities at build time through the manifest + `composeAddons`
   (widgets, i18n, icons, forms, slots, previews, and menu declarations); never
   register or mutate a module-global at runtime. `usePreviews`/`useWidget`/
   `useSlot` read the composed `AppRuntime`; menu declarations project into refine
   resources and chrome renders refine `useMenu`.
+- **A resource registry key is the emitted canonical `modelLabel`** (for example
+  `"integrate.OAuthClient"`). Addon composition may accept a unique bare or
+  lowercase spelling only because `createApp` canonicalizes it fail-fast against
+  the merged schema inventory; runtime render lookups degrade with a development
+  warning when a spelling is unavailable in the active schema. Durable manifests,
+  authored-operation labels, routes, forms, and runtime maps store the canonical
+  qualified label.
 - Shell-published surfaces (`usePrimaryPane`/`PrimaryPanePublisher`,
   `useChatterContent`) are effect publishers. Publish memoized nodes/content,
   and keep any callbacks they close over stable; when a callback wraps
@@ -205,7 +232,7 @@ TanStack apply the URL-owned filter object to in-memory rows.
   view.
 - One component tree. Extend or register; do not fork.
 - **Slots are additive extension points.** Use them before copying a component.
-  A slot entry is uniquely keyed by `(slot, id)` and a second addon claiming one
+  A slot entry is uniquely keyed by `(slot, model?, impl?, id)` and a second addon claiming one
   **collides** at composition — it is never a silent override decided by addon
   array order. So an addon contributes only to a key it owns. To vary a
   contribution per row, key it on the fact the row already carries (an
@@ -238,11 +265,11 @@ TanStack apply the URL-owned filter object to in-memory rows.
   `use<Addon>T()` in an addon (created with `createNamespaceT(ns, fallback)`),
   with namespace-relative English keys in the namespace bundle. A prop whose default is a
   label defaults to `undefined` and resolves `?? t("key")` in the body — never call
-  `t()` in a default parameter. No hardcoded copy in a component. Two boundaries
-  stay plain English: an addon's declarative manifest menu/route `label:` (chrome
-  data, not in-component copy — none are routed), and a form registered via
-  `forms:` (a statically parsed element, never rendered as a component, so a hook
-  cannot reach its `<Field label>`).
+  `t()` in a default parameter. No hardcoded copy in a component. Three boundaries
+  stay plain English: an addon's declarative manifest menu/route `label:` and
+  chatter/drawer contribution labels (chrome data, not in-component copy — none
+  are routed), and a form registered via `forms:` (a statically parsed element,
+  never rendered as a component, so a hook cannot reach its `<Field label>`).
 - Every icon is a registered glyph rendered via `<Glyph name="…">` (or the
   `renderGlyph(icon)` slot adapter). A component never imports `lucide-react`
   directly: base glyphs live in `chrome/icon-registry.ts`; an addon contributes its
@@ -268,6 +295,8 @@ TanStack apply the URL-owned filter object to in-memory rows.
   action controls or hooks, but they do not own table mechanics, duplicate route
   params, cache state, bespoke loading/error surfaces, or local copies of shared
   resource-view state.
+- A row verb is a `rowActions` declaration on `ListView`/`RowsListView`, never a
+  hand-rolled trailing column with local `useConfirm`/`toast.danger` ceremony.
 - **Two-collection settings pages are a sanctioned family, not a double toolbar.**
   A `SettingsShell` may stack several `SettingsSection`s, each wrapping its own
   `ResourceList`/`DrawerResourceList` (integrate Templates: template sources +
@@ -327,12 +356,12 @@ TanStack apply the URL-owned filter object to in-memory rows.
   duplicated. Group your fields for the stacked layout and tabbing is one prop away.
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
-  "OAuthClient" }` (one route per resource, build-time fail-fast) — and the
+  "integrate.OAuthClient" }` (one route per resource, build-time fail-fast) — and the
   relation widget resolves it through `useResourceRoute(resource)` to show a
   "follow" arrow to the selected record's detail page (breadcrumbs come from
   refine). A resource with no routed page simply shows no arrow.
 - Register a resource's create form once via `defineAddon`'s
-  `forms: { Model: <…Field/Group children…> }`; the standard renderer uses it
+  `forms: { "integrate.OAuthClient": <…Field/Group children…> }`; the standard renderer uses it
   wherever that resource is created, including the relation-picker inline create. Use
   it when the create input diverges from the read projection (write-only secrets,
   scalar-id pickers, a kind discriminator). With a registered form,
@@ -347,7 +376,10 @@ TanStack apply the URL-owned filter object to in-memory rows.
 - Toolbar/action dialogs with ordinary field inputs compose `MutationDialog` from
   `@angee/ui`. It owns the `DialogForm` scaffold, value reset, required gating,
   submit busy/error state, and FieldDescriptor widget rendering; addons provide
-  fields, mutation variables, and domain result handling. A **record action that
+  fields, mutation variables, and domain result handling. Decode raw controls at
+  that boundary with `parseValues` and `mutationDialogValueCodecs`; ordinary text
+  trims and maps empty input to `null`, while explicit required/verbatim codecs
+  guard their authored field contracts. A **record action that
   collects typed args** — relation pickers, a relation list prefilled from the
   invoking selection/record, scalars — instead declares `args` + `submit` on its
   `<Action>`; `RecordActionBar` opens `ActionFormDialog`, which fires the authored
@@ -385,6 +417,9 @@ TanStack apply the URL-owned filter object to in-memory rows.
 
 Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 
+- **Plural copy uses native i18next suffixes:** declare `key_one`/`key_other` in the bundle and call `t("key", { count })` with a numeric count; `createNamespaceT` applies the same `Intl.PluralRules` selection in provider-less renders.
+- **Server preferences are per-tab-session snapshots:** they have no cross-tab immediacy, and rapid multi-tab writes are last-writer-wins until the deferred `changes()` path lands.
+- **A nested list must pass `scope="local"` to keep its own `pageSize` and view;** the default inherited scope intentionally reuses the ambient resource-view state.
 - **A filtered `pnpm typecheck`/`test` skips the root `pretypecheck: codegen` hook.**
   The root `typecheck`/`test` scripts run `pnpm codegen` first; `pnpm --filter <pkg>
   typecheck` (and filtered vitest) does not. After any SDL change it then runs against
@@ -563,7 +598,7 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   writes only (no live push, no error). Add the subscription to opt a model into
   live updates; omit it and you simply get local-write invalidation.
 - **A `createDefaults` seed submits on create even when `readOnly`.** `ResourceList`'s
-  `createDefaults` seeds the create form, and `FormView.mutationData` submits a create
+  `createDefaults` seeds the create form, and `form-view-model.ts`'s `mutationData` submits a create
   seed even for a `readOnly`/`createOnly` field — whether the seed is the field's own
   `defaultValue` or a page-level `createDefaults` entry — so a seeded read-only field is
   no longer silently dropped from the create payload. Prefer `createOnly` (editable on

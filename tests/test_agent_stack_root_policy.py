@@ -14,17 +14,17 @@ def test_workspace_skill_prefers_an_existing_ancestor_stack_root() -> None:
 
     for contract in (
         'if test -f "$candidate/angee.yaml"; then',
-        'angee_root=$(cd "$candidate" && pwd -P)',
-        'test -f "$repo_root/.angee/angee.yaml"',
-        'angee_root=$(cd "$repo_root/.angee" && pwd -P)',
+        "walk up from the current\ndirectory",
         'angee --root "$angee_root" ws create',
         "do not run `angee init`",
     ):
         assert contract in skill
 
-    ancestor_probe = skill.index('if test -f "$candidate/angee.yaml"; then')
-    local_overlay_fallback = skill.index('test -f "$repo_root/.angee/angee.yaml"')
-    assert ancestor_probe < local_overlay_fallback
+    # The checkout-local .angee/ dev overlay died with angee v0.9.0: an
+    # ancestor stack is the only owner, and a workspace root is not a git
+    # repository, so resolution never starts from git rev-parse.
+    assert ".angee/angee.yaml" not in skill
+    assert "git rev-parse --show-toplevel) || exit 1" not in skill
     assert "Run Angee commands from the repository root" not in skill
 
 

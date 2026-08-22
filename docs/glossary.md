@@ -12,7 +12,8 @@ deterministic product surface. It owns the seams, not the concerns.
 
 **Addon** — the unit of capability. An addon declares a contract (source models,
 operations, routes, slots, resources) that the composer assembles into a project.
-Everything, including the framework core, is an addon.
+Everything, including the framework core, is an addon. **Addon** is also the
+user-facing name; **App** is reserved for a domain root in the product rail.
 
 **Framework addon** — an addon that is part of Angee itself. The framework core is
 the foundational framework addon; other base addons ship with Angee and build on
@@ -129,6 +130,10 @@ of an agent or automation. Non-login (unusable password, excluded from OIDC
 linking and user pickers); its lifecycle is owned by the thing it represents
 (the agents manager creates, renames, and deactivates it with its `Agent`).
 
+**Agent** — an autonomous actor represented by an `agents.Agent` and linked
+service-account user row. The agent keeps its own authorization species while
+the user row owns database attribution.
+
 **Resource file** — tabular data owned by an addon and imported idempotently by
 tier (`master`, `install`, `demo`). Addons list resource files in their
 `addon.toml` `[resources]` manifest.
@@ -173,6 +178,15 @@ intent remain separate facts.
 private-message substrate.
 
 ## Frontend
+
+**Files / `storage`** — **Files** is the user-facing product name; `storage` is
+the technical addon, route, model, and i18n namespace.
+
+**AI / `Inference*`** — **AI** is the user-facing product name; `Inference*`
+names the technical models, resources, routes, and APIs behind it.
+
+**Permissions / `iam`** — **Permissions** is the user-facing product name;
+`iam` is the technical addon, route, model, and i18n namespace.
 
 **`defineAddon`** — the frontend entry point an addon uses to contribute routes,
 views, slots, and other UI to the composition.
