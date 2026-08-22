@@ -22,6 +22,17 @@ describe("MetricStrip", () => {
     expect(screen.getByText("Relations")).toBeTruthy();
   });
 
+  test("prominent density keeps tone labels in the same metric family", () => {
+    const { container } = render(
+      <MetricStrip
+        density="prominent"
+        metrics={[{ label: "Failures", value: 4, tone: "danger" }]}
+      />,
+    );
+    expect(screen.getByText("Failures")).toBeTruthy();
+    expect(container.querySelector("dd")?.className).toContain("text-2xl");
+  });
+
   test("a non-navigable tile renders no link", () => {
     render(<MetricTile label="Relations" value={3} />);
     expect(screen.queryByRole("link")).toBeNull();

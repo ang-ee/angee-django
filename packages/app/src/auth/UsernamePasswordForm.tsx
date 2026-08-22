@@ -2,6 +2,7 @@ import { useId, useState, type FormEvent, type ReactNode } from "react";
 
 import { errorMessage } from "@angee/ui/feedback/index";
 import { useUiT } from "@angee/ui/i18n";
+import { Alert } from "@angee/ui/ui/alert";
 import { Button } from "@angee/ui/ui/button";
 import { FieldControl, FieldLabel, FieldRoot } from "@angee/ui/ui/field";
 import { useLoginWithPassword } from "../providers/auth";
@@ -92,13 +93,7 @@ export function UsernamePasswordForm({
       </FieldRoot>
 
       {hasError ? (
-        <p
-          id={errorId}
-          role="alert"
-          className="rounded-6 border border-danger bg-danger-soft px-3 py-2 text-13 text-danger-text"
-        >
-          {error}
-        </p>
+        <Alert id={errorId} tone="danger">{error}</Alert>
       ) : null}
 
       <Button

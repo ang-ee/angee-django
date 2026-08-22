@@ -8,8 +8,8 @@
 //   unique — a second addon claiming one is a collision, and a composition-time
 //   error (app boot;
 //   `pnpm run test` composes the full addon set — `typecheck`/`build` do not).
-// - Chatter tabs dedupe by `id`, last addon wins, so a later addon can override a
-//   default.
+// - Chatter tabs are unique by `(model?, id)`; a second addon claiming the same
+//   scoped tab is a composition-time collision.
 //
 // The ordered lists then sort by `sequence`, never by addon order.
 
@@ -160,7 +160,11 @@ function mergeByKey<T extends { sequence?: number }>(
 export function mergeChatterContributions(
   ...groups: readonly (readonly ChatterContribution[])[]
 ): ChatterContribution[] {
-  return mergeByKey(groups, (tab) => tab.id);
+  return mergeByKey(
+    groups,
+    (tab) => `${tab.model ?? ""}\0${tab.id}`,
+    "chatter tab",
+  );
 }
 
 export function mergeSlotContributions(
@@ -280,7 +284,11 @@ export function composeAddons(
     icons,
     forms,
     dataProviders,
-    chatter: mergeChatterContributions(...addons.map((a) => a.chatter ?? [])),
+    chatter: mergeChatterContributions(
+      ...addons.map((addon) =>
+        normalizeChatterContributions(addon.chatter ?? [], canonicalizeModel),
+      ),
+    ),
     slots: mergeSlotContributions(
       ...addons.map((addon) =>
         normalizeSlotContributions(
@@ -293,6 +301,17 @@ export function composeAddons(
     drawers: mergeDrawerContributions(...addons.map((a) => a.drawers ?? [])),
     previews,
   };
+}
+
+function normalizeChatterContributions(
+  contributions: readonly ChatterContribution[],
+  canonicalizeModel: (spelling: string) => string,
+): ChatterContribution[] {
+  return contributions.map((entry) =>
+    entry.model === undefined
+      ? entry
+      : { ...entry, model: canonicalizeModel(entry.model) },
+  );
 }
 
 function normalizeSlotContributions(

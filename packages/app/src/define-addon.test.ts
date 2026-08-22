@@ -108,6 +108,28 @@ describe("composeAddons", () => {
     ]);
   });
 
+  test("keys chatter tabs by model and id and rejects a duplicate scope", () => {
+    const party = defineAddon({
+      id: "party-history",
+      chatter: [{ id: "history", model: "parties.Party" }],
+    });
+    const circle = defineAddon({
+      id: "circle-history",
+      chatter: [{ id: "history", model: "parties.Circle" }],
+    });
+    expect(
+      composeAddons([party, circle], IDENTITY_CANONICALIZER).chatter,
+    ).toHaveLength(2);
+
+    const duplicate = defineAddon({
+      id: "duplicate-party-history",
+      chatter: [{ id: "history", model: "parties.Party" }],
+    });
+    expect(() =>
+      composeAddons([party, duplicate], IDENTITY_CANONICALIZER),
+    ).toThrow(/chatter tab/);
+  });
+
   test("two addons claiming one slot entry is a collision, not an override", () => {
     // Silently letting addon array order pick the winner hid a real clash (the
     // integrate/whatsapp record-verb ids). An addon that means to specialize
@@ -126,7 +148,7 @@ describe("composeAddons", () => {
     );
   });
 
-  test("canonicalizes route, form, and typed model-slot declarations before merging", () => {
+  test("canonicalizes route, form, chatter, and typed model-slot declarations before merging", () => {
     const canonical = (spelling: string) =>
       spelling === "Note" || spelling === "note" ? "notes.Note" : spelling;
     const composed = composeAddons([
@@ -134,6 +156,7 @@ describe("composeAddons", () => {
         id: "notes",
         routes: [{ name: "notes.home", path: "/notes", resource: "Note" }],
         forms: { note: "FORM" },
+        chatter: [{ id: "history", model: "Note" }],
         slots: [
           {
             slot: "form-view.sections",
@@ -146,6 +169,7 @@ describe("composeAddons", () => {
 
     expect(composed.routes[0]?.resource).toBe("notes.Note");
     expect(composed.forms).toEqual({ "notes.Note": "FORM" });
+    expect(composed.chatter[0]?.model).toBe("notes.Note");
     expect(composed.slots[0]).toMatchObject({
       slot: "form-view.sections",
       model: "notes.Note",

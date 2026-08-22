@@ -7,6 +7,7 @@ import type {
 
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
+import { Alert } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Dialog } from "../ui/dialog";
 import { DeletePreviewTree } from "./DeletePreviewTree";
@@ -50,11 +51,11 @@ export function DeletePreviewDialog({
           <Dialog.Body className="space-y-4">
             <DeleteSummary preview={preview} overflowCount={overflowCount} />
             {preview.hasBlockers ? (
-              <div className="rounded-6 border border-danger/35 bg-danger-soft px-3 py-2 text-13 text-danger-text">
+              <Alert tone="danger">
                 {blockedRecordCount > 0
                   ? t("deletePreview.blockedCount", { count: blockedRecordCount })
                   : t("deletePreview.blockedGeneric")}
-              </div>
+              </Alert>
             ) : null}
             <DeletePreviewTree nodes={treeNodes} />
           </Dialog.Body>

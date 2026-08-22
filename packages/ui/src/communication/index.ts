@@ -51,6 +51,7 @@ export {
   MessageRow,
   ReactionBar,
   ReactionPicker,
+  reactionsFromGroups,
   messageComposerInputClassName,
   type MessageActionsProps,
   type MessageAttachmentChipProps,
@@ -66,5 +67,7 @@ export {
   type MessageRowProps,
   type Reaction,
   type ReactionBarProps,
+  type ReactionGroup,
+  type ReactionGroupCopy,
   type ReactionPickerProps,
 } from "./message";

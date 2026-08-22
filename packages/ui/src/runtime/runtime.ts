@@ -363,12 +363,28 @@ export function useNamespaceT(
   const t = useT(namespace);
   return useCallback(
     (key: string, vars: MessageVars = {}) => {
-      const defaultValue = fallback[key] ?? key;
+      const defaultValue = fallbackTemplate(key, fallback, vars);
       const result = t(key, { ...vars, defaultValue });
       return result === key ? interpolateFallback(defaultValue, vars) : result;
     },
     [t, fallback],
   );
+}
+
+const ENGLISH_PLURAL_RULES = new Intl.PluralRules("en");
+
+function fallbackTemplate(
+  key: string,
+  fallback: MessageResources,
+  vars: MessageVars,
+): string {
+  const count = vars.count;
+  if (typeof count === "number" && Number.isFinite(count)) {
+    const category = ENGLISH_PLURAL_RULES.select(count);
+    const plural = fallback[`${key}_${category}`] ?? fallback[`${key}_other`];
+    if (plural !== undefined) return plural;
+  }
+  return fallback[key] ?? key;
 }
 
 function interpolateFallback(template: string, vars: MessageVars): string {

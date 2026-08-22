@@ -256,11 +256,13 @@ describe("React architecture guardrails", () => {
   test("i18n bundle liveness flags a planted dead key", () => {
     const fixtureKeys: I18nBundleKey[] = [
       { namespace: "fixture", key: "live", file: "fixture/i18n.ts" },
+      { namespace: "fixture", key: "items_one", file: "fixture/i18n.ts" },
+      { namespace: "fixture", key: "items_other", file: "fixture/i18n.ts" },
       { namespace: "fixture", key: "planted.dead", file: "fixture/i18n.ts" },
       { namespace: "ui", key: "addon.only", file: "fixture/ui-i18n.ts" },
     ];
     const fixtureSources: I18nSourceText[] = [
-      { namespace: "fixture", file: "fixture/view.tsx", text: 't("live")' },
+      { namespace: "fixture", file: "fixture/view.tsx", text: 't("live"); t("items", { count })' },
       { namespace: "addon", file: "fixture/addon-view.tsx", text: 'useUiT()("addon.only")' },
     ];
 
@@ -724,9 +726,10 @@ function unusedI18nKeys(
   return bundleKeys
     .filter((entry) => {
       if (dynamicKeys.has(`${entry.namespace}\0${entry.key}`)) return false;
+      const referencedKey = entry.key.replace(/_(?:one|other)$/, "");
       return !sourceTexts.some((source) =>
         (entry.namespace === "ui" || source.namespace === entry.namespace)
-        && containsQuotedKey(source.text, entry.key));
+        && containsQuotedKey(source.text, referencedKey));
     })
     .map((entry) => `${entry.namespace}.${entry.key} (${workspaceRelative(entry.file)})`)
     .sort();

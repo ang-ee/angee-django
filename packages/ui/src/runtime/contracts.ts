@@ -79,10 +79,14 @@ export interface ChatterViewContext {
   view: ChatterView;
 }
 
-/** A chatter aside tab; merges by `id` (last wins) and orders by `sequence`. */
+/** A chatter aside tab; unique by `(model?, id)` and ordered by `sequence`. */
 export interface ChatterContribution {
   id: string;
   sequence?: number;
+  /** Canonical model scope; the app normalizes authored spellings at composition. */
+  model?: string;
+  /** Additional declarative scope evaluated by the shell before counts or rendering. */
+  when?: (context: ChatterViewContext) => boolean;
   label?: ReactNode;
   icon?: string;
   count?: number;

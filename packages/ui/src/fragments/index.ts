@@ -36,12 +36,6 @@ export {
   type MetaSectionProps,
 } from "./MetaGrid";
 export {
-  MetricGrid,
-  metricGridVariants,
-  type MetricGridProps,
-  type MetricGridTile,
-} from "./MetricGrid";
-export {
   LogStream,
   logStreamVariants,
   type LogStreamProps,
@@ -50,6 +44,7 @@ export {
   MetricStrip,
   MetricTile,
   metricStripVariants,
+  type MetricDensity,
   type MetricStripProps,
   type MetricTileProps,
   type MetricTileValue,

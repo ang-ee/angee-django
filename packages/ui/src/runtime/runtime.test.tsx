@@ -18,6 +18,7 @@ import {
   useRouteHref,
   useRuntimeAuth,
   useRuntimeUserPreferences,
+  useNamespaceT,
   useSlot,
   useT,
   useWidget,
@@ -295,6 +296,20 @@ describe("useT", () => {
   test("falls back to the key when the namespace lacks it", () => {
     const { result } = renderHook(() => useT("notes"));
     expect(result.current("missing")).toBe("missing");
+  });
+});
+
+describe("useNamespaceT", () => {
+  test("resolves English one/other bundles without an i18n provider", () => {
+    const fallback = {
+      item_one: "{count} item",
+      item_other: "{count} items",
+    };
+    const { result } = renderHook(() => useNamespaceT("fixture", fallback));
+
+    expect(result.current("item", { count: 1 })).toBe("1 item");
+    expect(result.current("item", { count: 2 })).toBe("2 items");
+    expect(result.current("item", { count: 0 })).toBe("0 items");
   });
 });
 

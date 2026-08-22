@@ -57,9 +57,16 @@ export function Chatter({
   // replaces its predecessor in place; a new id appends. So a page contributing a
   // `details`/`backlinks` tab keeps the defaults it does not override.
   const viewContext = useActiveChatterView(runtime.chatterRoutes ?? []);
+  const activeContributions = React.useMemo(
+    () =>
+      (runtime.chatter ?? []).filter((contribution) =>
+        contributionMatches(contribution, viewContext),
+      ),
+    [runtime.chatter, viewContext],
+  );
   const contributedTabs = React.useMemo(
-    () => tabsFromContributions(runtime.chatter ?? [], viewContext, counts),
-    [runtime.chatter, viewContext, counts],
+    () => tabsFromContributions(activeContributions, viewContext, counts),
+    [activeContributions, viewContext, counts],
   );
   const resolvedTabs = mergeChatterTabs(
     defaultTabs(t),
@@ -85,7 +92,7 @@ export function Chatter({
         className,
       )}
     >
-      {(runtime.chatter ?? []).map((contribution) =>
+      {activeContributions.map((contribution) =>
         contribution.useCount ? (
           <ChatterCountProbe
             key={contribution.id}
@@ -135,6 +142,20 @@ export function Chatter({
       ) : null}
     </aside>
   );
+}
+
+function contributionMatches(
+  contribution: ChatterContribution,
+  context: ChatterViewContext,
+): boolean {
+  if (
+    contribution.model !== undefined &&
+    (context.route?.canonicalLabel ?? context.route?.modelLabel) !==
+      contribution.model
+  ) {
+    return false;
+  }
+  return contribution.when?.(context) ?? true;
 }
 
 function useActiveChatterView(
@@ -200,9 +221,6 @@ function tabsFromContributions(
 ): readonly ChatterTab[] {
   return contributions.flatMap((contribution) => {
     if (!contribution.render) return [];
-    // A render that returns null declares itself not applicable to the active
-    // view (e.g. a party-only tab on a non-party record): the tab is dropped,
-    // not shown empty.
     const children = contribution.render(context);
     if (children == null || children === false) return [];
     const count = counts[contribution.id] ?? contribution.count;

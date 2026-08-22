@@ -18,7 +18,7 @@ export interface MetricProps {
   detail?: ReactNode;
 }
 
-/** Render-less marker; `DashboardView` collects these into its `MetricGrid`. */
+/** Render-less marker; `DashboardView` collects these into one prominent metric strip. */
 export function Metric(_props: MetricProps): null {
   return null;
 }

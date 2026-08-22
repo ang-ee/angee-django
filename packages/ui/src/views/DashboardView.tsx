@@ -1,13 +1,14 @@
 import type { ReactElement, ReactNode } from "react";
 
-import { MetricGrid, type MetricGridTile } from "../fragments/MetricGrid";
+import { MetricStrip, type MetricTileValue } from "../fragments/MetricStrip";
 import { cn } from "../lib/cn";
 import type { MetricProps } from "./dashboard/Metric";
 import { pageChildren, pageElementProps } from "./page/types";
 
 /**
  * The aggregate View: authored TSX of `<Metric>` Elements folded into one
- * `MetricGrid` band, plus any cards/panels below. Purely presentational — the
+ * prominent-density `MetricStrip` band, plus any cards/panels below. Purely
+ * presentational — the
  * page supplies the values (a bespoke composite read or several resource
  * hooks) — so it renders standalone as a page body (the overview surfaces) and
  * as a view-switcher peer of a list.
@@ -24,7 +25,7 @@ export function DashboardView({
   children,
   className,
 }: DashboardViewProps): ReactElement {
-  const metrics: MetricGridTile[] = [];
+  const metrics: MetricTileValue[] = [];
   const content: ReactNode[] = [];
   for (const child of pageChildren(children)) {
     const metric = pageElementProps<MetricProps>(child, "metric");
@@ -43,7 +44,7 @@ export function DashboardView({
 
   return (
     <div className={cn("flex flex-col gap-6", className)}>
-      {metrics.length > 0 ? <MetricGrid metrics={metrics} /> : null}
+      {metrics.length > 0 ? <MetricStrip density="prominent" metrics={metrics} /> : null}
       {content}
     </div>
   );

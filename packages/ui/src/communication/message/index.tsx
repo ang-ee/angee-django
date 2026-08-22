@@ -364,6 +364,59 @@ export interface Reaction {
   title?: string;
 }
 
+interface ReactionGroupHandle {
+  display_name?: string | null;
+  value?: string | null;
+}
+
+export interface ReactionGroup {
+  reaction: string;
+  count: number;
+  self_reacted?: boolean;
+  handles: readonly ReactionGroupHandle[];
+}
+
+export interface ReactionGroupCopy {
+  count: (
+    values: Record<string, string> & { reaction: string; count: string },
+  ) => string;
+  named: (
+    values: Record<string, string> & { reaction: string; names: string },
+  ) => string;
+}
+
+/**
+ * Projects transport reaction groups into the presentational `ReactionBar`
+ * contract. The caller supplies translated copy formatters so the shared owner
+ * keeps the name/no-name grammar while every product routes wording through its
+ * own statically discoverable i18n keys.
+ */
+export function reactionsFromGroups(
+  groups: readonly ReactionGroup[],
+  copy: ReactionGroupCopy,
+): Reaction[] {
+  return groups.map((group) => {
+    const names = group.handles
+      .map((handle) => handle.display_name || handle.value || "")
+      .filter((value) => value.trim() !== "");
+    return {
+      reaction: group.reaction,
+      count: group.count,
+      active: group.self_reacted,
+      title:
+        names.length === 0
+          ? copy.count({
+              reaction: group.reaction,
+              count: group.count.toLocaleString(),
+            })
+          : copy.named({
+              reaction: group.reaction,
+              names: names.join(", "),
+            }),
+    };
+  });
+}
+
 interface ReactionPillProps {
   /** The reaction glyph (an emoji). */
   reaction: string;

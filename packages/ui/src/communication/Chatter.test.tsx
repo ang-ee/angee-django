@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import {
   Outlet,
   RouterProvider,
@@ -9,7 +9,7 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { afterEach, beforeAll, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 import { baseIcons } from "../chrome/icon-registry";
 import {
@@ -82,6 +82,56 @@ describe("Chatter", () => {
       name: /Comments\s*7/,
     });
     expect(commentsTab.textContent).not.toContain("2");
+  });
+
+  test("scopes before rendering while canonical models include MTI subtypes", async () => {
+    const hiddenCount = vi.fn(() => 9);
+    const hiddenRender = vi.fn(() => <span>Wrong model</span>);
+    const blockedRender = vi.fn(() => <span>Blocked</span>);
+    renderChatter({
+      chatterRoutes: [
+        {
+          name: "notes.record",
+          path: "/records/$id",
+          viewType: "notes/record",
+          modelLabel: "crm.Vip",
+          canonicalLabel: "parties.Party",
+          recordParam: "id",
+        },
+      ],
+      chatter: [
+        {
+          id: "wrong-model",
+          model: "notes.Note",
+          label: "Wrong model",
+          useCount: hiddenCount,
+          render: hiddenRender,
+        },
+        {
+          id: "blocked",
+          model: "parties.Party",
+          when: () => false,
+          label: "Blocked",
+          render: blockedRender,
+        },
+        {
+          id: "history",
+          model: "parties.Party",
+          when: (context) => context.view.kind === "record",
+          label: "History",
+          render: (context) => <span>History for {context.view.sqid}</span>,
+        },
+      ],
+    });
+
+    const historyTab = await screen.findByRole("tab", { name: "History" });
+    fireEvent.click(historyTab);
+    expect(screen.getByText("History for rec_1")).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Wrong model" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Blocked" })).toBeNull();
+    expect(hiddenCount).not.toHaveBeenCalled();
+    expect(hiddenRender).not.toHaveBeenCalled();
+    expect(blockedRender).not.toHaveBeenCalled();
   });
 });
 
