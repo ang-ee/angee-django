@@ -418,7 +418,7 @@ TanStack apply the URL-owned filter object to in-memory rows.
 Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 
 - **Plural copy uses native i18next suffixes:** declare `key_one`/`key_other` in the bundle and call `t("key", { count })` with a numeric count; `createNamespaceT` applies the same `Intl.PluralRules` selection in provider-less renders.
-- **Server preferences are per-tab-session snapshots:** they have no cross-tab immediacy, and rapid multi-tab writes are last-writer-wins until the deferred `changes()` path lands.
+- **Server preference writes are live but not transactional across tabs:** each delivered `changes()` event rebases later patches immediately, while whole-document writes already in flight can still be accepted in server order and the last accepted write wins.
 - **A nested list must pass `scope="local"` to keep its own `pageSize` and view;** the default inherited scope intentionally reuses the ambient resource-view state.
 - **A filtered `pnpm typecheck`/`test` skips the root `pretypecheck: codegen` hook.**
   The root `typecheck`/`test` scripts run `pnpm codegen` first; `pnpm --filter <pkg>

@@ -80,9 +80,9 @@ class ChangeReadGate:
     ) -> ChangeEvent | None:
         """Return a readable change event, or ``None`` when hidden."""
 
-        change = payload if isinstance(payload, ChangePayload) else ChangePayload.from_mapping(payload)
+        change = self._change(payload)
         if not self.resource_type:
-            return ChangeEvent.from_payload(change)
+            return self._emit(change)
 
         resource = ObjectRef(self.resource_type, change.resource_identifier)
         allowed = check_field_access(
@@ -93,6 +93,22 @@ class ChangeReadGate:
         )
         if not allowed.allowed:
             return None
+        return self._emit(change)
+
+    def _change(
+        self,
+        payload: Mapping[str, Any] | ChangePayload,
+    ) -> ChangePayload:
+        """Normalize one channel value into the gate's policy input."""
+
+        return payload if isinstance(payload, ChangePayload) else ChangePayload.from_mapping(payload)
+
+    def _emit(self, change: ChangePayload) -> ChangeEvent:
+        """Redact one policy-approved change and project its GraphQL event."""
+
+        if not self.resource_type:
+            return ChangeEvent.from_payload(change)
+        resource = ObjectRef(self.resource_type, change.resource_identifier)
         return ChangeEvent.from_payload(self._redact(change, resource))
 
     def _redact(
@@ -122,3 +138,28 @@ class ChangeReadGate:
             if not result.allowed:
                 denied.add(field_name)
         return payload.redacted(denied)
+
+
+class ActorSelfChangeReadGate(ChangeReadGate):
+    """Expose changes only when the changed resource is the subscribing actor.
+
+    Self-service schema surfaces use this gate when ordinary row-read permission
+    is intentionally broader than the private event stream. The actor/resource
+    identity is still derived by REBAC; no session or model-specific identifier
+    is reimplemented here.
+    """
+
+    def filter(
+        self,
+        payload: Mapping[str, Any] | ChangePayload,
+    ) -> ChangeEvent | None:
+        """Return only this actor's own resource change event."""
+
+        change = self._change(payload)
+        if self.actor.optional_relation:
+            return None
+        if self.resource_type != self.actor.subject_type:
+            return None
+        if change.resource_identifier != self.actor.subject_id:
+            return None
+        return self._emit(change)

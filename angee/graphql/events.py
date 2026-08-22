@@ -48,12 +48,17 @@ class ChangePayload:
         *,
         action: str,
         update_fields: Iterable[str] | None,
+        readable_fields: Iterable[str] = (),
         during_ingestion: bool = False,
     ) -> ChangePayload:
         """Return the channel payload for a saved or deleted model instance."""
 
         changed_fields = tuple(sorted(str(field) for field in update_fields)) if update_fields is not None else None
-        changed_values = _changed_values(instance, changed_fields) if changed_fields is not None else None
+        changed_values = (
+            _changed_values(instance, changed_fields, frozenset(readable_fields))
+            if changed_fields is not None
+            else None
+        )
         resource_id = None
         if model_resource_type(type(instance)):
             resource_id = model_resource_id(instance)
@@ -120,14 +125,16 @@ class ChangePayload:
 def _changed_values(
     instance: models.Model,
     changed_fields: tuple[str, ...],
+    readable_fields: frozenset[str],
 ) -> dict[str, Any]:
-    """Return JSON-safe values for concrete local fields without relation fetches."""
+    """Return projected, JSON-safe local-field values without relation fetches."""
 
     values: dict[str, Any] = {}
     for name in changed_fields:
         field = _concrete_local_field(instance, name)
-        if field is not None:
-            values[name] = json_safe(getattr(instance, field.attname, None))
+        if field is None or not ({name, field.name, field.attname} & readable_fields):
+            continue
+        values[name] = json_safe(getattr(instance, field.attname, None))
     return values
 
 

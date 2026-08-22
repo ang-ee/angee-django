@@ -388,6 +388,27 @@ class DataResourceMetadata:
 
         return {"schemaName": schema_name, **_wire_dataclass(self)}
 
+    def readable_model_field_names(self) -> frozenset[str]:
+        """Return concrete model field names this resource projects readably.
+
+        Change publication consumes this fact before serializing partial-save
+        values.  The resource projection owns wire visibility, including an
+        explicit Strawberry field name; the publisher must not infer readable
+        columns from the Django model alone.
+        """
+
+        if self.model is None or self.node_type is None:
+            return frozenset()
+        readable = {field.name for field in self.fields if field.readable}
+        names: set[str] = set()
+        for model_field in self.model._meta.local_fields:
+            wire_name = resource_wire_field_name(self.node_type, model_field.name)
+            if wire_name not in readable:
+                continue
+            names.add(model_field.name)
+            names.add(model_field.attname)
+        return frozenset(names)
+
 
 def data_resource_metadata(surface: object) -> tuple[DataResourceMetadata, ...]:
     """Return model resource metadata attached to ``surface``."""
