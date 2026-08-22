@@ -40,6 +40,8 @@ export const enMessagingMessages: Record<string, string> = {
   // Message row affordances.
   "message.author": "Someone",
   "message.reactions": "Reactions",
+  "message.reactionCount": "{reaction} {count}",
+  "message.reactionTitle": "{reaction} by {names}",
   "message.markDone": "Mark message done",
   "message.reply": "Reply to message",
   "message.star": "Star message",

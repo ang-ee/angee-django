@@ -16,6 +16,9 @@ import {
   LoadingPanel,
   ResourceEdit,
   ResourceList,
+  SplitPane,
+  SplitPaneHandle,
+  SplitPanes,
   useEnumOptions,
   useImplPrefill,
   type ActionContext,
@@ -213,8 +216,12 @@ function WorkflowCanvas({
   }
 
   return (
-    <div className="grid h-full min-h-[34rem] grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)] overflow-hidden bg-canvas">
-      <div className="relative min-h-0 border-r border-border-subtle">
+    <SplitPanes
+      autoSave="workflows.canvas"
+      panelIds={["graph", "inspector"]}
+      className="h-full min-h-[34rem] bg-canvas"
+    >
+      <SplitPane id="graph" defaultSize={68} minSize={42} className="relative">
         {steps.length === 0 ? (
           <EmptyState
             fill
@@ -249,13 +256,16 @@ function WorkflowCanvas({
         <div className="absolute inset-x-3 bottom-3">
           <ErrorBanner description={mutationError} />
         </div>
-      </div>
-      <CanvasInspector
-        selectedStep={selectedStep}
-        selectedEdge={selectedEdge}
-        onChanged={refreshGraph}
-      />
-    </div>
+      </SplitPane>
+      <SplitPaneHandle />
+      <SplitPane id="inspector" defaultSize={32} minSize={22} collapsible>
+        <CanvasInspector
+          selectedStep={selectedStep}
+          selectedEdge={selectedEdge}
+          onChanged={refreshGraph}
+        />
+      </SplitPane>
+    </SplitPanes>
   );
 }
 

@@ -573,10 +573,9 @@ function buildSchemaGraph(
           highlighted,
           title: titleLabel(relation.name),
           code: relation.name,
-          detail:
-            relation.allowed_subject_types.length === 1
-              ? t("schema.subjectCount.one", { count: relation.allowed_subject_types.length })
-              : t("schema.subjectCount.other", { count: relation.allowed_subject_types.length }),
+          detail: t("schema.subjectCount", {
+            count: relation.allowed_subject_types.length,
+          }),
         }),
       );
       edges.push({
@@ -601,10 +600,9 @@ function buildSchemaGraph(
           highlighted,
           title: titleLabel(permission.name),
           code: permission.name,
-          detail:
-            permission.conditions.length === 1
-              ? t("schema.conditionCount.one", { count: permission.conditions.length })
-              : t("schema.conditionCount.other", { count: permission.conditions.length }),
+          detail: t("schema.conditionCount", {
+            count: permission.conditions.length,
+          }),
         }),
       );
 

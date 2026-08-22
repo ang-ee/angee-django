@@ -19,10 +19,10 @@ import {
   ResourceList,
   avatarInitials,
   errorMessage,
+  reactionsFromGroups,
   type ListColumn,
   type RecordPanelContext,
   type RecordTabDescriptor,
-  type Reaction,
   type StringIdRow,
 } from "@angee/ui";
 
@@ -31,13 +31,13 @@ import {
   FeedMessagesDocument,
   type FeedMessageRow,
 } from "./documents";
-import { usePostsT } from "./i18n";
+import { usePostsT, type PostsT } from "./i18n";
+import { postsReactionCopy } from "./reaction-copy";
 
 const FEED_MODEL = "posts.Feed";
 const FEED_FOLLOW_MODEL = "posts.FeedFollow";
 const FEED_POST_LIMIT = 50;
 
-type PostsT = ReturnType<typeof usePostsT>;
 type FeedFollowRow = StringIdRow;
 
 function FeedPostsTab({ recordId }: RecordPanelContext): React.ReactElement {
@@ -90,7 +90,10 @@ function FeedPostRow({
 }): React.ReactElement {
   const author = senderDisplayName(message.sender, t("post.author"));
   const timestamp = message.sent_at ?? message.created_at;
-  const reactions = messageReactions(message, t);
+  const reactions = reactionsFromGroups(
+    message.reaction_groups,
+    postsReactionCopy(t),
+  );
   const body = hasRenderableParts(message) ? (
     <MessagePartsView parts={message.parts} resolveFileUrl={(file) => file.url} />
   ) : (
@@ -117,34 +120,6 @@ function hasRenderableParts(message: FeedMessageRow): boolean {
   return message.parts.some((part) => {
     const text = part.fragment?.text ?? "";
     return text.trim() !== "" || part.file !== null;
-  });
-}
-
-function messageReactions(message: FeedMessageRow, t: PostsT): Reaction[] {
-  return message.reaction_groups.map((group) => ({
-    reaction: group.reaction,
-    count: group.count,
-    active: group.self_reacted,
-    title: reactionTitle(group, t),
-  }));
-}
-
-function reactionTitle(
-  group: FeedMessageRow["reaction_groups"][number],
-  t: PostsT,
-): string {
-  const names = group.handles
-    .map((handle) => handle.display_name || handle.value)
-    .filter((value): value is string => Boolean(value?.trim()));
-  if (names.length === 0) {
-    return t("post.reactionCount", {
-      reaction: group.reaction,
-      count: group.count.toLocaleString(),
-    });
-  }
-  return t("post.reactionTitle", {
-    reaction: group.reaction,
-    names: names.join(", "),
   });
 }
 

@@ -57,7 +57,7 @@ export function InferenceProvidersPage(): React.ReactElement {
       }
     >
       <List resource={PROVIDER_MODEL}>
-        <Facet field="vendor" label="Vendor" labelField="display_name" />
+        <Facet field="vendor" label={t("facet.vendor")} labelField="display_name" />
         <Column field="name" />
         <Column field="backend_class" />
         <Column field="lifecycle" widget="statusBadge" />

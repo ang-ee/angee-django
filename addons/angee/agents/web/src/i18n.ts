@@ -55,6 +55,12 @@ export const enAgentsMessages: Record<string, string> = {
   "sessions.new": "New agent",
   "sessions.running": "Running",
 
+  // Collection facets shared by the agents catalogue surfaces.
+  "facet.vendor": "Vendor",
+  "facet.source": "Source",
+  "facet.repository": "Repository",
+  "facet.server": "Server",
+
   // McpPage — bespoke form-section labels.
   "mcp.endpoint": "Endpoint",
 

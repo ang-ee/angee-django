@@ -8,7 +8,8 @@ import {
   Button,
   EmptyState,
   LoadingPanel,
-  RelativeTime,
+  MessageFeed,
+  MessageRow,
   Tag,
   avatarInitials,
 } from "@angee/ui";
@@ -106,7 +107,7 @@ export function TimelinePane(props: TimelinePaneProps): React.ReactElement {
       <p className="pb-2 text-2xs text-fg-subtle">
         {t("timeline.count", { count: total })}
       </p>
-      <ul className="flex flex-col gap-1">
+      <MessageFeed label={t("timeline.feedLabel")} className="gap-1">
         {rows.map((message) => {
           const author = senderDisplayName(message.sender, "—");
           const title = message.thread?.title?.text ?? "";
@@ -114,30 +115,35 @@ export function TimelinePane(props: TimelinePaneProps): React.ReactElement {
             ? directionPresentation(message.direction)
             : null;
           return (
-            <li key={message.id} className="flex gap-2.5 rounded-6 px-2 py-2 hover:bg-sheet-2">
-              <Avatar size="sm">
-                <AvatarFallback>{avatarInitials(author)}</AvatarFallback>
-              </Avatar>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-13 font-medium">{author}</span>
-                  {message.platform ? <Tag tone="neutral">{message.platform}</Tag> : null}
-                  {direction ? (
-                    <Tag tone={direction.tone}>
-                      {t(direction.key)}
-                    </Tag>
-                  ) : null}
-                  <RelativeTime value={orderAt(message)} className="text-2xs text-fg-subtle" />
-                </div>
+            <MessageRow
+              key={message.id}
+              className="rounded-6 px-2 py-2 hover:bg-sheet-2"
+              avatar={
+                <Avatar size="sm">
+                  <AvatarFallback>{avatarInitials(author)}</AvatarFallback>
+                </Avatar>
+              }
+              author={author}
+              timestamp={orderAt(message)}
+              channel={
+                message.platform || direction ? (
+                  <>
+                    {message.platform ? <Tag tone="neutral">{message.platform}</Tag> : null}
+                    {direction ? <Tag tone={direction.tone}>{t(direction.key)}</Tag> : null}
+                  </>
+                ) : undefined
+              }
+            >
+              <>
                 {title ? <div className="truncate text-13 font-medium text-fg">{title}</div> : null}
                 {message.preview ? (
                   <div className="line-clamp-2 text-13 text-fg-muted">{message.preview}</div>
                 ) : null}
-              </div>
-            </li>
+              </>
+            </MessageRow>
           );
         })}
-      </ul>
+      </MessageFeed>
       {exhausted ? null : (
         <Button
           variant="ghost"

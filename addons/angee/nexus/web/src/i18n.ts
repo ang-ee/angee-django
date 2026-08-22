@@ -16,6 +16,7 @@ export const enNexusMessages: Record<string, string> = {
   "cadences.touchDue": "Touch due",
   "cadences.group.schedule": "Schedule",
   "timeline.count": "{count} messages across every channel",
+  "timeline.feedLabel": "Cross-channel messages",
   "timeline.loadOlder": "Load older",
   "timeline.empty": "No messages exchanged with this contact yet.",
   "timeline.circleEmpty": "No messages exchanged with this circle yet.",

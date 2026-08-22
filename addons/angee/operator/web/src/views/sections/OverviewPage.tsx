@@ -1,4 +1,4 @@
-import { Card, CardContent, CardHeader, CardTitle, cn, MetricGrid, Skeleton, textRoleVariants, type MetricGridTile } from "@angee/ui";
+import { Card, CardContent, CardHeader, CardTitle, cn, MetricStrip, Skeleton, textRoleVariants, type MetricTileValue } from "@angee/ui";
 import type { ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
@@ -19,7 +19,7 @@ export function OverviewPage(): ReactNode {
 
   const stack = snapshot?.stack ?? null;
   const health = snapshot?.health ?? null;
-  const metrics: readonly MetricGridTile[] = [
+  const metrics: readonly MetricTileValue[] = [
     { label: t("section.operator.services.title"), value: snapshot?.services.length ?? 0 },
     { label: t("section.operator.workspaces.title"), value: snapshot?.workspaces.length ?? 0 },
     { label: t("section.operator.sources.title"), value: snapshot?.sources.length ?? 0 },
@@ -68,7 +68,7 @@ export function OverviewPage(): ReactNode {
         </Card>
       </div>
 
-      <MetricGrid className="grid-cols-2 sm:grid-cols-4" metrics={metrics} />
+      <MetricStrip density="prominent" className="grid-cols-2 sm:grid-cols-4" metrics={metrics} />
     </OperatorSection>
   );
 }

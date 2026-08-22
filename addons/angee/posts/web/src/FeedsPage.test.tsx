@@ -21,63 +21,71 @@ const pageMocks = vi.hoisted(() => ({
   useAuthoredQuery: vi.fn(),
 }));
 
-vi.mock("@angee/refine", () => ({
-  useAuthoredQuery: pageMocks.useAuthoredQuery,
-}));
+vi.mock("@angee/refine", async () => {
+  const actual = await vi.importActual<typeof import("@angee/refine")>("@angee/refine");
+  return {
+    ...actual,
+    useAuthoredQuery: pageMocks.useAuthoredQuery,
+  };
+});
 
-vi.mock("@angee/ui", () => ({
-  Avatar: ({ initials }: { initials?: string }) => <span>{initials}</span>,
-  Column: ({ field }: { field: string }) => {
-    pageMocks.columnFields.push(field);
-    return null;
-  },
-  EmptyState: ({ title }: { title: React.ReactNode }) => <section>{title}</section>,
-  ErrorBanner: ({ title }: { title?: React.ReactNode }) => <section>{title}</section>,
-  Field: () => null,
-  Form: ({ children }: { children?: React.ReactNode }) => <section>{children}</section>,
-  Group: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
-  List: (props: Record<string, unknown>) => {
-    pageMocks.listProps = props;
-    return <section>{props.children as React.ReactNode}</section>;
-  },
-  ListView: (props: Record<string, unknown>) => {
-    pageMocks.listViews.push(props);
-    return <section>{String(props.emptyContent ?? "")}</section>;
-  },
-  LoadingPanel: ({ message }: { message?: string }) => <section>{message}</section>,
-  MessageFeed: ({ children, label }: { children?: React.ReactNode; label?: string }) => (
-    <ul aria-label={label}>{children}</ul>
-  ),
-  MessagePartsView: ({ parts }: { parts: readonly MockPart[] }) => (
-    <div>{parts.map((part) => part.fragment?.text ?? "").join("")}</div>
-  ),
-  MessageRow: ({
-    author,
-    children,
-    reactions,
-  }: {
-    author?: React.ReactNode;
-    children?: React.ReactNode;
-    reactions?: React.ReactNode;
-  }) => (
-    <li>
-      <span>{author}</span>
-      {children}
-      {reactions}
-    </li>
-  ),
-  ReactionBar: ({ reactions }: { reactions: readonly { reaction: string; count: number }[] }) => (
-    <div>{reactions.map((reaction) => `${reaction.reaction}:${reaction.count}`).join(",")}</div>
-  ),
-  ResourceList: (props: Record<string, unknown>) => {
-    pageMocks.resourceProps = props;
-    return <div>{props.children as React.ReactNode}</div>;
-  },
-  avatarInitials: (label: string) => label.slice(0, 2).toUpperCase(),
-  createNamespaceT: () => () => (key: string) => key,
-  errorMessage: (error: unknown, fallback: string) =>
-    error instanceof Error ? error.message : fallback,
-}));
+vi.mock("@angee/ui", async () => {
+  const actual = await vi.importActual<typeof import("@angee/ui")>("@angee/ui");
+  return {
+    Avatar: ({ initials }: { initials?: string }) => <span>{initials}</span>,
+    Column: ({ field }: { field: string }) => {
+      pageMocks.columnFields.push(field);
+      return null;
+    },
+    EmptyState: ({ title }: { title: React.ReactNode }) => <section>{title}</section>,
+    ErrorBanner: ({ title }: { title?: React.ReactNode }) => <section>{title}</section>,
+    Field: () => null,
+    Form: ({ children }: { children?: React.ReactNode }) => <section>{children}</section>,
+    Group: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+    List: (props: Record<string, unknown>) => {
+      pageMocks.listProps = props;
+      return <section>{props.children as React.ReactNode}</section>;
+    },
+    ListView: (props: Record<string, unknown>) => {
+      pageMocks.listViews.push(props);
+      return <section>{String(props.emptyContent ?? "")}</section>;
+    },
+    LoadingPanel: ({ message }: { message?: string }) => <section>{message}</section>,
+    MessageFeed: ({ children, label }: { children?: React.ReactNode; label?: string }) => (
+      <ul aria-label={label}>{children}</ul>
+    ),
+    MessagePartsView: ({ parts }: { parts: readonly MockPart[] }) => (
+      <div>{parts.map((part) => part.fragment?.text ?? "").join("")}</div>
+    ),
+    MessageRow: ({
+      author,
+      children,
+      reactions,
+    }: {
+      author?: React.ReactNode;
+      children?: React.ReactNode;
+      reactions?: React.ReactNode;
+    }) => (
+      <li>
+        <span>{author}</span>
+        {children}
+        {reactions}
+      </li>
+    ),
+    ReactionBar: ({ reactions }: { reactions: readonly { reaction: string; count: number }[] }) => (
+      <div>{reactions.map((reaction) => `${reaction.reaction}:${reaction.count}`).join(",")}</div>
+    ),
+    reactionsFromGroups: actual.reactionsFromGroups,
+    ResourceList: (props: Record<string, unknown>) => {
+      pageMocks.resourceProps = props;
+      return <div>{props.children as React.ReactNode}</div>;
+    },
+    avatarInitials: (label: string) => label.slice(0, 2).toUpperCase(),
+    createNamespaceT: () => () => (key: string) => key,
+    errorMessage: (error: unknown, fallback: string) =>
+      error instanceof Error ? error.message : fallback,
+  };
+});
 
 vi.mock("./i18n", () => ({
   usePostsT: () => (key: string) => key,

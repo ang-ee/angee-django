@@ -13,6 +13,9 @@ import {
   RailPanel,
   RelationPicker,
   SegmentedControl,
+  SplitPane,
+  SplitPaneHandle,
+  SplitPanes,
   Tag,
   useChatter,
   useResourceRecordHrefLookup,
@@ -156,8 +159,12 @@ export function GraphPage(): React.ReactElement {
         ) : graph.error ? (
           <div className="p-5"><ErrorBanner description={graph.error.message} /></div>
         ) : (
-          <div className="grid h-full min-h-[34rem] grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)] overflow-hidden bg-canvas">
-            <div className="relative min-h-0 border-r border-border-subtle">
+          <SplitPanes
+            autoSave="nexus.graph"
+            panelIds={["graph", "inspector"]}
+            className="h-full min-h-[34rem] bg-canvas"
+          >
+            <SplitPane id="graph" defaultSize={68} minSize={42} className="relative">
               {nodes.length === 0 ? (
                 <EmptyState fill icon="radar" title={t("graph.noResults")} />
               ) : (
@@ -181,20 +188,23 @@ export function GraphPage(): React.ReactElement {
               {graph.data?.party_graph?.truncated ? (
                 <Badge className="absolute left-3 top-3" tone="warning">{t("graph.truncated")}</Badge>
               ) : null}
-            </div>
-            <Inspector
-              nodes={selectedNodes}
-              edge={selectedEdge}
-              routeHref={routeHref}
-              recordHref={recordHref}
-              openTimeline={(node) => {
-                setActiveTab(isCircleNode(node) ? "feed" : "timeline");
-                setCollapsed(false);
-                const path = nodePath(recordHref, node);
-                if (path) void navigate({ to: path });
-              }}
-            />
-          </div>
+            </SplitPane>
+            <SplitPaneHandle />
+            <SplitPane id="inspector" defaultSize={32} minSize={22} collapsible>
+              <Inspector
+                nodes={selectedNodes}
+                edge={selectedEdge}
+                routeHref={routeHref}
+                recordHref={recordHref}
+                openTimeline={(node) => {
+                  setActiveTab(isCircleNode(node) ? "feed" : "timeline");
+                  setCollapsed(false);
+                  const path = nodePath(recordHref, node);
+                  if (path) void navigate({ to: path });
+                }}
+              />
+            </SplitPane>
+          </SplitPanes>
         )}
       </PageBody>
     </Page>

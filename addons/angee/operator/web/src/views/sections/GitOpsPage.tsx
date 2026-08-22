@@ -1,4 +1,4 @@
-import { MetricGrid, RowsListView, textRoleVariants, type ResourceToolbarGroupOption, type ListColumn, type MetricGridTile } from "@angee/ui";
+import { MetricStrip, RowsListView, textRoleVariants, type ResourceToolbarGroupOption, type ListColumn, type MetricTileValue } from "@angee/ui";
 import { useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
@@ -110,13 +110,14 @@ export function GitOpsPage(): ReactNode {
 /** The topology summary: a compact metric strip of the daemon's drift counts. */
 function GitOpsSummary({ summary }: { summary: GitOpsSummary }): ReactNode {
   const t = useOperatorT();
-  const metrics: readonly MetricGridTile[] = SUMMARY_TILES.map((tile) => ({
+  const metrics: readonly MetricTileValue[] = SUMMARY_TILES.map((tile) => ({
     label: t(tile.labelKey),
     value: summary[tile.id],
   }));
 
   return (
-    <MetricGrid
+    <MetricStrip
+      density="prominent"
       className="grid-cols-2 sm:grid-cols-3 lg:grid-cols-6"
       metrics={metrics}
     />

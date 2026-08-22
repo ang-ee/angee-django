@@ -3,6 +3,7 @@ import { rowPublicId } from "@angee/metadata";
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import {
   Action,
+  Alert,
   Badge,
   Code,
   Column,
@@ -15,6 +16,9 @@ import {
   List,
   LoadingPanel,
   ResourceList,
+  SplitPane,
+  SplitPaneHandle,
+  SplitPanes,
   TimelineView,
   cn,
   statusTone,
@@ -150,16 +154,22 @@ function RunTimelinePanel({ runId }: { runId: string }): React.ReactElement {
   }
 
   return (
-    <div className="grid h-full min-h-[34rem] grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] overflow-hidden bg-canvas">
-      <TimelineView<WorkflowRunStepRun>
-        rows={stepRuns}
-        dateField="created_at"
-        rowKey="id"
-        emptyContent={t("runs.emptyTimeline")}
-        className="border-r border-border-subtle"
-        renderEntry={(row) => <RunJournalEntry row={row} />}
-      />
-      <div className="min-h-0">
+    <SplitPanes
+      autoSave="workflows.run-timeline"
+      panelIds={["journal", "graph"]}
+      className="h-full min-h-[34rem] bg-canvas"
+    >
+      <SplitPane id="journal" defaultSize={46} minSize={30} collapsible>
+        <TimelineView<WorkflowRunStepRun>
+          rows={stepRuns}
+          dateField="created_at"
+          rowKey="id"
+          emptyContent={t("runs.emptyTimeline")}
+          renderEntry={(row) => <RunJournalEntry row={row} />}
+        />
+      </SplitPane>
+      <SplitPaneHandle />
+      <SplitPane id="graph" defaultSize={54} minSize={34}>
         {graphNodes.length === 0 ? (
           <EmptyState
             fill
@@ -175,8 +185,8 @@ function RunTimelinePanel({ runId }: { runId: string }): React.ReactElement {
             nodeStyles={workflowNodeStyles}
           />
         )}
-      </div>
-    </div>
+      </SplitPane>
+    </SplitPanes>
   );
 }
 
@@ -207,9 +217,7 @@ function RunJournalEntry({
         <JournalPayload title={t("runs.resume")} value={row.resume_state} />
       </div>
       {row.error ? (
-        <div className="rounded-6 border border-danger-soft-border bg-danger-soft p-3 text-13 text-danger-soft-text">
-          {row.error}
-        </div>
+        <Alert tone="danger">{row.error}</Alert>
       ) : null}
     </div>
   );

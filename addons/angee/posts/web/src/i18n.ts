@@ -33,3 +33,4 @@ export const enPostsMessages: Record<string, string> = {
 };
 
 export const usePostsT = createNamespaceT("posts", enPostsMessages);
+export type PostsT = ReturnType<typeof usePostsT>;
