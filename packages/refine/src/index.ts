@@ -83,6 +83,8 @@ export {
   useAuthoredMutation,
   useAuthoredInfiniteQuery,
   useAuthoredQuery,
+  useAuthoredQueryBatch,
+  useInvalidateAuthoredModels,
   errorFromAuthoredEnvelope,
   authoredOperationData,
   authoredQueryData,
@@ -95,6 +97,7 @@ export {
   type AuthoredMutationOptions,
   type AuthoredOperationOptions,
   type AuthoredQueryOptions,
+  type AuthoredQueryBatchScope,
   type AuthoredQueryResult,
   type AuthoredVariables,
 } from "./dialect/authored-hooks";

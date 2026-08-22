@@ -11,9 +11,11 @@ import {
 } from "@refinedev/core";
 import {
   useInfiniteQuery,
+  useQueries,
   useQueryClient,
   type InfiniteData,
   type QueryFunctionContext,
+  type UseQueryResult,
 } from "@tanstack/react-query";
 
 import {
@@ -21,6 +23,7 @@ import {
   invalidateAuthoredQueries,
 } from "../query-invalidation";
 import {
+  stableKey,
   useStableArray,
   useStableVariables,
 } from "../stable-deps";
@@ -70,6 +73,16 @@ export interface AuthoredQueryResult<TData> {
   fetching: boolean;
   error: Error | null;
   refetch: () => void;
+}
+
+/** One authored read in a dynamic batch, addressed by a caller-stable key. */
+export interface AuthoredQueryBatchScope<TDocument extends AuthoredDocument> {
+  /** Caller identity for the scope; it must change when the document changes. */
+  key: string;
+  document: TDocument;
+  variables?: AuthoredVariables<TDocument>;
+  /** Canonical model labels whose changes invalidate this read. */
+  models?: readonly string[];
 }
 
 export type AuthoredInfinitePageVariables<
@@ -146,6 +159,121 @@ export function useAuthoredQuery<TDocument extends AuthoredDocument>(
     error: run.query.error as Error | null,
     refetch,
   };
+}
+
+/**
+ * Run a render-varying set of authored GraphQL reads through one
+ * {@link useQueries} hook. Each cache entry is owned by its data provider,
+ * document, and variables; the caller's `key` only addresses the returned map.
+ * Model interests ride the same `changes()` invalidation seam as
+ * {@link useAuthoredQuery}.
+ */
+export function useAuthoredQueryBatch<TDocument extends AuthoredDocument>(
+  scopes: readonly AuthoredQueryBatchScope<TDocument>[],
+  options: AuthoredOperationOptions & { enabled?: boolean } = {},
+): ReadonlyMap<
+  string,
+  AuthoredQueryResult<DocumentData<TDocument>>
+> {
+  type Data = DocumentData<TDocument>;
+  type Variables = AuthoredVariables<TDocument>;
+  const enabled = options.enabled ?? true;
+  const activeDataProviderName = useActiveDataProviderName();
+  const dataProviderName =
+    options.dataProviderName ?? activeDataProviderName ?? "default";
+  const dataProvider = useDataProvider();
+  // The caller key owns document identity; hashing the GraphQL AST here made a
+  // render dependency out of a large immutable declaration. Provider + variables
+  // are the runtime query identity that may vary beneath that declaration.
+  const scopesKey = stableKey(
+    scopes.map((scope) => [scope.key, dataProviderName, scope.variables]),
+  );
+  const modelsKey = stableKey(scopes.map((scope) => scope.models));
+  const requests = useMemo(
+    () =>
+      enabled
+        ? scopes.map((scope) => ({
+            key: scope.key,
+            document: scope.document,
+            variables: (scope.variables ?? {}) as Variables,
+            dataProviderName,
+            models: scope.models ?? [],
+          }))
+        : [],
+    // `scopesKey` structurally stabilizes caller-created variables/model arrays.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [dataProviderName, enabled, modelsKey, scopesKey],
+  );
+  const liveModels = useStableArray(
+    [...new Set(requests.flatMap((request) => request.models))].sort(),
+  );
+  useAuthoredLiveInterest(enabled && requests.length > 0, liveModels);
+  const combine = useCallback(
+    (results: UseQueryResult<Data | undefined, Error>[]) =>
+      results.map((result) => ({
+        data: result.data,
+        fetching: result.isFetching,
+        error: result.error,
+        // QueryObserver owns this stable function; forwarding it directly keeps
+        // each combined entry structurally shareable across unchanged renders.
+        refetch: result.refetch,
+      })),
+    [],
+  );
+  const combined = useQueries({
+    queries: requests.map((request) => ({
+      queryKey: [
+        "angee",
+        "authored",
+        request.dataProviderName,
+        request.document,
+        request.variables,
+      ],
+      queryFn: async () => {
+        const custom = dataProvider(request.dataProviderName).custom;
+        if (!custom) {
+          throw new Error(
+            `Data provider "${request.dataProviderName}" does not support ` +
+              "custom authored queries.",
+          );
+        }
+        const response = await custom<BaseRecord>({
+          url: "",
+          method: "post",
+          meta: queryMeta(request.document, request.variables),
+        });
+        return authoredOperationData<Data>(response.data);
+      },
+      enabled,
+      // A new provider/document/variables key must never render the previous
+      // observer's data while its own request is pending.
+      placeholderData: undefined,
+      meta: authoredQueryMeta(request.models),
+    })),
+    // TanStack structurally shares plain combine results. A Map here would be a
+    // fresh opaque value on every notification, so map only after combination.
+    combine,
+  });
+  return useMemo(
+    () =>
+      new Map(
+        requests.map((request, index) => [
+          request.key,
+          combined[index] as AuthoredQueryResult<Data>,
+        ] as const),
+      ),
+    [combined, requests],
+  );
+}
+
+/** Invalidate every authored read registered against any supplied model. */
+export function useInvalidateAuthoredModels(): (
+  modelLabels: readonly string[],
+) => void {
+  const queryClient = useQueryClient();
+  return useCallback((modelLabels: readonly string[]) => {
+    void invalidateAuthoredQueries(queryClient, modelLabels);
+  }, [queryClient]);
 }
 
 export function useAuthoredInfiniteQuery<
