@@ -29,6 +29,7 @@ import type { Occurrence } from "./CalendarView";
 import type { AnyCalendarWindowSource } from "./use-calendar-window";
 import type { DndPayload } from "../lib/dnd";
 import type { RowActionDeclaration } from "./RowActions";
+import type { CrudFilter, CrudSort } from "@refinedev/core";
 
 /**
  * The calendar kind's data declaration. The windowed-collection surface fetches
@@ -53,6 +54,10 @@ export interface BoardLaneSource {
   field: string;
   /** Optional display-field override; defaults to the related model representation. */
   labelField?: string;
+  /** Server-side filters narrowing the related rows that become board lanes. */
+  filters?: readonly CrudFilter[];
+  /** Explicit server order for the related rows that become board lanes. */
+  sorters?: readonly CrudSort[];
   /** Writable Float field that owns manual order inside this lane context.
    * A ResourceList create form declares it (usually `createOnly`) to submit the
    * lane quick-create seed through FormView's existing default-values contract. */

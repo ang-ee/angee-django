@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactElement } from "react";
+import type { CrudFilter } from "@refinedev/core";
 
 import {
   useResourceRecordHref,
@@ -20,6 +21,8 @@ export interface RelationFieldWidgetProps {
   onChange?: (value: string) => void;
   readOnly?: boolean;
   relation: RelationFieldInfo;
+  /** Server-side filters narrowing the rows offered by this relation picker. */
+  filters?: readonly CrudFilter[];
   /**
    * The already-loaded selected record as a picker option (id + folded label),
    * derived by `FormView` from the parent read. Shows the trigger label before
@@ -44,6 +47,7 @@ export function RelationFieldWidget({
   onChange,
   readOnly,
   relation,
+  filters,
   selectedOption,
   placeholder,
   "aria-label": ariaLabel,
@@ -54,6 +58,7 @@ export function RelationFieldWidget({
   const [opened, setOpened] = useState(false);
   const { list, options: fetched } = useRelationOptions(relation, {
     enabled: opened,
+    filters,
   });
   // The selected record's own (folded) label shows immediately; once the list
   // loads, its fresh label for the same record wins, and the selected option is

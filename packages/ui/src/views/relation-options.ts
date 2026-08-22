@@ -7,6 +7,7 @@ import {
   useList,
   type BaseRecord,
   type CrudFilter,
+  type CrudSort,
   type HttpError,
   } from "@refinedev/core";
 import {
@@ -39,6 +40,8 @@ export interface RelationOptionsConfig {
    * resource's own queryset exposes.
    */
   filters?: readonly CrudFilter[];
+  /** Explicit server order for relations whose row sequence is semantic. */
+  sorters?: readonly CrudSort[];
 }
 
 export interface RelationOptionsList {
@@ -63,6 +66,7 @@ export function useRelationOptions(
     labelField: optionLabelField,
     pageSize = RELATION_OPTION_LIMIT,
     sort = false,
+    sorters,
   } = config;
   const labelField = optionLabelField ?? relation?.labelField ?? "id";
   const metadata = useModelMetadata(relation?.resource ?? "");
@@ -80,6 +84,7 @@ export function useRelationOptions(
       pageSize: pageSize ?? DEFAULT_PAGE_SIZE,
     },
     ...(filters ? { filters: [...filters] } : {}),
+    ...(sorters ? { sorters: [...sorters] } : {}),
     meta: { fields },
     queryOptions: {
       enabled: enabled && relation !== null && resource !== null,

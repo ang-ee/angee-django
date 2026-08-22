@@ -239,6 +239,18 @@ describe("ListView board laneSource", () => {
     });
   });
 
+  test("forwards declared filters and sorters to the lane relation query", async () => {
+    const filters = [
+      { field: "pipeline", operator: "eq" as const, value: "pip_sales" },
+    ];
+    const sorters = [{ field: "position", order: "asc" as const }];
+    renderLeadBoard({ laneSource: { field: "stage", filters, sorters } });
+
+    await waitFor(() => expect(harness.boardProps).not.toBeNull());
+
+    expect(lastUseListOption()).toMatchObject({ filters, sorters });
+  });
+
   test("orders by a declared rank and persists lane plus midpoint request", async () => {
     harness.tableRows = [
       {
@@ -497,10 +509,18 @@ function rowIdsByLane(): Record<string, string[]> {
 function lastUseListOption(): {
   resource?: string;
   dataProviderName?: string;
+  filters?: readonly unknown[];
+  sorters?: readonly unknown[];
   meta?: { fields?: unknown };
 } | undefined {
   return harness.useListOptions.at(-1) as
-    | { resource?: string; dataProviderName?: string; meta?: { fields?: unknown } }
+    | {
+        resource?: string;
+        dataProviderName?: string;
+        filters?: readonly unknown[];
+        sorters?: readonly unknown[];
+        meta?: { fields?: unknown };
+      }
     | undefined;
 }
 

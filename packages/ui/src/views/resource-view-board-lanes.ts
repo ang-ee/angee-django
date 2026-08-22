@@ -88,6 +88,8 @@ export function useBoardLaneState<TRow extends Row>({
   const laneResult = useRelationOptions(source?.relation ?? null, {
     labelField: source?.labelField,
     fields: laneFields,
+    filters: source?.filters,
+    sorters: source?.sorters,
     enabled: source !== null,
   });
   // Refine's optimistic cache writes a flat relation id, which conflicts with

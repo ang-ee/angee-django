@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { Row } from "@angee/metadata";
 import type { ActionOutcome } from "@angee/refine";
+import type { CrudFilter } from "@refinedev/core";
 
 import type { PromptOptions } from "../../feedback";
 import type { FieldDescriptor } from "./Field";
@@ -79,6 +80,8 @@ export interface ActionRelationArg extends ActionArgBase {
   argKind: "relation";
   /** Target model label the picker lists (as `useModelMetadata` resolves it). */
   resource: string;
+  /** Server-side filters narrowing the relation rows offered by the picker. */
+  filters?: readonly CrudFilter[];
 }
 
 /** A multi relation-list arg, prefilled from the invoking context (explicit edit wins). */

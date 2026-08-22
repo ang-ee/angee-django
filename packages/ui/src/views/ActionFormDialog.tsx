@@ -281,6 +281,7 @@ function ActionRelationControl({
   return (
     <RelationFieldWidget
       relation={relation}
+      filters={arg.filters}
       value={relationValueId(value)}
       readOnly={readOnly}
       placeholder={arg.placeholder}
