@@ -294,6 +294,7 @@ def _render_dev_stack(
     project_path: str = ".",
     framework_path: str = "workspaces/src/angee-django",
     addons_profile: str = "base",
+    include_arp: bool = False,
     work_state_source: str = "",
     celery_queues: str = "",
     enable_ollama: bool = False,
@@ -311,6 +312,7 @@ def _render_dev_stack(
 
     variables = {
         "addons_profile": addons_profile,
+        "include_arp": "true" if include_arp else "",
         "celery_queues": celery_queues,
         "django_port": "8000",
         "edge_port": "80",
@@ -337,6 +339,7 @@ def _render_project_settings(
     include_operator_installer: bool = False,
     addons_profile: str = "base",
     framework_workspace: bool = False,
+    include_arp: bool = False,
 ) -> dict[str, Any]:
     """Render project settings enough for stack-owned contract tests."""
 
@@ -348,6 +351,7 @@ def _render_project_settings(
             '{% if addon_installer_backend != "local" %}': addon_installer_backend != "local",
             '{% if addons_profile == "full" %}': addons_profile == "full",
             "{% if framework_workspace %}": framework_workspace,
+            "{% if include_arp %}": include_arp,
         },
     )
     replacements = {
@@ -608,6 +612,11 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
         "{BASE_DIR}/workspaces/src/angee-base/addons",
     ]
 
+    # include_arp adds only the discovery dir — never roster entries.
+    arp = _render_project_settings(framework_workspace=True, include_arp=True)
+    assert "{BASE_DIR}/workspaces/src/angee-arp/addons" in arp["ANGEE_ADDON_DIRS"]
+    assert not any(app.startswith("arp.") for app in arp["INSTALLED_APPS"])
+
 
 # --- dev (process) contracts ---------------------------------------------------
 
@@ -754,6 +763,14 @@ def test_dev_stack_declares_the_framework_sources_and_the_src_workspace() -> Non
     full = _render_dev_stack(addons_profile="full")
     for name in ("angee-messaging-bridges", "angee-examples"):
         assert full["sources"][name]["repo"] == f"https://github.com/ang-ee/{name}.git"
+
+    # arpee is its own opt-in (a private product repo): absent from base AND
+    # full profiles, declared only by include_arp.
+    assert "angee-arp" not in stack["sources"]
+    assert "angee-arp" not in full["sources"]
+    arp = _render_dev_stack(include_arp=True)
+    assert arp["sources"]["angee-arp"]["repo"] == "https://github.com/ang-ee/angee-arp.git"
+    assert arp["sources"]["angee-arp"]["cache_path"] == "sources/angee-arp"
 
     wired = _render_dev_stack(work_state_source="work-angee-django")
     assert wired["workspaces"]["src"]["inputs"] == {"work_state_source": "work-angee-django"}

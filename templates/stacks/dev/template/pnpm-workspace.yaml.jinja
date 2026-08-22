@@ -19,6 +19,9 @@ packages:
   - "workspaces/src/angee-react/e2e"
   - "workspaces/src/angee-examples/e2e"
 {% endif %}
+{% if include_arp %}
+  - "workspaces/src/angee-arp/addons/arp/*/web"
+{% endif %}
 allowBuilds:
   esbuild: true
   "@tailwindcss/oxide": true

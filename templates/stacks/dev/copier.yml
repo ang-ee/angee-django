@@ -52,6 +52,7 @@ _angee:
         addon_installer_backend: operator
         include_operator_installer: true
         addons_profile: "${inputs.addons_profile}"
+        include_arp: "${inputs.include_arp}"
         olm_cxxflags: "${inputs.olm_cxxflags}"
         framework_workspace: true
         # The rendered pyproject resolves django-angee editable from the same
@@ -108,6 +109,15 @@ work_state_source:
   type: str
   default: ""
   help: Stack source name for the src workspace's private work-state slot; empty = no work-state.
+
+# Opt-in: arpee, the ARP product (a clean-room Odoo port as arp.* consumer
+# addons). Declares the PRIVATE ang-ee/angee-arp repo as a source with its
+# workspace slot, addon dir, and web globs — the addons stay out of
+# INSTALLED_APPS until installed (the marketplace catalogs and composes them).
+include_arp:
+  type: bool
+  default: false
+  help: Declare the private ang-ee/angee-arp source (arpee's arp.* addons) with its slot, addon dir, and web globs.
 
 olm_cxxflags:
   type: str

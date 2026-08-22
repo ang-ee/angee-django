@@ -65,6 +65,14 @@ _angee:
       subpath: angee-examples
       # Opt-in repo: a base-profile stack declares no source for it; skip.
       optional: true
+    angee-arp:
+      source: angee-arp
+      mode: worktree
+      ref: "${inputs.base_ref}"
+      branch: "${inputs.branch_prefix}/${name | slug}"
+      subpath: angee-arp
+      # Opt-in product repo (arpee): skip when the stack declares no source.
+      optional: true
     angee-templates:
       source: angee-templates
       mode: worktree
