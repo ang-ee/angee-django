@@ -65,6 +65,7 @@ interface ActionArgBase extends Pick<
   | "placeholder"
   | "description"
   | "currencyField"
+  | "defaultValue"
 > {
   /** Not required before the form may submit (e.g. an optional amount). */
   optional?: boolean;
@@ -89,6 +90,8 @@ export interface ActionRelationListArg extends ActionArgBase {
   argKind: "relationList";
   /** Target model label the picker lists (as `useModelMetadata` resolves it). */
   resource: string;
+  /** Server-side filters narrowing the rows offered by this multi-picker. */
+  filters?: readonly CrudFilter[];
   /**
    * Prefill the selected ids from the invoking context. Defaults to the invoking
    * selection, else the open record's id. A user edit overrides the prefill.
@@ -136,7 +139,8 @@ export interface ActionProps extends ActionBinding {
   icon?: string;
   disabled?: boolean;
   danger?: boolean;
-  confirm?: ActionConfirm;
+  /** Static confirmation copy, or copy derived from the loaded record. */
+  confirm?: ActionConfirm | ((record: Row) => ActionConfirm);
   /**
    * Show this action only when the open record matches — e.g. show "Disable"
    * only while enabled. Evaluated against the loaded record; an action with a

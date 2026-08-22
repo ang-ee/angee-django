@@ -22,6 +22,8 @@ export interface FieldDescriptorControlProps {
     rowTemplate?: readonly FormSpecFieldDescriptor[];
   };
   value: unknown;
+  /** Source row for widgets whose display depends on a sibling field (money). */
+  row?: unknown;
   messages?: readonly string[];
   readOnly?: boolean;
   onChange?: (value: unknown) => void;
@@ -36,6 +38,7 @@ export interface FieldDescriptorControlProps {
 export function FieldDescriptorControl({
   field,
   value,
+  row,
   messages,
   readOnly,
   onChange,
@@ -55,6 +58,7 @@ export function FieldDescriptorControl({
   return (
     <Component
       value={value}
+      row={row}
       field={widgetField}
       messages={messages}
       readOnly={readOnly}

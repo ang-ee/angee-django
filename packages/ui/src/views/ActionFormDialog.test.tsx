@@ -125,6 +125,7 @@ const registerPaymentArgs: readonly ActionArg[] = [
     argKind: "relationList",
     resource: "Invoice",
     label: "Invoices",
+    filters: [{ field: "status", operator: "eq", value: "submitted" }],
   },
   {
     name: "journal",
@@ -133,7 +134,12 @@ const registerPaymentArgs: readonly ActionArg[] = [
     label: "Journal",
     filters: [{ field: "kind", operator: "eq", value: "bank" }],
   },
-  { name: "date", widget: "text", label: "Date" },
+  {
+    name: "date",
+    widget: "text",
+    label: "Date",
+    defaultValue: "2026-07-05",
+  },
   { name: "amount", widget: "text", label: "Amount", optional: true },
 ];
 
@@ -214,6 +220,8 @@ describe("ActionFormDialog", () => {
     expect(screen.getByRole("button", { name: "Journal" })).toBeTruthy();
     // The scalars render editable inputs.
     expect(screen.getByRole("textbox", { name: "Date" })).toBeTruthy();
+    expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Date" }).value)
+      .toBe("2026-07-05");
     expect(screen.getByRole("textbox", { name: "Amount" })).toBeTruthy();
   });
 
@@ -226,6 +234,19 @@ describe("ActionFormDialog", () => {
       expect.objectContaining({
         resource: "journals",
         filters: [{ field: "kind", operator: "eq", value: "bank" }],
+      }),
+    );
+  });
+
+  test("forwards a relation-list argument's declared filters to its option query", async () => {
+    renderDialog(registerPaymentAction(vi.fn()));
+
+    await screen.findByText("INV-1");
+
+    expect(listOptions).toContainEqual(
+      expect.objectContaining({
+        resource: "invoices",
+        filters: [{ field: "status", operator: "eq", value: "submitted" }],
       }),
     );
   });
