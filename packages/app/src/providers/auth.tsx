@@ -14,8 +14,10 @@ import {
   useInvalidateAuthStore,
   useLogin,
   useLogout as useRefineLogout,
+  useSubscription,
   type AuthActionResponse,
   type AuthProvider as RefineAuthProvider,
+  type LiveEvent,
 } from "@refinedev/core";
 
 import {
@@ -123,6 +125,7 @@ export const ANONYMOUS_AUTH: AuthState = {
 };
 
 const EMPTY_PREFERENCES: UserPreferences = {};
+const USER_PREFERENCES_LIVE_MODELS = ["iam.User"] as const;
 const DEFAULT_PREFERENCES_STATE: UserPreferencesState = {
   available: false,
   preferences: EMPTY_PREFERENCES,
@@ -355,6 +358,15 @@ export function UserPreferencesProvider({
     }),
     [userId],
   );
+  const onPreferencesChange = useCallback(
+    (event: LiveEvent) => {
+      const preferences = preferencesFromLiveEvent(event, userId);
+      if (!preferences) return;
+      queue.rebase(preferences);
+      setSnapshot({ userId, preferences });
+    },
+    [queue, userId],
+  );
 
   useEffect(() => {
     queue.open();
@@ -386,9 +398,41 @@ export function UserPreferencesProvider({
   );
   return (
     <UserPreferencesContext.Provider value={value}>
+      {userId ? (
+        <UserPreferencesSubscription
+          key={userId}
+          userId={userId}
+          dataProviderName={dataProviderName}
+          onLiveEvent={onPreferencesChange}
+        />
+      ) : null}
       {children}
     </UserPreferencesContext.Provider>
   );
+}
+
+interface UserPreferencesSubscriptionProps {
+  userId: string;
+  dataProviderName?: string;
+  onLiveEvent: (event: LiveEvent) => void;
+}
+
+function UserPreferencesSubscription({
+  userId,
+  dataProviderName,
+  onLiveEvent,
+}: UserPreferencesSubscriptionProps): null {
+  // Refine's subscription effect re-subscribes only when ``enabled`` changes;
+  // the actor-keyed child remount makes the user-bound callback honest.
+  useSubscription({
+    channel: `angee/user-preferences/${userId}`,
+    params: { models: USER_PREFERENCES_LIVE_MODELS },
+    types: ["updated"],
+    enabled: true,
+    onLiveEvent,
+    meta: { dataProviderName },
+  });
+  return null;
 }
 
 export function useUserPreferences(): UserPreferencesState {
@@ -456,6 +500,23 @@ function loginCredentials(value: unknown): LoginCredentials | null {
 function preferencesValue(value: unknown): UserPreferences {
   const record = recordValue(value);
   return record ? { ...record } : {};
+}
+
+function preferencesFromLiveEvent(
+  event: LiveEvent,
+  userId: string | null,
+): UserPreferences | null {
+  if (!userId) return null;
+  const payload = recordValue(event.payload);
+  if (payload?.id !== userId) return null;
+  if (
+    !Array.isArray(payload.changedFields)
+    || !payload.changedFields.includes("preferences")
+  ) {
+    return null;
+  }
+  const changedValues = recordValue(payload.changedValues);
+  return preferencesValue(changedValues?.preferences);
 }
 
 function errorFromUnknownOrNull(value: unknown): Error | null {

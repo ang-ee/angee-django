@@ -454,7 +454,10 @@ function GroupedPagerRow<TRow extends Row>({
   t,
 }: GroupedPagerRowProps<TRow>): React.ReactElement {
   const { pageKey, label, page, pageSize, total, unit } = item;
-  const navLabel = `${label} ${t(unit === "groups" ? "list.groups" : "list.records")}`;
+  const navLabel = t(
+    unit === "groups" ? "list.pagerSubject.groups" : "list.pagerSubject.records",
+    { label },
+  );
   return (
     <TableRow>
       <TableCell colSpan={colSpan} className="bg-sheet py-2">

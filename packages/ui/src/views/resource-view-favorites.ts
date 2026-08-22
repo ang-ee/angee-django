@@ -3,7 +3,7 @@ import {
   useMemo,
   useRef,
 } from "react";
-import { recordValue } from "@angee/refine";
+import * as v from "valibot";
 import {
   canonicalModelLabelOrNull,
   useSchemaFieldMetadata,
@@ -54,6 +54,15 @@ const LOCKED_FAVORITES_SLICE: ResourceViewFavoritesSlice = {
   document: EMPTY_FAVORITES_DOCUMENT,
   writable: false,
 };
+
+const FavoritesVersionEnvelopeSchema = v.object({
+  version: v.optional(v.unknown()),
+});
+
+const ResourceViewFavoritesPreferencesSchema = v.object({
+  version: v.literal(RESOURCE_VIEW_FAVORITES_VERSION),
+  models: v.record(v.string(), v.unknown()),
+});
 
 export interface ResourceViewFavoritesState {
   savedFavorites: readonly ResourceViewFavorite[];
@@ -141,30 +150,34 @@ function appendResourceViewFavorite(
   };
 }
 
-function readResourceViewFavoritesSlice(
+/**
+ * The stored favorites document, discriminated by version: an unknown version
+ * reads empty and write-unavailable (never overwrite a future document); a
+ * version-matched document reads writable with malformed favorites dropped
+ * per model.
+ */
+export function readResourceViewFavoritesSlice(
   preferences: RuntimeUserPreferences,
 ): ResourceViewFavoritesSlice {
   const raw = preferences[RESOURCE_VIEW_FAVORITES_PREFERENCES_KEY];
   if (raw === undefined) return EMPTY_FAVORITES_SLICE;
-  const record = recordValue(raw);
+  const envelope = v.safeParse(FavoritesVersionEnvelopeSchema, raw);
   if (
-    record
-    && record.version !== undefined
-    && record.version !== RESOURCE_VIEW_FAVORITES_VERSION
+    envelope.success
+    && envelope.output.version !== undefined
+    && envelope.output.version !== RESOURCE_VIEW_FAVORITES_VERSION
   ) {
     return LOCKED_FAVORITES_SLICE;
   }
-  if (!record || record.version !== RESOURCE_VIEW_FAVORITES_VERSION) {
-    return EMPTY_FAVORITES_SLICE;
-  }
-  const rawModels = recordValue(record.models);
-  if (!rawModels) return EMPTY_FAVORITES_SLICE;
+  const document = v.safeParse(ResourceViewFavoritesPreferencesSchema, raw);
+  if (!document.success) return EMPTY_FAVORITES_SLICE;
+  // A version-matched document never loses siblings to one bad entry: each
+  // model's list drops only its malformed favorites (the same recovery the
+  // legacy import uses), so the next save cannot wipe healthy models.
   const models: Record<string, readonly ResourceViewFavorite[]> = {};
-  for (const [modelLabel, value] of Object.entries(rawModels)) {
-    if (!Array.isArray(value)) return EMPTY_FAVORITES_SLICE;
-    const favorites = resourceViewFavoritesFromUnknown(value);
-    if (favorites.length !== value.length) return EMPTY_FAVORITES_SLICE;
-    models[modelLabel] = favorites;
+  for (const [model, favorites] of Object.entries(document.output.models)) {
+    const kept = resourceViewFavoritesFromUnknown(favorites);
+    if (kept.length > 0) models[model] = kept;
   }
   return {
     writable: true,
