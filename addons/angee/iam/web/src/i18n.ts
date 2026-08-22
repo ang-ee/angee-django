@@ -20,7 +20,7 @@ export const enIamMessages: Record<string, string> = {
   "users.activate": "Activate",
 
   // OAuth login methods (the public sign-in slot).
-  "login.loadingOptions": "Loading sign-in options...",
+  "login.loadingOptions": "Loading sign-in options…",
   "login.providersUnavailable": "Sign-in providers unavailable",
   "login.passwordStillAvailable":
     "Username and password sign-in is still available.",
@@ -29,7 +29,7 @@ export const enIamMessages: Record<string, string> = {
   "login.startError": "Could not start sign-in.",
 
   // OAuth callback page.
-  "callback.completing": "Completing sign-in...",
+  "callback.completing": "Completing sign-in…",
   "callback.confirming": "Your session is being confirmed.",
   "callback.signInFailed": "Could not sign in",
   "callback.backToSignIn": "Back to sign in",
@@ -102,7 +102,7 @@ export const enIamMessages: Record<string, string> = {
 
   // Schema page.
   "schema.unavailable": "Schema unavailable",
-  "schema.loading": "Loading schema...",
+  "schema.loading": "Loading schema…",
   "schema.searchPlaceholder": "Search schema",
   "schema.resourceTypesLabel": "Resource types",
   "schema.noMatches": "No matching resource types.",

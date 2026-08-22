@@ -76,7 +76,7 @@ export const enIntegrateMessages: Record<string, string> = {
     "Pick a VCS bridge, then type to find a repository to inventory.",
   "addRepo.integrationLabel": "VCS bridge",
   "addRepo.integrationPlaceholder": "Select a bridge",
-  "addRepo.integrationSearch": "Search bridges...",
+  "addRepo.integrationSearch": "Search bridges…",
   "addRepo.nameLabel": "Repository name",
   "addRepo.namePlaceholder": "Type a repository name…",
   "addRepo.addFailed": "Could not add repository.",
@@ -100,7 +100,7 @@ export const enIntegrateMessages: Record<string, string> = {
   "providers.action.discover": "Discover endpoints",
   "providers.discover.done": "Discovered endpoints.",
   "providers.connect.startError": "Could not start account connection.",
-  "providers.connect.redirecting": "Redirecting...",
+  "providers.connect.redirecting": "Redirecting…",
   "providers.connect.openAuthorize": "Open the authorization page",
   "providers.connect.instructions": ", approve, then paste the code it shows below.",
   "providers.connect.codeLabel": "Authorization code",
@@ -129,7 +129,7 @@ export const enIntegrateMessages: Record<string, string> = {
   "externalAccounts.provider": "Provider",
 
   // Account-connect callback page.
-  "connectCallback.completing": "Connecting account...",
+  "connectCallback.completing": "Connecting account…",
   "connectCallback.confirming": "Your account connection is being confirmed.",
   "connectCallback.failedTitle": "Could not connect account",
   "connectCallback.backToProviders": "Back to providers",
