@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback } from "react";
+import { recordValue } from "@angee/refine";
 
 import { dedupeBy } from "../lib/dedupe";
 import {
+  usePreferenceSlice,
   type RuntimeUserPreferences,
-  useRuntimeUserPreferences,
 } from "../runtime";
 
 export const APP_RAIL_PREFERENCES_KEY = "chrome.rail";
@@ -24,13 +25,16 @@ export function readAppRailPreferences(
   preferences: RuntimeUserPreferences | null | undefined,
 ): AppRailPreferences {
   const raw = preferences?.[APP_RAIL_PREFERENCES_KEY];
-  if (!isObject(raw)) return EMPTY_RAIL_PREFERENCES;
+  const record = recordValue(raw);
+  if (!record) return EMPTY_RAIL_PREFERENCES;
   return {
-    order: stringList(raw.order),
-    defaultItemId: typeof raw.defaultItemId === "string"
-      ? raw.defaultItemId
+    order: stringList(record.order),
+    defaultItemId: typeof record.defaultItemId === "string"
+      ? record.defaultItemId
       : null,
-    expanded: typeof raw.expanded === "boolean" ? raw.expanded : undefined,
+    expanded: typeof record.expanded === "boolean"
+      ? record.expanded
+      : undefined,
   };
 }
 
@@ -52,52 +56,23 @@ export function useAppRailPreferences(): {
   railPreferences: AppRailPreferences;
   setRailPreferences: (rail: AppRailPreferences) => void;
 } {
-  const { preferences, setPreferences } = useRuntimeUserPreferences();
-  const [optimistic, setOptimistic] = useState<AppRailPreferences | null>(null);
-  const latestWrite = useRef(0);
-  const stored = useMemo(
-    () => readAppRailPreferences(preferences),
-    [preferences],
+  const rail = usePreferenceSlice(
+    APP_RAIL_PREFERENCES_KEY,
+    readAppRailPreferences,
+    writeAppRailPreferences,
   );
 
-  useEffect(() => {
-    setOptimistic((current) =>
-      current && sameAppRailPreferences(current, stored) ? null : current
-    );
-  }, [stored]);
-
   const setRailPreferences = useCallback(
-    (rail: AppRailPreferences) => {
-      const write = ++latestWrite.current;
-      setOptimistic(rail);
-      void setPreferences(writeAppRailPreferences(preferences, rail)).catch(() => {
-        if (latestWrite.current !== write) return;
-        setOptimistic((current) =>
-          current && sameAppRailPreferences(current, rail) ? null : current
-        );
-      });
+    (next: AppRailPreferences) => {
+      void rail.update(() => next).catch(() => undefined);
     },
-    [preferences, setPreferences],
+    [rail.update],
   );
 
   return {
-    railPreferences: optimistic ?? stored,
+    railPreferences: rail.value,
     setRailPreferences,
   };
-}
-
-function sameAppRailPreferences(
-  left: AppRailPreferences,
-  right: AppRailPreferences,
-): boolean {
-  return left.defaultItemId === right.defaultItemId
-    && left.expanded === right.expanded
-    && left.order.length === right.order.length
-    && left.order.every((item, index) => item === right.order[index]);
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function stringList(value: unknown): readonly string[] {

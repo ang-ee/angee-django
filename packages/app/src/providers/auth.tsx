@@ -2,7 +2,10 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
+  useState,
   type ReactNode,
 } from "react";
 import {
@@ -23,7 +26,12 @@ import {
   type TypedDocumentNode,
 } from "@angee/refine";
 import { errorFromUnknown as sharedErrorFromUnknown } from "@angee/ui/data/errors";
-import { DEFAULT_LOGIN_PATH } from "@angee/ui/runtime";
+import {
+  DEFAULT_LOGIN_PATH,
+  type RuntimeUserPreferences,
+  type RuntimeUserPreferencesPatch,
+  type RuntimeUserPreferencesState,
+} from "@angee/ui/runtime";
 import {
   AngeeCurrentUserDocument,
   AngeeLoginDocument,
@@ -32,8 +40,12 @@ import {
   type AngeeCurrentUserData,
   type AngeeLoginUserData,
 } from "./documents.public";
+import {
+  createUserPreferencesPatchQueue,
+  type UserPreferencesPatchQueue,
+} from "./user-preferences";
 
-export type UserPreferences = Record<string, unknown>;
+export type UserPreferences = RuntimeUserPreferences;
 
 export interface AuthUser {
   id: string;
@@ -71,10 +83,7 @@ export interface LoginResult {
   user?: CurrentUserPayload | null;
 }
 
-export interface UserPreferencesState {
-  preferences: UserPreferences;
-  setPreferences: (preferences: UserPreferences) => Promise<void>;
-}
+export type UserPreferencesState = RuntimeUserPreferencesState;
 
 export interface AngeeAuthProviderOptions extends AngeeHasuraClientOptions {
   loginPath?: string;
@@ -115,8 +124,9 @@ export const ANONYMOUS_AUTH: AuthState = {
 
 const EMPTY_PREFERENCES: UserPreferences = {};
 const DEFAULT_PREFERENCES_STATE: UserPreferencesState = {
+  available: false,
   preferences: EMPTY_PREFERENCES,
-  setPreferences: async () => undefined,
+  patchPreferences: async () => undefined,
 };
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -326,17 +336,50 @@ export function UserPreferencesProvider({
 }): ReactNode {
   const { user } = useAuth();
   const { updatePreferences } = useUpdatePreferences({ dataProviderName });
-  const preferences = user?.preferences ?? EMPTY_PREFERENCES;
-  const setPreferences = useCallback(
-    async (next: UserPreferences): Promise<void> => {
-      if (!user) return;
-      await updatePreferences(next);
-    },
-    [updatePreferences, user],
+  const userId = user?.id ?? null;
+  const serverPreferences = user?.preferences ?? EMPTY_PREFERENCES;
+  const updatePreferencesRef = useRef(updatePreferences);
+  updatePreferencesRef.current = updatePreferences;
+  const [snapshot, setSnapshot] = useState<{
+    userId: string | null;
+    preferences: UserPreferences;
+  }>(() => ({ userId, preferences: serverPreferences }));
+  // Queue identity follows only the actor; live values enter via refs/rebase.
+  const queue = useMemo<UserPreferencesPatchQueue>(
+    () => createUserPreferencesPatchQueue({
+      persist: async (next) => {
+        const saved = await updatePreferencesRef.current(next);
+        return saved?.preferences ?? next;
+      },
+      committed: (preferences) => setSnapshot({ userId, preferences }),
+    }),
+    [userId],
   );
+
+  useEffect(() => () => queue.close(), [queue]);
+
+  useEffect(() => {
+    queue.rebase(serverPreferences);
+    setSnapshot({ userId, preferences: serverPreferences });
+  }, [queue, serverPreferences, userId]);
+
+  const patchPreferences = useCallback(
+    async (apply: RuntimeUserPreferencesPatch): Promise<void> => {
+      if (!userId) return;
+      await queue.patch(apply);
+    },
+    [queue, userId],
+  );
+  const preferences = snapshot.userId === userId
+    ? snapshot.preferences
+    : serverPreferences;
   const value = useMemo<UserPreferencesState>(
-    () => ({ preferences, setPreferences }),
-    [preferences, setPreferences],
+    () => ({
+      available: userId !== null,
+      preferences,
+      patchPreferences,
+    }),
+    [patchPreferences, preferences, userId],
   );
   return (
     <UserPreferencesContext.Provider value={value}>

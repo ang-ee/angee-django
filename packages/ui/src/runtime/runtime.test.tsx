@@ -253,6 +253,7 @@ describe("useRuntimeUserPreferences", () => {
   test("defaults to empty preferences outside the app auth provider", () => {
     const { result } = renderHook(() => useRuntimeUserPreferences());
 
+    expect(result.current.available).toBe(false);
     expect(result.current.preferences).toEqual({});
   });
 });

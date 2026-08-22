@@ -50,6 +50,7 @@ export const enUiMessages: Record<string, string> = {
   "resourceToolbar.filterFallback": "filter",
   "resourceToolbar.filterPlaceholder": "Filter…",
   "resourceToolbar.filterRecords": "Filter records",
+  "resourceToolbar.filterAndGroup": "Filter and group",
   "resourceToolbar.filterGroupFavorites": "Filter, group, favorites",
   "resourceToolbar.filterAndFavorites": "Filter and favorites",
   "resourceToolbar.filters": "Filters",

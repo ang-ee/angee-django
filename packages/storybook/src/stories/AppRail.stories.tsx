@@ -20,10 +20,11 @@ function RailStory({ expanded }: { expanded: boolean }) {
     <AppRuntimeProvider
       runtime={{
         userPreferences: {
+          available: true,
           preferences: {
             "chrome.rail": { order: [], defaultItemId: null, expanded },
           },
-          setPreferences: async () => undefined,
+          patchPreferences: async () => undefined,
         },
       }}
     >

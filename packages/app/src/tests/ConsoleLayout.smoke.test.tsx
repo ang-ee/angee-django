@@ -9,7 +9,13 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { useMemo, type ReactNode, type SVGProps } from "react";
+import {
+  useCallback,
+  useMemo,
+  useState,
+  type ReactNode,
+  type SVGProps,
+} from "react";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
@@ -20,7 +26,12 @@ import { ControlBand } from "@angee/ui/layouts/ControlBand";
 import { PrimaryPanePublisher } from "@angee/ui/layouts/primary-pane-context";
 import { Statusline, StatusSegment } from "@angee/ui/layouts/Statusline";
 import { useChatterContent } from "@angee/ui/communication/index";
-import { AppRuntimeProvider, type AppRuntime } from "@angee/ui/runtime";
+import {
+  AppRuntimeProvider,
+  type AppRuntime,
+  type RuntimeUserPreferences,
+  type RuntimeUserPreferencesPatch,
+} from "@angee/ui/runtime";
 
 vi.mock("@angee/logo-react", async (importOriginal) => {
   const { PRESETS } = await importOriginal<typeof import("@angee/logo-react")>();
@@ -131,7 +142,10 @@ vi.mock("@refinedev/core", async (importOriginal) => {
 
 let largeViewport = true;
 
-function runtimeForConsoleTest(): Partial<AppRuntime> {
+function runtimeForConsoleTest(
+  preferences: RuntimeUserPreferences,
+  patchPreferences: (apply: RuntimeUserPreferencesPatch) => Promise<void>,
+): Partial<AppRuntime> {
   return {
     icons: baseIcons,
     auth: {
@@ -149,14 +163,9 @@ function runtimeForConsoleTest(): Partial<AppRuntime> {
       error: null,
     },
     userPreferences: {
-      preferences: {
-        "chrome.rail": {
-          order: [],
-          defaultItemId: null,
-          expanded: true,
-        },
-      },
-      setPreferences: async () => undefined,
+      available: true,
+      preferences,
+      patchPreferences,
     },
   };
 }
@@ -204,10 +213,31 @@ function renderInRouter(children: ReactNode, initialPath = "/notes") {
   });
 
   return render(
-    <AppRuntimeProvider runtime={runtimeForConsoleTest()}>
+    <ConsoleTestRuntime>
       <RouterProvider router={router} />
-    </AppRuntimeProvider>,
+    </ConsoleTestRuntime>,
   );
+}
+
+function ConsoleTestRuntime({ children }: { children: ReactNode }): ReactNode {
+  const [preferences, setPreferences] = useState<RuntimeUserPreferences>({
+    "chrome.rail": {
+      order: [],
+      defaultItemId: null,
+      expanded: true,
+    },
+  });
+  const patchPreferences = useCallback(
+    async (apply: RuntimeUserPreferencesPatch): Promise<void> => {
+      setPreferences((current) => apply(current));
+    },
+    [],
+  );
+  const runtime = useMemo(
+    () => runtimeForConsoleTest(preferences, patchPreferences),
+    [patchPreferences, preferences],
+  );
+  return <AppRuntimeProvider runtime={runtime}>{children}</AppRuntimeProvider>;
 }
 
 describe("ConsoleLayout", () => {

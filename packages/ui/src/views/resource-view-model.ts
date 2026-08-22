@@ -2,6 +2,7 @@ import { format } from "date-fns";
 import {
   ANGEE_FILTER_LOOKUP_OPERATORS,
   clampPageSize,
+  recordValue,
   stableSerialize,
   type AngeeFilterLookupOperator,
 } from "@angee/refine";
@@ -182,10 +183,16 @@ export function resourceViewFavoritesFromJson(
 ): readonly ResourceViewFavorite[] {
   try {
     const value = raw ? JSON.parse(raw) : [];
-    return Array.isArray(value) ? value.filter(isResourceViewFavorite) : [];
+    return resourceViewFavoritesFromUnknown(value);
   } catch {
     return [];
   }
+}
+
+export function resourceViewFavoritesFromUnknown(
+  value: unknown,
+): readonly ResourceViewFavorite[] {
+  return Array.isArray(value) ? value.filter(isResourceViewFavorite) : [];
 }
 
 export type ResourceViewAction =
@@ -214,7 +221,7 @@ export class Filter {
   readonly value: ResourceViewFilter;
 
   constructor(value: unknown = {}) {
-    const record = filterRecord(value);
+    const record = recordValue(value);
     this.value = record ? ({ ...record } as ResourceViewFilter) : {};
   }
 
@@ -263,7 +270,7 @@ export class Filter {
   }
 
   and(filter: unknown): ResourceViewFilter {
-    const right = filterRecord(filter);
+    const right = recordValue(filter);
     if (!right || Object.keys(right).length === 0) return this.value;
     const next: Record<string, unknown> = { ...this.value };
     let andFilter: Record<string, unknown> | undefined;
@@ -275,7 +282,7 @@ export class Filter {
       }
     }
     if (!andFilter) return next as ResourceViewFilter;
-    const existingAnd = filterRecord(next.AND);
+    const existingAnd = recordValue(next.AND);
     next.AND = existingAnd ? Filter.combine(existingAnd, andFilter) : andFilter;
     return next as ResourceViewFilter;
   }
@@ -366,7 +373,7 @@ function withoutFilterFields(
   value: unknown,
   fields: ReadonlySet<string>,
 ): ResourceViewFilter {
-  const record = filterRecord(value);
+  const record = recordValue(value);
   if (!record) return {};
   const next: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(record)) {
@@ -391,7 +398,7 @@ function withoutFilterControlValue(
       .filter((item) => Object.keys(item).length > 0);
     return items.length > 0 ? items : undefined;
   }
-  const record = filterRecord(value);
+  const record = recordValue(value);
   if (!record) return value;
   const child = withoutFilterFields(record, fields);
   return Object.keys(child).length > 0 ? child : undefined;
@@ -902,8 +909,8 @@ function isCalendarViewMode(value: string): value is CalendarViewMode {
 }
 
 function isResourceViewFavorite(value: unknown): value is ResourceViewFavorite {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Partial<ResourceViewFavorite>;
+  const record = recordValue(value);
+  if (!record) return false;
   return typeof record.id === "string" && typeof record.label === "string";
 }
 
@@ -931,13 +938,6 @@ function slugifyFavoriteLabel(label: string): string {
 function resourceViewFilterFromUnknown(value: unknown): ResourceViewFilter | null {
   if (!isResourceViewFilter(value)) return null;
   return value as ResourceViewFilter;
-}
-
-function filterRecord(filter: unknown): Record<string, unknown> | undefined {
-  if (!filter || typeof filter !== "object" || Array.isArray(filter)) {
-    return undefined;
-  }
-  return filter as Record<string, unknown>;
 }
 
 function isResourceViewLookup(value: unknown): value is ResourceViewLookup {

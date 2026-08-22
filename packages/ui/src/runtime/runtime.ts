@@ -76,6 +76,9 @@ export interface RuntimeI18n {
 }
 
 export type RuntimeUserPreferences = Record<string, unknown>;
+export type RuntimeUserPreferencesPatch = (
+  preferences: RuntimeUserPreferences,
+) => RuntimeUserPreferences;
 
 export interface RuntimeAuthUser {
   id: string;
@@ -98,8 +101,9 @@ export interface RuntimeLogoutAction {
 }
 
 export interface RuntimeUserPreferencesState {
+  available: boolean;
   preferences: RuntimeUserPreferences;
-  setPreferences: (preferences: RuntimeUserPreferences) => Promise<void>;
+  patchPreferences: (patch: RuntimeUserPreferencesPatch) => Promise<void>;
 }
 
 type RuntimeTOptions = MessageVars & {
@@ -124,8 +128,9 @@ const EMPTY_RUNTIME: AppRuntime = {
     error: null,
   },
   userPreferences: {
+    available: false,
     preferences: EMPTY_USER_PREFERENCES,
-    setPreferences: async () => undefined,
+    patchPreferences: async () => undefined,
   },
   icons: {},
   forms: {},

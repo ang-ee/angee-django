@@ -398,6 +398,7 @@ function FilterPicker({
   const [favoriteOpen, setFavoriteOpen] = React.useState(false);
   const [favoriteLabel, setFavoriteLabel] =
     React.useState(defaultFavoriteLabel);
+  const favoritesEnabled = onFavoriteSave !== undefined;
   const [draftFilterText, setDraftFilterText] = React.useState(filterText);
   const commitFilterText = useDebouncedCallback((value: string) => {
     if (value !== filterText) onFilterTextChange?.(value);
@@ -507,8 +508,16 @@ function FilterPicker({
           className="grid size-6 shrink-0 place-content-center rounded-6 text-fg-muted outline-none transition-colors hover:bg-sheet hover:text-fg focus-visible:focus-ring"
           aria-label={
             groupControls
-              ? t("resourceToolbar.filterGroupFavorites")
-              : t("resourceToolbar.filterAndFavorites")
+              ? t(
+                  favoritesEnabled
+                    ? "resourceToolbar.filterGroupFavorites"
+                    : "resourceToolbar.filterAndGroup",
+                )
+              : t(
+                  favoritesEnabled
+                    ? "resourceToolbar.filterAndFavorites"
+                    : "resourceToolbar.filter",
+                )
           }
         >
           <Glyph name="chevron-down" className="size-3" />
@@ -519,7 +528,11 @@ function FilterPicker({
           <PopoverContent
             className={cn(
               "grid max-w-[calc(100vw-2rem)]",
-              groupControls ? "w-[45rem] grid-cols-3" : "w-[30rem] grid-cols-2",
+              groupControls && favoritesEnabled
+                ? "w-[45rem] grid-cols-3"
+                : groupControls || favoritesEnabled
+                  ? "w-[30rem] grid-cols-2"
+                  : "w-[15rem] grid-cols-1",
             )}
           >
             <PickerColumn
@@ -609,56 +622,58 @@ function FilterPicker({
                 ) : null}
               </PickerColumn>
             ) : null}
-            <PickerColumn
-              icon={<Glyph name="star" className="size-3.5" />}
-              title={t("resourceToolbar.favorites")}
-            >
-              <PickerButton
-                active={favoriteOpen}
-                muted={!favoriteOpen}
-                onClick={() => setFavoriteOpen((value) => !value)}
+            {favoritesEnabled ? (
+              <PickerColumn
+                icon={<Glyph name="star" className="size-3.5" />}
+                title={t("resourceToolbar.favorites")}
               >
-                <Glyph name="plus" className="size-3" />
-                {t("resourceToolbar.saveCurrentSearch")}
-              </PickerButton>
-              {favoriteOpen ? (
-                <form
-                  className="mt-2 grid gap-2 rounded-6 border border-border-subtle bg-sheet p-2 shadow-xs"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    saveFavorite();
-                  }}
+                <PickerButton
+                  active={favoriteOpen}
+                  muted={!favoriteOpen}
+                  onClick={() => setFavoriteOpen((value) => !value)}
                 >
-                  <Input
-                    size="sm"
-                    value={favoriteLabel}
-                    aria-label={t("resourceToolbar.favoriteName")}
-                    onChange={(event) =>
-                      setFavoriteLabel(event.currentTarget.value)}
-                  />
-                  <Button
-                    type="submit"
-                    size="sm"
-                    variant="secondary"
-                    className="justify-center"
+                  <Glyph name="plus" className="size-3" />
+                  {t("resourceToolbar.saveCurrentSearch")}
+                </PickerButton>
+                {favoriteOpen ? (
+                  <form
+                    className="mt-2 grid gap-2 rounded-6 border border-border-subtle bg-sheet p-2 shadow-xs"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      saveFavorite();
+                    }}
                   >
-                    {t("resourceToolbar.save")}
-                  </Button>
-                </form>
-              ) : null}
-              {favorites.length === 0 ? (
-                <PickerMuted>{t("resourceToolbar.noSavedSearches")}</PickerMuted>
-              ) : (
-                favorites.map((favorite) => (
-                  <PickerButton
-                    key={favorite.id}
-                    onClick={() => onFavoriteSelect?.(favorite)}
-                  >
-                    {favorite.label}
-                  </PickerButton>
-                ))
-              )}
-            </PickerColumn>
+                    <Input
+                      size="sm"
+                      value={favoriteLabel}
+                      aria-label={t("resourceToolbar.favoriteName")}
+                      onChange={(event) =>
+                        setFavoriteLabel(event.currentTarget.value)}
+                    />
+                    <Button
+                      type="submit"
+                      size="sm"
+                      variant="secondary"
+                      className="justify-center"
+                    >
+                      {t("resourceToolbar.save")}
+                    </Button>
+                  </form>
+                ) : null}
+                {favorites.length === 0 ? (
+                  <PickerMuted>{t("resourceToolbar.noSavedSearches")}</PickerMuted>
+                ) : (
+                  favorites.map((favorite) => (
+                    <PickerButton
+                      key={favorite.id}
+                      onClick={() => onFavoriteSelect?.(favorite)}
+                    >
+                      {favorite.label}
+                    </PickerButton>
+                  ))
+                )}
+              </PickerColumn>
+            ) : null}
           </PopoverContent>
         </PopoverPositioner>
       </PopoverPortal>

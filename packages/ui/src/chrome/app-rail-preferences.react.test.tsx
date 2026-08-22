@@ -14,13 +14,19 @@ describe("useAppRailPreferences", () => {
   test("keeps the newest optimistic write through stale storage and rejection", async () => {
     const first = deferred<void>();
     const second = deferred<void>();
-    const setPreferences = vi.fn()
+    const patchPreferences = vi.fn()
       .mockImplementationOnce(() => first.promise)
       .mockImplementationOnce(() => second.promise);
     let preferences: RuntimeUserPreferences = {};
     const wrapper = ({ children }: { children: ReactNode }) => (
       <AppRuntimeProvider
-        runtime={{ userPreferences: { preferences, setPreferences } }}
+        runtime={{
+          userPreferences: {
+            available: true,
+            preferences,
+            patchPreferences,
+          },
+        }}
       >
         {children}
       </AppRuntimeProvider>

@@ -6,6 +6,10 @@
 
 export { makeContext, type ContextBinding } from "./make-context";
 export {
+  usePreferenceSlice,
+  type PreferenceSliceState,
+} from "./user-preferences";
+export {
   AppRuntimeProvider,
   useAppRuntime,
   useWidget,
@@ -33,6 +37,7 @@ export {
   type ResourceRecordHrefLookup,
   type RuntimeResourceRoutes,
   type RuntimeUserPreferences,
+  type RuntimeUserPreferencesPatch,
   type RuntimeUserPreferencesState,
   DEFAULT_LOGIN_PATH,
 } from "./runtime";

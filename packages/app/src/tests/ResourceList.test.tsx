@@ -26,9 +26,11 @@ import {
 } from "@tanstack/react-query";
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactElement,
   type ReactNode,
@@ -88,6 +90,11 @@ import type {
 } from "@angee/metadata";
 import { withTestResourceInventory } from "@angee/metadata/testing";
 import { installTestLocalStorage } from "../testing";
+import {
+  AppRuntimeProvider,
+  type RuntimeUserPreferences,
+  type RuntimeUserPreferencesPatch,
+} from "@angee/ui/runtime";
 
 interface ResourceListOptions {
   fields?: readonly string[];
@@ -1159,7 +1166,7 @@ describe("ResourceList", () => {
     ).toBeNull();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Filter, group, favorites" }),
+      screen.getByRole("button", { name: "Filter and group" }),
     );
 
     expect(await screen.findByText("Group by")).toBeTruthy();
@@ -2336,7 +2343,7 @@ describe("ResourceList", () => {
     );
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Filter, group, favorites" }),
+      await screen.findByRole("button", { name: "Filter and group" }),
     );
     fireEvent.click(
       await screen.findByRole("button", { name: "Add custom filter" }),
@@ -2363,14 +2370,16 @@ describe("ResourceList", () => {
   test("saves and reapplies the current resource-view search", async () => {
     const onUrlUpdate = vi.fn();
     render(
-      <TestUrlState onUrlUpdate={onUrlUpdate}>
-        <ResourceList
-          resource="notes.Note"
-          columns={columns}
-          formFields={formFields}
-          pageSize={2}
-        />
-      </TestUrlState>,
+      <AuthenticatedPreferences>
+        <TestUrlState onUrlUpdate={onUrlUpdate}>
+          <ResourceList
+            resource="notes.Note"
+            columns={columns}
+            formFields={formFields}
+            pageSize={2}
+          />
+        </TestUrlState>
+      </AuthenticatedPreferences>,
     );
 
     fireEvent.click(
@@ -2452,7 +2461,7 @@ describe("ResourceList", () => {
     await screen.findByRole("button", { name: "Groups 3-4 / 4 groups" });
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Filter, group, favorites",
+        name: "Filter and group",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Month" }));
@@ -2534,7 +2543,7 @@ describe("ResourceList", () => {
     });
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Filter, group, favorites",
+        name: "Filter and group",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Month" }));
@@ -2549,6 +2558,35 @@ function nextTask(): Promise<void> {
   return new Promise((resolve) => {
     globalThis.setTimeout(resolve, 0);
   });
+}
+
+function AuthenticatedPreferences({
+  children,
+}: {
+  children: ReactNode;
+}): ReactElement {
+  const current = useRef<RuntimeUserPreferences>({});
+  const [preferences, setPreferences] = useState<RuntimeUserPreferences>({});
+  const patchPreferences = useCallback(
+    async (patch: RuntimeUserPreferencesPatch): Promise<void> => {
+      const next = patch(current.current);
+      current.current = next;
+      setPreferences(next);
+      await nextTask();
+    },
+    [],
+  );
+  const runtime = useMemo(
+    () => ({
+      userPreferences: {
+        available: true,
+        preferences,
+        patchPreferences,
+      },
+    }),
+    [patchPreferences, preferences],
+  );
+  return <AppRuntimeProvider runtime={runtime}>{children}</AppRuntimeProvider>;
 }
 
 interface TestUrlStateProps {

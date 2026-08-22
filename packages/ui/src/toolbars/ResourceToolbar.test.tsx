@@ -99,4 +99,18 @@ describe("ResourceToolbar list-kind regression", () => {
     expect(screen.queryByLabelText("Calendar view")).toBeNull();
     expect(screen.queryByLabelText("Previous period")).toBeNull();
   });
+
+  test("hides favorites when no authenticated preference writer is available", () => {
+    renderToolbar({ view: "list" });
+
+    fireEvent.click(screen.getByLabelText("Filter"));
+    expect(screen.queryByText("Favorites")).toBeNull();
+  });
+
+  test("shows favorites when the preference adapter supplies its writer", () => {
+    renderToolbar({ view: "list", onFavoriteSave: vi.fn() });
+
+    fireEvent.click(screen.getByLabelText("Filter and favorites"));
+    expect(screen.getByText("Favorites")).toBeTruthy();
+  });
 });

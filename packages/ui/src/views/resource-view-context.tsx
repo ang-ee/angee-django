@@ -4,7 +4,6 @@ import {
   useContext,
   useMemo,
   useState,
-  useSyncExternalStore,
   type Key,
   type ReactElement,
   type ReactNode,
@@ -13,7 +12,6 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 
 import {
   ResourceViewState,
-  resourceViewFavoritesFromJson,
   resourceViewSearchToState,
   resourceViewStateToSearch,
   mergeResourceViewSearch,
@@ -26,6 +24,7 @@ import {
   type ResourceViewKind,
   type ResourceViewSort,
 } from "./resource-view-model";
+import { useResourceViewFavorites } from "./resource-view-favorites";
 
 export interface ResourceViewContextValue {
   state: ResourceViewState;
@@ -42,7 +41,7 @@ export interface ResourceViewContextValue {
   setMode: (mode: CalendarViewMode) => void;
   setAnchor: (anchor: string) => void;
   savedFavorites: readonly ResourceViewFavorite[];
-  saveFavorite: (label: string) => void;
+  saveFavorite?: (label: string) => void;
   applyFavorite: (favorite: ResourceViewFavorite) => void;
 }
 
@@ -66,12 +65,6 @@ export interface ResourceViewScopeMountOptions {
 }
 
 const ResourceViewContext = createContext<ResourceViewContextValue | null>(null);
-const EMPTY_FAVORITES: readonly ResourceViewFavorite[] = [];
-const favoriteListeners = new Map<string, Set<() => void>>();
-const favoriteSnapshots = new Map<
-  string,
-  { raw: string | null; value: readonly ResourceViewFavorite[] }
->();
 type ResourceViewActions = Omit<
   ResourceViewContextValue,
   "state" | "savedFavorites" | "saveFavorite"
@@ -215,27 +208,9 @@ function useResourceViewContextValue({
   resource: string | undefined;
   state: ResourceViewState;
 }): ResourceViewContextValue {
-  const favoriteStorageKey = resource
-    ? `angee:resource-view:${resource}:favorites`
-    : null;
-  const savedFavorites = useSyncExternalStore(
-    (onStoreChange) => subscribeToFavorites(favoriteStorageKey, onStoreChange),
-    () => readFavorites(favoriteStorageKey),
-    () => readFavorites(favoriteStorageKey),
-  );
-
-  const saveFavorite = useCallback(
-    (label: string) => {
-      const trimmed = label.trim();
-      if (!trimmed || !favoriteStorageKey) return;
-      const current = readFavorites(favoriteStorageKey);
-      const next = [
-        ...current,
-        state.toFavorite(trimmed, current),
-      ];
-      writeFavorites(favoriteStorageKey, next);
-    },
-    [favoriteStorageKey, state],
+  const { savedFavorites, saveFavorite } = useResourceViewFavorites(
+    resource,
+    state,
   );
 
   const value = useMemo<ResourceViewContextValue>(
@@ -305,67 +280,4 @@ function createResourceViewActions(
     setAnchor: (anchor) => dispatch({ type: "setAnchor", anchor }),
     applyFavorite: (favorite) => dispatch({ type: "applyFavorite", favorite }),
   };
-}
-
-function readFavorites(
-  storageKey: string | null,
-): readonly ResourceViewFavorite[] {
-  const storage = favoriteStorage();
-  if (!storageKey || !storage) return EMPTY_FAVORITES;
-  try {
-    const raw = storage.getItem(storageKey);
-    const cached = favoriteSnapshots.get(storageKey);
-    if (cached?.raw === raw) return cached.value;
-    const value = resourceViewFavoritesFromJson(raw);
-    favoriteSnapshots.set(storageKey, { raw, value });
-    return value;
-  } catch {
-    return EMPTY_FAVORITES;
-  }
-}
-
-function writeFavorites(
-  storageKey: string | null,
-  favorites: readonly ResourceViewFavorite[],
-): void {
-  const storage = favoriteStorage();
-  if (!storageKey || !storage) return;
-  storage.setItem(storageKey, JSON.stringify(favorites));
-  favoriteSnapshots.delete(storageKey);
-  emitFavoriteChange(storageKey);
-}
-
-function subscribeToFavorites(
-  storageKey: string | null,
-  onStoreChange: () => void,
-): () => void {
-  if (!storageKey || typeof window === "undefined") return () => undefined;
-  const listeners = favoriteListeners.get(storageKey) ?? new Set<() => void>();
-  listeners.add(onStoreChange);
-  favoriteListeners.set(storageKey, listeners);
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === storageKey) {
-      favoriteSnapshots.delete(storageKey);
-      onStoreChange();
-    }
-  };
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener("storage", onStorage);
-    listeners.delete(onStoreChange);
-    if (listeners.size === 0) favoriteListeners.delete(storageKey);
-  };
-}
-
-function emitFavoriteChange(storageKey: string): void {
-  favoriteListeners.get(storageKey)?.forEach((listener) => listener());
-}
-
-function favoriteStorage(): Storage | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.localStorage ?? null;
-  } catch {
-    return null;
-  }
 }
