@@ -507,18 +507,24 @@ function BoardLane<TRow extends Row>({
         open={!collapsed}
         onOpenChange={(open) => onCollapsedChange(!open)}
       >
-        <div className="sticky top-0 z-10 rounded-t-[10px] bg-inset px-2 pt-2 pb-1">
-          <CollapsibleTrigger className="w-full rounded-6 px-1 text-fg">
+        {/* The lane title stays a level-3 heading with label-only content —
+            the shipped board contract. The fold trigger is the chevron
+            beside it (a heading may not live inside a button). */}
+        <div className="sticky top-0 z-10 flex items-center gap-1 rounded-t-[10px] bg-inset px-2 pt-2 pb-1">
+          <CollapsibleTrigger
+            aria-labelledby={headingId}
+            className="rounded-6 text-fg"
+          >
             <CollapsibleIcon />
-            {tone ? <StatusDot tone={tone} /> : null}
-            <span
-              id={headingId}
-              className="min-w-0 flex-1 truncate text-13 font-semibold text-fg"
-            >
-              {group.label ?? t("list.allRecords")}
-            </span>
-            <CountBadge value={group.rows.length} />
           </CollapsibleTrigger>
+          {tone ? <StatusDot tone={tone} /> : null}
+          <h3
+            id={headingId}
+            className="min-w-0 flex-1 truncate text-13 font-semibold text-fg"
+          >
+            {group.label ?? t("list.allRecords")}
+          </h3>
+          <CountBadge value={group.rows.length} />
         </div>
         <CollapsiblePanel>
           {sortable ? (
