@@ -13,6 +13,7 @@ export {
   PROJECT_MODEL,
   TASK_MODEL,
 } from "./resources";
+export { useTaskFormDeclaration } from "./task-actions";
 
 const projectsRoutes: readonly BaseAddonRoute[] = [
   {
