@@ -58,7 +58,7 @@ export const chromeMenuItems: readonly ChromeMenuItem[] = [
   },
   {
     id: "iam",
-    label: "IAM",
+    label: "Permissions",
     icon: "auth",
     group: "platform",
     children: [

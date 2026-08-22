@@ -44,7 +44,7 @@ describe("AppChooser", () => {
       { id: "notes", label: "Notes", to: "/notes" },
       {
         id: "iam",
-        label: "IAM",
+        label: "Permissions",
         group: "platform",
         children: [{ id: "iam.users", label: "Users", to: "/iam/users" }],
       },

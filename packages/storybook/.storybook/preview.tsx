@@ -50,7 +50,7 @@ const previewRuntime = {
 const previewResources: ResourceProps[] = [
   previewMenuResource("notes", "Notes", "/notes", "notes"),
   previewMenuResource("resources", "Resources", "/resources", "archive"),
-  previewMenuResource("iam", "IAM", "/iam", "auth"),
+  previewMenuResource("iam", "Permissions", "/iam", "auth"),
   previewMenuResource("activity", "Activity", "/activity", "activity"),
 ];
 

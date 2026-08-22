@@ -137,7 +137,7 @@ describe("railMenuItems", () => {
       { id: "notes", label: "Notes", to: "/notes", appRoot: true },
       {
         id: "iam",
-        label: "IAM",
+        label: "Permissions",
         group: "platform",
         appRoot: true,
         children: [{ id: "iam.users", to: "/iam/users" }],
