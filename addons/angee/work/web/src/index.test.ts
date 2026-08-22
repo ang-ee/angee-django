@@ -21,9 +21,12 @@ describe("work addon manifest", () => {
     expect(work.routes?.find((route) => route.name === "work.queues")?.resource).toBe(
       QUEUE_MODEL,
     );
-    expect(work.routes?.find((route) => route.name === "work.cycles")?.resource).toBe(
-      CYCLE_MODEL,
-    );
+    // work.cycles is a parameterized projection — it must NOT claim a
+    // resource (a collection href cannot resolve at boot; the framework
+    // now fails fast on it).
+    expect(
+      work.routes?.find((route) => route.name === "work.cycles")?.resource,
+    ).toBeUndefined();
     expect(work.routes?.find((route) => route.name === "work.board")?.resource).toBeUndefined();
     expect(
       work.routes?.find((route) => route.name === "work.cycle-board")?.resource,

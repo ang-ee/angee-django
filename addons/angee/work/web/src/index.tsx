@@ -59,7 +59,8 @@ const workRoutes: readonly BaseAddonRoute[] = [
     path: "/work/queues/$queueId/cycles",
     parent: "work.queues",
     menu: "work.queues",
-    resource: CYCLE_MODEL,
+    // Projection page (PipelinePage rule): a parameterized route must not
+    // claim a resource — the collection href could never resolve at boot.
     component: lazyRouteComponent(
       () => import("./views/CyclesPage"),
       "CyclesPage",
