@@ -8,7 +8,7 @@ from django.apps import apps
 from django.db import models
 from strawberry import auto
 
-from angee.graphql.data import hasura_model_resource
+from angee.graphql.data import DataResourceSubtitleMetadata, hasura_model_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
@@ -85,6 +85,7 @@ _NOTE_RESOURCE = hasura_model_resource(
     get_queryset=_note_queryset,
     get_aggregate_queryset=_note_aggregate_queryset,
     id_column="sqid",
+    subtitle=DataResourceSubtitleMetadata(word_count="word_count"),
 )
 
 

@@ -11,14 +11,6 @@ const NOTE_DEFAULT_GROUPS = {
   board: { field: "status" },
 } satisfies ResourceViewDefaultGroups;
 
-// Created/updated timestamps + word count feed the record subtitle (id · created
-// · updated · words); they are queried but kept out of the field grid.
-const RECORD_SUBTITLE_FIELDS: readonly string[] = [
-  "created_at",
-  "updated_at",
-  "word_count",
-];
-
 function noteList(agentsHref: string | undefined, t: NotesT): React.ReactElement {
   return (
     <List
@@ -51,7 +43,7 @@ function noteList(agentsHref: string | undefined, t: NotesT): React.ReactElement
 
 function noteForm(t: NotesT): React.ReactElement {
   return (
-    <Form resource={MODEL} returning={RECORD_SUBTITLE_FIELDS}>
+    <Form resource={MODEL}>
       <Field name="title" widget="text" title />
       <Field name="status" widget="statusbar" />
       <Group label={t("form.details")} columns={2}>
