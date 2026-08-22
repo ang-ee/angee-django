@@ -119,8 +119,15 @@ TanStack apply the URL-owned filter object to in-memory rows.
 ## Rules
 
 - Python ships schema and operations. TypeScript ships UX.
-- **Authored operations are typed, never hand-mirrored.** A bespoke (non-CRUD)
-  operation is a `graphql()` document imported from `@angee/gql/<schema>`; its
+- **Schema dependence stops at the composition boundary.** `@angee/refine`,
+  `@angee/metadata`, and `@angee/ui` stay schema-independent; when they need a
+  bespoke operation they hand-author a typed `TypedDocumentNode` (see
+  `ui/views/documents.ts`) rather than importing a project runtime. `@angee/app`
+  is the sanctioned schema-dependent composition package, and it and addon web
+  packages consume generated documents from the composed stack's `@angee/gql`.
+- **Generated authored operations are typed, never hand-mirrored.** In a
+  schema-dependent package, a bespoke (non-CRUD) operation is a `graphql()`
+  document imported from `@angee/gql/<schema>`; its
   result/variables types come from the generated `TypedDocumentNode` (use
   `DocumentType<typeof Doc>` for named result types and
   `DocumentVariables<typeof Doc>` from `@angee/refine` for named variable types) —
