@@ -13,6 +13,10 @@ from angee.graphql.data import (
     hasura_model_resource,
     public_pk_decoder,
 )
+from angee.graphql.data.resource_fields import (
+    DataResourceEnumValueMetadata,
+    DataResourceFieldMetadata,
+)
 from angee.graphql.ids import PublicID, optional_public_id, require_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
@@ -38,6 +42,106 @@ ThreadActivity = apps.get_model("messaging", "ThreadActivity")
 Folder = apps.get_model("storage", "Folder")
 Party = apps.get_model("parties", "Party")
 User = get_user_model()
+
+_PROJECT_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(
+    Project,
+    "hasura_readable_fields",
+)
+_PROJECT_EXTENSION_FILTER_FIELDS = declared_hasura_resource_fields(
+    Project,
+    "hasura_filterable_fields",
+)
+_PROJECT_EXTENSION_ORDER_FIELDS = declared_hasura_resource_fields(
+    Project,
+    "hasura_sortable_fields",
+)
+_PROJECT_EXTENSION_AGGREGATE_FIELDS = declared_hasura_resource_fields(
+    Project,
+    "hasura_aggregatable_fields",
+)
+_PROJECT_EXTENSION_GROUP_FIELDS = declared_hasura_resource_fields(
+    Project,
+    "hasura_groupable_fields",
+)
+_PROJECT_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(
+    Project,
+    "hasura_insertable_fields",
+)
+_PROJECT_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(
+    Project,
+    "hasura_updatable_fields",
+)
+_PROJECT_EXTENSION_WRITE_FIELDS = tuple(
+    dict.fromkeys((*_PROJECT_EXTENSION_INSERT_FIELDS, *_PROJECT_EXTENSION_UPDATE_FIELDS))
+)
+_PROJECT_EXTENSION_PUBLIC_ID_FIELDS = tuple(
+    name for name in _PROJECT_EXTENSION_WRITE_FIELDS if Project._meta.get_field(name).is_relation
+)
+
+
+def _extension_declared_fields(
+    model: type,
+    readable_fields: tuple[str, ...],
+    *,
+    filterable_fields: tuple[str, ...],
+    sortable_fields: tuple[str, ...],
+    aggregatable_fields: tuple[str, ...],
+    groupable_fields: tuple[str, ...],
+    insertable_fields: tuple[str, ...],
+    updatable_fields: tuple[str, ...],
+) -> tuple[str | DataResourceFieldMetadata, ...]:
+    """Return metadata for donor fields projected after the parent node.
+
+    Ordinary fields retain model reconstruction. A contributed ``StateField``
+    supplies its enum metadata explicitly because the downstream type extension
+    is composed after this parent resource is declared.
+    """
+
+    filterable = set(filterable_fields)
+    sortable = set(sortable_fields)
+    aggregatable = set(aggregatable_fields)
+    groupable = set(groupable_fields)
+    insertable = set(insertable_fields)
+    updatable = set(updatable_fields)
+    declared: list[str | DataResourceFieldMetadata] = []
+    for name in readable_fields:
+        choices_enum = getattr(model._meta.get_field(name), "choices_enum", None)
+        if choices_enum is None:
+            declared.append(name)
+            continue
+        declared.append(
+            DataResourceFieldMetadata(
+                name=name,
+                kind="enum",
+                values=tuple(
+                    DataResourceEnumValueMetadata(
+                        value=str(member.name),
+                        description=str(member.label) if str(member.label).strip() else None,
+                    )
+                    for member in choices_enum
+                ),
+                widget="select",
+                filterable=name in filterable,
+                sortable=name in sortable,
+                aggregatable=name in aggregatable,
+                groupable=name in groupable,
+                creatable=name in insertable,
+                updatable=name in updatable,
+            )
+        )
+    return tuple(declared)
+
+
+_PROJECT_EXTENSION_DECLARED_FIELDS = _extension_declared_fields(
+    Project,
+    _PROJECT_EXTENSION_READ_FIELDS,
+    filterable_fields=_PROJECT_EXTENSION_FILTER_FIELDS,
+    sortable_fields=_PROJECT_EXTENSION_ORDER_FIELDS,
+    aggregatable_fields=_PROJECT_EXTENSION_AGGREGATE_FIELDS,
+    groupable_fields=_PROJECT_EXTENSION_GROUP_FIELDS,
+    insertable_fields=_PROJECT_EXTENSION_INSERT_FIELDS,
+    updatable_fields=_PROJECT_EXTENSION_UPDATE_FIELDS,
+)
 
 _TASK_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(
     Task,
@@ -70,13 +174,20 @@ _TASK_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(
 _TASK_EXTENSION_FORBIDDEN_INSERT_FIELDS = set(
     declared_hasura_resource_fields(Task, "hasura_forbidden_insertable_fields")
 )
-_TASK_EXTENSION_WRITE_FIELDS = tuple(
-    dict.fromkeys((*_TASK_EXTENSION_INSERT_FIELDS, *_TASK_EXTENSION_UPDATE_FIELDS))
-)
+_TASK_EXTENSION_WRITE_FIELDS = tuple(dict.fromkeys((*_TASK_EXTENSION_INSERT_FIELDS, *_TASK_EXTENSION_UPDATE_FIELDS)))
 _TASK_EXTENSION_PUBLIC_ID_FIELDS = tuple(
-    name
-    for name in _TASK_EXTENSION_WRITE_FIELDS
-    if Task._meta.get_field(name).is_relation
+    name for name in _TASK_EXTENSION_WRITE_FIELDS if Task._meta.get_field(name).is_relation
+)
+
+_TASK_EXTENSION_DECLARED_FIELDS = _extension_declared_fields(
+    Task,
+    _TASK_EXTENSION_READ_FIELDS,
+    filterable_fields=_TASK_EXTENSION_FILTER_FIELDS,
+    sortable_fields=_TASK_EXTENSION_ORDER_FIELDS,
+    aggregatable_fields=_TASK_EXTENSION_AGGREGATE_FIELDS,
+    groupable_fields=_TASK_EXTENSION_GROUP_FIELDS,
+    insertable_fields=_TASK_EXTENSION_INSERT_FIELDS,
+    updatable_fields=_TASK_EXTENSION_UPDATE_FIELDS,
 )
 
 DroppedReason = Task._meta.get_field("dropped_reason").choices_enum
@@ -322,9 +433,18 @@ _PROJECT_RESOURCE = hasura_model_resource(
         "converted_from",
         "created_at",
         "updated_at",
+        *_PROJECT_EXTENSION_FILTER_FIELDS,
     ],
-    sortable=["title", "status", "start_date", "target_date", "created_at", "updated_at"],
-    aggregatable=["id"],
+    sortable=[
+        "title",
+        "status",
+        "start_date",
+        "target_date",
+        "created_at",
+        "updated_at",
+        *_PROJECT_EXTENSION_ORDER_FIELDS,
+    ],
+    aggregatable=["id", *_PROJECT_EXTENSION_AGGREGATE_FIELDS],
     groupable=[
         "status",
         "lead",
@@ -332,6 +452,7 @@ _PROJECT_RESOURCE = hasura_model_resource(
         "target_date_resolution",
         "folder",
         "target_date",
+        *_PROJECT_EXTENSION_GROUP_FIELDS,
     ],
     insertable=[
         "title",
@@ -343,6 +464,7 @@ _PROJECT_RESOURCE = hasura_model_resource(
         "target_date",
         "target_date_resolution",
         "folder",
+        *_PROJECT_EXTENSION_INSERT_FIELDS,
     ],
     updatable=[
         "title",
@@ -353,13 +475,22 @@ _PROJECT_RESOURCE = hasura_model_resource(
         "target_date",
         "target_date_resolution",
         "folder",
+        *_PROJECT_EXTENSION_UPDATE_FIELDS,
     ],
     field_id_decode={
         "lead": public_pk_decoder(User),
         "folder": public_pk_decoder(Folder),
         "converted_from": public_pk_decoder(Task),
+        **{
+            name: public_pk_decoder(Project._meta.get_field(name).related_model)
+            for name in _PROJECT_EXTENSION_PUBLIC_ID_FIELDS
+        },
     },
-    write_backend=AngeeHasuraWriteBackend(Project, public_id_fields=("lead", "folder")),
+    write_backend=AngeeHasuraWriteBackend(
+        Project,
+        public_id_fields=("lead", "folder", *_PROJECT_EXTENSION_PUBLIC_ID_FIELDS),
+    ),
+    declared_fields=_PROJECT_EXTENSION_DECLARED_FIELDS,
 )
 
 _MILESTONE_RESOURCE = hasura_model_resource(
@@ -495,7 +626,7 @@ _TASK_RESOURCE = hasura_model_resource(
             *_TASK_EXTENSION_PUBLIC_ID_FIELDS,
         ),
     ),
-    declared_fields=_TASK_EXTENSION_READ_FIELDS,
+    declared_fields=_TASK_EXTENSION_DECLARED_FIELDS,
 )
 
 _TASK_RELATION_RESOURCE = hasura_model_resource(

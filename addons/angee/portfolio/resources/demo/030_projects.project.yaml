@@ -1,0 +1,29 @@
+_meta:
+  model: projects.Project
+rows:
+  - xref: accessible_plot_booking
+    fields:
+      product: portfolio.neighborhood_garden
+      title: Launch accessible plot booking
+      body: Let neighbours choose accessible plots before the spring allocation.
+      status: open
+      lead: iam.user_alice
+      target_date: 2027-02-28
+      target_date_resolution: month
+      priority: 10
+      sort_order: 1024.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: seed_exchange
+    fields:
+      product: portfolio.neighborhood_garden
+      title: Open the neighbourhood seed exchange
+      body: Create the bounded push that leaves release 2.3 on the garden timeline.
+      status: open
+      lead: iam.user_bob
+      target_date: 2027-04-30
+      target_date_resolution: month
+      priority: 20
+      sort_order: 2048.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

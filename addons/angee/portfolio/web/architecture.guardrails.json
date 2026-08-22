@@ -1,0 +1,28 @@
+{
+  "criticalExports": [
+    {
+      "name": "PRODUCT_MODEL",
+      "ownerFile": "src/resources.ts"
+    },
+    {
+      "name": "INITIATIVE_MODEL",
+      "ownerFile": "src/resources.ts"
+    },
+    {
+      "name": "INITIATIVE_PROJECT_MODEL",
+      "ownerFile": "src/resources.ts"
+    },
+    {
+      "name": "UPDATE_MODEL",
+      "ownerFile": "src/resources.ts"
+    },
+    {
+      "name": "RELEASE_MODEL",
+      "ownerFile": "src/resources.ts"
+    },
+    {
+      "name": "parsePortfolioUpdateValues",
+      "ownerFile": "src/update-composer.tsx"
+    }
+  ]
+}
