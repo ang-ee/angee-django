@@ -14,6 +14,8 @@ describe("messaging addon manifest", () => {
       "activity",
     ]);
     expect((messaging.routes ?? []).map((route) => route.name)).toEqual([
+      "messaging.publicWebforms",
+      "messaging.publicWebform",
       "messaging.inbox",
       "messaging.inbox.record",
       "messaging.threads",

@@ -300,3 +300,16 @@ class ManualChannelBackend(ChannelBackend):
         """Return no messages — a manual channel is populated by hand."""
 
         return []
+
+
+class WebformChannelBackend(ChannelBackend):
+    """Vendor-free public-form channel populated only by its curated HTTP view."""
+
+    key = "webform"
+    label = "Public Webform"
+    quote_edges = False
+
+    def fetch_messages(self) -> list[ParsedMessage]:
+        """Return no polled messages; form POSTs call the shared ingest owner."""
+
+        return []

@@ -80,7 +80,19 @@ describe("ChannelsPage", () => {
       expect.arrayContaining(["sync_stage", "last_sync_status", "last_sync_items", "last_sync_completed_at"]),
     );
     expect(pageMocks.fieldNames).toEqual(
-      expect.arrayContaining(["is_syncing", "sync_stage", "sync_error", "sync_progress", "last_sync_summary"]),
+      expect.arrayContaining([
+        "slug",
+        "is_published",
+        "form_schema_version",
+        "form_schema",
+        "max_body_bytes",
+        "max_field_bytes",
+        "is_syncing",
+        "sync_stage",
+        "sync_error",
+        "sync_progress",
+        "last_sync_summary",
+      ]),
     );
   });
 });

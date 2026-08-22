@@ -73,6 +73,18 @@ const messagingMenu: readonly BaseMenuItem[] = [
 const messaging = defineBaseAddon({
   id: "messaging",
   routes: [
+    {
+      name: "messaging.publicWebforms",
+      path: "/public/forms",
+      layout: "public",
+    },
+    {
+      name: "messaging.publicWebform",
+      path: "/public/forms/$slug",
+      parent: "messaging.publicWebforms",
+      layout: "public",
+      component: lazyRouteComponent(() => import("./PublicWebformPage"), "PublicWebformPage"),
+    },
     ...resourcePageRoutes("messaging.inbox", "/messaging/inbox", lazyRouteComponent(() => import("./MessagesPage"), "MessagesPage"), "messaging.Message"),
     ...resourcePageRoutes("messaging.threads", "/messaging/threads", lazyRouteComponent(() => import("./ThreadsPage"), "ThreadsPage"), "messaging.Thread"),
     ...resourcePageRoutes("messaging.channels", "/messaging/channels", lazyRouteComponent(() => import("./ChannelsPage"), "ChannelsPage"), "messaging.Channel"),

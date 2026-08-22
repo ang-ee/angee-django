@@ -29,6 +29,14 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Any, ClassVar, cast
 
+from angee.base.actors import actor_user_id
+from angee.base.emission import ModelClassAttribute
+from angee.base.fields import SqidField, StateField
+from angee.base.impl import ImplClassField
+from angee.base.mixins import AuditMixin, SqidMixin
+from angee.base.models import AngeeModel
+from angee.base.refs import RecordRefMixin
+from angee.jobs.autoconfig import SETTINGS as _JOB_SETTINGS
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -36,7 +44,8 @@ from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelatio
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
+from django.core.validators import MinValueValidator
 from django.db import close_old_connections, connection, connections, models, transaction
 from django.db.models.functions import MD5, Coalesce
 from django.utils import timezone
@@ -49,16 +58,8 @@ from rebac import (
     to_subject_ref,
 )
 
-from angee.base.actors import actor_user_id
-from angee.base.emission import ModelClassAttribute
-from angee.base.fields import SqidField, StateField
-from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeModel
-from angee.base.refs import RecordRefMixin
 from angee.integrate.models import Bridge
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
-from angee.jobs.autoconfig import SETTINGS as _JOB_SETTINGS
 from angee.messaging.backends import ChannelBackend
 from angee.messaging.managers import (
     ChannelManager,
@@ -76,6 +77,7 @@ from angee.messaging.managers import (
     strip_null_bytes,
 )
 from angee.messaging.tracking import FieldTracker, TrackingChange
+from angee.messaging.webforms import WebformSpec, default_webform_schema
 from angee.parties.models import Handle
 
 # Partitioned channel syncs (IMAP mailboxes) drain up to this many partitions
@@ -1177,6 +1179,151 @@ class Channel(Bridge):
             node[path[-1]] = value
             row.cursor = cursor
             row.save(update_fields=["cursor", "updated_at"])
+
+
+class _ChannelWebformContribution(models.Model):
+    """Public-form configuration and message mapping folded onto Channel.
+
+    The contribution mirrors intake's narrow same-row donor shape: no second
+    table and no duplicate ``AngeeModel`` timestamps ahead of Channel's concrete
+    Integration parent.  Persisted form facts and their interpretation therefore
+    stay on the row that owns them.
+    """
+
+    hasura_readable_fields = (
+        "slug",
+        "is_published",
+        "form_schema_version",
+        "form_schema",
+        "max_body_bytes",
+        "max_field_bytes",
+    )
+    hasura_filterable_fields = ("slug", "is_published", "form_schema_version")
+    hasura_sortable_fields = hasura_filterable_fields
+    hasura_aggregatable_fields: tuple[str, ...] = ()
+    hasura_groupable_fields = ("is_published", "form_schema_version")
+    hasura_updatable_fields = hasura_readable_fields
+
+    slug = models.SlugField(max_length=80, blank=True, default="")
+    is_published = models.BooleanField(default=False)
+    form_schema_version = models.PositiveSmallIntegerField(
+        default=1,
+        validators=(MinValueValidator(1),),
+    )
+    form_schema = models.JSONField(default=default_webform_schema, blank=True)
+    max_body_bytes = models.PositiveIntegerField(
+        default=65_536,
+        validators=(MinValueValidator(1),),
+    )
+    max_field_bytes = models.PositiveIntegerField(
+        default=4_096,
+        validators=(MinValueValidator(1),),
+    )
+
+    class Meta:
+        """Abstract webform columns and the public-slug identity constraint."""
+
+        abstract = True
+        constraints = (
+            models.UniqueConstraint(
+                fields=("slug",),
+                condition=~models.Q(slug=""),
+                name="uq_messaging_channel_webform_slug",
+            ),
+        )
+
+    def clean(self) -> None:
+        """Keep published/form-specific facts attached only to webform channels."""
+
+        super().clean()
+        is_webform = str(self.backend_class) == "webform"
+        errors: dict[str, str] = {}
+        if (self.slug or self.is_published) and not is_webform:
+            errors["backend_class"] = "A public form requires the webform channel backend."
+        if self.is_published and not self.slug:
+            errors["slug"] = "A published public form requires a slug."
+        if errors:
+            raise ValidationError(errors)
+        if is_webform:
+            self.webform_spec()
+
+    def webform_spec(self) -> WebformSpec:
+        """Return this row's server-validated versioned form spec."""
+
+        return WebformSpec.deserialize(
+            self.form_schema,
+            version=int(self.form_schema_version),
+        )
+
+    def webform_message(
+        self,
+        *,
+        submission_id: str,
+        answers: dict[str, Any],
+    ) -> Any:
+        """Map one validated answer envelope to messaging's neutral ingest DTO."""
+
+        from angee.messaging.backends import (
+            ParsedHandle,
+            ParsedMessage,
+            ParsedPart,
+            ParsedThread,
+        )
+
+        spec = self.webform_spec()
+        email_field = spec.email_field
+        email = str(answers.get(email_field.name) or "").strip() if email_field else ""
+        content_answers = (
+            {name: value for name, value in answers.items() if name != email_field.name}
+            if email_field
+            else answers
+        )
+        stable_id = f"webform:{self.slug}:{submission_id}"
+        sender = ParsedHandle(
+            platform="other",
+            value=stable_id,
+            external_id=stable_id,
+            display_name="Anonymous",
+        )
+        title = str(self.display_name or f"Public form {self.slug}")
+        now = timezone.now()
+        return ParsedMessage(
+            external_id=stable_id,
+            platform="other",
+            sender=sender,
+            sent_at=now,
+            received_at=now,
+            thread=ParsedThread(
+                external_id=f"webform:{self.slug}",
+                title=title,
+                metadata={"webform_slug": self.slug},
+            ),
+            body=ParsedPart(
+                type="text/plain",
+                role="body",
+                text=spec.render_markdown(content_answers),
+            ),
+            metadata={
+                "webform": {
+                    "slug": self.slug,
+                    "schema_version": int(self.form_schema_version),
+                    "submission_id": submission_id,
+                    "answers": content_answers,
+                    "unverified_submitter_email": email or None,
+                }
+            },
+        )
+
+
+class ChannelWebform(_ChannelWebformContribution, AngeeModel):
+    """Same-row public-webform donor for ``messaging.Channel``."""
+
+    extends = "messaging.Channel"
+
+    class Meta:
+        """Abstract donor discovered by the composer; runtime remains false."""
+
+        abstract = True
 
 
 class Thread(SqidMixin, AuditMixin, AngeeModel):

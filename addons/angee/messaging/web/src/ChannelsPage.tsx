@@ -34,6 +34,14 @@ export function ChannelsPage(): React.ReactElement {
         <Field name="runtime_status" readOnly />
         <Field name="backend_class" readOnly />
         <Field name="config" readOnly />
+        <Group label={t("channel.group.webform")} columns={2}>
+          <Field name="slug" widget="slug" showWhen={isWebformChannel} />
+          <Field name="is_published" showWhen={isWebformChannel} />
+          <Field name="form_schema_version" showWhen={isWebformChannel} />
+          <Field name="max_body_bytes" showWhen={isWebformChannel} />
+          <Field name="max_field_bytes" showWhen={isWebformChannel} />
+          <Field name="form_schema" widget="json" showWhen={isWebformChannel} />
+        </Group>
         <Group label={t("channel.group.lastSync")} columns={2}>
           <Field name="is_syncing" readOnly />
           <Field name="sync_stage" readOnly />
@@ -48,4 +56,8 @@ export function ChannelsPage(): React.ReactElement {
       </Form>
     </ResourceList>
   );
+}
+
+function isWebformChannel(values: Record<string, unknown>): boolean {
+  return String(values.backend_class ?? "").toLowerCase() === "webform";
 }
