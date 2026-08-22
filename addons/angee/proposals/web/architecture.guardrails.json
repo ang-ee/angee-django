@@ -1,0 +1,24 @@
+{
+  "criticalExports": [
+    {
+      "name": "ROUND_MODEL",
+      "ownerFile": "src/resources.ts"
+    },
+    {
+      "name": "PROPOSAL_MODEL",
+      "ownerFile": "src/resources.ts"
+    },
+    {
+      "name": "TOPIC_MODEL",
+      "ownerFile": "src/resources.ts"
+    },
+    {
+      "name": "ANSWER_MODEL",
+      "ownerFile": "src/resources.ts"
+    },
+    {
+      "name": "REVIEW_MODEL",
+      "ownerFile": "src/resources.ts"
+    }
+  ]
+}
