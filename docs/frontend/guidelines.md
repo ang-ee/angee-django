@@ -137,8 +137,9 @@ TanStack apply the URL-owned filter object to in-memory rows.
   `documents.public.ts` → public. An op must live in a `documents*.ts` file (the
   codegen glob does not scan inline ops), and a console op placed in a
   `documents.public.ts` (or vice versa) fails codegen loudly against the wrong
-  schema. Keep valibot only to narrow a `JSON`-scalar field the schema leaves
-  opaque (parse, do not assert).
+  schema. Narrow a `JSON`-scalar object with `recordValue` from `@angee/refine`,
+  then validate its domain fields at their owner; valibot adoption is a deferred
+  stack decision.
 - **Record-targeted action mutations are derived, not authored.** For a
   `<field>(id: ID!, ...required scalar arguments): ActionResult` mutation, call
   `useActionMutation<ActionFieldName>("field")` from `@angee/ui` in headless
@@ -416,6 +417,7 @@ TanStack apply the URL-owned filter object to in-memory rows.
 
 Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 
+- **Server preferences are per-tab-session snapshots:** they have no cross-tab immediacy, and rapid multi-tab writes are last-writer-wins until the deferred `changes()` path lands.
 - **A nested list must pass `scope="local"` to keep its own `pageSize` and view;** the default inherited scope intentionally reuses the ambient resource-view state.
 - **A filtered `pnpm typecheck`/`test` skips the root `pretypecheck: codegen` hook.**
   The root `typecheck`/`test` scripts run `pnpm codegen` first; `pnpm --filter <pkg>
