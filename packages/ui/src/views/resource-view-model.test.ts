@@ -144,6 +144,11 @@ describe("resource-view model", () => {
       { id: "favorite:valid", label: "Valid" },
       { id: 123, label: "Invalid" },
       { id: "favorite:missing-label" },
+      {
+        id: "favorite:bad-sort",
+        label: "Bad sort",
+        sort: { field: "title", dir: "sideways" },
+      },
     ]))).toEqual([{ id: "favorite:valid", label: "Valid" }]);
   });
 

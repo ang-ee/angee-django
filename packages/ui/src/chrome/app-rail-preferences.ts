@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { recordValue } from "@angee/refine";
+import * as v from "valibot";
 
 import { dedupeBy } from "../lib/dedupe";
 import {
@@ -21,20 +21,25 @@ const EMPTY_RAIL_PREFERENCES: AppRailPreferences = {
   expanded: undefined,
 };
 
+const RailPreferencesEnvelopeSchema = v.object({
+  order: v.optional(v.unknown()),
+  defaultItemId: v.optional(v.unknown()),
+  expanded: v.optional(v.unknown()),
+});
+
 export function readAppRailPreferences(
   preferences: RuntimeUserPreferences | null | undefined,
 ): AppRailPreferences {
   const raw = preferences?.[APP_RAIL_PREFERENCES_KEY];
-  const record = recordValue(raw);
-  if (!record) return EMPTY_RAIL_PREFERENCES;
+  const result = v.safeParse(RailPreferencesEnvelopeSchema, raw);
+  if (!result.success) return EMPTY_RAIL_PREFERENCES;
+  const record = result.output;
+  const defaultItemId = v.safeParse(v.string(), record.defaultItemId);
+  const expanded = v.safeParse(v.boolean(), record.expanded);
   return {
     order: stringList(record.order),
-    defaultItemId: typeof record.defaultItemId === "string"
-      ? record.defaultItemId
-      : null,
-    expanded: typeof record.expanded === "boolean"
-      ? record.expanded
-      : undefined,
+    defaultItemId: defaultItemId.success ? defaultItemId.output : null,
+    expanded: expanded.success ? expanded.output : undefined,
   };
 }
 
@@ -76,6 +81,13 @@ export function useAppRailPreferences(): {
 }
 
 function stringList(value: unknown): readonly string[] {
-  if (!Array.isArray(value)) return [];
-  return dedupeBy(value.filter((item): item is string => typeof item === "string"), (item) => item);
+  const result = v.safeParse(v.array(v.unknown()), value);
+  if (!result.success) return [];
+  return dedupeBy(
+    result.output.flatMap((item) => {
+      const parsed = v.safeParse(v.string(), item);
+      return parsed.success ? [parsed.output] : [];
+    }),
+    (item) => item,
+  );
 }

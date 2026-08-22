@@ -1,4 +1,5 @@
 import { format } from "date-fns";
+import * as v from "valibot";
 import {
   ANGEE_FILTER_LOOKUP_OPERATORS,
   clampPageSize,
@@ -104,7 +105,9 @@ export function availableResourceViewKinds(
 
 export type ResourceViewGroupGranularity =
   (typeof RESOURCE_VIEW_GROUP_GRANULARITIES)[number];
-export type ResourceViewSortDirection = "asc" | "desc";
+export const RESOURCE_VIEW_SORT_DIRECTIONS = ["asc", "desc"] as const;
+export type ResourceViewSortDirection =
+  (typeof RESOURCE_VIEW_SORT_DIRECTIONS)[number];
 export type ResourceViewOrderDirection = "ASC" | "DESC";
 export const RESOURCE_VIEW_LOOKUP_OPERATORS = ANGEE_FILTER_LOOKUP_OPERATORS;
 export type ResourceViewLookupOperator = AngeeFilterLookupOperator;
@@ -178,6 +181,29 @@ export interface ResourceViewFavorite {
   view?: ResourceViewKind;
 }
 
+const ResourceViewSortSchema = v.object({
+  field: v.string(),
+  dir: v.picklist(RESOURCE_VIEW_SORT_DIRECTIONS),
+});
+
+const ResourceViewGroupSchema = v.object({
+  field: v.string(),
+  aggregateField: v.optional(v.string()),
+  aggregateKey: v.optional(v.string()),
+  granularity: v.optional(v.picklist(RESOURCE_VIEW_GROUP_GRANULARITIES)),
+});
+
+/** Parse boundary for one favorite stored inside the opaque preferences JSON. */
+export const ResourceViewFavoriteSchema = v.object({
+  id: v.string(),
+  label: v.string(),
+  pageSize: v.optional(v.pipe(v.number(), v.finite())),
+  sort: v.optional(v.nullable(ResourceViewSortSchema)),
+  filter: v.optional(v.custom<ResourceViewFilter>(isResourceViewFilter)),
+  groupStack: v.optional(v.array(ResourceViewGroupSchema)),
+  view: v.optional(v.picklist(RESOURCE_VIEW_KINDS)),
+});
+
 export function resourceViewFavoritesFromJson(
   raw: string | null,
 ): readonly ResourceViewFavorite[] {
@@ -192,7 +218,12 @@ export function resourceViewFavoritesFromJson(
 export function resourceViewFavoritesFromUnknown(
   value: unknown,
 ): readonly ResourceViewFavorite[] {
-  return Array.isArray(value) ? value.filter(isResourceViewFavorite) : [];
+  const arrayResult = v.safeParse(v.array(v.unknown()), value);
+  if (!arrayResult.success) return [];
+  return arrayResult.output.flatMap((item) => {
+    const result = v.safeParse(ResourceViewFavoriteSchema, item);
+    return result.success ? [result.output] : [];
+  });
 }
 
 export type ResourceViewAction =
@@ -906,12 +937,6 @@ function isResourceViewKind(value: string): value is ResourceViewKind {
 
 function isCalendarViewMode(value: string): value is CalendarViewMode {
   return CALENDAR_VIEW_MODES.includes(value as CalendarViewMode);
-}
-
-function isResourceViewFavorite(value: unknown): value is ResourceViewFavorite {
-  const record = recordValue(value);
-  if (!record) return false;
-  return typeof record.id === "string" && typeof record.label === "string";
 }
 
 function nextResourceViewFavoriteId(
