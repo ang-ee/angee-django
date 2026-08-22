@@ -11,7 +11,9 @@ from rebac import ObjectRef, SubjectRef, current_actor
 from rebac.backends import backend
 from rebac.field_visibility import check_field_access, gated_read_fields
 from rebac.resources import model_resource_type
+from rebac.schema.walker import field_gated_actions
 
+from angee.base.permissions import effective_rebac_definition
 from angee.graphql.events import ChangeEvent, ChangePayload
 
 
@@ -52,7 +54,7 @@ def _is_gated_read_axis(model: type[models.Model], axis: str) -> bool:
     leaf_model: type[models.Model] = model
     for step in path:
         field_name = step.split(".", maxsplit=1)[0]
-        if field_name in gated_read_fields(leaf_model):
+        if field_name in _declared_gated_read_fields(leaf_model):
             return True
         try:
             field = leaf_model._meta.get_field(field_name)
@@ -62,7 +64,44 @@ def _is_gated_read_axis(model: type[models.Model], axis: str) -> bool:
         if related is None:
             return False
         leaf_model = related
-    return leaf.split(".", maxsplit=1)[0] in gated_read_fields(leaf_model)
+    return leaf.split(".", maxsplit=1)[0] in _declared_gated_read_fields(leaf_model)
+
+
+def _declared_gated_read_fields(model: type[models.Model]) -> frozenset[str]:
+    """Return field names protected by disk-declared ``read__`` permissions."""
+
+    definition = effective_rebac_definition(model)
+    if definition is None:
+        # Untyped models cannot cause the backend helper to resolve a schema, and
+        # retaining that empty fast path keeps synthetic callers injectable.
+        return gated_read_fields(model) if not model_resource_type(model) else frozenset()
+    prefix = "read__"
+    fields = {
+        field_name
+        for action in field_gated_actions(definition, "read")
+        if (field_name := _model_field_name(model, action.removeprefix(prefix))) is not None
+    }
+    return frozenset(fields)
+
+
+def _model_field_name(model: type[models.Model], name: str) -> str | None:
+    """Resolve a declared field action to its canonical Django field name."""
+
+    if name == "pk":
+        pk = model._meta.pk
+        return pk.name if pk is not None else None
+    try:
+        field = model._meta.get_field(name)
+    except FieldDoesNotExist:
+        return next(
+            (
+                candidate.name
+                for candidate in model._meta.concrete_fields
+                if getattr(candidate, "attname", None) == name
+            ),
+            None,
+        )
+    return field.name if getattr(field, "concrete", False) else None
 
 
 class ChangeReadGate:
