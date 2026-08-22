@@ -12,6 +12,8 @@ from typing import Any, cast
 
 import pytest
 import reversion
+from angee.addons import AddonContract
+from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from django.apps import AppConfig
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
@@ -20,9 +22,7 @@ from django.db import connection, models
 from django.test import RequestFactory
 from rebac import actor_context, system_context
 
-from angee.addons import AddonContract
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
-from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClientOidc
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import Credential as AbstractCredential
@@ -39,6 +39,7 @@ from angee.integrate.vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
 from angee.knowledge.models import Link as AbstractLink
 from angee.knowledge.models import MarkdownPage as AbstractMarkdownPage
 from angee.knowledge.models import Page as AbstractPage
+from angee.knowledge.models import RecordBinding as AbstractRecordBinding
 from angee.knowledge.models import Vault as AbstractVault
 from angee.platform.models import Addon as AbstractAddon
 from angee.platform.models import PlatformExplorer as AbstractPlatformExplorer
@@ -444,7 +445,20 @@ class Link(AbstractLink):
         rebac_id_attr = "sqid"
 
 
-KNOWLEDGE_TEST_MODELS = (Vault, Page, MarkdownPage, Link)
+class RecordBinding(AbstractRecordBinding):
+    """Concrete knowledge record edge used by source-addon tests."""
+
+    class Meta(AbstractRecordBinding.Meta):
+        """Django model options for the canonical test record binding."""
+
+        abstract = False
+        app_label = "knowledge"
+        db_table = "test_knowledge_record_binding"
+        rebac_resource_type = "knowledge/record_binding"
+        rebac_id_attr = "sqid"
+
+
+KNOWLEDGE_TEST_MODELS = (Vault, Page, MarkdownPage, Link, RecordBinding)
 """Concrete knowledge models created on demand by knowledge test fixtures."""
 
 

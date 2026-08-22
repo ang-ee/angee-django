@@ -6,15 +6,16 @@ from django.apps import AppConfig
 
 
 class KnowledgeConfig(AppConfig):
-    """Source app manifest for the knowledge addon."""
+    """Source app manifest for knowledge indexes and record bindings."""
 
     default = True
     name = "angee.knowledge"
 
     def ready(self) -> None:
-        """Register the backlink index signal after app population."""
+        """Wire knowledge-owned signal receivers after app population."""
 
         super().ready()
-        # App-populate phase 1 imports this config before models are ready;
-        # importing signals here registers the post_save receiver.
-        from angee.knowledge import signals  # noqa: F401
+        # App population phase 1 imports AppConfig before the models exist; defer.
+        from angee.knowledge import signals
+
+        signals.connect()

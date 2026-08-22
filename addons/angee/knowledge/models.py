@@ -16,14 +16,28 @@ import re
 from dataclasses import dataclass
 from typing import Any, ClassVar, cast
 
-from django.conf import settings
-from django.db import IntegrityError, models, transaction
-from markdown_it import MarkdownIt
-from rebac import PermissionDenied, system_context, to_subject_ref
-
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel
+from angee.base.models import AngeeManager, AngeeModel, public_id_for
+from angee.base.refs import RecordRef, RecordRefMixin, canonical_record_target
+from django.conf import settings
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError, models, transaction
+from markdown_it import MarkdownIt
+from rebac import (
+    MissingActorError,
+    ObjectRef,
+    PermissionDenied,
+    current_actor,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+)
+from rebac.backends import backend as rebac_backend
+from rebac.resources import model_resource_type
+
 from angee.knowledge.retrieval import RetrievalBackend
 
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]\n]+?)\]\]")
@@ -240,6 +254,346 @@ class Page(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         """Return the page title for Django displays."""
 
         return self.title
+
+
+class RecordBindingManager(AngeeManager):
+    """Own polymorphic knowledge-to-record binding writes and reverse reads.
+
+    Django/Zed cannot field-back a relation through ``GenericForeignKey``. The
+    model's own Zed definition is therefore deliberately fail-closed; these
+    authored methods are the only read/write surface and gate every operation on
+    the target's canonical REBAC identity. Returned querysets are exact-filtered
+    system querysets, never a general bypass.
+    """
+
+    DEFAULT_ROLE = "related"
+    KNOWLEDGE_MODELS = frozenset({"knowledge.page", "knowledge.vault"})
+
+    def create(self, **kwargs: Any) -> models.Model:
+        """Create through the idempotent role-keyed upsert contract."""
+
+        try:
+            target = kwargs.pop("target")
+        except KeyError as error:
+            raise TypeError("RecordBinding.objects.create() requires target.") from error
+        role = kwargs.pop("role", self.DEFAULT_ROLE)
+        page = kwargs.pop("page", None)
+        vault = kwargs.pop("vault", None)
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            raise TypeError(f"Unexpected RecordBinding fields: {unexpected}")
+        return self.upsert(page=page, vault=vault, target=target, role=role)
+
+    def upsert(
+        self,
+        *,
+        target: models.Model,
+        page: models.Model | None = None,
+        vault: models.Model | None = None,
+        role: str = DEFAULT_ROLE,
+    ) -> models.Model:
+        """Return one binding per knowledge owner, canonical target, and role."""
+
+        knowledge, owner_field = self._knowledge_owner(page=page, vault=vault)
+        canonical = canonical_record_target(self._saved(target, "target"))
+        self._require_access(knowledge, "write", "Write access to the knowledge owner is required.")
+        self._require_target_access(
+            canonical,
+            "write",
+            "Write access to the target is required to bind knowledge.",
+        )
+        actor = self._actor()
+        role = self._role(role)
+        lookup = {
+            owner_field: knowledge,
+            "content_type": canonical.content_type,
+            "object_id": canonical.object_id,
+            "role": role,
+        }
+        with system_context(reason="knowledge.record_binding.upsert"), transaction.atomic():
+            binding, _created = self.model._base_manager.get_or_create(**lookup)
+        return binding.with_actor(actor)
+
+    def unbind(
+        self,
+        *,
+        target: models.Model,
+        page: models.Model | None = None,
+        vault: models.Model | None = None,
+        role: str = DEFAULT_ROLE,
+    ) -> int:
+        """Delete one role-keyed binding after both owners authorize the write."""
+
+        knowledge, owner_field = self._knowledge_owner(page=page, vault=vault)
+        canonical = canonical_record_target(self._saved(target, "target"))
+        self._require_access(knowledge, "write", "Write access to the knowledge owner is required.")
+        self._require_target_access(
+            canonical,
+            "write",
+            "Write access to the target is required to unbind knowledge.",
+        )
+        with system_context(reason="knowledge.record_binding.unbind"):
+            deleted, _by_model = self.model._base_manager.filter(
+                **{
+                    owner_field: knowledge,
+                    "content_type": canonical.content_type,
+                    "object_id": canonical.object_id,
+                    "role": self._role(role),
+                }
+            ).delete()
+        return deleted
+
+    def teardown_for_record(self, record: models.Model) -> None:
+        """Delete every binding to ``record`` before the target row disappears.
+
+        Canonical targets have no reverse ``GenericRelation`` because knowledge can
+        bind any current or future REBAC model. The global knowledge-owned
+        ``pre_delete`` receiver therefore delegates here so primary-key reuse cannot
+        make an old binding resolve to a new row. Deleting the bindings normally keeps
+        their ``post_delete`` change publisher and target read anchor intact.
+        """
+
+        if record.pk is None:
+            return
+        content_type, object_id = canonical_record_target(record)
+        bindings = self.model._base_manager.filter(content_type=content_type, object_id=object_id)
+        if not bindings.exists():
+            return
+        with system_context(reason="knowledge.record_binding.teardown"), transaction.atomic():
+            bindings.delete()
+
+    def for_record(self, record: models.Model, *, role: str | None = None) -> models.QuerySet[Any]:
+        """Return bindings on one actor-readable canonical record."""
+
+        canonical = canonical_record_target(self._saved(record, "record"))
+        if not self._target_has_access(canonical, "read"):
+            return self.system_context(reason="knowledge.record_binding.for_record.denied").none()
+        queryset = self.system_context(reason="knowledge.record_binding.for_record").filter(
+            content_type=canonical.content_type, object_id=canonical.object_id
+        )
+        return queryset if role is None else queryset.filter(role=self._role(role))
+
+    def pages_for_record(self, record: models.Model, *, role: str | None = None) -> models.QuerySet[Any]:
+        """Return page bindings on ``record`` without loading gated page content."""
+
+        return self.for_record(record, role=role).filter(page__isnull=False)
+
+    def vaults_for_record(self, record: models.Model, *, role: str | None = None) -> models.QuerySet[Any]:
+        """Return vault bindings on ``record`` without loading gated vault content."""
+
+        return self.for_record(record, role=role).filter(vault__isnull=False)
+
+    def for_knowledge(
+        self,
+        knowledge: models.Model,
+        *,
+        role: str | None = None,
+    ) -> models.QuerySet[Any]:
+        """Return bindings from one readable page/vault to actor-readable targets."""
+
+        knowledge, owner_field = self._knowledge_owner_instance(knowledge)
+        self._require_access(knowledge, "read", "Read access to the knowledge owner is required.")
+        actor = self._actor()
+        candidates = self.system_context(reason="knowledge.record_binding.for_knowledge.candidates").filter(
+            **{owner_field: knowledge}
+        )
+        if role is not None:
+            candidates = candidates.filter(role=self._role(role))
+        pairs = list(candidates.values_list("content_type_id", "object_id"))
+        allowed = models.Q(pk__in=())
+        content_types = ContentType.objects.in_bulk({content_type_id for content_type_id, _ in pairs})
+        for content_type_id, object_ids in _object_ids_by_content_type(pairs).items():
+            content_type = content_types.get(content_type_id)
+            model = None if content_type is None else content_type.model_class()
+            if model is None or model_resource_type(model) is None:
+                continue
+            readable_ids = list(
+                model._default_manager.with_actor(actor).filter(pk__in=object_ids).values_list("pk", flat=True)
+            )
+            if readable_ids:
+                allowed |= models.Q(content_type_id=content_type_id, object_id__in=readable_ids)
+        return candidates.filter(allowed)
+
+    def records_for_page(self, page: models.Model, *, role: str | None = None) -> tuple[RecordRef, ...]:
+        """Return public refs for actor-readable records bound from ``page``."""
+
+        return tuple(binding.record_ref for binding in self.for_knowledge(page, role=role))
+
+    def records_for_vault(self, vault: models.Model, *, role: str | None = None) -> tuple[RecordRef, ...]:
+        """Return public refs for actor-readable records bound from ``vault``."""
+
+        return tuple(binding.record_ref for binding in self.for_knowledge(vault, role=role))
+
+    @classmethod
+    def _knowledge_owner(
+        cls,
+        *,
+        page: models.Model | None,
+        vault: models.Model | None,
+    ) -> tuple[models.Model, str]:
+        if (page is None) == (vault is None):
+            raise ValidationError("Exactly one of page or vault is required.")
+        return cls._knowledge_owner_instance(page if page is not None else cast(models.Model, vault))
+
+    @classmethod
+    def _knowledge_owner_instance(cls, knowledge: models.Model) -> tuple[models.Model, str]:
+        knowledge = cls._saved(knowledge, "knowledge owner")
+        label = knowledge._meta.label_lower
+        if label not in cls.KNOWLEDGE_MODELS:
+            raise ValidationError("Knowledge bindings may originate only from a Page or Vault.")
+        return knowledge, "page" if label == "knowledge.page" else "vault"
+
+    @staticmethod
+    def _saved(instance: models.Model, name: str) -> models.Model:
+        if instance is None or instance.pk is None:
+            raise ValidationError(f"A saved {name} is required.")
+        return instance
+
+    @staticmethod
+    def _role(role: str) -> str:
+        value = str(role or "").strip()
+        if not value:
+            raise ValidationError("A non-empty binding role is required.")
+        field = RecordBinding._meta.get_field("role")
+        field.run_validators(value)
+        return value
+
+    @staticmethod
+    def _actor() -> Any:
+        actor = current_actor()
+        if actor is None:
+            raise MissingActorError("Knowledge record bindings require an actor.")
+        return actor
+
+    @classmethod
+    def _require_access(cls, instance: models.Model, action: str, message: str) -> None:
+        actor = cls._actor()
+        if (
+            not rebac_backend()
+            .check_access(
+                subject=actor,
+                action=action,
+                resource=to_object_ref(instance),
+            )
+            .allowed
+        ):
+            raise PermissionDenied(message)
+
+    @classmethod
+    def _target_has_access(cls, canonical: Any, action: str) -> bool:
+        return (
+            rebac_backend()
+            .check_access(
+                subject=cls._actor(),
+                action=action,
+                resource=_canonical_object_ref(canonical.content_type, canonical.object_id),
+            )
+            .allowed
+        )
+
+    @classmethod
+    def _require_target_access(cls, canonical: Any, action: str, message: str) -> None:
+        if not cls._target_has_access(canonical, action):
+            raise PermissionDenied(message)
+
+
+class RecordBinding(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
+    """Role-keyed edge from a knowledge Page/Vault to any REBAC record.
+
+    The target is canonicalized to its topmost REBAC-typed MTI ancestor. The
+    edge never grants access to either side: authored reads ride target ``read``
+    while a returned page/vault id must still be resolved through that knowledge
+    row's own REBAC policy before content is available.
+    """
+
+    runtime = True
+    sqid_prefix = "krb_"
+
+    page = models.ForeignKey(
+        "knowledge.Page",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="record_bindings",
+    )
+    vault = models.ForeignKey(
+        "knowledge.Vault",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="record_bindings",
+    )
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
+    object_id = models.PositiveBigIntegerField()
+    target = GenericForeignKey("content_type", "object_id")
+    role = models.SlugField(max_length=64, default=RecordBindingManager.DEFAULT_ROLE)
+
+    objects = RecordBindingManager()
+
+    class Meta:
+        """Django model options for knowledge record bindings."""
+
+        abstract = True
+        ordering = ("role", "sqid")
+        rebac_resource_type = "knowledge/record_binding"
+        rebac_id_attr = "sqid"
+        constraints = (
+            models.CheckConstraint(
+                condition=(
+                    models.Q(page__isnull=False, vault__isnull=True) | models.Q(page__isnull=True, vault__isnull=False)
+                ),
+                name="ck_knowledge_record_binding_owner",
+            ),
+            models.UniqueConstraint(
+                fields=("page", "content_type", "object_id", "role"),
+                condition=models.Q(page__isnull=False),
+                name="uq_knowledge_record_binding_page_target_role",
+            ),
+            models.UniqueConstraint(
+                fields=("vault", "content_type", "object_id", "role"),
+                condition=models.Q(vault__isnull=False),
+                name="uq_knowledge_record_binding_vault_target_role",
+            ),
+        )
+        indexes = (models.Index(fields=("content_type", "object_id", "role")),)
+
+    def clean(self) -> None:
+        """Require exactly one knowledge owner and a REBAC-typed target."""
+
+        super().clean()
+        if (self.page_id is None) == (self.vault_id is None):
+            raise ValidationError("Exactly one of page or vault is required.")
+        _canonical_object_ref(self.content_type, self.object_id)
+
+    def change_read_resource(self) -> ObjectRef:
+        """Gate binding change events on the canonical target's ``read``."""
+
+        return _canonical_object_ref(self.content_type, self.object_id)
+
+    def __str__(self) -> str:
+        """Return a readable knowledge-to-record edge label."""
+
+        owner = f"page:{self.page_id}" if self.page_id is not None else f"vault:{self.vault_id}"
+        return f"{owner}->{self.record_model_label}:{self.record_public_id}#{self.role}"
+
+
+def _canonical_object_ref(content_type: ContentType, object_id: Any) -> ObjectRef:
+    """Return the REBAC identity stored by a canonical record pointer."""
+
+    model = content_type.model_class()
+    resource_type = None if model is None else model_resource_type(model)
+    if model is None or resource_type is None:
+        raise ValidationError("Knowledge bindings require a REBAC-typed target.")
+    return ObjectRef(resource_type, public_id_for(model, object_id))
+
+
+def _object_ids_by_content_type(pairs: list[tuple[int, Any]]) -> dict[int, set[Any]]:
+    """Group canonical object ids by content type for actor-scoped reverse reads."""
+
+    grouped: dict[int, set[Any]] = {}
+    for content_type_id, object_id in pairs:
+        grouped.setdefault(content_type_id, set()).add(object_id)
+    return grouped
 
 
 class StaleBodyError(ValueError):
@@ -464,9 +818,7 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
                 line=token_map[0],
             )
             for index, token in enumerate(tokens)
-            if token.type == "heading_open"
-            and token.markup.startswith("#")
-            and (token_map := token.map) is not None
+            if token.type == "heading_open" and token.markup.startswith("#") and (token_map := token.map) is not None
         ]
 
     @staticmethod

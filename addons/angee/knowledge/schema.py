@@ -8,11 +8,7 @@ from typing import Annotated, Any, cast
 
 import strawberry
 import strawberry_django
-from django.apps import apps
-from django.db.models import F
-from rebac import system_context
-from strawberry import auto
-
+from angee.base.models import instance_from_public_id, write_scoped_queryset
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     DataResourceSubtitleMetadata,
@@ -31,11 +27,18 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
+from django.apps import apps
+from django.db.models import F
+from rebac import system_context
+from rebac.resources import model_resource_type
+from strawberry import auto
+
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_display_label, user_public_id
 from angee.iam.permissions import request_from_info
 from angee.knowledge.models import (
     AmbiguousMatchError,
+    RecordBindingManager,
     SectionNotFoundError,
     StaleBodyError,
     StructuredEditError,
@@ -46,6 +49,7 @@ Vault = apps.get_model("knowledge", "Vault")
 Page = apps.get_model("knowledge", "Page")
 MarkdownPage = apps.get_model("knowledge", "MarkdownPage")
 Link = apps.get_model("knowledge", "Link")
+RecordBinding = apps.get_model("knowledge", "RecordBinding")
 
 
 @strawberry_django.type(Vault)
@@ -199,6 +203,54 @@ class PageType(AuthoredRefMixin, AngeeNode):
         ]
 
 
+@strawberry_django.type(RecordBinding)
+class RecordBindingType(AngeeNode):
+    """Existence reverse-index visible to target readers.
+
+    Bound page/vault public ids, role, and timestamps are visible by design;
+    knowledge content remains gated by the page/vault's own REBAC policy.
+    """
+
+    role: auto
+    created_at: auto
+    updated_at: auto
+
+    @strawberry_django.field(only=["page_id"])
+    def page(self) -> PublicID | None:
+        """Return the bound page id, if this is a page binding."""
+
+        return to_public_id(Page, cast(Any, self).page_id)
+
+    @strawberry_django.field(only=["vault_id"])
+    def vault(self) -> PublicID | None:
+        """Return the bound vault id, if this is a vault binding."""
+
+        return to_public_id(Vault, cast(Any, self).vault_id)
+
+    @strawberry_django.field(only=["content_type_id", "object_id"])
+    def model_label(self) -> str:
+        """Return the canonical target's ``app_label.ModelName`` label."""
+
+        return cast(Any, self).record_model_label
+
+    @strawberry_django.field(only=["content_type_id", "object_id"])
+    def record_id(self) -> PublicID:
+        """Return the canonical ancestor's public id, not the passed model level's."""
+
+        return PublicID(cast(Any, self).record_public_id)
+
+
+@strawberry.input
+class RecordBindingInput:
+    """One Page/Vault-to-record role key used by bind and unbind."""
+
+    model_label: str
+    record_id: PublicID
+    page: PublicID | None = None
+    vault: PublicID | None = None
+    role: str = RecordBindingManager.DEFAULT_ROLE
+
+
 @strawberry.type
 class PageBodyPayload:
     """Result of a markdown body write."""
@@ -309,6 +361,31 @@ MAX_SEARCH_PAGE_SIZE = 100
 """Upper bound on :meth:`KnowledgeQuery.search_pages` ``first`` — every backend inherits it."""
 
 
+def _record_for_binding(model_label: str, record_id: PublicID, *, write: bool = False) -> Any | None:
+    """Resolve an arbitrary REBAC record through the ambient actor's row scope."""
+
+    try:
+        model = apps.get_model(str(model_label).strip())
+    except (LookupError, ValueError):
+        return None
+    if model_resource_type(model) is None:
+        return None
+    queryset = write_scoped_queryset(model) if write else None
+    return instance_from_public_id(model, str(record_id), queryset=queryset)
+
+
+def _knowledge_for_binding(input: RecordBindingInput, *, write: bool = False) -> tuple[Any | None, Any | None]:
+    """Resolve exactly one Page/Vault owner through the ambient actor's row scope."""
+
+    if (input.page is None) == (input.vault is None):
+        raise ValueError("Exactly one of page or vault is required.")
+    if input.page is not None:
+        queryset = write_scoped_queryset(Page) if write else None
+        return require_instance_for_id(Page, input.page, queryset=queryset), None
+    queryset = write_scoped_queryset(Vault) if write else None
+    return None, require_instance_for_id(Vault, cast(PublicID, input.vault), queryset=queryset)
+
+
 @strawberry.type
 class KnowledgeQuery:
     """Knowledge content queries that span the page/body join."""
@@ -333,10 +410,89 @@ class KnowledgeQuery:
         target = require_instance_for_id(Vault, vault)
         return cast("list[PageType]", list(target.retrieval.search(query, first=first)))
 
+    @strawberry.field(name="record_knowledge_bindings")
+    def record_knowledge_bindings(
+        self,
+        model_label: str,
+        record_id: PublicID,
+        role: str | None = None,
+    ) -> list[RecordBindingType]:
+        """Return Page/Vault references bound to one actor-readable record."""
+
+        record = _record_for_binding(model_label, record_id)
+        if record is None:
+            return []
+        return cast(
+            "list[RecordBindingType]",
+            list(RecordBinding._default_manager.for_record(record, role=role)),
+        )
+
+    @strawberry.field(name="page_record_bindings")
+    def page_record_bindings(
+        self,
+        page: PublicID,
+        role: str | None = None,
+    ) -> list[RecordBindingType]:
+        """Return actor-readable target references bound from one readable page."""
+
+        source = require_instance_for_id(Page, page)
+        return cast(
+            "list[RecordBindingType]",
+            list(RecordBinding._default_manager.for_knowledge(source, role=role)),
+        )
+
+    @strawberry.field(name="vault_record_bindings")
+    def vault_record_bindings(
+        self,
+        vault: PublicID,
+        role: str | None = None,
+    ) -> list[RecordBindingType]:
+        """Return actor-readable target references bound from one readable vault."""
+
+        source = require_instance_for_id(Vault, vault)
+        return cast(
+            "list[RecordBindingType]",
+            list(RecordBinding._default_manager.for_knowledge(source, role=role)),
+        )
+
 
 @strawberry.type
 class KnowledgeMutation:
     """Markdown body writes that belong to the Knowledge domain."""
+
+    @strawberry.mutation(name="bind_knowledge_record")
+    def bind_knowledge_record(self, input: RecordBindingInput) -> RecordBindingType:
+        """Idempotently bind one writable Page/Vault to one writable record."""
+
+        page, vault = _knowledge_for_binding(input, write=True)
+        target = _record_for_binding(input.model_label, input.record_id, write=True)
+        if target is None:
+            raise ValueError("Record not found.")
+        return cast(
+            RecordBindingType,
+            RecordBinding._default_manager.upsert(
+                page=page,
+                vault=vault,
+                target=target,
+                role=input.role,
+            ),
+        )
+
+    @strawberry.mutation(name="unbind_knowledge_record")
+    def unbind_knowledge_record(self, input: RecordBindingInput) -> bool:
+        """Remove one Page/Vault-to-record role key if it exists."""
+
+        page, vault = _knowledge_for_binding(input, write=True)
+        target = _record_for_binding(input.model_label, input.record_id, write=True)
+        if target is None:
+            raise ValueError("Record not found.")
+        RecordBinding._default_manager.unbind(
+            page=page,
+            vault=vault,
+            target=target,
+            role=input.role,
+        )
+        return True
 
     @strawberry.mutation(name="delete_vault")
     def delete_vault(self, id: PublicID, confirm: bool = False) -> DeletePreview:
@@ -479,6 +635,8 @@ _KNOWLEDGE_SCHEMA_BUCKET = {
     "types": [
         VaultType,
         PageType,
+        RecordBindingType,
+        RecordBindingInput,
         MarkdownPageType,
         OutlineEntryType,
         BacklinkType,
@@ -498,6 +656,7 @@ schemas = {
         "subscription": [
             changes(Page, field="pageChanged"),
             changes(MarkdownPage, field="markdownPageChanged"),
+            changes(RecordBinding, field="knowledgeRecordBindingChanged"),
         ],
     },
 }

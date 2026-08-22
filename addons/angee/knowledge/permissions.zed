@@ -1,7 +1,7 @@
 // Authorization schema for the knowledge addon.
 // @rebac_package: knowledge
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 4
 
 // Role namespace for knowledge-wide grants. Membership in a role object
 // (knowledge/role:vault_viewer, :vault_editor, :vault_admin,
@@ -80,4 +80,21 @@ definition knowledge/link {
     permission read   = source_page->read
     permission write  = source_page->write
     permission delete = source_page->write
+}
+
+// A RecordBinding target is a GenericForeignKey to any current or future REBAC
+// type, which Zed cannot express as one field-backed relation without hardcoding
+// downstream addons. Keep the row definition fail-closed. RecordBindingManager's
+// authored surfaces resolve and gate the canonical target under the ambient actor;
+// the change publisher carries that same target ObjectRef as its read anchor.
+definition knowledge/record_binding {
+    // Keep both relations even though permissions fail closed: normal model
+    // saves/deletes need them for field-backed FK relationship synchronization.
+    relation page: knowledge/page // rebac:field=page
+    relation vault: knowledge/vault // rebac:field=vault
+
+    permission create = nil
+    permission read   = nil
+    permission write  = nil
+    permission delete = nil
 }
