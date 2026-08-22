@@ -9,7 +9,8 @@ itself.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from typing import Any, ClassVar, cast
 
@@ -760,8 +761,9 @@ class TaskWork(StagedModelMixin, AngeeModel):
         object.__setattr__(self, "_work_loaded_queue_id", getattr(self, "queue_id", None))
         object.__setattr__(self, "_work_loaded_stage_id", getattr(self, "stage_id", None))
 
-    # Django QuerySet.update() bypasses save-path projection/rejection by nature;
-    # the API routes through instance saves, and internal bulk writers are on their honor.
+    # Django QuerySet.update() bypasses the A1 authored-status and verb-only
+    # system-stage boundaries by nature; the API routes through instance saves,
+    # and internal bulk writers are on their honor.
     def __setattr__(self, name: str, value: Any) -> None:
         """Remember direct status assignment while allowing the projection writer."""
 
@@ -772,6 +774,17 @@ class TaskWork(StagedModelMixin, AngeeModel):
         ):
             object.__setattr__(self, "_work_status_assigned", True)
         super().__setattr__(name, value)
+
+    @contextmanager
+    def _work_verb_write(self) -> Iterator[None]:
+        """Let one owning verb perform lifecycle projection or enter a system stage."""
+
+        internal = getattr(self, "_work_internal_status", False)
+        object.__setattr__(self, "_work_internal_status", True)
+        try:
+            yield
+        finally:
+            object.__setattr__(self, "_work_internal_status", internal)
 
     def refresh_from_db(self, *args: Any, **kwargs: Any) -> None:
         """Refresh without misclassifying Django's field hydration as a direct write."""
@@ -818,6 +831,7 @@ class TaskWork(StagedModelMixin, AngeeModel):
         """Project a stage before base lifecycle validation and enforce scope."""
 
         self._apply_queue_and_stage_defaults(provision=False)
+        self._reject_direct_system_stage_transition()
         self._reject_direct_status_write()
         self._project_stage_lifecycle()
         self.validate_cycle_scope()
@@ -834,6 +848,7 @@ class TaskWork(StagedModelMixin, AngeeModel):
         )
         with transaction.atomic():
             defaulted = self._apply_queue_and_stage_defaults(provision=True)
+            self._reject_direct_system_stage_transition()
             self.validate_stage_scope()
             self.validate_cycle_scope()
             projected = self._project_stage_lifecycle()
@@ -1114,7 +1129,8 @@ class TaskWork(StagedModelMixin, AngeeModel):
                     )
                 source.stage = duplicate_stage
                 source.dropped_reason = source.TaskDroppedReason.DUPLICATE
-                source.save(update_fields=("stage", "dropped_reason", "updated_at"))
+                with source._work_verb_write():
+                    source.save(update_fields=("stage", "dropped_reason", "updated_at"))
 
             source._move_links_to(canonical)
             source._move_followers_to(canonical)
@@ -1149,6 +1165,24 @@ class TaskWork(StagedModelMixin, AngeeModel):
             raise ValidationError(
                 {"status": "Set stage instead; status is projected by the work addon."}
             )
+
+    def _reject_direct_system_stage_transition(self) -> None:
+        """Reserve entry into triage and duplicate stages for their owning verbs."""
+
+        loaded_stage_id = getattr(self, "_work_loaded_stage_id", None)
+        if (
+            self.stage_id is None
+            or loaded_stage_id == self.stage_id
+            or getattr(self, "_work_internal_status", False)
+        ):
+            return
+        category = str(self.stage.get_category())
+        if category not in self.stage.SYSTEM_CATEGORIES:
+            return
+        verb = "capture" if category == self.stage.StageCategory.TRIAGE else "mark_duplicate"
+        raise ValidationError(
+            {"stage": f"Use {verb} to move a task into the system {category} stage."}
+        )
 
     def _apply_queue_and_stage_defaults(self, *, provision: bool) -> set[str]:
         """Infer queue from cycle/stage, then personal queue and default stage."""
@@ -1200,8 +1234,7 @@ class TaskWork(StagedModelMixin, AngeeModel):
         stage_changed = self._state.adding or loaded_stage_id != self.stage_id
         old_category = self._stage_category(loaded_stage_id) if stage_changed else category
 
-        object.__setattr__(self, "_work_internal_status", True)
-        try:
+        with self._work_verb_write():
             if category in {"triage", "backlog", "unstarted", "started"}:
                 self.status = self.TaskStatus.OPEN
                 self.done_at = None
@@ -1228,8 +1261,6 @@ class TaskWork(StagedModelMixin, AngeeModel):
                 self.done_at = None
             else:
                 raise ValidationError({"stage": f"Unknown work stage category {category!r}."})
-        finally:
-            object.__setattr__(self, "_work_internal_status", False)
 
         fields = {"status", "done_at", "dropped_reason", "dropped_at"}
         if category == "triage" and stage_changed:
@@ -1355,11 +1386,8 @@ class TaskWork(StagedModelMixin, AngeeModel):
     def _base_verb(self, name: str, *args: Any) -> Any:
         """Run a projects-only lifecycle verb for a legacy queue-less task."""
 
-        object.__setattr__(self, "_work_internal_status", True)
-        try:
+        with self._work_verb_write():
             return getattr(super(), name)(*args)
-        finally:
-            object.__setattr__(self, "_work_internal_status", False)
 
 
 class UserWork(AngeeModel):

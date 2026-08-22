@@ -205,8 +205,9 @@ class NeedManager(AngeeManager):
             created_by_id=created_by_id,
             updated_by_id=created_by_id,
         )
-        task.full_clean(validate_unique=False, validate_constraints=False)
-        task.sudo(reason="intake.need.create_triage_task").save()
+        with task._work_verb_write():
+            task.full_clean(validate_unique=False, validate_constraints=False)
+            task.sudo(reason="intake.need.create_triage_task").save()
         return task
 
     @staticmethod
