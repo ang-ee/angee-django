@@ -85,6 +85,14 @@ addons_profile:
     - full
   help: Addon roster for the host — base (consumer scaffold) or full (the whole platform composition).
 
+# Opt-in: point an addon dir at the arpee product's workspace slot
+# (workspaces/src/angee-arp/addons). Discovery only — arp.* apps enter
+# INSTALLED_APPS via the marketplace installer or by hand.
+include_arp:
+  type: bool
+  default: false
+  help: Add the angee-arp workspace slot's addons dir to ANGEE_ADDON_DIRS (no roster entries).
+
 # Whether the host sits at the root of a stack that materializes the framework
 # source repos as workspace slots (workspaces/src/<repo>). When true, the addon
 # dirs point into those slots so the composer finds the base (and, per profile,

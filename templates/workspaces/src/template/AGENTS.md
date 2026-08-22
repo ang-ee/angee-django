@@ -21,6 +21,9 @@ there.
   facebook, meta). Same folder-addon model.
 - **`angee-examples/`** — showcase consumer addons (`example.notes`) and the
   reference e2e suite; the reference for third-party addon authors.
+- **`angee-arp/`** — arpee, the ARP product: the clean-room Odoo port as
+  `arp.*` consumer addons. Present only when the stack opts in
+  (`include_arp` — the repo is private).
 - **`angee-templates/`** — the Copier templates that render stacks, projects,
   workspaces, and services (what `angee init` consumes).
 - **`angee-operator/`** — the `angee` CLI / operator daemon (Go).

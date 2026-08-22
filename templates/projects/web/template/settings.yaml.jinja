@@ -104,6 +104,9 @@ ANGEE_ADDON_DIRS:
   - "{BASE_DIR}/workspaces/src/angee-messaging-bridges/addons"
   - "{BASE_DIR}/workspaces/src/angee-examples/addons"
 {% endif %}
+{% if include_arp %}
+  - "{BASE_DIR}/workspaces/src/angee-arp/addons"
+{% endif %}
 {% endif %}
 ANGEE_RUNTIME_DIR: "{BASE_DIR}/runtime"
 # This root IS the stack (ANGEE_ROOT=.), so data lives at the stack's persist

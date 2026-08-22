@@ -8,6 +8,7 @@
     { "name": "angee-base", "path": "angee-base" },
     { "name": "angee-messaging-bridges", "path": "angee-messaging-bridges" },
     { "name": "angee-examples", "path": "angee-examples" },
+    { "name": "angee-arp", "path": "angee-arp" },
     { "name": "angee-templates", "path": "angee-templates" },
     { "name": "angee-operator", "path": "angee-operator" },
     { "name": ".work", "path": ".work" }
