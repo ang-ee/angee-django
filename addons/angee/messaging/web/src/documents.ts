@@ -24,6 +24,26 @@ export const RECORD_UNREAD_COUNT_MODELS = [
   "messaging.ThreadFollower",
 ] as const;
 
+export const ACTIVITY_AGENDA_MODELS = ["messaging.ThreadActivity"] as const;
+
+/** Messaging-owned cross-record agenda used by personal work projections. */
+export const ActivityAgendaDocument = graphql(`
+  query MessagingActivityAgenda($windowStart: Date!, $windowEnd: Date!) {
+    activity_agenda(window_start: $windowStart, window_end: $windowEnd) {
+      id
+      summary
+      due_date
+      state
+      status
+      attachment {
+        label
+        model_label
+        record_id
+      }
+    }
+  }
+`);
+
 /** Reopenable live-channel pairing state; updates ride channelChanged. */
 export const ChannelPairing = graphql(`
   query ChannelPairing($id: ID!) {

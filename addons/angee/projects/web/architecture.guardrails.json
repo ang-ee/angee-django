@@ -1,0 +1,12 @@
+{
+  "criticalExports": [
+    {
+      "name": "PROJECT_MODEL",
+      "ownerFile": "src/resources.ts"
+    },
+    {
+      "name": "TASK_MODEL",
+      "ownerFile": "src/resources.ts"
+    }
+  ]
+}

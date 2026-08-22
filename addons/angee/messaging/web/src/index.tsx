@@ -19,6 +19,10 @@ import {
 export { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
 export { CHANNEL_MODEL } from "./documents";
 export {
+  ActivityAgendaList,
+  type ActivityAgendaListProps,
+} from "./ActivityAgendaList";
+export {
   defineChannelBridgeAddon,
   defineChannelPollBridgeAddon,
   type ChannelBridgeAddonOptions,

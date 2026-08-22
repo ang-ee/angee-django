@@ -230,10 +230,10 @@ class ProjectTaskActionMutation:
 
     @strawberry.mutation
     @action_guard("Complete task failed.")
-    def complete_task(self, info: strawberry.Info, task: PublicID) -> ActionResult:
+    def complete_task(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Complete one writable task."""
 
-        target = authorized_action_target(info, Task, task, "write")
+        target = authorized_action_target(info, Task, id, "write")
         target.complete()
         return ActionResult(ok=True, message="Task completed.", id=target.sqid)
 
@@ -242,30 +242,30 @@ class ProjectTaskActionMutation:
     def drop_task(
         self,
         info: strawberry.Info,
-        task: PublicID,
+        id: PublicID,
         reason: DroppedReason,  # type: ignore[valid-type]
     ) -> ActionResult:
         """Drop one writable task for a closed reason."""
 
-        target = authorized_action_target(info, Task, task, "write")
+        target = authorized_action_target(info, Task, id, "write")
         target.drop(reason)
         return ActionResult(ok=True, message="Task dropped.", id=target.sqid)
 
     @strawberry.mutation
     @action_guard("Reopen task failed.")
-    def reopen_task(self, info: strawberry.Info, task: PublicID) -> ActionResult:
+    def reopen_task(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Reopen one writable task."""
 
-        target = authorized_action_target(info, Task, task, "write")
+        target = authorized_action_target(info, Task, id, "write")
         target.reopen()
         return ActionResult(ok=True, message="Task reopened.", id=target.sqid)
 
     @strawberry.mutation
     @action_guard("Promote task to project failed.")
-    def promote_task_to_project(self, info: strawberry.Info, task: PublicID) -> ActionResult:
+    def promote_task_to_project(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Promote one writable task while retaining its identity and provenance."""
 
-        target = authorized_action_target(info, Task, task, "write")
+        target = authorized_action_target(info, Task, id, "write")
         project = target.promote_to_project()
         return ActionResult(ok=True, message="Task promoted to project.", id=project.sqid)
 

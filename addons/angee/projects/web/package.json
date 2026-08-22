@@ -1,5 +1,5 @@
 {
-  "name": "@angee/intake",
+  "name": "@angee/projects",
   "version": "0.0.0",
   "license": "LGPL-3.0-or-later",
   "private": true,
@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@angee/app": "workspace:*",
-    "@angee/projects": "workspace:*",
+    "@angee/messaging": "workspace:*",
     "@angee/refine": "workspace:*",
     "@angee/ui": "workspace:*",
     "lucide-react": "^1.21.0"
