@@ -137,7 +137,7 @@ def resource_type_name(surface: type | None) -> str | None:
 
 def model_resource_fields(
     model: type[models.Model],
-    fields: tuple[str, ...],
+    fields: tuple[str | DataResourceFieldMetadata, ...],
     *,
     filter_fields: tuple[str, ...] = (),
     order_fields: tuple[str, ...] = (),
@@ -148,7 +148,12 @@ def model_resource_fields(
     required_create_fields: tuple[str, ...] = (),
     relation_axes: tuple[DataRelationAxisMetadata, ...] = (),
 ) -> tuple[DataResourceFieldMetadata, ...]:
-    """Return resource metadata for model fields exposed outside the node class."""
+    """Return metadata for model fields exposed outside the node class.
+
+    A caller may supply explicit metadata for a projected donor field whose
+    shape the bare model cannot reconstruct (notably an enum). Ordinary string
+    declarations retain the model-only fail-fast contract.
+    """
 
     filterable = set(filter_fields)
     sortable = set(order_fields)
@@ -159,17 +164,21 @@ def model_resource_fields(
     required_on_create = set(required_create_fields)
     relation_by_field = {axis.field: axis for axis in relation_axes}
     return tuple(
-        _model_resource_field(
-            model,
-            name,
-            relation_axis=relation_by_field.get(name),
-            filterable=name in filterable,
-            sortable=name in sortable,
-            aggregatable=name in aggregatable,
-            groupable=name in groupable,
-            creatable=name in creatable,
-            updatable=name in updatable,
-            required_on_create=name in required_on_create,
+        (
+            name
+            if isinstance(name, DataResourceFieldMetadata)
+            else _model_resource_field(
+                model,
+                name,
+                relation_axis=relation_by_field.get(name),
+                filterable=name in filterable,
+                sortable=name in sortable,
+                aggregatable=name in aggregatable,
+                groupable=name in groupable,
+                creatable=name in creatable,
+                updatable=name in updatable,
+                required_on_create=name in required_on_create,
+            )
         )
         for name in fields
     )
