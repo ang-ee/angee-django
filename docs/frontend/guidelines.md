@@ -137,9 +137,10 @@ TanStack apply the URL-owned filter object to in-memory rows.
   `documents.public.ts` → public. An op must live in a `documents*.ts` file (the
   codegen glob does not scan inline ops), and a console op placed in a
   `documents.public.ts` (or vice versa) fails codegen loudly against the wrong
-  schema. Narrow a `JSON`-scalar object with `recordValue` from `@angee/refine`,
-  then validate its domain fields at their owner; valibot adoption is a deferred
-  stack decision.
+  schema. An opaque `JSON`-scalar value is parsed at its domain owner with a
+  valibot schema (`safeParse`), never asserted into an application shape; a
+  recursive shape a declarative schema cannot express may wrap its type guard
+  in `v.custom`, keeping the parse boundary in the schema.
 - **Record-targeted action mutations are derived, not authored.** For a
   `<field>(id: ID!, ...required scalar arguments): ActionResult` mutation, call
   `useActionMutation<ActionFieldName>("field")` from `@angee/ui` in headless
@@ -419,6 +420,8 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 
 - **Plural copy uses native i18next suffixes:** declare `key_one`/`key_other` in the bundle and call `t("key", { count })` with a numeric count; `createNamespaceT` applies the same `Intl.PluralRules` selection in provider-less renders.
 - **Server preference writes are live but not transactional across tabs:** each delivered `changes()` event rebases later patches immediately, while whole-document writes already in flight can still be accepted in server order and the last accepted write wins.
+- **Effect cleanup must not permanently kill a memoized resource:** StrictMode's simulated mount → cleanup → remount leaves it dead; own the resource inside the effect or explicitly re-arm it on mount, as the preference patch queue does.
+- **A render callback may only read fields some column declares or the `ListView fields={[…]}` extras name:** the selection owner (`requestedFieldPaths`) fetches column-declared paths plus those extras and nothing else — an undeclared read is `undefined` on every row (a link built from it throws, a caption silently blanks). Still null-guard values a row may legitimately lack.
 - **A nested list must pass `scope="local"` to keep its own `pageSize` and view;** the default inherited scope intentionally reuses the ambient resource-view state.
 - **A filtered `pnpm typecheck`/`test` skips the root `pretypecheck: codegen` hook.**
   The root `typecheck`/`test` scripts run `pnpm codegen` first; `pnpm --filter <pkg>

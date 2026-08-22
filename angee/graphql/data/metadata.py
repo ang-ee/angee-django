@@ -21,9 +21,9 @@ from angee.graphql.data.resource_fields import (
     input_wire_fields,
     merge_resource_fields,
     model_resource_fields,
+    require_resource_selection_path,
     require_unique_resource_fields,
     required_input_wire_fields,
-    require_resource_selection_path,
     resource_fields,
     resource_type_name,
     resource_wire_field_name,
@@ -290,6 +290,12 @@ class DataResourceMetadata:
     public_id_field: str
     roots: DataResourceRoots
     type_names: DataResourceTypeNames
+    contributors: tuple[str, ...] = dataclasses.field(
+        default=(),
+        compare=False,
+        repr=False,
+        metadata={"wire": False},
+    )
     canonical_label: str | None = None
     row_model: str = "server"
     record_representation: str | None = None
@@ -338,6 +344,7 @@ class DataResourceMetadata:
             ),
             roots=self.roots.merge(self, other),
             type_names=self.type_names.merge(self, other),
+            contributors=_merge_contributors(self.contributors, other.contributors),
             canonical_label=cast(
                 str | None,
                 _merge_value(
@@ -587,7 +594,9 @@ def attach_data_resource_metadata(
     """
 
     existing = data_resource_metadata(surface)
-    setattr(surface, DATA_RESOURCE_METADATA_ATTR, existing + (metadata,))
+    contributor = resource_type_name(surface) or surface.__name__
+    attached = dataclasses.replace(metadata, contributors=(contributor,))
+    setattr(surface, DATA_RESOURCE_METADATA_ATTR, existing + (attached,))
     return surface
 
 
@@ -651,7 +660,8 @@ def _merge_row_model(
     if left.row_model != right.row_model:
         raise ImproperlyConfigured(
             f"resource metadata for {left.model_label} has conflicting row_model: "
-            f"{left.row_model!r} and {right.row_model!r}."
+            f"{left.row_model!r} from {_contributor_names(left)} and "
+            f"{right.row_model!r} from {_contributor_names(right)}."
         )
     return left.row_model
 
@@ -680,9 +690,23 @@ def _merge_value(
 
     if left_value is not None and right_value is not None and left_value != right_value:
         raise ImproperlyConfigured(
-            f"resource metadata for {left.model_label} has conflicting {name}: {left_value!r} and {right_value!r}."
+            f"resource metadata for {left.model_label} has conflicting {name}: "
+            f"{left_value!r} from {_contributor_names(left)} and "
+            f"{right_value!r} from {_contributor_names(right)}."
         )
     return left_value if left_value is not None else right_value
+
+
+def _merge_contributors(left: tuple[str, ...], right: tuple[str, ...]) -> tuple[str, ...]:
+    """Return contributor names in first-seen order for later diagnostics."""
+
+    return tuple(dict.fromkeys((*left, *right)))
+
+
+def _contributor_names(metadata: DataResourceMetadata) -> str:
+    """Return the surfaces/types that donated one metadata contribution."""
+
+    return ", ".join(metadata.contributors) or metadata.model_label
 
 
 def _merge_capabilities(left: tuple[str, ...], right: tuple[str, ...]) -> tuple[str, ...]:
