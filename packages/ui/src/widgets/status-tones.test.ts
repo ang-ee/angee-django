@@ -31,4 +31,15 @@ describe("statusTone", () => {
       statusTone("connecting", { connecting: "info" }, { unknownTone: "neutral" }),
     ).toBe("info");
   });
+
+  test("keeps pairing lifecycle states on the shared vocabulary", () => {
+    const pairingOverrides = {
+      PAIRED: "success",
+      LOGGED_OUT: "danger",
+    } as const;
+
+    expect(statusTone("PAIRED", pairingOverrides)).toBe("success");
+    expect(statusTone("STARTING", pairingOverrides)).toBe("warning");
+    expect(statusTone("STOPPED", pairingOverrides)).toBe("neutral");
+  });
 });

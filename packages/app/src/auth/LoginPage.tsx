@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { AngeeLogo, AngeeLogoCube } from "@angee/logo-react";
+import { AngeeLogo, AngeeLogoCube, PRESETS } from "@angee/logo-react";
 import "@angee/logo-react/style.css";
 import { useSlot } from "@angee/ui/runtime";
 
@@ -23,11 +23,9 @@ export const AUTH_LOGIN_PASSWORD_HELP_SLOT = "auth.login.password-help";
 
 const HERO_SLIDE_KEYS = ["intent", "agentNative", "composable"] as const;
 const LOGIN_BACKDROP_FADE_MS = 1_000;
-const BRAND_TEAL = "#14b8a6";
-const BRAND_GOLD = "#FCD34D";
-const BRAND_GOLD_DARK = "#9A7D0A";
-const BRAND_GOLD_FACE = "#E6B400";
-const BRAND_DARK = "#08111f";
+const LOGIN_LOGO_PRESET = PRESETS.gold;
+const LOGIN_TEAL = "#14b8a6";
+const LOGIN_CUBE_DARK = "#08111f";
 
 export interface LoginPageProps {
   brand?: ReactNode;
@@ -315,7 +313,14 @@ function LoginVisualBackdrop({
       {showAtmosphere ? (
         <>
           <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(rgba(255,255,255,0.06)_1px,transparent_1px)] bg-[size:56px_56px] opacity-[0.24] [mask-image:linear-gradient(90deg,black,transparent_74%)]" />
-          <div className="absolute inset-0 bg-[linear-gradient(118deg,rgba(45,212,191,0.16)_0%,transparent_42%),linear-gradient(318deg,rgba(252,211,77,0.12)_0%,transparent_36%)]" />
+          <div
+            className="absolute inset-0"
+            style={{
+              backgroundImage:
+                `linear-gradient(118deg, color-mix(in srgb, ${LOGIN_TEAL} 16%, transparent) 0%, transparent 42%), `
+                + `linear-gradient(318deg, color-mix(in srgb, ${LOGIN_LOGO_PRESET.colors.top} 12%, transparent) 0%, transparent 36%)`,
+            }}
+          />
         </>
       ) : null}
     </div>
@@ -380,9 +385,9 @@ function WanderingCube(): ReactNode {
       <AngeeLogoCube
         size={68}
         gap={2}
-        leftColor={BRAND_TEAL}
-        rightColor={BRAND_GOLD}
-        baseDark={BRAND_DARK}
+        leftColor={LOGIN_TEAL}
+        rightColor={LOGIN_LOGO_PRESET.colors.top}
+        baseDark={LOGIN_CUBE_DARK}
         animationSpeed={24}
         animationType="rotate-slide"
         wander
@@ -456,9 +461,9 @@ function DefaultCardHeader({
         <AngeeLogoCube
           size={9}
           gap={0.75}
-          leftColor={BRAND_GOLD_DARK}
-          rightColor={BRAND_GOLD_FACE}
-          baseDark={BRAND_GOLD}
+          leftColor={LOGIN_LOGO_PRESET.colors.left}
+          rightColor={LOGIN_LOGO_PRESET.colors.right}
+          baseDark={LOGIN_LOGO_PRESET.colors.top}
           animationSpeed={18}
           animationType="rotate"
         />

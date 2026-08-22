@@ -11,12 +11,16 @@ import {
   LoginPage,
 } from "./LoginPage";
 
-vi.mock("@angee/logo-react", () => ({
-  AngeeLogo: (props: { width?: number; height?: number }) => (
-    <svg aria-label="Angee" width={props.width} height={props.height} />
-  ),
-  AngeeLogoCube: () => <div data-testid="angee-logo-cube" />,
-}));
+vi.mock("@angee/logo-react", async (importOriginal) => {
+  const { PRESETS } = await importOriginal<typeof import("@angee/logo-react")>();
+  return {
+    AngeeLogo: (props: { width?: number; height?: number }) => (
+      <svg aria-label="Angee" width={props.width} height={props.height} />
+    ),
+    AngeeLogoCube: () => <div data-testid="angee-logo-cube" />,
+    PRESETS,
+  };
+});
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),

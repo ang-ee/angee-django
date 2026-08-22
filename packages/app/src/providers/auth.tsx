@@ -5,30 +5,33 @@ import {
   useMemo,
   type ReactNode,
 } from "react";
-import { parse } from "graphql";
 import {
   keys,
-  useCustomMutation,
   useGetIdentity,
   useInvalidateAuthStore,
   useLogin,
   useLogout as useRefineLogout,
   type AuthActionResponse,
   type AuthProvider as RefineAuthProvider,
-  type BaseRecord,
-  type HttpError,
-  type MetaQuery,
 } from "@refinedev/core";
 
 import {
   createAngeeGraphQLClient,
-  mutationMeta,
+  useAuthoredMutation,
   recordValue,
-  stringValue,
   type AngeeHasuraClientOptions,
+  type TypedDocumentNode,
 } from "@angee/refine";
 import { errorFromUnknown as sharedErrorFromUnknown } from "@angee/ui/data/errors";
 import { DEFAULT_LOGIN_PATH } from "@angee/ui/runtime";
+import {
+  AngeeCurrentUserDocument,
+  AngeeLoginDocument,
+  AngeeLogoutDocument,
+  AngeeUpdatePreferencesDocument,
+  type AngeeCurrentUserData,
+  type AngeeLoginUserData,
+} from "./documents.public";
 
 export type UserPreferences = Record<string, unknown>;
 
@@ -51,17 +54,12 @@ export interface AuthState {
   hasRole: (role: string) => boolean;
 }
 
-export interface CurrentUserPayload {
-  id: string;
-  username: string;
-  firstName: string;
-  lastName: string;
-  email: string;
-  isStaff: boolean;
-  isActive: boolean;
+export type CurrentUserPayload = Omit<
+  NonNullable<AngeeCurrentUserData>,
+  "preferences"
+> & {
   preferences: UserPreferences;
-  roleRefs: readonly string[];
-}
+};
 
 export interface LoginCredentials {
   username: string;
@@ -99,64 +97,15 @@ export interface UseUpdatePreferencesResult {
   error: Error | null;
 }
 
-export interface UpdatePreferencesRequest {
-  url: "";
-  method: "post";
-  values: { preferences: UserPreferences };
-  dataProviderName?: string;
-  meta: MetaQuery;
-}
-
 type GraphQLRequest = <TData, TVariables extends object = Record<string, never>>(
-  document: string,
+  document: TypedDocumentNode<TData, TVariables>,
   variables?: TVariables,
 ) => Promise<TData>;
-
-interface CurrentUserQueryResult {
-  current_user: unknown;
-}
-
-interface LoginMutationResult {
-  login?: {
-    ok?: unknown;
-    user?: unknown;
-  } | null;
-}
-
-interface LogoutMutationResult {
-  logout?: unknown;
-}
-
-interface UpdatePreferencesMutationResult {
-  update_preferences?: unknown;
-}
 
 interface AngeeAuthActionResponse extends AuthActionResponse {
   ok?: boolean;
   user?: CurrentUserPayload | null;
 }
-
-const PUBLIC_USER_SELECTION =
-  "id username firstName: first_name lastName: last_name email isStaff: is_staff isActive: is_active preferences";
-const CURRENT_USER_SELECTION = `${PUBLIC_USER_SELECTION} roleRefs: role_refs`;
-
-// Auth is an app-owned bootstrapping concern: it runs before a generated public
-// schema module is guaranteed to exist for framework package tests. Keep these
-// public operations runtime-narrowed until the wire owner exposes generated
-// public auth documents to framework packages.
-export const CURRENT_USER_DOCUMENT =
-  `query angee_current_user { current_user { ${CURRENT_USER_SELECTION} } }`;
-
-export const LOGIN_DOCUMENT =
-  `mutation angeeLogin($username: String!, $password: String!) { ` +
-  `login(username: $username, password: $password) { ok user { ${PUBLIC_USER_SELECTION} } } }`;
-
-export const LOGOUT_DOCUMENT = "mutation angeeLogout { logout }";
-
-export const UPDATE_PREFERENCES_DOCUMENT =
-  `mutation angee_update_preferences($preferences: JSON!) { ` +
-  `update_preferences(preferences: $preferences) { ${CURRENT_USER_SELECTION} } }`;
-export const UPDATE_PREFERENCES_MUTATION = parse(UPDATE_PREFERENCES_DOCUMENT);
 
 export const ANONYMOUS_AUTH: AuthState = {
   user: null,
@@ -187,8 +136,8 @@ export function createAngeeAuthProviderFromRequest(
 ): RefineAuthProvider {
   const loginPath = options.loginPath ?? DEFAULT_LOGIN_PATH;
   const currentUser = async (): Promise<CurrentUserPayload | null> => {
-    const data = await request<CurrentUserQueryResult>(CURRENT_USER_DOCUMENT);
-    return parseCurrentUser(recordValue(data)?.current_user);
+    const data = await request(AngeeCurrentUserDocument);
+    return currentUserPayload(data.current_user);
   };
   return {
     async check() {
@@ -213,17 +162,16 @@ export function createAngeeAuthProviderFromRequest(
       try {
         const credentials = loginCredentials(params);
         if (!credentials) return { success: false, ok: false };
-        const data = await request<LoginMutationResult, LoginCredentials>(
-          LOGIN_DOCUMENT,
+        const data = await request(
+          AngeeLoginDocument,
           credentials,
         );
-        const login = recordValue(data.login);
-        const ok = login?.ok === true;
+        const ok = data.login.ok;
         if (ok) options.onAuthChange?.();
         return {
           success: ok,
           ok,
-          user: parseCurrentUser(login?.user),
+          user: loginUserPayload(data.login.user),
         } satisfies AngeeAuthActionResponse;
       } catch (caught) {
         return { success: false, error: authErrorFromUnknown(caught) };
@@ -231,8 +179,8 @@ export function createAngeeAuthProviderFromRequest(
     },
     async logout() {
       try {
-        const data = await request<LogoutMutationResult>(LOGOUT_DOCUMENT);
-        const success = data.logout === true;
+        const data = await request(AngeeLogoutDocument);
+        const success = data.logout;
         if (success) options.onAuthChange?.();
         return { success };
       } catch (caught) {
@@ -332,45 +280,26 @@ export function useLogoutAction(): {
   };
 }
 
-export function updatePreferencesRequest(
-  preferences: UserPreferences,
-  dataProviderName?: string,
-): UpdatePreferencesRequest {
-  return {
-    url: "",
-    method: "post",
-    values: { preferences },
-    dataProviderName,
-    meta: mutationMeta(UPDATE_PREFERENCES_MUTATION, { preferences }),
-  };
-}
-
 export function useUpdatePreferences(
   options: UseUpdatePreferencesOptions = {},
 ): UseUpdatePreferencesResult {
-  const run = useCustomMutation<
-    BaseRecord,
-    HttpError,
-    { preferences: UserPreferences }
-  >();
+  const [run, mutation] = useAuthoredMutation(
+    AngeeUpdatePreferencesDocument,
+    { dataProviderName: options.dataProviderName },
+  );
   const invalidateAuthStore = useInvalidateAuthStore();
   const updatePreferences = useCallback(
     async (preferences: UserPreferences): Promise<CurrentUserPayload | null> => {
-      const response = await run.mutateAsync(
-        updatePreferencesRequest(preferences, options.dataProviderName),
-      );
+      const data = await run({ preferences });
       await invalidateAuthStore();
-      return parseCurrentUser(
-        recordValue(response.data as UpdatePreferencesMutationResult)
-          ?.update_preferences,
-      );
+      return currentUserPayload(data?.update_preferences);
     },
-    [invalidateAuthStore, options.dataProviderName, run.mutateAsync],
+    [invalidateAuthStore, run],
   );
   return {
     updatePreferences,
-    fetching: run.mutation.isPending,
-    error: errorFromUnknownOrNull(run.mutation.error),
+    fetching: mutation.fetching,
+    error: mutation.error,
   };
 }
 
@@ -420,22 +349,24 @@ export function useUserPreferences(): UserPreferencesState {
   return useContext(UserPreferencesContext) ?? DEFAULT_PREFERENCES_STATE;
 }
 
-export function parseCurrentUser(value: unknown): CurrentUserPayload | null {
-  const record = recordValue(value);
-  if (!record) return null;
-  if (typeof record.id !== "string" || typeof record.username !== "string") {
-    return null;
-  }
+function currentUserPayload(
+  value: AngeeCurrentUserData | null | undefined,
+): CurrentUserPayload | null {
+  if (!value) return null;
   return {
-    id: record.id,
-    username: record.username,
-    firstName: stringValue(record.firstName) ?? "",
-    lastName: stringValue(record.lastName) ?? "",
-    email: stringValue(record.email) ?? "",
-    isStaff: record.isStaff === true,
-    isActive: record.isActive === true,
-    preferences: preferencesValue(record.preferences),
-    roleRefs: stringList(record.roleRefs),
+    ...value,
+    preferences: preferencesValue(value.preferences),
+  };
+}
+
+function loginUserPayload(
+  value: AngeeLoginUserData | null | undefined,
+): CurrentUserPayload | null {
+  if (!value) return null;
+  return {
+    ...value,
+    preferences: preferencesValue(value.preferences),
+    roleRefs: [],
   };
 }
 
@@ -479,12 +410,6 @@ function loginCredentials(value: unknown): LoginCredentials | null {
 function preferencesValue(value: unknown): UserPreferences {
   const record = recordValue(value);
   return record ? { ...record } : {};
-}
-
-function stringList(value: unknown): readonly string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
 }
 
 function errorFromUnknownOrNull(value: unknown): Error | null {

@@ -43,7 +43,7 @@ export function UsernamePasswordForm({
       }
       setError(t("auth.invalidCredentials"));
     } catch (caught) {
-      setError(errorMessage(caught, t("auth.genericError")));
+      setError(errorMessage(caught, t("error.generic")));
     }
   }
 

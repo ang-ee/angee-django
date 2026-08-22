@@ -886,9 +886,6 @@ const TEST_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
         detail: "note",
         list: "notes",
         aggregate: "noteAggregate",
-        groupBy: "noteGroups",
-        groupByInput: "NoteGroupBySpec",
-        groupOrderInput: "NoteGroupOrder",
         delete: "deleteNote",
       },
       fields: {
@@ -1026,7 +1023,6 @@ const SNAKE_NOTE_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventor
         detail: "notes_by_pk",
         list: "notes",
         aggregate: "notes_aggregate",
-        groupBy: "notes_groups",
       },
       fields: {
         title: { name: "title", kind: "scalar", scalar: "String" },
@@ -1992,7 +1988,7 @@ describe("ResourceList", () => {
 
     expect(await screen.findByRole("region", { name: "All records" }))
       .toBeTruthy();
-    expect(screen.queryByText("Loading...")).toBeNull();
+    expect(screen.queryByText("Loading…")).toBeNull();
     expect(screen.queryByText("list.loading")).toBeNull();
   });
 

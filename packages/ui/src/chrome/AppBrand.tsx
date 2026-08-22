@@ -2,7 +2,7 @@ import type { ReactElement, ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 
 import { cn } from "../lib/cn";
-import { AngeeMark } from "./AngeeMark";
+import { Glyph } from "./Glyph";
 
 export interface AppBrandProps {
   className?: string;
@@ -28,7 +28,7 @@ export function AppBrand({
       )}
     >
       <span className="grid size-4 shrink-0 place-content-center text-brand [&>svg]:size-4">
-        {mark ?? <AngeeMark size={16} aria-hidden="true" />}
+        {mark ?? <Glyph name="angee" size={16} />}
       </span>
       <span className="min-w-0 truncate">{name}</span>
     </Link>

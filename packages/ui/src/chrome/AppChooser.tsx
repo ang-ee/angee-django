@@ -23,7 +23,6 @@ import {
 import { SectionEyebrow } from "../ui/section-eyebrow";
 import { textRoleVariants } from "../ui/text";
 import { Tooltip } from "../ui/tooltip";
-import { AngeeMark } from "./AngeeMark";
 import { Glyph } from "./Glyph";
 import {
   type ChromeMenuGroup,
@@ -119,7 +118,7 @@ export function AppChooser({
             className,
           )}
         >
-          {trigger ?? <AngeeMark size={20} aria-hidden="true" />}
+          {trigger ?? <Glyph name="angee" size={20} />}
         </PopoverTrigger>
       </Tooltip>
       <PopoverPortal>
@@ -132,7 +131,7 @@ export function AppChooser({
           >
             <div className="mb-4 flex items-center gap-3">
               <span className="grid size-7 shrink-0 place-content-center rounded-6 bg-brand-soft text-brand-soft-text">
-                <AngeeMark size={18} aria-hidden="true" />
+                <Glyph name="angee" size={18} />
               </span>
               <div className="min-w-0 flex-1">
                 <h2 className="m-0 truncate text-15 font-semibold text-fg">

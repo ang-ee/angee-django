@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { defineConfig, mergeConfig, type ViteUserConfig } from "vitest/config";
@@ -21,6 +22,12 @@ import type { InlineConfig } from "vitest/node";
 // project's own `vitest.config.ts` calls this with its project-relative path — e.g.
 // `gqlAliasFor(fileURLToPath(new URL("../runtime/gql/", import.meta.url)))`.
 export function gqlAliasFor(runtimeGqlDir: string) {
+  if (!existsSync(runtimeGqlDir)) {
+    throw new Error(
+      `Generated GraphQL runtime not found at "${runtimeGqlDir}". `
+      + "Compose the stack first, then run pnpm codegen from the stack web host.",
+    );
+  }
   return [
     {
       find: /^@angee\/gql\//,

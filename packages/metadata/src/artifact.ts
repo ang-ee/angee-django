@@ -58,9 +58,6 @@ export interface ModelRootFieldMetadata {
   detail?: string;
   list?: string;
   aggregate?: string;
-  groupBy?: string;
-  groupByInput?: string;
-  groupOrderInput?: string;
   revisions?: string;
   revisionFields?: readonly string[];
   create?: string;
@@ -641,9 +638,6 @@ function rootFieldsFromResource(
     detail: resource.roots.detail ?? undefined,
     list: resource.roots.list ?? undefined,
     aggregate: resource.roots.aggregate ?? undefined,
-    groupBy: resource.roots.groups ?? undefined,
-    groupByInput: resource.typeNames.groupBySpec ?? undefined,
-    groupOrderInput: resource.typeNames.groupOrder ?? undefined,
     revisions: resource.roots.revisions ?? undefined,
     revisionFields: nonEmptyList(resource.revisionFields),
     create: resource.roots.create ?? undefined,

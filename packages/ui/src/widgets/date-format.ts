@@ -22,7 +22,10 @@ export function dateFromValue(value: DateFormatValue): Date | null {
   return isValid(parsed) ? parsed : null;
 }
 
-/** Parse any row/display value to a valid `Date`, or null for non-date values. */
+/**
+ * Parse any row/display value to a valid `Date`, or null for non-date values.
+ * String values use ISO-8601 by design.
+ */
 export function dateFromUnknown(value: unknown): Date | null {
   if (value instanceof Date || typeof value === "number" || typeof value === "string") {
     return dateFromValue(value);

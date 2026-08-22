@@ -1,4 +1,5 @@
-import { type ComponentType, type SVGProps } from "react";
+import { createElement, type ComponentType, type SVGProps } from "react";
+import { AngeeLogo } from "@angee/logo-react";
 import { useAppRuntime } from "../runtime";
 import {
   Activity,
@@ -67,7 +68,6 @@ import {
 } from "lucide-react";
 
 import { AgentGlyph } from "./AgentGlyph";
-import { AngeeMark } from "./AngeeMark";
 
 export type IconProps = SVGProps<SVGSVGElement> & {
   size?: number | string;
@@ -76,11 +76,25 @@ export type IconProps = SVGProps<SVGSVGElement> & {
 
 export type IconComponent = ComponentType<IconProps>;
 
+/** Adapt the logo owner's SVG to the global glyph registry's size convention. */
+function AngeeLogoIcon({
+  size = 20,
+  strokeWidth: _strokeWidth,
+  ...props
+}: IconProps) {
+  return createElement(AngeeLogo, {
+    ...props,
+    bgColor: null,
+    height: props.height ?? size,
+    preset: "gold",
+    width: props.width ?? size,
+  });
+}
+
 export const baseIcons = {
   activity: Activity,
   agent: AgentGlyph,
-  angee: AngeeMark,
-  "angee-cube": AngeeMark,
+  angee: AngeeLogoIcon,
   archive: Archive,
   "arrow-down": ArrowDown,
   "arrow-up": ArrowUp,

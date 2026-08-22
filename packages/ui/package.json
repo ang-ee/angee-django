@@ -41,10 +41,6 @@
       "types": "./src/chrome/AgentGlyph.tsx",
       "import": "./src/chrome/AgentGlyph.tsx"
     },
-    "./chrome/AngeeMark": {
-      "types": "./src/chrome/AngeeMark.tsx",
-      "import": "./src/chrome/AngeeMark.tsx"
-    },
     "./chrome/icon-registry": {
       "types": "./src/chrome/icon-registry.ts",
       "import": "./src/chrome/icon-registry.ts"

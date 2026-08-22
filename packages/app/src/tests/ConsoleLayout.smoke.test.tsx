@@ -22,13 +22,18 @@ import { Statusline, StatusSegment } from "@angee/ui/layouts/Statusline";
 import { useChatterContent } from "@angee/ui/communication/index";
 import { AppRuntimeProvider, type AppRuntime } from "@angee/ui/runtime";
 
-vi.mock("@angee/logo-react", () => ({
-  AngeeLogo: ({ bgColor: _bgColor, geometry: _geometry, preset: _preset, ...props }: SVGProps<SVGSVGElement> & {
-    bgColor?: string | null;
-    geometry?: string;
-    preset?: string;
-  }) => <svg {...props} data-testid="angee-logo" />,
-}));
+vi.mock("@angee/logo-react", async (importOriginal) => {
+  const { PRESETS } = await importOriginal<typeof import("@angee/logo-react")>();
+  return {
+    AngeeLogo: ({ bgColor: _bgColor, geometry: _geometry, preset: _preset, ...props }: SVGProps<SVGSVGElement> & {
+      bgColor?: string | null;
+      geometry?: string;
+      preset?: string;
+    }) => <svg {...props} data-testid="angee-logo" />,
+    AngeeLogoCube: () => <span data-testid="angee-logo-cube" />,
+    PRESETS,
+  };
+});
 
 vi.mock("@refinedev/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@refinedev/core")>();

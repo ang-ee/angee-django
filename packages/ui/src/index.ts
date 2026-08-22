@@ -18,7 +18,6 @@ export * from "./runtime";
 export * from "./chrome/Glyph";
 export * from "./chrome/icon-registry";
 export * from "./chrome/AgentGlyph";
-export * from "./chrome/AngeeMark";
 export * from "./i18n";
 
 // UI primitives — embeddable atoms on Base UI.

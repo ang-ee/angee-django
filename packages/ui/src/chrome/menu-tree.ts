@@ -25,7 +25,6 @@ export type ChromeMenuTone = Extract<
  * `children` is excluded because its element type differs per surface.
  */
 export interface ChromeMenuExtra {
-  parent?: string;
   parentId?: string;
   appRoot?: boolean;
   description?: string;
@@ -63,7 +62,6 @@ export class ChromeMenuNode implements ChromeMenuItem {
   to?: string;
   icon?: string;
   children?: readonly ChromeMenuNode[];
-  parent?: string;
   parentId?: string;
   parentNode?: ChromeMenuNode;
   appRoot?: boolean;
@@ -92,7 +90,7 @@ export class ChromeMenuNode implements ChromeMenuItem {
   }
 
   get parentKey(): string | undefined {
-    return this.parentId ?? this.parent;
+    return this.parentId;
   }
 
   get targetedChildren(): readonly ChromeMenuNode[] {
