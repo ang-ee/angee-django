@@ -65,7 +65,7 @@ actually unique to your product.
 
 ## Batteries — the addon catalog
 
-- **IAM** — the identity REBAC operates on: users, groups, machine `Service`
+- **Permissions** (`iam`) — the identity REBAC operates on: users, groups, machine `Service`
   accounts, hashed API keys, impersonation auditing, and an actor resolver that
   unifies session / token / machine-to-machine.
 - **Storage** — files and blobs: content-hash dedup, pluggable backends (local +
