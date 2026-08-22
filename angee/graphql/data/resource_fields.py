@@ -13,6 +13,7 @@ from django.db import models
 from strawberry.types import get_object_definition
 from strawberry.types.base import StrawberryList, StrawberryOptional
 from strawberry.types.enum import StrawberryEnumDefinition
+from strawberry.types.lazy_type import LazyType
 from strawberry_django_hasura import SnakeNameConverter
 
 from angee.base.impl import ImplClassField
@@ -133,6 +134,59 @@ def resource_type_name(surface: type | None) -> str | None:
     if definition is not None:
         return str(definition.name)
     return surface_name(surface)
+
+
+def require_resource_selection_path(
+    surface: type | None,
+    path: str,
+    *,
+    model_label: str,
+) -> None:
+    """Require a dotted GraphQL selection path to resolve through ``surface``.
+
+    Each segment is matched by its actual wire name. Intermediate fields must
+    project another Strawberry object; walking through a scalar/list or naming a
+    missing field fails during metadata emission, before a generated detail query
+    can carry the invalid selection.
+    """
+
+    current_surface: object | None = surface
+    parts = path.split(".")
+    for index, part in enumerate(parts):
+        definition = get_object_definition(current_surface)
+        field = (
+            next(
+                (
+                    candidate
+                    for candidate in definition.fields
+                    if _wire_field_name(candidate) == part
+                ),
+                None,
+            )
+            if definition is not None
+            else None
+        )
+        if field is None:
+            raise ImproperlyConfigured(
+                f"resource metadata for {model_label} declares subtitle selection "
+                f"path {path!r} with unknown field {part!r}."
+            )
+        if index == len(parts) - 1:
+            return
+        try:
+            next_surface, is_list = _selection_surface(field.type)
+        except NotImplementedError as error:
+            raise ImproperlyConfigured(
+                f"resource metadata for {model_label} cannot resolve subtitle "
+                f"selection path {path!r}: {error}"
+            ) from error
+        if is_list or get_object_definition(next_surface) is None:
+            traversed = ".".join(parts[: index + 1])
+            raise ImproperlyConfigured(
+                f"resource metadata for {model_label} declares subtitle selection "
+                f"path {path!r} through non-object field {traversed!r}."
+            )
+        current_surface = next_surface
 
 
 def model_resource_fields(
@@ -471,6 +525,19 @@ def _surface_field_type(surface: type | None, name: str) -> object | None:
                     f"GraphQL type for field '{name}': {exc}"
                 ) from exc
     return None
+
+
+def _selection_surface(value: object) -> tuple[object, bool]:
+    """Return a selection field's unwrapped type and whether it crossed a list."""
+
+    is_list = False
+    while isinstance(value, StrawberryOptional | StrawberryList):
+        if isinstance(value, StrawberryList):
+            is_list = True
+        value = value.of_type
+    if isinstance(value, LazyType):
+        value = value.resolve_type()
+    return value, is_list
 
 
 def _surface_field_scalar(

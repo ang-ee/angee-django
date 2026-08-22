@@ -7,16 +7,38 @@ payload is identical to a model-backed resource.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 import strawberry
 from django.core.exceptions import ImproperlyConfigured
 
 from angee.graphql.data.metadata import (
+    DataResourceMetadata,
     DataResourceRoots,
+    DataResourceSubtitleMetadata,
     DataResourceTypeNames,
     make_data_resource_metadata,
+    merge_data_resources,
     serialize_data_resources,
 )
+
+
+@strawberry.type
+class SubtitleBodyType:
+    """Nested projection used by subtitle selection-path tests."""
+
+    word_count: int
+
+
+@strawberry.type
+class SubtitlePageType:
+    """Computed projection used by subtitle selection-path tests."""
+
+    created_at: str
+    published_at: str
+    title: str
+    markdown: SubtitleBodyType
 
 
 def test_computed_resource_metadata_is_model_optional() -> None:
@@ -105,4 +127,107 @@ def test_computed_resource_metadata_requires_label_without_model() -> None:
             roots=DataResourceRoots(list_name="x"),
             type_names=DataResourceTypeNames(),
             capabilities=("list",),
+        )
+
+
+def test_resource_subtitle_contributions_compose_by_semantic_fact() -> None:
+    """Distinct subtitle facts compose while each semantic slot remains singular."""
+
+    created = make_data_resource_metadata(
+        model=None,
+        model_label="knowledge.page",
+        node_type=SubtitlePageType,
+        roots=DataResourceRoots(list_name="pages"),
+        type_names=DataResourceTypeNames(),
+        capabilities=("list",),
+        subtitle=DataResourceSubtitleMetadata(created="created_at"),
+    )
+    words = make_data_resource_metadata(
+        model=None,
+        model_label="knowledge.page",
+        node_type=SubtitlePageType,
+        roots=DataResourceRoots(detail_name="pages_by_pk"),
+        type_names=DataResourceTypeNames(),
+        capabilities=("detail",),
+        subtitle=DataResourceSubtitleMetadata(word_count="markdown.word_count"),
+    )
+
+    [merged] = merge_data_resources((created, words))
+
+    assert merged.subtitle == DataResourceSubtitleMetadata(
+        created="created_at",
+        word_count="markdown.word_count",
+    )
+
+
+def test_resource_subtitle_collision_fails_fast() -> None:
+    """Conflicting owners of one semantic subtitle fact cannot silently win."""
+
+    def contribution(path: str) -> DataResourceMetadata:
+        return make_data_resource_metadata(
+            model=None,
+            model_label="knowledge.page",
+            node_type=SubtitlePageType,
+            roots=DataResourceRoots(),
+            type_names=DataResourceTypeNames(),
+            capabilities=(),
+            subtitle=DataResourceSubtitleMetadata(created=path),
+        )
+
+    with pytest.raises(ImproperlyConfigured, match="conflicting subtitle.created"):
+        merge_data_resources((contribution("created_at"), contribution("published_at")))
+
+
+def test_resource_subtitle_rejects_malformed_selection_path() -> None:
+    """Subtitle declarations use GraphQL dotted selection-path grammar."""
+
+    with pytest.raises(ImproperlyConfigured, match="invalid subtitle.word_count selection path"):
+        make_data_resource_metadata(
+            model=None,
+            model_label="knowledge.page",
+            node_type=SubtitlePageType,
+            roots=DataResourceRoots(),
+            type_names=DataResourceTypeNames(),
+            capabilities=(),
+            subtitle=DataResourceSubtitleMetadata(word_count="markdown..word_count"),
+        )
+
+
+@pytest.mark.parametrize(
+    "path",
+    ("missing", "markdown.missing"),
+)
+def test_resource_subtitle_rejects_unknown_selection_path(path: str) -> None:
+    """Flat and nested subtitle paths must resolve against the node projection."""
+
+    with pytest.raises(
+        ImproperlyConfigured,
+        match=rf"knowledge\.page.*{re.escape(path)}",
+    ):
+        make_data_resource_metadata(
+            model=None,
+            model_label="knowledge.page",
+            node_type=SubtitlePageType,
+            roots=DataResourceRoots(),
+            type_names=DataResourceTypeNames(),
+            capabilities=(),
+            subtitle=DataResourceSubtitleMetadata(word_count=path),
+        )
+
+
+def test_resource_subtitle_rejects_scalar_mid_path() -> None:
+    """A dotted subtitle path cannot descend through a projected scalar."""
+
+    with pytest.raises(
+        ImproperlyConfigured,
+        match=r"knowledge\.page.*title\.word_count.*non-object",
+    ):
+        make_data_resource_metadata(
+            model=None,
+            model_label="knowledge.page",
+            node_type=SubtitlePageType,
+            roots=DataResourceRoots(),
+            type_names=DataResourceTypeNames(),
+            capabilities=(),
+            subtitle=DataResourceSubtitleMetadata(word_count="title.word_count"),
         )

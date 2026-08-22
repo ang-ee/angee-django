@@ -18,7 +18,7 @@ from strawberry import auto
 from strawberry_django_aggregates.errors import GroupByFieldNotAllowed
 
 from angee.base.models import AngeeDataModel
-from angee.graphql.data import hasura_model_resource
+from angee.graphql.data import DataResourceSubtitleMetadata, hasura_model_resource
 from angee.graphql.data import metadata as metadata_module
 from angee.graphql.data.hasura import _measure_ops_for_field, _relation_filter_decoders
 from angee.graphql.data.metadata import (
@@ -89,6 +89,19 @@ class ResourceTimedThing(AngeeDataModel):
     sqid_prefix = "rtt_"
 
     duration = models.DurationField()
+
+    class Meta:
+        """Django model options for the test model."""
+
+        app_label = "tests"
+
+
+class ResourceFlaggedTimestampThing(models.Model):
+    """Model whose timestamp semantics come only from Django field flags."""
+
+    label = models.CharField(max_length=64)
+    born_on = models.DateTimeField(auto_now_add=True)
+    touched_on = models.DateTimeField(auto_now=True)
 
     class Meta:
         """Django model options for the test model."""
@@ -171,6 +184,29 @@ def test_resource_field_metadata_has_a_field_owner_module() -> None:
     assert not hasattr(metadata_module, "_optional_type_name")
 
 
+def test_resource_subtitle_timestamp_defaults_follow_model_field_flags() -> None:
+    """Created/updated facts follow auto_now_add/auto_now, independent of names."""
+
+    @strawberry_django.type(ResourceFlaggedTimestampThing)
+    class ResourceFlaggedTimestampThingType:
+        label: auto
+        born_on: auto
+        touched_on: auto
+
+    metadata = make_data_resource_metadata(
+        model=ResourceFlaggedTimestampThing,
+        node_type=ResourceFlaggedTimestampThingType,
+        roots=DataResourceRoots(),
+        type_names=DataResourceTypeNames(),
+        capabilities=(),
+    )
+
+    assert metadata.subtitle == DataResourceSubtitleMetadata(
+        created="born_on",
+        updated="touched_on",
+    )
+
+
 def test_hasura_resource_attaches_angee_resource_metadata() -> None:
     """The Hasura builder remains external while Angee owns resource metadata."""
 
@@ -178,6 +214,8 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
     class HasuraResourceThingType(AngeeNode):
         name: auto
         word_count: auto
+        created_at: auto
+        updated_at: auto
 
     write_backend = type(
         "NoopWriteBackend",
@@ -199,6 +237,7 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
         get_queryset=lambda info: HasuraResourceThing.objects.all(),
         write_backend=write_backend,
         id_decode=lambda value: value,
+        subtitle=DataResourceSubtitleMetadata(word_count="word_count"),
     )
     schema = GraphQLSchemas(
         [
@@ -271,6 +310,11 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
     assert metadata.create_fields == ("name", "word_count")
     assert metadata.update_fields == ("name", "word_count")
     assert metadata.required_create_fields == ("name",)
+    assert metadata.subtitle == DataResourceSubtitleMetadata(
+        created="created_at",
+        updated="updated_at",
+        word_count="word_count",
+    )
     assert fields["word_count"].filterable is True
     assert fields["word_count"].sortable is True
     assert fields["word_count"].aggregatable is True
@@ -278,6 +322,11 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
     assert fields["word_count"].updatable is True
     serialized = schema._schema.extensions["angee"]["resources"][0]
     assert serialized["roots"]["groupsCount"] == "things_groups_count"
+    assert serialized["subtitle"] == {
+        "created": "created_at",
+        "updated": "updated_at",
+        "wordCount": "word_count",
+    }
     sdl = schema.as_str()
     assert "word_count" in sdl
     assert "wordCount" not in sdl
