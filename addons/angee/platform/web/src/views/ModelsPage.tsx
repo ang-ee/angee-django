@@ -16,7 +16,7 @@ interface ModelResourceRow extends Record<string, unknown> {
   id: string;
   label: string;
   model_name: string;
-  addon_id: string;
+  addon_id: string | null;
   addon_label: string;
   db_table: string;
   field_count: number;
@@ -45,11 +45,14 @@ function columns(
     {
       field: "addon_label",
       header: t("col.addon"),
-      render: (row) => (
-        <TextRouteLink href={routeHref("platform.addons.record", { id: row.addon_id })}>
-          {row.addon_label}
-        </TextRouteLink>
-      ),
+      render: (row) =>
+        row.addon_id ? (
+          <TextRouteLink href={routeHref("platform.addons.record", { id: row.addon_id })}>
+            {row.addon_label}
+          </TextRouteLink>
+        ) : (
+          row.addon_label
+        ),
     },
     {
       field: "db_table",
@@ -107,6 +110,8 @@ export function ModelsPage(): ReactElement {
     <ListView<ModelResourceRow>
       resource="platform.Model"
       columns={columns(t, routeHref)}
+      // Render-only reads (see the frontend guidelines' undeclared-field rule).
+      fields={["addon_id"]}
       groupOptions={groupOptions(t)}
       baseFilter={addonScope ? { addon_id: { exact: addonScope } } : undefined}
       defaultGroup={addonScope ? null : { field: "addon_label" }}
