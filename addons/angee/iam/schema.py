@@ -36,6 +36,7 @@ from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.base.models import SqidPublicIdentity, instance_from_public_id
+from angee.graphql.access import ActorSelfChangeReadGate
 from angee.graphql.data import aggregate_queryset, hasura_model_resource, hasura_pydantic_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID
@@ -917,6 +918,13 @@ schemas = {
     "public": {
         "query": [IAMQuery],
         "mutation": [IAMMutation],
+        "subscription": [
+            changes(
+                User,
+                field="userChanged",
+                read_gate=ActorSelfChangeReadGate,
+            )
+        ],
         "types": [
             UserType,
             CurrentUserType,

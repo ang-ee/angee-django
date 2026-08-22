@@ -119,6 +119,8 @@ export function ResourcesPage(): ReactElement {
     <ListView<ResourceLedgerResourceRow>
       resource="resources.Resource"
       columns={columns(t)}
+      // Render-only reads (see the frontend guidelines' undeclared-field rule).
+      fields={["target_id", "source_path"]}
       customFilterFields={filterFields(t)}
       groupOptions={groupOptions(t)}
       defaultGroup={{ field: "tier" }}

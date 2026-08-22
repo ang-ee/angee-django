@@ -9,6 +9,7 @@ bucket, the way the runtime composer does.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 from collections.abc import Iterator
 from typing import Any
@@ -23,7 +24,8 @@ from django.core.management import call_command
 from django.db import connection
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext, override_settings
-from rebac import app_settings, system_context
+from rebac import actor_context, app_settings, system_context, to_object_ref, to_subject_ref
+from rebac.backends import backend
 from rebac.roles import grant
 
 from angee.base.models import (
@@ -32,8 +34,10 @@ from angee.base.models import (
     public_id_for,
     public_id_of,
 )
+from angee.graphql import subscriptions
 from angee.graphql.data.field_classification import resource_field_kind, resource_field_widget
 from angee.graphql.data.metadata import model_resource_fields
+from angee.graphql.events import ChangePayload
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
@@ -1403,16 +1407,80 @@ def test_scalar_id_relation_axis_classifies_as_leaf() -> None:
     assert resource_field_widget(oauth_client_fk, kind) == "select"
 
 
-def test_console_schema_exposes_user_change_subscription(
+def test_iam_schemas_expose_user_change_subscriptions(
     iam_connection_tables: None,
 ) -> None:
-    """The IAM users view has a console change stream to subscribe to."""
+    """Public self-service and the IAM users view expose user change streams."""
 
     public_sdl = _schema("public").as_str()
     console_sdl = _schema("console").as_str()
 
-    assert "userChanged" not in public_sdl
+    assert "userChanged: ChangeEvent!" in _sdl_block(public_sdl, "type Subscription")
     assert "userChanged: ChangeEvent!" in _sdl_block(console_sdl, "type Subscription")
+
+
+def test_public_user_change_subscription_only_yields_the_actor(
+    iam_connection_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The self feed is stricter than row read and exposes only projected values."""
+
+    actor = User.objects.create_user(username="preference-actor")
+    other = User.objects.create_user(username="preference-other")
+    grant(actor=actor, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
+    actor_ref = to_subject_ref(actor)
+    assert backend().check_access(
+        subject=actor_ref,
+        action="read",
+        resource=to_object_ref(other),
+    ).allowed
+
+    actor.preferences = {"chrome.rail": {"expanded": False}}
+    other.preferences = {"chrome.rail": {"expanded": True}}
+    actor.set_password("reset-secret")
+    user_resource = next(
+        resource
+        for resource in _schema("console").angee_resources
+        if resource.model_label == "iam.User"
+    )
+    readable_fields = user_resource.readable_model_field_names()
+    assert "preferences" in readable_fields
+    assert "password" not in readable_fields
+    actor_change = ChangePayload.from_instance(
+        actor,
+        action="update",
+        update_fields=("password", "preferences"),
+        readable_fields=readable_fields,
+    )
+    other_change = ChangePayload.from_instance(
+        other,
+        action="update",
+        update_fields=("preferences",),
+        readable_fields=readable_fields,
+    )
+
+    async def subscribe(model: type[Any]):
+        assert model is User
+        yield other_change
+        yield actor_change
+
+    monkeypatch.setattr(subscriptions, "_subscribe", subscribe)
+    surface = iam_schema.schemas["public"]["subscription"][0]
+    field = surface.__strawberry_definition__.fields[0]
+    resolver = field.base_resolver.wrapped_func
+
+    async def collect() -> list[Any]:
+        events: list[Any] = []
+        with actor_context(actor_ref):
+            async for event in resolver(object(), object()):
+                events.append(event)
+        return events
+
+    events = asyncio.run(collect())
+
+    assert [str(event.id) for event in events] == [public_id_of(actor)]
+    assert events[0].changed_fields == ["password", "preferences"]
+    assert events[0].changed_values == {"preferences": actor.preferences}
 
 
 @pytest.mark.django_db
