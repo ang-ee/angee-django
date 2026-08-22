@@ -31,6 +31,13 @@ from django.utils import timezone
 from rebac import current_actor, system_context
 
 
+class NeedImportance(models.TextChoices):
+    """Binary requester signal, deliberately distinct from planning priority."""
+
+    NORMAL = "normal", "Normal"
+    IMPORTANT = "important", "Important"
+
+
 class NeedManager(AngeeManager):
     """Own manual capture, message capture, and triage-task construction."""
 
@@ -81,7 +88,7 @@ class NeedManager(AngeeManager):
         if not body:
             raise ValidationError({"body": "A manual need requires a body."})
         try:
-            importance_value = self.model.Importance(getattr(importance, "value", importance))
+            importance_value = NeedImportance(getattr(importance, "value", importance))
         except ValueError as error:
             raise ValidationError({"importance": "Choose normal or important."}) from error
 
@@ -155,7 +162,7 @@ class NeedManager(AngeeManager):
                 task=task,
                 party_id=party_id,
                 source_message=locked_message,
-                importance=self.model.Importance.NORMAL,
+                importance=NeedImportance.NORMAL,
                 created_by_id=locked_message.created_by_id,
                 updated_by_id=locked_message.updated_by_id,
             )
@@ -233,12 +240,6 @@ class Need(AuditMixin, AngeeDataModel):
     runtime = True
     sqid_prefix = "ned_"
 
-    class Importance(models.TextChoices):
-        """Binary requester signal, deliberately distinct from planning priority."""
-
-        NORMAL = "normal", "Normal"
-        IMPORTANT = "important", "Important"
-
     party = models.ForeignKey(
         "parties.Party",
         null=True,
@@ -263,7 +264,7 @@ class Need(AuditMixin, AngeeDataModel):
     targets_project = models.BooleanField(default=False, editable=False)
     """Whether ``project`` is the direct target rather than task-project context."""
 
-    importance = StateField(choices_enum=Importance, default=Importance.NORMAL)
+    importance = StateField(choices_enum=NeedImportance, default=NeedImportance.NORMAL)
     body = models.TextField(blank=True, default="")
     source_message = models.ForeignKey(
         "messaging.Message",

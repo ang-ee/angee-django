@@ -5,7 +5,7 @@ export const CaptureNeedDocument = graphql(`
     $target: NeedTargetInput!
     $body: String!
     $party: ID
-    $importance: Importance!
+    $importance: NeedImportance!
   ) {
     capture_need(
       target: $target

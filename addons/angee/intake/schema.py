@@ -28,8 +28,8 @@ Task = apps.get_model("projects", "Task")
 Message = apps.get_model("messaging", "Message")
 Queue = apps.get_model("work", "Queue")
 
-Importance = Need._meta.get_field("importance").choices_enum
-strawberry.enum(cast(Any, Importance))
+NeedImportance = Need._meta.get_field("importance").choices_enum
+strawberry.enum(cast(Any, NeedImportance))
 
 
 @strawberry.input
@@ -76,7 +76,7 @@ class IntakeActionMutation:
         target: NeedTargetInput,
         body: str,
         party: PublicID | None = None,
-        importance: Importance = Importance.NORMAL,  # type: ignore[valid-type]
+        importance: NeedImportance = NeedImportance.NORMAL,  # type: ignore[valid-type]
     ) -> ActionResult:
         """Idempotently capture one exact manual request on a task or project."""
 

@@ -48,6 +48,49 @@ _TRACK_SYSTEM_ACTOR = SubjectRef.of("proposals/system", "track")
 """Non-user attribution for Project rows created only by ``create_track``."""
 
 
+class RoundOpeningPolicy(models.TextChoices):
+    """Which responder-owned surfaces disclosure opens."""
+
+    FACILITATOR_ONLY = "facilitator_only", "Facilitator only"
+    ANSWERS = "answers", "Answers"
+    ANSWERS_AND_TRACKS = "answers_and_tracks", "Answers and tracks"
+
+
+class RoundStatus(models.TextChoices):
+    """Code-owned Round lifecycle."""
+
+    COLLECTING = "collecting", "Collecting"
+    OPENED = "opened", "Opened"
+    CLOSED = "closed", "Closed"
+    CANCELLED = "cancelled", "Cancelled"
+
+
+class RoundOutcome(models.TextChoices):
+    """Terminal close outcomes."""
+
+    AWARDED = "awarded", "Awarded"
+    NO_AWARD = "no_award", "No award"
+
+
+class ProposalState(models.TextChoices):
+    """Single Proposal document lifecycle."""
+
+    DRAFT = "draft", "Draft"
+    SUBMITTED = "submitted", "Submitted"
+    ACCEPTED = "accepted", "Accepted"
+    PARTIALLY_ACCEPTED = "partially_accepted", "Partially accepted"
+    DECLINED = "declined", "Declined"
+    WITHDRAWN = "withdrawn", "Withdrawn"
+
+
+class ProposalConfidence(models.TextChoices):
+    """Closed confidence vocabulary for comparison."""
+
+    LOW = "low", "Low"
+    MEDIUM = "medium", "Medium"
+    HIGH = "high", "High"
+
+
 def _adopt(instance: models.Model, source: models.Model, fields: Iterable[str]) -> None:
     """Copy persisted scalar/FK state without tripping guarded state descriptors."""
 
@@ -151,27 +194,6 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
         "closed_by_id",
     )
 
-    class OpeningPolicy(models.TextChoices):
-        """Which responder-owned surfaces disclosure opens."""
-
-        FACILITATOR_ONLY = "facilitator_only", "Facilitator only"
-        ANSWERS = "answers", "Answers"
-        ANSWERS_AND_TRACKS = "answers_and_tracks", "Answers and tracks"
-
-    class Status(models.TextChoices):
-        """Code-owned Round lifecycle."""
-
-        COLLECTING = "collecting", "Collecting"
-        OPENED = "opened", "Opened"
-        CLOSED = "closed", "Closed"
-        CANCELLED = "cancelled", "Cancelled"
-
-    class Outcome(models.TextChoices):
-        """Terminal close outcomes."""
-
-        AWARDED = "awarded", "Awarded"
-        NO_AWARD = "no_award", "No award"
-
     task = models.ForeignKey(
         "projects.Task",
         null=True,
@@ -200,18 +222,18 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
         related_name="requested_proposal_rounds",
     )
     opening_policy = StateField(
-        choices_enum=OpeningPolicy,
-        default=OpeningPolicy.FACILITATOR_ONLY,
+        choices_enum=RoundOpeningPolicy,
+        default=RoundOpeningPolicy.FACILITATOR_ONLY,
     )
-    status = StateField(choices_enum=Status, default=Status.COLLECTING)
+    status = StateField(choices_enum=RoundStatus, default=RoundStatus.COLLECTING)
     status_transitions = StateTransitions(
         status,
         {
-            Status.COLLECTING: (Status.OPENED, Status.CANCELLED),
-            Status.OPENED: (Status.CLOSED, Status.CANCELLED),
+            RoundStatus.COLLECTING: (RoundStatus.OPENED, RoundStatus.CANCELLED),
+            RoundStatus.OPENED: (RoundStatus.CLOSED, RoundStatus.CANCELLED),
         },
     )
-    outcome = StateField(choices_enum=Outcome, null=True, blank=True)
+    outcome = StateField(choices_enum=RoundOutcome, null=True, blank=True)
     last_call_at = models.DateTimeField()
     submission_deadline = models.DateTimeField()
     opened_at = models.DateTimeField(null=True, blank=True, editable=False)
@@ -308,7 +330,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
                 ).first()
             if (
                 persisted is not None
-                and persisted["status"] != self.Status.COLLECTING
+                and persisted["status"] != RoundStatus.COLLECTING
                 and persisted["opening_policy"] != self.opening_policy
             ):
                 raise ValidationError({"opening_policy": "Opening policy is immutable after opening."})
@@ -317,7 +339,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
     def deletion_error(self) -> str | None:
         """Return why this Round cannot be deleted under the untouched-draft rule."""
 
-        if self.status != self.Status.COLLECTING or self.outcome is not None:
+        if self.status != RoundStatus.COLLECTING or self.outcome is not None:
             return "Only a collecting round can be deleted."
         with system_context(reason="proposals.round.delete_guard"):
             proposals = list(
@@ -350,23 +372,23 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
                 .order_by("pk")
             )
             expected = locked._opening_relationships(proposals)
-            if locked.status == self.Status.OPENED:
+            if locked.status == RoundStatus.OPENED:
                 locked._assert_open_postcondition(proposals, expected)
-            elif locked.status == self.Status.COLLECTING:
+            elif locked.status == RoundStatus.COLLECTING:
                 locked._reconcile_opening_relationships(proposals, expected)
-                if locked.opening_policy == self.OpeningPolicy.ANSWERS_AND_TRACKS:
+                if locked.opening_policy == RoundOpeningPolicy.ANSWERS_AND_TRACKS:
                     for proposal in proposals:
-                        if proposal.state == proposal.State.SUBMITTED and proposal.track_id is not None:
+                        if proposal.state == ProposalState.SUBMITTED and proposal.track_id is not None:
                             proposal._publish_track_locked(proposals)
                 locked._mark_opened()
             else:
-                locked.status_transitions.not_allowed(locked.status, self.Status.OPENED)
+                locked.status_transitions.not_allowed(locked.status, RoundStatus.OPENED)
         _adopt(self, locked, ("status", "opened_at", "opened_by", "updated_at", "updated_by"))
         return self
 
     def close(
         self,
-        outcome: str | Outcome,
+        outcome: str | RoundOutcome,
         *,
         accepted: Iterable[models.Model] = (),
         partial: Iterable[models.Model] = (),
@@ -376,7 +398,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
         if self.pk is None:
             raise ValidationError("A saved round is required.")
         try:
-            outcome_value = self.Outcome(getattr(outcome, "value", outcome))
+            outcome_value = RoundOutcome(getattr(outcome, "value", outcome))
         except ValueError as error:
             raise ValidationError({"outcome": "Choose awarded or no award."}) from error
         accepted_ids = self._selection_ids(accepted, "accepted")
@@ -384,9 +406,9 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
         overlap = accepted_ids & partial_ids
         if overlap:
             raise ValidationError("Accepted and partially accepted proposals must be disjoint.")
-        if outcome_value == self.Outcome.NO_AWARD and (accepted_ids or partial_ids):
+        if outcome_value == RoundOutcome.NO_AWARD and (accepted_ids or partial_ids):
             raise ValidationError({"outcome": "No-award closure cannot select proposals."})
-        if outcome_value == self.Outcome.AWARDED and not (accepted_ids or partial_ids):
+        if outcome_value == RoundOutcome.AWARDED and not (accepted_ids or partial_ids):
             raise ValidationError({"outcome": "Awarded closure requires an accepted proposal."})
 
         proposal_model = apps.get_model("proposals", "Proposal")
@@ -402,21 +424,21 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
             unknown = sorted((accepted_ids | partial_ids) - set(by_id))
             if unknown:
                 raise ValidationError("Every selected proposal must belong to this round.")
-            if locked.status == self.Status.CLOSED:
+            if locked.status == RoundStatus.CLOSED:
                 locked._assert_close_postcondition(
                     proposals,
                     outcome=outcome_value,
                     accepted_ids=accepted_ids,
                     partial_ids=partial_ids,
                 )
-            elif locked.status != self.Status.OPENED:
-                locked.status_transitions.not_allowed(locked.status, self.Status.CLOSED)
+            elif locked.status != RoundStatus.OPENED:
+                locked.status_transitions.not_allowed(locked.status, RoundStatus.CLOSED)
             else:
                 selected = accepted_ids | partial_ids
-                if any(by_id[pk].state != proposal_model.State.SUBMITTED for pk in selected):
+                if any(by_id[pk].state != ProposalState.SUBMITTED for pk in selected):
                     raise ValidationError("Only submitted proposals can be selected.")
                 for proposal in proposals:
-                    if proposal.state != proposal_model.State.SUBMITTED:
+                    if proposal.state != ProposalState.SUBMITTED:
                         continue
                     if proposal.pk in accepted_ids:
                         proposal._mark_accepted(locked.facilitator_id)
@@ -439,7 +461,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
             raise ValidationError("A saved round is required.")
         with transaction.atomic():
             locked = type(self).objects.sudo(reason="proposals.round.cancel").lock_if_supported().get(pk=self.pk)
-            if locked.status == self.Status.CANCELLED:
+            if locked.status == RoundStatus.CANCELLED:
                 if locked.outcome is not None or locked.closed_at is None or locked.closed_by_id is None:
                     raise ValidationError("Cancelled round receipts do not match the requested postcondition.")
             else:
@@ -466,7 +488,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
                 .filter(round_id=locked.pk)
                 .order_by("pk")
             )
-            if locked.status in {self.Status.CLOSED, self.Status.CANCELLED}:
+            if locked.status in {RoundStatus.CLOSED, RoundStatus.CANCELLED}:
                 raise ValidationError({"facilitator": "Terminal rounds cannot transfer facilitation."})
             old_id = locked.facilitator_id
             if old_id == user.pk:
@@ -490,7 +512,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
         _adopt(self, locked, ("facilitator", "updated_at", "updated_by"))
         return self
 
-    @transition(status, source=Status.COLLECTING, target=Status.OPENED, on_success=save_state)
+    @transition(status, source=RoundStatus.COLLECTING, target=RoundStatus.OPENED, on_success=save_state)
     def _mark_opened(self) -> None:
         """Record the immutable opening receipt."""
 
@@ -499,8 +521,8 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
         self.allow_immutable_save("opened_at", "opened_by_id")
         self._transition_fields = {"opened_at", "opened_by"}
 
-    @transition(status, source=Status.OPENED, target=Status.CLOSED, on_success=save_state)
-    def _mark_closed(self, outcome: Outcome) -> None:
+    @transition(status, source=RoundStatus.OPENED, target=RoundStatus.CLOSED, on_success=save_state)
+    def _mark_closed(self, outcome: RoundOutcome) -> None:
         """Record one immutable close outcome and receipt."""
 
         self.outcome = outcome
@@ -511,8 +533,8 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
 
     @transition(
         status,
-        source=(Status.COLLECTING, Status.OPENED),
-        target=Status.CANCELLED,
+        source=(RoundStatus.COLLECTING, RoundStatus.OPENED),
+        target=RoundStatus.CANCELLED,
         on_success=save_state,
     )
     def _mark_cancelled(self) -> None:
@@ -537,20 +559,20 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
             raise ValidationError({"last_call_at": "Last call must not follow the submission deadline."})
 
     def _validate_lifecycle_receipts(self) -> None:
-        if self.status == self.Status.COLLECTING and any(
+        if self.status == RoundStatus.COLLECTING and any(
             value is not None
             for value in (self.outcome, self.opened_at, self.opened_by_id, self.closed_at, self.closed_by_id)
         ):
             raise ValidationError("A collecting round cannot carry lifecycle receipts.")
-        if self.status in {self.Status.OPENED, self.Status.CLOSED} and (
+        if self.status in {RoundStatus.OPENED, RoundStatus.CLOSED} and (
             self.opened_at is None or self.opened_by_id is None
         ):
             raise ValidationError("An opened round requires its opening receipt.")
-        if self.status in {self.Status.CLOSED, self.Status.CANCELLED} and (
+        if self.status in {RoundStatus.CLOSED, RoundStatus.CANCELLED} and (
             self.closed_at is None or self.closed_by_id is None
         ):
             raise ValidationError("A terminal round requires its close receipt.")
-        if (self.status == self.Status.CLOSED) != (self.outcome is not None):
+        if (self.status == RoundStatus.CLOSED) != (self.outcome is not None):
             raise ValidationError({"outcome": "Only a closed round carries an outcome."})
 
     def _selection_ids(self, proposals: Iterable[models.Model], field: str) -> set[Any]:
@@ -579,17 +601,16 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
         return tuple(users[user_id] for user_id in ids if user_id in users)
 
     def _opening_relationships(self, proposals: list[models.Model]) -> list[RelationshipTuple]:
-        if self.opening_policy == self.OpeningPolicy.FACILITATOR_ONLY:
+        if self.opening_policy == RoundOpeningPolicy.FACILITATOR_ONLY:
             return []
-        proposal_model = apps.get_model("proposals", "Proposal")
         recipients = self._responder_users(
             proposals,
-            states={proposal_model.State.SUBMITTED},
+            states={ProposalState.SUBMITTED},
         )
         return [
             _relationship(proposal, "reader", user)
             for proposal in proposals
-            if proposal.state == proposal.State.SUBMITTED
+            if proposal.state == ProposalState.SUBMITTED
             for user in recipients
         ]
 
@@ -645,17 +666,16 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
     def _assert_open_track_postcondition(self, proposals: list[models.Model]) -> None:
         """Require every answers-and-tracks grant owned by the opening ceremony."""
 
-        if self.opening_policy != self.OpeningPolicy.ANSWERS_AND_TRACKS:
+        if self.opening_policy != RoundOpeningPolicy.ANSWERS_AND_TRACKS:
             return
-        proposal_model = apps.get_model("proposals", "Proposal")
         recipients = self._responder_users(
             proposals,
-            states={proposal_model.State.SUBMITTED},
+            states={ProposalState.SUBMITTED},
         )
         tracked = [
             proposal
             for proposal in proposals
-            if proposal.state == proposal.State.SUBMITTED and proposal.track_id is not None
+            if proposal.state == ProposalState.SUBMITTED and proposal.track_id is not None
         ]
         expected = {
             _relationship_key(_relationship(proposal.track, "reader", user))
@@ -688,19 +708,19 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
         self,
         proposals: list[models.Model],
         *,
-        outcome: Outcome,
+        outcome: RoundOutcome,
         accepted_ids: set[Any],
         partial_ids: set[Any],
     ) -> None:
         if self.outcome != outcome or self.closed_at is None or self.closed_by_id is None:
             raise ValidationError("Closed round receipts do not match the requested postcondition.")
-        actual_accepted = {proposal.pk for proposal in proposals if proposal.state == proposal.State.ACCEPTED}
+        actual_accepted = {proposal.pk for proposal in proposals if proposal.state == ProposalState.ACCEPTED}
         actual_partial = {
-            proposal.pk for proposal in proposals if proposal.state == proposal.State.PARTIALLY_ACCEPTED
+            proposal.pk for proposal in proposals if proposal.state == ProposalState.PARTIALLY_ACCEPTED
         }
         if actual_accepted != accepted_ids or actual_partial != partial_ids:
             raise ValidationError("Closed round decisions do not match the requested postcondition.")
-        if any(proposal.state == proposal.State.SUBMITTED for proposal in proposals):
+        if any(proposal.state == ProposalState.SUBMITTED for proposal in proposals):
             raise ValidationError("Closed round left a submitted proposal undecided.")
 
 
@@ -795,7 +815,7 @@ class ProposalManager(AngeeManager):
                 .lock_if_supported()
                 .get(pk=round.pk)
             )
-            if locked_round.status != locked_round.Status.COLLECTING:
+            if locked_round.status != RoundStatus.COLLECTING:
                 raise ValidationError({"round": "Replies cannot be captured after opening."})
             locked_message = (
                 type(message)
@@ -813,9 +833,9 @@ class ProposalManager(AngeeManager):
                 round=locked_round,
                 party=resolved_party,
             )
-            if proposal.state != proposal.State.DRAFT:
+            if proposal.state != ProposalState.DRAFT:
                 if (
-                    proposal.state == proposal.State.SUBMITTED
+                    proposal.state == ProposalState.SUBMITTED
                     and proposal.capture_payload_hash == payload_hash
                     and proposal.capture_parser_version == self.CAPTURE_PARSER_VERSION
                 ):
@@ -1021,23 +1041,6 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         "decided_by_id",
     )
 
-    class State(models.TextChoices):
-        """Single Proposal document lifecycle."""
-
-        DRAFT = "draft", "Draft"
-        SUBMITTED = "submitted", "Submitted"
-        ACCEPTED = "accepted", "Accepted"
-        PARTIALLY_ACCEPTED = "partially_accepted", "Partially accepted"
-        DECLINED = "declined", "Declined"
-        WITHDRAWN = "withdrawn", "Withdrawn"
-
-    class Confidence(models.TextChoices):
-        """Closed confidence vocabulary for comparison."""
-
-        LOW = "low", "Low"
-        MEDIUM = "medium", "Medium"
-        HIGH = "high", "High"
-
     round = models.ForeignKey(
         "proposals.Round",
         on_delete=models.CASCADE,
@@ -1064,16 +1067,16 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         on_delete=models.SET_NULL,
         related_name="captured_proposal",
     )
-    state = StateField(choices_enum=State, default=State.DRAFT)
+    state = StateField(choices_enum=ProposalState, default=ProposalState.DRAFT)
     state_transitions = StateTransitions(
         state,
         {
-            State.DRAFT: State.SUBMITTED,
-            State.SUBMITTED: (
-                State.ACCEPTED,
-                State.PARTIALLY_ACCEPTED,
-                State.DECLINED,
-                State.WITHDRAWN,
+            ProposalState.DRAFT: ProposalState.SUBMITTED,
+            ProposalState.SUBMITTED: (
+                ProposalState.ACCEPTED,
+                ProposalState.PARTIALLY_ACCEPTED,
+                ProposalState.DECLINED,
+                ProposalState.WITHDRAWN,
             ),
         },
     )
@@ -1114,7 +1117,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
     staffing = models.CharField(max_length=240, blank=True, default="")
     timeframe_start = models.DateField(null=True, blank=True)
     timeframe_end = models.DateField(null=True, blank=True)
-    confidence = StateField(choices_enum=Confidence, null=True, blank=True)
+    confidence = StateField(choices_enum=ProposalConfidence, null=True, blank=True)
     valid_until = models.DateField(null=True, blank=True)
     capture_payload_hash = models.CharField(max_length=64, blank=True, default="", editable=False)
     capture_parser_version = models.CharField(max_length=64, blank=True, default="", editable=False)
@@ -1207,7 +1210,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
                 .lock_if_supported()
                 .get(pk=self.round_id)
             )
-            if locked_round.status != locked_round.Status.COLLECTING:
+            if locked_round.status != RoundStatus.COLLECTING:
                 raise ValidationError({"round": "Proposal shells cannot be added after opening."})
             self.round = locked_round
             super().save(*args, **kwargs)
@@ -1216,7 +1219,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
     def deletion_error(self) -> str | None:
         """Return why this Proposal is no longer an untouched draft."""
 
-        if self.state != self.State.DRAFT or self.submitted_at is not None or self.decided_at is not None:
+        if self.state != ProposalState.DRAFT or self.submitted_at is not None or self.decided_at is not None:
             return "Only an untouched draft proposal can be deleted."
         if self.source_message_id is not None or self.track_id is not None:
             return "Captured or tracked proposals cannot be deleted."
@@ -1270,11 +1273,11 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
                 .order_by("pk")
                 .get()
             )
-            if locked.state == self.State.SUBMITTED:
+            if locked.state == ProposalState.SUBMITTED:
                 locked._assert_submitted_postcondition()
-            elif locked.state != self.State.DRAFT:
-                locked.state_transitions.not_allowed(locked.state, self.State.SUBMITTED)
-            elif locked_round.status != locked_round.Status.COLLECTING:
+            elif locked.state != ProposalState.DRAFT:
+                locked.state_transitions.not_allowed(locked.state, ProposalState.SUBMITTED)
+            elif locked_round.status != RoundStatus.COLLECTING:
                 raise ValidationError({"round": "Proposals cannot be submitted after opening."})
             else:
                 locked._submit_locked(fallback_user_id=locked.responder_id or locked_round.facilitator_id)
@@ -1300,10 +1303,10 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
                 .order_by("pk")
                 .get()
             )
-            if locked.state == self.State.WITHDRAWN:
+            if locked.state == ProposalState.WITHDRAWN:
                 if locked.decided_at is None or locked.decided_by_id is None:
                     raise ValidationError("Withdrawn proposal receipts do not match the requested postcondition.")
-            elif locked_round.status == locked_round.Status.CLOSED:
+            elif locked_round.status == RoundStatus.CLOSED:
                 raise ValidationError({"round": "Proposals cannot be withdrawn after closure."})
             else:
                 locked._mark_withdrawn(locked.responder_id or locked_round.facilitator_id)
@@ -1417,7 +1420,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         if (
             actor_id is not None
             and str(actor_id) == str(self.responder_id)
-            and round.status == round.Status.OPENED
+            and round.status == RoundStatus.OPENED
         ):
             return
         raise ValidationError(
@@ -1429,7 +1432,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
             }
         )
 
-    @transition(state, source=State.DRAFT, target=State.SUBMITTED, on_success=save_state)
+    @transition(state, source=ProposalState.DRAFT, target=ProposalState.SUBMITTED, on_success=save_state)
     def _mark_submitted(self, fallback_user_id: Any | None = None) -> None:
         """Record immutable submission receipts."""
 
@@ -1438,7 +1441,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         self.allow_immutable_save("submitted_at", "submitted_by_id")
         self._transition_fields = {"submitted_at", "submitted_by"}
 
-    @transition(state, source=State.SUBMITTED, target=State.ACCEPTED, on_success=save_state)
+    @transition(state, source=ProposalState.SUBMITTED, target=ProposalState.ACCEPTED, on_success=save_state)
     def _mark_accepted(self, fallback_user_id: Any | None = None) -> None:
         """Accept this submitted Proposal."""
 
@@ -1446,8 +1449,8 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
 
     @transition(
         state,
-        source=State.SUBMITTED,
-        target=State.PARTIALLY_ACCEPTED,
+        source=ProposalState.SUBMITTED,
+        target=ProposalState.PARTIALLY_ACCEPTED,
         on_success=save_state,
     )
     def _mark_partially_accepted(self, fallback_user_id: Any | None = None) -> None:
@@ -1455,13 +1458,13 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
 
         self._set_decision_receipt(fallback_user_id)
 
-    @transition(state, source=State.SUBMITTED, target=State.DECLINED, on_success=save_state)
+    @transition(state, source=ProposalState.SUBMITTED, target=ProposalState.DECLINED, on_success=save_state)
     def _mark_declined(self, fallback_user_id: Any | None = None) -> None:
         """Decline this submitted Proposal."""
 
         self._set_decision_receipt(fallback_user_id)
 
-    @transition(state, source=State.SUBMITTED, target=State.WITHDRAWN, on_success=save_state)
+    @transition(state, source=ProposalState.SUBMITTED, target=ProposalState.WITHDRAWN, on_success=save_state)
     def _mark_withdrawn(self, fallback_user_id: Any | None = None) -> None:
         """Withdraw this submitted Proposal."""
 
@@ -1474,11 +1477,11 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         self._transition_fields = {"decided_at", "decided_by"}
 
     def _submit_locked(self, fallback_user_id: Any | None = None) -> None:
-        if self.state == self.State.SUBMITTED:
+        if self.state == ProposalState.SUBMITTED:
             self._assert_submitted_postcondition()
             return
-        if self.state != self.State.DRAFT:
-            self.state_transitions.not_allowed(self.state, self.State.SUBMITTED)
+        if self.state != ProposalState.DRAFT:
+            self.state_transitions.not_allowed(self.state, ProposalState.SUBMITTED)
         # Persist while the responder's editor tuple still authorizes this
         # actor-scoped row. The enclosing transaction then revokes that tuple;
         # neither edge becomes visible without the other.
@@ -1510,7 +1513,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         round = apps.get_model("proposals", "Round")._base_manager.get(pk=self.round_id)
         write_relationships([_relationship(round, "reader", responder)])
         editor = _relationship(self, "editor", responder)
-        if self.state == self.State.DRAFT:
+        if self.state == ProposalState.DRAFT:
             write_relationships([editor])
         else:
             delete_relationship(editor)
@@ -1533,11 +1536,11 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         """Return proposal states whose responders may receive a published track."""
 
         return {
-            self.State.SUBMITTED,
-            self.State.ACCEPTED,
-            self.State.PARTIALLY_ACCEPTED,
-            self.State.DECLINED,
-            self.State.WITHDRAWN,
+            ProposalState.SUBMITTED,
+            ProposalState.ACCEPTED,
+            ProposalState.PARTIALLY_ACCEPTED,
+            ProposalState.DECLINED,
+            ProposalState.WITHDRAWN,
         }
 
     def _track_is_published(self, proposals: list[models.Model]) -> bool:
@@ -1600,24 +1603,24 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
 
 
     def _validate_lifecycle_receipts(self) -> None:
-        if self.state == self.State.DRAFT and any(
+        if self.state == ProposalState.DRAFT and any(
             value is not None
             for value in (self.submitted_at, self.submitted_by_id, self.decided_at, self.decided_by_id)
         ):
             raise ValidationError("A draft proposal cannot carry lifecycle receipts.")
-        if self.state != self.State.DRAFT and (
+        if self.state != ProposalState.DRAFT and (
             self.submitted_at is None or self.submitted_by_id is None
         ):
             raise ValidationError("A non-draft proposal requires its submission receipt.")
         terminal = {
-            self.State.ACCEPTED,
-            self.State.PARTIALLY_ACCEPTED,
-            self.State.DECLINED,
-            self.State.WITHDRAWN,
+            ProposalState.ACCEPTED,
+            ProposalState.PARTIALLY_ACCEPTED,
+            ProposalState.DECLINED,
+            ProposalState.WITHDRAWN,
         }
         if self.state in terminal and (self.decided_at is None or self.decided_by_id is None):
             raise ValidationError("A terminal proposal requires its decision receipt.")
-        if self.state == self.State.SUBMITTED and (self.decided_at is not None or self.decided_by_id is not None):
+        if self.state == ProposalState.SUBMITTED and (self.decided_at is not None or self.decided_by_id is not None):
             raise ValidationError("A submitted proposal cannot carry a decision receipt.")
 
 
