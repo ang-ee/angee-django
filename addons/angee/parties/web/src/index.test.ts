@@ -2,6 +2,7 @@ import { expectValidBaseAddon } from "@angee/app/testing";
 import { createRouteHref } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
+import { enPartiesMessages } from "./i18n";
 import parties from "./index";
 
 describe("parties addon manifest", () => {
@@ -37,6 +38,14 @@ describe("parties addon manifest", () => {
       (parties.routes ?? []).find((route) => route.name === "parties.merge")
         ?.parent,
     ).toBe("parties.review");
+    expect([
+      enPartiesMessages["handle.contact"],
+      enPartiesMessages["review.party"],
+      enPartiesMessages["relationship.party"],
+    ]).toEqual(["Party", "Party", "Party"]);
+    expect(
+      Object.values(enPartiesMessages).filter((value) => /\bcontacts?\b/i.test(value)),
+    ).toEqual([]);
   });
 
   test("builds list, record, and merge hrefs from its declared route templates", () => {

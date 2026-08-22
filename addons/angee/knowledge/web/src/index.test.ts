@@ -2,6 +2,7 @@ import { expectValidBaseAddon } from "@angee/app/testing";
 import type { BaseMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
+import { enKnowledgeMessages } from "./i18n";
 import knowledge from "./index";
 
 describe("knowledge addon manifest", () => {
@@ -35,7 +36,7 @@ describe("knowledge addon manifest", () => {
     expect(record?.component).toBeUndefined();
   });
 
-  test("exposes a Knowledge menu with a Vaults child", () => {
+  test("exposes a Knowledge menu with a Settings child", () => {
     expect(knowledge.menus).toHaveLength(1);
     const menu = knowledge.menus?.[0] as BaseMenuItem | undefined;
     expect(menu?.id).toBe("knowledge");
@@ -46,6 +47,11 @@ describe("knowledge addon manifest", () => {
       "knowledge.home",
       "knowledge.settings",
     ]);
+    expect(menu?.children?.map((child) => child.label)).toEqual([
+      "Wiki",
+      "Settings",
+    ]);
+    expect(enKnowledgeMessages["settings.title"]).toBe("Settings");
   });
 
   test("registers its vault/note glyphs", () => {

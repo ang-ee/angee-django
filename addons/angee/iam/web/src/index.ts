@@ -22,7 +22,7 @@ const identityMenu: readonly BaseMenuItem[] = [
     // Route-less app root: the rail icon inherits its target from the first
     // child (Overview), so `iam.overview` is referenced by exactly one menu item.
     id: "iam",
-    label: "IAM",
+    label: "Permissions",
     icon: "auth",
     group: "platform",
     children: [

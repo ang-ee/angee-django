@@ -9,7 +9,11 @@ describe("angee.tags addon manifest", () => {
     expect(() => expectValidBaseAddon(tags)).not.toThrow();
   });
 
-  test("names the tag resource on its list route so relations can follow it", () => {
+  test("uses the Tags route-name convention and names the list resource", () => {
+    expect((tags.routes ?? []).map((route) => route.name)).toEqual([
+      "tags.tags",
+      "tags.tag",
+    ]);
     const resources = (tags.routes ?? [])
       .map((route) => route.resource)
       .filter((resource): resource is string => Boolean(resource));
@@ -22,6 +26,11 @@ describe("angee.tags addon manifest", () => {
       id: "tags",
       label: "Tags",
       group: "platform",
+    });
+    expect(root?.children?.[0]).toMatchObject({
+      id: "tags.tags",
+      label: "Tags",
+      route: "tags.tags",
     });
   });
 

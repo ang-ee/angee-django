@@ -7,9 +7,9 @@ rows:
   - xref: dedupe_parties
     fields:
       key: dedupe_parties
-      name: Deduplicate contacts
+      name: Deduplicate people
       description: >-
-        Scan for contacts sharing a normalized handle, review the proposed
+        Scan for people sharing a normalized handle, review the proposed
         merges as one editable batch, then apply the approved verbs.
       subject_declaration: ""
       budget: {}

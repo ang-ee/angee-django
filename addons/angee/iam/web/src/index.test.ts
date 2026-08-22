@@ -56,10 +56,10 @@ describe("iam addon manifest", () => {
     expect(names).not.toContain("iam.permissions");
   });
 
-  test("contributes the IAM console menu with a Roles dropdown", () => {
+  test("contributes the Permissions console menu with a Roles dropdown", () => {
     const menu = iam.menus?.[0] as BaseMenuItem | undefined;
     expect(menu?.id).toBe("iam");
-    expect(menu?.label).toBe("IAM");
+    expect(menu?.label).toBe("Permissions");
     // Route-less root: target inherited from the first child (Overview).
     expect(menu?.route).toBeUndefined();
     expect(menu?.children?.map((item) => item.id)).toEqual([

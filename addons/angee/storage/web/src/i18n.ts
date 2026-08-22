@@ -6,11 +6,11 @@ import { createNamespaceT } from "@angee/ui";
 
 export const enStorageMessages: Record<string, string> = {
   // Browser-level loading and empty states.
-  "loading": "Loading storage",
+  "loading": "Loading files…",
   "loadingFile": "Loading file",
-  "drives.unavailableTitle": "Storage unavailable",
+  "drives.unavailableTitle": "Files unavailable",
   "drives.emptyTitle": "No drives",
-  "drives.emptyDescription": "No storage drives are available to you.",
+  "drives.emptyDescription": "No drives are available to you.",
   "file.notFoundTitle": "File not found",
   "file.notFoundDescription": "This file is no longer available.",
   "preview.unsupported": "No inline preview for this file type.",
@@ -107,7 +107,7 @@ export const enStorageMessages: Record<string, string> = {
     "The unit of access control and key namespace files live in.",
   "settings.backends.title": "Backends",
   "settings.backends.description":
-    "Storage infrastructure a drive is created against.",
+    "Infrastructure a drive is created against.",
 
   // Settings admin console — drive/backend form field labels.
   "settings.archived": "Archived",

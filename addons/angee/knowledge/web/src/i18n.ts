@@ -43,7 +43,7 @@ export const enKnowledgeMessages: Record<string, string> = {
   "editor.folderTitle": "Folder",
   "editor.folderDescription":
     "A folder groups pages — open a note in the tree to edit it.",
-  "settings.title": "Vaults",
+  "settings.title": "Settings",
   "settings.description": "The access boundary a tree of pages lives in.",
 };
 

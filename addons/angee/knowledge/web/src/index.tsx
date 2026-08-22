@@ -28,7 +28,7 @@ const knowledgeMenu: readonly BaseMenuItem[] = [
     route: "knowledge.home",
     children: [
       { id: "knowledge.home", label: "Wiki", icon: "knowledge", route: "knowledge.home" },
-      { id: "knowledge.settings", label: "Vaults", icon: "vault", route: "knowledge.settings" },
+      { id: "knowledge.settings", label: "Settings", icon: "vault", route: "knowledge.settings" },
     ],
   },
 ];

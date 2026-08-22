@@ -128,9 +128,10 @@ def test_workflows_parties_resource_backfills_key_across_existing_lineage(
 
     assert first.created == 9
     with system_context(reason="test legacy workflow resource load"):
-        draft = Workflow.objects.get(name="Deduplicate contacts", status=workflow_models.WorkflowStatus.DRAFT)
+        draft = Workflow.objects.get(name="Deduplicate people", status=workflow_models.WorkflowStatus.DRAFT)
         published = Workflow.objects.get(published_from=draft)
     assert draft.key == ""
+    assert draft.description.startswith("Scan for people sharing a normalized handle")
     assert published.key == ""
 
     current = (source / "resources" / "install" / "100_workflows.workflow.yaml").read_text()
