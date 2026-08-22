@@ -1,0 +1,10 @@
+_meta:
+  model: intake.Need
+rows:
+  - xref: eng_customer_export
+    fields:
+      task: work.eng_composition_smoke
+      importance: important
+      body: Customers need a reliable export of their project activity.
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

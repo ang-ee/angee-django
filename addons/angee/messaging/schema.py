@@ -13,6 +13,23 @@ from typing import Annotated, Any, cast
 
 import strawberry
 import strawberry_django
+from angee.base.models import instance_from_public_id
+from angee.graphql.actions import ActionResult, action_target, resolve_action_target
+from angee.graphql.data import (
+    AngeeHasuraWriteBackend,
+    declared_hasura_resource_fields,
+    hasura_model_resource,
+    public_pk_decoder,
+)
+from angee.graphql.data.resource_fields import (
+    DataResourceEnumValueMetadata,
+    DataResourceFieldMetadata,
+)
+from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
+from angee.graphql.ids import PublicID, require_instance_for_id
+from angee.graphql.node import AngeeNode
+from angee.graphql.subscriptions import changes
+from angee.graphql.writes import write_queryset
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
@@ -22,14 +39,6 @@ from django.views.decorators.debug import sensitive_variables
 from rebac import PermissionDenied
 from strawberry import auto
 
-from angee.base.models import instance_from_public_id
-from angee.graphql.actions import ActionResult, action_target, resolve_action_target
-from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
-from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
-from angee.graphql.ids import PublicID, require_instance_for_id
-from angee.graphql.node import AngeeNode
-from angee.graphql.subscriptions import changes
-from angee.graphql.writes import write_queryset
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, request_from_info
 from angee.iam.schema import UserType
 from angee.integrate.live import PairingProjection, PairingState
@@ -58,6 +67,78 @@ MessageEdge = apps.get_model("messaging", "MessageEdge")
 Participant = apps.get_model("messaging", "Participant")
 Reaction = apps.get_model("messaging", "Reaction")
 MessageStar = apps.get_model("messaging", "MessageStar")
+
+_CHANNEL_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(
+    Channel,
+    "hasura_readable_fields",
+)
+_CHANNEL_EXTENSION_FILTER_FIELDS = declared_hasura_resource_fields(
+    Channel,
+    "hasura_filterable_fields",
+)
+_CHANNEL_EXTENSION_ORDER_FIELDS = declared_hasura_resource_fields(
+    Channel,
+    "hasura_sortable_fields",
+)
+_CHANNEL_EXTENSION_AGGREGATE_FIELDS = declared_hasura_resource_fields(
+    Channel,
+    "hasura_aggregatable_fields",
+)
+_CHANNEL_EXTENSION_GROUP_FIELDS = declared_hasura_resource_fields(
+    Channel,
+    "hasura_groupable_fields",
+)
+_CHANNEL_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(
+    Channel,
+    "hasura_updatable_fields",
+)
+_CHANNEL_EXTENSION_PUBLIC_ID_FIELDS = tuple(
+    name for name in _CHANNEL_EXTENSION_UPDATE_FIELDS if Channel._meta.get_field(name).is_relation
+)
+
+
+def _channel_extension_declared_fields() -> tuple[str | DataResourceFieldMetadata, ...]:
+    """Return parent-resource metadata for donor fields outside ChannelType.
+
+    Relations and scalars retain the framework's model reconstruction. A donor
+    ``StateField`` supplies explicit enum metadata because its GraphQL projection
+    is contributed later by the downstream addon's type extension.
+    """
+
+    filterable = set(_CHANNEL_EXTENSION_FILTER_FIELDS)
+    sortable = set(_CHANNEL_EXTENSION_ORDER_FIELDS)
+    aggregatable = set(_CHANNEL_EXTENSION_AGGREGATE_FIELDS)
+    groupable = set(_CHANNEL_EXTENSION_GROUP_FIELDS)
+    updatable = set(_CHANNEL_EXTENSION_UPDATE_FIELDS)
+    declared: list[str | DataResourceFieldMetadata] = []
+    for name in _CHANNEL_EXTENSION_READ_FIELDS:
+        choices_enum = getattr(Channel._meta.get_field(name), "choices_enum", None)
+        if choices_enum is None:
+            declared.append(name)
+            continue
+        declared.append(
+            DataResourceFieldMetadata(
+                name=name,
+                kind="enum",
+                values=tuple(
+                    DataResourceEnumValueMetadata(
+                        value=str(member.name),
+                        description=str(member.label) if str(member.label).strip() else None,
+                    )
+                    for member in choices_enum
+                ),
+                widget="select",
+                filterable=name in filterable,
+                sortable=name in sortable,
+                aggregatable=name in aggregatable,
+                groupable=name in groupable,
+                updatable=name in updatable,
+            )
+        )
+    return tuple(declared)
+
+
+_CHANNEL_EXTENSION_DECLARED_FIELDS = _channel_extension_declared_fields()
 
 
 @strawberry_django.type(Channel)
@@ -1606,19 +1687,39 @@ _CHANNEL_RESOURCE = hasura_model_resource(
         "sync_stage",
         "last_sync_completed_at",
         "updated_at",
+        *_CHANNEL_EXTENSION_FILTER_FIELDS,
     ],
-    sortable=["display_name", "backend_class", "lifecycle", "runtime_status", "last_sync_completed_at", "updated_at"],
-    aggregatable=["id", "last_sync_items"],
-    groupable=["backend_class", "lifecycle", "runtime_status", "last_sync_status", "sync_stage"],
+    sortable=[
+        "display_name",
+        "backend_class",
+        "lifecycle",
+        "runtime_status",
+        "last_sync_completed_at",
+        "updated_at",
+        *_CHANNEL_EXTENSION_ORDER_FIELDS,
+    ],
+    aggregatable=["id", "last_sync_items", *_CHANNEL_EXTENSION_AGGREGATE_FIELDS],
+    groupable=[
+        "backend_class",
+        "lifecycle",
+        "runtime_status",
+        "last_sync_status",
+        "sync_stage",
+        *_CHANNEL_EXTENSION_GROUP_FIELDS,
+    ],
     insert=False,
     # The operator label is the one channel fact a human owns; everything else on
     # the row is runtime truth a session writes. Blank falls back to the
     # vendor-derived `Integration.display_label`, so clearing it is a real intent.
-    updatable=["display_name"],
+    updatable=["display_name", *_CHANNEL_EXTENSION_UPDATE_FIELDS],
     # Deleting a channel purges everything it ingested (see `delete_channel` /
     # `_ChannelWriteBackend`); `delete=True` lights the console's delete button.
     delete=True,
-    write_backend=_ChannelWriteBackend(Channel),
+    write_backend=_ChannelWriteBackend(
+        Channel,
+        public_id_fields=_CHANNEL_EXTENSION_PUBLIC_ID_FIELDS,
+    ),
+    declared_fields=_CHANNEL_EXTENSION_DECLARED_FIELDS,
 )
 _MESSAGE_RESOURCE = hasura_model_resource(
     MessageType,

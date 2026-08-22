@@ -1336,6 +1336,7 @@ class ThreadAttachment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         """Why the thread is attached to the target record."""
 
         CHATTER = "chatter", "Chatter"
+        SOURCE = "source", "Source"
 
     sqid_prefix = "tha_"
     thread = models.ForeignKey(

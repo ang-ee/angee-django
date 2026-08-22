@@ -20,6 +20,7 @@ class BareGraphQLConfig(AppConfig):
     name = "angee.graphql"
     label = "graphql"
 
+
 SECRET_KEY = "angee-tests"
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
@@ -57,6 +58,7 @@ INSTALLED_APPS = [
     "angee.messaging_integrate_slack",
     "angee.spaces",
     "angee.work",
+    "angee.intake",
     "angee.nexus",
     "angee.posts",
     "angee.platform",
@@ -202,6 +204,7 @@ ANGEE_OAUTH_PROVIDER_TYPES = {
     "google": "angee.iam_integrate_oidc.providers.GoogleType",
 }
 ANGEE_CREDENTIAL_DISCONNECT_GUARDS = ("angee.iam_integrate_oidc.identity.guard_last_sign_in_disconnect",)
+ANGEE_WORK_MERGE_CONTRIBUTORS = ("angee.intake.merge.move_task_needs",)
 # Bare tests run Django's per-process LocMem cache. Production OAuth redirects
 # must use a shared cache; tests opt in explicitly so the state guard remains loud.
 ANGEE_INTEGRATE_ALLOW_LOCAL_OAUTH_STATE_CACHE = True
