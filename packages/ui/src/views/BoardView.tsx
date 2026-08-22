@@ -10,16 +10,28 @@ import {
   type CollisionDetection,
   type DragEndEvent,
 } from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
 import type { Row as TableRowModel } from "@tanstack/react-table";
 import { useNavigate } from "@tanstack/react-router";
-import type { ModelMetadata, Row } from "@angee/metadata";
+import { rowPublicId, type ModelMetadata, type Row } from "@angee/metadata";
 
 import { useUiT } from "../i18n";
 import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
 import { useDndKitSensors } from "../lib/dnd";
-import { type Tone } from "../lib/tones";
+import type { Tone } from "../lib/tones";
 import { CountBadge } from "../ui/badge";
+import { Button } from "../ui/button";
+import {
+  CollapsibleIcon,
+  CollapsiblePanel,
+  CollapsibleRoot,
+  CollapsibleTrigger,
+} from "../ui/collapsible";
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
 import { StatusDot } from "../ui/status-icon";
 import type { ResourceViewContextValue } from "./resource-view-context";
@@ -30,10 +42,18 @@ import {
   readPath,
   type RowGroup,
 } from "./resource-view-list-body";
-import type { ListEmptyContent } from "./resource-view-types";
 import { columnTone } from "./page";
 import type { ColumnDescriptor } from "./page";
-import type { CardActionContext } from "./resource-view-types";
+import type {
+  BoardCardPlacement,
+  CardActionContext,
+  ListEmptyContent,
+} from "./resource-view-types";
+import {
+  boardAppendRank,
+  boardMoveForDrop,
+  type BoardDropTarget,
+} from "./board-ordering";
 
 const BOARD_SCROLL_SURFACE_CLASS =
   "flex items-start gap-3 p-3";
@@ -54,7 +74,15 @@ export interface BoardViewProps<TRow extends Row = Row> {
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
   cardActionContext?: CardActionContext;
   dragEnabled?: boolean;
-  onCardMove?: (row: TRow, laneId: string | null) => void | Promise<void>;
+  rankField?: string;
+  optimisticPlacementByRowId?: ReadonlyMap<string, BoardCardPlacement>;
+  onCardMove?: (
+    row: TRow,
+    laneId: string | null,
+    rank?: number,
+  ) => void | Promise<void>;
+  /** Lane-footer create seam; the resource page opens its existing create form. */
+  onCreateInLane?: (laneId: string | null, rank?: number) => void;
   /** Override the card body (mirrors `GalleryView.renderCard`) — for a rich card
    * (description, chips, badges) instead of the default title + key/value rows. The
    * lane grouping, frame link/click, selection, and the `cardActions` footer stay. */
@@ -76,7 +104,10 @@ export function BoardView<TRow extends Row = Row>(
     cardActions,
     cardActionContext,
     dragEnabled = false,
+    rankField,
+    optimisticPlacementByRowId = EMPTY_BOARD_PLACEMENTS,
     onCardMove,
+    onCreateInLane,
     renderCard,
   } = props;
   return (
@@ -92,7 +123,10 @@ export function BoardView<TRow extends Row = Row>(
       cardActions={cardActions}
       cardActionContext={cardActionContext ?? EMPTY_CARD_ACTION_CONTEXT}
       dragEnabled={dragEnabled}
+      rankField={rankField}
+      optimisticPlacementByRowId={optimisticPlacementByRowId}
       onCardMove={onCardMove}
+      onCreateInLane={onCreateInLane}
       renderCard={renderCard}
     />
   );
@@ -101,6 +135,8 @@ export function BoardView<TRow extends Row = Row>(
 const EMPTY_CARD_ACTION_CONTEXT: CardActionContext = {
   refresh: () => undefined,
 };
+
+const EMPTY_BOARD_PLACEMENTS: ReadonlyMap<string, BoardCardPlacement> = new Map();
 
 function BoardRows<TRow extends Row>({
   columns,
@@ -114,7 +150,10 @@ function BoardRows<TRow extends Row>({
   cardActions,
   cardActionContext,
   dragEnabled,
+  rankField,
+  optimisticPlacementByRowId,
   onCardMove,
+  onCreateInLane,
   renderCard,
 }: {
   columns: readonly ColumnDescriptor<TRow>[];
@@ -128,7 +167,14 @@ function BoardRows<TRow extends Row>({
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
   cardActionContext: CardActionContext;
   dragEnabled: boolean;
-  onCardMove?: (row: TRow, laneId: string | null) => void | Promise<void>;
+  rankField?: string;
+  optimisticPlacementByRowId: ReadonlyMap<string, BoardCardPlacement>;
+  onCardMove?: (
+    row: TRow,
+    laneId: string | null,
+    rank?: number,
+  ) => void | Promise<void>;
+  onCreateInLane?: (laneId: string | null, rank?: number) => void;
   renderCard?: (row: TRow) => React.ReactNode;
 }): React.ReactElement {
   const t = useUiT();
@@ -136,17 +182,43 @@ function BoardRows<TRow extends Row>({
   const hasDeclaredLanes = leaves.some((group) => group.declared);
   const groupFields = new Set(groupStack.map((group) => group.field));
   const moveEnabled = dragEnabled && Boolean(onCardMove);
+  const sortable = moveEnabled && Boolean(rankField);
   const sensors = useDndKitSensors(6);
+  const [foldOverrides, setFoldOverrides] = React.useState<
+    ReadonlyMap<string, boolean>
+  >(EMPTY_FOLD_OVERRIDES);
+  const rankForRow = React.useCallback(
+    (row: TableRowModel<TRow>): number | undefined => {
+      if (!rankField) return undefined;
+      const rowId = rowPublicId(row.original) ?? row.id;
+      const optimisticRank = optimisticPlacementByRowId.get(rowId)?.rank;
+      if (optimisticRank !== undefined) return optimisticRank;
+      const rank = readPath(row.original, rankField);
+      return typeof rank === "number" && Number.isFinite(rank)
+        ? rank
+        : undefined;
+    },
+    [optimisticPlacementByRowId, rankField],
+  );
   const handleDragEnd = React.useCallback(
     (event: DragEndEvent) => {
       const active = boardDragData<TRow>(event);
-      const nextLaneId = event.over?.id;
-      if (!active || typeof nextLaneId !== "string" || nextLaneId === active.laneId) {
-        return;
-      }
-      void onCardMove?.(active.row, nextLaneId === "" ? null : nextLaneId);
+      const target = boardDropTarget(event, leaves);
+      if (!active || !target) return;
+      const move = boardMoveForDrop({
+        activeRowId: active.rowId,
+        activeLaneId: active.laneId,
+        target,
+        groups: leaves,
+        rankField,
+        rankForRow,
+      });
+      if (!move) return;
+      const laneId = move.laneId === "" ? null : move.laneId;
+      if (move.rank === undefined) void onCardMove?.(active.row, laneId);
+      else void onCardMove?.(active.row, laneId, move.rank);
     },
-    [onCardMove],
+    [leaves, onCardMove, rankField, rankForRow],
   );
   if (!hasDeclaredLanes && leaves.every((group) => group.rows.length === 0)) {
     if (fetching) {
@@ -176,6 +248,20 @@ function BoardRows<TRow extends Row>({
           cardActions={cardActions}
           cardActionContext={cardActionContext}
           dragEnabled={moveEnabled}
+          sortable={sortable}
+          rankField={rankField}
+          rankForRow={rankForRow}
+          collapsed={
+            foldOverrides.get(group.key) ?? group.defaultCollapsed === true
+          }
+          onCollapsedChange={(collapsed) => {
+            setFoldOverrides((current) => {
+              const next = new Map(current);
+              next.set(group.key, collapsed);
+              return next;
+            });
+          }}
+          onCreateInLane={onCreateInLane}
           renderCard={renderCard}
         />
       ))}
@@ -195,13 +281,28 @@ function BoardRows<TRow extends Row>({
 
 const boardCollisionDetection: CollisionDetection = (args) => {
   const pointerCollisions = pointerWithin(args);
-  return pointerCollisions.length > 0
-    ? pointerCollisions
-    : rectIntersection(args);
+  return prioritizeCardCollision(
+    pointerCollisions.length > 0 ? pointerCollisions : rectIntersection(args),
+  );
 };
+
+function prioritizeCardCollision<TCollision extends { id: string | number }>(
+  collisions: TCollision[],
+): TCollision[] {
+  const cardIndex = collisions.findIndex(
+    (collision) => !String(collision.id).startsWith("board-lane:"),
+  );
+  if (cardIndex <= 0) return collisions;
+  return [
+    collisions[cardIndex]!,
+    ...collisions.slice(0, cardIndex),
+    ...collisions.slice(cardIndex + 1),
+  ];
+}
 
 interface BoardDragData<TRow extends Row> {
   row: TRow;
+  rowId: string;
   laneId: string;
 }
 
@@ -215,8 +316,41 @@ function boardDragData<TRow extends Row>(
   if (!record.row || typeof record.row !== "object" || Array.isArray(record.row)) {
     return null;
   }
-  return { laneId: record.laneId, row: record.row as TRow };
+  return {
+    laneId: record.laneId,
+    rowId: String(event.active.id),
+    row: record.row as TRow,
+  };
 }
+
+function boardDropTarget<TRow extends Row>(
+  event: DragEndEvent,
+  groups: readonly RowGroup<TRow>[],
+): BoardDropTarget | null {
+  if (!event.over) return null;
+  const data = event.over.data?.current;
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const record = data as Record<string, unknown>;
+    if (record.type === "board-card" && typeof record.laneId === "string") {
+      return { laneId: record.laneId, rowId: String(event.over.id) };
+    }
+    if (record.type === "board-lane" && typeof record.laneId === "string") {
+      return { laneId: record.laneId };
+    }
+  }
+  const overId = String(event.over.id);
+  const cardGroup = groups.find((group) =>
+    group.rows.some((row) => row.id === overId),
+  );
+  if (cardGroup) return { laneId: cardGroup.key, rowId: overId };
+  const laneGroup = groups.find((group) => group.key === overId);
+  if (laneGroup) return { laneId: laneGroup.key };
+  // Rendered targets carry typed data. The id fallback keeps custom collision
+  // detectors that expose lane ids interoperable with the board move seam.
+  return { laneId: overId };
+}
+
+const EMPTY_FOLD_OVERRIDES: ReadonlyMap<string, boolean> = new Map();
 
 function BoardSkeleton({
   laneCount,
@@ -286,6 +420,12 @@ function BoardLane<TRow extends Row>({
   cardActions,
   cardActionContext,
   dragEnabled,
+  sortable,
+  rankField,
+  rankForRow,
+  collapsed,
+  onCollapsedChange,
+  onCreateInLane,
   renderCard,
 }: {
   columns: readonly ColumnDescriptor<TRow>[];
@@ -298,15 +438,60 @@ function BoardLane<TRow extends Row>({
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
   cardActionContext: CardActionContext;
   dragEnabled: boolean;
+  sortable: boolean;
+  rankField?: string;
+  rankForRow: (row: TableRowModel<TRow>) => number | undefined;
+  collapsed: boolean;
+  onCollapsedChange: (collapsed: boolean) => void;
+  onCreateInLane?: (laneId: string | null, rank?: number) => void;
   renderCard?: (row: TRow) => React.ReactNode;
 }): React.ReactElement {
   const headingId = React.useId();
   const t = useUiT();
   const tone = laneDotTone(group, groupStack, columns);
   const { setNodeRef, isOver } = useDroppable({
-    id: group.key,
+    id: `board-lane:${group.key}`,
+    data: { type: "board-lane", laneId: group.key },
     disabled: !dragEnabled || group.dropDisabled === true,
   });
+  const cards = (
+    <div className="flex flex-col gap-2 px-2 pb-2">
+      {group.rows.map((row) => (
+        <BoardRowCard
+          key={row.id}
+          columns={columns}
+          groupFields={groupFields}
+          modelMetadata={modelMetadata}
+          row={row}
+          rowHref={rowHref}
+          onRowClick={onRowClick}
+          cardActions={cardActions}
+          cardActionContext={cardActionContext}
+          dragEnabled={dragEnabled}
+          sortable={sortable}
+          laneId={group.key}
+          renderCard={renderCard}
+        />
+      ))}
+      {onCreateInLane && group.dropDisabled !== true ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start"
+          onClick={() =>
+            onCreateInLane(
+              group.key === "" ? null : group.key,
+              rankField ? boardAppendRank(group, rankForRow) : undefined,
+            )
+          }
+        >
+          <Glyph name="plus" />
+          {t("board.addCard")}
+        </Button>
+      ) : null}
+    </div>
+  );
   return (
     <section
       ref={dragEnabled ? setNodeRef : undefined}
@@ -317,51 +502,40 @@ function BoardLane<TRow extends Row>({
         isOver && group.dropDisabled !== true && "border-border-focus bg-brand-soft/25",
       )}
     >
-      <div className="sticky top-0 z-10 flex items-center gap-2 rounded-t-[10px] bg-inset px-3 pt-3 pb-2">
-        {tone ? <StatusDot tone={tone} /> : null}
-        <h3
-          id={headingId}
-          className="min-w-0 flex-1 truncate text-13 font-semibold text-fg"
-        >
-          {group.label ?? t("list.allRecords")}
-        </h3>
-        <CountBadge value={group.rows.length} />
-      </div>
-      <div className="flex flex-col gap-2 px-2 pb-2">
-        {group.rows.map((row) => (
-          <BoardRowCard
-            key={row.id}
-            columns={columns}
-            groupFields={groupFields}
-            modelMetadata={modelMetadata}
-            row={row}
-            rowHref={rowHref}
-            onRowClick={onRowClick}
-            cardActions={cardActions}
-            cardActionContext={cardActionContext}
-            dragEnabled={dragEnabled}
-            laneId={group.key}
-            renderCard={renderCard}
-          />
-        ))}
-      </div>
+      <CollapsibleRoot
+        variant="flush"
+        open={!collapsed}
+        onOpenChange={(open) => onCollapsedChange(!open)}
+      >
+        <div className="sticky top-0 z-10 rounded-t-[10px] bg-inset px-2 pt-2 pb-1">
+          <CollapsibleTrigger className="w-full rounded-6 px-1 text-fg">
+            <CollapsibleIcon />
+            {tone ? <StatusDot tone={tone} /> : null}
+            <span
+              id={headingId}
+              className="min-w-0 flex-1 truncate text-13 font-semibold text-fg"
+            >
+              {group.label ?? t("list.allRecords")}
+            </span>
+            <CountBadge value={group.rows.length} />
+          </CollapsibleTrigger>
+        </div>
+        <CollapsiblePanel>
+          {sortable ? (
+            <SortableContext
+              items={group.rows.map((row) => row.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              {cards}
+            </SortableContext>
+          ) : cards}
+        </CollapsiblePanel>
+      </CollapsibleRoot>
     </section>
   );
 }
 
-function BoardRowCard<TRow extends Row>({
-  columns,
-  groupFields,
-  modelMetadata,
-  row,
-  rowHref,
-  onRowClick,
-  cardActions,
-  cardActionContext,
-  dragEnabled,
-  laneId,
-  renderCard,
-}: {
+interface BoardRowCardProps<TRow extends Row> {
   columns: readonly ColumnDescriptor<TRow>[];
   groupFields: ReadonlySet<string>;
   modelMetadata?: ModelMetadata | null;
@@ -371,9 +545,84 @@ function BoardRowCard<TRow extends Row>({
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
   cardActionContext: CardActionContext;
   dragEnabled: boolean;
+  sortable: boolean;
   laneId: string;
   renderCard?: (row: TRow) => React.ReactNode;
-}): React.ReactElement {
+}
+
+function BoardRowCard<TRow extends Row>(
+  props: BoardRowCardProps<TRow>,
+): React.ReactElement {
+  if (props.sortable) {
+    return <SortableBoardRowCard {...props} />;
+  }
+  return <DraggableBoardRowCard {...props} />;
+}
+
+function DraggableBoardRowCard<TRow extends Row>({
+  row,
+  laneId,
+  ...props
+}: BoardRowCardProps<TRow>): React.ReactElement {
+  const drag = useDraggable({
+    id: row.id,
+    data: { type: "board-card", row: row.original, laneId },
+    disabled: !props.dragEnabled,
+  });
+  return (
+    <BoardRowCardContent
+      {...props}
+      row={row}
+      laneId={laneId}
+      drag={{ ...drag, transition: undefined }}
+    />
+  );
+}
+
+function SortableBoardRowCard<TRow extends Row>({
+  row,
+  laneId,
+  ...props
+}: BoardRowCardProps<TRow>): React.ReactElement {
+  const drag = useSortable({
+    id: row.id,
+    data: { type: "board-card", row: row.original, laneId },
+  });
+  return (
+    <BoardRowCardContent
+      {...props}
+      row={row}
+      laneId={laneId}
+      dragEnabled
+      drag={drag}
+    />
+  );
+}
+
+type BoardCardDrag = Pick<
+  ReturnType<typeof useSortable>,
+  | "attributes"
+  | "listeners"
+  | "setNodeRef"
+  | "setActivatorNodeRef"
+  | "transform"
+  | "transition"
+  | "isDragging"
+>;
+
+function BoardRowCardContent<TRow extends Row>({
+  columns,
+  groupFields,
+  modelMetadata,
+  row,
+  rowHref,
+  onRowClick,
+  cardActions,
+  cardActionContext,
+  dragEnabled,
+  renderCard,
+  drag,
+}: BoardRowCardProps<TRow> & { drag: BoardCardDrag }): React.ReactElement {
   const t = useUiT();
   const href = rowHref?.(row.original);
   const actions = cardActions?.(row.original, cardActionContext);
@@ -383,14 +632,14 @@ function BoardRowCard<TRow extends Row>({
     setNodeRef,
     setActivatorNodeRef,
     transform,
+    transition,
     isDragging,
-  } = useDraggable({
-    id: row.id,
-    data: { row: row.original, laneId },
-    disabled: !dragEnabled,
-  });
+  } = drag;
   const style = dragEnabled && transform
-    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` }
+    ? {
+        transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
+        transition,
+      }
     : undefined;
   return (
     <article

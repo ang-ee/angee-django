@@ -423,6 +423,7 @@ function ResourceListBody<TRow extends Row = Row>({
   const resolvedFacets = declarations.list
     ? mergePageFacets(facets, declarations.list.facets)
     : facets;
+  const resolvedLaneSource = declarations.list?.props.laneSource ?? laneSource;
   const listRenderProps = {
     fields,
     baseFilter,
@@ -439,7 +440,7 @@ function ResourceListBody<TRow extends Row = Row>({
     toolbarActions,
     cardActions,
     draggableRow,
-    laneSource,
+    laneSource: resolvedLaneSource,
     ...(declarations.list
       ? listElementRenderProps(declarations.list.props)
       : {}),
@@ -451,10 +452,14 @@ function ResourceListBody<TRow extends Row = Row>({
       : {}),
   };
   const resourceView = useResourceView();
-  // The calendar's range-select seeds the create form; it lives here (the create
-  // owner) so quick-create rides the same routed-create seam as the "New" button.
+  // Collection quick-create seeds live here (the create owner), so calendar
+  // range select and board lane create use the same routed form as "New".
   const [quickCreateDefaults, setQuickCreateDefaults] =
     React.useState<Record<string, unknown> | undefined>(undefined);
+  const resolvedCreateDefaults = React.useMemo(
+    () => mergeCreateDefaults(createDefaults, quickCreateDefaults),
+    [createDefaults, quickCreateDefaults],
+  );
 
   // A record is open when an id is selected or a create was requested.
   const open = hasRecordSurface && (resolvedCreating || resolvedRecordId != null);
@@ -491,6 +496,19 @@ function ResourceListBody<TRow extends Row = Row>({
       handleSelectRecord?.(null);
     },
     [calendar, handleSelectRecord],
+  );
+  const handleBoardCreateInLane = React.useCallback(
+    (laneId: string | null, rank?: number) => {
+      if (!resolvedLaneSource) return;
+      setQuickCreateDefaults({
+        [resolvedLaneSource.field]: laneId,
+        ...(resolvedLaneSource.rankField && rank !== undefined
+          ? { [resolvedLaneSource.rankField]: rank }
+          : {}),
+      });
+      handleSelectRecord?.(null);
+    },
+    [handleSelectRecord, resolvedLaneSource],
   );
   // The surface-level calendar spec: sources + reschedule from the page, the
   // range-select seam wired to the routed create (only when a create form exists).
@@ -566,6 +584,11 @@ function ResourceListBody<TRow extends Row = Row>({
           ? handleCreateRecord
           : undefined
       }
+      onCreateInLane={
+        canQuickCreate && resolvedLaneSource
+          ? handleBoardCreateInLane
+          : undefined
+      }
       onListStateChange={handleListStateChange}
       onRowClick={hasRecordSurface && handleSelectRecord ? handleRowClick : undefined}
     />
@@ -589,7 +612,9 @@ function ResourceListBody<TRow extends Row = Row>({
       groups={resolvedFormGroups}
       actions={resolvedFormActions}
       {...formRenderProps}
-      defaultValues={resolvedCreating ? quickCreateDefaults ?? createDefaults : undefined}
+      defaultValues={
+        resolvedCreating ? resolvedCreateDefaults : undefined
+      }
       recordExtras={resolvedCreating ? undefined : recordExtras}
       recordTabs={resolvedCreating ? undefined : recordTabs}
       onSaved={handleSaved}
@@ -716,6 +741,7 @@ function validateResourceListDeclarations<TRow extends Row>(
       declarationKeys: ["columns"],
       resourceListOwnedKeys: [
         "onCreate",
+        "onCreateInLane",
         "onRowClick",
         "onListStateChange",
       ],
@@ -817,13 +843,23 @@ function listElementRenderProps<TRow extends Row>(
     children: _children,
     facets: _facets,
     list: _list,
+    laneSource: _laneSource,
     resource: _model,
     onCreate: _onCreate,
+    onCreateInLane: _onCreateInLane,
     onRowClick: _onRowClick,
     onListStateChange: _onListStateChange,
     ...forwarded
   } = props;
   return forwarded;
+}
+
+function mergeCreateDefaults(
+  base: Record<string, unknown> | undefined,
+  quick: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!quick) return base;
+  return { ...base, ...quick };
 }
 
 function formElementRenderProps(props: FormProps): Partial<FormViewProps> {

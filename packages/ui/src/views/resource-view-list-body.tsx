@@ -122,6 +122,8 @@ export type RowGroup<TRow extends Row> = {
   children: readonly RowGroup<TRow>[];
   declared?: boolean;
   dropDisabled?: boolean;
+  /** Lane-resource hint used only as the board fold's initial value. */
+  defaultCollapsed?: boolean;
 };
 
 export interface GroupMeasure extends AggregateMeasure {

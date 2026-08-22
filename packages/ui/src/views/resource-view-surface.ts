@@ -110,6 +110,7 @@ import {
   normaliseScopePage,
   type GroupedRenderParams,
 } from "./resource-view-grouped-model";
+import type { BoardCardPlacement } from "./resource-view-types";
 
 type RowRecord = BaseRecord & Row;
 type ResourceFilterInput = Record<string, unknown>;
@@ -203,7 +204,13 @@ interface FlatResourceViewPresentationSurface<TRow extends Row = Row>
   setPageSelection: (checked: boolean) => void;
   groupedRows: readonly RowGroup<TRow>[];
   boardDragEnabled: boolean;
-  onBoardCardMove?: (row: TRow, laneId: string | null) => void | Promise<void>;
+  boardRankField?: string;
+  boardOptimisticPlacementByRowId: ReadonlyMap<string, BoardCardPlacement>;
+  onBoardCardMove?: (
+    row: TRow,
+    laneId: string | null,
+    rank?: number,
+  ) => void | Promise<void>;
 }
 
 interface ResourceViewSurfaceBase<TRow extends Row = Row> {
@@ -238,6 +245,7 @@ export interface GroupedResourceViewSurface<TRow extends Row = Row>
 }
 
 const EMPTY_ARRAY = [] as const;
+const EMPTY_BOARD_PLACEMENTS: ReadonlyMap<string, BoardCardPlacement> = new Map();
 const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set();
 const EMPTY_EXPANDED_KEYS: ReadonlySet<string> = new Set();
 const EMPTY_LEAF_RESULTS: ReadonlyMap<string, AngeeListBatchEntry> = new Map();
@@ -928,11 +936,15 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     () => tableResult.refineCore.result.data as readonly TRow[],
     [tableResult.refineCore.result.data],
   );
+  const refetchRows = React.useCallback(() => {
+    void tableResult.refineCore.tableQuery.refetch();
+  }, [tableResult.refineCore.tableQuery.refetch]);
   const boardLaneState = useBoardLaneState<TRow>({
     laneSource,
     modelMetadata,
     rows,
     enabled: active && resourceView.state.view === "board",
+    refetchRows,
   });
   const list = React.useMemo(
     () =>
@@ -1029,11 +1041,15 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
     () => (run.result.data ?? []) as readonly RowRecord[] as readonly TRow[],
     [run.result.data],
   );
+  const refetchRows = React.useCallback(() => {
+    void run.query.refetch();
+  }, [run.query.refetch]);
   const boardLaneState = useBoardLaneState<TRow>({
     laneSource,
     modelMetadata,
     rows: allRows,
     enabled: active && resourceView.state.view === "board",
+    refetchRows,
   });
   // The fetched page is capped; the only signal the in-browser set is actually
   // incomplete is the resource's own total exceeding the cap (a page that
@@ -1313,7 +1329,7 @@ function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
               table.getRowModel().rows,
               boardLaneState.source,
               boardLaneState.lanes,
-              boardLaneState.optimisticLaneByRowId,
+              boardLaneState.optimisticPlacementByRowId,
               t("list.emptyValue"),
               t("list.unknownValue"),
             )
@@ -1350,6 +1366,11 @@ function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
     setPageSelection,
     groupedRows,
     boardDragEnabled: boardLaneState?.dragEnabled ?? false,
+    ...(boardLaneState?.rankField
+      ? { boardRankField: boardLaneState.rankField }
+      : {}),
+    boardOptimisticPlacementByRowId:
+      boardLaneState?.optimisticPlacementByRowId ?? EMPTY_BOARD_PLACEMENTS,
     ...(boardLaneState?.onCardMove
       ? { onBoardCardMove: boardLaneState.onCardMove }
       : {}),

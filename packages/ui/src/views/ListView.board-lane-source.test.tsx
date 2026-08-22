@@ -13,12 +13,13 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { BoardViewProps } from "./BoardView";
 import type { ColumnDescriptor } from "./page";
 import { defineRowAction, type RowActionDeclaration } from "./RowActions";
-import type { CardActionContext } from "./resource-view-types";
+import type { BoardLaneSource, CardActionContext } from "./resource-view-types";
 
 type LeadRow = Row & {
   id: string;
   name: string;
   stage: { id: string; name: string } | string | null;
+  sort_order?: number;
 };
 
 const harness = vi.hoisted(() => ({
@@ -238,6 +239,69 @@ describe("ListView board laneSource", () => {
     });
   });
 
+  test("orders by a declared rank and persists lane plus midpoint request", async () => {
+    harness.tableRows = [
+      {
+        id: "led_2",
+        name: "Second",
+        stage: { id: "stg_new", name: "New" },
+        sort_order: 2048,
+      },
+      {
+        id: "led_1",
+        name: "First",
+        stage: { id: "stg_new", name: "New" },
+        sort_order: 1024,
+      },
+    ];
+    renderLeadBoard({
+      laneSource: { field: "stage", rankField: "sort_order" },
+    });
+
+    await waitFor(() => {
+      expect(rowIdsByLane().stg_new).toEqual(["led_1", "led_2"]);
+    });
+    expect(harness.boardProps?.rankField).toBe("sort_order");
+    expect(lastTableOption()).toMatchObject({
+      refineCoreProps: {
+        meta: { fields: expect.arrayContaining(["sort_order"]) },
+      },
+    });
+
+    await act(async () => {
+      await harness.boardProps?.onCardMove?.(
+        harness.tableRows[0]!,
+        "stg_qualified",
+        1536,
+      );
+    });
+    expect(harness.updateCalls).toEqual([
+      {
+        id: "led_2",
+        values: { stage: "stg_qualified", sort_order: 1536 },
+      },
+    ]);
+  });
+
+  test("reads a declared lane fold fact as the initial collapsed state", async () => {
+    harness.laneRows = [
+      { id: "stg_new", name: "New", fold: true },
+      { id: "stg_qualified", name: "Qualified", fold: false },
+    ];
+    renderLeadBoard({
+      laneSource: { field: "stage", foldField: "fold" },
+    });
+
+    await waitFor(() => {
+      expect(
+        harness.boardProps?.groups.find((group) => group.key === "stg_new"),
+      ).toMatchObject({ defaultCollapsed: true });
+    });
+    expect(lastUseListOption()).toMatchObject({
+      meta: { fields: ["id", "name", "fold"] },
+    });
+  });
+
   test("keeps the derived board lanes when no laneSource is declared", async () => {
     harness.groupedRows = [
       groupedTableRow("stage:New", "New", [harness.tableRows[0]!]),
@@ -389,11 +453,12 @@ describe("ListView board laneSource", () => {
       title: "board.moveFailed",
       description: "write rejected",
     });
+    expect(harness.refetch).toHaveBeenCalledTimes(1);
   });
 });
 
 function renderLeadBoard(options: {
-  laneSource?: { field: string; labelField?: string } | undefined;
+  laneSource?: BoardLaneSource | undefined;
   metadata?: SchemaFieldMetadata;
   columns?: readonly ColumnDescriptor<LeadRow>[];
   withDefaultGroup?: boolean;
@@ -524,6 +589,7 @@ function leadMetadata(
       fields: [
         field("id", { scalar: "ID", updatable: false }),
         field("name", { scalar: "String" }),
+        field("sort_order", { scalar: "Float" }),
         field("stage", {
           kind: "relation",
           relationModelLabel: "crm.Stage",
@@ -542,7 +608,9 @@ function leadMetadata(
       orderFields: ["name"],
       aggregateFields: ["id"],
       groupByFields: ["stage"],
-      updateFields: stageWritable ? ["name", "stage"] : ["name"],
+      updateFields: stageWritable
+        ? ["name", "stage", "sort_order"]
+        : ["name", "sort_order"],
       groupDimensions: [{ field: "stage", input: "stage", key: "stage", kind: "relation" }],
       relationAxes: [
         {
@@ -567,6 +635,7 @@ function leadMetadata(
         field("id", { scalar: "ID", updatable: false }),
         field("name", { scalar: "String" }),
         field("code", { scalar: "String" }),
+        field("fold", { scalar: "Boolean", updatable: false }),
       ],
       filterFields: ["id", "name", "code"],
       orderFields: ["position", "id"],

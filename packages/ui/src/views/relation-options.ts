@@ -27,6 +27,8 @@ export const RELATION_OPTION_LIMIT = 200;
 
 export interface RelationOptionsConfig {
   labelField?: string;
+  /** Additional scalar fields a composing surface needs from each option row. */
+  fields?: readonly string[];
   pageSize?: number;
   enabled?: boolean;
   sort?: boolean;
@@ -47,6 +49,7 @@ export interface RelationOptionsList {
 export interface RelationOptionsResult {
   list: RelationOptionsList;
   options: readonly RelationOption[];
+  rows: readonly Row[];
 }
 
 export function useRelationOptions(
@@ -55,6 +58,7 @@ export function useRelationOptions(
 ): RelationOptionsResult {
   const {
     enabled = true,
+    fields: extraFields,
     filters,
     labelField: optionLabelField,
     pageSize = RELATION_OPTION_LIMIT,
@@ -64,8 +68,8 @@ export function useRelationOptions(
   const metadata = useModelMetadata(relation?.resource ?? "");
   const resource = metadata?.resource ?? null;
   const fields = React.useMemo(
-    () => refineFieldsFromPaths(["id", labelField]),
-    [labelField],
+    () => refineFieldsFromPaths(["id", labelField, ...(extraFields ?? [])]),
+    [extraFields, labelField],
   );
   const run = useList<RowRecord, HttpError>({
     resource: resource ? refineResourceName(resource) : "__angee_disabled__",
@@ -98,7 +102,7 @@ export function useRelationOptions(
     () => relationOptionsFromRows(rows, labelField, { sort }),
     [labelField, rows, sort],
   );
-  return React.useMemo(() => ({ list, options }), [list, options]);
+  return React.useMemo(() => ({ list, options, rows }), [list, options, rows]);
 }
 
 /**

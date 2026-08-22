@@ -117,6 +117,7 @@ export const enUiMessages: Record<string, string> = {
   "board.moveFailed": "Could not move card",
   "board.moveFailedDescription": "The card move failed.",
   "board.dragCard": "Move card",
+  "board.addCard": "Add card",
   "calendar.loadError": "The calendar failed to load. Reload the page to try again.",
   "calendar.loadFailed": "The calendar data failed to load.",
   "calendar.weekOf": "Week of {date}",
