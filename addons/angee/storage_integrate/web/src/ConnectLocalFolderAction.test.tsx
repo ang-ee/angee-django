@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const actionMocks = vi.hoisted(() => ({
   connect: vi.fn(async () => ({ connect_local_folder: { id: "int_1" } })),
+  dialogProps: null as Record<string, unknown> | null,
   mutationOptions: null as Record<string, unknown> | null,
-  browseVariables: null as Record<string, unknown> | null,
 }));
 
 vi.mock("./documents", () => ({
@@ -16,101 +16,46 @@ vi.mock("./documents", () => ({
   MOUNT_MODEL: "storage_integrate.Mount",
 }));
 
-vi.mock("@angee/refine", () => ({
-  useAuthoredQuery: (
-    _document: unknown,
-    variables: Record<string, unknown>,
-  ) => {
-    actionMocks.browseVariables = variables;
-    return {
-      data: {
-        browse_mount_source: {
-          location: {
-            token: "/srv/shared/docs",
-            label: "docs",
-            is_navigable: true,
-            is_mountable: true,
-            blocked_reason: "",
-          },
-          parent_token: "/srv/shared",
-          entries: [],
-          truncated: false,
-          supports_manual_token: true,
-        },
-      },
-      fetching: false,
-      error: null,
-    };
-  },
-  useAuthoredMutation: (_document: unknown, options?: Record<string, unknown>) => {
-    actionMocks.mutationOptions = options ?? null;
-    return [actionMocks.connect, { fetching: false, error: null }];
-  },
-}));
+vi.mock("@angee/refine", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@angee/refine")>();
+  return {
+    ...original,
+    useAuthoredQuery: vi.fn(),
+    useAuthoredMutation: (_document: unknown, options?: Record<string, unknown>) => {
+      actionMocks.mutationOptions = options ?? null;
+      return [actionMocks.connect, { fetching: false, error: null }];
+    },
+  };
+});
 
-vi.mock("@angee/ui", () => ({
-  Button: ({
-    children,
-    active: _active,
-    loading: _loading,
-    loadingText: _loadingText,
-    ...props
-  }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
-    active?: boolean;
-    loading?: boolean;
-    loadingText?: string;
-  }) => <button {...props}>{children}</button>,
-  DialogForm: ({
-    open,
-    title,
-    children,
-    footer,
-    onSubmit,
-  }: {
-    open: boolean;
-    title: string;
-    children: React.ReactNode;
-    footer?: React.ReactNode;
-    onSubmit?: React.FormEventHandler<HTMLFormElement>;
-  }) =>
-    open ? (
-      <form aria-label={title} onSubmit={onSubmit}>
-        {children}
-        {footer}
-      </form>
-    ) : null,
-  ErrorBanner: ({ description }: { description?: React.ReactNode }) =>
-    description ? <p role="alert">{description}</p> : null,
-  FieldLabel: ({ children, ...props }: React.HTMLAttributes<HTMLLabelElement>) => (
-    <label {...props}>{children}</label>
-  ),
-  FieldRoot: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  Glyph: ({ name }: { name: string }) => <span aria-hidden>{name}</span>,
-  Input: (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} />,
-  Select: ({
-    options,
-    onValueChange,
-    ...props
-  }: React.SelectHTMLAttributes<HTMLSelectElement> & {
-    options: readonly { value: string; label: string }[];
-    onValueChange: (value: string) => void;
-  }) => (
-    <select {...props} onChange={(event) => onValueChange(event.currentTarget.value)}>
-      {options.map((option) => (
-        <option key={option.value} value={option.value}>
-          {option.label}
-        </option>
-      ))}
-    </select>
-  ),
-  Spinner: () => <span>spinner</span>,
-  cn: (...values: unknown[]) => values.filter(Boolean).join(" "),
-  errorMessage: (_error: unknown, fallback: string) => fallback,
-  textRoleVariants: () => "",
-}));
+vi.mock("@angee/ui", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@angee/ui")>();
+  const { createMutationDialogTestDouble } = await import("@angee/ui/testing");
+  return {
+    ...original,
+    Button: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
+      <button {...props}>{children}</button>
+    ),
+    Glyph: ({ name }: { name: string }) => <span aria-hidden>{name}</span>,
+    MutationDialog: createMutationDialogTestDouble({
+      capture: (props) => {
+        actionMocks.dialogProps = props;
+      },
+      values: {
+        name: "  Shared  ",
+        path: "/srv/shared/docs",
+        mode: "REFERENCE",
+      },
+      submitLabel: "submit",
+    }),
+  };
+});
 
 vi.mock("./i18n", () => ({
-  useStorageIntegrateT: () => (key: string) => key,
+  useStorageIntegrateT: () => (key: string) =>
+    key === "mount.localFolder.error"
+      ? "Could not connect the local folder."
+      : key,
 }));
 
 import { ConnectLocalFolderAction } from "./ConnectLocalFolderAction";
@@ -120,31 +65,26 @@ describe("ConnectLocalFolderAction", () => {
 
   beforeEach(() => {
     actionMocks.connect.mockClear();
+    actionMocks.dialogProps = null;
     actionMocks.mutationOptions = null;
-    actionMocks.browseVariables = null;
   });
 
-  test("browses the local backend and submits its selected source token", async () => {
+  test("declares the local backend and submits typed mount variables", async () => {
     render(<ConnectLocalFolderAction />);
-    fireEvent.click(screen.getByRole("button", { name: "mount.connect.button" }));
+    fireEvent.click(screen.getByRole("button", { name: "mount.localFolder.button" }));
 
-    expect(actionMocks.browseVariables).toEqual({
-      backendClass: "local_folder",
-      credentialId: null,
-      token: "",
-    });
     expect(actionMocks.mutationOptions).toEqual({
       invalidateModels: ["storage_integrate.Mount"],
     });
-
-    fireEvent.change(screen.getByLabelText("mount.connect.name"), {
-      target: { value: " Shared " },
+    expect(actionMocks.dialogProps).toMatchObject({
+      title: "mount.localFolder.title",
+      submitLabel: "mount.connect.submit",
+      submittingLabel: "mount.connect.submitting",
+      errorFallback: "Could not connect the local folder.",
+      size: "lg",
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: "mount.browse.useThisFolder" }),
-    );
-    fireEvent.submit(screen.getByRole("form", { name: "mount.connect.title" }));
 
+    fireEvent.submit(screen.getByRole("form", { name: "mount.localFolder.title" }));
     await waitFor(() =>
       expect(actionMocks.connect).toHaveBeenCalledWith({
         name: "Shared",

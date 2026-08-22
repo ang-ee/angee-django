@@ -39,13 +39,13 @@ const oauthConnectCallback = lazyRouteComponent(
 const integrateRoutes: readonly BaseAddonRoute[] = [
   // List/detail pairs: the list route owns the component/model, and the `$id`
   // child carries only the nested record URL.
-  ...resourcePageRoutes("integrate.integrations", "/integrate", lazyRouteComponent(() => import("./views/IntegrationsPage"), "IntegrationsPage"), "Integration", { detailName: "integrate.integration" }),
-  ...resourcePageRoutes("integrate.vendors", "/integrate/vendors", lazyRouteComponent(() => import("./views/VendorsPage"), "VendorsPage"), "Vendor", { detailName: "integrate.vendor" }),
-  ...resourcePageRoutes("integrate.webhooks", "/integrate/webhooks", lazyRouteComponent(() => import("./views/WebhooksPage"), "WebhooksPage"), "WebhookSubscription", { detailName: "integrate.webhook" }),
-  ...resourcePageRoutes("integrate.vcs", "/integrate/vcs", lazyRouteComponent(() => import("./views/VcsBridgesPage"), "VcsBridgesPage"), "VcsBridge", { detailName: "integrate.vcsBridge" }),
-  ...resourcePageRoutes("integrate.repositories", "/integrate/repositories", lazyRouteComponent(() => import("./views/RepositoriesPage"), "RepositoriesPage"), "Repository", { detailName: "integrate.repository" }),
-  ...resourcePageRoutes("integrate.sources", "/integrate/sources", lazyRouteComponent(() => import("./views/SourcesPage"), "SourcesPage"), "Source", { detailName: "integrate.source" }),
-  ...resourcePageRoutes("integrate.templates", "/integrate/templates", lazyRouteComponent(() => import("./views/TemplatesPage"), "TemplatesPage"), "Template", { detailName: "integrate.template" }),
+  ...resourcePageRoutes("integrate.integrations", "/integrate", lazyRouteComponent(() => import("./views/IntegrationsPage"), "IntegrationsPage"), "integrate.Integration", { detailName: "integrate.integration" }),
+  ...resourcePageRoutes("integrate.vendors", "/integrate/vendors", lazyRouteComponent(() => import("./views/VendorsPage"), "VendorsPage"), "integrate.Vendor", { detailName: "integrate.vendor" }),
+  ...resourcePageRoutes("integrate.webhooks", "/integrate/webhooks", lazyRouteComponent(() => import("./views/WebhooksPage"), "WebhooksPage"), "integrate.WebhookSubscription", { detailName: "integrate.webhook" }),
+  ...resourcePageRoutes("integrate.vcs", "/integrate/vcs", lazyRouteComponent(() => import("./views/VcsBridgesPage"), "VcsBridgesPage"), "integrate.VcsBridge", { detailName: "integrate.vcsBridge" }),
+  ...resourcePageRoutes("integrate.repositories", "/integrate/repositories", lazyRouteComponent(() => import("./views/RepositoriesPage"), "RepositoriesPage"), "integrate.Repository", { detailName: "integrate.repository" }),
+  ...resourcePageRoutes("integrate.sources", "/integrate/sources", lazyRouteComponent(() => import("./views/SourcesPage"), "SourcesPage"), "integrate.Source", { detailName: "integrate.source" }),
+  ...resourcePageRoutes("integrate.templates", "/integrate/templates", lazyRouteComponent(() => import("./views/TemplatesPage"), "TemplatesPage"), "integrate.Template", { detailName: "integrate.template" }),
 
   // --- Connect surface (outbound OAuth) -----------------------------------
   // The account-connect callback: the provider redirects back here after the user
@@ -66,9 +66,9 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
     path: CONNECT_CALLBACK_LOOPBACK_PATH,
     component: oauthConnectCallback,
   },
-  ...resourcePageRoutes("integrate.providers", "/integrate/providers", lazyRouteComponent(() => import("./connect/views/ProvidersPage"), "ProvidersPage"), "OAuthClient", { detailName: "integrate.provider" }),
-  ...resourcePageRoutes("integrate.accounts", "/integrate/accounts", lazyRouteComponent(() => import("./connect/views/ExternalAccountsPage"), "ExternalAccountsPage"), "ExternalAccount", { detailName: "integrate.account" }),
-  ...resourcePageRoutes("integrate.credentials", "/integrate/credentials", lazyRouteComponent(() => import("./connect/views/CredentialsPage"), "CredentialsPage"), "Credential", { detailName: "integrate.credential" }),
+  ...resourcePageRoutes("integrate.providers", "/integrate/providers", lazyRouteComponent(() => import("./connect/views/ProvidersPage"), "ProvidersPage"), "integrate.OAuthClient", { detailName: "integrate.provider" }),
+  ...resourcePageRoutes("integrate.accounts", "/integrate/accounts", lazyRouteComponent(() => import("./connect/views/ExternalAccountsPage"), "ExternalAccountsPage"), "integrate.ExternalAccount", { detailName: "integrate.account" }),
+  ...resourcePageRoutes("integrate.credentials", "/integrate/credentials", lazyRouteComponent(() => import("./connect/views/CredentialsPage"), "CredentialsPage"), "integrate.Credential", { detailName: "integrate.credential" }),
 ];
 
 const integrateMenu: readonly BaseMenuItem[] = [
@@ -126,7 +126,7 @@ const integrate = defineBaseAddon({
   // The credential CRUD form: used by the Credentials page "New" and the
   // relation-picker inline create (e.g. an Integration's credential field).
   forms: {
-    Credential: credentialCreateForm,
+    "integrate.Credential": credentialCreateForm,
   },
   // Lifecycle verbs contributed against the MTI parent, so every integration
   // subtype's form inherits them. Connecting is not among them: it means a real
@@ -134,19 +134,19 @@ const integrate = defineBaseAddon({
   // the vendor contributes that against its own model.
   slots: [
     {
-      slot: formViewRecordActionsSlot(INTEGRATION_MODEL),
+      ...formViewRecordActionsSlot(INTEGRATION_MODEL),
       id: INTEGRATION_PAUSE_ACTION_ID,
       sequence: 11,
       content: <PauseIntegrationAction />,
     },
     {
-      slot: formViewRecordActionsSlot(INTEGRATION_MODEL),
+      ...formViewRecordActionsSlot(INTEGRATION_MODEL),
       id: INTEGRATION_RESUME_ACTION_ID,
       sequence: 12,
       content: <ResumeIntegrationAction />,
     },
     {
-      slot: formViewRecordActionsSlot(INTEGRATION_MODEL),
+      ...formViewRecordActionsSlot(INTEGRATION_MODEL),
       id: INTEGRATION_DISCONNECT_ACTION_ID,
       sequence: 13,
       content: <DisconnectIntegrationAction />,

@@ -53,41 +53,35 @@ const nexus = defineBaseAddon({
   menus: nexusMenu,
   icons: { cadence: CalendarClock, network: Share2, radar: Radar, timeline: History },
   i18n: { nexus: enNexusMessages },
-  // The cross-channel timeline rides the record chatter seam and self-gates to
-  // party records: a null render on any other model drops the tab entirely.
+  // The cross-channel timeline rides the record chatter seam; the shell applies
+  // each canonical model and record predicate before rendering the contribution.
   chatter: [
     {
       id: "timeline",
       sequence: 30,
+      model: "parties.Party",
+      when: (context) => context.view.kind === "record",
       label: "Timeline",
       icon: "timeline",
-      render: (context) => {
-        const partyId = context.view.kind === "record" ? context.view.sqid : undefined;
-        if (context.route?.canonicalLabel !== "parties.Party" || !partyId) return null;
-        return <TimelinePane partyId={partyId} />;
-      },
+      render: (context) => <TimelinePane partyId={context.view.sqid ?? ""} />,
     },
     {
       id: "network",
       sequence: 31,
+      model: "parties.Party",
+      when: (context) => context.view.kind === "record",
       label: "Network",
       icon: "network",
-      render: (context) => {
-        const partyId = context.view.kind === "record" ? context.view.sqid : undefined;
-        if (context.route?.canonicalLabel !== "parties.Party" || !partyId) return null;
-        return <NetworkPane partyId={partyId} />;
-      },
+      render: (context) => <NetworkPane partyId={context.view.sqid ?? ""} />,
     },
     {
       id: "feed",
-      sequence: 30,
+      sequence: 32,
+      model: "parties.Circle",
+      when: (context) => context.view.kind === "record",
       label: "Feed",
       icon: "timeline",
-      render: (context) => {
-        const circleId = context.view.kind === "record" ? context.view.sqid : undefined;
-        if (context.route?.canonicalLabel !== "parties.Circle" || !circleId) return null;
-        return <TimelinePane circleId={circleId} />;
-      },
+      render: (context) => <TimelinePane circleId={context.view.sqid ?? ""} />,
     },
   ],
   slots: [

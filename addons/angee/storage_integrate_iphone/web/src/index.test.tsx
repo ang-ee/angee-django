@@ -18,5 +18,12 @@ describe("angee.storage_integrate_iphone addon manifest", () => {
     expect(
       storageIntegrateIphone.i18n?.storage?.["iphone.mount.connect.button"],
     ).toBe("Connect iPhone backup");
+    expect(Object.keys(storageIntegrateIphone.i18n?.storage ?? {}).sort()).toEqual([
+      "iphone.mount.connect.button",
+      "iphone.mount.connect.description",
+      "iphone.mount.connect.error",
+      "iphone.mount.connect.namePlaceholder",
+      "iphone.mount.connect.title",
+    ]);
   });
 });

@@ -2,11 +2,11 @@ import { type ReactElement } from "react";
 import { parseAsString, useQueryState } from "nuqs";
 
 import {
-  Code, ListView, textRoleVariants, type ResourceToolbarGroupOption, type ListColumn } from "@angee/ui";
+  Code, ListView, textRoleVariants, useRouteHref, type ResourceToolbarGroupOption, type ListColumn, type RouteHref } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
 import { LinkedChips, TextRouteLink } from "../lib/cells";
-import { addonDetailPath, fieldsPath, modelDetailPath } from "../lib/paths";
+import { platformScopeSearch } from "../lib/paths";
 
 // The `platform.Model` Hasura resource row (`hasura_pydantic_resource`,
 // `addons/angee/platform/schema.py`): raw snake fields, fetched + grouped
@@ -25,14 +25,17 @@ interface ModelResourceRow extends Record<string, unknown> {
   depends_on: readonly string[];
 }
 
-function columns(t: (key: string) => string): readonly ListColumn<ModelResourceRow>[] {
+function columns(
+  t: (key: string) => string,
+  routeHref: RouteHref,
+): readonly ListColumn<ModelResourceRow>[] {
   return [
     {
       field: "model_name",
       header: t("col.model"),
       render: (row) => (
         <span className="flex min-w-0 flex-col">
-          <TextRouteLink href={modelDetailPath(row.id)} className="font-medium">
+          <TextRouteLink href={routeHref("platform.models.record", { id: row.id })} className="font-medium">
             {row.model_name}
           </TextRouteLink>
           <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.id}</span>
@@ -43,7 +46,9 @@ function columns(t: (key: string) => string): readonly ListColumn<ModelResourceR
       field: "addon_label",
       header: t("col.addon"),
       render: (row) => (
-        <TextRouteLink href={addonDetailPath(row.addon_id)}>{row.addon_label}</TextRouteLink>
+        <TextRouteLink href={routeHref("platform.addons.record", { id: row.addon_id })}>
+          {row.addon_label}
+        </TextRouteLink>
       ),
     },
     {
@@ -55,7 +60,15 @@ function columns(t: (key: string) => string): readonly ListColumn<ModelResourceR
       field: "field_count",
       header: t("col.fields"),
       render: (row) => (
-        <TextRouteLink href={fieldsPath({ model: row.id })}>{row.field_count}</TextRouteLink>
+        <TextRouteLink
+          href={routeHref(
+            "platform.fields",
+            undefined,
+            platformScopeSearch({ model: row.id }),
+          )}
+        >
+          {row.field_count}
+        </TextRouteLink>
       ),
     },
     { field: "relation_count", header: t("col.relations") },
@@ -68,7 +81,12 @@ function columns(t: (key: string) => string): readonly ListColumn<ModelResourceR
       field: "depends_on",
       header: t("col.dependsOn"),
       sortable: false,
-      render: (row) => <LinkedChips items={row.depends_on} href={modelDetailPath} />,
+      render: (row) => (
+        <LinkedChips
+          items={row.depends_on}
+          href={(id) => routeHref("platform.models.record", { id })}
+        />
+      ),
     },
   ];
 }
@@ -82,12 +100,13 @@ function groupOptions(t: (key: string) => string): readonly ResourceToolbarGroup
 
 export function ModelsPage(): ReactElement {
   const t = usePlatformT();
+  const routeHref = useRouteHref();
   const [addonScope] = useQueryState("addon", parseAsString);
 
   return (
     <ListView<ModelResourceRow>
       resource="platform.Model"
-      columns={columns(t)}
+      columns={columns(t, routeHref)}
       groupOptions={groupOptions(t)}
       baseFilter={addonScope ? { addon_id: { exact: addonScope } } : undefined}
       defaultGroup={addonScope ? null : { field: "addon_label" }}

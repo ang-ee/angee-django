@@ -40,6 +40,8 @@ export const enMessagingMessages: Record<string, string> = {
   // Message row affordances.
   "message.author": "Someone",
   "message.reactions": "Reactions",
+  "message.reactionCount": "{reaction} {count}",
+  "message.reactionTitle": "{reaction} by {names}",
   "message.markDone": "Mark message done",
   "message.reply": "Reply to message",
   "message.star": "Star message",
@@ -61,7 +63,6 @@ export const enMessagingMessages: Record<string, string> = {
   "composer.comment": "Comment",
   "composer.note": "Note",
   "composer.cancelReply": "Cancel reply",
-  "composer.recipients": "Recipients",
   "composer.addRecipient": "Add recipient",
   "composer.loadingRecipients": "Loading recipients",
   "composer.noRecipients": "No recipients",
@@ -91,7 +92,6 @@ export const enMessagingMessages: Record<string, string> = {
   "subtype.legend": "Notification types",
 
   // Chatter transport / mutation errors.
-  "error.generic": "Something went wrong. Try again.",
   "error.load": "Could not load the conversation.",
   "error.dismiss": "Dismiss",
   "error.postComment": "Could not post comment.",
@@ -106,7 +106,6 @@ export const enMessagingMessages: Record<string, string> = {
   "error.markDone": "Could not mark message done.",
 
   // ThreadTranscript — the channel conversation transcript on the Thread detail.
-  "transcript.tab": "Conversation",
   "transcript.label": "Conversation transcript",
   "transcript.loading": "Loading conversation",
   "transcript.error": "Could not load the conversation.",
@@ -131,6 +130,10 @@ export const enMessagingMessages: Record<string, string> = {
   "channel.name": "Channel",
   "channel.group.lastSync": "Last sync",
   "channel.action.sync": "Sync now",
+  "channel.connect.name": "Name",
+  "channel.connect.submit": "Connect",
+  "channel.connect.submitting": "Connecting…",
+  "channel.connect.integerInvalid": "{label} must be a whole number.",
   "channel.pairing.connect": "Connect",
   "channel.pairing.status": "Pairing status",
   "channel.pairing.title": "Link this channel",

@@ -8,7 +8,7 @@ const messagingIntegrateImap = defineChannelPollBridgeAddon({
   key: "imap",
   sequence: 10,
   connectAction: <ConnectImapChannelAction />,
-  i18n: enMessagingImapMessages,
+  i18n: { messaging: enMessagingImapMessages },
 });
 
 export default messagingIntegrateImap;

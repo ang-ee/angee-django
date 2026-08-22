@@ -7,9 +7,9 @@ import {
 } from "../../data/documents.daemon";
 import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
-import { RowActions } from "../parts/RowActions";
 import { LogPanel, useDaemonLogStream } from "./logs";
 import { useWorkspaceActions } from "./workspace-actions";
+import { OperatorActionButtons } from "../parts/OperatorActionButtons";
 
 /** Workspace detail: overview + lifecycle actions + the live log tail. */
 export function WorkspaceDetail(): ReactElement {
@@ -49,7 +49,7 @@ export function WorkspaceDetail(): ReactElement {
       }
       actions={
         workspace ? (
-          <RowActions
+          <OperatorActionButtons
             actions={actions}
             busy={busy}
             subject={workspace}

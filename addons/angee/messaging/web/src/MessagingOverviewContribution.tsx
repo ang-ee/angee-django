@@ -1,36 +1,51 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import { Chip, InlineEmpty, MiniCard, RailPanel, RelativeTime } from "@angee/ui";
+import {
+  Chip,
+  InlineEmpty,
+  MiniCard,
+  RailPanel,
+  RelativeTime,
+  statusTone,
+  type Tone,
+} from "@angee/ui";
 
 import { MessagingChannelHealth } from "./documents";
 import { useMessagingT, type MessagingT } from "./i18n";
 
 const CHANNEL_LIMIT = 20;
 
+interface PairingHealthDefinition {
+  label: string;
+  tone?: Tone;
+}
+
+const PAIRING_HEALTH_BY_STATE: Readonly<Record<string, PairingHealthDefinition>> = {
+  PAIRED: { label: "overview.channels.paired", tone: "success" },
+  LOGGED_OUT: { label: "overview.channels.loggedOut", tone: "danger" },
+  PAUSED: { label: "overview.channels.paused" },
+  DUPLICATE_ACCOUNT: { label: "overview.channels.duplicate", tone: "danger" },
+  AWAITING_SCAN: { label: "overview.channels.awaitingScan", tone: "info" },
+  AWAITING_PASSWORD: {
+    label: "overview.channels.awaitingPassword",
+    tone: "warning",
+  },
+  STARTING: { label: "overview.channels.starting" },
+  STOPPED: { label: "overview.channels.stopped" },
+};
+
 function pairingHealth(
   state: string | null | undefined,
   t: MessagingT,
-): { label: string; tone: "success" | "warning" | "danger" | "info" | "neutral" } {
-  switch (state) {
-    case "PAIRED":
-      return { label: t("overview.channels.paired"), tone: "success" };
-    case "LOGGED_OUT":
-      return { label: t("overview.channels.loggedOut"), tone: "danger" };
-    case "PAUSED":
-      return { label: t("overview.channels.paused"), tone: "warning" };
-    case "DUPLICATE_ACCOUNT":
-      return { label: t("overview.channels.duplicate"), tone: "danger" };
-    case "AWAITING_SCAN":
-      return { label: t("overview.channels.awaitingScan"), tone: "info" };
-    case "AWAITING_PASSWORD":
-      return { label: t("overview.channels.awaitingPassword"), tone: "warning" };
-    case "STARTING":
-      return { label: t("overview.channels.starting"), tone: "info" };
-    case "STOPPED":
-      return { label: t("overview.channels.stopped"), tone: "warning" };
-    default:
-      return { label: t("overview.channels.notApplicable"), tone: "neutral" };
-  }
+): { label: string; tone: Tone } {
+  const definition = state ? PAIRING_HEALTH_BY_STATE[state] : undefined;
+  const overrides = state && definition?.tone
+    ? { [state]: definition.tone }
+    : undefined;
+  return {
+    label: t(definition?.label ?? "overview.channels.notApplicable"),
+    tone: statusTone(state, overrides),
+  };
 }
 
 /** Messaging-owned channel health contributed into the Parties overview seam. */

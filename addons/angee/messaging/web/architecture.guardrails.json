@@ -1,0 +1,28 @@
+{
+  "criticalExports": [
+    {
+      "name": "PairingDialog",
+      "ownerFile": "src/PairingDialog.tsx"
+    },
+    {
+      "name": "usePairingConnect",
+      "ownerFile": "src/usePairingConnect.tsx"
+    }
+  ],
+  "dynamicI18nKeyFamilies": [
+    {
+      "namespace": "messaging",
+      "owner": "channel-bridge menu factory",
+      "prefix": "channel.",
+      "values": ["imap", "slack", "discord", "matrix", "signal", "telegram", "whatsapp"],
+      "suffixes": [".menu.label", ".menu.description"]
+    },
+    {
+      "namespace": "messaging",
+      "owner": "ConnectChannelAction i18nPrefix",
+      "prefix": "channel.",
+      "values": ["imap", "slack", "discord", "matrix", "telegram", "whatsapp"],
+      "suffixes": [".button", ".title", ".description", ".error"]
+    }
+  ]
+}

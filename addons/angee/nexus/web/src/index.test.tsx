@@ -41,57 +41,26 @@ describe("nexus addon manifest", () => {
     }
   });
 
-  test("timeline chatter tab self-gates to party records", () => {
-    const timeline = (nexus.chatter ?? []).find((entry) => entry.id === "timeline");
-    expect(timeline?.render).toBeDefined();
-    const render = timeline?.render;
-    if (!render) throw new Error("missing render");
-    // A non-party canonical target drops the tab even when the route model is a
-    // Party subtype.
-    expect(
-      render({
-        pathname: "/parties/people/abc",
-        params: { id: "abc" },
-        route: {
-          name: "parties.people.record",
-          path: "/parties/people/$id",
-          viewType: "list",
-          modelLabel: "parties.Person",
-          canonicalLabel: "storage.File",
-        },
-        view: { kind: "record", type: "list", sqid: "abc" },
-      }),
-    ).toBeNull();
-    // A future subtype inherits the tab from its canonical Party target without
-    // being named by nexus.
-    expect(
-      render({
-        pathname: "/crm/vips/pty_1",
-        params: { id: "pty_1" },
-        route: {
-          name: "crm.vips.record",
-          path: "/crm/vips/$id",
-          viewType: "list",
-          modelLabel: "crm.Vip",
-          canonicalLabel: "parties.Party",
-        },
-        view: { kind: "record", type: "list", sqid: "pty_1" },
-      }),
-    ).not.toBeNull();
-    // A dashboard (no record) never shows the tab, even on the party route.
-    expect(
-      render({
-        pathname: "/parties/people",
-        params: {},
-        route: {
-          name: "parties.people",
-          path: "/parties/people",
-          viewType: "list",
-          modelLabel: "parties.Person",
-          canonicalLabel: "parties.Party",
-        },
-        view: { kind: "dashboard", type: "list" },
-      }),
-    ).toBeNull();
+  test("declares canonical model and record scopes for chatter tabs", () => {
+    const chatter = nexus.chatter ?? [];
+    expect(chatter.map(({ id, sequence, model }) => ({ id, sequence, model }))).toEqual([
+      { id: "timeline", sequence: 30, model: "parties.Party" },
+      { id: "network", sequence: 31, model: "parties.Party" },
+      { id: "feed", sequence: 32, model: "parties.Circle" },
+    ]);
+    const recordContext = {
+      pathname: "/parties/people/abc",
+      params: { id: "abc" },
+      view: { kind: "record" as const, type: "list", sqid: "abc" },
+    };
+    const dashboardContext = {
+      pathname: "/parties/people",
+      params: {},
+      view: { kind: "dashboard" as const, type: "list" },
+    };
+    for (const entry of chatter) {
+      expect(entry.when?.(recordContext)).toBe(true);
+      expect(entry.when?.(dashboardContext)).toBe(false);
+    }
   });
 });

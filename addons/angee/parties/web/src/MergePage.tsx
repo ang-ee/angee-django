@@ -16,11 +16,10 @@ import {
   RadioGroup,
   RailPanel,
   Tag,
-  TextLink,
   avatarInitials,
-  recordPath,
+  useRouteHref,
 } from "@angee/ui";
-import { Link, useNavigate, useParams } from "@tanstack/react-router";
+import { useNavigate, useParams } from "@tanstack/react-router";
 
 import {
   MergeParties,
@@ -178,6 +177,7 @@ function SurvivorOption({
 export function MergePage(): React.ReactElement {
   const t = usePartiesT();
   const navigate = useNavigate();
+  const routeHref = useRouteHref();
   const params = useParams({ strict: false }) as { left?: string; right?: string };
   const leftId = params.left ?? "";
   const rightId = params.right ?? "";
@@ -260,10 +260,13 @@ export function MergePage(): React.ReactElement {
     if (!merged) return;
     const person = survivor === "left" ? leftPerson : rightPerson;
     void navigate({
-      to: recordPath(person ? "/parties/people" : "/parties/organizations", merged.id),
+      to: routeHref(
+        person ? "parties.people.record" : "parties.organizations.record",
+        { id: merged.id },
+      ),
       replace: true,
     });
-  }, [differing, fieldChoices, left, leftPerson, merge, navigate, right, rightPerson, survivor]);
+  }, [differing, fieldChoices, left, leftPerson, merge, navigate, right, rightPerson, routeHref, survivor]);
 
   const keepSeparate = React.useCallback(async () => {
     if (!left || !right) return;
@@ -271,24 +274,10 @@ export function MergePage(): React.ReactElement {
     if (result?.veto_merge) goBack();
   }, [goBack, left, right, veto]);
 
-  const crumbs = (
-    <>
-      <TextLink asChild variant="muted">
-        <Link to="/parties/people">{t("merge.breadcrumb.people")}</Link>
-      </TextLink>
-      <span aria-hidden>/</span>
-      <TextLink asChild variant="muted">
-        <Link to="/parties/review">{t("merge.breadcrumb.review")}</Link>
-      </TextLink>
-      <span aria-hidden>/</span>
-      <span>{t("merge.title")}</span>
-    </>
-  );
-
   if (comparison.fetching && !left && !right) {
     return (
       <Page>
-        <PageHeader crumbs={crumbs} title={t("merge.title")} description={t("merge.description")} />
+        <PageHeader title={t("merge.title")} description={t("merge.description")} />
         <PageBody>
           <LoadingPanel message={t("merge.loading")} />
         </PageBody>
@@ -299,7 +288,7 @@ export function MergePage(): React.ReactElement {
   if (comparison.error) {
     return (
       <Page>
-        <PageHeader crumbs={crumbs} title={t("merge.title")} description={t("merge.description")} />
+        <PageHeader title={t("merge.title")} description={t("merge.description")} />
         <PageBody>
           <ErrorBanner description={t("merge.error")} />
         </PageBody>
@@ -310,7 +299,7 @@ export function MergePage(): React.ReactElement {
   if (!left || !right || left.id === right.id) {
     return (
       <Page>
-        <PageHeader crumbs={crumbs} title={t("merge.title")} description={t("merge.description")} />
+        <PageHeader title={t("merge.title")} description={t("merge.description")} />
         <PageBody>
           <EmptyState
             icon="users"
@@ -326,7 +315,7 @@ export function MergePage(): React.ReactElement {
 
   return (
     <Page>
-      <PageHeader crumbs={crumbs} title={t("merge.title")} description={t("merge.description")} />
+      <PageHeader title={t("merge.title")} description={t("merge.description")} />
       <PageBody>
         <div className="mx-auto grid w-full max-w-6xl gap-5">
           <RadioGroup

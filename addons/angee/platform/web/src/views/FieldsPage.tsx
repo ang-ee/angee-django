@@ -2,11 +2,10 @@ import { type ReactElement } from "react";
 import { parseAsString, useQueryState } from "nuqs";
 
 import {
-  ListView, type ResourceToolbarGroupOption, type ListColumn } from "@angee/ui";
+  ListView, useRouteHref, type ResourceToolbarGroupOption, type ListColumn, type RouteHref } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
 import { TextRouteLink } from "../lib/cells";
-import { addonDetailPath, modelDetailPath } from "../lib/paths";
 
 // The `platform.Field` Hasura resource row (`hasura_pydantic_resource`,
 // `addons/angee/platform/schema.py`): every composed model's fields flattened
@@ -21,7 +20,10 @@ interface FieldResourceRow extends Record<string, unknown> {
   addon: string;
 }
 
-function columns(t: (key: string) => string): readonly ListColumn<FieldResourceRow>[] {
+function columns(
+  t: (key: string) => string,
+  routeHref: RouteHref,
+): readonly ListColumn<FieldResourceRow>[] {
   return [
     {
       field: "name",
@@ -32,14 +34,18 @@ function columns(t: (key: string) => string): readonly ListColumn<FieldResourceR
       field: "model",
       header: t("col.model"),
       render: (row) => (
-        <TextRouteLink href={modelDetailPath(row.model)}>{row.model}</TextRouteLink>
+        <TextRouteLink href={routeHref("platform.models.record", { id: row.model })}>
+          {row.model}
+        </TextRouteLink>
       ),
     },
     {
       field: "addon",
       header: t("col.addon"),
       render: (row) => (
-        <TextRouteLink href={addonDetailPath(row.addon)}>{row.addon}</TextRouteLink>
+        <TextRouteLink href={routeHref("platform.addons.record", { id: row.addon })}>
+          {row.addon}
+        </TextRouteLink>
       ),
     },
     { field: "kind", header: t("col.type") },
@@ -48,7 +54,7 @@ function columns(t: (key: string) => string): readonly ListColumn<FieldResourceR
       header: t("col.relationTarget"),
       render: (row) =>
         row.relation_target ? (
-          <TextRouteLink href={modelDetailPath(row.relation_target)}>
+          <TextRouteLink href={routeHref("platform.models.record", { id: row.relation_target })}>
             {row.relation_target}
           </TextRouteLink>
         ) : null,
@@ -67,6 +73,7 @@ function groupOptions(t: (key: string) => string): readonly ResourceToolbarGroup
 
 export function FieldsPage(): ReactElement {
   const t = usePlatformT();
+  const routeHref = useRouteHref();
   const [modelScope] = useQueryState("model", parseAsString);
   const [addonScope] = useQueryState("addon", parseAsString);
 
@@ -80,7 +87,7 @@ export function FieldsPage(): ReactElement {
   return (
     <ListView<FieldResourceRow>
       resource="platform.Field"
-      columns={columns(t)}
+      columns={columns(t, routeHref)}
       groupOptions={groupOptions(t)}
       baseFilter={Object.keys(filter).length > 0 ? filter : undefined}
       defaultGroup={modelScope ? null : { field: "model" }}

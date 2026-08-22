@@ -1,0 +1,9 @@
+{
+  "allowedRelativeEscapes": [
+    {
+      "file": "src/index.test.tsx",
+      "specifier": "../../../workflows/web/src/index",
+      "reason": "The composition test exercises the declared angee.workflows dependency; the workspace install cannot materialize a newly declared @angee/workflows package edge without pnpm install."
+    }
+  ]
+}

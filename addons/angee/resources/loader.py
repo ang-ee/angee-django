@@ -349,6 +349,18 @@ class AngeeResource(resources.ModelResource):
                 return False
             current = self._prepared_condition_value(field, getattr(instance, field.attname))
             wanted = self._prepared_condition_value(field, value)
+            if (
+                isinstance(self.entry.adopt, str)
+                and self.entry.adopt == field_name
+                and current in (None, "")
+                and wanted not in (None, "")
+                and self._single_adoption_condition(field_name) is not None
+            ):
+                # A conditional stable key may be introduced after the ledger
+                # already owns the row. Its empty sentinel is unassigned, not a
+                # conflicting natural identity; the model still owns whether
+                # this one-time assignment is valid.
+                continue
             if current != wanted:
                 return True
         return False
@@ -391,7 +403,19 @@ class AngeeResource(resources.ModelResource):
 
         if isinstance(adopt, str):
             candidate = self._adoption_candidate(row, adopt)
-            candidates = [] if candidate is None else [candidate]
+            if candidate is None:
+                return None
+            field_name, value = candidate
+            queryset = self._meta.model._default_manager.filter(**{field_name: value})
+            condition = self._single_adoption_condition(field_name)
+            if condition is not None:
+                queryset = queryset.filter(condition)
+            matches = list(queryset[:2])
+            if len(matches) > 1:
+                raise ImproperlyConfigured(
+                    f"{self.entry.display}: adopt field {field_name!r} matched multiple rows"
+                )
+            return matches[0] if matches else None
         elif isinstance(adopt, tuple):
             composite = self._composite_adoption_candidate(row, adopt)
             if composite is None:
@@ -455,6 +479,9 @@ class AngeeResource(resources.ModelResource):
         """Return a row value for one configured adoption field."""
 
         field = self._unique_adoption_field(field_name)
+        condition = self._single_adoption_condition(field_name)
+        if condition is not None and not self._row_matches_condition(row, condition):
+            return None
         resource_field = self.fields.get(field.name)
         if resource_field is None:
             raise ImproperlyConfigured(f"{self.entry.display}: adopt field {field_name!r} is not importable")
@@ -547,9 +574,25 @@ class AngeeResource(resources.ModelResource):
             field = self._meta.model._meta.get_field(field_name)
         except FieldDoesNotExist as error:
             raise ImproperlyConfigured(f"{self.entry.display}: adopt field {field_name!r} does not exist") from error
-        if not isinstance(field, models.Field) or not self._is_adoptable_field(field):
+        if not isinstance(field, models.Field) or field.primary_key:
             raise ImproperlyConfigured(f"{self.entry.display}: adopt field {field_name!r} must be a unique model field")
+        if not field.unique:
+            found, condition = self._find_unique_field_set_condition((field_name,))
+            if not found or condition is None:
+                raise ImproperlyConfigured(
+                    f"{self.entry.display}: adopt field {field_name!r} must be a unique model field"
+                )
         return field
+
+    def _single_adoption_condition(self, field_name: str) -> models.Q | None:
+        """Return the condition that scopes one explicit string adoption field."""
+
+        field = self._unique_adoption_field(field_name)
+        if field.unique:
+            return None
+        found, condition = self._find_unique_field_set_condition((field_name,))
+        assert found and condition is not None
+        return condition
 
     def _unique_adoption_fields(
         self,

@@ -22,7 +22,7 @@ const identityMenu: readonly BaseMenuItem[] = [
     // Route-less app root: the rail icon inherits its target from the first
     // child (Overview), so `iam.overview` is referenced by exactly one menu item.
     id: "iam",
-    label: "IAM",
+    label: "Permissions",
     icon: "auth",
     group: "platform",
     children: [
@@ -61,7 +61,7 @@ const iam = defineBaseAddon({
       component: lazyRouteComponent(() => import("./OAuthCallbackPage"), "OAuthCallbackPage"),
     },
     { name: "iam.overview", path: "/iam", component: lazyRouteComponent(() => import("./views/OverviewPage"), "OverviewPage") },
-    ...resourcePageRoutes("iam.users", "/iam/users", lazyRouteComponent(() => import("./views/UsersPage"), "UsersPage"), "User"),
+    ...resourcePageRoutes("iam.users", "/iam/users", lazyRouteComponent(() => import("./views/UsersPage"), "UsersPage"), "iam.User"),
     { name: "iam.roles", path: "/iam/roles", resource: "iam.Role", component: lazyRouteComponent(() => import("./views/RolesPage"), "RolesPage") },
     ...resourcePageRoutes("iam.groups", "/iam/groups", lazyRouteComponent(() => import("./views/GroupsPage"), "GroupsPage"), "iam.Group"),
     { name: "iam.grants", path: "/iam/grants", resource: "iam.Grant", component: lazyRouteComponent(() => import("./views/GrantsPage"), "GrantsPage") },
@@ -80,7 +80,7 @@ const iam = defineBaseAddon({
       // OIDC login lives on the OAuth client itself; this contributes the OIDC tab
       // into integrate's OAuth-client form, gated to the OIDC provider types this
       // addon owns. No separate OIDC page/model — it's the same OAuthClient row.
-      slot: formViewSectionsSlot("OAuthClient"),
+      ...formViewSectionsSlot("integrate.OAuthClient"),
       id: "iam.oidc-login",
       content: oidcLoginSection,
     },

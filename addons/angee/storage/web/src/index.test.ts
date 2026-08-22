@@ -2,6 +2,7 @@ import { expectValidBaseAddon } from "@angee/app/testing";
 import type { BaseMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
+import { enStorageMessages } from "./i18n";
 import storage from "./index";
 
 describe("storage addon manifest", () => {
@@ -46,6 +47,16 @@ describe("storage addon manifest", () => {
       "storage.files",
       "storage.settings",
     ]);
+    expect(enStorageMessages["loading"]).toBe("Loading files…");
+    expect(enStorageMessages["drives.unavailableTitle"]).toBe(
+      "Files unavailable",
+    );
+    expect(enStorageMessages["drives.emptyDescription"]).toBe(
+      "No drives are available to you.",
+    );
+    expect(enStorageMessages["settings.backends.description"]).toBe(
+      "Infrastructure a drive is created against.",
+    );
   });
 
   test("registers its drive glyph", () => {

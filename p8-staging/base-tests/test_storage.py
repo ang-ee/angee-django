@@ -439,6 +439,15 @@ def test_storage_resource_metadata_exposes_delete_previews() -> None:
     assert resources["storage.Folder"].type_names.delete_payload == "DeletePreview"
 
 
+def test_storage_console_schema_exposes_file_and_folder_changes() -> None:
+    """Both live storage resources publish their declared change fields."""
+
+    sdl = addon_schema(storage_schema.schemas, "console").as_str()
+
+    assert "fileChanged" in sdl
+    assert "folderChanged" in sdl
+
+
 @pytest.mark.django_db(transaction=True)
 def test_storage_graphql_custom_mutations_accept_public_ids(drive: Any) -> None:
     """Custom storage mutations resolve raw sqids at the GraphQL boundary."""

@@ -1,5 +1,5 @@
 import { useAuthoredQuery, type MessageVars } from "@angee/refine";
-import { Alert, Badge, Button, Code, GraphView, PrimaryPanePublisher, SearchInput, Spinner, barVariants, cn, textRoleVariants, useChatterContent, type ChatterTab, type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
+import { Alert, Badge, Button, Code, GraphView, InlineEmpty, PrimaryPanePublisher, SearchInput, Spinner, barVariants, cn, textRoleVariants, useChatterContent, type ChatterTab, type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
 import { type KeyboardEvent, type MutableRefObject, type ReactElement, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState, } from "react";
 
 import {
@@ -428,7 +428,7 @@ function RelationList({
           </InspectorRow>
         ))
       ) : (
-        <EmptyInspectorRow>{t("schema.noRelations")}</EmptyInspectorRow>
+        <InlineEmpty label={t("schema.noRelations")} />
       )}
     </InspectorSection>
   );
@@ -456,7 +456,7 @@ function PermissionList({
           </InspectorRow>
         ))
       ) : (
-        <EmptyInspectorRow>{t("schema.noPermissions")}</EmptyInspectorRow>
+        <InlineEmpty label={t("schema.noPermissions")} />
       )}
     </InspectorSection>
   );
@@ -499,18 +499,6 @@ function InspectorRow({
           {code}
         </Code>
       </div>
-      {children}
-    </div>
-  );
-}
-
-function EmptyInspectorRow({
-  children,
-}: {
-  children: ReactNode;
-}): ReactElement {
-  return (
-    <div className={cn(textRoleVariants({ role: "meta" }), "rounded-6 border border-dashed border-border-subtle bg-inset px-3 py-4 text-center")}>
       {children}
     </div>
   );
@@ -585,10 +573,9 @@ function buildSchemaGraph(
           highlighted,
           title: titleLabel(relation.name),
           code: relation.name,
-          detail:
-            relation.allowed_subject_types.length === 1
-              ? t("schema.subjectCount.one", { count: relation.allowed_subject_types.length })
-              : t("schema.subjectCount.other", { count: relation.allowed_subject_types.length }),
+          detail: t("schema.subjectCount", {
+            count: relation.allowed_subject_types.length,
+          }),
         }),
       );
       edges.push({
@@ -613,10 +600,9 @@ function buildSchemaGraph(
           highlighted,
           title: titleLabel(permission.name),
           code: permission.name,
-          detail:
-            permission.conditions.length === 1
-              ? t("schema.conditionCount.one", { count: permission.conditions.length })
-              : t("schema.conditionCount.other", { count: permission.conditions.length }),
+          detail: t("schema.conditionCount", {
+            count: permission.conditions.length,
+          }),
         }),
       );
 

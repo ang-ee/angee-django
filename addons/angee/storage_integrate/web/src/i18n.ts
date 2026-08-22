@@ -1,20 +1,19 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enStorageIntegrateMessages: Record<string, string> = {
-  "mount.connect.button": "Connect local folder",
-  "mount.connect.title": "Connect local folder",
-  "mount.connect.description":
+  "mount.localFolder.button": "Connect local folder",
+  "mount.localFolder.title": "Connect local folder",
+  "mount.localFolder.description":
     "Make a folder on this Django host available as a storage drive.",
+  "mount.localFolder.namePlaceholder": "Shared documents",
+  "mount.localFolder.error": "Could not connect the local folder.",
   "mount.connect.name": "Name",
-  "mount.connect.namePlaceholder": "Shared documents",
+  "mount.connect.sourceFolder": "Source folder",
   "mount.connect.mode": "File handling",
   "mount.connect.modeCopy": "Copy files",
   "mount.connect.modeReference": "Leave files in place",
   "mount.connect.submit": "Connect",
-  "mount.connect.submitting": "Connecting",
-  "mount.connect.cancel": "Cancel",
-  "mount.connect.error": "Could not connect the local folder.",
-  "mount.browse.currentFolder": "Current folder",
+  "mount.connect.submitting": "Connecting…",
   "mount.browse.up": "Up",
   "mount.browse.useThisFolder": "Use this folder",
   "mount.browse.loading": "Loading folders",

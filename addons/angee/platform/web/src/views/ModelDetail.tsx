@@ -1,20 +1,16 @@
 import { type ReactElement } from "react";
 
-import { Badge, Code, DetailSection, DetailSurface, useRouteRecordId } from "@angee/ui";
+import { Badge, Code, DetailSection, DetailSurface, useRouteHref, useRouteRecordId } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
-import {
-  addonDetailPath,
-  fieldsPath,
-  graphPath,
-  modelDetailPath,
-} from "../lib/paths";
+import { platformScopeSearch } from "../lib/paths";
 import { LinkedChips, RouterLink, useRouteNavigate } from "../lib/cells";
 import { usePlatformModel } from "../lib/explorer";
 
 export function ModelDetail(): ReactElement {
   const t = usePlatformT();
   const id = useRouteRecordId();
+  const routeHref = useRouteHref();
   const { model, dependedBy, fetching } = usePlatformModel(id);
   const go = useRouteNavigate();
 
@@ -36,7 +32,7 @@ export function ModelDetail(): ReactElement {
         model ? (
           <>
             <Code tone="muted">{model.label}</Code>
-            <RouterLink href={addonDetailPath(model.addon_id)}>
+            <RouterLink href={routeHref("platform.addons.record", { id: model.addon_id })}>
               <Badge tone="info">{model.addon_label}</Badge>
             </RouterLink>
           </>
@@ -49,7 +45,11 @@ export function ModelDetail(): ReactElement {
                 label: t("col.fields"),
                 value: model.field_count,
                 icon: "columns",
-                href: fieldsPath({ model: model.label }),
+                href: routeHref(
+                  "platform.fields",
+                  undefined,
+                  platformScopeSearch({ model: model.label }),
+                ),
                 onNavigate: go,
               },
               {
@@ -61,14 +61,18 @@ export function ModelDetail(): ReactElement {
                 label: t("col.addon"),
                 value: model.addon_label,
                 icon: "grid",
-                href: addonDetailPath(model.addon_id),
+                href: routeHref("platform.addons.record", { id: model.addon_id }),
                 onNavigate: go,
               },
               {
                 label: t("col.graph"),
                 value: t("detail.open"),
                 icon: "share",
-                href: graphPath(model.label),
+                href: routeHref(
+                  "platform.graph",
+                  undefined,
+                  platformScopeSearch({ model: model.label }),
+                ),
                 onNavigate: go,
               },
             ]
@@ -96,11 +100,17 @@ export function ModelDetail(): ReactElement {
             rows={[
               [
                 t("col.dependsOn"),
-                <LinkedChips items={model.depends_on} href={modelDetailPath} />,
+                <LinkedChips
+                  items={model.depends_on}
+                  href={(id) => routeHref("platform.models.record", { id })}
+                />,
               ],
               [
                 t("col.dependedBy"),
-                <LinkedChips items={dependedBy} href={modelDetailPath} />,
+                <LinkedChips
+                  items={dependedBy}
+                  href={(id) => routeHref("platform.models.record", { id })}
+                />,
               ],
             ]}
           />

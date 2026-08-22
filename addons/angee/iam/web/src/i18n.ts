@@ -20,7 +20,7 @@ export const enIamMessages: Record<string, string> = {
   "users.activate": "Activate",
 
   // OAuth login methods (the public sign-in slot).
-  "login.loadingOptions": "Loading sign-in options...",
+  "login.loadingOptions": "Loading sign-in options…",
   "login.providersUnavailable": "Sign-in providers unavailable",
   "login.passwordStillAvailable":
     "Username and password sign-in is still available.",
@@ -29,7 +29,7 @@ export const enIamMessages: Record<string, string> = {
   "login.startError": "Could not start sign-in.",
 
   // OAuth callback page.
-  "callback.completing": "Completing sign-in...",
+  "callback.completing": "Completing sign-in…",
   "callback.confirming": "Your session is being confirmed.",
   "callback.signInFailed": "Could not sign in",
   "callback.backToSignIn": "Back to sign in",
@@ -70,8 +70,8 @@ export const enIamMessages: Record<string, string> = {
   "overview.privileged.empty": "No admin-tier grants.",
   "overview.namespaces.title": "Role namespaces",
   "overview.namespaces.summary": "{count} namespaces",
-  "overview.namespaces.roleCount.one": "{count} role",
-  "overview.namespaces.roleCount.other": "{count} roles",
+  "overview.namespaces.roleCount_one": "{count} role",
+  "overview.namespaces.roleCount_other": "{count} roles",
   "overview.namespaces.grantCount": "{count} grants",
   "overview.namespaces.empty": "No roles defined.",
   "overview.unassigned.title": "Unassigned principals",
@@ -79,11 +79,6 @@ export const enIamMessages: Record<string, string> = {
   "overview.unassigned.empty": "Every principal has a role.",
 
   // OIDC sign-in providers page — form-section labels and the discover action.
-  "oidc.group.provider": "Provider",
-  "oidc.group.loginPolicy": "Login policy",
-  "oidc.action.discover": "Discover endpoints",
-  "oidc.column.provider": "Provider",
-  "oidc.column.status": "Status",
 
   // Grants page.
   "grants.column.principal": "Principal",
@@ -96,9 +91,6 @@ export const enIamMessages: Record<string, string> = {
   "grants.revoke.failedTitle": "Role was not revoked",
 
   // Relationships page.
-  "relationships.group.resourceType": "Resource Type",
-  "relationships.group.subjectType": "Subject Type",
-  "relationships.group.relation": "Relation",
   "relationships.column.resourceRef": "Resource Ref",
   "relationships.column.subjectRef": "Subject Ref",
   "relationships.column.resourceType": "Resource Type",
@@ -110,7 +102,7 @@ export const enIamMessages: Record<string, string> = {
 
   // Schema page.
   "schema.unavailable": "Schema unavailable",
-  "schema.loading": "Loading schema...",
+  "schema.loading": "Loading schema…",
   "schema.searchPlaceholder": "Search schema",
   "schema.resourceTypesLabel": "Resource types",
   "schema.noMatches": "No matching resource types.",
@@ -125,10 +117,10 @@ export const enIamMessages: Record<string, string> = {
   "schema.noRelations": "No relations.",
   "schema.noPermissions": "No permissions.",
   "schema.resourceDetail": "{relations} relations / {permissions} permissions",
-  "schema.subjectCount.one": "{count} subject",
-  "schema.subjectCount.other": "{count} subjects",
-  "schema.conditionCount.one": "{count} condition",
-  "schema.conditionCount.other": "{count} conditions",
+  "schema.subjectCount_one": "{count} subject",
+  "schema.subjectCount_other": "{count} subjects",
+  "schema.conditionCount_one": "{count} condition",
+  "schema.conditionCount_other": "{count} conditions",
   "schema.edge.contains": "contains",
 };
 

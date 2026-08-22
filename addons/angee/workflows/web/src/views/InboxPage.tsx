@@ -17,6 +17,9 @@ import {
   LazyBoundary,
   LoadingPanel,
   RowsListView,
+  SplitPane,
+  SplitPaneHandle,
+  SplitPanes,
   Textarea,
   formSpecInitialValues,
   useDottedPathFieldErrors,
@@ -85,27 +88,35 @@ export function InboxPage(): React.ReactElement {
   }
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_minmax(20rem,26rem)] overflow-hidden bg-canvas">
-      <RowsListView
-        rows={rows}
-        columns={columns}
-        fetching={decisionsQuery.fetching}
-        error={decisionsQuery.error}
-        onRowClick={(row) => setSelectedId(row.id)}
-        activeRowId={selected?.id ?? null}
-        emptyContent={{
-          icon: "workflow-inbox",
-          title: t("inbox.emptyTitle"),
-          description: t("inbox.emptyDescription"),
-        }}
-        className="border-r border-border-subtle"
-      />
-      <DecisionResolutionPanel
-        key={selected?.id ?? "empty"}
-        decision={selected?.raw ?? null}
-        onResolved={() => setSelectedId(null)}
-      />
-    </div>
+    <SplitPanes
+      autoSave="workflows.inbox"
+      panelIds={["decisions", "resolution"]}
+      className="h-full min-h-0 bg-canvas"
+    >
+      <SplitPane id="decisions" defaultSize={66} minSize={40}>
+        <RowsListView
+          rows={rows}
+          columns={columns}
+          fetching={decisionsQuery.fetching}
+          error={decisionsQuery.error}
+          onRowClick={(row) => setSelectedId(row.id)}
+          activeRowId={selected?.id ?? null}
+          emptyContent={{
+            icon: "workflow-inbox",
+            title: t("inbox.emptyTitle"),
+            description: t("inbox.emptyDescription"),
+          }}
+        />
+      </SplitPane>
+      <SplitPaneHandle />
+      <SplitPane id="resolution" defaultSize={34} minSize={24} collapsible>
+        <DecisionResolutionPanel
+          key={selected?.id ?? "empty"}
+          decision={selected?.raw ?? null}
+          onResolved={() => setSelectedId(null)}
+        />
+      </SplitPane>
+    </SplitPanes>
   );
 }
 

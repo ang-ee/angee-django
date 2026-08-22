@@ -1,0 +1,27 @@
+{
+  "dynamicI18nKeyFamilies": [
+    {
+      "namespace": "parties",
+      "owner": "merge field declarations",
+      "prefix": "merge.field.",
+      "values": [
+        "display_name",
+        "notes",
+        "first_met_note",
+        "name_prefix",
+        "given_name",
+        "additional_name",
+        "family_name",
+        "name_suffix",
+        "nickname",
+        "birthday"
+      ]
+    },
+    {
+      "namespace": "parties",
+      "owner": "merge provenance union",
+      "prefix": "merge.provenance.",
+      "values": ["left", "right", "both"]
+    }
+  ]
+}

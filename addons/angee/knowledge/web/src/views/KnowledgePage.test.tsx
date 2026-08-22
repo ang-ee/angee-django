@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, within, } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { createRouteHref } from "@angee/ui/runtime";
 import {
   ChatterTabsTestHost,
   PrimaryPaneTestHost,
@@ -9,7 +10,10 @@ import {
 } from "@angee/app/testing";
 
 const routerMocks = vi.hoisted(() => ({
-  navigate: vi.fn(), params: {} as Record<string, string>, }));
+  navigate: vi.fn(),
+  params: {} as Record<string, string>,
+  routeHref: vi.fn(),
+}));
 
 const sdkMocks = vi.hoisted(() => ({
   useAuthoredQuery: vi.fn(), refetch: {
@@ -21,8 +25,11 @@ const sdkMocks = vi.hoisted(() => ({
 const pageActionMocks = vi.hoisted(() => ({
   busy: false, createPage: vi.fn(async () => "created-page"), deletePage: vi.fn(async () => undefined), movePage: vi.fn(), }));
 
-vi.mock("@tanstack/react-router", () => ({
-  useNavigate: () => routerMocks.navigate, useParams: () => routerMocks.params, }));
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => routerMocks.navigate,
+  useParams: () => routerMocks.params,
+}));
 
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
@@ -56,6 +63,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
   };
   return {
     ...actual,
+    useRouteHref: () => routerMocks.routeHref,
     useRouteRecordId: () => routerMocks.params.id,
     useNamespaceT: (_namespace: string, messages: Record<string, string>) =>
       makeT(messages), EmptyState: ({ title }: { title: string }) => (
@@ -148,6 +156,7 @@ import {
   KnowledgePages,
   KnowledgeVaults,
 } from "../data/documents";
+import knowledge from "../index";
 import { KnowledgePage } from "./KnowledgePage";
 
 function renderPage() {
@@ -166,6 +175,10 @@ beforeEach(() => {
   knowledgeData = makeKnowledgeData();
   routerMocks.params = {};
   routerMocks.navigate.mockClear();
+  routerMocks.routeHref.mockReset();
+  const routeHref = createRouteHref(knowledge.routes ?? []);
+  routerMocks.routeHref.mockImplementation(routeHref);
+  Object.assign(routerMocks.routeHref, { maybe: routeHref.maybe });
   for (const refetch of Object.values(sdkMocks.refetch)) {
     refetch.mockClear();
   }
@@ -231,6 +244,9 @@ describe("KnowledgePage explorer wiring", () => {
     expect(routerMocks.navigate).toHaveBeenLastCalledWith({
       to: "/knowledge/page-a",
     });
+    expect(routerMocks.routeHref).toHaveBeenCalledWith("knowledge.page", {
+      id: "page-a",
+    });
   });
 
   test("selects an inline-created vault after the refetched options include it", () => {
@@ -240,6 +256,7 @@ describe("KnowledgePage explorer wiring", () => {
 
     expect(sdkMocks.refetch.vaults).toHaveBeenCalledOnce();
     expect(routerMocks.navigate).toHaveBeenLastCalledWith({ to: "/knowledge" });
+    expect(routerMocks.routeHref).toHaveBeenCalledWith("knowledge.home");
     expect(rootPickerValue()).toBe("vault-a");
 
     knowledgeData = {

@@ -3,10 +3,9 @@ import { useNavigate } from "@tanstack/react-router";
 import { parseAsString, useQueryState } from "nuqs";
 
 import {
-  ErrorBanner, GraphView, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
+  ErrorBanner, GraphView, useRouteHref, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
 
 import { usePlatformModelGraph } from "../lib/explorer";
-import { modelDetailPath } from "../lib/paths";
 
 const NODE_STYLES: Record<"model", GraphViewNodeStyle> = {
   model: {
@@ -19,6 +18,7 @@ const NODE_STYLES: Record<"model", GraphViewNodeStyle> = {
 
 export function GraphPage(): ReactElement {
   const navigate = useNavigate();
+  const routeHref = useRouteHref();
   const [modelScope] = useQueryState("model", parseAsString);
   const { nodes, edges, error } = usePlatformModelGraph({ model: modelScope });
 
@@ -39,7 +39,9 @@ export function GraphPage(): ReactElement {
         layout={{ rankdir: "LR" }}
         className="console-route-canvas"
         onNodeClick={(node: GraphViewNode<"model">) =>
-          navigate({ to: modelDetailPath(node.id) })
+          navigate({
+            to: routeHref("platform.models.record", { id: node.id }),
+          })
         }
       />
     </div>

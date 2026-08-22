@@ -26,7 +26,7 @@ export function SourcesPage(): React.ReactElement {
       createDefaults={SKILL_DEFAULTS}
     >
       <List resource={MODEL} pageSize={50}>
-        <Facet field="repository" label="Repository" labelField="name" />
+        <Facet field="repository" label={t("facet.repository")} labelField="name" />
         <Column field="path" />
         <Column field="ref" />
         <Column field="last_synced_at" />

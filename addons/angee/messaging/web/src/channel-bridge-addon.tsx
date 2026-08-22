@@ -24,8 +24,8 @@ export interface ChannelPollBridgeAddonOptions {
   sequence: number;
   /** Vendor-owned channel creation action. */
   connectAction: ReactNode;
-  /** Messaging-namespace messages, including this vendor's menu copy. */
-  i18n: Record<string, string>;
+  /** Explicit messaging-namespace contribution, including vendor menu copy. */
+  i18n: { messaging: Record<string, string> };
 }
 
 export interface ChannelBridgeAddonOptions extends ChannelPollBridgeAddonOptions {
@@ -70,30 +70,30 @@ export function defineChannelBridgeAddon({
 
   return defineBaseAddon({
     id,
-    i18n: { messaging: i18n },
-    menus: [channelBridgeMenu(i18n, key)],
+    i18n,
+    menus: [channelBridgeMenu(i18n.messaging, key)],
     slots: [
       channelBridgeConnectSlot(id, sequence, connectAction),
       {
-        slot: channelActions,
+        ...channelActions,
         id: connectActionId,
         sequence: 10,
         content: pairingAction("disconnected", "channel.pairing.connect", true),
       },
       {
-        slot: channelActions,
+        ...channelActions,
         id: pairingActionId,
         sequence: 10,
         content: pairingAction("connected", "channel.pairing.status"),
       },
       {
-        slot: channelActions,
+        ...channelActions,
         id: INTEGRATION_RESUME_ACTION_ID,
         sequence: 12,
         content: pairingAction("paused", "channel.pairing.resume", true),
       },
       {
-        slot: channelActions,
+        ...channelActions,
         id: INTEGRATION_DISCONNECT_ACTION_ID,
         sequence: 13,
         content: disconnectAction,
@@ -112,8 +112,8 @@ export function defineChannelPollBridgeAddon({
 }: ChannelPollBridgeAddonOptions): BaseAddon {
   return defineBaseAddon({
     id,
-    i18n: { messaging: i18n },
-    menus: [channelBridgeMenu(i18n, key)],
+    i18n,
+    menus: [channelBridgeMenu(i18n.messaging, key)],
     slots: [channelBridgeConnectSlot(id, sequence, connectAction)],
   });
 }
@@ -123,7 +123,7 @@ function channelBridgeMenu(i18n: Record<string, string>, key: string) {
   return {
     id: `messaging.${key}`,
     label: vendorMenuMessage(i18n, key, "label"),
-    to: "/messaging/channels",
+    route: "messaging.channels",
     parentId: "messaging",
     icon: "channel",
     description: vendorMenuMessage(i18n, key, "description"),

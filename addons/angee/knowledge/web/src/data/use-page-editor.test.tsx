@@ -13,6 +13,7 @@ import { afterEach,
 import {
   ModelMetadataProvider,
 } from "@angee/metadata";
+import { withTestResourceInventory } from "@angee/metadata/testing";
 import type {
   SchemaFieldMetadata,
 } from "@angee/metadata";
@@ -215,7 +216,7 @@ function graphqlOperationName(document: unknown): string {
   );
 }
 
-const PAGE_METADATA: SchemaFieldMetadata = {
+const PAGE_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     PageType: {
       typeName: "PageType",
@@ -252,7 +253,7 @@ const PAGE_METADATA: SchemaFieldMetadata = {
       },
     },
   },
-};
+});
 
 function MetadataWrapper({ children }: { children: ReactNode }): ReactElement {
   return (

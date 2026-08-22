@@ -3,7 +3,7 @@ import { Action, Column, ResourceList, Field, Form, Group, List } from "@angee/u
 
 import { useIamT } from "../i18n";
 
-const MODEL = "User";
+const MODEL = "iam.User";
 
 const userList = (
   <List resource={MODEL}>

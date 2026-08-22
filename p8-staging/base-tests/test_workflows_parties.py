@@ -49,7 +49,7 @@ def _dedupe_workflow() -> Any:
     """Return the scan -> gate -> prepare -> stock map -> unit workflow."""
 
     return workflow_with_steps(
-        name="Deduplicate contacts",
+        name="Deduplicate people",
         steps=(
             {"key": "scan", "step_class": "parties_dedupe_scan", "config": {"limit": 50}},
             {"key": "gate", "step_class": "parties_dedupe_gate", "config": {}},

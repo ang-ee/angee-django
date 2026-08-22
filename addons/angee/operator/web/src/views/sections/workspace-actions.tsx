@@ -9,10 +9,10 @@ import { useOperatorT } from "../../i18n";
 import { useOperatorAction } from "../../data/transport";
 import type { WorkspaceRef } from "../../data/types";
 import { useRunDaemonAction } from "../parts/run-action";
-import type { RowAction } from "../parts/RowActions";
+import type { OperatorAction } from "../parts/OperatorActionButtons";
 
 /** A lifecycle action for a workspace: its label, tone, and bound handler. */
-export type WorkspaceRowAction = RowAction<WorkspaceRef>;
+export type WorkspaceRowAction = OperatorAction<WorkspaceRef>;
 
 /** Workspace lifecycle actions shared by the detail page and embedded WorkspaceRow. */
 export function useWorkspaceActions(refetch: () => void): {

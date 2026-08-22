@@ -11,7 +11,7 @@ import {
   IntegrateRevealCredential,
 } from "../documents";
 
-const MODEL = "Credential";
+const MODEL = "integrate.Credential";
 
 const credentialList = (
   <List resource={MODEL}>
@@ -87,7 +87,7 @@ export function CredentialsPage(): React.ReactElement {
     [createCredential],
   );
 
-  // Create uses the addon-registered `Credential` form override (a kind dropdown
+  // Create uses the addon-registered credential form override (a kind dropdown
   // that swaps the material field); this declared form is the lifecycle editor
   // (status / reveal / health) the detail shows on edit.
   const credentialForm = (

@@ -5,10 +5,11 @@ import {
   type DocumentVariables,
 } from "@angee/refine";
 import * as React from "react";
-import { Button, ChatBubble, EmptyState, Glyph, LoadingPanel, MessagePartsView, ReactionBar, RelativeTime, SectionEyebrow, cn, textRoleVariants, type ChatBubbleRole, type Reaction } from "@angee/ui";
+import { Button, ChatBubble, EmptyState, Glyph, LoadingPanel, MessagePartsView, ReactionBar, RelativeTime, SectionEyebrow, cn, reactionsFromGroups, textRoleVariants, type ChatBubbleRole } from "@angee/ui";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { useMessagingT } from "./i18n";
+import { messagingReactionCopy } from "./reaction-copy";
 import {
   ThreadTranscriptDocument,
   type ThreadTranscriptRow,
@@ -280,12 +281,10 @@ function TranscriptMessage({ message, t }: TranscriptMessageProps): React.ReactE
   const direction = message.direction;
   const author = senderDisplayName(message.sender, t("message.author"));
   const timestamp = message.sent_at ?? message.created_at;
-  const reactions: Reaction[] = message.reaction_groups.map((group) => ({
-    reaction: group.reaction,
-    count: group.count,
-    active: group.self_reacted,
-    title: reactionTitle(group),
-  }));
+  const reactions = reactionsFromGroups(
+    message.reaction_groups,
+    messagingReactionCopy(t),
+  );
 
   const body = (
     <>
@@ -332,12 +331,4 @@ function TranscriptMessage({ message, t }: TranscriptMessageProps): React.ReactE
       </ChatBubble>
     </div>
   );
-}
-
-function reactionTitle(group: ThreadTranscriptRow["reaction_groups"][number]): string {
-  const names = group.handles
-    .map((handle) => handle.display_name || handle.value)
-    .filter((value) => value.trim() !== "");
-  if (names.length === 0) return `${group.reaction} ${group.count.toLocaleString()}`;
-  return `${group.reaction} by ${names.join(", ")}`;
 }

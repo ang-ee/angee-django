@@ -11,7 +11,6 @@ export const enSpacesMessages: Record<string, string> = {
   "group.roster.party": "Party",
   "group.roster.role": "Role",
   "group.roster.empty": "No roster members in this space yet.",
-  "group.roster.actions": "Roster actions",
   "group.roster.add": "Add member",
   "group.roster.adding": "Adding…",
   "group.roster.addError": "Could not add the roster member.",

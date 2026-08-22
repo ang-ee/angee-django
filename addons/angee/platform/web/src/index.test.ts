@@ -36,6 +36,12 @@ describe("platform addon manifest", () => {
     const root = platform.menus?.[0] as BaseMenuItem | undefined;
     const groups = root?.children ?? [];
     expect(groups.map((group) => group.id)).toEqual(["platform.explore"]);
+    expect(groups[0]?.children?.map((child) => child.label)).toEqual([
+      "Graph",
+      "Models",
+      "Fields",
+      "Addons",
+    ]);
     expect(groups[0]?.children?.map((child) => child.route)).toEqual([
       "platform.graph",
       "platform.models",

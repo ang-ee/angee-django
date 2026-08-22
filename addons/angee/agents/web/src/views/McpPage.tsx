@@ -34,10 +34,11 @@ export function McpServersPage(): React.ReactElement {
 }
 
 export function McpToolsPage(): React.ReactElement {
+  const t = useAgentsT();
   return (
     <ResourceList resource={TOOL_MODEL} placement="inline" routed>
       <List resource={TOOL_MODEL}>
-        <Facet field="server" label="Server" labelField="name" />
+        <Facet field="server" label={t("facet.server")} labelField="name" />
         <Column field="name" />
         <Column field="enabled" />
         <Column field="updated_at" />

@@ -3,7 +3,7 @@ import { Column, ResourceList, Field, Form, Group, List } from "@angee/ui";
 
 import { useIntegrateT } from "../../i18n";
 
-const MODEL = "ExternalAccount";
+const MODEL = "integrate.ExternalAccount";
 
 const accountList = (
   <List resource={MODEL}>

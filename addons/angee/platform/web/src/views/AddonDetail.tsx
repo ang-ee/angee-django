@@ -1,14 +1,9 @@
 import { type ReactElement } from "react";
 
-import { Badge, Code, DetailSection, DetailSurface, useRouteRecordId } from "@angee/ui";
+import { Badge, Code, DetailSection, DetailSurface, useRouteHref, useRouteRecordId } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
-import {
-  addonDetailPath,
-  fieldsPath,
-  modelDetailPath,
-  modelsPath,
-} from "../lib/paths";
+import { platformScopeSearch } from "../lib/paths";
 import { LinkedChips, useRouteNavigate } from "../lib/cells";
 import { usePlatformAddon } from "../lib/explorer";
 
@@ -17,6 +12,7 @@ const shortName = (dep: string): string => dep.split(".").pop() ?? dep;
 export function AddonDetail(): ReactElement {
   const t = usePlatformT();
   const id = useRouteRecordId();
+  const routeHref = useRouteHref();
   const { addon, dependsOn, dependedBy, modelLabels, fetching } =
     usePlatformAddon(id);
   const go = useRouteNavigate();
@@ -54,7 +50,11 @@ export function AddonDetail(): ReactElement {
                 value: addon.model_count,
                 icon: "grid",
                 href: addon.model_count
-                  ? modelsPath({ addon: addon.id })
+                  ? routeHref(
+                      "platform.models",
+                      undefined,
+                      platformScopeSearch({ addon: addon.id }),
+                    )
                   : undefined,
                 onNavigate: go,
               },
@@ -63,7 +63,11 @@ export function AddonDetail(): ReactElement {
                 value: addon.field_count,
                 icon: "columns",
                 href: addon.field_count
-                  ? fieldsPath({ addon: addon.id })
+                  ? routeHref(
+                      "platform.fields",
+                      undefined,
+                      platformScopeSearch({ addon: addon.id }),
+                    )
                   : undefined,
                 onNavigate: go,
               },
@@ -85,7 +89,7 @@ export function AddonDetail(): ReactElement {
                 t("col.dependsOn"),
                 <LinkedChips
                   items={dependsOn}
-                  href={addonDetailPath}
+                  href={(id) => routeHref("platform.addons.record", { id })}
                   format={shortName}
                 />,
               ],
@@ -93,7 +97,7 @@ export function AddonDetail(): ReactElement {
                 t("col.dependedBy"),
                 <LinkedChips
                   items={dependedBy}
-                  href={addonDetailPath}
+                  href={(id) => routeHref("platform.addons.record", { id })}
                   format={shortName}
                 />,
               ],
@@ -106,7 +110,10 @@ export function AddonDetail(): ReactElement {
                 count: modelLabels.length,
               })}
             >
-              <LinkedChips items={modelLabels} href={modelDetailPath} />
+              <LinkedChips
+                items={modelLabels}
+                href={(id) => routeHref("platform.models.record", { id })}
+              />
             </DetailSection>
           ) : null}
         </>

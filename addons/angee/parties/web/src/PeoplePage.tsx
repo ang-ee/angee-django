@@ -18,6 +18,7 @@ import {
   errorMessage,
   useAuthoredResourceMutation,
   useLatestRef,
+  useRouteHref,
   useToast,
   type ActionDescriptor,
   type DndPayload,
@@ -35,7 +36,6 @@ import {
 } from "./documents";
 import { IdentityTab } from "./IdentityTab";
 import { usePartiesT } from "./i18n";
-import { partyMergePath } from "./routes";
 
 const MODEL = "parties.Person";
 
@@ -251,6 +251,7 @@ function peopleForm(
 export function PeoplePage(): React.ReactElement {
   const t = usePartiesT();
   const navigate = useNavigate();
+  const routeHref = useRouteHref();
   const search = useSearch({ strict: false }) as Readonly<Record<string, unknown>>;
   const toast = useToast();
   const scope = React.useMemo(
@@ -283,10 +284,12 @@ export function PeoplePage(): React.ReactElement {
           validationErrors: { otherParty: [t("person.action.mergeRequired")] },
         };
       }
-      await navigate({ to: partyMergePath(recordId, otherId) });
+      await navigate({
+        to: routeHref("parties.merge", { left: recordId, right: otherId }),
+      });
       return { ok: true, message: "" };
     },
-    [navigate, t],
+    [navigate, routeHref, t],
   );
   const circles = React.useMemo<readonly CircleTreeRow[]>(
     () =>

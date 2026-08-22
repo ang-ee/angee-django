@@ -13,7 +13,12 @@ from django.db.models import F
 from rebac import system_context
 from strawberry import auto
 
-from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data import (
+    AngeeHasuraWriteBackend,
+    DataResourceSubtitleMetadata,
+    hasura_model_resource,
+    public_pk_decoder,
+)
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import (
     PublicID,
@@ -296,6 +301,7 @@ _PAGE_RESOURCE = hasura_model_resource(
         "parent": public_pk_decoder(Page),
     },
     write_backend=PageWriteBackend(Page, public_id_fields=("parent",)),
+    subtitle=DataResourceSubtitleMetadata(word_count="markdown.word_count"),
 )
 
 

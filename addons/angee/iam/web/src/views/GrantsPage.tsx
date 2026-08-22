@@ -1,7 +1,12 @@
-import { useMemo, useState, type ReactElement, } from "react";
+import { useMemo, type ReactElement } from "react";
 
 import {
-  Button, Code, ListView, errorMessage, useAuthoredResourceMutation, useConfirm, useToast, type ListColumn } from "@angee/ui";
+  Code,
+  ListView,
+  defineRowAction,
+  type ListColumn,
+  type RowActionDeclaration,
+} from "@angee/ui";
 
 import { IAM_ROLE_MUTATION_INVALIDATES, IamRevokeRole } from "../documents";
 import { useIamT } from "../i18n";
@@ -23,44 +28,6 @@ interface GrantResourceRow extends Record<string, unknown> {
 
 export function GrantsPage(): ReactElement {
   const t = useIamT();
-  const confirm = useConfirm();
-  const toast = useToast();
-  const [revoke_role, revokeState] = useAuthoredResourceMutation(IamRevokeRole, {
-    invalidateModels: IAM_ROLE_MUTATION_INVALIDATES,
-    shouldInvalidate: (result) => result?.revoke_role === true,
-  });
-  const [pendingGrantId, setPendingGrantId] = useState<string | null>(null);
-
-  async function revoke(row: GrantResourceRow): Promise<void> {
-    const confirmed = await confirm({
-      title: t("grants.revoke.title"),
-      body: t("grants.revoke.body", { role: row.role, principal: row.principal_label }),
-      cancel: t("grants.revoke.cancel"),
-      confirm: t("revoke"),
-      danger: true,
-    });
-    if (!confirmed) return;
-    setPendingGrantId(row.id);
-    try {
-      const result = await revoke_role({
-        principal_id: row.principal_id,
-        role: row.role,
-      });
-      if (result?.revoke_role === false) {
-        throw new Error(t("grants.revoke.error"));
-      }
-    } catch (caught) {
-      // A failed revoke rides the same danger-toast path every record action
-      // surfaces its ActionResult through (RecordActionBar), not a page-local
-      // Alert band.
-      toast.danger({
-        title: t("grants.revoke.failedTitle"),
-        description: errorMessage(caught, t("grants.revoke.error")),
-      });
-    } finally {
-      setPendingGrantId(null);
-    }
-  }
 
   const grantColumns = useMemo<readonly ListColumn<GrantResourceRow>[]>(
     () => [
@@ -93,32 +60,47 @@ export function GrantsPage(): ReactElement {
         header: t("grants.column.namespace"),
         render: (row) => <Code truncate>{row.namespace}</Code>,
       },
-      {
-        field: "actions",
-        header: "",
-        sortable: false,
-        align: "right",
-        render: (row) => (
-          <Button
-            type="button"
-            size="sm"
-            variant="danger"
-            pending={pendingGrantId === row.id && revokeState.fetching}
-            disabled={pendingGrantId !== null && pendingGrantId !== row.id}
-            onClick={() => void revoke(row)}
-          >
-            {t("revoke")}
-          </Button>
-        ),
-      },
     ],
-    [pendingGrantId, revokeState.fetching, t],
+    [t],
+  );
+  const rowActions = useMemo<readonly RowActionDeclaration<GrantResourceRow>[]>(
+    () => [
+      defineRowAction({
+        kind: "authored",
+        id: "revoke-role",
+        label: t("revoke"),
+        document: IamRevokeRole,
+        variables: (row: GrantResourceRow) => ({
+          principal_id: row.principal_id,
+          role: row.role,
+        }),
+        succeeded: (result) => result?.revoke_role === true,
+        invalidateModels: IAM_ROLE_MUTATION_INVALIDATES,
+        confirm: {
+          title: () => t("grants.revoke.title"),
+          body: (row) => t("grants.revoke.body", {
+            role: row.role,
+            principal: row.principal_label,
+          }),
+          confirm: () => t("revoke"),
+          cancel: () => t("grants.revoke.cancel"),
+        },
+        toast: {
+          title: () => t("grants.revoke.failedTitle"),
+          description: () => t("grants.revoke.error"),
+        },
+        variant: "danger",
+        pendingPolicy: "active-row",
+      }),
+    ],
+    [t],
   );
 
   return (
     <ListView<GrantResourceRow>
       resource="iam.Grant"
       columns={grantColumns}
+      rowActions={rowActions}
       defaultGroup={{ field: "namespace" }}
       pageSize={50}
     />

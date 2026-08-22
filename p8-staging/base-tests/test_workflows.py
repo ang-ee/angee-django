@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.utils.text import slugify
 from rebac import app_settings, system_context
 from rebac.roles import grant
 
@@ -26,7 +27,7 @@ pytest_plugins = ("tests.workflows",)
 def create_workflow(name: str = "Document Review") -> Workflow:
     """Create one draft workflow in the test table."""
 
-    return Workflow.objects.create(name=name)
+    return Workflow.objects.create(key=slugify(name), name=name)
 
 
 def create_entry(workflow: Workflow, *, key: str = "start", name: str = "Start") -> Step:
@@ -62,6 +63,7 @@ def _published_workflow(*, name: str, subject_declaration: str, owner: Any) -> t
 
     with system_context(reason="test workflows subject declaration definition"):
         draft = Workflow.objects.create(
+            key=slugify(name),
             name=name,
             subject_declaration=subject_declaration,
             created_by=owner,
@@ -131,12 +133,14 @@ def test_publish_copies_draft_to_immutable_version(workflow_tables: None) -> Non
         first.refresh_from_db()
         assert first.status == WorkflowStatus.PUBLISHED
         assert first.published_from == draft
+        assert first.key == draft.key == "document-review"
         assert first.version == 1
         assert first.name == "Document Review"
         assert Step.objects.get(workflow=first, key="start").name == "Start"
         assert Edge.objects.filter(workflow=first, condition="done").count() == 1
 
         assert second.version == 2
+        assert second.key == draft.key
         assert second.name == "Document Review Draft"
         assert Step.objects.get(workflow=second, key="start").name == "Start Draft"
         assert Workflow.objects.current_published_for(draft) == second
@@ -149,6 +153,76 @@ def test_publish_copies_draft_to_immutable_version(workflow_tables: None) -> Non
         published_step.name = "Edited"
         with pytest.raises(ValidationError, match="immutable"):
             published_step.save()
+
+        draft.key = "changed-lineage"
+        with pytest.raises(ValidationError, match="immutable once assigned"):
+            draft.save()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_workflow_key_is_unique_per_assigned_head_and_allows_legacy_backfill(
+    workflow_tables: None,
+) -> None:
+    """Assigned stable keys are unique and a migration-era empty key initializes once."""
+
+    with system_context(reason="test workflow stable key uniqueness"):
+        first = create_workflow("First lineage")
+        with pytest.raises(ValidationError) as duplicate:
+            Workflow.objects.create(key=first.key, name="Duplicate lineage")
+        duplicate_error = duplicate.value.error_dict["key"][0]
+        assert duplicate_error.message == "A workflow with this key already exists."
+        assert duplicate_error.code == "unique"
+
+        legacy = Workflow.objects.create(name="Legacy lineage")
+        create_entry(legacy)
+        published = legacy.publish()
+        published_updated_at = published.updated_at
+        legacy.key = "Legacy-Lineage"
+        legacy.save()
+        published.refresh_from_db()
+        assert legacy.key == "legacy-lineage"
+        assert published.key == legacy.key
+        assert published.updated_at > published_updated_at
+
+        legacy.key = "changed-lineage"
+        with pytest.raises(ValidationError, match="immutable once assigned"):
+            legacy.save()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_workflow_version_rejects_a_stable_key_different_from_its_head(
+    workflow_tables: None,
+) -> None:
+    """A version cannot validate with a stable key outside its lineage."""
+
+    with system_context(reason="test workflow version stable key mismatch"):
+        head = create_workflow("Stable head")
+        mismatched = Workflow(key="other-key", name="Mismatched", published_from=head)
+
+        with pytest.raises(ValidationError, match="share their lineage stable key"):
+            mismatched.full_clean()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_workflow_stable_key_propagation_rejects_conflicting_versions_atomically(
+    workflow_tables: None,
+) -> None:
+    """A conflicting historical version aborts assignment and rolls back the head."""
+
+    with system_context(reason="test workflow stable key propagation conflict"):
+        head = Workflow.objects.create(name="Legacy conflict")
+        create_entry(head)
+        published = head.publish()
+        Workflow._base_manager.filter(pk=published.pk).update(key="conflicting-key")
+
+        head.key = "assigned-key"
+        with pytest.raises(ValidationError, match="disagree with their lineage stable key"):
+            head.save()
+
+        head.refresh_from_db()
+        published.refresh_from_db()
+        assert head.key == ""
+        assert published.key == "conflicting-key"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -185,6 +259,36 @@ def test_console_can_publish_workflow(workflow_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_console_rejects_reassigning_an_existing_workflow_stable_key(
+    workflow_tables: None,
+) -> None:
+    """The update API delegates assignment-once enforcement to Workflow.save()."""
+
+    del workflow_tables
+    schema = _console_schema()
+    admin = _platform_admin("workflow-key-admin")
+    with system_context(reason="test workflow stable key update API"):
+        workflow = create_workflow("API stable key")
+
+    result = execute_schema(
+        schema,
+        """
+        mutation ReassignWorkflowKey($id: String!) {
+          update_workflows_by_pk(pk_columns: {id: $id}, _set: {key: "another-key"}) { key }
+        }
+        """,
+        {"id": workflow.sqid},
+        user=admin,
+    )
+
+    assert result.errors is not None
+    assert "immutable once assigned" in result.errors[0].message
+    with system_context(reason="test workflow stable key update API result"):
+        workflow.refresh_from_db()
+    assert workflow.key == "api-stable-key"
+
+
+@pytest.mark.django_db(transaction=True)
 def test_workflows_for_subject_declaration_filters_resource_and_rebac(workflow_tables: None) -> None:
     """The subject declaration resolver returns only current workflows the actor may start."""
 
@@ -202,6 +306,7 @@ def test_workflows_for_subject_declaration_filters_resource_and_rebac(workflow_t
       query WorkflowsForSubjectDeclaration($subjectDeclaration: String!) {
         workflows_for_subject_declaration(subject_declaration: $subjectDeclaration) {
           id
+          key
           name
           subject_declaration
         }
@@ -224,9 +329,9 @@ def test_workflows_for_subject_declaration_filters_resource_and_rebac(workflow_t
         )
     )["workflows_for_subject_declaration"]
 
-    assert [(row["name"], row["subject_declaration"]) for row in visible] == [
-        ("Any subject", ""),
-        ("Matching", Workflow._meta.label_lower),
+    assert [(row["key"], row["name"], row["subject_declaration"]) for row in visible] == [
+        ("any-subject", "Any subject", ""),
+        ("matching", "Matching", Workflow._meta.label_lower),
     ]
     assert hidden == []
 

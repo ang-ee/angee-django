@@ -11,7 +11,7 @@ import type { ServiceState } from "../../data/types";
 import { serviceDetailPath } from "../../lib/paths";
 import { daemonRowsByName, type DaemonRow } from "../parts/daemon-rows";
 import { OperatorSection } from "../parts/OperatorSection";
-import { RowActions } from "../parts/RowActions";
+import { OperatorActionButtons } from "../parts/OperatorActionButtons";
 import { StateTag } from "../parts/StateTag";
 import { useServiceActions } from "./service-actions";
 
@@ -113,7 +113,7 @@ export function ServiceRow({ name, emptyContent }: ServiceRowProps): ReactNode {
           <span className="whitespace-nowrap">
             <StateTag state={service.status} />
           </span>
-          <RowActions actions={actions} busy={busy} subject={service} />
+          <OperatorActionButtons actions={actions} busy={busy} subject={service} />
         </div>
       ) : (
         <p className={cn(textRoleVariants({ role: "meta" }), "border-y border-border-subtle py-3")}>

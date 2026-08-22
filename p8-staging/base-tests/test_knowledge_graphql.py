@@ -34,6 +34,26 @@ def test_importing_knowledge_schema_does_not_query_database() -> None:
     assert len(captured) == 0
 
 
+def test_page_resource_emits_nested_word_count_subtitle_fact() -> None:
+    """Knowledge owns the nested word-count path consumed by record subtitles."""
+
+    schema = _schema("public")
+    metadata = next(
+        resource
+        for resource in schema.angee_resources
+        if resource.model_label == "knowledge.Page"
+    )
+    wire = next(
+        resource
+        for resource in schema._schema.extensions["angee"]["resources"]
+        if resource["modelLabel"] == "knowledge.Page"
+    )
+
+    assert metadata.subtitle is not None
+    assert metadata.subtitle.word_count == "markdown.word_count"
+    assert wire["subtitle"]["wordCount"] == "markdown.word_count"
+
+
 def test_create_vault_and_page_flow(knowledge_tables: None) -> None:
     """The Hasura insert mutations persist through Knowledge-owned factories."""
 

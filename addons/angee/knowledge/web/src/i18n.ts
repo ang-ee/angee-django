@@ -18,7 +18,6 @@ export const enKnowledgeMessages: Record<string, string> = {
   "page.notFoundDescription": "This page is no longer available.",
   "page.selectTitle": "Select a page",
   "page.selectDescription": "Choose a page from the tree to read it.",
-  "page.crumbFallback": "Page",
   "page.deleteConfirmTitle": 'Delete "{title}"?',
   "page.deleteConfirmBody":
     "Deleting a folder removes the pages inside it too.",
@@ -44,7 +43,7 @@ export const enKnowledgeMessages: Record<string, string> = {
   "editor.folderTitle": "Folder",
   "editor.folderDescription":
     "A folder groups pages — open a note in the tree to edit it.",
-  "settings.title": "Vaults",
+  "settings.title": "Settings",
   "settings.description": "The access boundary a tree of pages lives in.",
 };
 

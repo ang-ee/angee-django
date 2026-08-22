@@ -11,22 +11,24 @@ import {
   List,
   ListView,
   MutationDialog,
+  mutationDialogValueCodecs,
   ResourceList,
   SplitPane,
   SplitPaneHandle,
   SplitPanes,
   Glyph,
   cn,
-  errorMessage,
+  defineRowAction,
+  rowIdVariables,
   type ListColumn,
   type MutationDialogField,
+  type MutationDialogValues,
   type RecordPanelContext,
   type RecordTabDescriptor,
   type ResourceListSnapshot,
+  type RowActionDeclaration,
   type StringIdRow,
   useAuthoredResourceMutation,
-  useConfirm,
-  useToast,
 } from "@angee/ui";
 import { ThreadTranscript } from "@angee/messaging";
 
@@ -49,7 +51,7 @@ const EMPTY_THREAD_ROWS: readonly SpaceThreadRow[] = [];
 type SpaceMembershipRole = "OWNER" | "MODERATOR" | "MEMBER" | "VIEWER";
 
 /** Narrow a dialog value onto the wire's MembershipRole enum, defaulting MEMBER. */
-export function membershipRole(value: unknown): SpaceMembershipRole {
+function membershipRole(value: unknown): SpaceMembershipRole {
   return (
     value === "OWNER"
     || value === "MODERATOR"
@@ -58,15 +60,6 @@ export function membershipRole(value: unknown): SpaceMembershipRole {
   )
     ? value
     : "MEMBER";
-}
-
-/**
- * Lowercase wire value for the update `_set` surface: the writable String
- * takes the lowercase model value (the read/write casing asymmetry pitfall),
- * unlike the add mutation's real enum which takes the uppercase name.
- */
-export function membershipRoleWireValue(value: unknown): string {
-  return membershipRole(value).toLowerCase();
 }
 
 function threadColumns(
@@ -106,10 +99,8 @@ function threadColumns(
   ];
 }
 
-function GroupRosterTab({ recordId, ...context }: RecordPanelContext): React.ReactElement {
+function GroupRosterTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = useSpacesT();
-  const confirm = useConfirm();
-  const toast = useToast();
   const [addOpen, setAddOpen] = React.useState(false);
   const [roleRow, setRoleRow] = React.useState<MembershipRow | null>(null);
   const [add, addState] = useAuthoredResourceMutation(AddSpaceMembership, {
@@ -119,13 +110,7 @@ function GroupRosterTab({ recordId, ...context }: RecordPanelContext): React.Rea
     UpdateSpaceMembershipRole,
     { invalidateModels: SPACE_MEMBERSHIP_INVALIDATES },
   );
-  const [remove, removeState] = useAuthoredResourceMutation(RemoveSpaceMembership, {
-    invalidateModels: SPACE_MEMBERSHIP_INVALIDATES,
-  });
-  const busy =
-    addState.fetching ||
-    updateState.fetching ||
-    removeState.fetching;
+  const busy = addState.fetching || updateState.fetching;
   const roleOptions = React.useMemo(
     () => [
       { value: "OWNER", label: t("group.roster.role.owner") },
@@ -172,68 +157,45 @@ function GroupRosterTab({ recordId, ...context }: RecordPanelContext): React.Rea
       { field: "is_confirmed" },
       { field: "source" },
       { field: "created_at" },
-      {
-        field: "id",
-        header: t("group.roster.actions"),
-        headerVisuallyHidden: true,
-        sortable: false,
-        align: "right",
-        render: (row) => (
-          <span className="inline-flex gap-1">
-            <Button
-              type="button"
-              variant="ghost"
-              size="iconSm"
-              aria-label={t("group.roster.changeRole")}
-              title={t("group.roster.changeRole")}
-              disabled={busy}
-              onClick={(event) => {
-                event.stopPropagation();
-                setRoleRow(row);
-              }}
-            >
-              <Glyph decorative name="pencil" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="iconSm"
-              aria-label={t("group.roster.remove")}
-              title={t("group.roster.remove")}
-              disabled={busy}
-              onClick={(event) => {
-                event.stopPropagation();
-                void removeMember(row);
-              }}
-            >
-              <Glyph decorative name="trash" />
-            </Button>
-          </span>
-        ),
-      },
+    ],
+    [t],
+  );
+  const rowActions = React.useMemo<readonly RowActionDeclaration<MembershipRow>[]>(
+    () => [
+      defineRowAction({
+        kind: "page",
+        id: "change-membership-role",
+        label: t("group.roster.changeRole"),
+        icon: "pencil",
+        variant: "ghost",
+        disabled: () => busy,
+        pendingPolicy: "disable-actions",
+        onSelect: (row: MembershipRow) => setRoleRow(row),
+      }),
+      defineRowAction({
+        kind: "authored",
+        id: "remove-membership",
+        label: t("group.roster.remove"),
+        document: RemoveSpaceMembership,
+        variables: rowIdVariables,
+        invalidateModels: SPACE_MEMBERSHIP_INVALIDATES,
+        confirm: {
+          title: () => t("group.roster.removeTitle"),
+          body: () => t("group.roster.removeDescription"),
+          confirm: () => t("group.roster.remove"),
+        },
+        toast: {
+          title: () => t("group.roster.removeError"),
+          description: () => t("group.roster.removeError"),
+        },
+        icon: "trash",
+        variant: "ghost",
+        disabled: () => busy,
+        pendingPolicy: "disable-actions",
+      }),
     ],
     [busy, t],
   );
-  void context;
-
-  async function removeMember(row: MembershipRow): Promise<void> {
-    const accepted = await confirm({
-      title: t("group.roster.removeTitle"),
-      body: t("group.roster.removeDescription"),
-      confirm: t("group.roster.remove"),
-      danger: true,
-    });
-    if (!accepted) return;
-    try {
-      await remove({ id: row.id });
-    } catch (cause) {
-      toast.danger({
-        title: t("group.roster.removeError"),
-        description: errorMessage(cause, t("group.roster.removeError")),
-      });
-    }
-  }
-
   return (
     <>
       <ListView<MembershipRow>
@@ -242,6 +204,7 @@ function GroupRosterTab({ recordId, ...context }: RecordPanelContext): React.Rea
         fields={["id", "party.display_name", "role", "is_confirmed", "source", "created_at"]}
         baseFilter={{ group: { exact: recordId } }}
         columns={columns}
+        rowActions={rowActions}
         toolbarActions={
           <Button type="button" variant="primary" size="sm" onClick={() => setAddOpen(true)}>
             <Glyph decorative name="plus" />
@@ -259,11 +222,12 @@ function GroupRosterTab({ recordId, ...context }: RecordPanelContext): React.Rea
         submitLabel={t("group.roster.add")}
         submittingLabel={t("group.roster.adding")}
         errorFallback={t("group.roster.addError")}
+        parseValues={parseAddMembershipValues}
         onSubmit={(values) =>
           add({
             group: recordId,
-            party: String(values.party ?? ""),
-            role: membershipRole(values.role),
+            party: values.party,
+            role: values.role,
           })
         }
       />
@@ -278,10 +242,11 @@ function GroupRosterTab({ recordId, ...context }: RecordPanelContext): React.Rea
         submitLabel={t("group.roster.saveRole")}
         submittingLabel={t("group.roster.savingRole")}
         errorFallback={t("group.roster.roleError")}
+        parseValues={parseMembershipRoleValues}
         onSubmit={(values) =>
           updateRole({
             id: roleRow?.id ?? "",
-            role: membershipRoleWireValue(values.role),
+            role: values.role,
           })
         }
         onSubmitted={() => setRoleRow(null)}
@@ -290,7 +255,20 @@ function GroupRosterTab({ recordId, ...context }: RecordPanelContext): React.Rea
   );
 }
 
-function GroupThreadsTab({ recordId, ...context }: RecordPanelContext): React.ReactElement {
+function parseAddMembershipValues(values: MutationDialogValues) {
+  return {
+    party: mutationDialogValueCodecs.requiredString(values.party, "party"),
+    role: membershipRole(values.role),
+  };
+}
+
+function parseMembershipRoleValues(values: MutationDialogValues) {
+  // The update `_set` surface writes the lowercase model value, unlike the add
+  // mutation's real enum. Parsing owns that wire casing; submit adds row context.
+  return { role: membershipRole(values.role).toLowerCase() };
+}
+
+function GroupThreadsTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = useSpacesT();
   const [selectedThread, setSelectedThread] = React.useState<{
     groupId: string;
@@ -298,7 +276,6 @@ function GroupThreadsTab({ recordId, ...context }: RecordPanelContext): React.Re
   } | null>(null);
   const [listState, setListState] =
     React.useState<ResourceListSnapshot<SpaceThreadRow> | null>(null);
-  void context;
   const selectedThreadId =
     selectedThread?.groupId === recordId ? selectedThread.threadId : null;
   const threadRows = listState?.rows ?? EMPTY_THREAD_ROWS;

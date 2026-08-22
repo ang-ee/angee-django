@@ -425,6 +425,69 @@ class Migration(migrations.Migration):
     assert not (runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py").exists()
 
 
+def test_workflow_stable_key_migration_guards_and_preserves_constraint_state() -> None:
+    """The workflow migration accepts only the exact pre-stable-key shape."""
+
+    from angee.workflows.models import Workflow
+
+    module = importlib.import_module("angee.workflows.runtime_migrations.workflow_stable_key")
+    legacy = ProjectState()
+    legacy.add_model(
+        ModelState(
+            "workflows",
+            "Workflow",
+            [
+                ("id", models.AutoField(primary_key=True)),
+                (
+                    "published_from",
+                    models.ForeignKey(
+                        "workflows.Workflow",
+                        blank=True,
+                        null=True,
+                        on_delete=models.CASCADE,
+                    ),
+                ),
+            ],
+        )
+    )
+    partial = legacy.clone()
+    partial.models["workflows", "workflow"].fields["key"] = models.SlugField(
+        blank=True,
+        default="",
+        max_length=100,
+    )
+
+    assert module.applies(ProjectState()) is False
+    assert module.applies(legacy) is True
+    with pytest.raises(ImproperlyConfigured, match="partial Workflow stable key transition"):
+        module.applies(partial)
+
+    migrated = module.Migration("probe", "workflows").mutate_state(legacy)
+    assert module.applies(migrated) is False
+    workflow = migrated.models["workflows", "workflow"]
+    field = workflow.fields["key"]
+    constraint = next(
+        item for item in workflow.options["constraints"] if item.name == "uniq_workflows_workflow_head_key"
+    )
+    assert isinstance(field, models.SlugField)
+    assert field.blank is True
+    assert field.default == ""
+    assert field.max_length == 100
+    assert constraint.fields == ("key",)
+    assert constraint.condition == models.Q(published_from__isnull=True) & ~models.Q(key="")
+    assert constraint.violation_error_code == "unique"
+    assert constraint.violation_error_message == "A workflow with this key already exists."
+    _path, _args, kwargs = constraint.deconstruct()
+    assert kwargs["violation_error_code"] == "unique"
+    assert kwargs["violation_error_message"] == "A workflow with this key already exists."
+    assert isinstance(module.Migration.operations[0], migrations.AddField)
+    assert isinstance(module.Migration.operations[1], migrations.AddConstraint)
+    model_constraint = next(
+        item for item in Workflow._meta.constraints if item.name == "uniq_workflows_workflow_head_key"
+    )
+    assert model_constraint.deconstruct() == constraint.deconstruct()
+
+
 def _integration_lifecycle_state(
     choices: tuple[tuple[str, str], ...],
 ) -> ProjectState:

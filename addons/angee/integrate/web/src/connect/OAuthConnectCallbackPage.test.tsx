@@ -1,12 +1,13 @@
 // @vitest-environment happy-dom
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { AppRuntimeProvider, baseIcons } from "@angee/ui";
+import { AppRuntimeProvider, baseIcons, createRouteHref } from "@angee/ui";
 import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { OAuthConnectCallbackPage } from "./OAuthConnectCallbackPage";
 import { CONNECT_CALLBACK_LOOPBACK_PATH, CONNECT_CALLBACK_PATH } from "./redirects";
+import integrate from "../index";
 
 const mocks = vi.hoisted(() => ({ mutate: vi.fn() }));
 
@@ -114,7 +115,12 @@ describe("OAuthConnectCallbackPage", () => {
 
 function Runtime({ children }: { children: ReactNode }): ReactElement {
   return (
-    <AppRuntimeProvider runtime={{ icons: baseIcons }}>
+    <AppRuntimeProvider
+      runtime={{
+        icons: baseIcons,
+        routeHref: createRouteHref(integrate.routes ?? []),
+      }}
+    >
       {children}
     </AppRuntimeProvider>
   );

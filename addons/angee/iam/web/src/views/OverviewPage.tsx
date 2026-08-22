@@ -200,11 +200,9 @@ export function OverviewPage(): ReactElement {
                 <MiniCard
                   key={namespace.namespace}
                   title={titleLabel(namespace.namespace)}
-                  meta={
-                    namespace.role_count === 1
-                      ? t("overview.namespaces.roleCount.one", { count: namespace.role_count.toLocaleString() })
-                      : t("overview.namespaces.roleCount.other", { count: namespace.role_count.toLocaleString() })
-                  }
+                  meta={t("overview.namespaces.roleCount", {
+                    count: namespace.role_count,
+                  })}
                   primaryTag={{
                     label: t("overview.namespaces.grantCount", { count: namespace.grant_count.toLocaleString() }),
                     tone: namespace.grant_count > 0 ? "brand" : "neutral",

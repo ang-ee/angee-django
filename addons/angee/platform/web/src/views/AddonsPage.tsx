@@ -1,10 +1,9 @@
 import { type ReactElement } from "react";
 
 import {
-  Badge, Chip, ListView, statusTone, textRoleVariants, type CardActionContext, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
+  Badge, Chip, ListView, statusTone, textRoleVariants, useRouteHref, type CardActionContext, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
-import { addonDetailPath } from "../lib/paths";
 import {
   AddonCard,
   AddonCardActions,
@@ -84,6 +83,7 @@ function groupOptions(t: (key: string) => string): readonly ResourceToolbarGroup
  */
 export function AddonsPage(): ReactElement {
   const t = usePlatformT();
+  const routeHref = useRouteHref();
   return (
     <ListView<AddonResourceRow>
       resource={ADDON_MODEL}
@@ -93,7 +93,7 @@ export function AddonsPage(): ReactElement {
       defaultView="board"
       defaultGroup={{ field: "category" }}
       pageSize={100}
-      rowHref={(row) => addonDetailPath(row.id)}
+      rowHref={(row) => routeHref("platform.addons.record", { id: row.id })}
       toolbarActions={<AddonSourceControls />}
       renderCard={(row) => <AddonCard row={row} />}
       cardActions={(row: AddonResourceRow, context: CardActionContext) => (

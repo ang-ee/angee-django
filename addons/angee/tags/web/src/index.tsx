@@ -20,11 +20,11 @@ const TAGS_ID = "tags";
 
 const tagsRoutes: readonly BaseAddonRoute[] = [
   ...resourcePageRoutes(
-    "tags.list",
+    "tags.tags",
     "/tags",
     lazyRouteComponent(() => import("./views/TagsPage"), "TagsPage"),
     "tags.Tag",
-    { detailName: "tags.detail", menu: "tags.list" },
+    { detailName: "tags.tag", menu: "tags.tags" },
   ),
 ];
 
@@ -36,10 +36,10 @@ const tagsMenu: readonly BaseMenuItem[] = [
     group: "platform",
     children: [
       {
-        id: "tags.list",
-        label: "Vocabulary",
+        id: "tags.tags",
+        label: "Tags",
         icon: "tags-tag",
-        route: "tags.list",
+        route: "tags.tags",
       },
     ],
   },

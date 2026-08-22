@@ -9,6 +9,7 @@ export const SubjectlessWorkflows = graphql(`
   query WorkflowsPartiesSubjectless($subjectDeclaration: String!) {
     workflows_for_subject_declaration(subject_declaration: $subjectDeclaration) {
       id
+      key
       name
       subject_declaration
     }

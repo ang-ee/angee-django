@@ -1,26 +1,19 @@
 import * as React from "react";
 import {
-  Button,
-  Glyph,
   ListView,
   Tag,
   type ListColumn,
   type RecordPanelContext,
-  type StringIdRow,
-  useAuthoredResourceMutation,
 } from "@angee/ui";
 
-import {
-  ConfirmPartyHandle,
-  DismissPartyHandle,
-  PARTY_HANDLE_DECISION_INVALIDATES,
-} from "./documents";
 import { usePartiesT } from "./i18n";
+import {
+  usePartyHandleRowActions,
+  type PartyHandleActionRow,
+} from "./party-handle-row-actions";
 
-type LinkRow = StringIdRow & {
+type LinkRow = PartyHandleActionRow & {
   confidence?: number;
-  is_confirmed?: boolean;
-  is_dismissed?: boolean;
 };
 
 function linkState(row: LinkRow, t: ReturnType<typeof usePartiesT>): React.ReactElement {
@@ -37,15 +30,7 @@ function linkState(row: LinkRow, t: ReturnType<typeof usePartiesT>): React.React
  */
 export function IdentityTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = usePartiesT();
-  const [confirm, { fetching: confirming }] = useAuthoredResourceMutation(
-    ConfirmPartyHandle,
-    { invalidateModels: PARTY_HANDLE_DECISION_INVALIDATES },
-  );
-  const [dismiss, { fetching: dismissing }] = useAuthoredResourceMutation(
-    DismissPartyHandle,
-    { invalidateModels: PARTY_HANDLE_DECISION_INVALIDATES },
-  );
-  const busy = confirming || dismissing;
+  const rowActions = usePartyHandleRowActions<LinkRow>("remaining");
 
   const columns = React.useMemo<readonly ListColumn<LinkRow>[]>(
     () => [
@@ -58,49 +43,8 @@ export function IdentityTab({ recordId }: RecordPanelContext): React.ReactElemen
         header: t("identity.state"),
         render: (row) => linkState(row, t),
       },
-      {
-        field: "id",
-        header: t("review.actions"),
-        headerVisuallyHidden: true,
-        sortable: false,
-        align: "right",
-        render: (row) => (
-          <span className="inline-flex gap-1">
-            {row.is_confirmed ? null : (
-              <Button
-                variant="ghost"
-                size="iconSm"
-                aria-label={t("identity.confirm")}
-                title={t("identity.confirm")}
-                disabled={busy}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void confirm({ id: row.id });
-                }}
-              >
-                <Glyph name="check" />
-              </Button>
-            )}
-            {row.is_dismissed ? null : (
-              <Button
-                variant="ghost"
-                size="iconSm"
-                aria-label={t("identity.dismiss")}
-                title={t("identity.dismiss")}
-                disabled={busy}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void dismiss({ id: row.id });
-                }}
-              >
-                <Glyph name="x" />
-              </Button>
-            )}
-          </span>
-        ),
-      },
     ],
-    [busy, confirm, dismiss, t],
+    [t],
   );
 
   return (
@@ -118,6 +62,7 @@ export function IdentityTab({ recordId }: RecordPanelContext): React.ReactElemen
       ]}
       baseFilter={{ party: { exact: recordId } }}
       columns={columns}
+      rowActions={rowActions}
       emptyContent={t("identity.empty")}
     />
   );

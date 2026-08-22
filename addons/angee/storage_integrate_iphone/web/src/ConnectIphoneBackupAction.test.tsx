@@ -35,7 +35,6 @@ describe("ConnectIphoneBackupAction", () => {
       mutationDocument: "ConnectIphoneBackup",
       backendClass: "iphone_backup",
       i18nPrefix: "iphone.mount.connect",
-      idPrefix: "mount-iphone-backup",
       invalidateModel: "storage_integrate.Mount",
     });
   });

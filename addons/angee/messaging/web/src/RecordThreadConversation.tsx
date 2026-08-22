@@ -1,6 +1,6 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Avatar, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, SearchInput, SegmentedControl, Select, Tag, Textarea, UploadDropTarget, avatarInitials, cn, errorMessage, messageComposerInputClassName, textRoleVariants, type Reaction } from "@angee/ui";
+import { Avatar, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, SearchInput, SegmentedControl, Select, Tag, Textarea, UploadDropTarget, avatarInitials, cn, errorMessage, messageComposerInputClassName, reactionsFromGroups, textRoleVariants } from "@angee/ui";
 import {
   useStorageUpload,
   type UploadedFile,
@@ -9,6 +9,7 @@ import {
 import { useDebounce } from "use-debounce";
 
 import { useMessagingT, type MessagingT } from "./i18n";
+import { messagingReactionCopy } from "./reaction-copy";
 import {
   DeleteRecordMessageDocument,
   MarkRecordMessageDoneDocument,
@@ -836,12 +837,10 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
   const timestamp = message.sent_at ?? message.created_at;
   const subtypeDescription = message.subtype?.description || message.subtype?.name || "";
   const directionTag = directionLabel(message.direction, t);
-  const reactions: Reaction[] = message.reaction_groups.map((group) => ({
-    reaction: group.reaction,
-    count: group.count,
-    active: group.self_reacted,
-    title: reactionTitle(group),
-  }));
+  const reactions = reactionsFromGroups(
+    message.reaction_groups,
+    messagingReactionCopy(t),
+  );
   const activeReactions = message.reaction_groups
     .filter((group) => group.self_reacted)
     .map((group) => group.reaction);
@@ -1048,14 +1047,6 @@ function directionLabel(direction: string | null | undefined, t: MessagingT): st
   if (direction === "INBOUND") return t("message.directionInbound");
   if (direction === "OUTBOUND") return t("message.directionOutbound");
   return null;
-}
-
-function reactionTitle(group: RecordMessageRow["reaction_groups"][number]): string {
-  const names = group.handles
-    .map((handle) => handle.display_name || handle.value)
-    .filter((value) => value.trim() !== "");
-  if (names.length === 0) return `${group.reaction} ${group.count.toLocaleString()}`;
-  return `${group.reaction} by ${names.join(", ")}`;
 }
 
 function recipientOptionsFrom(
