@@ -335,6 +335,7 @@ services:
       # Agents run in containers, so they reach this /mcp mount through the host gateway.
       ANGEE_BUILTIN_MCP_URL: "{{ mcp_url }}"
       REDIS_URL: "{{ redis_url }}"
+      CACHE_URL: "{{ redis_url }}"
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
     after: [provision]
 {% endif %}
@@ -366,6 +367,7 @@ services:
       ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
       ANGEE_BUILTIN_MCP_URL: "{{ mcp_url }}"
       REDIS_URL: "{{ redis_url }}"
+      CACHE_URL: "{{ redis_url }}"
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
       {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
     command:
@@ -373,7 +375,8 @@ services:
       - "-c"
       - >-
         {% if framework == "source" %}uv sync --frozen --inexact --extra postgres --project sources/angee-django && {% endif %}python manage.py angee provision --bootstrap-admin
-        && exec python -m uvicorn angee.asgi:application --host 0.0.0.0 --port 8000
+        && CADDY_IP=$$(python -c 'import socket; print(socket.gethostbyname("caddy"))')
+        && exec python -m uvicorn angee.asgi:application --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "$$CADDY_IP"
     after: [postgres, redis]
 {% endif %}
 
@@ -396,6 +399,7 @@ services:
       DATABASE_URL: "{{ database_url }}"
       YAMLCONF_SECRET_KEY: "${secret.secret-key}"
       REDIS_URL: "{{ redis_url }}"
+      CACHE_URL: "{{ redis_url }}"
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
     after: [provision]
 {% endif %}
@@ -415,6 +419,7 @@ services:
       ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
       ANGEE_BUILTIN_MCP_URL: "{{ mcp_url }}"
       REDIS_URL: "{{ redis_url }}"
+      CACHE_URL: "{{ redis_url }}"
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
       {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
     # In source mode each container runs its own uv sync before importing psycopg — a
@@ -436,8 +441,8 @@ services:
 {% endif %}{% endfor %}
 
 {% if runtime_mode == "process" %}
-  # Vite dev server for the SPA. It proxies /graphql/ and /auth/csrf/ to Django so the
-  # SPA and backend share the session cookie across ports.
+  # Vite dev server for the SPA. It proxies the curated Django HTTP surfaces
+  # (/graphql/, /auth/csrf/, /forms/) so browser traffic stays same-origin.
   frontend:
     runtime: local
     workdir: source://app
@@ -520,7 +525,7 @@ services:
         :80 {
           encode zstd gzip
 
-          @django path /graphql/* /auth/csrf /auth/csrf/ /storage/upload /storage/upload/* /storage/download /storage/download/* /admin/* /static/* /media/*
+          @django path /graphql/* /auth/csrf /auth/csrf/ /forms/* /storage/upload /storage/upload/* /storage/download /storage/download/* /admin/* /static/* /media/*
           handle @django {
             reverse_proxy django:8000
           }
