@@ -23,6 +23,7 @@ import {
 import type { RelationOption } from "../widgets/RelationField";
 import type { RelationFieldInfo } from "./model-metadata-defaults";
 import { DEFAULT_PAGE_SIZE } from "./page-size";
+import { useValueStable } from "../lib/use-value-stable";
 
 export const RELATION_OPTION_LIMIT = 200;
 
@@ -69,6 +70,13 @@ export function useRelationOptions(
     sorters,
   } = config;
   const labelField = optionLabelField ?? relation?.labelField ?? "id";
+  // Stabilise filters/sorters by VALUE: a consumer that declares them inline
+  // (e.g. a board's `laneSource.filters`) rebuilds the array every render, and
+  // forwarding a fresh identity into refine's `useList` drives an update loop.
+  // A value-equal array keeps a stable identity, so plausible inline props are
+  // safe without every caller memoising.
+  const stableFilters = useValueStable(filters);
+  const stableSorters = useValueStable(sorters);
   const metadata = useModelMetadata(relation?.resource ?? "");
   const resource = metadata?.resource ?? null;
   const fields = React.useMemo(
@@ -83,8 +91,8 @@ export function useRelationOptions(
       currentPage: 1,
       pageSize: pageSize ?? DEFAULT_PAGE_SIZE,
     },
-    ...(filters ? { filters: [...filters] } : {}),
-    ...(sorters ? { sorters: [...sorters] } : {}),
+    ...(stableFilters ? { filters: [...stableFilters] } : {}),
+    ...(stableSorters ? { sorters: [...stableSorters] } : {}),
     meta: { fields },
     queryOptions: {
       enabled: enabled && relation !== null && resource !== null,
