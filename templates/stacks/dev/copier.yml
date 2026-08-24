@@ -122,7 +122,7 @@ include_arp:
 olm_cxxflags:
   type: str
   default: "-fdelayed-template-parsing"
-  help: CXXFLAGS for the python-olm sdist build (matrix extra); empty renders no override — pass empty on GCC/Linux.
+  help: CXXFLAGS for python-olm, installed through the Matrix addon's mautrix[encryption] dependency in the generated addons group; empty renders no override — pass empty on GCC/Linux.
 
 django_port:
   type: int

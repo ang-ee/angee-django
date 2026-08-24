@@ -85,8 +85,8 @@ INSTALLED_APPS:
   - angee.messaging_integrate_whatsapp
   - angee.messaging_integrate_telegram
   - angee.messaging_integrate_signal
-  # The matrix bridge needs django-angee's optional `matrix` extra
-  # (mautrix[encryption]/python-olm) — the full-profile pyproject selects it.
+  # The matrix bridge's addon manifest projects mautrix[encryption]/python-olm
+  # into the host pyproject's generated addons dependency group.
   - angee.messaging_integrate_matrix
   - angee.messaging_integrate_slack
   - angee.messaging_integrate_imessage

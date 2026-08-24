@@ -102,7 +102,8 @@ framework_workspace:
   default: false
   help: Point ANGEE_ADDON_DIRS at the stack's workspaces/src/* source slots (framework-dev layout).
 
-# CXXFLAGS for the python-olm sdist build (the matrix extra; no cp314 wheels
+# CXXFLAGS for the python-olm sdist build, installed through the Matrix addon's
+# mautrix[encryption] dependency in the generated addons group (no cp314 wheels
 # exist). The default is the clang workaround the macOS toolchain needs;
 # GCC rejects the flag and needs none, so pass --input olm_cxxflags= (empty)
 # on Linux — an empty value renders no build-variables block at all.
