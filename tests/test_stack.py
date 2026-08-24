@@ -17,12 +17,13 @@ def test_stack_names_celery_not_procrastinate() -> None:
     assert "| Procrastinate |" not in text
 
 
-def test_pyproject_uses_celery_and_channels_redis() -> None:
-    """Python runtime dependencies carry the queue and shared channel layer."""
+def test_pyproject_uses_celery_and_keeps_only_the_channels_seam() -> None:
+    """The wheel carries jobs and Channels while Redis fanout stays addon-owned."""
 
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = set(data["project"]["dependencies"])
 
     assert any(dependency.startswith("celery[redis]") for dependency in dependencies)
-    assert any(dependency.startswith("channels-redis") for dependency in dependencies)
+    assert any(dependency.startswith("channels>=") for dependency in dependencies)
+    assert not any(dependency.startswith("channels-redis") for dependency in dependencies)
     assert not any("procrastinate" in dependency for dependency in dependencies)

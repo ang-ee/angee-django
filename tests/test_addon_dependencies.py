@@ -15,7 +15,10 @@ from angee.compose.dependencies import AddonDependencyGroup, AddonDependencyGrou
 from angee.compose.runtime import Runtime
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CORE_METADATA_DEPENDENCIES = {"django>=6.0,<6.1"}
+CORE_METADATA_DEPENDENCIES = {
+    "channels>=4.0",  # Core ASGI owns the generic WebSocket routing seam.
+    "django>=6.0,<6.1",
+}
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
@@ -41,7 +44,7 @@ def _app_config(path: Path, name: str, dependencies: tuple[str, ...]) -> AppConf
 
 
 def test_core_dependencies_match_the_in_wheel_addon_manifests() -> None:
-    """The wheel carries exactly its four addons plus core distribution metadata."""
+    """The wheel carries exactly its three addons plus core distribution metadata."""
 
     project_dependencies = set(_read_toml(PROJECT_ROOT / "pyproject.toml")["project"]["dependencies"])
     addon_dependencies = {

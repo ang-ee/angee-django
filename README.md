@@ -99,15 +99,15 @@ Django, Vite, Daphne, or workers by hand. For the full onboarding path
 Angee's platform spans sibling repositories; this one holds the framework core —
 the one real Python package, `django-angee`:
 
-- **`angee/`** — composition, GraphQL, REBAC, resources, the Celery seam, and
-  the `manage.py angee build` composer.
+- **`angee/`** — the model and data contracts, ASGI and Celery seams, and the
+  `manage.py angee build` composer.
 - **`docs/`**, **`tests/`** — the intent docs and the framework test suite.
 
-The React packages live in `ang-ee/angee-react`, the base addons in
-`ang-ee/angee-base`, the messaging bridges in `ang-ee/angee-messaging-bridges`,
-and the showcase consumer addons + reference e2e suite in
-`ang-ee/angee-examples`. A stack's `src` workspace materializes them all side
-by side as worktree slots.
+The React packages live in `ang-ee/angee-react`, the base addons (including the
+GraphQL runtime) in `ang-ee/angee-base`, the messaging bridges in
+`ang-ee/angee-messaging-bridges`, and the showcase consumer addons + reference
+e2e suite in `ang-ee/angee-examples`. A stack's `src` workspace materializes
+them all side by side as worktree slots.
 
 The full annotated layout lives in **[`AGENTS.md`](AGENTS.md)**.
 

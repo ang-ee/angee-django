@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
 
-from angee.asgi import _http_app, _Lifespan
+from angee.asgi import _http_app, _Lifespan, _run_boot_hooks
 
 
 def _recording_app(name: str, sink: list[tuple[str, str]]) -> Any:
@@ -74,6 +74,25 @@ def test_http_app_matches_longest_prefix_first() -> None:
     asyncio.run(_call_http(app, "/a/x"))
 
     assert seen == [("nested", "/a/b/x"), ("parent", "/a/x")]
+
+
+def test_run_boot_hooks_dispatches_addon_asgi_contributions(monkeypatch: Any) -> None:
+    """Core ASGI boot runs callable hooks without knowing addon implementations."""
+
+    addon = SimpleNamespace(name="example.addon")
+    calls: list[str] = []
+    monkeypatch.setattr("django.apps.apps.get_app_configs", lambda: [addon])
+
+    def contribution(app_config: Any, module_name: str, attr: str) -> list[Any]:
+        assert app_config is addon
+        assert (module_name, attr) == ("asgi", "boot_hooks")
+        return [lambda: calls.append("boot")]
+
+    monkeypatch.setattr("angee.addons.addon_contribution", contribution)
+
+    _run_boot_hooks()
+
+    assert calls == ["boot"]
 
 
 def _mount(events: list[str], *, fail: bool = False) -> Any:

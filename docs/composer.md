@@ -52,8 +52,8 @@ build` path.
 | Runtime import during Django app population | [`ComposeConfig.import_models()`](../angee/compose/apps.py) |
 | HTTP route aggregation | [`angee.urls`](../angee/urls.py) |
 | WebSocket routes, HTTP sub-app mounts, mount lifespans | [`angee.asgi`](../angee/asgi.py) |
-| GraphQL schema declarations and SDL output | [`angee.graphql`](../angee/graphql/) |
-| MCP tool declarations and the `/mcp` StreamableHTTP mount | [`angee.mcp`](../addons/angee/mcp/) |
+| GraphQL schema declarations and SDL output | `angee.graphql` (the folder addon in `angee-base`) |
+| MCP tool declarations and the `/mcp` StreamableHTTP mount | `angee.mcp` (the folder addon in `angee-base`) |
 
 If a fact belongs to one of these owners, update that owner or its docstring.
 This document should point there, not repeat the contract.

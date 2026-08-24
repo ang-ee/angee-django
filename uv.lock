@@ -513,7 +513,6 @@ source = { editable = "." }
 dependencies = [
     { name = "celery", extra = ["redis"] },
     { name = "channels" },
-    { name = "channels-redis" },
     { name = "cryptography" },
     { name = "django" },
     { name = "django-choices-field" },
@@ -522,15 +521,8 @@ dependencies = [
     { name = "django-simple-history" },
     { name = "django-sqids" },
     { name = "django-yamlconf" },
-    { name = "django-zed-rebac", extra = ["strawberry-django"] },
-    { name = "fastmcp" },
+    { name = "django-zed-rebac" },
     { name = "hatch-angee" },
-    { name = "mcp" },
-    { name = "pydantic" },
-    { name = "strawberry-django-aggregates" },
-    { name = "strawberry-django-hasura" },
-    { name = "strawberry-graphql" },
-    { name = "strawberry-graphql-django" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -554,7 +546,6 @@ dev = [
 requires-dist = [
     { name = "celery", extras = ["redis"], specifier = ">=5.5" },
     { name = "channels", specifier = ">=4.0" },
-    { name = "channels-redis", specifier = ">=4.2" },
     { name = "cryptography", specifier = ">=44" },
     { name = "django", specifier = ">=6.0,<6.1" },
     { name = "django-choices-field", specifier = ">=4.0.0" },
@@ -563,16 +554,9 @@ requires-dist = [
     { name = "django-simple-history", specifier = ">=3.7" },
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
-    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.14" },
-    { name = "fastmcp", specifier = ">=3.4.2,<4" },
+    { name = "django-zed-rebac", specifier = ">=0.14" },
     { name = "hatch-angee", specifier = ">=0.2.1" },
-    { name = "mcp", specifier = ">=1.2" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2" },
-    { name = "pydantic", specifier = ">=2.13" },
-    { name = "strawberry-django-aggregates", specifier = ">=0.10.0" },
-    { name = "strawberry-django-hasura", specifier = ">=0.6.0" },
-    { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?branch=codex%2Finput-object-extensions" },
-    { name = "strawberry-graphql-django", specifier = ">=0.86.7" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 provides-extras = ["postgres"]

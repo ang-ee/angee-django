@@ -32,10 +32,10 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/.venv \
     # compiler-free.
     AUTOBAHN_USE_NVX=0
 # libmagic1: python-magic (storage MIME sniffing). tini: PID 1 signal reaping so
-# `docker stop` shuts the ASGI server down cleanly. git: uv resolves the pinned
-# ang-ee/strawberry* git deps with it — needed both to bake the closure (deps) and
-# for the mounted-source `uv sync` at container start (the dev flow this image
-# exists for). No compiler, no node (Vite is a separate image); the framework's own
+# `docker stop` shuts the ASGI server down cleanly. git: the composed stack's
+# addon dependency group pulls the pinned ang-ee/strawberry fork — git is needed
+# both to bake that closure and for the mounted-source `uv sync` at container
+# start. No compiler, no node (Vite is a separate image); the framework's own
 # wheels ship manylinux binaries.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libmagic1 tini ca-certificates git gosu \
@@ -54,10 +54,10 @@ FROM base AS deps
 # group so a dev workspace can run pytest/ruff/mypy in-container out of the box.
 ARG DEV=
 COPY pyproject.toml uv.lock ./
-# The ang-ee/strawberry* forks pinned in `[tool.uv.sources]` are public, so uv
-# clones them over anonymous HTTPS — no credential, no SSH. Deps only — the project
-# is not built here, so the source tree / hatch-angee are not needed and the layer
-# caches until the lock moves.
+# The Strawberry fork projected from the GraphQL addon's manifest is public, so
+# uv clones it over anonymous HTTPS — no credential, no SSH. Deps only — the
+# project is not built here, so the source tree / hatch-angee are not needed and
+# the layer caches until the lock moves.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project ${DEV} \
     && chown -R angee:angee /opt/.venv
@@ -83,7 +83,7 @@ FROM deps AS runtime
 # Off /app on purpose: the local stack bind-mounts the project at /app, so the
 # framework source lands at /opt/angee-src — a mount over /app can never hide it.
 WORKDIR /opt/angee-src
-# The forks in [tool.uv.sources] are public (git inherited from base clones them
+# The addon-owned Strawberry fork is public (git inherited from base clones it
 # over anonymous HTTPS → credential-free). README.md + both license files satisfy
 # the wheel build's metadata (`license-files`: LGPLv3 additional permissions plus
 # the GPLv3 they extend); angee + addons are the two source roots the hatch-angee

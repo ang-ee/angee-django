@@ -12,10 +12,12 @@ Dependency changes must update this file in the same change.
 - `docs/stack.md` owns concern boundaries: which library owns which job, and
   what thin glue Angee adds.
 - Each addon's `addon.toml` owns its Python dependencies. The core
-  `pyproject.toml` carries the four in-wheel addon manifests plus distribution
+  `pyproject.toml` carries the three in-wheel addon manifests plus distribution
   metadata; `angee build` projects the composed folder addons into the host's
   generated `[dependency-groups].addons` key. `uv.lock` pins the resolved Python
-  graph. Use `uv add` / `uv lock`; do not use `pip install` by hand.
+  graph. The `angee.graphql` folder addon's manifest owns its Strawberry stack,
+  Pydantic, Channels Redis adapter, and exact Strawberry fork reference. Use
+  `uv add` / `uv lock`; do not use `pip install` by hand.
 - `package.json` owns JavaScript package scripts and declared dependencies.
   `pnpm-workspace.yaml` owns workspace membership. `pnpm-lock.yaml` pins the
   resolved JavaScript graph. Use `pnpm add` / `pnpm install`; do not use npm or

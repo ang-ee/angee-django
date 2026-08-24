@@ -12,5 +12,5 @@ dependencies = [
   "django-reversion>=5.1",
   "django-simple-history>=3.7",
   "django-sqids>=0.1",
-  "django-zed-rebac[strawberry-django]>=0.14",
+  "django-zed-rebac>=0.14",
 ]

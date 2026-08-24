@@ -14,13 +14,6 @@ class BareComposeConfig(AppConfig):
     label = "compose"
 
 
-class BareGraphQLConfig(AppConfig):
-    """Register the GraphQL core addon without process-wide ready hooks."""
-
-    name = "angee.graphql"
-    label = "graphql"
-
-
 SECRET_KEY = "angee-tests"
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
@@ -30,7 +23,6 @@ INSTALLED_APPS = [
     "simple_history",
     "tests.settings.BareComposeConfig",
     "angee.base",
-    "tests.settings.BareGraphQLConfig",
     "angee.jobs",
     "tests.mtidemo",
 ]
@@ -49,8 +41,3 @@ DATABASES = {
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 USE_TZ = True
 ANGEE_RUNTIME_MODULE = "tests.runtime"
-ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER = True
-STRAWBERRY_DJANGO = {
-    "DEFAULT_PK_FIELD_NAME": "sqid",
-    "MAP_AUTO_ID_AS_GLOBAL_ID": False,
-}

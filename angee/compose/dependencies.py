@@ -14,7 +14,6 @@ IN_WHEEL_ADDONS = frozenset(
     {
         "angee.base",
         "angee.compose",
-        "angee.graphql",
         "angee.jobs",
     }
 )
@@ -41,7 +40,7 @@ class AddonDependencyGroup:
 
     The Django app graph owns which addons are composed. Each folder addon's
     co-located ``addon.toml`` owns its dependencies, and hatch-angee owns parsing,
-    union compilation, and the round-trip-safe pyproject edit. The four in-wheel
+    union compilation, and the round-trip-safe pyproject edit. The three in-wheel
     core addons are excluded because their dependencies remain in the wheel's
     static metadata.
     """

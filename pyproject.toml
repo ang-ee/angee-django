@@ -16,31 +16,21 @@ requires-python = ">=3.14"
 dependencies = [
   "celery[redis]>=5.5",
   "channels>=4.0",
-  "channels-redis>=4.2",
   "cryptography>=44",
   "django-reversion>=5.1",
   "django-simple-history>=3.7",
   "django-sqids>=0.1",
-  "django-zed-rebac[strawberry-django]>=0.14",
+  "django-zed-rebac>=0.14",
   # <6.1: Django 6.1 adds fetch_mode to Model.from_db and django-zed-rebac's
   # override does not accept it yet; lift the cap when rebac supports 6.1.
   "django>=6.0,<6.1",
-  "fastmcp>=3.4.2,<4",
   "hatch-angee>=0.2.1",
-  "mcp>=1.2",
-  "pydantic>=2.13",
-  "strawberry-graphql>=0.270",
-  "strawberry-django-aggregates>=0.10.0",
-  "strawberry-django-hasura>=0.6.0",
-  # 0.86.7 carries the DEFAULT_PK_FIELD_NAME mutation-lookup fix the Hasura
-  # resolvers depend on (upstream #928, was an Angee fork patch).
-  "strawberry-graphql-django>=0.86.7",
   "django-choices-field>=4.0.0",
   "django-yamlconf>=1.5.0",
   "django-environ>=0.12",
-  # ASGI server: serves the composed app (Django + channels WebSocket + the MCP
-  # StreamableHTTP mount). uvicorn sends the ASGI lifespan that runs the mount's
-  # session manager; [standard] adds WebSocket and --reload support for dev.
+  # ASGI server: serves the composed app and addon-contributed channels WebSocket
+  # and HTTP mounts. uvicorn sends the ASGI lifespan that runs mount lifespans;
+  # [standard] adds WebSocket and --reload support for dev.
   "uvicorn[standard]>=0.30",
 ]
 
@@ -73,9 +63,6 @@ dev = [
 # `.angee/caches/uv` wherever uv runs (slots, worktrees, the stack root under
 # --project). The rendered stack host pins its own stack-owned cache; every
 # other invocation uses uv's default per-user cache.
-
-[tool.uv.sources]
-strawberry-graphql = { git = "https://github.com/ang-ee/strawberry.git", branch = "codex/input-object-extensions" }
 
 [tool.hatch.build.targets.wheel]
 # The distribution contains the framework core only. Folder addons are provided

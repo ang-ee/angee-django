@@ -47,11 +47,11 @@ changing any import.
 .                           # a workspace slot: <stack>/workspaces/<ws>/angee-django
 ├── angee/                  # `django-angee` — framework core + composer (PEP 420 namespace, no __init__.py)
 │   ├── base/               # framework core: the model toolkit (abstract models, mixins, fields, managers)
-│   ├── graphql/            # the GraphQL runtime — schema buckets, auto-CRUD, subscriptions, SDL (`manage.py schema`)
+│   ├── data/               # framework core: the product data-surface description contract
 │   ├── compose/            # the composer — emits the concrete runtime (`manage.py angee build`)
 │   └── jobs/               # the Celery seam (broker wiring, beat, queue routing)
 ├── docs/                   # intent docs — glossary, stack, guidelines, and `docs/howto/`
-├── tests/                  # framework tests (composition, GraphQL, IAM, CRUD, …)
+├── tests/                  # framework-core tests (composition, contracts, jobs, serving seams, …)
 ├── .agents/                # shared agent methodology — reviewer agents, commands, skills, workflows (`.agents/README.md`; public)
 ├── .work/                  # private agent work-state — plans, notes, handovers (gitignored symlink to a separate private repo; never mirrored)
 ├── README.md               # human entry point; `AGENTS.md` is the agent/contributor entry point
@@ -59,7 +59,7 @@ changing any import.
 
 # Sibling workspace slots (their own repos, side by side):
 ../angee-react/             # `@angee/app`, `ui`, `refine`, `metadata` + the storybook and e2e workshops
-../angee-base/              # the base addons — folders with addon.toml + co-located `web/` fragments
+../angee-base/              # base folder addons, including the `angee.graphql` runtime, with co-located `web/` fragments
 ../angee-messaging-bridges/ # the opt-in personal-messaging bridge addons
 ../angee-examples/          # showcase consumer addons (`example.notes`) + the reference e2e suite
 ../angee-templates/         # the Copier templates — project / stack / workspace / service kinds

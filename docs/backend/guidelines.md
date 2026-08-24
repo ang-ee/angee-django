@@ -69,15 +69,15 @@ Before adding backend structure, pass the Django architecture gate:
 
 ## Package Layering
 
-The framework core is three packages with a one-way dependency rule that a test
-enforces:
+The framework wheel and the GraphQL folder addon have a one-way dependency rule
+that layering tests enforce:
 
 - `angee.base` is the model foundation (models, fields, mixins, managers,
   querysets, and model emission declarations). It must not import `angee.compose`,
   `angee.graphql`, or addon packages.
-- `angee.graphql` is the GraphQL runtime (schema assembly, Strawberry helpers,
-  serving, subscriptions, and SDL commands). It may import `angee.base`, never
-  `angee.compose`.
+- `angee.graphql` is the `angee-base` folder addon's GraphQL runtime (schema
+  assembly, Strawberry helpers, serving, subscriptions, and SDL commands). It
+  may import `angee.base`, never `angee.compose`.
 - `angee.compose` is the build-time composer. It may import `angee.base` and
   discover plain Django addon configs, but no serving module (`asgi`, `urls`,
   `views`, `consumers`, `signals`, `models`, `graphql`) may import
@@ -125,14 +125,14 @@ Rules that follow from the layering:
   those same facts directly. `angee.compose.settings` loads the project contract
   and calls `Composer(globals()).compose_settings()`, which expands the addon
   dependency closure and sorts the resulting app set, then gives Django the
-  resolved `AppConfig` instances in `INSTALLED_APPS`. Framework boot apps
-  (`angee.compose`, `angee.base`, `angee.graphql`) arrive through that same graph
-  rather than a parallel hardcoded list. In app-populate phase 2,
-  `ComposeConfig.import_models()` checks the generated runtime and imports
-  concrete model modules before normal app model imports continue. `angee build`
-  and `angee clean` may emit stale runtime sources during that hook only so
-  Django can finish loading the generated model registry; no build/run app-set
-  split exists.
+  resolved `AppConfig` instances in `INSTALLED_APPS`. The core boot apps
+  (`angee.compose`, `angee.base`) and folder addons such as `angee.graphql`
+  arrive through that same graph rather than a parallel hardcoded list. In
+  app-populate phase 2, `ComposeConfig.import_models()` checks the generated
+  runtime and imports concrete model modules before normal app model imports
+  continue. `angee build` and `angee clean` may emit stale runtime sources during
+  that hook only so Django can finish loading the generated model registry; no
+  build/run app-set split exists.
 - **The resource ledger is owned by the resource addon.** The composer discovers
   `angee.resources.models.Resource` as a normal addon source model and emits it
   under the `resources` label. `angee.base` must not import `angee.resources`.

@@ -65,25 +65,20 @@ Send = Callable[[MutableMapping[str, Any]], Awaitable[None]]
 ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 
 
-def _emit_dev_sdl() -> None:
-    """Regenerate the generated GraphQL SDL once per dev-serve worker boot.
+def _run_boot_hooks() -> None:
+    """Run ASGI boot hooks contributed by installed addons after app population."""
 
-    Only the dev ``runserver`` path sets ``ANGEE_DEV_SDL=1`` (a production serve
-    leaves the runtime image untouched), so this is a no-op everywhere else. It
-    runs at ASGI-import time, after :func:`get_asgi_application` has populated the
-    app registry, so the concrete models the SDL introspects are imported. The
-    GraphQL owner is imported lazily so a production serve never loads strawberry
-    here. Management commands (``schema --check``/``angee build --check``/tests)
-    never import this module, so their drift gates stay live.
-    """
+    from django.apps import apps
+    from django.core.exceptions import ImproperlyConfigured
 
-    if os.environ.get("ANGEE_DEV_SDL") != "1":
-        return
-    # Deferred: keep the GraphQL/strawberry stack off the no-op production-serve
-    # import path (the flag is set only by the dev `runserver` override).
-    from angee.graphql.sdl import GraphQLSdl
+    from angee.addons import addon_contribution
 
-    GraphQLSdl.from_discovery().emit_if_stale()
+    for app_config in apps.get_app_configs():
+        hooks = addon_contribution(app_config, "asgi", "boot_hooks")
+        for hook in hooks:
+            if not callable(hook):
+                raise ImproperlyConfigured(f"{app_config.name}.asgi.boot_hooks must contain callables")
+            hook()
 
 
 def _application() -> Any:
@@ -103,7 +98,7 @@ def _application() -> Any:
     from django.core.asgi import get_asgi_application
 
     django_asgi_app = get_asgi_application()
-    _emit_dev_sdl()
+    _run_boot_hooks()
     websocket_patterns = _websocket_urlpatterns()
     http_mounts = _http_mounts()
     if not websocket_patterns and not http_mounts:

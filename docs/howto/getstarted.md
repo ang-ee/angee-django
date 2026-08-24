@@ -121,11 +121,11 @@ at a time. Expect a lot of movement over the coming weeks as new addons land.
 Concretely, today:
 
 - **Already landed here.** The operator (Stacks, Services, Jobs, Sources,
-  Workspaces, secrets, ports, and gitops topology over CLI, REST, and GraphQL)
-  and the framework core: composition (source models → `runtime/`), GraphQL via
-  strawberry-django, relationship-based authorization (REBAC), aggregates,
-  tiered resources, history/revisions, and the React frontend (layouts,
-  list/board/form views).
+  Workspaces, secrets, ports, and gitops topology over CLI, REST, and GraphQL),
+  the framework core (including composition from source models to `runtime/`),
+  and the base addons: GraphQL via strawberry-django, relationship-based
+  authorization (REBAC), aggregates, tiered resources, history/revisions, and
+  the React frontend (layouts, list/board/form views).
 - **Being lifted in now.** The higher-level addons — agents, integrations,
   knowledge, storage, and communications. They already run in the team's other
   platforms; the work in flight is reconstructing and open-sourcing them here,
