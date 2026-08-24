@@ -63,7 +63,7 @@ export const enProposalsMessages: Record<string, string> = {
   "proposal.action.createTrack": "Create track",
   "proposal.action.publishTrack": "Publish track",
   "proposal.action.failed": "The proposal action returned no result.",
-  "comparison.title": "Compare {{round}}",
+  "comparison.title": "Compare {round}",
   "comparison.description":
     "Topics align every readable proposal; sealed or empty values both appear as an em dash.",
   "comparison.back": "Round record",
