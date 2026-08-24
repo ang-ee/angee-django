@@ -50,6 +50,8 @@ import {
 } from "@angee/refine";
 
 import { errorFromUnknown } from "../data/errors";
+import { useLatestRef } from "../lib/use-latest-ref";
+import { useValueStable } from "../lib/use-value-stable";
 import { useUiT } from "../i18n";
 import type { ResourceViewContextValue } from "./resource-view-context";
 import {
@@ -849,17 +851,27 @@ export function useResourceViewSurface<TRow extends Row = Row>({
   const rowGroupStack = groupStack ?? resourceView.state.groupStack;
   const [expanded, setExpanded] = React.useState<ExpandedState>({});
   const dataResource = modelMetadata?.resource ?? null;
-  const refineFilters = React.useMemo(
-    () => crudFiltersFromFilterRecord(mergedFilter) ?? [],
-    [mergedFilter],
+  // Value-stabilise the filters/sorters handed to refine's useTable: a
+  // consumer's inline `baseFilter`/`order` (e.g. a board's) rebuilds
+  // `mergedFilter`/`sortOrder` every render, so these memos yield a fresh
+  // array identity each time. refine's internal permanent-filter/sorter sync
+  // effect keys on identity and loops ("Maximum update depth") — collapsing
+  // value-equal arrays back to one identity stops it.
+  const refineFilters = useValueStable(
+    React.useMemo(
+      () => crudFiltersFromFilterRecord(mergedFilter) ?? [],
+      [mergedFilter],
+    ),
   );
   const refineFiltersKey = React.useMemo(
     () => stableSerialize(refineFilters),
     [refineFilters],
   );
-  const refineSorters = React.useMemo(
-    () => refineSortersFromAngeeOrder(sortOrder) ?? [],
-    [sortOrder],
+  const refineSorters = useValueStable(
+    React.useMemo(
+      () => refineSortersFromAngeeOrder(sortOrder) ?? [],
+      [sortOrder],
+    ),
   );
   const listMeta = React.useMemo(
     () => ({ fields: refineFieldsFromPaths(requestedFields) }),
@@ -929,9 +941,14 @@ export function useResourceViewSurface<TRow extends Row = Row>({
       queryOptions: { enabled: active },
     },
   });
+  // Reset user-applied filters when the permanent/base filter changes. Key
+  // ONLY on the value (refineFiltersKey) — refine returns a fresh setFilters
+  // identity every render, so depending on it would re-run this effect every
+  // commit and loop. Call the latest setFilters through a ref instead.
+  const setFiltersRef = useLatestRef(tableResult.refineCore.setFilters);
   React.useEffect(() => {
-    tableResult.refineCore.setFilters([], "replace");
-  }, [refineFiltersKey, tableResult.refineCore.setFilters]);
+    setFiltersRef.current([], "replace");
+  }, [refineFiltersKey, setFiltersRef]);
   const rows = React.useMemo(
     () => tableResult.refineCore.result.data as readonly TRow[],
     [tableResult.refineCore.result.data],
