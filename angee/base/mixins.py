@@ -26,7 +26,7 @@ ARCHIVE_FLAG_FIELD = "is_archived"
 
 Every model that composes :class:`ArchiveMixin` carries this exact column, and
 the resource-metadata field classifier recognises the archive flag by this name
-(``angee.graphql.data.field_classification.is_archive_field``). Keeping the name
+(``angee.data.field_classification.is_archive_field``). Keeping the name
 identical everywhere is the contract that lets pickers default-filter archived
 rows and lists expose an archived facet without per-model wiring.
 """

@@ -15,6 +15,11 @@ CORE_SERVING_IMPORTS = (
     "angee.graphql",
     "angee.jobs",
 )
+DATA_CONTRACT_IMPORTS = (
+    "angee.data",
+    "angee.data.field_classification",
+    "angee.data.metadata",
+)
 REMOVED_VENDOR_MODULES = (
     "anthropic",
     "anymail",
@@ -70,5 +75,40 @@ def test_core_serving_import_closure_stays_vendor_free() -> None:
         vendor
         for vendor in REMOVED_VENDOR_MODULES
         if any(module == vendor or module.startswith(f"{vendor}.") for module in closure)
+    }
+    assert reached == set()
+
+
+def test_data_contract_import_closure_stays_transport_neutral() -> None:
+    """The data description contract reaches neither GraphQL nor Strawberry."""
+
+    script = "\n".join(
+        (
+            "import importlib, json, sys",
+            "from django.conf import settings",
+            "settings.configure(INSTALLED_APPS=[])",
+            "import django",
+            "django.setup()",
+            f"for name in {DATA_CONTRACT_IMPORTS!r}:",
+            "    importlib.import_module(name)",
+            "print(json.dumps(sorted(sys.modules)))",
+        )
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    closure = set(json.loads(result.stdout))
+
+    reached = {
+        module
+        for module in closure
+        if module == "angee.graphql"
+        or module.startswith("angee.graphql.")
+        or module == "strawberry"
+        or module.startswith("strawberry.")
     }
     assert reached == set()

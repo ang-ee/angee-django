@@ -13,16 +13,18 @@ import pytest
 import strawberry
 from django.core.exceptions import ImproperlyConfigured
 
-from angee.graphql.data.metadata import (
+from angee.data.metadata import (
     DataResourceMetadata,
     DataResourceRoots,
     DataResourceSubtitleMetadata,
     DataResourceTypeNames,
+    merge_data_resources,
+    serialize_data_resources,
+)
+from angee.graphql.data.metadata import (
     attach_data_resource_metadata,
     data_resource_metadata,
     make_data_resource_metadata,
-    merge_data_resources,
-    serialize_data_resources,
 )
 
 

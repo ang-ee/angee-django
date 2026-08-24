@@ -13,10 +13,9 @@ from rebac.errors import MissingActorError
 from strawberry_django.fields.types import resolve_model_field_type
 
 from angee.base.mixins import RevisionMixin
+from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
 from angee.graphql.access import assert_no_gated_read_fields
 from angee.graphql.data.metadata import (
-    DataResourceRoots,
-    DataResourceTypeNames,
     attach_data_resource_metadata,
     make_data_resource_metadata,
     resource_type_name,

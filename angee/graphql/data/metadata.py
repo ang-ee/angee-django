@@ -1,25 +1,21 @@
-"""Metadata for Angee model-backed data resource surfaces."""
+"""GraphQL projection and attachment of neutral data-surface descriptions."""
 
 from __future__ import annotations
 
 import dataclasses
 import re
-from dataclasses import dataclass
-from typing import Any, TypeVar, cast
+from typing import Any, TypeVar
 
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from rebac.resources import model_resource_type
-from strawberry.utils.str_converters import to_camel_case
 
 from angee.base.impl import ImplClassField
 from angee.base.refs import canonical_record_model
+from angee.data import metadata as data_contract
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.resource_fields import (
-    DataRelationAxisMetadata,
-    DataResourceFieldMetadata,
     input_wire_fields,
-    merge_resource_fields,
     model_resource_fields,
     require_resource_selection_path,
     require_unique_resource_fields,
@@ -37,404 +33,57 @@ from angee.graphql.introspection import (
 
 __all__ = [
     "DATA_RESOURCE_METADATA_ATTR",
-    "DataAggregateMeasureMetadata",
-    "DataDefaultSortMetadata",
-    "DataGroupAliasMetadata",
-    "DataGroupBucketFilterMetadata",
-    "DataGroupBucketFilterValueMapMetadata",
-    "DataGroupDimensionMetadata",
-    "DataGroupExtractionMetadata",
-    "DataLinesMetadata",
-    "DataRelationAxisMetadata",
-    "DataResourceFieldMetadata",
-    "DataResourceMetadata",
-    "DataResourceRoots",
-    "DataResourceSubtitleMetadata",
-    "DataResourceTypeNames",
     "attach_data_resource_metadata",
     "data_resource_metadata",
     "make_data_resource_metadata",
-    "merge_data_resources",
     "model_resource_fields",
+    "readable_model_field_names",
     "resource_fields",
     "resource_type_name",
     "resource_wire_field_name",
     "resource_wire_field_names",
-    "serialize_data_resources",
 ]
 
 DATA_RESOURCE_METADATA_ATTR = "__angee_data_resource__"
 """Attribute attached to schema surfaces that contribute model resource metadata."""
 
-_RESOURCE_CAPABILITY_ORDER = (
-    "list",
-    "detail",
-    "aggregate",
-    "groups",
-    "filterEcho",
-    "revisions",
-    "create",
-    "update",
-    "save",
-    "delete",
-    "deletePreview",
-    "changes",
-)
 
-@dataclass(frozen=True, slots=True)
-class DataGroupAliasMetadata:
-    """Metadata for a display field that groups through another aggregate axis."""
-
-    field: str
-    aggregate_field: str
-    aggregate_key: str
-
-
-@dataclass(frozen=True, slots=True)
-class DataGroupBucketFilterValueMapMetadata:
-    """One backend-owned group bucket value rewrite for drill-down filters."""
-
-    from_value: Any = dataclasses.field(metadata={"wire": "from"})
-    to_value: Any = dataclasses.field(metadata={"wire": "to"})
-
-
-@dataclass(frozen=True, slots=True)
-class DataGroupBucketFilterMetadata:
-    """Backend-owned predicate metadata for drilling into one group bucket."""
-
-    kind: str
-    field: str
-    value_key: str | None = None
-    range_key: str | None = None
-    lookup: str | None = None
-    null_lookup: str | None = "isNull"
-    value_transform: str | None = None
-    value_map: tuple[DataGroupBucketFilterValueMapMetadata, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class DataGroupExtractionMetadata:
-    """One extraction supported by a group dimension, such as month or day."""
-
-    name: str
-    input: str
-    key: str
-    range_key: str | None = None
-    filter: DataGroupBucketFilterMetadata | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class DataGroupDimensionMetadata:
-    """Backend-owned grouped bucket dimension metadata."""
-
-    field: str
-    input: str
-    key: str
-    kind: str = "column"
-    scalar: str | None = None
-    filter: DataGroupBucketFilterMetadata | None = None
-    extractions: tuple[DataGroupExtractionMetadata, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class DataAggregateMeasureMetadata:
-    """Aggregate measure selectable for one resource."""
-
-    op: str
-    field: str | None = None
-    input: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class DataDefaultSortMetadata:
-    """One model default ordering term exposed through the resource order input."""
-
-    field: str
-    direction: str
-
-
-@dataclass(frozen=True, slots=True)
-class DataLinesMetadata:
-    """Editable child-lines contract for one document resource.
-
-    Emitted when a resource declares ``lines=`` (F6): the frontend reads it to
-    drive the ``EditableLines`` composer and the authored ``<res>_save``
-    diff-apply mutation. ``field`` is the parent's child accessor, ``model_label``
-    the child model, ``input_type`` the shared GraphQL line input (an optional
-    public ``id`` plus the editable child columns), and ``fields`` the per-column
-    metadata (scalar/widget) the line cells render. ``position_field`` names the
-    integer order column when the child carries one.
-    """
-
-    field: str
-    model_label: str
-    input_type: str | None = None
-    fields: tuple[DataResourceFieldMetadata, ...] = ()
-    position_field: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class DataResourceRoots:
-    """GraphQL wire root names emitted for one model data resource."""
-
-    list_name: str | None = dataclasses.field(default=None, metadata={"wire": "list"})
-    detail_name: str | None = dataclasses.field(default=None, metadata={"wire": "detail"})
-    aggregate_name: str | None = dataclasses.field(default=None, metadata={"wire": "aggregate"})
-    group_name: str | None = dataclasses.field(default=None, metadata={"wire": "groups"})
-    group_count_name: str | None = dataclasses.field(default=None, metadata={"wire": "groupsCount"})
-    create_name: str | None = dataclasses.field(default=None, metadata={"wire": "create"})
-    update_name: str | None = dataclasses.field(default=None, metadata={"wire": "update"})
-    save_name: str | None = dataclasses.field(default=None, metadata={"wire": "save"})
-    delete_name: str | None = dataclasses.field(default=None, metadata={"wire": "delete"})
-    delete_preview_name: str | None = dataclasses.field(default=None, metadata={"wire": "deletePreview"})
-    revisions_name: str | None = dataclasses.field(default=None, metadata={"wire": "revisions"})
-    changes_name: str | None = dataclasses.field(default=None, metadata={"wire": "changes"})
-
-    def merge(self, left: DataResourceMetadata, right: DataResourceMetadata) -> DataResourceRoots:
-        """Return root names merged with metadata-level collision checks."""
-
-        return DataResourceRoots(
-            **{
-                field_def.name: _merge_value(
-                    left,
-                    right,
-                    field_def.name,
-                    getattr(self, field_def.name),
-                    getattr(right.roots, field_def.name),
-                )
-                for field_def in dataclasses.fields(DataResourceRoots)
-            }
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class DataResourceTypeNames:
-    """GraphQL type names owned or referenced by one data resource."""
-
-    query: str | None = None
-    node: str | None = None
-    filter: str | None = None
-    order: str | None = None
-    aggregate: str | None = None
-    grouped: str | None = None
-    group_key: str | None = None
-    group_by_spec: str | None = None
-    group_order: str | None = None
-    having: str | None = None
-    create_input: str | None = None
-    update_input: str | None = None
-    delete_payload: str | None = None
-    revision: str | None = None
-
-    def merge(self, left: DataResourceMetadata, right: DataResourceMetadata) -> DataResourceTypeNames:
-        """Return type names merged with metadata-level collision checks."""
-
-        return DataResourceTypeNames(
-            **{
-                field_def.name: _merge_value(
-                    left,
-                    right,
-                    field_def.name,
-                    getattr(self, field_def.name),
-                    getattr(right.type_names, field_def.name),
-                )
-                for field_def in dataclasses.fields(DataResourceTypeNames)
-            }
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class DataResourceSubtitleMetadata:
-    """Declared dotted selection paths for a resource record's subtitle facts.
-
-    The closed ``created``/``updated``/``word_count`` fact set is the renderer's
-    vocabulary; adding a fact extends this declaration and its presentation
-    together at the same seam.
-    """
-
-    created: str | None = None
-    updated: str | None = None
-    word_count: str | None = None
-
-    def merge(
-        self,
-        left: DataResourceMetadata,
-        right: DataResourceMetadata,
-    ) -> DataResourceSubtitleMetadata:
-        """Merge facts using the resource metadata's singleton collision rule."""
-
-        right_subtitle = cast(DataResourceSubtitleMetadata, right.subtitle)
-        return DataResourceSubtitleMetadata(
-            **{
-                field_def.name: _merge_value(
-                    left,
-                    right,
-                    f"subtitle.{field_def.name}",
-                    getattr(self, field_def.name),
-                    getattr(right_subtitle, field_def.name),
-                )
-                for field_def in dataclasses.fields(DataResourceSubtitleMetadata)
-            }
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class DataResourceMetadata:
-    """Internal metadata for one Angee model data resource."""
-
-    model: type[models.Model] | None = dataclasses.field(metadata={"wire": False})
-    model_label: str
-    resource_type: str | None
-    app_label: str
-    model_name: str
-    public_id_field: str
-    roots: DataResourceRoots
-    type_names: DataResourceTypeNames
-    contributors: tuple[str, ...] = dataclasses.field(
-        default=(),
-        compare=False,
-        repr=False,
-        metadata={"wire": False},
-    )
-    canonical_label: str | None = None
-    row_model: str = "server"
-    record_representation: str | None = None
-    subtitle: DataResourceSubtitleMetadata | None = None
-    impl_fields: tuple[str, ...] = ()
-    capabilities: tuple[str, ...] = ()
-    fields: tuple[DataResourceFieldMetadata, ...] = ()
-    filter_fields: tuple[str, ...] = ()
-    order_fields: tuple[str, ...] = ()
-    aggregate_fields: tuple[str, ...] = ()
-    group_by_fields: tuple[str, ...] = ()
-    group_dimensions: tuple[DataGroupDimensionMetadata, ...] = ()
-    aggregate_measures: tuple[DataAggregateMeasureMetadata, ...] = ()
-    default_measures: tuple[DataAggregateMeasureMetadata, ...] = ()
-    default_sort: tuple[DataDefaultSortMetadata, ...] = ()
-    create_fields: tuple[str, ...] = ()
-    update_fields: tuple[str, ...] = ()
-    required_create_fields: tuple[str, ...] = ()
-    revision_fields: tuple[str, ...] = ()
-    relation_axes: tuple[DataRelationAxisMetadata, ...] = ()
-    group_aliases: tuple[DataGroupAliasMetadata, ...] = ()
-    lines: DataLinesMetadata | None = dataclasses.field(default=None, metadata={"wire": "linesResource"})
-    node_type: type | None = dataclasses.field(default=None, metadata={"wire": False})
-    filter_type: type | None = dataclasses.field(default=None, metadata={"wire": False})
-    order_type: type | None = dataclasses.field(default=None, metadata={"wire": False})
-
-    def merge(self, other: DataResourceMetadata) -> DataResourceMetadata:
-        """Return this resource contribution merged with another same-model contribution."""
-
-        if self.model is not other.model:
-            left_owner = self.model._meta.label if self.model is not None else self.model_label
-            right_owner = other.model._meta.label if other.model is not None else other.model_label
-            raise ImproperlyConfigured(
-                f"resource metadata model label '{self.model_label}' is contributed by both "
-                f"{left_owner} and {right_owner}."
-            )
-        return DataResourceMetadata(
-            model=self.model,
-            model_label=self.model_label,
-            resource_type=self.resource_type or other.resource_type,
-            app_label=self.app_label,
-            model_name=self.model_name,
-            public_id_field=cast(
-                str,
-                _merge_value(self, other, "public_id_field", self.public_id_field, other.public_id_field),
-            ),
-            roots=self.roots.merge(self, other),
-            type_names=self.type_names.merge(self, other),
-            contributors=_merge_contributors(self.contributors, other.contributors),
-            canonical_label=cast(
-                str | None,
-                _merge_value(
-                    self,
-                    other,
-                    "canonical_label",
-                    self.canonical_label,
-                    other.canonical_label,
-                ),
-            ),
-            row_model=_merge_row_model(self, other),
-            record_representation=cast(
-                str | None,
-                _merge_value(
-                    self,
-                    other,
-                    "record_representation",
-                    self.record_representation,
-                    other.record_representation,
-                ),
-            ),
-            subtitle=_merge_subtitle(self, other),
-            impl_fields=self.impl_fields or other.impl_fields,
-            capabilities=_merge_capabilities(self.capabilities, other.capabilities),
-            fields=merge_resource_fields(self.fields, other.fields),
-            filter_fields=self.filter_fields or other.filter_fields,
-            order_fields=self.order_fields or other.order_fields,
-            aggregate_fields=self.aggregate_fields or other.aggregate_fields,
-            group_by_fields=self.group_by_fields or other.group_by_fields,
-            group_dimensions=self.group_dimensions or other.group_dimensions,
-            aggregate_measures=self.aggregate_measures or other.aggregate_measures,
-            default_measures=self.default_measures or other.default_measures,
-            default_sort=self.default_sort or other.default_sort,
-            create_fields=self.create_fields or other.create_fields,
-            update_fields=self.update_fields or other.update_fields,
-            required_create_fields=self.required_create_fields or other.required_create_fields,
-            revision_fields=self.revision_fields or other.revision_fields,
-            relation_axes=self.relation_axes or other.relation_axes,
-            group_aliases=self.group_aliases or other.group_aliases,
-            lines=self.lines or other.lines,
-            node_type=self.node_type or other.node_type,
-            filter_type=self.filter_type or other.filter_type,
-            order_type=self.order_type or other.order_type,
-        )
-
-    def as_wire(self, *, schema_name: str) -> dict[str, object]:
-        """Return this resource metadata in JSON-safe frontend wire shape."""
-
-        return {"schemaName": schema_name, **_wire_dataclass(self)}
-
-    def readable_model_field_names(self) -> frozenset[str]:
-        """Return concrete model field names this resource projects readably.
-
-        Change publication consumes this fact before serializing partial-save
-        values.  The resource projection owns wire visibility, including an
-        explicit Strawberry field name; the publisher must not infer readable
-        columns from the Django model alone.
-        """
-
-        if self.model is None or self.node_type is None:
-            return frozenset()
-        readable = {field.name for field in self.fields if field.readable}
-        names: set[str] = set()
-        for model_field in self.model._meta.local_fields:
-            wire_name = resource_wire_field_name(self.node_type, model_field.name)
-            if wire_name not in readable:
-                continue
-            names.add(model_field.name)
-            names.add(model_field.attname)
-        return frozenset(names)
-
-
-def data_resource_metadata(surface: object) -> tuple[DataResourceMetadata, ...]:
+def data_resource_metadata(surface: object) -> tuple[data_contract.DataResourceMetadata, ...]:
     """Return model resource metadata attached to ``surface``."""
 
     metadata = getattr(surface, DATA_RESOURCE_METADATA_ATTR, None)
     if metadata is None:
         return ()
-    if isinstance(metadata, DataResourceMetadata):
+    if isinstance(metadata, data_contract.DataResourceMetadata):
         return (metadata,)
-    if isinstance(metadata, tuple) and all(isinstance(item, DataResourceMetadata) for item in metadata):
+    if isinstance(metadata, tuple) and all(isinstance(item, data_contract.DataResourceMetadata) for item in metadata):
         return metadata
     return ()
+
+
+def readable_model_field_names(
+    metadata: data_contract.DataResourceMetadata,
+) -> frozenset[str]:
+    """Return concrete model fields projected readably by the GraphQL node."""
+
+    if metadata.model is None or metadata.node_type is None:
+        return frozenset()
+    readable = {field.name for field in metadata.fields if field.readable}
+    names: set[str] = set()
+    for model_field in metadata.model._meta.local_fields:
+        wire_name = resource_wire_field_name(metadata.node_type, model_field.name)
+        if wire_name not in readable:
+            continue
+        names.add(model_field.name)
+        names.add(model_field.attname)
+    return frozenset(names)
 
 
 def make_data_resource_metadata(
     *,
     model: type[models.Model] | None = None,
-    roots: DataResourceRoots,
-    type_names: DataResourceTypeNames,
+    roots: data_contract.DataResourceRoots,
+    type_names: data_contract.DataResourceTypeNames,
     capabilities: tuple[str, ...],
     node_type: type | None = None,
     filter_type: type | None = None,
@@ -443,25 +92,25 @@ def make_data_resource_metadata(
     order_fields: tuple[str, ...] = (),
     aggregate_fields: tuple[str, ...] = (),
     group_by_fields: tuple[str, ...] = (),
-    group_dimensions: tuple[DataGroupDimensionMetadata, ...] = (),
-    aggregate_measures: tuple[DataAggregateMeasureMetadata, ...] = (),
-    default_measures: tuple[DataAggregateMeasureMetadata, ...] = (),
-    default_sort: tuple[DataDefaultSortMetadata, ...] = (),
+    group_dimensions: tuple[data_contract.DataGroupDimensionMetadata, ...] = (),
+    aggregate_measures: tuple[data_contract.DataAggregateMeasureMetadata, ...] = (),
+    default_measures: tuple[data_contract.DataAggregateMeasureMetadata, ...] = (),
+    default_sort: tuple[data_contract.DataDefaultSortMetadata, ...] = (),
     create_input_type: type | None = None,
     update_input_type: type | None = None,
     create_fields: tuple[str, ...] = (),
     update_fields: tuple[str, ...] = (),
     required_create_fields: tuple[str, ...] = (),
     revision_fields: tuple[str, ...] = (),
-    relation_axes: tuple[DataRelationAxisMetadata, ...] = (),
-    group_aliases: tuple[DataGroupAliasMetadata, ...] = (),
-    lines: DataLinesMetadata | None = None,
-    fields: tuple[DataResourceFieldMetadata, ...] = (),
-    subtitle: DataResourceSubtitleMetadata | None = None,
+    relation_axes: tuple[data_contract.DataRelationAxisMetadata, ...] = (),
+    group_aliases: tuple[data_contract.DataGroupAliasMetadata, ...] = (),
+    lines: data_contract.DataLinesMetadata | None = None,
+    fields: tuple[data_contract.DataResourceFieldMetadata, ...] = (),
+    subtitle: data_contract.DataResourceSubtitleMetadata | None = None,
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
     row_model: str = "server",
-) -> DataResourceMetadata:
+) -> data_contract.DataResourceMetadata:
     """Build one resource metadata contribution from an owning schema surface.
 
     ``model`` is the owning Django model for a model-backed resource. A computed
@@ -524,7 +173,7 @@ def make_data_resource_metadata(
         else ()
     )
     active_fields = (
-        merge_resource_fields(generated_fields, declared_fields)
+        data_contract.merge_resource_fields(generated_fields, declared_fields)
         if declared_fields
         else generated_fields
     )
@@ -537,7 +186,7 @@ def make_data_resource_metadata(
         fields=active_fields,
         declared=subtitle,
     )
-    return DataResourceMetadata(
+    return data_contract.DataResourceMetadata(
         model=model,
         model_label=exposed_model_label,
         resource_type=model_resource_type(model) if model is not None else None,
@@ -579,7 +228,7 @@ _SurfaceT = TypeVar("_SurfaceT")
 
 def attach_data_resource_metadata(
     surface: type[_SurfaceT],
-    metadata: DataResourceMetadata,
+    metadata: data_contract.DataResourceMetadata,
 ) -> type[_SurfaceT]:
     """Attach model resource metadata to a generated Strawberry surface.
 
@@ -588,7 +237,7 @@ def attach_data_resource_metadata(
     ``type_extensions`` entry adds fields to the node, never to the model's
     resource projection) anchors its contribution on one of its own root
     surfaces — typically its action-mutation bucket — and the per-model merge
-    (:func:`merge_data_resources`) folds it into the owning model's resource
+    (:func:`angee.data.metadata.merge_data_resources`) folds it into the owning model's resource
     by model label. Fields only a server verb advances are contributed
     read-only (neither creatable nor updatable).
     """
@@ -598,124 +247,6 @@ def attach_data_resource_metadata(
     attached = dataclasses.replace(metadata, contributors=(contributor,))
     setattr(surface, DATA_RESOURCE_METADATA_ATTR, existing + (attached,))
     return surface
-
-
-def merge_data_resources(
-    metadata: tuple[DataResourceMetadata, ...],
-) -> tuple[DataResourceMetadata, ...]:
-    """Merge per-surface resource contributions into one resource per model."""
-
-    merged: dict[str, DataResourceMetadata] = {}
-    for item in metadata:
-        existing = merged.get(item.model_label)
-        merged[item.model_label] = item if existing is None else existing.merge(item)
-    return tuple(merged.values())
-
-
-def serialize_data_resources(
-    metadata: tuple[DataResourceMetadata, ...],
-    *,
-    schema_name: str,
-) -> list[dict[str, object]]:
-    """Return a JSON-safe schema-extension payload for resource metadata."""
-
-    return [item.as_wire(schema_name=schema_name) for item in metadata]
-
-
-def _wire_dataclass(instance: Any) -> dict[str, object]:
-    """Serialize one metadata dataclass through its own declared wire shape.
-
-    Each dataclass owns its wire mapping: a field serializes under its
-    ``_metadata_key`` (camelCase) name unless it declares a ``wire`` key in field
-    metadata, and fields marked ``{"wire": False}`` (the Python type handles) are
-    omitted.
-    """
-
-    payload: dict[str, object] = {}
-    for field_def in dataclasses.fields(instance):
-        wire = field_def.metadata.get("wire", True)
-        if wire is False:
-            continue
-        key = wire if isinstance(wire, str) else _metadata_key(field_def.name)
-        payload[key] = _wire_value(getattr(instance, field_def.name))
-    return payload
-
-
-def _wire_value(value: object) -> object:
-    """Return a JSON-safe wire value for one metadata field."""
-
-    if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return _wire_dataclass(value)
-    if isinstance(value, (tuple, list)):
-        return [_wire_value(item) for item in value]
-    return value
-
-
-def _merge_row_model(
-    left: DataResourceMetadata,
-    right: DataResourceMetadata,
-) -> str:
-    """Return one row-model signal, rejecting conflicting contributions."""
-
-    if left.row_model != right.row_model:
-        raise ImproperlyConfigured(
-            f"resource metadata for {left.model_label} has conflicting row_model: "
-            f"{left.row_model!r} from {_contributor_names(left)} and "
-            f"{right.row_model!r} from {_contributor_names(right)}."
-        )
-    return left.row_model
-
-
-def _merge_subtitle(
-    left: DataResourceMetadata,
-    right: DataResourceMetadata,
-) -> DataResourceSubtitleMetadata | None:
-    """Return subtitle facts merged with the existing singleton collision rule."""
-
-    if left.subtitle is None:
-        return right.subtitle
-    if right.subtitle is None:
-        return left.subtitle
-    return left.subtitle.merge(left, right)
-
-
-def _merge_value(
-    left: DataResourceMetadata,
-    right: DataResourceMetadata,
-    name: str,
-    left_value: str | None,
-    right_value: str | None,
-) -> str | None:
-    """Return one metadata value, rejecting conflicting contributions."""
-
-    if left_value is not None and right_value is not None and left_value != right_value:
-        raise ImproperlyConfigured(
-            f"resource metadata for {left.model_label} has conflicting {name}: "
-            f"{left_value!r} from {_contributor_names(left)} and "
-            f"{right_value!r} from {_contributor_names(right)}."
-        )
-    return left_value if left_value is not None else right_value
-
-
-def _merge_contributors(left: tuple[str, ...], right: tuple[str, ...]) -> tuple[str, ...]:
-    """Return contributor names in first-seen order for later diagnostics."""
-
-    return tuple(dict.fromkeys((*left, *right)))
-
-
-def _contributor_names(metadata: DataResourceMetadata) -> str:
-    """Return the surfaces/types that donated one metadata contribution."""
-
-    return ", ".join(metadata.contributors) or metadata.model_label
-
-
-def _merge_capabilities(left: tuple[str, ...], right: tuple[str, ...]) -> tuple[str, ...]:
-    """Return deterministic capability names from both resource contributions."""
-
-    names = {*left, *right}
-    ordered = [name for name in _RESOURCE_CAPABILITY_ORDER if name in names]
-    ordered.extend(sorted(names - set(_RESOURCE_CAPABILITY_ORDER)))
-    return tuple(ordered)
 
 
 def _require_unique(
@@ -741,9 +272,9 @@ def _resource_subtitle(
     model: type[models.Model] | None,
     model_label: str,
     node_type: type | None,
-    fields: tuple[DataResourceFieldMetadata, ...],
-    declared: DataResourceSubtitleMetadata | None,
-) -> DataResourceSubtitleMetadata | None:
+    fields: tuple[data_contract.DataResourceFieldMetadata, ...],
+    declared: data_contract.DataResourceSubtitleMetadata | None,
+) -> data_contract.DataResourceSubtitleMetadata | None:
     """Return validated subtitle paths plus canonical timestamp defaults.
 
     Facts are GraphQL dotted selection paths, rather than model-field paths, so
@@ -771,11 +302,11 @@ def _resource_subtitle(
             )
         return candidates[0] if candidates else None
 
-    defaults = DataResourceSubtitleMetadata(
+    defaults = data_contract.DataResourceSubtitleMetadata(
         created=timestamp_path("auto_now_add"),
         updated=timestamp_path("auto_now"),
     )
-    active = DataResourceSubtitleMetadata(
+    active = data_contract.DataResourceSubtitleMetadata(
         created=(
             declared.created
             if declared is not None and declared.created is not None
@@ -788,7 +319,7 @@ def _resource_subtitle(
         ),
         word_count=declared.word_count if declared is not None else None,
     )
-    for field_def in dataclasses.fields(DataResourceSubtitleMetadata):
+    for field_def in dataclasses.fields(data_contract.DataResourceSubtitleMetadata):
         path = getattr(active, field_def.name)
         if path is not None and _SELECTION_PATH.fullmatch(path) is None:
             raise ImproperlyConfigured(
@@ -808,7 +339,7 @@ def _resource_subtitle(
     return active if has_fact else None
 
 
-def _record_representation_field(fields: tuple[DataResourceFieldMetadata, ...]) -> str | None:
+def _record_representation_field(fields: tuple[data_contract.DataResourceFieldMetadata, ...]) -> str | None:
     """Return the backend-owned display field for a resource record."""
 
     candidates = (
@@ -833,7 +364,7 @@ def _record_representation_field(fields: tuple[DataResourceFieldMetadata, ...]) 
     return None
 
 
-def _is_display_scalar(field: DataResourceFieldMetadata | None) -> bool:
+def _is_display_scalar(field: data_contract.DataResourceFieldMetadata | None) -> bool:
     """Return whether ``field`` is suitable as a compact record label."""
 
     return field is not None and field.kind == "scalar" and field.scalar == "String"
@@ -842,7 +373,7 @@ def _is_display_scalar(field: DataResourceFieldMetadata | None) -> bool:
 def _impl_fields(
     model: type[models.Model] | None,
     node_type: type | None,
-    fields: tuple[DataResourceFieldMetadata, ...],
+    fields: tuple[data_contract.DataResourceFieldMetadata, ...],
 ) -> tuple[str, ...]:
     """Return this resource's readable ``ImplClassField`` column names, sorted.
 
@@ -865,25 +396,14 @@ def _impl_fields(
     return tuple(sorted(names & readable))
 
 
-def _metadata_key(name: str) -> str:
-    """Return the camelCase JSON key for one metadata-envelope dataclass field.
-
-    The frontend ``DataResourceMetadata`` contract keys its objects in camelCase
-    (``revisionFields``, ``typeNames``); that is the metadata envelope's own
-    naming, distinct from the snake_case GraphQL wire field names above.
-    """
-
-    return to_camel_case(name)
-
-
 def _default_sort(
     model: type[models.Model],
     order_fields: tuple[str, ...],
-) -> tuple[DataDefaultSortMetadata, ...]:
+) -> tuple[data_contract.DataDefaultSortMetadata, ...]:
     """Return model default ordering terms exposed by the order input."""
 
     orderable = set(order_fields)
-    sorts: list[DataDefaultSortMetadata] = []
+    sorts: list[data_contract.DataDefaultSortMetadata] = []
     for term in model._meta.ordering:
         if isinstance(term, models.expressions.OrderBy):
             # An expression ordering (F(...).desc(nulls_last=True), say) carries a
@@ -909,7 +429,7 @@ def _default_sort(
             continue
         _require_model_field_for_path(model, field, purpose="default ordering")
         sorts.append(
-            DataDefaultSortMetadata(
+            data_contract.DataDefaultSortMetadata(
                 field=field,
                 direction="DESC" if term.startswith("-") else "ASC",
             )
@@ -920,11 +440,11 @@ def _default_sort(
 def _relation_axes(
     model: type[models.Model],
     group_by_fields: tuple[str, ...],
-) -> tuple[DataRelationAxisMetadata, ...]:
+) -> tuple[data_contract.DataRelationAxisMetadata, ...]:
     """Return direct FK group axes with their related model and optional label axis."""
 
     label_axes = _relation_label_axes(model, group_by_fields)
-    relation_axes: list[DataRelationAxisMetadata] = []
+    relation_axes: list[data_contract.DataRelationAxisMetadata] = []
     for path in group_by_fields:
         if "__" in path:
             continue
@@ -939,7 +459,7 @@ def _relation_axes(
         if related_model is None:
             continue
         relation_axes.append(
-            DataRelationAxisMetadata(
+            data_contract.DataRelationAxisMetadata(
                 field=path,
                 model_label=related_model._meta.label,
                 public_id_field=PUBLIC_ID_FIELD_NAME,

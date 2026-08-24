@@ -1,4 +1,4 @@
-"""Field classification for Angee data-resource metadata."""
+"""Django field classification and vocabulary for Angee data descriptions."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from typing import Any
 from django.db import models
 
 from angee.base.mixins import ARCHIVE_FLAG_FIELD
-from angee.graphql.introspection import is_to_many_relation
 
 RESOURCE_FIELD_KINDS = frozenset({"scalar", "enum", "relation", "list"})
 """Supported resource field kind names."""
@@ -19,6 +18,12 @@ RESOURCE_FIELD_WIDGETS = frozenset(
     {"select", "many2one", "tagInput", "switch", "integer", "float", "money", "datetime", "date", "json"}
 )
 """Widget vocabulary owned by backend data-resource metadata."""
+
+
+def is_to_many_relation(field: models.Field[Any, Any]) -> bool:
+    """Return whether a Django field represents a to-many relation path."""
+
+    return bool(getattr(field, "many_to_many", False) or getattr(field, "one_to_many", False))
 
 
 def resource_field_kind(
@@ -146,3 +151,4 @@ def _declared_projection_fact(field: models.Field[Any, Any] | None, name: str) -
     if value in (None, ""):
         return None
     return str(value)
+

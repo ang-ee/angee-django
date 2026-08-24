@@ -18,10 +18,9 @@ from rebac import current_actor, system_context
 from rebac.resources import model_resource_type
 
 from angee.base.models import public_id_of, read_scoped_queryset
+from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.metadata import (
-    DataResourceRoots,
-    DataResourceTypeNames,
     attach_data_resource_metadata,
     make_data_resource_metadata,
     resource_type_name,

@@ -9,6 +9,8 @@ from django.db import models
 from strawberry.types import get_object_definition
 from strawberry_django.utils.typing import get_django_definition
 
+from angee.data import field_classification as data_field_classification
+
 
 def surface_name(surface: object) -> str:
     """Return a readable name for a Strawberry surface."""
@@ -38,12 +40,6 @@ def is_to_one_relation(field: models.Field[Any, Any]) -> bool:
     """Return whether ``field`` is a forward to-one relation."""
 
     return bool(getattr(field, "many_to_one", False) or getattr(field, "one_to_one", False))
-
-
-def is_to_many_relation(field: models.Field[Any, Any]) -> bool:
-    """Return whether ``field`` represents a to-many relation path."""
-
-    return bool(getattr(field, "many_to_many", False) or getattr(field, "one_to_many", False))
 
 
 class FieldPathError(Exception):
@@ -76,7 +72,7 @@ def require_field_for_path(model: type[models.Model], path: str) -> models.Field
             field = current_model._meta.get_field(part)
         except FieldDoesNotExist:
             raise FieldPathError(to_many=False) from None
-        if is_to_many_relation(field):
+        if data_field_classification.is_to_many_relation(field):
             raise FieldPathError(to_many=True)
         remote_field = getattr(field, "remote_field", None)
         related_model = getattr(remote_field, "model", None)

@@ -24,10 +24,8 @@ from strawberry_django_hasura import (
     hasura_run_query_resource,
 )
 
+from angee.data.metadata import DataAggregateMeasureMetadata, DataResourceRoots, DataResourceTypeNames
 from angee.graphql.data.metadata import (
-    DataAggregateMeasureMetadata,
-    DataResourceRoots,
-    DataResourceTypeNames,
     attach_data_resource_metadata,
     make_data_resource_metadata,
     resource_type_name,

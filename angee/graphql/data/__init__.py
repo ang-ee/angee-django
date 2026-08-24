@@ -8,17 +8,7 @@ from angee.graphql.data.hasura import (
     hasura_model_resource,
     public_pk_decoder,
 )
-from angee.graphql.data.metadata import (
-    DataRelationAxisMetadata,
-    DataResourceFieldMetadata,
-    DataResourceMetadata,
-    DataResourceRoots,
-    DataResourceSubtitleMetadata,
-    DataResourceTypeNames,
-    resource_type_name,
-    resource_wire_field_name,
-    resource_wire_field_names,
-)
+from angee.graphql.data.metadata import resource_type_name, resource_wire_field_name, resource_wire_field_names
 from angee.graphql.data.pydantic_resource import (
     hasura_pydantic_resource,
     pydantic_node,
@@ -27,12 +17,6 @@ from angee.graphql.data.pydantic_resource import (
 __all__ = [
     "AngeeHasuraWriteBackend",
     "aggregate_queryset",
-    "DataRelationAxisMetadata",
-    "DataResourceFieldMetadata",
-    "DataResourceMetadata",
-    "DataResourceRoots",
-    "DataResourceSubtitleMetadata",
-    "DataResourceTypeNames",
     "declared_hasura_resource_fields",
     "hasura_model_resource",
     "hasura_pydantic_resource",

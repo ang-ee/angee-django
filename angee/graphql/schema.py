@@ -23,11 +23,10 @@ from strawberry.utils.str_converters import to_camel_case
 from strawberry_django_hasura import hasura_config
 
 from angee.addons import addon_contract, resolve_addon_reference
+from angee.data.metadata import DataResourceMetadata, merge_data_resources, serialize_data_resources
 from angee.graphql.data.metadata import (
-    DataResourceMetadata,
     data_resource_metadata,
-    merge_data_resources,
-    serialize_data_resources,
+    readable_model_field_names,
 )
 from angee.graphql.ids import assert_unique_sqid_prefixes
 from angee.graphql.introspection import (
@@ -304,7 +303,7 @@ class GraphQLSchemas:
             for resource in self.resources(schema_name):
                 if resource.model in readable_by_model:
                     readable_by_model[resource.model].update(
-                        resource.readable_model_field_names()
+                        readable_model_field_names(resource)
                     )
         for model, readable_fields in readable_by_model.items():
             connect_publishers(model, readable_fields=readable_fields)

@@ -41,10 +41,8 @@ from angee.base.models import (
     public_id_for,
     requires_angee_rebac_contract,
 )
-from angee.graphql.access import assert_no_gated_read_fields
-from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
-from angee.graphql.data.field_classification import model_field_scalar
-from angee.graphql.data.metadata import (
+from angee.data.field_classification import model_field_scalar
+from angee.data.metadata import (
     DataAggregateMeasureMetadata,
     DataGroupBucketFilterMetadata,
     DataGroupBucketFilterValueMapMetadata,
@@ -55,6 +53,10 @@ from angee.graphql.data.metadata import (
     DataResourceRoots,
     DataResourceSubtitleMetadata,
     DataResourceTypeNames,
+)
+from angee.graphql.access import assert_no_gated_read_fields
+from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
+from angee.graphql.data.metadata import (
     attach_data_resource_metadata,
     make_data_resource_metadata,
     model_resource_fields,

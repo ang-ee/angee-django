@@ -1,9 +1,8 @@
-"""Resource field metadata and Strawberry/Django field classification."""
+"""GraphQL/Django projection into neutral resource-field descriptions."""
 
 from __future__ import annotations
 
 import dataclasses
-from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -17,16 +16,17 @@ from strawberry.types.lazy_type import LazyType
 from strawberry_django_hasura import SnakeNameConverter
 
 from angee.base.impl import ImplClassField
-from angee.graphql.data.field_classification import (
+from angee.data import metadata as data_contract
+from angee.data.field_classification import (
     RESOURCE_FIELD_KINDS as _RESOURCE_FIELD_KINDS,
 )
-from angee.graphql.data.field_classification import (
+from angee.data.field_classification import (
     RESOURCE_FIELD_SCALARS as _RESOURCE_FIELD_SCALARS,
 )
-from angee.graphql.data.field_classification import (
+from angee.data.field_classification import (
     RESOURCE_FIELD_WIDGETS as _RESOURCE_FIELD_WIDGETS,
 )
-from angee.graphql.data.field_classification import (
+from angee.data.field_classification import (
     is_archive_field,
     model_field_scalar,
     money_currency_field,
@@ -36,58 +36,6 @@ from angee.graphql.data.field_classification import (
 from angee.graphql.introspection import surface_field_names, surface_name
 
 _FILTER_CONTROL_FIELDS = frozenset({"AND", "OR", "NOT", "DISTINCT", "and", "or", "not", "distinct"})
-
-
-@dataclass(frozen=True, slots=True)
-class DataRelationAxisMetadata:
-    """Metadata for a relation group axis and its public identity lookup."""
-
-    field: str
-    model_label: str
-    public_id_field: str
-    label_axis: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class DataResourceEnumValueMetadata:
-    """One enum value exposed by a resource field."""
-
-    value: str
-    description: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class DataResourceFieldMetadata:
-    """Field capability metadata emitted for one model resource field."""
-
-    name: str
-    kind: str
-    scalar: str | None = None
-    values: tuple[DataResourceEnumValueMetadata, ...] = ()
-    widget: str | None = None
-    readable: bool = True
-    filterable: bool = False
-    sortable: bool = False
-    aggregatable: bool = False
-    groupable: bool = False
-    creatable: bool = False
-    updatable: bool = False
-    required_on_create: bool = False
-    archivable: bool = False
-    currency_field: str | None = None
-    relation_model_label: str | None = None
-    relation_label_axis: str | None = None
-    relation_object: bool = False
-    """Whether a ``relation`` field is projected as a nested selectable object.
-
-    A to-one FK can surface two ways with identical ``relation`` semantics
-    (``many2one`` widget, relation filter/group axis): as a nested node
-    (``product: ProductVariantType`` — its subfields are selectable) or as the
-    related row's public id (``location: strawberry.ID`` — a leaf). Only the
-    former may be read with a sub-selection; the frontend keys the row selection on
-    this flag so a nested relation reads ``{ id <label> }`` and an id projection
-    stays a leaf.
-    """
 
 
 # The schema is built with ``hasura_config()`` (``angee/graphql/schema.py``); its
@@ -191,7 +139,7 @@ def require_resource_selection_path(
 
 def model_resource_fields(
     model: type[models.Model],
-    fields: tuple[str | DataResourceFieldMetadata, ...],
+    fields: tuple[str | data_contract.DataResourceFieldMetadata, ...],
     *,
     filter_fields: tuple[str, ...] = (),
     order_fields: tuple[str, ...] = (),
@@ -200,8 +148,8 @@ def model_resource_fields(
     create_fields: tuple[str, ...] = (),
     update_fields: tuple[str, ...] = (),
     required_create_fields: tuple[str, ...] = (),
-    relation_axes: tuple[DataRelationAxisMetadata, ...] = (),
-) -> tuple[DataResourceFieldMetadata, ...]:
+    relation_axes: tuple[data_contract.DataRelationAxisMetadata, ...] = (),
+) -> tuple[data_contract.DataResourceFieldMetadata, ...]:
     """Return metadata for model fields exposed outside the node class.
 
     A caller may supply explicit metadata for a projected donor field whose
@@ -220,7 +168,7 @@ def model_resource_fields(
     return tuple(
         (
             name
-            if isinstance(name, DataResourceFieldMetadata)
+            if isinstance(name, data_contract.DataResourceFieldMetadata)
             else _model_resource_field(
                 model,
                 name,
@@ -278,8 +226,8 @@ def resource_fields(
     create_fields: tuple[str, ...],
     update_fields: tuple[str, ...],
     required_create_fields: tuple[str, ...],
-    relation_axes: tuple[DataRelationAxisMetadata, ...],
-) -> tuple[DataResourceFieldMetadata, ...]:
+    relation_axes: tuple[data_contract.DataRelationAxisMetadata, ...],
+) -> tuple[data_contract.DataResourceFieldMetadata, ...]:
     """Return model resource field metadata from the declared node surface."""
 
     filterable = set(filter_fields)
@@ -290,7 +238,7 @@ def resource_fields(
     updatable = set(update_fields)
     required_on_create = set(required_create_fields)
     relation_by_field = {axis.field: axis for axis in relation_axes}
-    fields: list[DataResourceFieldMetadata] = []
+    fields: list[data_contract.DataResourceFieldMetadata] = []
     for python_name in surface_field_names(node_type):
         name = resource_wire_field_name(node_type, python_name) or python_name
         axis = relation_by_field.get(name)
@@ -315,7 +263,7 @@ def resource_fields(
         )
         values = _resource_enum_values(model_field, surface_type) if kind == "enum" else ()
         fields.append(
-            DataResourceFieldMetadata(
+            data_contract.DataResourceFieldMetadata(
                 name=name,
                 kind=kind,
                 scalar=scalar,
@@ -340,8 +288,8 @@ def resource_fields(
 
 def require_unique_resource_fields(
     model_label: str,
-    fields: tuple[DataResourceFieldMetadata, ...],
-) -> tuple[DataResourceFieldMetadata, ...]:
+    fields: tuple[data_contract.DataResourceFieldMetadata, ...],
+) -> tuple[data_contract.DataResourceFieldMetadata, ...]:
     """Return resource field metadata after rejecting duplicate field names."""
 
     seen: set[str] = set()
@@ -355,44 +303,7 @@ def require_unique_resource_fields(
     return fields
 
 
-def merge_resource_fields(
-    left: tuple[DataResourceFieldMetadata, ...],
-    right: tuple[DataResourceFieldMetadata, ...],
-) -> tuple[DataResourceFieldMetadata, ...]:
-    """Return resource field metadata merged by field name."""
-
-    by_name = {field.name: field for field in left}
-    order = [field.name for field in left]
-    for field in right:
-        existing = by_name.get(field.name)
-        if existing is None:
-            by_name[field.name] = field
-            order.append(field.name)
-            continue
-        by_name[field.name] = DataResourceFieldMetadata(
-            name=existing.name,
-            kind=existing.kind if existing.kind != "scalar" or field.kind == "scalar" else field.kind,
-            scalar=existing.scalar or field.scalar,
-            values=existing.values or field.values,
-            widget=existing.widget or field.widget,
-            readable=existing.readable or field.readable,
-            filterable=existing.filterable or field.filterable,
-            sortable=existing.sortable or field.sortable,
-            aggregatable=existing.aggregatable or field.aggregatable,
-            groupable=existing.groupable or field.groupable,
-            creatable=existing.creatable or field.creatable,
-            updatable=existing.updatable or field.updatable,
-            required_on_create=existing.required_on_create or field.required_on_create,
-            archivable=existing.archivable or field.archivable,
-            currency_field=existing.currency_field or field.currency_field,
-            relation_model_label=existing.relation_model_label or field.relation_model_label,
-            relation_label_axis=existing.relation_label_axis or field.relation_label_axis,
-            relation_object=existing.relation_object or field.relation_object,
-        )
-    return tuple(by_name[name] for name in order)
-
-
-def _validate_resource_field(model_label: str, field: DataResourceFieldMetadata) -> None:
+def _validate_resource_field(model_label: str, field: data_contract.DataResourceFieldMetadata) -> None:
     """Reject impossible explicit resource field metadata."""
 
     if field.kind not in _RESOURCE_FIELD_KINDS:
@@ -449,7 +360,7 @@ def _model_resource_field(
     model: type[models.Model],
     name: str,
     *,
-    relation_axis: DataRelationAxisMetadata | None,
+    relation_axis: data_contract.DataRelationAxisMetadata | None,
     filterable: bool,
     sortable: bool,
     aggregatable: bool,
@@ -457,7 +368,7 @@ def _model_resource_field(
     creatable: bool,
     updatable: bool,
     required_on_create: bool,
-) -> DataResourceFieldMetadata:
+) -> data_contract.DataResourceFieldMetadata:
     try:
         field = model._meta.get_field(name)
     except FieldDoesNotExist as error:
@@ -476,7 +387,7 @@ def _model_resource_field(
             f"resource metadata for {model._meta.label} cannot classify model field "
             f"{name!r} ({field.__class__.__name__})."
         )
-    return DataResourceFieldMetadata(
+    return data_contract.DataResourceFieldMetadata(
         name=name,
         kind=kind,
         scalar=scalar,
@@ -498,7 +409,7 @@ def _model_resource_field(
 
 def _relation_model_label(
     field: models.Field[Any, Any] | None,
-    relation_axis: DataRelationAxisMetadata | None,
+    relation_axis: data_contract.DataRelationAxisMetadata | None,
 ) -> str | None:
     if relation_axis is not None:
         return relation_axis.model_label
@@ -645,14 +556,14 @@ def _strawberry_type_is_enum(value: object | None) -> bool:
     return False
 
 
-def _surface_enum_values(value: object | None) -> tuple[DataResourceEnumValueMetadata, ...]:
+def _surface_enum_values(value: object | None) -> tuple[data_contract.DataResourceEnumValueMetadata, ...]:
     """Return enum value metadata from the Strawberry enum surface."""
 
     definition = _strawberry_enum_definition(value)
     if definition is None:
         return ()
     return tuple(
-        DataResourceEnumValueMetadata(
+        data_contract.DataResourceEnumValueMetadata(
             value=str(enum_value.name),
             description=(
                 str(enum_value.description)
@@ -667,7 +578,7 @@ def _surface_enum_values(value: object | None) -> tuple[DataResourceEnumValueMet
 def _resource_enum_values(
     field: models.Field[Any, Any] | None,
     value: object | None,
-) -> tuple[DataResourceEnumValueMetadata, ...]:
+) -> tuple[data_contract.DataResourceEnumValueMetadata, ...]:
     """Return enum metadata, folding the field's choice labels into descriptions.
 
     An enum field's human labels live on the Django field — a ``StateField`` /
