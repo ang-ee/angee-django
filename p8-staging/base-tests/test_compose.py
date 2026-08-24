@@ -19,6 +19,7 @@ from angee.base.models import AngeeManager, AngeeModel, role_anchor
 from angee.base.transitions import StateTransitions, save_state, transition
 from angee.compose.appgraph import AppGraph
 from angee.compose.apps import ComposeConfig
+from angee.compose.dependencies import AddonDependencyGroupResult
 from angee.compose.management.commands.angee import Command
 from angee.compose.runtime import Runtime
 from angee.compose.web import WebRuntime
@@ -1671,11 +1672,9 @@ def test_build_command_delegates_the_complete_write_lifecycle(
     calls: list[str] = []
 
     class FakeRuntime:
-        project_dir: Path | None = None
-
-        def build(self) -> tuple[Path, ...]:
+        def build(self) -> AddonDependencyGroupResult:
             calls.append("build")
-            return ()
+            return AddonDependencyGroupResult.UNCHANGED
 
     monkeypatch.setattr(runtime_module.Runtime, "from_django", classmethod(lambda cls: FakeRuntime()))
 
@@ -1698,7 +1697,7 @@ def test_runtime_build_emits_stale_sources_before_materializing(tmp_path: Path, 
     monkeypatch.setattr(runtime, "emit", lambda: calls.append("emit"))
     monkeypatch.setattr(runtime, "runtime_migrations", lambda: FakeMigrations())
 
-    assert runtime.build() == (output,)
+    assert runtime.build() is AddonDependencyGroupResult.SKIPPED_NO_PROJECT_DIR
     assert calls == ["emit", "materialize"]
 
 
@@ -1715,7 +1714,7 @@ def test_runtime_build_materializes_when_sources_are_current(tmp_path: Path, mon
     monkeypatch.setattr(runtime, "emit", lambda: calls.append("emit"))
     monkeypatch.setattr(runtime, "runtime_migrations", lambda: FakeMigrations())
 
-    assert runtime.build() == ()
+    assert runtime.build() is AddonDependencyGroupResult.SKIPPED_NO_PROJECT_DIR
     assert calls == ["materialize"]
 
 
