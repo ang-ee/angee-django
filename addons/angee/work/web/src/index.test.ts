@@ -2,7 +2,7 @@ import { expectValidBaseAddon } from "@angee/app/testing";
 import { createRouteHref } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
-import work, { CYCLE_MODEL, QUEUE_MODEL } from "./index";
+import work, { QUEUE_MODEL } from "./index";
 
 describe("work addon manifest", () => {
   test("satisfies rendered-addon invariants", () => {

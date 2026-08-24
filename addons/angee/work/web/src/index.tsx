@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 
 import { enWorkMessages } from "./i18n";
-import { CYCLE_MODEL, QUEUE_MODEL } from "./resources";
+import { QUEUE_MODEL } from "./resources";
 import { taskWorkFormSection } from "./task-work";
 import { TriageRecordActions } from "./triage-actions";
 
@@ -37,7 +37,7 @@ const workRoutes: readonly BaseAddonRoute[] = [
   {
     name: "work.board",
     path: "/work/queues/$queueId/board",
-    parent: "work.queues",
+    layout: "console",
     menu: "work.queues",
     component: lazyRouteComponent(
       () => import("./views/QueueBoardPage"),
@@ -47,7 +47,7 @@ const workRoutes: readonly BaseAddonRoute[] = [
   {
     name: "work.triage",
     path: "/work/queues/$queueId/triage",
-    parent: "work.queues",
+    layout: "console",
     menu: "work.queues",
     component: lazyRouteComponent(
       () => import("./views/TriageInboxPage"),
@@ -57,7 +57,7 @@ const workRoutes: readonly BaseAddonRoute[] = [
   {
     name: "work.cycles",
     path: "/work/queues/$queueId/cycles",
-    parent: "work.queues",
+    layout: "console",
     menu: "work.queues",
     // Projection page (PipelinePage rule): a parameterized route must not
     // claim a resource — the collection href could never resolve at boot.

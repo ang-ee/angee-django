@@ -30,7 +30,7 @@ const proposalsRoutes: readonly BaseAddonRoute[] = [
   {
     name: "proposals.round-comparison",
     path: "/proposals/rounds/$id/compare",
-    parent: "proposals.rounds.record",
+    layout: "console",
     menu: "proposals.rounds",
     component: lazyRouteComponent(
       () => import("./views/RoundComparisonPage"),
