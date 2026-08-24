@@ -81,7 +81,9 @@ class Command(BaseCommand):
                 runtime.check()
                 message = "angee build --check: ok"
             else:
-                runtime.build()
+                dependency_result = runtime.build()
+                style = self.style.WARNING if dependency_result.skipped else self.style.SUCCESS
+                self.stdout.write(style(f"angee build: addon dependencies {dependency_result.value}"))
                 message = "angee build: ok"
         except RuntimeError as error:
             raise CommandError(str(error)) from error

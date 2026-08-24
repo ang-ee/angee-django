@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 SETTINGS = {
-    "CELERY_BROKER_URL": "redis://redis:6379/1",
     "CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP": True,
     "CELERY_TASK_IGNORE_RESULT": True,
     "CELERY_TASK_SOFT_TIME_LIMIT": 840,
@@ -20,7 +19,12 @@ SETTINGS = {
 
 
 def settings(namespace: Mapping[str, Any]) -> dict[str, Any]:
-    """Return environment-sensitive job settings."""
+    """Return environment-sensitive job settings.
+
+    The host/stack owns broker topology and supplies ``CELERY_BROKER_URL``
+    through its environment or settings namespace; the framework job seam has
+    no deployment-specific broker default.
+    """
 
     result: dict[str, Any] = {}
     # Beat's schedule state file belongs in the stack's data dir, never in beat's

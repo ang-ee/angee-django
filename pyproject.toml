@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatch-angee>=0.1.5"]
+requires = ["hatch-angee>=0.2.1"]
 build-backend = "hatch_angee.build"
 
 [project]
@@ -18,9 +18,6 @@ dependencies = [
   "channels>=4.0",
   "channels-redis>=4.2",
   "cryptography>=44",
-  "django-import-export>=4.3",
-  "django-anymail>=15.1",
-  "django-axes>=8.0",
   "django-reversion>=5.1",
   "django-simple-history>=3.7",
   "django-sqids>=0.1",
@@ -28,64 +25,29 @@ dependencies = [
   # <6.1: Django 6.1 adds fetch_mode to Model.from_db and django-zed-rebac's
   # override does not accept it yet; lift the cap when rebac supports 6.1.
   "django>=6.0,<6.1",
+  "fastmcp>=3.4.2,<4",
+  "hatch-angee>=0.2.1",
+  "mcp>=1.2",
   "pydantic>=2.13",
-  "pydantic-ai-slim[anthropic,mcp,openai]>=2.13",
-  "croniter>=6.0",
-  "python-dateutil>=2.9",
-  "phonenumbers>=9.0",
-  "pyjwt[crypto]>=2.12",
-  "pyyaml>=6",
-  # Comment/format-preserving YAML round-trip: the AddonInstaller's settings.yaml
-  # INSTALLED_APPS install/uninstall edit (pyyaml round-trips lose comments/layout).
-  "ruamel.yaml>=0.18",
   "strawberry-graphql>=0.270",
   "strawberry-django-aggregates>=0.10.0",
   "strawberry-django-hasura>=0.6.0",
   # 0.86.7 carries the DEFAULT_PK_FIELD_NAME mutation-lookup fix the Hasura
   # resolvers depend on (upstream #928, was an Angee fork patch).
   "strawberry-graphql-django>=0.86.7",
-  "tablib>=3",
   "django-choices-field>=4.0.0",
   "django-yamlconf>=1.5.0",
   "django-environ>=0.12",
-  "python-magic>=0.4.27",
-  "mcp>=1.2",
   # ASGI server: serves the composed app (Django + channels WebSocket + the MCP
   # StreamableHTTP mount). uvicorn sends the ASGI lifespan that runs the mount's
   # session manager; [standard] adds WebSocket and --reload support for dev.
   "uvicorn[standard]>=0.30",
-  "fastmcp>=3.4.2,<4",
-  "anthropic>=0.109.2",
-  "openai>=2.43.0",
-  "vobject>=0.9.9",
-  "markdown-it-py>=4.2",
-  "authlib>=1.7.2",
-  # httpcore is bounded and named directly: integrate.http subclasses its SyncBackend
-  # and swaps the ConnectionPool's network backend for the SSRF pin, so the pin owns
-  # httpcore's API. httpx is bounded to the verified range for the same reason.
-  "httpcore>=1.0,<2",
-  "httpx>=0.28.1,<0.29",
-  "imapclient>=3.1.0",
-  "slack-sdk>=3.43.0",
-  "mail-parser-reply>=1.36",
-  "neonize>=0.4.3.post0",
-  "qrcode[pil]>=8.2",
-  "telethon>=1.44",
-  "cryptg>=0.6.0",
-  "discord-py>=2.7",
 ]
 
 [project.optional-dependencies]
-# Per-addon extras: an addon whose third-party dependencies are heavy, or whose
-# build is fragile, declares them here instead of in the unconditional table above,
-# so a deployment that does not compose that addon never resolves them. Safe by
-# construction — `test_live_console_import_path_stays_vendor_free` proves the
-# console/ASGI import closure reaches none of these libraries; only the addon's
-# dedicated worker (its `*.session` module) loads them. Composing the addon without
-# its extra is the operator's error, and the worker fails fast on the import.
-#
-# pgvector's Python package and the hatch-angee addon-dependency collection stay
-# deferred, so this is a static table, not `dynamic`.
+# Wheel extras are reserved for core-owned deployment variants. Addon-owned
+# dependencies come from each composed addon's addon.toml and are projected by
+# `manage.py angee build` into the host's generated dependency group.
 
 # Postgres driver only — installed by the runtime image's `--extra postgres` and by
 # the self-contained local stack. psycopg 3 is the driver Django 6's
@@ -93,14 +55,6 @@ dependencies = [
 # stack env supplies the URL; angee/compose/settings.py maps it, SQLite floor
 # otherwise).
 postgres = ["psycopg[binary]>=3.2"]
-
-# angee.messaging_integrate_matrix. `mautrix[encryption]` pulls python-olm, which
-# vendors EOL libolm C++ and only builds under the `[tool.uv.extra-build-variables]`
-# workaround below — so it is the clearest case for staying out of the default
-# resolution. mautrix's persistent PgCryptoStore selects the two DB drivers
-# directly: asyncpg for its store module import, aiosqlite for the addon's SQLite
-# store URL, so they are part of the same E2EE boundary and move with it.
-matrix = ["mautrix[encryption]", "asyncpg>=0.30", "aiosqlite>=0.21"]
 
 [dependency-groups]
 dev = [
@@ -119,19 +73,6 @@ dev = [
 # `.angee/caches/uv` wherever uv runs (slots, worktrees, the stack root under
 # --project). The rendered stack host pins its own stack-owned cache; every
 # other invocation uses uv's default per-user cache.
-
-[tool.uv.extra-build-variables]
-# python-olm (mautrix[encryption]) vendors the EOL libolm C++ source, which
-# modern clang rejects on a const-increment inside a never-instantiated template
-# member (macOS has no wheels; manylinux wheels predate the stricter checks).
-# Deferring template semantic checks lets the sdist build unchanged. Remove when
-# mautrix moves off libolm (vodozemac) or a fixed release appears.
-#
-# Inert unless the `matrix` extra is selected: python-olm is no longer in the
-# default resolution, so an install without `--extra matrix` never builds it and
-# never reads this. It stays here (not beside the extra — uv has no per-extra build
-# settings) so the one install that does resolve python-olm still gets the flag.
-python-olm = { CXXFLAGS = "-fdelayed-template-parsing" }
 
 [tool.uv.sources]
 strawberry-graphql = { git = "https://github.com/ang-ee/strawberry.git", branch = "codex/input-object-extensions" }

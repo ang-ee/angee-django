@@ -171,6 +171,23 @@ origins without writing. After a successful build, normal `makemigrations` may
 generate any remaining lossless changes and Django handles the rest of the
 migration lifecycle.
 
+### Composed addon dependencies
+
+Each addon's `addon.toml` owns its third-party `dependencies`. After runtime
+emission, explicit `angee build` passes the manifests for the resolved Django app
+graph to hatch-angee and writes their exact sorted union into the host
+`pyproject.toml` as the generated `[dependency-groups].addons` key. The four
+in-wheel core addons are excluded because the `django-angee` wheel already carries
+their dependencies in static package metadata. Plain Django apps and addons that
+are available but not composed contribute nothing.
+
+The hatch-angee writer preserves unrelated TOML comments and formatting, writes
+atomically, and leaves an identical file untouched. A bare host with no
+`pyproject.toml` is an explicit build-time skip so framework unit tests and minimal
+Django projects can still emit a runtime. A fresh generated host therefore
+bootstraps in two dependency steps: sync the core, run `manage.py angee build` to
+materialize the addon group, then sync again to install that group.
+
 `ComposeConfig.import_models()` is the Django app-loading hook. In app-populate
 phase 2 it calls `emit_if_stale()` and then imports generated models:
 

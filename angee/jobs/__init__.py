@@ -3,12 +3,8 @@
 This app owns Angee's deferred and periodic execution tier. Addons declare
 Celery tasks in conventional ``tasks.py`` modules and enqueue through the small
 Angee seam when they need framework-owned defaults.
+
+Kept import-light because Django imports the package during app population.
+Callers import the concrete seam from ``angee.jobs.enqueue`` or
+``angee.jobs.locks``; Celery imports ``angee.jobs.celery`` as its application.
 """
-
-from __future__ import annotations
-
-from angee.jobs.celery import app as celery_app
-from angee.jobs.enqueue import enqueue_task
-from angee.jobs.locks import LockKey, record_lock_key, task_lock, task_lock_is_held
-
-__all__ = ["LockKey", "celery_app", "enqueue_task", "record_lock_key", "task_lock", "task_lock_is_held"]

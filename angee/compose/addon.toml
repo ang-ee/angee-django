@@ -9,5 +9,8 @@ depends_on = ["django_yamlconf"]
 dependencies = [
   "django-environ>=0.12",
   "django-yamlconf>=1.5.0",
+  "fastmcp>=3.4.2,<4",
+  "hatch-angee>=0.2.1",
+  "mcp>=1.2",
   "uvicorn[standard]>=0.30",
 ]

@@ -1,35 +1,21 @@
-"""Guard the addon dependency partition against the authoritative root tables."""
+"""Guard core and composed-addon dependency ownership."""
 
 from __future__ import annotations
 
 import tomllib
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
+from django.apps import AppConfig
+
+from angee.compose import dependencies as dependencies_module
+from angee.compose.dependencies import AddonDependencyGroup, AddonDependencyGroupResult
+from angee.compose.runtime import Runtime
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SOURCE_ROOT = PROJECT_ROOT.parent
-# The union partition needs every sibling addon repo present (D2 in-stack
-# mode); a bare checkout skips and the stack lane enforces the full union.
-SIBLING_ADDON_ROOTS = (
-    SOURCE_ROOT / "angee-base" / "addons" / "angee",
-    SOURCE_ROOT / "angee-messaging-bridges" / "addons" / "angee",
-)
-ADDON_ROOTS = tuple(
-    root
-    for root in (PROJECT_ROOT / "angee", *SIBLING_ADDON_ROOTS)
-    if root.is_dir()
-)
-CORE_DEPENDENCIES = {"django>=6.0,<6.1", "pydantic>=2.13"}
-MATRIX_MANIFEST = (
-    SOURCE_ROOT
-    / "angee-messaging-bridges"
-    / "addons"
-    / "angee"
-    / "messaging_integrate_matrix"
-    / "addon.toml"
-)
+CORE_METADATA_DEPENDENCIES = {"django>=6.0,<6.1"}
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
@@ -39,39 +25,121 @@ def _read_toml(path: Path) -> dict[str, Any]:
         return tomllib.load(stream)
 
 
-def _addon_manifests() -> tuple[Path, ...]:
-    """Discover every first-party addon manifest under both Python source roots."""
+def _app_config(path: Path, name: str, dependencies: tuple[str, ...]) -> AppConfig:
+    """Return an AppConfig backed by an addon manifest under ``path``."""
 
-    return tuple(
-        manifest
-        for root in ADDON_ROOTS
-        for manifest in sorted(root.glob("*/addon.toml"))
+    path.mkdir(parents=True)
+    module = ModuleType(name)
+    module.__file__ = str(path / "apps.py")
+    module.__path__ = [str(path)]  # type: ignore[attr-defined]
+    rendered_dependencies = ", ".join(f'"{dependency}"' for dependency in dependencies)
+    (path / "addon.toml").write_text(
+        f'[addon]\nname = "{name}"\ndependencies = [{rendered_dependencies}]\n',
+        encoding="utf-8",
     )
+    return AppConfig(name, module)
 
 
-def test_addon_dependencies_partition_the_authoritative_root_tables() -> None:
-    """Every addon dependency remains a verbatim member of its authoritative root table."""
+def test_core_dependencies_match_the_in_wheel_addon_manifests() -> None:
+    """The wheel carries exactly its four addons plus core distribution metadata."""
 
-    if not all(root.is_dir() for root in SIBLING_ADDON_ROOTS):
-        pytest.skip("sibling addon repos absent — the union partition is enforced in the stack lane")
-
-    project = _read_toml(PROJECT_ROOT / "pyproject.toml")["project"]
-    root_dependencies = set(project["dependencies"])
-    optional_dependencies = project["optional-dependencies"]
-    matrix_dependencies = set(optional_dependencies["matrix"])
-    dependencies_by_manifest = {
-        manifest: set(_read_toml(manifest)["addon"].get("dependencies", ()))
-        for manifest in _addon_manifests()
+    project_dependencies = set(_read_toml(PROJECT_ROOT / "pyproject.toml")["project"]["dependencies"])
+    addon_dependencies = {
+        dependency
+        for manifest in sorted((PROJECT_ROOT / "angee").glob("*/addon.toml"))
+        for dependency in _read_toml(manifest)["addon"].get("dependencies", ())
     }
-    declared_dependencies = set().union(*dependencies_by_manifest.values())
 
-    assert dependencies_by_manifest, "no addon manifests were discovered"
-    assert CORE_DEPENDENCIES <= root_dependencies
-    assert declared_dependencies - matrix_dependencies == root_dependencies - CORE_DEPENDENCIES
-    if MATRIX_MANIFEST.is_file():
-        assert dependencies_by_manifest[MATRIX_MANIFEST] == matrix_dependencies
+    assert project_dependencies == addon_dependencies | CORE_METADATA_DEPENDENCIES
 
-    root_declared_dependencies = root_dependencies | set().union(
-        *(set(dependencies) for dependencies in optional_dependencies.values())
+
+def test_composed_addon_dependencies_are_written_idempotently(tmp_path: Path) -> None:
+    """Only composed folder-addon manifests project into the host group."""
+
+    host = tmp_path / "host"
+    host.mkdir()
+    pyproject = host / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "host"\nversion = "0.0.0"\n\n'
+        '[dependency-groups]\ndev = ["pytest>=8"]\n',
+        encoding="utf-8",
     )
-    assert declared_dependencies <= root_declared_dependencies
+    addon = _app_config(tmp_path / "fake-addon", "example.fake", ("zeta>=2", "alpha>=1", "alpha>=1"))
+    core = _app_config(tmp_path / "fake-core", "angee.base", ("core-vendor>=1",))
+    projection = AddonDependencyGroup((addon, core), project_dir=host)
+
+    assert projection.write() is AddonDependencyGroupResult.WRITTEN
+    first_stat = pyproject.stat()
+    document = _read_toml(pyproject)
+    assert document["dependency-groups"]["dev"] == ["pytest>=8"]
+    assert document["dependency-groups"]["addons"] == ["alpha>=1", "zeta>=2"]
+    assert pyproject.read_text(encoding="utf-8").count("GENERATED by angee build") == 1
+
+    assert projection.write() is AddonDependencyGroupResult.UNCHANGED
+    assert pyproject.stat().st_ino == first_stat.st_ino
+    assert pyproject.stat().st_mtime_ns == first_stat.st_mtime_ns
+
+
+def test_composed_addon_dependencies_skip_a_bare_host(tmp_path: Path) -> None:
+    """A unit-test or bare project with no pyproject is an explicit no-op."""
+
+    addon = _app_config(tmp_path / "fake-addon", "example.fake_bare", ("alpha>=1",))
+    host = tmp_path / "host"
+    host.mkdir()
+
+    projection = AddonDependencyGroup((addon,), project_dir=host)
+
+    assert projection.write() is AddonDependencyGroupResult.SKIPPED_NO_PYPROJECT
+    assert projection.check() is AddonDependencyGroupResult.SKIPPED_NO_PYPROJECT
+    assert not (host / "pyproject.toml").exists()
+
+
+def test_runtime_dependency_check_accepts_fresh_rejects_stale_and_skips_bare_host(tmp_path: Path) -> None:
+    """Runtime check includes the compiled host dependency group when one exists."""
+
+    host = tmp_path / "host"
+    host.mkdir()
+    pyproject = host / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "host"\nversion = "0.0.0"\n', encoding="utf-8")
+    addon = _app_config(tmp_path / "fake-addon", "example.fake_check", ("alpha>=1",))
+    runtime = Runtime((addon,), runtime_dir=tmp_path / "runtime", project_dir=host)
+
+    assert runtime.build() is AddonDependencyGroupResult.WRITTEN
+    assert runtime.build() is AddonDependencyGroupResult.UNCHANGED
+    runtime.check()
+
+    pyproject.write_text(pyproject.read_text(encoding="utf-8").replace("alpha>=1", "stale>=1"), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="host addon dependency group is stale"):
+        runtime.check()
+
+    pyproject.unlink()
+    runtime.check()
+
+
+def test_runtime_build_reports_a_missing_project_directory(tmp_path: Path) -> None:
+    """Runtime delegates the no-project result instead of making the command infer it."""
+
+    addon = _app_config(tmp_path / "fake-addon", "example.fake_no_project", ("alpha>=1",))
+    runtime = Runtime((addon,), runtime_dir=tmp_path / "runtime", project_dir=None)
+
+    assert runtime.build() is AddonDependencyGroupResult.SKIPPED_NO_PROJECT_DIR
+
+
+def test_composed_addon_dependency_write_wraps_os_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Atomic replacement failures reach the command as clean runtime errors."""
+
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "pyproject.toml").write_text('[project]\nname = "host"\nversion = "0.0.0"\n', encoding="utf-8")
+    addon = _app_config(tmp_path / "fake-addon", "example.fake_write_error", ("alpha>=1",))
+
+    def fail_write(*_args: object, **_kwargs: object) -> None:
+        raise OSError("read-only pyproject")
+
+    monkeypatch.setattr(dependencies_module, "write_block", fail_write)
+
+    with pytest.raises(RuntimeError, match="read-only pyproject"):
+        AddonDependencyGroup((addon,), project_dir=host).write()

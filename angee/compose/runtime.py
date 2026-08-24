@@ -28,10 +28,12 @@ from django.utils.module_loading import module_has_submodule
 from angee.base.emission import ModelClassAttribute, ModelDecorator
 from angee.base.models import AngeeModel
 from angee.base.transitions import revalidate_transition_metadata
+from angee.compose.dependencies import AddonDependencyGroup, AddonDependencyGroupResult
 from angee.compose.migrations import RuntimeMigrations
 from angee.compose.permissions import extension_source_map
 from angee.compose.web import WebRuntime
 from angee.fs import GENERATED_SENTINEL, write_atomic
+from angee.project import find_project_dir
 
 _COMPOSER_WEB_SOURCES = {
     Path("web/manifest.json"),
@@ -101,7 +103,8 @@ class Runtime:
       whole runtime. Every other entry point renders through it.
     - ``emit`` — write that map to ``runtime_dir`` during the explicit
       ``angee build`` pass (resets, prunes orphans).
-    - ``build`` — emit stale sources, then materialize applicable addon-owned
+    - ``build`` — emit stale sources, project the composed folder addons into
+      the host dependency group, then materialize applicable addon-owned
       migrations onto the downstream Django graph.
     - ``is_current`` / ``check`` / ``_drift`` — disk vs the rendered map.
     - ``reset`` / ``clean`` — delete generated files behind the
@@ -118,12 +121,14 @@ class Runtime:
         *,
         runtime_dir: Path,
         runtime_module: str = "runtime",
+        project_dir: Path | None = None,
     ) -> None:
         """Create a runtime renderer for ``addons`` and ``runtime_dir``."""
 
         self.addons = tuple(addons)
         self.runtime_dir = runtime_dir
         self.runtime_module = runtime_module
+        self.project_dir = project_dir
         self._contributions = tuple((addon, self.model_contributions(addon)) for addon in self.addons)
         self.sources_by_label = self._sources_by_label()
         self.source_models_by_composition_label = self._source_models_by_composition_label()
@@ -156,6 +161,7 @@ class Runtime:
             apps.get_app_configs(),
             runtime_dir=Path(runtime_dir),
             runtime_module=str(runtime_module),
+            project_dir=find_project_dir(),
         ).configure_migration_modules()
 
     def render_sources(self) -> dict[Path, str]:
@@ -216,12 +222,20 @@ class Runtime:
             labels=self.labels,
         )
 
-    def build(self) -> tuple[Path, ...]:
-        """Emit stale generated sources, then materialize addon migrations."""
+    @property
+    def addon_dependency_group(self) -> AddonDependencyGroup:
+        """Return the dependency projector for this runtime's composed host."""
+
+        return AddonDependencyGroup(self.addons, project_dir=self.project_dir)
+
+    def build(self) -> AddonDependencyGroupResult:
+        """Emit stale sources, project addon dependencies, then materialize migrations."""
 
         if not self.is_current():
             self.emit()
-        return self.runtime_migrations().materialize()
+        dependency_result = self.addon_dependency_group.write()
+        self.runtime_migrations().materialize()
+        return dependency_result
 
     def import_generated_models(self) -> None:
         """Import generated concrete model modules for all emitted labels."""
@@ -272,12 +286,13 @@ class Runtime:
         return not self._drift()
 
     def check(self) -> None:
-        """Raise for generated-source drift or pending addon migrations."""
+        """Raise for generated-source, dependency-group, or migration drift."""
 
         drift = self._drift()
         if drift:
             rendered = ", ".join(str(path) for path in drift)
             raise RuntimeError(f"generated runtime is stale: {rendered}")
+        self.addon_dependency_group.check()
         self.runtime_migrations().check()
 
     def _drift(self) -> list[Path]:

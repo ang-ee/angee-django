@@ -15,9 +15,9 @@ references — follow this before restarting anything.
 | `examples/notes-angee` (the example host itself) | **dissolved** — a stack is the host: `angee init` renders the host at the stack root (`ang-ee/angee-templates`, `projects/web` + `stacks/dev`); the reference e2e suite lives in **angee-examples** `e2e/` |
 | `templates/` | the **angee-templates** repo (in flight — P7) |
 
-What did **not** change: addon names, `INSTALLED_APPS` entries, the
-`django-angee` distribution's dependencies and the `matrix` extra (they stay
-until the dependency projection ships), your data, your migrations.
+What did **not** change: addon names, `INSTALLED_APPS` entries, your data, or your
+migrations. Dependency ownership did change: each folder addon's `addon.toml`
+now supplies its vendor dependencies to the composed host.
 
 ## 1. Add the new sources
 
@@ -69,9 +69,11 @@ symptom is a context-provider error at runtime ("No QueryClient set",
 ## 4. Refresh and restart
 
 ```sh
-uv sync --project sources/angee-django --extra postgres   # refresh the editable
-pnpm install                                              # relink the workspace
-angee dev                                                 # or restart services
+uv sync                              # bootstrap django-angee
+uv run manage.py angee build         # write the composed addons dependency group
+uv sync                              # install the generated addons group
+pnpm install                         # relink the workspace
+angee dev                            # or restart services
 ```
 
 The boot re-composes, `rebac sync` reads permissions from the new trees, and
@@ -90,11 +92,11 @@ identical).
 ## Notes
 
 - **Bridges are opt-in now.** No bridge repo cloned = no bridge code
-  present; remove bridge entries from `INSTALLED_APPS` if you don't use
-  them. Matrix additionally still needs `django-angee[matrix]`.
+  present; remove bridge entries from `INSTALLED_APPS` if you don't use them.
+  A composed Matrix bridge contributes its own E2EE dependencies through the
+  generated addons group.
 - Consumer repos with hand-written globs into the old monorepo layout
   (e.g. `../angee-django/angee/web/*`) need the same re-pointing to their
   `../angee-react/*` siblings.
-- Dependencies are unchanged in this release: the `django-angee` editable
-  still carries the full dependency table, so no `pyproject.toml` changes
-  are required. The per-addon dependency projection arrives separately.
+- The generated `[dependency-groups].addons` key is composer-owned. Do not edit
+  it by hand; change the owning addon's manifest and rerun `angee build`.

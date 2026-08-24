@@ -11,9 +11,11 @@ Dependency changes must update this file in the same change.
 
 - `docs/stack.md` owns concern boundaries: which library owns which job, and
   what thin glue Angee adds.
-- `pyproject.toml` owns Python package metadata, workspace membership, tool
-  configuration, and declared Python dependencies. `uv.lock` pins the resolved
-  Python graph. Use `uv add` / `uv lock`; do not use `pip install` by hand.
+- Each addon's `addon.toml` owns its Python dependencies. The core
+  `pyproject.toml` carries the four in-wheel addon manifests plus distribution
+  metadata; `angee build` projects the composed folder addons into the host's
+  generated `[dependency-groups].addons` key. `uv.lock` pins the resolved Python
+  graph. Use `uv add` / `uv lock`; do not use `pip install` by hand.
 - `package.json` owns JavaScript package scripts and declared dependencies.
   `pnpm-workspace.yaml` owns workspace membership. `pnpm-lock.yaml` pins the
   resolved JavaScript graph. Use `pnpm add` / `pnpm install`; do not use npm or
@@ -33,7 +35,7 @@ Dependency changes must update this file in the same change.
 | strawberry-django-hasura >= 0.6 | Expose Django models in the Hasura GraphQL dialect (`_bool_exp`/`_aggregate`/`x_by_pk`/`_set`, exact `Decimal` filters, nested to-many `NestedInsert`), exact grouped-count roots, plus computed (non-model) sources via a `run_query` `RowSource` | Composes it as the model emitter (`hasura_model_resource`, incl. `lines=` editable-child nested inserts) and the pydantic computed-source emitter (`hasura_pydantic_resource`) |
 | pydantic | Typed model validation/parsing | Row-shape SSOT for computed (non-model) Hasura resources — the node + filter scalars derive from the pydantic model (`hasura_pydantic_resource`) |
 | pydantic-ai-slim[anthropic,openai,mcp] | In-process agent loop, tool calling, replayable message history, and MCP client; `pydantic-graph` is a transitive dependency but is not used by Angee directly | `agents_runtime_pydantic` adapts Angee inference backends and selected MCP rows into one bounded session turn; workflow durability and approval decisions remain owned by `workflows` / `workflows_agents` |
-| Celery + Redis | Task transport, worker execution, retries, queue routing, and periodic dispatch | hosted by the `angee.jobs` framework app; Redis-backed broker; task bodies acquire Angee locks and delegate state changes to model/manager owners |
+| Celery + Redis | Task transport, worker execution, retries, queue routing, and periodic dispatch | hosted by the `angee.jobs` framework app; the host/stack supplies broker topology; task bodies acquire Angee locks and delegate state changes to model/manager owners |
 | croniter | Cron-expression schedule parsing | schedule triggers compute `next_fire_at` (workflows) |
 | python-dateutil | RFC-5545 recurrence-rule parsing and expansion (`rrulestr`) | `angee.scheduling` owns recurrence — `RecurrenceField` (a validated RRULE column) + `Recurrence.occurrences(window)`, bounded, timezone-aware expansion in the project `TIME_ZONE` |
 | phonenumbers | Region-aware telephone parsing, validation, matching, and E.164 formatting | `parties.Handle.normalize_value` parses phone/WhatsApp values with `region=None`, so canonical E.164 input requires a leading `+country` code; invalid, impossible, or region-unknown values use the digit-only comparison fallback, and signature evidence mines through the same owner |
