@@ -17,6 +17,7 @@ import type {
 } from "@angee/metadata";
 
 import { useUiT } from "../i18n";
+import { useValueStable } from "../lib/use-value-stable";
 import { BoardView } from "./BoardView";
 import {
   withResourceViewScope,
@@ -154,7 +155,7 @@ function ListViewBody<TRow extends Row = Row>({
   defaultGroup,
   defaultGroups,
   calendar,
-  laneSource,
+  laneSource: laneSourceInput,
   onCreate,
   onCreateInLane,
   createLabel,
@@ -174,6 +175,14 @@ function ListViewBody<TRow extends Row = Row>({
   resourceView: ResourceViewContextValue;
 }): React.ReactElement {
   const t = useUiT();
+  // A board page declares `laneSource` inline (`{ field, filters: fn(id), … }`),
+  // so it arrives as a fresh identity every render. That identity cascades
+  // through `resolvedLaneSource` → the pinned board group → the group-state
+  // effect, which re-dispatches `setGroup` faster than the async URL write can
+  // settle `state.group` — an update-depth loop. Collapsing value-equal
+  // laneSource back to one identity lets the derived group memoise and the
+  // effect settle after a single dispatch.
+  const laneSource = useValueStable(laneSourceInput);
   const rowActionSurface = useRowActionsSurface(rowActions);
   const resolvedEmptyContent = emptyContent ?? t("list.empty");
   // The Calendar kind is offered only where the page declares occurrence sources;
