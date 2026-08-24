@@ -8,7 +8,8 @@ from django.apps import apps
 from django.db import models
 from strawberry import auto
 
-from angee.graphql.data import DataResourceSubtitleMetadata, hasura_model_resource
+from angee.data.metadata import DataResourceSubtitleMetadata
+from angee.graphql.data import hasura_model_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
