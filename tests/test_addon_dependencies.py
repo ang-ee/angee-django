@@ -1,4 +1,4 @@
-"""Guard core and composed-addon dependency ownership."""
+"""Guard composed folder-addon dependency ownership."""
 
 from __future__ import annotations
 
@@ -14,12 +14,6 @@ from angee.compose import dependencies as dependencies_module
 from angee.compose.dependencies import AddonDependencyGroup, AddonDependencyGroupResult
 from angee.compose.runtime import Runtime
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CORE_METADATA_DEPENDENCIES = {
-    "channels>=4.0",  # Core ASGI owns the generic WebSocket routing seam.
-    "django>=6.0,<6.1",
-}
-
 
 def _read_toml(path: Path) -> dict[str, Any]:
     """Return the TOML document at ``path`` using the standard-library parser."""
@@ -28,32 +22,20 @@ def _read_toml(path: Path) -> dict[str, Any]:
         return tomllib.load(stream)
 
 
-def _app_config(path: Path, name: str, dependencies: tuple[str, ...]) -> AppConfig:
-    """Return an AppConfig backed by an addon manifest under ``path``."""
+def _app_config(path: Path, name: str, dependencies: tuple[str, ...] | None) -> AppConfig:
+    """Return an AppConfig, optionally backed by an addon manifest."""
 
     path.mkdir(parents=True)
     module = ModuleType(name)
     module.__file__ = str(path / "apps.py")
     module.__path__ = [str(path)]  # type: ignore[attr-defined]
-    rendered_dependencies = ", ".join(f'"{dependency}"' for dependency in dependencies)
-    (path / "addon.toml").write_text(
-        f'[addon]\nname = "{name}"\ndependencies = [{rendered_dependencies}]\n',
-        encoding="utf-8",
-    )
+    if dependencies is not None:
+        rendered_dependencies = ", ".join(f'"{dependency}"' for dependency in dependencies)
+        (path / "addon.toml").write_text(
+            f'[addon]\nname = "{name}"\ndependencies = [{rendered_dependencies}]\n',
+            encoding="utf-8",
+        )
     return AppConfig(name, module)
-
-
-def test_core_dependencies_match_the_in_wheel_addon_manifests() -> None:
-    """The wheel carries exactly its three addons plus core distribution metadata."""
-
-    project_dependencies = set(_read_toml(PROJECT_ROOT / "pyproject.toml")["project"]["dependencies"])
-    addon_dependencies = {
-        dependency
-        for manifest in sorted((PROJECT_ROOT / "angee").glob("*/addon.toml"))
-        for dependency in _read_toml(manifest)["addon"].get("dependencies", ())
-    }
-
-    assert project_dependencies == addon_dependencies | CORE_METADATA_DEPENDENCIES
 
 
 def test_composed_addon_dependencies_are_written_idempotently(tmp_path: Path) -> None:
@@ -68,8 +50,8 @@ def test_composed_addon_dependencies_are_written_idempotently(tmp_path: Path) ->
         encoding="utf-8",
     )
     addon = _app_config(tmp_path / "fake-addon", "example.fake", ("zeta>=2", "alpha>=1", "alpha>=1"))
-    core = _app_config(tmp_path / "fake-core", "angee.base", ("core-vendor>=1",))
-    projection = AddonDependencyGroup((addon, core), project_dir=host)
+    plain_core = _app_config(tmp_path / "fake-core", "angee.base", None)
+    projection = AddonDependencyGroup((addon, plain_core), project_dir=host)
 
     assert projection.write() is AddonDependencyGroupResult.WRITTEN
     first_stat = pyproject.stat()

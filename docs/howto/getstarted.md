@@ -47,7 +47,8 @@ The framework is a thin composition layer. You write **source models**
 (abstract Django models), GraphQL contributions, REBAC permissions, and React
 views inside **addons**; the **composer** assembles those addon contracts into a
 concrete, runnable Django + GraphQL + React application under a generated
-`runtime/` tree. Everything — including the framework core — is an addon, so the
+`runtime/` tree. The framework core supplies the language and composition
+machinery, while every product capability — including GraphQL — is an addon. The
 first question for any change is always *which level owns it.*
 
 Concretely, you build in **addons**, and each addon bundles two halves that ship
@@ -257,8 +258,8 @@ cooperate:
   whole runtime up from a fresh checkout is the single `manage.py angee provision`
   command, which owns that build→migrate→sync→load→schema chain end to end (the
   dev and local stacks invoke it instead of restating the steps). Because
-  everything is an addon and each fact has one owner, an agent's job is to find
-  the owning level and change it there — never to re-derive or monkey-patch.
+  each capability is an addon and each fact has one owner, an agent's job is to
+  find the owning level and change it there — never to re-derive or monkey-patch.
 
 In short, agents self-build because the operator makes the *lifecycle*
 scriptable and the framework makes the *application* a deterministic build from

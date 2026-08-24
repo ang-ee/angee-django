@@ -8,7 +8,7 @@ from django.apps import AppConfig
 
 
 class BareComposeConfig(AppConfig):
-    """Register the compose core addon without emitting a generated runtime."""
+    """Register the core composer without emitting a generated runtime."""
 
     name = "angee.compose"
     label = "compose"

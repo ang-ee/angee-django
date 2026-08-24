@@ -14,17 +14,19 @@ A project declares the root apps it composes through Django `INSTALLED_APPS`.
 
 ## Repository Role
 
-This repository holds the Angee framework core. The framework core is an addon
-like any other; the base addons (the sibling `angee-base` repo) build on it, and
-consumer addons (a product team's own code) build on those. See
-`docs/glossary.md` for these terms.
+This repository holds the Angee framework core: the language and the loom — the
+data contract, composer, model toolkit, serving seams, and jobs seam. The core is
+not an addon. Everything that gives a product a capability, including its API
+protocol, is an addon; framework addons live in the sibling `angee-base` repo,
+and consumer addons are a product team's own code. See `docs/glossary.md` for
+these terms.
 
-Because everything is an addon, the first question for any change is *what level
-does it belong to?*
+The first question for any change is *what level does it belong to?*
 
-- **Framework / base addon** — a capability that belongs to Angee and is
-  inherited by every project downstream. A change here is copied into every
-  consumer, so hold it to the highest bar.
+- **Framework core** — the composition language and shared machinery inherited
+  by every project downstream. A change here is copied into every consumer, so
+  hold it to the highest bar.
+- **Framework addon** — a reusable product capability that ships with Angee.
 - **Consumer addon** — product logic for a specific project, built on the
   framework.
 
@@ -35,13 +37,12 @@ stack DRY.
 
 ## Repository Layout
 
-A map by role, not a file inventory — each addon's `AppConfig` and module
-docstrings own the current contract, and this points to the owner. Everything is
-an addon: the framework core at `angee/` is the one real Python package
-(`django-angee`); every other piece of the platform lives in a sibling source
-repo, materialized side by side as workspace slots by a stack's `src` workspace.
-The `angee.*` namespace spans the core and the base addons across repos without
-changing any import.
+A map by role, not a file inventory — core module docstrings and addon contracts
+own the current behavior, and this points to those owners. The framework core at
+`angee/` is the one real Python package (`django-angee`); product capabilities
+live in addons from sibling source repos, materialized side by side as workspace
+slots by a stack's `src` workspace. The `angee.*` namespace spans the core and
+the base addons across repos without changing any import.
 
 ```text
 .                           # a workspace slot: <stack>/workspaces/<ws>/angee-django

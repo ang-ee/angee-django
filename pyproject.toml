@@ -75,7 +75,6 @@ artifacts = [
   "angee/**/*.typed",
   "angee/**/*.yaml",
   "angee/**/*.zed",
-  "angee/**/addon.toml",
 ]
 # The web/ sources are added by hatch-angee's addon-sources hook (the single source
 # of truth for them), so keep hatchling's default walk out of them — otherwise a

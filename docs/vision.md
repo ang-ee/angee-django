@@ -129,9 +129,9 @@ is a dev stack or a prod stack; a human, a script, or an agent drives the
 data, permissions, and the API, and a React SDK that owns everything visual —
 joined only by a typed contract the build emits.
 
-Everything is an addon, and addons are **composed, not patched.** Most plugin
-systems compose by concatenation and monkey-patching — runtime mutations rebuilt
-on every boot, impossible to audit. Angee composes at build time,
+Product capabilities are addons, and addons are **composed, not patched.** Most
+plugin systems compose by concatenation and monkey-patching — runtime mutations
+rebuilt on every boot, impossible to audit. Angee composes at build time,
 deterministically: abstract addons are merged by Python's own inheritance into
 one concrete application — one model graph, one GraphQL schema, one permission
 schema, one typed client. Byte-identical inputs produce byte-identical outputs,

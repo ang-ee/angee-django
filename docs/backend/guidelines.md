@@ -125,9 +125,10 @@ Rules that follow from the layering:
   those same facts directly. `angee.compose.settings` loads the project contract
   and calls `Composer(globals()).compose_settings()`, which expands the addon
   dependency closure and sorts the resulting app set, then gives Django the
-  resolved `AppConfig` instances in `INSTALLED_APPS`. The core boot apps
-  (`angee.compose`, `angee.base`) and folder addons such as `angee.graphql`
-  arrive through that same graph rather than a parallel hardcoded list. In
+  resolved `AppConfig` instances in `INSTALLED_APPS`. Framework defaults own the
+  ordered always-on core prefix (`django_yamlconf`, `angee.compose`, contenttypes,
+  REBAC, reversion, simple-history, `angee.base`, `angee.jobs`); folder addons such
+  as `angee.graphql` expand from the project's declared roots. In
   app-populate phase 2, `ComposeConfig.import_models()` checks the generated
   runtime and imports concrete model modules before normal app model imports
   continue. `angee build` and `angee clean` may emit stale runtime sources during

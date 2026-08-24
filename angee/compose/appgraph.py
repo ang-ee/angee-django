@@ -11,11 +11,11 @@ from angee.addons import addon_contract
 
 
 class AppGraph:
-    """Resolve project addon roots into ordered Django app configs.
+    """Resolve settings app roots into ordered Django app configs.
 
-    ``resolve`` also annotates each returned config with the composed-graph facts
-    a runtime reader (e.g. the platform console) needs but cannot re-derive
-    correctly from outside — the graph's owner records them here so consumers
+    ``resolve`` also annotates each returned config with composed-graph facts.
+    Runtime addon readers (e.g. the platform console) cannot re-derive those
+    correctly from outside, so the graph's owner records them here and consumers
     only read:
 
     - ``angee_addon_root``: whether the project declared this app as a root
@@ -23,12 +23,12 @@ class AppGraph:
       closure (``False``). If a declared root is also another root's dependency,
       the root declaration wins. The root/dependency split is the source of an
       addon's "consumer" vs "required" classification.
-    - ``angee_depends_on``: the addon's declared dependency names, normalized
-      through :meth:`app_dependencies` (the one parser of that fact).
+    - ``angee_depends_on``: an addon's declared dependency names, normalized
+      through :meth:`app_dependencies`; plain apps carry an empty tuple.
     - ``angee_forced``: whether any other resolved app depends on this one — the
-      composer's reading of "cannot be uninstalled" (framework core + anything
-      another installed addon needs). Transitive: ``A→B→C`` forces both ``B`` and
-      ``C``. A leaf consumer/host root nothing depends on is not forced.
+      composer's reading of "cannot be uninstalled" for addons another installed
+      addon needs. Transitive: ``A→B→C`` forces both ``B`` and ``C``. A leaf
+      consumer/host root nothing depends on is not forced.
     """
 
     def resolve(self, roots: Iterable[str | AppConfig]) -> tuple[AppConfig, ...]:
@@ -119,7 +119,7 @@ class AppGraph:
         return tuple(ordered)
 
     def app_dependencies(self, config: AppConfig) -> tuple[str, ...]:
-        """Return the app names or labels the addon's ``addon.toml`` declares."""
+        """Return an addon's declared app dependencies; plain apps have none."""
 
         contract = addon_contract(config)
         dependencies = contract.depends_on if contract is not None else ()

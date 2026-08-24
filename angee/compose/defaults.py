@@ -33,9 +33,21 @@ DEFAULT_AUTO_FIELD = globals().get("DEFAULT_AUTO_FIELD", "django.db.models.BigAu
 _configured_installed_apps = globals().get("INSTALLED_APPS", ())
 if isinstance(_configured_installed_apps, str):
     _configured_installed_apps = (_configured_installed_apps,)
-INSTALLED_APPS = [
+# Core apps are plain Django apps. Their stable topological boot order precedes
+# every project-declared addon root.
+_CORE_INSTALLED_APPS_PREFIX = (
+    "django_yamlconf",
     "angee.compose",
-    *(entry for entry in _configured_installed_apps if entry != "angee.compose"),
+    "django.contrib.contenttypes",
+    "rebac",
+    "reversion",
+    "simple_history",
+    "angee.base",
+    "angee.jobs",
+)
+INSTALLED_APPS = [
+    *_CORE_INSTALLED_APPS_PREFIX,
+    *(entry for entry in _configured_installed_apps if entry not in _CORE_INSTALLED_APPS_PREFIX),
 ]
 
 ANGEE_RUNTIME_MODULE = globals().get("ANGEE_RUNTIME_MODULE", "runtime")

@@ -43,7 +43,7 @@ build` path.
 | Concern | Owner |
 |---|---|
 | Project-root discovery, YAML settings load, bootstrap environment | [`angee.compose.settings`](../angee/compose/settings.py) |
-| Overridable framework defaults | [`angee.compose.defaults`](../angee/compose/defaults.py) |
+| Overridable framework defaults and ordered always-on core apps | [`angee.compose.defaults`](../angee/compose/defaults.py) |
 | Reserved composed settings and final settings mutation | [`Composer`](../angee/compose/composer.py) |
 | Root/dependency graph, app aliases, root annotations | [`AppGraph`](../angee/compose/appgraph.py) |
 | Addon settings fragments and declared `ANGEE_*` env overlays | [`AutoConfig`](../angee/compose/autoconfig.py) |
@@ -63,7 +63,8 @@ This document should point there, not repeat the contract.
 `angee.compose.settings` is the settings module Django imports. It owns the boot
 sequence: find the project root, load or synthesize the project settings module,
 apply `django-yamlconf`, reject implicit ancestor settings files, evaluate Angee
-defaults, make configured addon roots importable, and call `Composer`.
+defaults (including the ordered core app prefix), make configured addon roots
+importable, and call `Composer`.
 
 Project settings may override framework defaults before composition. Settings
 that are products of composition are reserved and are assigned by `Composer`; an
@@ -71,14 +72,14 @@ addon or project cannot redefine them with a conflicting value. The current
 reserved set lives in `COMPOSER_OWNED_SETTINGS`.
 
 `ANGEE_ADDON_DIRS` is interpreted during this phase only to make addon source
-roots importable. It is not a second addon list: the project root addon contract
-is `INSTALLED_APPS`.
+roots importable. It is not a second addon list: project roots are the configured
+`INSTALLED_APPS` entries after the framework-owned core prefix.
 
 ## App Graph And Settings
 
-`Composer` reads `INSTALLED_APPS` as the project's root addon list, resolves the
-full ordered app set through `AppGraph`, writes the resolved `AppConfig` objects
-back to `INSTALLED_APPS`, and sets the stable framework entrypoints.
+`Composer` reads the core-prefixed `INSTALLED_APPS`, resolves the full ordered app
+set through `AppGraph`, writes the resolved `AppConfig` objects back to
+`INSTALLED_APPS`, and sets the stable framework entrypoints.
 
 `AppGraph` delegates app creation to Django's `AppConfig.create()`, expands each
 app's declared dependencies, and annotates the resulting configs with graph facts
@@ -92,18 +93,18 @@ second time.
 
 ## Autoconfig
 
-After `INSTALLED_APPS` is resolved, `Composer` applies addon settings through
-`AutoConfig` in dependency order.
+After `INSTALLED_APPS` is resolved, `Composer` applies optional app settings
+through `AutoConfig` in dependency order. Core and third-party apps are plain
+`AppConfig` instances; folder addons additionally carry manifests.
 
-An addon may provide `<app>.autoconfig` with a `SETTINGS` mapping. The keys use
+Any app may provide `<app>.autoconfig` with a `SETTINGS` mapping. The keys use
 `django-yamlconf` syntax; `AutoConfig` owns the Angee rules around reserved
-settings, addon defaults, list/dict merging, and declared `ANGEE_*` environment
+settings, app defaults, list/dict merging, and declared `ANGEE_*` environment
 overlays. Apps still read `django.conf.settings`; process environment is
 normalized during composition.
 
-`django_yamlconf` is installed through the app graph because `angee.compose`
-depends on it, so `ycexplain` and `yclist` remain the provenance tools for
-composed settings.
+`django_yamlconf` is in the framework-owned app prefix, so `ycexplain` and
+`yclist` remain the provenance tools for composed settings.
 
 Entry-level before/after ordering for list settings is intentionally not built
 yet. Current order is addon dependency order plus yamlconf merge semantics. If a
@@ -176,10 +177,10 @@ migration lifecycle.
 Each addon's `addon.toml` owns its third-party `dependencies`. After runtime
 emission, explicit `angee build` passes the manifests for the resolved Django app
 graph to hatch-angee and writes their exact sorted union into the host
-`pyproject.toml` as the generated `[dependency-groups].addons` key. The four
-in-wheel core addons are excluded because the `django-angee` wheel already carries
-their dependencies in static package metadata. Plain Django apps and addons that
-are available but not composed contribute nothing.
+`pyproject.toml` as the generated `[dependency-groups].addons` key. The framework
+core has no manifests; its dependencies live in the wheel's package metadata.
+Other plain Django apps and addons that are available but not composed contribute
+nothing.
 
 The hatch-angee writer preserves unrelated TOML comments and formatting, writes
 atomically, and leaves an identical file untouched. A bare host with no

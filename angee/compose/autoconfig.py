@@ -61,7 +61,7 @@ def is_setting_name(name: str) -> bool:
 
 
 class AutoConfig:
-    """Apply addon autoconfig modules to a settings namespace."""
+    """Apply optional app autoconfig modules to a settings namespace."""
 
     def __init__(self, namespace: MutableMapping[str, Any], *, reserved_settings: frozenset[str]) -> None:
         """Store the settings namespace being mutated."""

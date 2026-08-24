@@ -12,12 +12,16 @@ deterministic product surface. It owns the seams, not the concerns.
 
 **Addon** — the unit of capability. An addon declares a contract (source models,
 operations, routes, slots, resources) that the composer assembles into a project.
-Everything, including the framework core, is an addon. **Addon** is also the
-user-facing name; **App** is reserved for a domain root in the product rail.
+Everything that gives a product a capability, including its API protocol, is an
+addon. The framework core is not. **Addon** is also the user-facing name;
+**App** is reserved for a domain root in the product rail.
 
-**Framework addon** — an addon that is part of Angee itself. The framework core is
-the foundational framework addon; other base addons ship with Angee and build on
-it. Inherited by every project downstream, so held to the highest bar.
+**Framework core** — Angee's composition language and loom: the data contract,
+composer, model toolkit, serving seams, and jobs seam. It is the `django-angee`
+wheel, not an addon.
+
+**Framework addon** — a reusable product capability that is part of Angee itself
+and builds on the framework core. Framework addons live in `angee-base`.
 
 **Consumer addon** — an addon written by a product team for a specific project,
 built on top of the framework and base addons.

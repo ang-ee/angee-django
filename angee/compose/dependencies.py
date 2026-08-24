@@ -10,15 +10,6 @@ from pathlib import Path
 from django.apps import AppConfig
 from hatch_angee import ManifestError, ProjectError, compile_dependencies, parse_manifest, write_block
 
-IN_WHEEL_ADDONS = frozenset(
-    {
-        "angee.base",
-        "angee.compose",
-        "angee.jobs",
-    }
-)
-# Their dependencies are already carried by the django-angee wheel.
-
 
 class AddonDependencyGroupResult(StrEnum):
     """Describe what dependency projection did for the host project."""
@@ -38,11 +29,11 @@ class AddonDependencyGroupResult(StrEnum):
 class AddonDependencyGroup:
     """Project the composed folder addons into the host dependency group.
 
-    The Django app graph owns which addons are composed. Each folder addon's
-    co-located ``addon.toml`` owns its dependencies, and hatch-angee owns parsing,
-    union compilation, and the round-trip-safe pyproject edit. The three in-wheel
-    core addons are excluded because their dependencies remain in the wheel's
-    static metadata.
+    The Django app graph owns which apps are composed. A co-located
+    ``addon.toml`` marks a folder addon and owns its dependencies; hatch-angee
+    owns parsing, union compilation, and the round-trip-safe pyproject edit.
+    Plain Django apps, including the framework core, have no manifest and
+    therefore contribute nothing.
     """
 
     def __init__(self, addons: Iterable[AppConfig], *, project_dir: Path | None) -> None:
@@ -64,8 +55,7 @@ class AddonDependencyGroup:
             manifests = tuple(
                 parse_manifest(marker)
                 for addon in self.addons
-                if addon.name not in IN_WHEEL_ADDONS
-                and (marker := Path(addon.path) / "addon.toml").is_file()
+                if (marker := Path(addon.path) / "addon.toml").is_file()
             )
             return compile_dependencies(manifests)
         except (ManifestError, ProjectError, OSError) as error:
