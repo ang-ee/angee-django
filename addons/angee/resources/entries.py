@@ -11,13 +11,13 @@ from typing import Any, Protocol, TypeAlias
 
 import tablib
 import yaml
+from angee.addons import addon_contract
 from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.utils import make_model_tuple
 from import_export.results import Result, RowResult
 
-from angee.addons import addon_contract
 from angee.resources import sources
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.tiers import ResourceTier

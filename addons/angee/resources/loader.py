@@ -9,6 +9,8 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 import tablib
+from angee.base.models import AngeeModel, instance_from_public_id, public_id_of
+from angee.base.serialization import json_safe
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from import_export import fields, resources
@@ -16,8 +18,6 @@ from import_export.instance_loaders import BaseInstanceLoader
 from import_export.results import RowResult
 from import_export.utils import get_related_model
 
-from angee.base.models import AngeeModel, instance_from_public_id, public_id_of
-from angee.base.serialization import json_safe
 from angee.resources.entries import RESERVED_ROW_KEYS, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.widgets import (

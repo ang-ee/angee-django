@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from angee.base.models import public_id_for
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.db import IntegrityError, connection, models, transaction
@@ -23,7 +24,6 @@ from rebac import (
 )
 from rebac.models import active_relationship_model
 
-from angee.base.models import public_id_for
 from angee.tags.models import _NEVER_LOADED
 from angee.tags.models import Tag as AbstractTag
 from angee.tags.models import TagAssignment as AbstractTagAssignment

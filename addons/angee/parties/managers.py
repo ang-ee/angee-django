@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from itertools import combinations
 from typing import TYPE_CHECKING, Any, Self, cast
 
+from angee.base.mixins import HierarchyQuerySet
+from angee.base.models import AngeeManager, AngeeQuerySet
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
@@ -29,8 +31,6 @@ from django.db.models.functions import Coalesce
 from phonenumbers import PhoneNumberMatcher
 from rebac import PermissionDenied, current_actor, system_context
 
-from angee.base.mixins import HierarchyQuerySet
-from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.parties.mixins import LinkSource
 

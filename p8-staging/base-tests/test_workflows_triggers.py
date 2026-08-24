@@ -8,6 +8,7 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
+from angee.base.models import AngeeDataModel
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -15,7 +16,6 @@ from django.utils import timezone
 from rebac import actor_context, app_settings, system_context
 from rebac.roles import grant
 
-from angee.base.models import AngeeDataModel
 from angee.graphql.events import ChangePayload
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.subscriptions import changes

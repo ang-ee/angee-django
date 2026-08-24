@@ -22,13 +22,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from angee.addons import available_addons
+from angee.base.fields import StateField
+from angee.base.models import AngeeManager, AngeeModel
 from django.conf import settings
 from django.db import models, router, transaction
 from rebac import system_context
 
-from angee.addons import available_addons
-from angee.base.fields import StateField
-from angee.base.models import AngeeManager, AngeeModel
 from angee.platform import composed
 from angee.platform.installer import InstallResult, addon_installer
 

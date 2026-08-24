@@ -14,11 +14,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any, cast
 
+from angee.base.models import AngeeManager, AngeeQuerySet
 from django.db import models, transaction
 from django.utils import timezone
 from rebac.managers import RebacManager
-
-from angee.base.models import AngeeManager, AngeeQuerySet
 
 
 class FeedFollowQuerySet(AngeeQuerySet[Any]):

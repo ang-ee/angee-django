@@ -24,15 +24,15 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from angee.base.actors import actor_user_id, is_user_actor
+from angee.base.mixins import SqidMixin
+from angee.base.models import AngeeModel
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from rebac import current_actor
 
-from angee.base.actors import actor_user_id, is_user_actor
-from angee.base.mixins import SqidMixin
-from angee.base.models import AngeeModel
 from angee.nexus.managers import CadenceManager, TieManager
 
 

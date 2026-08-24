@@ -11,12 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, ClassVar, cast
 
+from angee.base.impl import resolve_impl_class
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from rebac import system_context
 
-from angee.base.impl import resolve_impl_class
 from angee.integrate.impl import BridgeImpl
 from angee.storage.exceptions import UploadError
 from angee.storage.uploads import MIME_SNIFF_BYTES, detect_mime, sha256_stream

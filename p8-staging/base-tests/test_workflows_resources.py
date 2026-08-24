@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from angee.addons import AddonContract, addon_contract
 from rebac import system_context
 
-from angee.addons import AddonContract, addon_contract
 from angee.graphql.schema import GraphQLSchemas
 from angee.resources.models import Resource
 from angee.workflows import models as workflow_models

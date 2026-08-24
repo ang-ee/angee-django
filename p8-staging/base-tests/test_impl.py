@@ -5,10 +5,10 @@ from __future__ import annotations
 import importlib.util
 
 import pytest
+from angee.base.impl import ImplBase, ImplChoice
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 
-from angee.base.impl import ImplBase, ImplChoice
 from tests.conftest import Integration, OAuthClient
 
 

@@ -6,6 +6,7 @@ import logging
 import threading
 from typing import Any
 
+from angee.jobs.locks import task_locks_are_cross_process
 from celery import shared_task
 from celery.signals import worker_shutting_down
 from django.apps import apps
@@ -22,7 +23,6 @@ from angee.integrate.models import Bridge, IntegrationRuntimeStatus
 from angee.integrate.registry import bridge_models
 from angee.integrate.sync import bridge_progress_context
 from angee.integrate.sync_runner import run_bridge_sync_job
-from angee.jobs.locks import task_locks_are_cross_process
 
 logger = logging.getLogger(__name__)
 

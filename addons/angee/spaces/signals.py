@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from angee.base.rebac_m2m import reconcile_m2m_changed_relationships_on_commit
 from django.apps import apps
 from django.db import models
 from django.db.models.signals import class_prepared, m2m_changed, post_delete, post_save, pre_save
 from rebac import system_context
 
-from angee.base.rebac_m2m import reconcile_m2m_changed_relationships_on_commit
 from angee.parties.models import Person
 from angee.spaces.models import Group, Membership, ThreadSpace
 

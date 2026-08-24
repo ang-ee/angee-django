@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from angee.base.transitions import TransitionNotAllowed
 from django.apps import apps
 from django.conf import settings
 from django.utils.module_loading import import_string
@@ -19,7 +20,6 @@ from rebac import system_context
 
 from angee.agents.grants import grant_resource_reader_role
 from angee.agents.models import AgentLifecycle
-from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.actions import ActionResult, action_target
 from angee.graphql.ids import PublicID
 from angee.operator.daemon import OperatorDaemon, OperatorDaemonNotFound

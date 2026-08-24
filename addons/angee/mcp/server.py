@@ -24,11 +24,11 @@ from collections.abc import Callable
 from functools import cache
 from typing import TYPE_CHECKING
 
+from angee.addons import addon_contract, is_angee_addon, resolve_addon_reference
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from fastmcp import FastMCP
 
-from angee.addons import addon_contract, is_angee_addon, resolve_addon_reference
 from angee.mcp.middleware import ActorMiddleware
 from angee.mcp.verifier import RebacTokenVerifier
 

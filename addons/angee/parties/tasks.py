@@ -7,12 +7,11 @@ from itertools import groupby
 from operator import itemgetter
 from typing import Any
 
+from angee.jobs.locks import LockKey, task_lock
 from celery import shared_task
 from django.apps import apps
 from django.utils import timezone
 from rebac import system_context
-
-from angee.jobs.locks import LockKey, task_lock
 
 
 @shared_task(

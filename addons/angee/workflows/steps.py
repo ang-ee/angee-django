@@ -21,12 +21,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, ClassVar, Self
 
+from angee.base.impl import ImplBase
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rebac import system_context
-
-from angee.base.impl import ImplBase
 
 GATE_POLICIES = frozenset({"one_done", "all_success", "majority", "sequential"})
 """Seat aggregation policies supported by the built-in gate step."""

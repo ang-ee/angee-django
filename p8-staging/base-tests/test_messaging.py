@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from angee.base.mixins import AuditMixin, SqidMixin
+from angee.base.models import AngeeModel
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
@@ -39,8 +41,6 @@ from rebac import (
 )
 from rebac.actors import current_sudo_reason, is_sudo
 
-from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeModel
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload

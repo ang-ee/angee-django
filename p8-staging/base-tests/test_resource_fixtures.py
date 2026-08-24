@@ -22,16 +22,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from angee.addons import available_addons, is_angee_addon
+from angee.base.models import AngeeModel
+from angee.compose.appgraph import AppGraph
+from angee.compose.runtime import Runtime
 from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db.models import Field
 from django.test import override_settings
 
-from angee.addons import available_addons, is_angee_addon
-from angee.base.models import AngeeModel
-from angee.compose.appgraph import AppGraph
-from angee.compose.runtime import Runtime
 from angee.resources.entries import GRANT_KIND, ResourceEntry, resource_manifest_for
 
 ADDON_DIRS = (

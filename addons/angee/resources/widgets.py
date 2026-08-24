@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from angee.base.models import instance_from_public_id
 from django.apps import apps
 from django.db import models
 from import_export import widgets
 
-from angee.base.models import instance_from_public_id
 from angee.resources.entries import resolve_model
 
 

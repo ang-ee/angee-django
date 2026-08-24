@@ -12,10 +12,9 @@ adjacent ``permissions.zed``.
 
 from __future__ import annotations
 
-from django.db import models
-
 from angee.base.fields import StateField
 from angee.base.models import AngeeDataModel
+from django.db import models
 
 
 class SaleDoc(AngeeDataModel):

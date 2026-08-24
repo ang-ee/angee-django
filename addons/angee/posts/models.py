@@ -26,12 +26,12 @@ from __future__ import annotations
 
 from typing import cast
 
-from django.db import models
-from rebac.managers import RebacManager
-
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
+from django.db import models
+from rebac.managers import RebacManager
+
 from angee.integrate.models import Bridge
 from angee.posts.backends import FeedBackend
 from angee.posts.ingest import land_posts

@@ -30,11 +30,10 @@ import decimal
 from decimal import Decimal
 from typing import Any
 
-from django.db import models
-
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.base.numeric import quantize
+from django.db import models
 
 
 class UomCategory(AngeeDataModel):

@@ -15,14 +15,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from django.apps import apps
-from django.contrib.auth import get_user_model
-from django.core.management import call_command
-from rebac import RelationshipTuple, to_subject_ref, write_relationships
-from rebac.backends import backend
-from rebac.schema.parser import parse_zed, validate_schema
-from rebac.types import ObjectRef
-
 from angee.compose.permissions import (
     SchemaExtensionError,
     apply_schema_paths,
@@ -32,6 +24,13 @@ from angee.compose.permissions import (
     render_zed,
 )
 from angee.fs import write_atomic
+from django.apps import apps
+from django.contrib.auth import get_user_model
+from django.core.management import call_command
+from rebac import RelationshipTuple, to_subject_ref, write_relationships
+from rebac.backends import backend
+from rebac.schema.parser import parse_zed, validate_schema
+from rebac.types import ObjectRef
 
 User = get_user_model()
 

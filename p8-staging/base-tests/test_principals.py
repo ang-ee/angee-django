@@ -6,14 +6,14 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from angee.base import actors as actor_module
+from angee.base.actors import actor_user_id
 from django.core.management import call_command
 from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import SubjectRef, app_settings, system_context
 
-from angee.base import actors as actor_module
-from angee.base.actors import actor_user_id
 from tests.conftest import IAM_CONNECTION_TEST_MODELS, INTEGRATE_TEST_MODELS, POSTS_TEST_MODELS, _clear_model_tables
 from tests.conftest import _create_missing_tables as _create_tables
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent, User

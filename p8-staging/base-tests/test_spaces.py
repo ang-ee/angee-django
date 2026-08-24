@@ -8,12 +8,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from django.apps import apps
-from django.core.management import call_command
-from django.db import IntegrityError, connection, transaction
-from rebac import PermissionDenied, actor_context, system_context
-from rebac.models import active_relationship_model
-
 from angee.compose.permissions import (
     apply_schema_paths,
     extension_source_map,
@@ -22,6 +16,12 @@ from angee.compose.permissions import (
     render_zed,
 )
 from angee.fs import write_atomic
+from django.apps import apps
+from django.core.management import call_command
+from django.db import IntegrityError, connection, transaction
+from rebac import PermissionDenied, actor_context, system_context
+from rebac.models import active_relationship_model
+
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from tests import test_messaging_graphql
 from tests.conftest import (

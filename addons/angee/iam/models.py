@@ -13,6 +13,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Self, cast
 
+from angee.base.fields import StateField
+from angee.base.mixins import SqidMixin
+from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, instance_from_public_id
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import UnicodeUsernameValidator
 from django.db import models, transaction
@@ -22,9 +25,6 @@ from rebac import app_settings, current_actor, system_context
 from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.roles import grant, revoke
 
-from angee.base.fields import StateField
-from angee.base.mixins import SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, instance_from_public_id
 from angee.iam.roles import user_ordering
 
 VISIBLE_PEOPLE_DEFAULT_LIMIT = 20

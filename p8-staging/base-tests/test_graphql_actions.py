@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from angee.base.transitions import TransitionNotAllowed
 from django.contrib.auth.models import AnonymousUser, Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
@@ -23,7 +24,6 @@ from rebac import (
 )
 
 import angee.graphql.actions as actions_module
-from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.actions import (
     ActionResult,
     action_guard,

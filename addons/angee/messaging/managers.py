@@ -31,6 +31,9 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
+from angee.base.actors import actor_user_id
+from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.refs import canonical_record_target
 from django.apps import apps
 from django.contrib.postgres.search import SearchQuery, SearchVector
 from django.core.exceptions import ImproperlyConfigured
@@ -39,9 +42,6 @@ from django.db.models.functions import MD5, Coalesce, Greatest
 from django.utils import timezone
 from rebac import PermissionDenied, current_actor, system_context
 
-from angee.base.actors import actor_user_id
-from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.refs import canonical_record_target
 from angee.graphql.publishing import mute_changes
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.messaging.events import message_ingested

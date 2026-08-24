@@ -7,13 +7,13 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
+from angee.base.models import read_scoped_queryset
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models
 from strawberry import auto
 from strawberry.scalars import JSON
 
-from angee.base.models import read_scoped_queryset
 from angee.graphql.actions import (
     ActionResult,
     action_guard,

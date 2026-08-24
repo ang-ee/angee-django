@@ -15,6 +15,7 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
+from angee.base.actors import actor_user_id
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -28,7 +29,6 @@ from angee.agents import provisioning
 from angee.agents.autoconfig import SETTINGS as _AGENTS_SETTINGS
 from angee.agents.context import render_view_context
 from angee.agents.models import RuntimeStatus, SessionStatus
-from angee.base.actors import actor_user_id
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID

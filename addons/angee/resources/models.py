@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from django.db import models
-
 from angee.base.fields import StateField
 from angee.base.models import AngeeModel
+from django.db import models
+
 from angee.resources.managers import ResourceManager
 from angee.resources.tiers import ResourceTier
 

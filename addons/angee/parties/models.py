@@ -25,6 +25,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, ClassVar, cast
 
+from angee.base.fields import SqidField, StateField
+from angee.base.impl import ImplClassField
+from angee.base.mixins import AuditMixin, HierarchyMixin, SqidMixin
+from angee.base.models import AngeeManager, AngeeModel
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -40,10 +44,6 @@ from phonenumbers import (
 from rebac import PermissionDenied, system_context
 from rebac.managers import RebacManager
 
-from angee.base.fields import SqidField, StateField
-from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, HierarchyMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel
 from angee.integrate.models import Bridge
 from angee.parties.backends import DirectoryBackend
 from angee.parties.managers import (

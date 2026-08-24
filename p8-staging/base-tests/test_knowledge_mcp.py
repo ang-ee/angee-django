@@ -16,10 +16,10 @@ import importlib
 from typing import Any
 
 import pytest
+from angee.addons import addon_contract, resolve_addon_reference
 from django.apps import apps
 from fastmcp import FastMCP
 
-from angee.addons import addon_contract, resolve_addon_reference
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from tests.conftest import SchemaAddon
 

@@ -27,6 +27,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import reversion
+from angee.base.actors import actor_user_id, is_user_actor
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
@@ -45,7 +46,6 @@ from pydantic import BaseModel
 from rebac import current_actor, system_context
 from strawberry.utils.str_converters import to_camel_case, to_snake_case
 
-from angee.base.actors import actor_user_id, is_user_actor
 from angee.graphql.schema import GraphQLSchemas
 from mcp.types import ToolAnnotations
 

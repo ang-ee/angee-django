@@ -13,6 +13,7 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
+from angee.base.impl import ImplBase
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import FieldDoesNotExist
@@ -24,7 +25,6 @@ from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
-from angee.base.impl import ImplBase
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
+from angee.jobs.locks import task_lock_is_held
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.db import connection
@@ -19,7 +20,6 @@ from angee.integrate.live import PairingState
 from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import IntegrationRuntimeStatus
 from angee.integrate.session import PASSWORD_SKIPPED, LiveSession, PasswordSkipped
-from angee.jobs.locks import task_lock_is_held
 from angee.messaging.backends import LiveChannelBackend, ParsedMessage, ParsedPart, ParsedThread
 from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
 from tests.test_messaging import MESSAGING_TEST_MODELS, Message

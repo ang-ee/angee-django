@@ -7,9 +7,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
-from django.db import transaction
-
 from angee.base.sync import sync_ingestion_active, sync_ingestion_context
+from django.db import transaction
 
 bridge_sync_context = sync_ingestion_context
 bridge_sync_active = sync_ingestion_active

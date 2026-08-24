@@ -21,10 +21,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from angee.base.impl import ImplBase
 from django.apps import apps
 from django.db.models import Q
-
-from angee.base.impl import ImplBase
 
 
 class RetrievalBackend(ImplBase):

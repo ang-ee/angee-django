@@ -8,14 +8,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from angee.addons import AddonContract, AddonMigration
+from angee.base.fields import StateField
+from angee.compose.migrations import RuntimeMigrations
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, migrations, models
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.state import ModelState, ProjectState
-
-from angee.addons import AddonContract, AddonMigration
-from angee.base.fields import StateField
-from angee.compose.migrations import RuntimeMigrations
 
 
 def _write_module(path: Path, text: str = "") -> None:

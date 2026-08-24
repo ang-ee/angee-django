@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from angee.addons import AddonContract
+from angee.base.models import AngeeModel
 from django.db import connection, models
 from django.test.utils import isolate_apps
 
-from angee.addons import AddonContract
-from angee.base.models import AngeeModel
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.models import Resource
 

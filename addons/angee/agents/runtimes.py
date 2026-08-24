@@ -26,11 +26,11 @@ import base64
 import json
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from angee.base.impl import ImplBase
 from django.conf import settings
 from django.utils.module_loading import import_string
 
 from angee.agents.runners import SessionRunner
-from angee.base.impl import ImplBase
 from angee.integrate.credentials import CredentialKind
 
 if TYPE_CHECKING:

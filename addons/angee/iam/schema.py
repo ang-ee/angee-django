@@ -12,6 +12,7 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
+from angee.base.models import SqidPublicIdentity, instance_from_public_id
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
@@ -35,7 +36,6 @@ from rebac.roles import (
 from strawberry import auto
 from strawberry.scalars import JSON
 
-from angee.base.models import SqidPublicIdentity, instance_from_public_id
 from angee.graphql.access import ActorSelfChangeReadGate
 from angee.graphql.data import aggregate_queryset, hasura_model_resource, hasura_pydantic_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata

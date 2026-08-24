@@ -8,14 +8,14 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, cast
 
+from angee.base.fields import StateField
+from angee.base.impl import ImplClassField
+from angee.base.models import AngeeManager
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import DataError, models
 from rebac import system_context
 
-from angee.base.fields import StateField
-from angee.base.impl import ImplClassField
-from angee.base.models import AngeeManager
 from angee.integrate.models import Bridge
 from angee.integrate.sync import current_bridge_progress
 from angee.storage import exceptions

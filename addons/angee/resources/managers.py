@@ -5,13 +5,13 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from angee.base.models import AngeeUnscopedManager, AngeeUnscopedQuerySet
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 
-from angee.base.models import AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.resources.entries import (
     GRANT_KIND,
     EntryGraph,

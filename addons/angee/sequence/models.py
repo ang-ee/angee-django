@@ -34,13 +34,12 @@ from __future__ import annotations
 
 from datetime import date
 
+from angee.base.fields import StateField
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeModel, role_anchor
 from django.apps import apps
 from django.db import models
 from django.utils import timezone
 from rebac import system_context
-
-from angee.base.fields import StateField
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeModel, role_anchor
 
 
 class PeriodReset(models.TextChoices):

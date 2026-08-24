@@ -184,10 +184,10 @@ def test_manifest_wires_the_seams() -> None:
     and the manifest depends on both owners.
     """
 
+    from angee.addons import addon_contract
     from django.apps import AppConfig
 
     import angee.knowledge_graph_pgvector as plugin_pkg
-    from angee.addons import addon_contract
 
     config = AppConfig("angee.knowledge_graph_pgvector", plugin_pkg)
     contract = addon_contract(config)

@@ -20,12 +20,12 @@ keep their defaults (``thread_read_access="read"``, ``thread_activity_access="wr
 
 from __future__ import annotations
 
-from django.db import models
-
 from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.base.transitions import StateTransitions, save_state, transition
+from django.db import models
+
 from angee.messaging.models import ThreadedModelMixin
 
 

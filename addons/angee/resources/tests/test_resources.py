@@ -8,14 +8,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from angee.addons import AddonContract
+from angee.base.models import CATALOGUE_TIERS, AngeeModel
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, connection, models
 from import_export.results import Result, RowResult
 from rebac import system_context
 
-from angee.addons import AddonContract
-from angee.base.models import CATALOGUE_TIERS, AngeeModel
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import _grant_tuples, materialize_grant_groups

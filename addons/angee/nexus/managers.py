@@ -7,12 +7,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Self
 
+from angee.base.models import AngeeManager, AngeeQuerySet
 from django.apps import apps
 from django.db import models, transaction
 from django.db.models.functions import Coalesce
 from django.utils import timezone
-
-from angee.base.models import AngeeManager, AngeeQuerySet
 
 
 @dataclass

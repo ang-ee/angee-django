@@ -10,10 +10,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from angee.addons import addon_contract, is_angee_addon
 from django.apps import AppConfig, apps
 from django.db.models import Model
-
-from angee.addons import addon_contract, is_angee_addon
 
 
 @dataclass(frozen=True, slots=True)

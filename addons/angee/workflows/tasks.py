@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from angee.jobs.locks import record_lock_key, task_lock
 from celery import shared_task
 from celery.exceptions import Retry
 from django.apps import apps
@@ -12,7 +13,6 @@ from django.db import transaction
 from django.utils import timezone
 from rebac import system_context
 
-from angee.jobs.locks import record_lock_key, task_lock
 from angee.workflows import engine, triggers
 from angee.workflows.models import StepRunStatus
 from angee.workflows.steps import StepRetryPolicy, TransientStepError, retry_policy_from_config

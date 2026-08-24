@@ -14,6 +14,11 @@ import json
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any, cast
 
+from angee.base.fields import StateField
+from angee.base.impl import ImplClassField, ImplDefaultsMixin
+from angee.base.mixins import AuditMixin, SqidMixin
+from angee.base.models import AngeeManager, AngeeModel, role_anchor
+from angee.base.transitions import StateTransitions, save_state, transition
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -28,11 +33,6 @@ from angee.agents.backends import InferenceBackend, InferenceRequest, InferenceR
 from angee.agents.grants import revoke_tool_grant, write_tool_grant
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
-from angee.base.fields import StateField
-from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, role_anchor
-from angee.base.transitions import StateTransitions, save_state, transition
 
 
 class InferenceModelUse(models.TextChoices):

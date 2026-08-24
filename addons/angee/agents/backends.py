@@ -13,6 +13,7 @@ from enum import StrEnum
 from typing import Any, ClassVar
 
 from angee.base.impl import ImplBase
+
 from angee.integrate.connect import enabled_oauth_client_from_hint
 
 

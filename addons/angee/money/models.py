@@ -24,15 +24,15 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
+from angee.base.mixins import ArchiveMixin, ArchiveQuerySet
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
+from angee.base.numeric import quantize
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.utils import timezone
 
-from angee.base.mixins import ArchiveMixin, ArchiveQuerySet
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
-from angee.base.numeric import quantize
 from angee.money.rounding import RoundingMode, rounding_constant
 
 REFERENCE_CURRENCY_SETTING = "ANGEE_MONEY_REFERENCE_CURRENCY"

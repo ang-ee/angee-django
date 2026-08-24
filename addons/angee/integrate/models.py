@@ -28,6 +28,12 @@ from functools import cache
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.parse import urlsplit, urlunsplit
 
+from angee.base.fields import EncryptedField, StateField
+from angee.base.impl import ImplClassField, ImplDefaultsMixin
+from angee.base.mixins import AuditMixin, SqidMixin
+from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
+from angee.base.transitions import StateTransitions, save_state, transition
+from angee.jobs.locks import LockKey, record_lock_key, task_locks_are_cross_process
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -50,11 +56,6 @@ from rebac import (
 from rebac.models import active_relationship_model
 from strawberry_django.descriptors import model_property
 
-from angee.base.fields import EncryptedField, StateField
-from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
-from angee.base.transitions import StateTransitions, save_state, transition
 from angee.integrate import registry
 from angee.integrate.credentials import CredentialKind, handler_for
 from angee.integrate.events import EventKind
@@ -68,7 +69,6 @@ from angee.integrate.sync import bridge_progress_context, bridge_sync_context
 from angee.integrate.vcs.backend import VCSBackend
 from angee.integrate.vcs.templates import parse_template_meta
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
-from angee.jobs.locks import LockKey, record_lock_key, task_locks_are_cross_process
 
 if TYPE_CHECKING:
     from collections.abc import Callable

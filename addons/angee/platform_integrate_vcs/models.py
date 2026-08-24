@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from angee.addons import available_addons
+from angee.base.models import AngeeManager, AngeeModel
 from django.apps import apps
 from django.conf import settings
 from django.db import models, transaction
 from django.utils import timezone
 from rebac import system_context
 
-from angee.addons import available_addons
-from angee.base.models import AngeeManager, AngeeModel
 from angee.platform_integrate_vcs.catalog import parse_addon_meta
 
 

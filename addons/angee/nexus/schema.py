@@ -6,11 +6,11 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
+from angee.base.actors import actor_user_id, is_user_actor
 from django.apps import apps
 from rebac import current_actor
 from strawberry import auto
 
-from angee.base.actors import actor_user_id, is_user_actor
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes

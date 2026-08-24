@@ -10,6 +10,9 @@ from typing import Any
 
 import pytest
 import reversion
+from angee.base.mixins import AuditMixin
+from angee.compose.permissions import apply_schema_paths, extension_source_map, merged_schema_relpath
+from angee.fs import write_atomic
 from asgiref.sync import async_to_sync, sync_to_async
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
@@ -60,9 +63,6 @@ from angee.agents_runtime_pydantic.toolsets import (
     _accessible_tool_grant_ids,
     _assert_in_process_compatible,
 )
-from angee.base.mixins import AuditMixin
-from angee.compose.permissions import apply_schema_paths, extension_source_map, merged_schema_relpath
-from angee.fs import write_atomic
 from angee.mcp.graphql import _CompiledTool
 from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
 from tests.conftest import _clear_model_tables

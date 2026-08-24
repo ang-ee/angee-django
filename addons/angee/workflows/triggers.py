@@ -7,6 +7,7 @@ import time
 from datetime import datetime
 from typing import Any
 
+from angee.base.models import instance_from_public_id
 from croniter import CroniterBadCronError
 from django.apps import apps
 from django.core.exceptions import FieldError
@@ -15,7 +16,6 @@ from django.db.models.signals import post_delete, post_save
 from django.utils import timezone
 from rebac import system_context
 
-from angee.base.models import instance_from_public_id
 from angee.graphql.events import ChangePayload
 from angee.graphql.publishing import change_published
 from angee.workflows import engine

@@ -10,10 +10,9 @@ enum instead of a per-model copy, so the GraphQL enum name no longer collides.
 
 from __future__ import annotations
 
+from angee.base.fields import StateField
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
-
-from angee.base.fields import StateField
 
 
 class LinkSource(models.TextChoices):
