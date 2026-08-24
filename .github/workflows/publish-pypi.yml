@@ -1,0 +1,39 @@
+name: publish PyPI package
+
+on:
+  release:
+    types: [published]
+
+# Restrictive default; the publish job alone elevates to id-token: write.
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    uses: ./.github/workflows/reusable-checks.yml
+    with:
+      python-version: "3.14"
+      pnpm-enabled: false
+      stack-enabled: false
+
+  publish:
+    needs: checks
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/django-angee
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"
+      - name: Build source and wheel distributions
+        run: uv build --sdist --wheel
+      - name: Validate distribution metadata
+        # uv accepts the Core Metadata 2.5 emitted for PEP 639; Twine 6.2 does not.
+        run: uv publish --dry-run --trusted-publishing never dist/*
+      - name: Publish through PyPI trusted publishing
+        uses: pypa/gh-action-pypi-publish@release/v1

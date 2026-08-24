@@ -2,12 +2,26 @@
 
 Notable structural and behavioral changes to the Angee framework — the `angee/`
 core + composer and the base addons under `addons/angee/`. The format loosely
-follows [Keep a Changelog](https://keepachangelog.com); the framework is
-pre-release (alpha preview), so entries are grouped by the dated effort that
-landed them, newest first. Day-to-day detail lives in git history — this file
+follows [Keep a Changelog](https://keepachangelog.com). Now that the package
+ships to PyPI, releases get version-keyed headings; earlier pre-release
+entries remain grouped by the dated effort that landed them, newest first. Day-to-day detail lives in git history — this file
 keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
+
+## 0.2.0 — 2026-08-24
+
+- Addon dependency facts are unbundled from the framework wheel: folder-addon
+  manifests own them and the composer projects their compiled dependency group
+  into each host.
+- The machine-readable data-surface contract now lives in the Strawberry-free
+  `angee.data` core package for use by GraphQL, MCP, and other producers.
+- The GraphQL runtime moved from the wheel to the `angee.graphql` folder addon
+  in `angee-base`, taking the Strawberry stack and its dependency pin with it.
+- The remaining framework apps are plain always-on Django core; their former
+  addon manifests and generated entry points are gone.
+- Distribution metadata, long-description links, source inclusion, and trusted
+  publishing plumbing now produce a PyPI-clean wheel and source distribution.
 
 ## 2026-07-15 — Exact grouped pagination totals
 

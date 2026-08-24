@@ -3,14 +3,14 @@
 **Developer framework and base addons for building Django + React applications
 on the [Angee platform](https://angee.ai).**
 
-[![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg)](LICENSE)
+[![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg)](https://github.com/ang-ee/angee-django/blob/main/LICENSE)
 [![Docs](https://img.shields.io/badge/docs-docs.angee.ai-1f6feb.svg)](https://docs.angee.ai)
 ![Python](https://img.shields.io/badge/python-3.14%2B-3776AB.svg)
 ![Django](https://img.shields.io/badge/django-6.0%2B-092E20.svg)
 ![React](https://img.shields.io/badge/react-19-61DAFB.svg)
 ![Status](https://img.shields.io/badge/status-early%20alpha%20preview-orange.svg)
 
-![Angee agent-native app collage](docs/screenshots/angee-readme-collage.png)
+![Angee agent-native app collage](https://raw.githubusercontent.com/ang-ee/angee-django/main/docs/screenshots/angee-readme-collage.png)
 
 > **For developers, not end users.** This repository is the framework source for
 > teams building Angee applications and addons. If you want a product to use,
@@ -42,7 +42,7 @@ Angee comes in two halves:
 In one line: *the operator runs things; `angee-django` decides what those things
 are.*
 
-> **New here?** Start with **[Get Started](docs/howto/getstarted.md)**.
+> **New here?** Start with **[Get Started](https://docs.angee.ai/guide/getstarted)**.
 
 ## Architecture at a glance
 
@@ -92,7 +92,7 @@ angee dev                                     # materialize sources + workspaces
 `angee dev` is the only supported way to bring the local stack up — never start
 Django, Vite, Daphne, or workers by hand. For the full onboarding path
 (one-shot management commands and isolated workspaces), see
-**[Get Started → Set it up](docs/howto/getstarted.md#set-it-up)**.
+**[Get Started → Set it up](https://docs.angee.ai/guide/getstarted#set-it-up)**.
 
 ## Repository layout
 
@@ -109,27 +109,28 @@ GraphQL runtime) in `ang-ee/angee-base`, the messaging bridges in
 e2e suite in `ang-ee/angee-examples`. A stack's `src` workspace materializes
 them all side by side as worktree slots.
 
-The full annotated layout lives in **[`AGENTS.md`](AGENTS.md)**.
+The full annotated layout lives in
+**[`AGENTS.md`](https://github.com/ang-ee/angee-django/blob/main/AGENTS.md)**.
 
 ## Documentation
 
 This repo follows a simple rule: **the code is the spec; the docs carry the
 intent.**
 
-- **[Get Started](docs/howto/getstarted.md)** — what Angee is, what you can
+- **[Get Started](https://docs.angee.ai/guide/getstarted)** — what Angee is, what you can
   build, and your first run. Start here.
-- **[Features](docs/features.md)** — the complete capability list and how each
+- **[Features](https://docs.angee.ai/guide/features)** — the complete capability list and how each
   part works.
-- **[Glossary](docs/glossary.md)** — shared vocabulary (addon, composer, host,
+- **[Glossary](https://docs.angee.ai/guide/glossary)** — shared vocabulary (addon, composer, host,
   source model, seams…).
-- **[Opinionated stack](docs/stack.md)** — which library owns which concern, and
+- **[Opinionated stack](https://docs.angee.ai/guide/stack)** — which library owns which concern, and
   what is locked versus proposed.
-- **[Development guidelines](docs/guidelines.md)** ·
-  **[Backend](docs/backend/guidelines.md)** ·
+- **[Development guidelines](https://docs.angee.ai/guide/guidelines)** ·
+  **[Backend](https://docs.angee.ai/django/guidelines)** ·
   **[Frontend](https://docs.angee.ai/react/guidelines)** — process and language rules.
-- **[Composer](docs/composer.md)** — how addon contracts become a runnable
+- **[Composer](https://docs.angee.ai/django/composer)** — how addon contracts become a runnable
   project.
-- **[`AGENTS.md`](AGENTS.md)** — the constitution, repository layout, and how the
+- **[`AGENTS.md`](https://github.com/ang-ee/angee-django/blob/main/AGENTS.md)** — the constitution, repository layout, and how the
   framework composes.
 - **[docs.angee.ai](https://docs.angee.ai)** — the full site: the operator's
   concepts, the `angee.yaml` manifest, templates, commands, and the REST +
@@ -146,41 +147,49 @@ TSDoc on every docs build — are published on the site: the
 - **Bugs & feature requests** — open an
   [issue](https://github.com/ang-ee/angee-django/issues).
 - **Security reports** — please report **privately**; see the
-  [Security Policy](SECURITY.md) (`security@angee.ai`). Do not open a public
+  [Security Policy](https://github.com/ang-ee/angee-django/blob/main/SECURITY.md)
+  (`security@angee.ai`). Do not open a public
   issue for vulnerabilities.
 
 ## Contributing
 
 Contributions are welcome — this is a public alpha and feedback is especially
-valuable. Start with **[`CONTRIBUTING.md`](CONTRIBUTING.md)**, which points at the
-constitution in **[`AGENTS.md`](AGENTS.md)** and the process in
-**[`docs/guidelines.md`](docs/guidelines.md)**.
+valuable. Start with
+**[`CONTRIBUTING.md`](https://github.com/ang-ee/angee-django/blob/main/CONTRIBUTING.md)**,
+which points at the constitution in
+**[`AGENTS.md`](https://github.com/ang-ee/angee-django/blob/main/AGENTS.md)** and
+the process in
+**[development guidelines](https://docs.angee.ai/guide/guidelines)**.
 
 - Bring the stack up with `angee dev` from the repository root — never start the
   individual processes by hand.
 - Run the backend checks (ruff, mypy, pytest) and the frontend checks from the
-  [backend](docs/backend/guidelines.md) and
+  [backend](https://docs.angee.ai/django/guidelines) and
   [frontend](https://docs.angee.ai/react/guidelines)
   guidelines before opening a pull request.
 - By participating you agree to uphold our
-  **[Code of Conduct](CODE_OF_CONDUCT.md)**.
+  **[Code of Conduct](https://github.com/ang-ee/angee-django/blob/main/CODE_OF_CONDUCT.md)**.
 
-Notable changes are recorded in **[`CHANGELOG.md`](CHANGELOG.md)**.
+Notable changes are recorded in
+**[`CHANGELOG.md`](https://github.com/ang-ee/angee-django/blob/main/CHANGELOG.md)**.
 
 ## Roadmap & status
 
 **Early alpha preview.** Production-readiness is targeted for **Q3 2026** —
 a target, not a promise — and arrives capability-by-capability. See
-[Get Started](docs/howto/getstarted.md#how-much-of-this-is-built-today) for the
+[Get Started](https://docs.angee.ai/guide/getstarted#how-much-of-this-is-built-today)
+for the
 current built-versus-ahead breakdown.
 
 ## License
 
 Copyright © 2026 Angee, Inc. Licensed under the **GNU Lesser General Public
 License v3.0 or later** (LGPL-3.0-or-later). The LGPL is drafted as additional
-permissions on top of the GPL, so both texts ship: **[LICENSE](LICENSE)** (the
-Lesser additional permissions) and **[LICENSE.GPL](LICENSE.GPL)** (the GNU
-General Public License v3.0 they extend).
+permissions on top of the GPL, so both texts ship:
+**[LICENSE](https://github.com/ang-ee/angee-django/blob/main/LICENSE)** (the
+Lesser additional permissions) and
+**[LICENSE.GPL](https://github.com/ang-ee/angee-django/blob/main/LICENSE.GPL)**
+(the GNU General Public License v3.0 they extend).
 
 Addons and applications built on Angee are yours to license as you choose,
 including proprietary — the LGPL's terms apply to Angee itself.

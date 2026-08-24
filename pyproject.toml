@@ -1,11 +1,33 @@
 [build-system]
-requires = ["hatch-angee>=0.2.1"]
+requires = [
+  # hatch-angee supports older hatchling releases, but PEP 639 license-files
+  # metadata requires hatchling 1.27 or newer.
+  "hatchling>=1.27",
+  "hatch-angee>=0.2.1",
+]
 build-backend = "hatch_angee.build"
 
 [project]
 name = "django-angee"
-version = "0.1.7"
+version = "0.2.0"
 description = "Thin Django composition primitives for Angee applications."
+readme = "README.md"
+authors = [{ name = "Alexis Yushin", email = "alexis@apexive.com" }]
+keywords = ["addons", "agentic-applications", "asgi", "composition", "django"]
+# PEP 639 deprecates License classifiers when `license` is an SPDX expression;
+# the expression below is the single machine-readable owner of license identity.
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Environment :: Web Environment",
+  "Framework :: Django",
+  "Framework :: Django :: 6.0",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Libraries :: Application Frameworks",
+  "Typing :: Typed",
+]
 # LGPLv3 is drafted as additional permissions on top of GPLv3, so both texts ship:
 # LICENSE is the Lesser additional permissions, LICENSE.GPL the GPLv3 they extend.
 license = "LGPL-3.0-or-later"
@@ -33,6 +55,12 @@ dependencies = [
   # [standard] adds WebSocket and --reload support for dev.
   "uvicorn[standard]>=0.30",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ang-ee/angee-django"
+Documentation = "https://docs.angee.ai"
+Changelog = "https://github.com/ang-ee/angee-django/blob/main/CHANGELOG.md"
+Issues = "https://github.com/ang-ee/angee-django/issues"
 
 [project.optional-dependencies]
 # Wheel extras are reserved for core-owned deployment variants. Addon-owned
@@ -92,6 +120,7 @@ exclude = [
 [tool.hatch.build.targets.sdist]
 only-include = [
   "AGENTS.md",
+  "CHANGELOG.md",
   "LICENSE",
   "LICENSE.GPL",
   "README.md",
