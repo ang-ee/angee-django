@@ -16,7 +16,7 @@ import { optionToken } from "./types";
  * Tones read as: success = live/healthy/done · warning = in-flight/needs-attention ·
  * danger = failed/hard-down · neutral = dormant/inert. The run-state axis the colored
  * dot shows maps stopped→neutral (grey), running→success (green), error→danger (red),
- * warning→warning (amber); see `docs/frontend/guidelines.md`.
+ * warning→warning (amber); see `docs/guidelines.md`.
  */
 export const STATUS_TONES: ToneValueBuckets = {
   success: [

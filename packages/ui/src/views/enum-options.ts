@@ -15,7 +15,7 @@ import { enumValueLabel } from "./resource-view-list-body";
  * lowercase `String` value, so a bare metadata-driven select submits the member
  * name and the input rejects it. Pair these options with a `createOnly` field so
  * the read casing never round-trips through the select (see the enum read/write
- * pitfall in docs/frontend/guidelines.md). The label is the SDL description where
+ * pitfall in docs/guidelines.md). The label is the SDL description where
  * authored, otherwise the humanized member name (`enumValueLabel`).
  */
 export function useEnumOptions(resource: string, field: string): readonly WidgetOption[] {
