@@ -7,10 +7,10 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from angee.addons import addon_contract
 from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
 
-from angee.addons import addon_contract
 from angee.graphql.schema import schema_parts_for
 from angee.resources.entries import ResourceEntry, resource_manifest_for
 from tests.conftest import make_contract
@@ -33,21 +33,14 @@ def _resource_rows(config: AppConfig, tier: str, path: str) -> dict[str, dict[st
     return {row.xref: row.values for row in entry.read_resource_rows()}
 
 
-def test_base_config_is_a_dependency_node() -> None:
-    """The model foundation participates in addon dependency ordering."""
+def test_base_config_is_a_plain_core_app() -> None:
+    """The model foundation is always installed but has no addon contract."""
 
     base = apps.get_app_config("base")
     contract = addon_contract(base)
 
     assert base.name == "angee.base"
-    assert contract is not None
-    assert contract.depends_on == (
-        "angee.compose",
-        "django.contrib.contenttypes",
-        "rebac",
-        "reversion",
-        "simple_history",
-    )
+    assert contract is None
 
 
 def test_resource_manifest_normalizes_tiers_and_entries(monkeypatch) -> None:

@@ -10,11 +10,10 @@ from types import ModuleType
 from typing import Any
 
 import pytest
-from django.apps import AppConfig
-from django.core.exceptions import ImproperlyConfigured
-
 from angee.compose.composer import Composer
 from angee.project import PROJECT_DIR_ENV, find_project_dir, project_dir
+from django.apps import AppConfig
+from django.core.exceptions import ImproperlyConfigured
 
 GRAPHQL_APP = "angee.graphql.apps.GraphQLConfig"
 
@@ -38,11 +37,22 @@ def _compose(tmp_path: Path) -> dict[str, Any]:
     """Return composed settings for the notes example addon."""
 
     settings: dict[str, Any] = {
-        "INSTALLED_APPS": ("example.notes",),
+        "INSTALLED_APPS": _default_installed_apps(tmp_path, ("example.notes",)),
         "ANGEE_RUNTIME_DIR": tmp_path / "runtime",
     }
     Composer(settings).compose_settings()
     return settings
+
+
+def _default_installed_apps(tmp_path: Path, roots: tuple[str, ...]) -> tuple[str, ...]:
+    """Return framework defaults followed by the project-declared roots."""
+
+    defaults = runpy.run_module(
+        "angee.compose.defaults",
+        init_globals={"BASE_DIR": tmp_path, "INSTALLED_APPS": roots},
+        run_name="__test_effective_defaults__",
+    )
+    return tuple(defaults["INSTALLED_APPS"])
 
 
 def test_project_dir_owner_discovers_explicit_manage_and_ancestor_roots(
@@ -80,7 +90,7 @@ def test_resources_root_expands_framework_dependencies(tmp_path: Path) -> None:
     """A host can name resources alone and get its framework boot closure."""
 
     settings: dict[str, Any] = {
-        "INSTALLED_APPS": ("angee.resources",),
+        "INSTALLED_APPS": _default_installed_apps(tmp_path, ("angee.resources",)),
         "ANGEE_RUNTIME_DIR": tmp_path / "runtime",
     }
     Composer(settings).compose_settings()
@@ -183,6 +193,8 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "reversion.apps.ReversionConfig",
         "simple_history",
         "angee.base",
+        # Core apps are an always-on prefix rather than addon dependencies.
+        "angee.jobs",
         "channels.apps.ChannelsConfig",
         GRAPHQL_APP,
         "angee.resources",
@@ -190,9 +202,6 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "django.contrib.auth.apps.AuthConfig",
         "django.contrib.sessions.apps.SessionsConfig",
         "angee.iam.apps.IAMConfig",
-        # integrate depends on angee.jobs (its periodic bridge tick), pulling the
-        # job seam ahead of every integration addon.
-        "angee.jobs",
         "angee.integrate.apps.IntegrateConfig",
         "angee.mcp.apps.MCPConfig",
         "angee.operator",
@@ -944,7 +953,17 @@ def test_defaults_module_seeds_compose_installed_app(tmp_path: Path) -> None:
         run_name="__test_defaults__",
     )
 
-    assert defaults["INSTALLED_APPS"] == ["angee.compose", "angee.resources"]
+    assert defaults["INSTALLED_APPS"] == [
+        "django_yamlconf",
+        "angee.compose",
+        "django.contrib.contenttypes",
+        "rebac",
+        "reversion",
+        "simple_history",
+        "angee.base",
+        "angee.jobs",
+        "angee.resources",
+    ]
     assert defaults["USE_TZ"] is True
     assert defaults["DEFAULT_AUTO_FIELD"] == "django.db.models.BigAutoField"
     assert defaults["ANGEE_RUNTIME_MODULE"] == "runtime"
@@ -1230,9 +1249,8 @@ def test_addon_contribution_ignores_plain_django_dependency_urls() -> None:
     """
 
     import django.contrib.auth as auth_module
-    from django.contrib.auth.apps import AuthConfig
-
     from angee.addons import addon_contribution
+    from django.contrib.auth.apps import AuthConfig
 
     auth_config = AuthConfig("django.contrib.auth", auth_module)
 

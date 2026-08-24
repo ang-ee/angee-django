@@ -73,13 +73,12 @@ def test_addon_contract_rejects_invalid_runtime_migration_entries(
         _read_addon_contract(str(marker))
 
 
-def test_available_addons_enumerates_core_and_folder_addons(settings) -> None:
-    """Core entry points and configured base-addon folders form the available set."""
+def test_available_addons_excludes_core_and_enumerates_folder_addons(settings) -> None:
+    """The catalog contains capability addons, not the framework core apps."""
 
     available = available_addons(settings.ANGEE_ADDON_DIRS)
-    for name in ("angee.base",):
-        assert name in available, f"{name!r} not advertised via angee.addons entry points"
-        assert available[name].source == "installed"
+    for name in ("angee.base", "angee.compose", "angee.jobs"):
+        assert name not in available
     for name in ("angee.graphql", "angee.iam", "angee.storage"):
         assert name in available, f"{name!r} not discovered from ANGEE_ADDON_DIRS"
         assert available[name].source == "local"
