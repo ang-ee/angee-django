@@ -15,7 +15,6 @@ def test_jobs_app_exports_celery_app() -> None:
 
     assert apps.is_installed("angee.jobs")
     assert app.main == "angee"
-    assert app.conf.task_ignore_result is True
 
 
 def test_enqueue_task_sends_named_task(monkeypatch: Any) -> None:

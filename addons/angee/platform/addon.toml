@@ -7,5 +7,7 @@ keywords = ["console", "admin", "explorer"]
 category = "Platform"
 depends_on = ["angee.iam", "angee.resources"]
 dependencies = [
+  # Comment/format-preserving YAML round-trip: the AddonInstaller's settings.yaml
+  # INSTALLED_APPS install/uninstall edit (pyyaml round-trips lose comments/layout).
   "ruamel.yaml>=0.18",
 ]

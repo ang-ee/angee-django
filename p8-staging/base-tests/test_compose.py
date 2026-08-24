@@ -9,14 +9,9 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, ClassVar, cast
 
-import pytest
-from django.apps import AppConfig, apps
-from django.core.exceptions import ImproperlyConfigured
-from django.core.management.base import CommandError
-from django.db import OperationalError, models
-
 import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
+import pytest
 from angee.base.emission import ModelClassAttribute, ModelDecorator
 from angee.base.fields import StateField
 from angee.base.mixins import HistoryMixin, RevisionMixin
@@ -27,6 +22,11 @@ from angee.compose.apps import ComposeConfig
 from angee.compose.management.commands.angee import Command
 from angee.compose.runtime import Runtime
 from angee.compose.web import WebRuntime
+from django.apps import AppConfig, apps
+from django.core.exceptions import ImproperlyConfigured
+from django.core.management.base import CommandError
+from django.db import OperationalError, models
+
 from tests.conftest import make_contract
 
 
@@ -1671,6 +1671,8 @@ def test_build_command_delegates_the_complete_write_lifecycle(
     calls: list[str] = []
 
     class FakeRuntime:
+        project_dir: Path | None = None
+
         def build(self) -> tuple[Path, ...]:
             calls.append("build")
             return ()
