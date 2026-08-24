@@ -11,7 +11,7 @@ BASE_SPEC = importlib.util.find_spec("angee.base")
 assert BASE_SPEC is not None and BASE_SPEC.origin is not None
 ANGEE = Path(BASE_SPEC.origin).resolve().parents[1]
 BASE = ANGEE / "base"
-GRAPHQL = ANGEE / "graphql"
+GRAPHQL = ROOT / "addons" / "angee" / "graphql"
 COMPOSE = ANGEE / "compose"
 RESOURCES = ROOT / "addons" / "angee" / "resources"  # resources is a base addon
 SOURCE_ROOTS = (ANGEE.parent, ROOT / "addons")
@@ -64,8 +64,10 @@ def _module_name(path: Path) -> str:
 def _tree_imports(root: Path) -> set[str]:
     """Return the union of imports across a package subtree."""
 
+    paths = tuple(root.rglob("*.py"))
+    assert paths, f"no Python sources found under {root}"
     names: set[str] = set()
-    for path in root.rglob("*.py"):
+    for path in paths:
         names |= _module_imports(path)
     return names
 

@@ -1,0 +1,22 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.graphql"
+description = "The GraphQL runtime — schema buckets, auto-CRUD, subscriptions, and SDL"
+keywords = ["graphql", "schema", "api"]
+category = "Foundation"
+depends_on = ["angee.base", "channels"]
+schemas = "sharing.schemas"
+dependencies = [
+  "channels>=4.0",
+  "channels-redis>=4.2",
+  "django-zed-rebac[strawberry-django]>=0.14",
+  "pydantic>=2.13",
+  "strawberry-django-aggregates>=0.10.0",
+  "strawberry-django-hasura>=0.6.0",
+  # The GraphQL addon owns the fork pin as a direct reference so every composed
+  # host receives the same source through its generated addons group; repeating
+  # uv.sources tables in each consumer/template would split that ownership.
+  "strawberry-graphql @ git+https://github.com/ang-ee/strawberry.git@e4fa3198f704d81b3ca96b6dcac75420c5fee516",
+  "strawberry-graphql-django>=0.86.7",
+]

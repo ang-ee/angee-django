@@ -1,17 +1,14 @@
 """Addon discovery — the *available* set, sourced from installed bundles.
 
 `available_addons()` is the installed-vs-enabled "available" tier (Django's
-pip-installed packages vs `INSTALLED_APPS`): every addon a bundle advertises via
-its `angee.addons` entry point, independent of which are enabled. The base addons
-ship those entry points (generated from their `addon.toml` by the build hook), so a
-fresh install of `django-angee` enumerates them with no `INSTALLED_APPS` list.
+pip-installed packages vs `INSTALLED_APPS`): every wheel-owned addon advertised
+through `angee.addons` entry points plus every folder addon discovered from the
+configured addon roots, independent of which are enabled.
 """
 
 from __future__ import annotations
 
 import pytest
-from django.core.exceptions import ImproperlyConfigured
-
 from angee.addons import (
     AddonContract,
     AddonMigration,
@@ -19,6 +16,7 @@ from angee.addons import (
     _read_addon_contract,
     available_addons,
 )
+from django.core.exceptions import ImproperlyConfigured
 
 
 def test_addon_contract_parses_ordered_runtime_migrations(tmp_path) -> None:
@@ -79,10 +77,10 @@ def test_available_addons_enumerates_core_and_folder_addons(settings) -> None:
     """Core entry points and configured base-addon folders form the available set."""
 
     available = available_addons(settings.ANGEE_ADDON_DIRS)
-    for name in ("angee.base", "angee.graphql"):
+    for name in ("angee.base",):
         assert name in available, f"{name!r} not advertised via angee.addons entry points"
         assert available[name].source == "installed"
-    for name in ("angee.iam", "angee.storage"):
+    for name in ("angee.graphql", "angee.iam", "angee.storage"):
         assert name in available, f"{name!r} not discovered from ANGEE_ADDON_DIRS"
         assert available[name].source == "local"
     assert isinstance(available["angee.iam"], AvailableAddon)
