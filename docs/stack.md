@@ -207,7 +207,7 @@ calendar.
 | Vitest | TypeScript and React tests | Frontend unit checks |
 | happy-dom | DOM environment for Vitest | Per-file env opt-in for hook and component tests |
 | @testing-library/react | React component and hook test rendering | Provider-wrapped render and hook harnesses |
-| Playwright | Browser tests | `@angee/e2e` harness: workspace-isolated runner, role `storageState` login, GraphQL `api` fixture, Page Object base (`docs/testing/e2e.md`) |
+| Playwright | Browser tests | `@angee/e2e` harness: workspace-isolated runner, role `storageState` login, GraphQL `api` fixture, Page Object base ([E2E guide](/react/e2e)) |
 | @playwright/mcp | Interactive browser-driving for host coding agents | Repo-root `.mcp.json` server (npx-run, pinned), bound to the base stack's `chrome-profile` (`.angee/data/chrome`); the agent navigates to the stack's `ANGEE_UI_PORT` (`:5173`). Distinct from `@angee/e2e` (the deterministic test runner) and `agents.MCPServer` (the MCP config rendered for operator-provisioned product agents) |
 | Storybook | Component workshop | `@angee/ui` and addon previews |
 | GitHub Actions | CI | Build, lint, type, test gates |

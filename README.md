@@ -126,7 +126,7 @@ intent.**
   what is locked versus proposed.
 - **[Development guidelines](docs/guidelines.md)** ·
   **[Backend](docs/backend/guidelines.md)** ·
-  **[Frontend](docs/frontend/guidelines.md)** — process and language rules.
+  **[Frontend](https://docs.angee.ai/react/guidelines)** — process and language rules.
 - **[Composer](docs/composer.md)** — how addon contracts become a runnable
   project.
 - **[`AGENTS.md`](AGENTS.md)** — the constitution, repository layout, and how the
@@ -159,7 +159,8 @@ constitution in **[`AGENTS.md`](AGENTS.md)** and the process in
 - Bring the stack up with `angee dev` from the repository root — never start the
   individual processes by hand.
 - Run the backend checks (ruff, mypy, pytest) and the frontend checks from the
-  [backend](docs/backend/guidelines.md) and [frontend](docs/frontend/guidelines.md)
+  [backend](docs/backend/guidelines.md) and
+  [frontend](https://docs.angee.ai/react/guidelines)
   guidelines before opening a pull request.
 - By participating you agree to uphold our
   **[Code of Conduct](CODE_OF_CONDUCT.md)**.

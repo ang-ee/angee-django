@@ -307,7 +307,8 @@ A change is done only when the code and the architecture are both checked.
 - The opinionated stack lives in `docs/stack.md`; manifests lock exact
   dependency setup.
 - Backend rules live in `docs/backend/guidelines.md`.
-- Frontend rules live in `docs/frontend/guidelines.md`.
+- Frontend rules live in the
+  [Frontend Guidelines](https://docs.angee.ai/react/guidelines).
 - Root rules stay here. Do not duplicate language-specific guidance in this
   file.
 
@@ -318,8 +319,9 @@ Durable project knowledge is checked in, not held in any agent's private memory
 
 - **Durable knowledge — conventions, gotchas/pitfalls, and architecture
   decisions — goes into the checked-in docs.** When you learn something that will
-  matter next time, extend the owning guideline (`docs/backend/guidelines.md`,
-  `docs/frontend/guidelines.md`, `docs/guidelines.md`, or `docs/stack.md`) as a
+  matter next time, extend the owning guideline (`docs/backend/guidelines.md`, the
+  [Frontend Guidelines](https://docs.angee.ai/react/guidelines),
+  `docs/guidelines.md`, or `docs/stack.md`) as a
   terse rule or a `Pitfalls` entry. Don't restate code contracts (field/API
   inventories) — those live beside the code (see "Let Code Carry Code Contracts"
   in `docs/guidelines.md`).
