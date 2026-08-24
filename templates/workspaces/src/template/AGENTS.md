@@ -8,14 +8,15 @@ there.
 
 ## The slots
 
-- **`angee-django/`** — the framework core: `angee.{base,compose,graphql,jobs}`,
+- **`angee-django/`** — the framework core: `angee.{base,compose,jobs}`,
   the composer, and the framework docs. The one real Python package. Its
   `AGENTS.md` carries the constitution that governs work in every slot.
 - **`angee-react/`** — the framework React packages (`@angee/app`, `ui`,
   `refine`, `metadata`) with the storybook and e2e workshops.
   Schema-independent by invariant.
-- **`angee-base/`** — the base addons: folders with `addon.toml`, each a
-  Django app with its co-located `web/` fragment. Content, not a package.
+- **`angee-base/`** — the base folder addons, including the `angee.graphql`
+  runtime, each with `addon.toml` and a co-located `web/` fragment. Content,
+  not a package.
 - **`angee-messaging-bridges/`** — the opt-in personal-messaging and takeout
   bridge addons (matrix, whatsapp, telegram, discord, signal, imessage,
   facebook, meta). Same folder-addon model.
