@@ -7,6 +7,14 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from angee.addons import addon_contract
+from angee.data.metadata import (
+    DataResourceFieldMetadata,
+    DataResourceMetadata,
+    DataResourceRoots,
+    DataResourceTypeNames,
+)
+from angee.graphql.schema import GraphQLSchemas
 from django.apps import apps
 from django.db import models
 from fastmcp import FastMCP
@@ -25,10 +33,6 @@ from graphql import (
     GraphQLString,
 )
 
-from angee.addons import addon_contract
-from angee.graphql.data.metadata import DataResourceMetadata, DataResourceRoots, DataResourceTypeNames
-from angee.graphql.data.resource_fields import DataResourceFieldMetadata
-from angee.graphql.schema import GraphQLSchemas
 from angee.mcp.graphql import _CompiledTool, register_graphql_tools
 from angee.mcp.resource_tools import (
     DEFAULT_QUERY_LIMIT,

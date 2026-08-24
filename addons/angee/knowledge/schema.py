@@ -9,9 +9,9 @@ from typing import Annotated, Any, cast
 import strawberry
 import strawberry_django
 from angee.base.models import instance_from_public_id, write_scoped_queryset
+from angee.data.metadata import DataResourceSubtitleMetadata
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
-    DataResourceSubtitleMetadata,
     hasura_model_resource,
     public_pk_decoder,
 )

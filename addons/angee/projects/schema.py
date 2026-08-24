@@ -6,16 +6,13 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
+from angee.data.metadata import DataResourceEnumValueMetadata, DataResourceFieldMetadata
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
     hasura_model_resource,
     public_pk_decoder,
-)
-from angee.graphql.data.resource_fields import (
-    DataResourceEnumValueMetadata,
-    DataResourceFieldMetadata,
 )
 from angee.graphql.ids import PublicID, optional_public_id, require_public_id
 from angee.graphql.node import AngeeNode

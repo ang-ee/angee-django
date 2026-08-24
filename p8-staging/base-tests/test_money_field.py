@@ -13,23 +13,23 @@ from __future__ import annotations
 import decimal
 from typing import cast
 
+import angee.base.fields as base_fields
 import strawberry
 import strawberry_django
+from angee.base.fields import SqidField
+from angee.data.field_classification import model_field_scalar, money_currency_field, resource_field_widget
+from angee.data.metadata import (
+    DataResourceRoots,
+    DataResourceTypeNames,
+    serialize_data_resources,
+)
+from angee.graphql.data.metadata import make_data_resource_metadata
+from angee.graphql.data.resource_fields import model_resource_fields
 from django.db import models
 from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.state import ModelState, ProjectState
 from strawberry import auto
 
-import angee.base.fields as base_fields
-from angee.base.fields import SqidField
-from angee.graphql.data.field_classification import model_field_scalar, money_currency_field, resource_field_widget
-from angee.graphql.data.metadata import (
-    DataResourceRoots,
-    DataResourceTypeNames,
-    make_data_resource_metadata,
-    serialize_data_resources,
-)
-from angee.graphql.data.resource_fields import model_resource_fields
 from angee.money.fields import MoneyField
 from tests.money_models import MoneyDocument, MoneyLine, MoneyStatement
 

@@ -14,16 +14,13 @@ from typing import Annotated, Any, cast
 import strawberry
 import strawberry_django
 from angee.base.models import instance_from_public_id
+from angee.data.metadata import DataResourceEnumValueMetadata, DataResourceFieldMetadata
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
     hasura_model_resource,
     public_pk_decoder,
-)
-from angee.graphql.data.resource_fields import (
-    DataResourceEnumValueMetadata,
-    DataResourceFieldMetadata,
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID, require_instance_for_id

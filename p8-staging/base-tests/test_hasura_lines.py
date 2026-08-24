@@ -16,6 +16,10 @@ from typing import Any
 import pytest
 import strawberry
 import strawberry_django
+from angee.data.metadata import merge_data_resources
+from angee.graphql.data.hasura import HasuraLines, hasura_model_resource
+from angee.graphql.data.metadata import data_resource_metadata, resource_fields
+from angee.graphql.node import AngeeNode
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.db import connection
@@ -30,9 +34,6 @@ from rebac import (
 )
 from strawberry import auto
 
-from angee.graphql.data.hasura import HasuraLines, hasura_model_resource
-from angee.graphql.data.metadata import data_resource_metadata, merge_data_resources, resource_fields
-from angee.graphql.node import AngeeNode
 from tests.conftest import create_user, execute_schema, result_data
 from tests.linesdemo.models import Product, SaleDoc, SaleLine, Tag
 
