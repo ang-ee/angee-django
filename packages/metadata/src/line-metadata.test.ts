@@ -173,4 +173,63 @@ describe("relationRepresentationForPath", () => {
     expect(relationRepresentationForPath("project.product.name", model, schema))
       .toBeNull();
   });
+
+  test("leaves an explicit continuation structural when an intermediate target has no metadata type", () => {
+    const message: ModelMetadata = {
+      typeName: "MessageType",
+      fields: {
+        thread: {
+          name: "thread",
+          kind: "relation",
+          relationTarget: "ThreadType",
+          relationObject: true,
+        },
+      },
+    };
+    const messagingSchema: SchemaFieldMetadata = {
+      types: {
+        ThreadType: {
+          typeName: "ThreadType",
+          fields: {
+            title: {
+              name: "title",
+              kind: "relation",
+              relationTarget: "FragmentType",
+              relationObject: true,
+            },
+          },
+        },
+      },
+    };
+
+    expect(
+      relationRepresentationForPath("thread.title.text", message, messagingSchema),
+    ).toBeNull();
+  });
+
+  test("still fails by name when a relation-terminal target type is missing", () => {
+    expect(() =>
+      relationRepresentationForPath("project", model, { types: {} })
+    ).toThrow(
+      'Relation field "project" targets missing metadata type "ProjectType".',
+    );
+  });
+
+  test("still fails by name when a relation-terminal representation is undeclared", () => {
+    const missingRepresentation: SchemaFieldMetadata = {
+      types: {
+        ProjectType: {
+          typeName: "ProjectType",
+          fields: {},
+          recordRepresentation: "title",
+        },
+      },
+    };
+
+    expect(() =>
+      relationRepresentationForPath("project", model, missingRepresentation)
+    ).toThrow(
+      'Record representation "title" is not declared on "ProjectType".',
+    );
+  });
 });

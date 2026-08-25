@@ -575,9 +575,11 @@ export function lineReadSelectionPaths(
  * The returned selection always includes the related record id plus every
  * scalar path needed by its `recordRepresentation`; `displayPath` is the final
  * representation scalar the column renderer reads. A non-relation terminal (or
- * an id-projected relation scalar) returns `null`. Missing relation/type facts
- * throw a named error instead of allowing a caller to emit a bare GraphQL object
- * leaf.
+ * an id-projected relation scalar) returns `null`. An explicit continuation may
+ * also return `null` when its intermediate target has no metadata resource; the
+ * caller can still select and read that author-declared dotted path structurally.
+ * Missing relation/type facts at the relation terminal throw a named error
+ * instead of allowing a caller to emit a bare GraphQL object leaf.
  */
 export function relationRepresentationForPath(
   path: string,
@@ -600,7 +602,14 @@ export function relationRepresentationForPath(
     ) {
       return null;
     }
-    current = requiredRelationTarget(field.relationTarget, path, metadata);
+    const related = metadata.types[field.relationTarget];
+    // A continued path already declares the leaf the author wants. Some valid
+    // GraphQL node targets deliberately have no resource metadata, so leave the
+    // dotted path intact and let the selection builder nest it structurally.
+    // Metadata remains mandatory below when the path ends at a relation and its
+    // record representation must be derived.
+    if (!related) return null;
+    current = related;
   }
   return null;
 }

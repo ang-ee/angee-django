@@ -5,8 +5,9 @@ import type {
   Row,
   SchemaFieldMetadata,
 } from "@angee/metadata";
-import { RelationRepresentationError } from "@angee/metadata";
+import { RelationRepresentationError, rowValueAtPath } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
+import { refineFieldsFromPaths } from "@angee/refine";
 
 import {
   buildFilterFields,
@@ -842,6 +843,54 @@ describe("relation column read expansion", () => {
       "project.product.display_name",
       "quantity",
     ]);
+  });
+
+  test("keeps an explicit scalar path structural when an intermediate relation target has no metadata", () => {
+    const message: ModelMetadata = {
+      typeName: "MessageType",
+      fields: {
+        thread: {
+          name: "thread",
+          kind: "relation",
+          relationTarget: "ThreadType",
+          relationObject: true,
+        },
+      },
+    };
+    const messagingSchema: SchemaFieldMetadata = {
+      types: {
+        ThreadType: {
+          typeName: "ThreadType",
+          fields: {
+            title: {
+              name: "title",
+              kind: "relation",
+              relationTarget: "FragmentType",
+              relationObject: true,
+            },
+          },
+        },
+      },
+    };
+    const resolved = columnsWithMetadataDefaults<Row>(
+      [{ field: "thread.title.text" }],
+      message,
+      messagingSchema,
+    );
+
+    expect(resolved[0]?.field).toBe("thread.title.text");
+    expect(resolved[0]?.selectionPaths).toBeUndefined();
+    const requested = requestedFieldPaths(resolved, undefined, message);
+    expect(refineFieldsFromPaths(requested)).toEqual([
+      "id",
+      { thread: [{ title: ["text"] }] },
+    ]);
+    expect(
+      rowValueAtPath(
+        { thread: { title: { text: "Live inbox title" } } },
+        resolved[0]?.field ?? "",
+      ),
+    ).toBe("Live inbox title");
   });
 
   test("a custom renderer keeps its relation field but still selects the representation", () => {
