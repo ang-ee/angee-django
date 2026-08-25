@@ -293,7 +293,7 @@ _INITIATIVE_PROJECT_RESOURCE = hasura_model_resource(
     InitiativeProjectType,
     model=InitiativeProject,
     name="portfolio_initiative_projects",
-    filterable=["id", "initiative", "project", "created_at", "updated_at"],
+    filterable=["id", "initiative", "project", "project__product", "created_at", "updated_at"],
     sortable=["initiative", "project", "sort_order", "created_at", "updated_at"],
     aggregatable=["id", "sort_order"],
     groupable=["initiative", "project", "project__product"],
@@ -302,6 +302,7 @@ _INITIATIVE_PROJECT_RESOURCE = hasura_model_resource(
     field_id_decode={
         "initiative": public_pk_decoder(Initiative),
         "project": public_pk_decoder(Project),
+        "project__product": public_pk_decoder(Product),
     },
     write_backend=AngeeHasuraWriteBackend(
         InitiativeProject,

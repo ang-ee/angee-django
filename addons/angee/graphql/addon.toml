@@ -13,7 +13,7 @@ dependencies = [
   "django-zed-rebac[strawberry-django]>=0.14",
   "pydantic>=2.13",
   "strawberry-django-aggregates>=0.10.0",
-  "strawberry-django-hasura>=0.6.0",
+  "strawberry-django-hasura>=0.7.1",
   # The GraphQL addon owns the fork pin as a direct reference so every composed
   # host receives the same source through its generated addons group; repeating
   # uv.sources tables in each consumer/template would split that ownership.

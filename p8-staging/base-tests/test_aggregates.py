@@ -29,7 +29,7 @@ from rebac import system_context
 from strawberry import auto
 from strawberry_django_aggregates.errors import GroupByFieldNotAllowed
 
-from angee.graphql.data import hasura_model_resource
+from angee.graphql.data import hasura_model_resource, public_pk_decoder
 from angee.graphql.data import metadata as metadata_module
 from angee.graphql.data.hasura import (
     _hasura_group_dimensions,
@@ -411,10 +411,11 @@ def test_hasura_nested_relation_group_dimension_matches_group_key_contract() -> 
         ResourceGrandchildType,
         model=ResourceGrandchild,
         name="resource_grandchildren",
-        filterable=["id", "child"],
+        filterable=["id", "child", "child__parent"],
         sortable=["child"],
         aggregatable=["id"],
         groupable=["child", "child__parent"],
+        field_id_decode={"child__parent": public_pk_decoder(ResourceParent)},
         get_queryset=lambda info: ResourceGrandchild.objects.all(),
         write_backend=write_backend,
         id_decode=lambda value: value,
@@ -441,6 +442,12 @@ def test_hasura_nested_relation_group_dimension_matches_group_key_contract() -> 
         key="child__parent_id",
         kind="relation",
         scalar="ID",
+        filter=DataGroupBucketFilterMetadata(
+            kind="equality",
+            field="child__parent",
+            value_key="child__parent_id",
+            lookup="sqid",
+        ),
     )
     assert group_key is not None
     assert nested.key in group_key.fields  # type: ignore[attr-defined]
@@ -1035,14 +1042,15 @@ def test_hasura_resource_rejects_unresolvable_axis_paths(
 
 @pytest.fixture()
 def relation_filter_tables(transactional_db: Any) -> Iterator[None]:
-    """Create concrete parent/child tables for the relation-filter tests."""
+    """Create the concrete relation-chain tables used by filter tests."""
 
     del transactional_db
-    created = _create_missing_tables((ResourceParent, ResourceChild))
+    models_under_test = (ResourceParent, ResourceChild, ResourceGrandchild)
+    created = _create_missing_tables(models_under_test)
     try:
         yield
     finally:
-        _clear_model_tables((ResourceParent, ResourceChild))
+        _clear_model_tables(models_under_test)
         if created:
             with connection.schema_editor() as schema_editor:
                 for model in reversed(created):
@@ -1132,3 +1140,83 @@ def test_filterable_relation_filters_by_public_id_without_field_id_decode(
         )
     )["resource_children"]
     assert [row["name"] for row in rows] == ["under-first"]
+
+
+def test_nested_relation_group_key_filters_its_bucket_rows(
+    relation_filter_tables: None,
+) -> None:
+    """A nested relation bucket sqid decodes through its full filter path."""
+
+    @strawberry_django.type(ResourceGrandchild)
+    class ResourceGrandchildFilterType(AngeeNode):
+        pass
+
+    resource = hasura_model_resource(
+        ResourceGrandchildFilterType,
+        model=ResourceGrandchild,
+        name="resource_grandchildren",
+        filterable=["id", "child__parent"],
+        sortable=["id"],
+        aggregatable=["id"],
+        groupable=["child__parent"],
+        insert=False,
+        update=False,
+        delete=False,
+        field_id_decode={"child__parent": public_pk_decoder(ResourceParent)},
+        get_queryset=lambda info: ResourceGrandchild._base_manager.all(),
+        id_column="sqid",
+    )
+    schema = GraphQLSchemas(
+        [
+            SchemaAddon(
+                {
+                    "public": {
+                        "query": [resource.query],
+                        "types": [ResourceGrandchildFilterType, *resource.types],
+                    }
+                }
+            )
+        ]
+    ).build("public")
+
+    first_parent = ResourceParent._base_manager.create(name="First")
+    second_parent = ResourceParent._base_manager.create(name="Second")
+    first_child = ResourceChild._base_manager.create(name="first-child", parent=first_parent)
+    second_child = ResourceChild._base_manager.create(name="second-child", parent=second_parent)
+    first_rows = [
+        ResourceGrandchild._base_manager.create(child=first_child),
+        ResourceGrandchild._base_manager.create(child=first_child),
+    ]
+    ResourceGrandchild._base_manager.create(child=second_child)
+
+    groups = result_data(
+        execute_schema(
+            schema,
+            """
+            query {
+              resource_grandchildren_groups(group_by: [{field: CHILD__PARENT}]) {
+                key { child__parent_id }
+                aggregate { count }
+              }
+            }
+            """,
+        )
+    )["resource_grandchildren_groups"]
+    bucket = next(group for group in groups if group["key"]["child__parent_id"] == str(first_parent.sqid))
+    bucket_key = bucket["key"]["child__parent_id"]
+
+    assert bucket["aggregate"]["count"] == 2
+    assert bucket_key == str(first_parent.sqid)
+
+    rows = result_data(
+        execute_schema(
+            schema,
+            """
+            query GrandchildrenInBucket($where: resource_grandchildren_bool_exp) {
+              resource_grandchildren(where: $where, order_by: [{id: asc}]) { id }
+            }
+            """,
+            {"where": {"child__parent": {"_eq": bucket_key}}},
+        )
+    )["resource_grandchildren"]
+    assert [row["id"] for row in rows] == [str(row.sqid) for row in first_rows]
