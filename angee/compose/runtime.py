@@ -32,13 +32,24 @@ from angee.compose.dependencies import AddonDependencyGroup, AddonDependencyGrou
 from angee.compose.migrations import RuntimeMigrations
 from angee.compose.permissions import extension_source_map
 from angee.compose.web import WebRuntime
-from angee.fs import GENERATED_SENTINEL, write_atomic
+from angee.fs import GENERATED_SENTINEL, GeneratedTree
 from angee.project import find_project_dir
 
 _COMPOSER_WEB_SOURCES = {
     Path("web/manifest.json"),
     Path("web/tailwind.sources.css"),
 }
+
+
+def _is_runtime_source(path: Path) -> bool:
+    """Return whether Runtime owns an extra on-disk path for drift and pruning."""
+
+    root = path.parts[0] if path.parts else ""
+    return (
+        root not in {"gql", "schemas"}
+        and (root != "web" or path in _COMPOSER_WEB_SOURCES)
+        and "__pycache__" not in path.parts
+    )
 
 _RESOURCE_LOAD_HOOK = "after_resource_load"
 """Model classmethod the resource loader fans in once every selected row loads."""
@@ -106,7 +117,7 @@ class Runtime:
     - ``build`` — emit stale sources, project the composed folder addons into
       the host dependency group, then materialize applicable addon-owned
       migrations onto the downstream Django graph.
-    - ``is_current`` / ``check`` / ``_drift`` — disk vs the rendered map.
+    - ``is_current`` / ``check`` — disk vs the rendered map.
     - ``reset`` / ``clean`` — delete generated files behind the
       ``GENERATED_SENTINEL`` gate while preserving ``*/migrations/``.
 
@@ -169,13 +180,13 @@ class Runtime:
 
         The composition seam. The returned map (path relative to
         ``runtime_dir`` → file text) is the single source of truth that
-        ``emit`` writes and ``_drift`` compares against disk. It contains the
+        ``emit`` writes and ``check`` compares against disk. It contains the
         generated package ``__init__`` plus, per label, an empty app/migrations
         ``__init__`` and a ``models.py``, plus (when a consumer addon contributes
         through a ``permissions.extends.zed``) the merged effective zed under
         ``permissions/<package>.zed`` — see ``angee.compose.permissions``.
-        Migrations themselves are never rendered here — Django's
-      addon materialization and Django's later ``makemigrations`` own
+        Migrations themselves are never rendered here — Django's addon
+        materialization and later ``makemigrations`` own
         ``runtime/<label>/migrations/`` (redirected via
         ``MIGRATION_MODULES``), and cleanup preserves it.
         """
@@ -204,13 +215,14 @@ class Runtime:
     def emit(self) -> None:
         """Reset the runtime and write all sources (destructive; explicit).
 
-        Used by the ``angee build`` command: it runs the ``_ensure_cleanable``
-        gate and prunes stale files (e.g. a removed addon's leftover label),
-        then rewrites.
+        Used by the ``angee build`` command: it runs the generated-tree cleanup
+        gate and prunes stale files (e.g. a removed addon's leftover label), then
+        rewrites.
         """
 
-        self.reset()
-        self._write_sources()
+        tree = self._generated_tree()
+        tree.reset()
+        tree.reconcile(prune=True)
 
     def runtime_migrations(self) -> RuntimeMigrations:
         """Return the addon migration materializer for this composed runtime."""
@@ -250,16 +262,13 @@ class Runtime:
         Write-only and idempotent: it never resets or cleans, so a present-but-
         stale runtime is healed file by file and a corrupted or non-Angee
         directory can never abort app population through the destructive
-        ``_ensure_cleanable`` gate. Orphaned files from a removed addon are
+        cleanup gate. Orphaned files from a removed addon are
         pruned by the explicit ``angee build`` (which calls ``emit``). Returning
         early when current keeps boots fast and avoids churning files the running
         process (and Django's autoreloader) already imported.
         """
 
-        if not self._drift():
-            return False
-        self._write_sources()
-        return True
+        return self._generated_tree().reconcile(prune=False)
 
     def configure_migration_modules(self) -> Runtime:
         """Redirect migrations for emitted runtime app labels."""
@@ -274,68 +283,42 @@ class Runtime:
         settings.MIGRATION_MODULES = migration_modules
         return self
 
-    def _write_sources(self) -> None:
-        """Write every rendered source file, creating parents as needed."""
-
-        for relative_path, text in self.render_sources().items():
-            write_atomic(self.runtime_dir / relative_path, text)
-
     def is_current(self) -> bool:
         """Return whether the on-disk runtime matches the rendered sources."""
 
-        return not self._drift()
+        return not self._generated_tree().drift()
 
     def check(self) -> None:
         """Raise for generated-source, dependency-group, or migration drift."""
 
-        drift = self._drift()
+        drift = self._generated_tree().drift()
         if drift:
             rendered = ", ".join(str(path) for path in drift)
             raise RuntimeError(f"generated runtime is stale: {rendered}")
         self.addon_dependency_group.check()
         self.runtime_migrations().check()
 
-    def _drift(self) -> list[Path]:
-        """Return generated source paths that differ from the rendered set."""
-
-        expected = self.render_sources()
-        actual_paths = self._actual_source_paths()
-        expected_paths = set(expected)
-        return sorted(
-            (expected_paths ^ actual_paths)
-            | {
-                path
-                for path in expected_paths & actual_paths
-                if (self.runtime_dir / path).read_text(encoding="utf-8") != expected[path]
-            }
-        )
-
     def reset(self) -> None:
         """Clear generated runtime sources while preserving migrations."""
 
-        self._ensure_cleanable()
-        self.clean()
-        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        self._generated_tree().reset()
 
     def clean(self) -> None:
         """Delete generated runtime files while preserving migrations."""
 
-        self._ensure_cleanable()
-        if not self.runtime_dir.exists():
-            return
-        keep_sentinel = self._has_preserved_migrations()
-        for path in sorted(self.runtime_dir.rglob("*"), reverse=True):
-            if self._is_preserved_migration_path(path):
-                continue
-            if keep_sentinel and path == self.runtime_dir / "__init__.py":
-                continue
-            if path.is_file():
-                path.unlink()
-            elif path.is_dir():
-                try:
-                    path.rmdir()
-                except OSError:
-                    pass
+        self._generated_tree().clean()
+
+    def _generated_tree(self) -> GeneratedTree:
+        """Return the synchronizer with Runtime's explicit filesystem policies."""
+
+        configured = getattr(settings, "ANGEE_RUNTIME_DIR", None)
+        return GeneratedTree(
+            self.runtime_dir,
+            self.render_sources(),
+            owns=_is_runtime_source,
+            sentinel=(Path("__init__.py"), GENERATED_SENTINEL),
+            clean_root=Path(configured) if configured is not None else None,
+        )
 
     def _models_source(
         self,
@@ -976,75 +959,6 @@ class Runtime:
                         f"{model_class.__module__}.{model_class.__name__}"
                     )
         return models_by_label
-
-    def _actual_source_paths(self) -> set[Path]:
-        """Return generated source paths currently on disk."""
-
-        if not self.runtime_dir.exists():
-            return set()
-        return {
-            path.relative_to(self.runtime_dir)
-            for path in self.runtime_dir.rglob("*")
-            if path.is_file() and self._is_checked_source(path)
-        }
-
-    def _ensure_cleanable(self) -> None:
-        """Raise if the runtime path is not configured generated output."""
-
-        configured = getattr(settings, "ANGEE_RUNTIME_DIR", None)
-        if configured is not None:
-            configured_path = Path(configured).resolve()
-            if self.runtime_dir.resolve() != configured_path:
-                raise RuntimeError(f"{self.runtime_dir} is not the configured runtime dir")
-        if not self.runtime_dir.exists():
-            return
-        children = list(self.runtime_dir.iterdir())
-        if not children:
-            return
-        if self._has_generated_sentinel():
-            return
-        raise RuntimeError(f"{self.runtime_dir} is not an Angee runtime directory")
-
-    def _has_generated_sentinel(self) -> bool:
-        """Return whether the runtime package carries Angee's sentinel."""
-
-        init_path = self.runtime_dir / "__init__.py"
-        return init_path.exists() and GENERATED_SENTINEL in init_path.read_text(encoding="utf-8")
-
-    def _is_checked_source(self, path: Path) -> bool:
-        """Return whether ``path`` participates in source drift checks."""
-
-        relative = path.relative_to(self.runtime_dir)
-        if relative.parts and relative.parts[0] in {"gql", "schemas"}:
-            return False
-        if relative.parts and relative.parts[0] == "web" and relative not in _COMPOSER_WEB_SOURCES:
-            return False
-        if self._is_orphaned_migration_path(relative):
-            return False
-        if "__pycache__" in path.parts:
-            return False
-        if path.parent.name == "migrations" and path.name[:4].isdigit() and path.suffix == ".py":
-            return False
-        return True
-
-    def _is_orphaned_migration_path(self, relative_path: Path) -> bool:
-        """Return whether ``relative_path`` is a preserved migration from an old label."""
-
-        return (
-            len(relative_path.parts) >= 2
-            and relative_path.parts[1] == "migrations"
-            and relative_path.parts[0] not in self.labels
-        )
-
-    def _is_preserved_migration_path(self, path: Path) -> bool:
-        """Return whether cleanup must preserve ``path`` under migrations."""
-
-        return "migrations" in path.relative_to(self.runtime_dir).parts
-
-    def _has_preserved_migrations(self) -> bool:
-        """Return whether cleanup will leave migration files behind."""
-
-        return any(path.is_file() and self._is_preserved_migration_path(path) for path in self.runtime_dir.rglob("*"))
 
     def _class_import(
         self,
