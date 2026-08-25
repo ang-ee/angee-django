@@ -1,6 +1,59 @@
-import { graphql, type DocumentType } from "@angee/gql/public";
+import { parse } from "graphql";
 
-export const AngeeCurrentUserDocument = graphql(`
+import type { TypedDocumentNode } from "@angee/refine";
+
+interface CurrentUserFields {
+  id: string;
+  username: string;
+  email: string;
+  preferences: unknown;
+  firstName: string;
+  lastName: string;
+  isStaff: boolean;
+  isActive: boolean;
+  roleRefs: string[];
+}
+
+interface LoginUserFields {
+  id: string;
+  username: string;
+  email: string;
+  preferences: unknown;
+  firstName: string;
+  lastName: string;
+  isStaff: boolean;
+  isActive: boolean;
+}
+
+interface AngeeCurrentUserResult {
+  current_user: CurrentUserFields | null;
+}
+
+interface AngeeLoginResult {
+  login: {
+    ok: boolean;
+    user: LoginUserFields | null;
+  };
+}
+
+interface AngeeLogoutResult {
+  logout: boolean;
+}
+
+interface AngeeUpdatePreferencesResult {
+  update_preferences: CurrentUserFields;
+}
+
+function authDocument<TResult, TVariables extends object>(
+  source: string,
+): TypedDocumentNode<TResult, TVariables> {
+  return parse(source) as TypedDocumentNode<TResult, TVariables>;
+}
+
+export const AngeeCurrentUserDocument = authDocument<
+  AngeeCurrentUserResult,
+  Record<string, never>
+>(`
   query AngeeCurrentUser {
     current_user {
       id
@@ -16,7 +69,10 @@ export const AngeeCurrentUserDocument = graphql(`
   }
 `);
 
-export const AngeeLoginDocument = graphql(`
+export const AngeeLoginDocument = authDocument<
+  AngeeLoginResult,
+  { username: string; password: string }
+>(`
   mutation AngeeLogin($username: String!, $password: String!) {
     login(username: $username, password: $password) {
       ok
@@ -34,13 +90,19 @@ export const AngeeLoginDocument = graphql(`
   }
 `);
 
-export const AngeeLogoutDocument = graphql(`
+export const AngeeLogoutDocument = authDocument<
+  AngeeLogoutResult,
+  Record<string, never>
+>(`
   mutation AngeeLogout {
     logout
   }
 `);
 
-export const AngeeUpdatePreferencesDocument = graphql(`
+export const AngeeUpdatePreferencesDocument = authDocument<
+  AngeeUpdatePreferencesResult,
+  { preferences: unknown }
+>(`
   mutation AngeeUpdatePreferences($preferences: JSON!) {
     update_preferences(preferences: $preferences) {
       id
@@ -56,10 +118,6 @@ export const AngeeUpdatePreferencesDocument = graphql(`
   }
 `);
 
-export type AngeeCurrentUserData = DocumentType<
-  typeof AngeeCurrentUserDocument
->["current_user"];
+export type AngeeCurrentUserData = AngeeCurrentUserResult["current_user"];
 
-export type AngeeLoginUserData = DocumentType<
-  typeof AngeeLoginDocument
->["login"]["user"];
+export type AngeeLoginUserData = AngeeLoginResult["login"]["user"];
