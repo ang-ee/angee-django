@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from angee.base.fields import StateField
 from django.core.exceptions import ImproperlyConfigured
 from django.db import migrations
 from django.db.migrations.state import ProjectState
+
+from angee.base.fields import StateField
 
 LEGACY_CHOICES = (
     ("oauth", "OAuth"),
