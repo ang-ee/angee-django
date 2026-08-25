@@ -675,6 +675,10 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   current models. Once an origin has materialized downstream, never edit its
   source or copied runtime file — ship a new named declaration. Explicit
   `angee build` is the only writer; normal boot remains migration-write-free.
+  "Never edit" includes mechanical reformatting: the composer pins each
+  source's sha256 at materialization and refuses drift at the next build, so
+  formatters/linters must exclude `**/runtime_migrations` (the addon repos'
+  ruff configs do).
 - **Agent runtime auth is a `(runtime × provider × credential-kind)` fact, not provider-only.**
   The `AgentRuntime` an agent's `runtime_class` selects (`angee.agents.runtimes`) owns how a
   credential becomes container env *and* the synced secret payload (`auth_env` /
