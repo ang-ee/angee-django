@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { ControlBandProvider } from "../layouts/ControlBand";
 import { cn } from "../lib/cn";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { textRoleVariants } from "../ui/text";
@@ -71,7 +72,10 @@ export interface SettingsShellProps {
 /**
  * The centered settings/admin column: a `mx-auto` flex column with the standard
  * page gutters. `maxWidth` and `gap` parameterize the only facts settings pages
- * vary; everything else is shared chrome.
+ * vary; everything else is shared chrome. Control bands render inline within
+ * their sections: a settings column composes sections, so an embedded view's
+ * controls belong beside it — never portaled to the layout's page band, where
+ * two sections would stack two bands.
  */
 export function SettingsShell({
   maxWidth,
@@ -88,7 +92,7 @@ export function SettingsShell({
         className,
       )}
     >
-      {children}
+      <ControlBandProvider host={undefined}>{children}</ControlBandProvider>
     </div>
   );
 }
