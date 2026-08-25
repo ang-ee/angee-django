@@ -69,8 +69,8 @@ from angee.graphql.data.metadata import (
 )
 from angee.graphql.data.resource_bundle import (
     resource_attr,
+    resource_query_metadata,
     resource_type_by_name,
-    resource_type_by_suffix,
 )
 from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.ids import PublicID, require_instance_for_id
@@ -439,6 +439,8 @@ class AngeeHasuraWriteBackend:
         for key, value in data.items():
             related_model = field_models.get(key)
             if related_model is None:
+                # ImplClassField.key_for/enum_member_for prefer member names;
+                # choices writes must prefer stored values when those collide.
                 out[key] = _choices_wire_value(owner_model, key, value)
                 continue
             try:
@@ -1193,50 +1195,11 @@ def attach_hasura_resource_metadata(
 ) -> HasuraResource:
     """Attach Angee resource metadata to a built Hasura resource bundle."""
 
-    list_root = resource_attr(resource, "list_root", name)
-    detail_root = resource_attr(resource, "detail_root", f"{name}_by_pk")
-    aggregate_root = resource_attr(resource, "aggregate_root", f"{name}_aggregate")
-    groups_root = resource_attr(resource, "groups_root", f"{name}_groups")
-    groups_count_root = resource_attr(resource, "groups_count_root", f"{name}_groups_count")
-    filter_type = resource_attr(
+    roots, type_names, filter_type, order_type = resource_query_metadata(
         resource,
-        "filter_type",
-        resource_type_by_name(resource, f"{name}_bool_exp"),
-    )
-    order_by_type = resource_attr(
-        resource,
-        "order_by_type",
-        resource_type_by_name(resource, f"{name}_order_by"),
-    )
-    aggregate_container_type = resource_attr(
-        resource,
-        "aggregate_container_type",
-        resource_type_by_name(resource, f"{name}_aggregate"),
-    )
-    group_type = resource_attr(
-        resource,
-        "group_type",
-        resource_type_by_name(resource, f"{name}_group") if groupable else None,
-    )
-    group_key_type = resource_attr(
-        resource,
-        "group_key_type",
-        resource_type_by_suffix(resource, "GroupKey") if groupable else None,
-    )
-    group_by_spec_type = resource_attr(
-        resource,
-        "group_by_spec_type",
-        resource_type_by_suffix(resource, "GroupBySpec") if groupable else None,
-    )
-    group_order_type = resource_attr(
-        resource,
-        "group_order_type",
-        resource_type_by_suffix(resource, "GroupOrder") if groupable else None,
-    )
-    having_type = resource_attr(
-        resource,
-        "having_type",
-        resource_type_by_suffix(resource, "Having") if groupable else None,
+        name=name,
+        node_type=node,
+        grouped=bool(groupable),
     )
     insert_input_type = resource_attr(
         resource,
@@ -1269,7 +1232,7 @@ def attach_hasura_resource_metadata(
         create_fields=parent_create_fields,
         update_fields=parent_update_fields,
     )
-    if detail_root is None:
+    if roots.detail_name is None:
         raise ImproperlyConfigured(f"{model._meta.label} Hasura resource did not expose a detail root.")
     attach_data_resource_metadata(
         resource.query,
@@ -1279,37 +1242,9 @@ def attach_hasura_resource_metadata(
             public_id_field=public_id_field,
             node_type=node,
             filter_type=filter_type,
-            order_type=order_by_type,
-            roots=DataResourceRoots(
-                list_name=resource_wire_field_name(resource.query, str(list_root or name)),
-                detail_name=resource_wire_field_name(resource.query, str(detail_root)),
-                aggregate_name=resource_wire_field_name(
-                    resource.query,
-                    str(aggregate_root or f"{name}_aggregate"),
-                ),
-                group_name=(
-                    resource_wire_field_name(resource.query, str(groups_root))
-                    if groupable and groups_root is not None
-                    else None
-                ),
-                group_count_name=(
-                    resource_wire_field_name(resource.query, str(groups_count_root))
-                    if groupable and groups_count_root is not None
-                    else None
-                ),
-            ),
-            type_names=DataResourceTypeNames(
-                query=resource_type_name(resource.query),
-                node=resource_type_name(node),
-                filter=resource_type_name(filter_type),
-                order=resource_type_name(order_by_type),
-                aggregate=resource_type_name(aggregate_container_type),
-                grouped=resource_type_name(group_type),
-                group_key=resource_type_name(group_key_type),
-                group_by_spec=resource_type_name(group_by_spec_type),
-                group_order=resource_type_name(group_order_type),
-                having=resource_type_name(having_type),
-            ),
+            order_type=order_type,
+            roots=roots,
+            type_names=type_names,
             capabilities=("list", "detail", "aggregate", *(("groups",) if groupable else ())),
             filter_fields=filterable,
             order_fields=sortable,

@@ -15,7 +15,7 @@ from dataclasses import replace
 from typing import Any
 
 import strawberry.experimental.pydantic
-from angee.data.metadata import DataAggregateMeasureMetadata, DataResourceRoots, DataResourceTypeNames
+from angee.data.metadata import DataAggregateMeasureMetadata
 from django.core.exceptions import ImproperlyConfigured
 from pydantic import BaseModel
 from strawberry_django_hasura import (
@@ -28,10 +28,8 @@ from strawberry_django_hasura import (
 from angee.graphql.data.metadata import (
     attach_data_resource_metadata,
     make_data_resource_metadata,
-    resource_type_name,
-    resource_wire_field_name,
 )
-from angee.graphql.data.resource_bundle import resource_attr, resource_type_by_name
+from angee.graphql.data.resource_bundle import resource_query_metadata
 
 
 def pydantic_node(row_model: type[BaseModel], *, name: str) -> type:
@@ -76,7 +74,6 @@ def hasura_pydantic_resource(
             raise TypeError("hasura_pydantic_resource requires rows= or source=")
         source = InMemoryRowSource(rows)
     node = pydantic_node(row_model, name=node_name or row_model.__name__)
-    node_type_name = resource_type_name(node)
     resource = hasura_run_query_resource(
         node,
         name=name,
@@ -85,17 +82,8 @@ def hasura_pydantic_resource(
         source=source,
         id_field=id_field,
     )
-    list_root = resource_attr(resource, "list_root", name)
-    detail_root = resource_attr(resource, "detail_root", f"{name}_by_pk")
-    aggregate_root = resource_attr(resource, "aggregate_root", f"{name}_aggregate")
-    filter_type = resource_attr(resource, "filter_type", resource_type_by_name(resource, f"{name}_bool_exp"))
-    order_by_type = resource_attr(resource, "order_by_type", resource_type_by_name(resource, f"{name}_order_by"))
-    aggregate_container_type = resource_attr(
-        resource,
-        "aggregate_container_type",
-        resource_type_by_name(resource, f"{name}_aggregate"),
-    )
-    if detail_root is None:
+    roots, type_names, filter_type, order_type = resource_query_metadata(resource, name=name, node_type=node)
+    if roots.detail_name is None:
         raise ImproperlyConfigured(f"{model_label or name} Hasura resource did not expose a detail root.")
     attach_data_resource_metadata(
         resource.query,
@@ -107,24 +95,9 @@ def hasura_pydantic_resource(
             public_id_field=id_field,
             node_type=node,
             filter_type=filter_type,
-            order_type=order_by_type,
-            # Read the wire names off the built query surface (the owner), as the
-            # model path does, instead of re-templating the dialect convention.
-            roots=DataResourceRoots(
-                list_name=resource_wire_field_name(resource.query, str(list_root or name)),
-                detail_name=resource_wire_field_name(resource.query, str(detail_root)),
-                aggregate_name=resource_wire_field_name(
-                    resource.query,
-                    str(aggregate_root or f"{name}_aggregate"),
-                ),
-            ),
-            type_names=DataResourceTypeNames(
-                query=resource_type_name(resource.query),
-                node=node_type_name,
-                filter=resource_type_name(filter_type),
-                order=resource_type_name(order_by_type),
-                aggregate=resource_type_name(aggregate_container_type),
-            ),
+            order_type=order_type,
+            roots=roots,
+            type_names=type_names,
             capabilities=("list", "detail", "aggregate"),
             # A computed pydantic source is small and admin-only: the frontend
             # fetches it once and filters/sorts/paginates/groups in the browser.

@@ -6,7 +6,6 @@ from typing import Any, cast
 
 import strawberry
 from angee.base.impl import ImplChoice as BaseImplChoice
-from angee.base.impl import ImplClassField
 from angee.base.models import AngeeModel
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
@@ -36,12 +35,17 @@ def impl_choices(model: str, field: str) -> list[ImplChoice]:
     django_model = _model_for_label(model)
     field_name = _field_name(field)
     try:
-        raw_field = django_model._meta.get_field(field_name)
+        model_field = cast(type[AngeeModel], django_model).impl_field(field_name)
+    except AttributeError as error:
+        raise ImproperlyConfigured(
+            f"{django_model._meta.label}.{field_name} is not an ImplClassField."
+        ) from error
     except FieldDoesNotExist as error:
-        raise ImproperlyConfigured(f"{django_model._meta.label} has no field {field!r}.") from error
-    if not isinstance(raw_field, ImplClassField) or not issubclass(django_model, AngeeModel):
-        raise ImproperlyConfigured(f"{django_model._meta.label}.{raw_field.name} is not an ImplClassField.")
-    model_field = django_model.impl_field(field_name)
+        if str(error).endswith(" is not an ImplClassField."):
+            message = f"{django_model._meta.label}.{field_name} is not an ImplClassField."
+        else:
+            message = f"{django_model._meta.label} has no field {field!r}."
+        raise ImproperlyConfigured(message) from error
     return [_project_choice(choice) for choice in model_field.impl_choices()]
 
 
