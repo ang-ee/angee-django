@@ -22,8 +22,9 @@ from typing import Any, cast
 
 from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeModel, bind_actor
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeModel
 from angee.base.refs import canonical_record_target
+from angee.base.scoping import bind_actor
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models, transaction

@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from angee.base.models import (
+from angee.base.identity import (
     instance_from_public_id,
     public_data_id_field,
     public_id_for,

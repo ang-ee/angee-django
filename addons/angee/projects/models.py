@@ -7,8 +7,9 @@ from typing import Any, cast
 
 from angee.base.fields import FractionalRankField, StateField
 from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeModel, bind_actor
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeModel
 from angee.base.refs import RecordRefMixin, canonical_record_target
+from angee.base.scoping import bind_actor
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TypeVar
 
-from angee.base.models import write_scoped_queryset
+from angee.base.scoping import write_scoped_queryset
 from django.db import models
 
 from angee.graphql.ids import PublicID, instance_for_id

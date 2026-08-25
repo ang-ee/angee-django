@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import cast
 
 import strawberry
-from angee.base.models import public_id_of
+from angee.base.identity import public_id_of
 from django.db import models
 
 from angee.graphql.ids import PublicID

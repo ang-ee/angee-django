@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, TypeVar
 
 import strawberry
-from angee.base.models import (
+from angee.base.identity import (
     instance_from_public_id,
     public_data_id_field,
     public_id_for,

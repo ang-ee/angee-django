@@ -13,7 +13,7 @@ from typing import Annotated, Any, cast
 
 import strawberry
 import strawberry_django
-from angee.base.models import instance_from_public_id
+from angee.base.identity import instance_from_public_id
 from angee.data.metadata import DataResourceEnumValueMetadata, DataResourceFieldMetadata
 from django.apps import apps
 from django.contrib.auth import get_user_model
@@ -2189,11 +2189,7 @@ def _thread_activity(activity_id: strawberry.ID) -> Any:
     """
 
     try:
-        activity = instance_from_public_id(
-            ThreadActivity,
-            str(activity_id),
-            queryset=ThreadActivity._base_manager.all(),
-        )
+        activity = ThreadActivity.system_queryset().from_public_id(str(activity_id))
     except ImproperlyConfigured as error:
         raise ValueError(str(error)) from error
     if activity is None:

@@ -17,10 +17,10 @@ from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeModel,
-    bind_actor,
     role_anchor,
 )
 from angee.base.refs import RecordRefMixin, canonical_record_target
+from angee.base.scoping import bind_actor
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey

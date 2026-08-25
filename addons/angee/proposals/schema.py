@@ -6,7 +6,6 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
-from angee.base.models import instance_from_public_id
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -238,7 +237,7 @@ class ProposalActionMutation:
         """Transfer facilitation and reconcile private-track grants."""
 
         target = authorized_action_target(info, Round, round, "write")
-        user = instance_from_public_id(User, str(facilitator), queryset=User._base_manager.all())
+        user = User.system_queryset().from_public_id(str(facilitator))
         if user is None:
             raise ValidationError({"facilitator": "User was not found."})
         target.transfer_facilitation(user)

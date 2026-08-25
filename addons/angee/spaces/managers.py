@@ -6,7 +6,8 @@ from typing import Any
 
 from angee.base.fields import enum_member_for
 from angee.base.mixins import HierarchyQuerySet
-from angee.base.models import AngeeManager, AngeeQuerySet, bind_actor
+from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.scoping import bind_actor
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from rebac import PermissionDenied

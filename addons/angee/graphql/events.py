@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from typing import Any, cast
 
 import strawberry
-from angee.base.models import public_id_of
+from angee.base.identity import public_id_of
 from angee.base.serialization import json_safe
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models

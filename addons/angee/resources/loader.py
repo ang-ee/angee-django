@@ -9,7 +9,8 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 import tablib
-from angee.base.models import AngeeModel, instance_from_public_id, public_id_of
+from angee.base.identity import instance_from_public_id, public_id_of
+from angee.base.models import AngeeModel
 from angee.base.serialization import json_safe
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models

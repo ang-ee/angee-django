@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 import strawberry
-from angee.base.models import AngeeModel, DirectRecordAccess, instance_from_public_id
+from angee.base.identity import instance_from_public_id
+from angee.base.models import AngeeModel, DirectRecordAccess
 from django.contrib.auth import get_user_model
 from rebac.resources import model_for_resource_type
 

@@ -12,7 +12,7 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
-from angee.base.models import SqidPublicIdentity, instance_from_public_id
+from angee.base.identity import SqidPublicIdentity, instance_from_public_id
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout

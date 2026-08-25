@@ -19,7 +19,8 @@ from typing import Any, ClassVar, Self, cast
 from angee.base.actors import actor_user_id
 from angee.base.fields import FractionalRankField, StateField
 from angee.base.mixins import AuditMixin
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeModel, bind_actor
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeModel
+from angee.base.scoping import bind_actor
 from angee.base.transitions import StateTransitions, save_state, transition
 from django.apps import apps
 from django.conf import settings

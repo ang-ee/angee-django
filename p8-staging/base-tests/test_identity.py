@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 from angee.base.fields import SqidField
-from angee.base.models import SqidPublicIdentity
+from angee.base.identity import SqidPublicIdentity
 from django.db import models
 from django.test import override_settings
 

@@ -16,9 +16,10 @@ import re
 from dataclasses import dataclass
 from typing import Any, ClassVar, cast
 
+from angee.base.identity import public_id_for
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, public_id_for
+from angee.base.models import AngeeManager, AngeeModel
 from angee.base.refs import RecordRef, RecordRefMixin, canonical_record_target
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey

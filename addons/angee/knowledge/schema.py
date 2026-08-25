@@ -8,7 +8,8 @@ from typing import Annotated, Any, cast
 
 import strawberry
 import strawberry_django
-from angee.base.models import instance_from_public_id, write_scoped_queryset
+from angee.base.identity import instance_from_public_id
+from angee.base.scoping import write_scoped_queryset
 from angee.data.metadata import DataResourceSubtitleMetadata
 from django.apps import apps
 from django.db.models import F

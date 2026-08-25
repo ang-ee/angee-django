@@ -40,13 +40,13 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
+from angee.base.identity import instance_from_public_id
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
 from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeModel,
     AngeeQuerySet,
-    instance_from_public_id,
     role_anchor,
 )
 from angee.base.refs import CanonicalRecordTarget, RecordRefMixin, canonical_record_target

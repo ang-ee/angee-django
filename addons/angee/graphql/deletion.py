@@ -8,7 +8,8 @@ from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
 import strawberry
-from angee.base.models import public_id_of, read_scoped_queryset
+from angee.base.identity import public_id_of
+from angee.base.scoping import read_scoped_queryset
 from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
 from django.db import models, transaction
 from django.db.models.deletion import (

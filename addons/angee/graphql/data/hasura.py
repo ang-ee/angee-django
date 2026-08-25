@@ -9,12 +9,14 @@ from dataclasses import dataclass
 from typing import Any
 
 import strawberry
-from angee.base.models import (
-    aggregate_scoped_queryset,
-    bind_actor,
+from angee.base.identity import (
     instance_from_public_id,
     public_data_id_field,
     public_id_for,
+)
+from angee.base.scoping import (
+    aggregate_scoped_queryset,
+    bind_actor,
     requires_angee_rebac_contract,
 )
 from angee.data.field_classification import model_field_scalar

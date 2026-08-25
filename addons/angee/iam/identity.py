@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from angee.base.models import instance_from_public_id, public_id_for
+from angee.base.identity import instance_from_public_id, public_id_for
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db.models import Q

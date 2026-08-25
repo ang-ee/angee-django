@@ -15,7 +15,8 @@ from datetime import datetime, timedelta
 from typing import Any, Literal, cast
 
 from angee.base.actors import actor_user_id
-from angee.base.models import instance_from_public_id, read_scoped_queryset
+from angee.base.identity import instance_from_public_id
+from angee.base.scoping import read_scoped_queryset
 from angee.jobs.enqueue import enqueue_task
 from django.apps import apps
 from django.conf import settings

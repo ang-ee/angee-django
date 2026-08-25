@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from angee.base.fields import EncryptedField
-from angee.base.models import instance_from_public_id
+from angee.base.identity import instance_from_public_id
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from rebac.resources import model_for_resource_type

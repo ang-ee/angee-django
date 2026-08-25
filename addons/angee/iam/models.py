@@ -14,8 +14,9 @@ from collections.abc import Mapping
 from typing import Any, Self, cast
 
 from angee.base.fields import StateField
+from angee.base.identity import instance_from_public_id
 from angee.base.mixins import SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, instance_from_public_id
+from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import UnicodeUsernameValidator
 from django.db import models, transaction
