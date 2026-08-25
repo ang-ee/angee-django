@@ -817,7 +817,7 @@ def _public_relation_group_key_row(
     row: dict[str, Any],
     relation_aliases: Mapping[str, type[models.Model]],
 ) -> dict[str, Any]:
-    """Return a key-shaping row whose direct relation axes use public ids."""
+    """Return a key-shaping row whose relation axes use public ids."""
 
     if not relation_aliases:
         return row
@@ -836,11 +836,11 @@ def _public_relation_group_key_aliases(
 ) -> dict[str, type[models.Model]]:
     aliases: dict[str, type[models.Model]] = {}
     for path, granularity in spec:
-        if granularity is not None or "__" in path:
+        if granularity is not None:
             continue
         try:
-            field = model._meta.get_field(path)
-        except FieldDoesNotExist:
+            field = require_field_for_path(model, path)
+        except FieldPathError:
             continue
         if not is_to_one_relation(field):
             continue
@@ -1524,7 +1524,7 @@ def _hasura_group_dimension(
         )
     field = _require_group_field(model, path)
     key = _group_key_path(field, path)
-    is_relation = "__" not in path and is_to_one_relation(field)
+    is_relation = is_to_one_relation(field)
     filter_metadata = _hasura_group_bucket_filter(
         field,
         path,
@@ -1743,18 +1743,13 @@ def _group_key_path(
 ) -> str:
     """Return the typed ``<Model>GroupKey`` field for one group axis.
 
-    The FK-alias rule (many-to-one → ``<path>_id``) is owned upstream by
-    ``group_by_alias``, which appends ``_id`` only for a many-to-one
-    relation; we gate on ``field.many_to_one`` so Angee's alias decision
-    is exactly what ``group_by_alias`` produces (a pure one-to-one axis
-    keeps its bare path there, not ``<path>_id``). Only the Angee
-    dotted-path normalization (``.`` → ``__``) for non-relation axes
-    stays local (no owner).
+    The FK-alias rule (many-to-one → ``<path>_id``) and dotted-path
+    normalization are owned upstream by ``group_by_alias``. Passing the
+    resolved terminal field keeps direct and nested relation paths on the
+    exact alias contract used by the aggregate builder's GroupKey emitter.
     """
 
-    if "__" not in path and getattr(field, "many_to_one", False):
-        return group_by_alias(path, None, field)
-    return path.replace(".", "__")
+    return group_by_alias(path, None, field)
 
 
 #: The aggregate ops Angee advertises on the data surface, in metadata order

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import dataclasses
 import enum
+import json
 import warnings
 from collections.abc import Iterator
 from decimal import Decimal
@@ -29,7 +31,11 @@ from strawberry_django_aggregates.errors import GroupByFieldNotAllowed
 
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.data import metadata as metadata_module
-from angee.graphql.data.hasura import _measure_ops_for_field, _relation_filter_decoders
+from angee.graphql.data.hasura import (
+    _hasura_group_dimensions,
+    _measure_ops_for_field,
+    _relation_filter_decoders,
+)
 from angee.graphql.data.metadata import (
     make_data_resource_metadata,
 )
@@ -84,6 +90,34 @@ class ResourceChild(AngeeDataModel):
         """Django model options for the test model."""
 
         app_label = "tests"
+
+
+class ResourceGrandchild(AngeeDataModel):
+    """Concrete grandchild model used by nested relation group-axis tests."""
+
+    sqid_prefix = "rg_"
+
+    child = models.ForeignKey(ResourceChild, on_delete=models.CASCADE, related_name="grandchildren")
+
+    class Meta:
+        """Django model options for the test model."""
+
+        app_label = "tests"
+
+
+@strawberry_django.type(ResourceParent)
+class ResourceSubtitleParentType:
+    """Nested object projection used by subtitle leaf-validation tests."""
+
+    name: auto
+
+
+@strawberry_django.type(ResourceChild)
+class ResourceSubtitleChildType:
+    """Resource projection carrying a to-one object field."""
+
+    name: auto
+    parent: ResourceSubtitleParentType
 
 
 class ResourceTimedThing(AngeeDataModel):
@@ -212,6 +246,26 @@ def test_resource_subtitle_timestamp_defaults_follow_model_field_flags() -> None
     )
 
 
+def test_resource_subtitle_rejects_relation_valued_terminal_field() -> None:
+    """A subtitle must name a selectable leaf, never a bare GraphQL object."""
+
+    with pytest.raises(
+        ImproperlyConfigured,
+        match=(
+            "resource metadata for tests.ResourceChild declares subtitle.word_count "
+            "selection path 'parent'.*declare a scalar subfield"
+        ),
+    ):
+        make_data_resource_metadata(
+            model=ResourceChild,
+            node_type=ResourceSubtitleChildType,
+            roots=DataResourceRoots(),
+            type_names=DataResourceTypeNames(),
+            capabilities=(),
+            subtitle=DataResourceSubtitleMetadata(word_count="parent"),
+        )
+
+
 def test_hasura_resource_attaches_angee_resource_metadata() -> None:
     """The Hasura builder remains external while Angee owns resource metadata."""
 
@@ -335,6 +389,76 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
     sdl = schema.as_str()
     assert "word_count" in sdl
     assert "wordCount" not in sdl
+
+
+def test_hasura_nested_relation_group_dimension_matches_group_key_contract() -> None:
+    """A nested FK dimension uses the aggregate builder's attname key and relation shape."""
+
+    @strawberry_django.type(ResourceGrandchild)
+    class ResourceGrandchildType(AngeeNode):
+        pass
+
+    write_backend = type(
+        "NoopWriteBackend",
+        (),
+        {
+            "create": lambda self, info, data: None,
+            "update": lambda self, info, pk, data: None,
+            "delete": lambda self, info, pk: None,
+        },
+    )()
+    resource = hasura_model_resource(
+        ResourceGrandchildType,
+        model=ResourceGrandchild,
+        name="resource_grandchildren",
+        filterable=["id", "child"],
+        sortable=["child"],
+        aggregatable=["id"],
+        groupable=["child", "child__parent"],
+        get_queryset=lambda info: ResourceGrandchild.objects.all(),
+        write_backend=write_backend,
+        id_decode=lambda value: value,
+    )
+    schema = GraphQLSchemas(
+        [
+            SchemaAddon(
+                {
+                    "public": {
+                        "query": [resource.query],
+                        "types": [ResourceGrandchildType, *resource.types],
+                    }
+                }
+            )
+        ]
+    ).build("public")
+    metadata = schema.angee_resources[0]
+    nested = {dimension.field: dimension for dimension in metadata.group_dimensions}["child__parent"]
+    group_key = schema._schema.get_type(metadata.type_names.group_key)
+
+    assert nested == DataGroupDimensionMetadata(
+        field="child__parent",
+        input="CHILD__PARENT",
+        key="child__parent_id",
+        kind="relation",
+        scalar="ID",
+    )
+    assert group_key is not None
+    assert nested.key in group_key.fields  # type: ignore[attr-defined]
+    assert metadata.relation_axes[0].label_axis is None
+
+
+def test_hasura_single_level_relation_group_metadata_is_byte_identical() -> None:
+    """The established direct-FK dimension payload stays byte-identical."""
+
+    dimension = _hasura_group_dimensions(ResourceChild, ("parent",), ("parent",))[0]
+    payload = json.dumps(dataclasses.asdict(dimension), separators=(",", ":"), sort_keys=True).encode()
+
+    assert payload == (
+        b'{"extractions":[],"field":"parent","filter":{"field":"parent","kind":"equality",'
+        b'"lookup":"sqid","null_lookup":"isNull","range_key":null,"value_key":"parent_id",'
+        b'"value_map":[],"value_transform":null},"input":"PARENT","key":"parent_id",'
+        b'"kind":"relation","scalar":"ID"}'
+    )
 
 
 def test_hasura_model_resource_groups_json_path_axes() -> None:

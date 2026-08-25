@@ -89,6 +89,7 @@ def require_resource_selection_path(
     path: str,
     *,
     model_label: str,
+    fact: str = "subtitle",
 ) -> None:
     """Require a dotted GraphQL selection path to resolve through ``surface``.
 
@@ -116,22 +117,35 @@ def require_resource_selection_path(
         )
         if field is None:
             raise ImproperlyConfigured(
-                f"resource metadata for {model_label} declares subtitle selection "
+                f"resource metadata for {model_label} declares {fact} selection "
                 f"path {path!r} with unknown field {part!r}."
             )
         if index == len(parts) - 1:
+            try:
+                terminal_surface, _is_list = _selection_surface(field.type)
+            except NotImplementedError as error:
+                raise ImproperlyConfigured(
+                    f"resource metadata for {model_label} cannot resolve {fact} "
+                    f"selection path {path!r}: {error}"
+                ) from error
+            if get_object_definition(terminal_surface) is not None:
+                raise ImproperlyConfigured(
+                    f"resource metadata for {model_label} declares {fact} selection "
+                    f"path {path!r} ending at object field {part!r}; declare a scalar "
+                    f"subfield such as {path + '.<record representation>'!r} instead."
+                )
             return
         try:
             next_surface, is_list = _selection_surface(field.type)
         except NotImplementedError as error:
             raise ImproperlyConfigured(
-                f"resource metadata for {model_label} cannot resolve subtitle "
+                f"resource metadata for {model_label} cannot resolve {fact} "
                 f"selection path {path!r}: {error}"
             ) from error
         if is_list or get_object_definition(next_surface) is None:
             traversed = ".".join(parts[: index + 1])
             raise ImproperlyConfigured(
-                f"resource metadata for {model_label} declares subtitle selection "
+                f"resource metadata for {model_label} declares {fact} selection "
                 f"path {path!r} through non-object field {traversed!r}."
             )
         current_surface = next_surface

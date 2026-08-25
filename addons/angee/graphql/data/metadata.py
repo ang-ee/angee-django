@@ -331,6 +331,7 @@ def _resource_subtitle(
                 node_type,
                 path,
                 model_label=model_label,
+                fact=f"subtitle.{field_def.name}",
             )
     has_fact = any(
         getattr(active, field_def.name) is not None
@@ -479,6 +480,15 @@ def _relation_label_axes(
     label_axes: dict[str, str] = {}
     for path in group_by_fields:
         if "__" not in path:
+            continue
+        try:
+            terminal_field = require_field_for_path(model, path)
+        except FieldPathError:
+            continue
+        if is_to_one_relation(terminal_field):
+            # A nested relation is its own identity dimension, not a scalar
+            # label for the first relation in the path. Advertising it as a
+            # label axis makes clients select the object as a bare leaf.
             continue
         relation, _leaf = path.split("__", 1)
         try:
