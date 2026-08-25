@@ -1,9 +1,4 @@
 {
   "extends": "../tsconfig.base.json",
-  "compilerOptions": {
-    "paths": {
-      "@angee/gql/*": ["../../../../runtime/gql/*"]
-    }
-  },
   "include": ["src", "vitest.config.ts"]
 }
