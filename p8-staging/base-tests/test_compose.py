@@ -996,21 +996,26 @@ def test_runtime_rejects_mismatched_extension_model_label(tmp_path: Path) -> Non
         Runtime((target_config, extension_config), runtime_dir=tmp_path / "runtime")
 
 
-def test_runtime_emit_and_check_detect_drift(tmp_path: Path) -> None:
-    """Emit writes deterministic files and check reports later drift."""
+def test_runtime_boot_repairs_drift_without_pruning_but_emit_prunes(tmp_path: Path) -> None:
+    """Checks see all drift, boot repairs files only, and explicit emit prunes."""
 
     runtime = runtime_for(tmp_path)
     runtime.emit()
     runtime.check()
-
-    (tmp_path / "runtime" / "resources" / "models.py").write_text(
-        "# stale\n",
-        encoding="utf-8",
-    )
+    models_path = runtime.runtime_dir / "resources" / "models.py"
+    models_path.write_text("# stale\n", encoding="utf-8")
+    orphan = runtime.runtime_dir / "removed" / "models.py"
+    orphan.parent.mkdir()
+    orphan.write_text("# orphan\n", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="stale"):
         runtime.check()
-    assert (tmp_path / "runtime" / "resources" / "models.py").read_text(encoding="utf-8") == "# stale\n"
+    assert runtime.emit_if_stale() is True
+    assert models_path.read_text(encoding="utf-8") == runtime.render_sources()[Path("resources/models.py")]
+    assert orphan.exists()
+    runtime.emit()
+    assert not orphan.exists()
+    runtime.check()
 
 
 def test_runtime_check_ignores_schema_command_output(tmp_path: Path) -> None:
@@ -1587,17 +1592,23 @@ def test_clean_then_emit_is_idempotent(tmp_path: Path, settings: Any) -> None:
     runtime = runtime_for(tmp_path)
     settings.ANGEE_RUNTIME_DIR = runtime.runtime_dir
     runtime.emit()
-    migration_path = runtime.runtime_dir / "resources" / "migrations" / "0001_initial.py"
-    migration_path.write_text("# migration\n", encoding="utf-8")
+    migration_paths = (
+        runtime.runtime_dir / "resources" / "migrations" / "0001_initial.py",
+        runtime.runtime_dir / "resources" / "migrations" / "archive" / "snapshot.txt",
+        runtime.runtime_dir / "removed" / "migrations" / "nested" / "data.bin",
+    )
+    for path in migration_paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("migration\n", encoding="utf-8")
 
     runtime.clean()
     assert "ANGEE GENERATED RUNTIME" in (runtime.runtime_dir / "__init__.py").read_text(encoding="utf-8")
     runtime.emit()
 
     assert "ANGEE GENERATED RUNTIME" in (runtime.runtime_dir / "__init__.py").read_text(encoding="utf-8")
-    assert migration_path.read_text(encoding="utf-8") == "# migration\n"
+    assert all(path.read_text(encoding="utf-8") == "migration\n" for path in migration_paths)
     runtime.clean()
-    assert migration_path.read_text(encoding="utf-8") == "# migration\n"
+    assert all(path.read_text(encoding="utf-8") == "migration\n" for path in migration_paths)
     assert "ANGEE GENERATED RUNTIME" in (runtime.runtime_dir / "__init__.py").read_text(encoding="utf-8")
     runtime.clean()
 
@@ -1720,13 +1731,13 @@ def test_runtime_build_materializes_when_sources_are_current(tmp_path: Path, mon
 
 def test_runtime_check_validates_migrations_after_source_drift_is_clean(tmp_path: Path, monkeypatch) -> None:
     runtime = runtime_for(tmp_path)
+    runtime.emit()
     calls: list[str] = []
 
     class FakeMigrations:
         def check(self) -> None:
             calls.append("migration_check")
 
-    monkeypatch.setattr(runtime, "_drift", lambda: [])
     monkeypatch.setattr(runtime, "runtime_migrations", lambda: FakeMigrations())
 
     runtime.check()
@@ -1736,8 +1747,9 @@ def test_runtime_check_validates_migrations_after_source_drift_is_clean(tmp_path
 
 def test_runtime_check_does_not_plan_migrations_while_sources_are_stale(tmp_path: Path, monkeypatch) -> None:
     runtime = runtime_for(tmp_path)
+    runtime.emit()
+    (runtime.runtime_dir / "resources" / "models.py").write_text("# stale\n", encoding="utf-8")
     calls: list[str] = []
-    monkeypatch.setattr(runtime, "_drift", lambda: [Path("resources/models.py")])
     monkeypatch.setattr(runtime, "runtime_migrations", lambda: calls.append("migration_check"))
 
     with pytest.raises(RuntimeError, match="generated runtime is stale"):
@@ -1748,7 +1760,7 @@ def test_runtime_check_does_not_plan_migrations_while_sources_are_stale(tmp_path
 
 def test_emit_if_stale_never_constructs_runtime_migrations(tmp_path: Path, monkeypatch) -> None:
     runtime = runtime_for(tmp_path)
-    monkeypatch.setattr(runtime, "_drift", lambda: [])
+    runtime.emit()
     monkeypatch.setattr(
         runtime,
         "runtime_migrations",

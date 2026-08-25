@@ -1,12 +1,13 @@
-"""On-disk GraphQL schema artifact emission, checks, and drift detection.
+"""On-disk GraphQL schema artifact rendering and reconciliation policy.
 
 :class:`GraphQLSdl` is the schema counterpart of :class:`angee.compose.runtime.Runtime`:
 it owns where generated schema artifacts live (``runtime/schemas/<name>.graphql`` and
 ``runtime/schemas/<name>.metadata.json``), renders them from the discovered
 :class:`~angee.graphql.schema.GraphQLSchemas`, and reconciles disk against that render.
 The ``schema`` management command and the dev-serve boot hook
-(:mod:`angee.graphql.asgi`) both delegate here, so the write/check/drift logic lives
-once.
+(:mod:`angee.graphql.asgi`) both delegate here. Shared filesystem lifecycle logic
+lives in :class:`angee.fs.GeneratedTree`; this owner supplies the GraphQL render and
+owned-suffix policy.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from angee.fs import write_atomic
+from angee.fs import GeneratedTree
 from django.conf import settings
 
 from angee.graphql.schema import GraphQLSchemas
@@ -55,10 +56,7 @@ class GraphQLSdl:
     def emit(self) -> None:
         """Reconcile the owned schema directory to the rendered schemas."""
 
-        rendered = self._rendered_artifacts()
-        self._prune_orphans(rendered)
-        for filename, content in rendered.items():
-            write_atomic(self.schema_dir / filename, content)
+        self._generated_tree().reconcile(prune=True)
 
     def emit_if_stale(self) -> bool:
         """Reconcile drifted schema artifacts and orphans; return whether any changed.
@@ -67,79 +65,34 @@ class GraphQLSdl:
         idempotent, and converges the owned directory to the render.
         """
 
-        drift = self._drift()
-        if not drift:
-            return False
-        rendered = self._rendered_artifacts()
-        self._prune_orphans(rendered)
-        for filename in drift:
-            if filename in rendered:
-                write_atomic(self.schema_dir / filename, rendered[filename])
-        return True
+        return self._generated_tree().reconcile(prune=True)
 
     def check(self) -> None:
         """Raise when on-disk schema artifacts differ from the render."""
 
-        drift = self._drift()
+        drift = self._generated_tree().drift()
         if drift:
-            rendered = ", ".join(f"schemas/{filename}" for filename in drift)
+            rendered = ", ".join(f"schemas/{path}" for path in drift)
             raise RuntimeError(f"generated GraphQL schema artifacts are stale: {rendered}")
 
-    def _drift(self) -> list[str]:
-        """Return schema artifact filenames whose on-disk file differs from the render."""
-
-        expected = self._rendered_artifacts()
-        actual = (
-            {path.name: path.read_text(encoding="utf-8") for path in self._artifact_paths()}
-            if self.schema_dir.exists()
-            else {}
-        )
-        return sorted(
-            (set(expected) ^ set(actual))
-            | {name for name in expected.keys() & actual.keys() if expected[name] != actual[name]}
-        )
-
-    def _rendered_artifacts(self) -> dict[str, str]:
+    def _rendered_artifacts(self) -> dict[Path, str]:
         """Return owned schema artifact filenames mapped to rendered content."""
 
-        artifacts = {
-            f"{name}{_SDL_SUFFIX}": sdl
-            for name, sdl in self.render().items()
-        }
-        artifacts.update(
-            {
-                f"{name}{_METADATA_SUFFIX}": _metadata_json(metadata)
-                for name, metadata in self.render_metadata().items()
-            }
-        )
+        artifacts = {Path(f"{name}{_SDL_SUFFIX}"): sdl for name, sdl in self.render().items()}
+        artifacts.update({
+            Path(f"{name}{_METADATA_SUFFIX}"): _metadata_json(metadata)
+            for name, metadata in self.render_metadata().items()
+        })
         return artifacts
 
-    def _artifact_paths(self) -> list[Path]:
-        """Return all generated schema artifact paths in deterministic order."""
+    def _generated_tree(self) -> GeneratedTree:
+        """Return the synchronizer with GraphQL's owned-suffix prune policy."""
 
-        if not self.schema_dir.exists():
-            return []
-        return sorted(
-            [
-                path
-                for path in self.schema_dir.iterdir()
-                if path.is_file()
-                and (
-                    path.name.endswith(_SDL_SUFFIX)
-                    or path.name.endswith(_METADATA_SUFFIX)
-                )
-            ]
+        return GeneratedTree(
+            self.schema_dir,
+            self._rendered_artifacts(),
+            owns=lambda path: len(path.parts) == 1 and path.name.endswith((_SDL_SUFFIX, _METADATA_SUFFIX)),
         )
-
-    def _prune_orphans(self, rendered: dict[str, str]) -> None:
-        """Remove schema artifacts for schema buckets that no longer render."""
-
-        if not self.schema_dir.exists():
-            return
-        expected_names = set(rendered)
-        for path in self._artifact_paths():
-            if path.name not in expected_names:
-                path.unlink()
 
 
 def _metadata_json(metadata: dict[str, object]) -> str:

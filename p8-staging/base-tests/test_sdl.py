@@ -78,10 +78,14 @@ def test_emit_if_stale_writes_only_on_drift(tmp_path: Path) -> None:
 
 
 def test_emit_if_stale_prunes_removed_schema_buckets(tmp_path: Path) -> None:
-    """The boot hook converges after a schema bucket is removed."""
+    """The boot hook prunes only owned suffixes after a schema bucket is removed."""
 
     schema_dir = tmp_path / "schemas"
     _sdl(tmp_path, {"public": "type Query { a: Int }\n", "console": "type Query { b: Int }\n"}).emit()
+    unrelated = schema_dir / "README.md"
+    unrelated.write_text("keep\n", encoding="utf-8")
+    suffix_lookalike = schema_dir / "public.graphql.bak"
+    suffix_lookalike.write_text("keep\n", encoding="utf-8")
 
     sdl = GraphQLSdl(
         cast(GraphQLSchemas, _StubSchemas({"public": "type Query { a: Int }\n"})),
@@ -91,6 +95,8 @@ def test_emit_if_stale_prunes_removed_schema_buckets(tmp_path: Path) -> None:
     assert sdl.emit_if_stale() is True
     assert not (schema_dir / "console.graphql").exists()
     assert not (schema_dir / "console.metadata.json").exists()
+    assert unrelated.read_text(encoding="utf-8") == "keep\n"
+    assert suffix_lookalike.read_text(encoding="utf-8") == "keep\n"
     sdl.check()
 
 
