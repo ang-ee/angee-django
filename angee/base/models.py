@@ -6,7 +6,7 @@ import re
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Self, TypeVar, cast
+from typing import Any, Generic, Self, TypeVar, cast
 
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
@@ -32,7 +32,6 @@ from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 from rebac.types import RelationshipFilter
 
-from angee.base.fields import SqidField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import SqidMixin, TimestampMixin
 from angee.base.permissions import effective_rebac_definition
@@ -119,13 +118,23 @@ EXTENSION_DONOR_STRUCTURAL_MEMBERS = frozenset(
 """Class-dict members that do not make a same-row extension donor semantic."""
 
 
-class AngeeQuerySet(RebacQuerySet[_ModelT]):
-    """QuerySet API shared by Angee source and runtime models."""
+class _PublicIdQuerySetMixin(Generic[_ModelT]):
+    model: type[_ModelT]
 
     def from_public_id(self, value: str) -> _ModelT | None:
         """Return the row addressed by ``value`` within this queryset policy."""
 
-        return _instance_from_public_id_queryset(self, value)
+        if value == "":
+            return None
+        try:
+            lookup = cast(Any, self.model).public_id_lookup(value)
+            return cast(_ModelT | None, cast(Any, self).filter(**lookup).first())
+        except (TypeError, ValueError):
+            return None
+
+
+class AngeeQuerySet(_PublicIdQuerySetMixin[_ModelT], RebacQuerySet[_ModelT]):
+    """QuerySet API shared by Angee source and runtime models."""
 
     def apply_ambient_scope(self) -> Self:
         """Eagerly apply REBAC row scope using the queryset or ambient actor."""
@@ -174,13 +183,8 @@ class AngeeQuerySet(RebacQuerySet[_ModelT]):
         return queryset.apply_ambient_scope()
 
 
-class AngeeUnscopedQuerySet(models.QuerySet[_ModelT]):
+class AngeeUnscopedQuerySet(_PublicIdQuerySetMixin[_ModelT], models.QuerySet[_ModelT]):
     """Angee queryset API for models that intentionally have no REBAC row policy."""
-
-    def from_public_id(self, value: str) -> _ModelT | None:
-        """Return the row addressed by ``value`` within this queryset."""
-
-        return _instance_from_public_id_queryset(self, value)
 
     def scoped_for_aggregate(self) -> Self:
         """Return this queryset for permission-naive aggregation.
@@ -303,6 +307,23 @@ class AngeeModel(TimestampMixin, RebacMixin):
         """Django model options for Angee's abstract model base."""
 
         abstract = True
+
+    @classmethod
+    def system_queryset(
+        cls,
+        *,
+        using: str | None = None,
+        lock: tuple[str, ...] | None = None,
+    ) -> AngeeQuerySet[Self]:
+        """Return an elevated unscoped queryset with backend-gated locks; SQLite stays unlocked.
+
+        Locking was previously dead at these call sites and is now real.
+        """
+
+        queryset = AngeeQuerySet[Self](model=cls, using=using).system_context(
+            reason=f"{cls._meta.label_lower}.system_queryset"
+        )
+        return queryset.lock_if_supported(of=lock) if lock is not None else queryset
 
     @classmethod
     def is_runtime_model(cls) -> bool:
@@ -797,185 +818,6 @@ def _role_anchor_name(resource_type: str) -> str:
     return "".join(part[:1].upper() + part[1:] for part in parts)
 
 
-@dataclass(frozen=True, slots=True)
-class SqidPublicIdentity:
-    """Sqid adapter for a model Angee does not own with a ``SqidField``.
-
-    Survives only for third-party Django models such as ``auth.Group`` where
-    Angee exposes a public sqid-shaped surface but cannot add its own field.
-    ``SqidField`` still owns the codec and prefix rules.
-    """
-
-    prefix: str
-    min_length: int | None = None
-    alphabet: str | None = None
-
-    def public_id_from_pk(self, value: Any) -> str:
-        """Return the public id encoded from a primary-key value."""
-
-        return self.sqid_field.public_id_from_value(value)
-
-    def public_id_to_pk(self, value: str) -> int | None:
-        """Decode one public id to the backing primary-key value."""
-
-        return self.sqid_field.public_id_to_value(value)
-
-    def public_id_lookup(self, model: type[models.Model], value: str) -> dict[str, Any]:
-        """Return a Django lookup for ``value`` against ``model``."""
-
-        pk = model._meta.pk
-        return {pk.name: self.public_id_to_pk(value)} if pk is not None else {}
-
-    @property
-    def sqid_field(self) -> SqidField:
-        """Return the owner field used to encode and decode this adapter's ids."""
-
-        # Deliberately per-call: this rare third-party path keeps SqidField as
-        # the codec owner without attaching a field to a model Angee does not own.
-        return SqidField(
-            real_field_name="id",
-            prefix=self.prefix,
-            min_length=self.min_length,
-            alphabet=self.alphabet,
-        )
-
-
-def public_data_id_field(model: type[models.Model]) -> SqidField | None:
-    """Return the sqid field that makes ``model`` safe for public data surfaces."""
-
-    for owner in (model, *model._meta.get_parent_list()):
-        try:
-            field = owner._meta.get_field("sqid")
-        except FieldDoesNotExist:
-            continue
-        if isinstance(field, SqidField):
-            return field
-    return None
-
-
-def instance_from_public_id(
-    model: type[_ModelT],
-    value: str,
-    *,
-    queryset: models.QuerySet[_ModelT] | None = None,
-    public_identity: SqidPublicIdentity | None = None,
-) -> _ModelT | None:
-    """Return ``model`` instance addressed by a public id.
-
-    Thin adapter for generic surfaces that receive a model class/queryset at
-    runtime or a third-party ``public_identity``; Angee-owned callers should use
-    ``Model.from_public_id`` or ``queryset.from_public_id`` when they know the
-    owner statically.
-    """
-
-    active_queryset = queryset if queryset is not None else model._default_manager.all()
-    return _instance_from_public_id_queryset(
-        active_queryset,
-        value,
-        public_identity=public_identity,
-    )
-
-
-def public_id_of(instance: models.Model) -> str:
-    """Return the public id for a generic model instance.
-
-    Thin adapter for generic surfaces that may receive a third-party Django
-    model. Angee-owned instances should use their ``public_id`` property.
-    """
-
-    public_id = getattr(instance, "public_id", None)
-    if isinstance(public_id, str):
-        return public_id
-    pk = instance.pk
-    if pk in (None, ""):
-        return ""
-    return str(pk)
-
-
-def public_id_for(
-    model: type[models.Model],
-    pk: Any,
-    *,
-    public_identity: SqidPublicIdentity | None = None,
-) -> str:
-    """Return the public id for a generic model when only its primary key is known.
-
-    Thin adapter for relation/projector code that receives a model class at
-    runtime, including third-party models reached through ``public_identity``.
-    Angee-owned callers should prefer ``Model.public_id_from_pk``.
-    """
-
-    if pk in (None, ""):
-        return ""
-    if public_identity is not None:
-        return public_identity.public_id_from_pk(pk)
-    resolver = getattr(model, "public_id_from_pk", None)
-    if callable(resolver):
-        return str(resolver(pk))
-    return str(pk)
-
-
-def bind_actor(instance: models.Model, actor: Any | None) -> None:
-    """Bind ``actor`` to ``instance`` when the model owns REBAC row policy."""
-
-    if actor is None:
-        return
-    with_actor = getattr(instance, "with_actor", None)
-    if callable(with_actor):
-        with_actor(actor)
-        return
-    if requires_angee_rebac_contract(type(instance)):
-        raise ImproperlyConfigured(f"{instance._meta.label} instances must expose with_actor(actor).")
-
-
-def aggregate_scoped_queryset(queryset: models.QuerySet[_ModelT]) -> models.QuerySet[_ModelT]:
-    """Return the aggregate-safe scoped queryset for a REBAC model."""
-
-    scoped = getattr(queryset, "scoped_for_aggregate", None)
-    if callable(scoped):
-        return cast(models.QuerySet[_ModelT], scoped())
-    if requires_angee_rebac_contract(queryset.model):
-        raise ImproperlyConfigured(f"{queryset.model._meta.label} querysets must expose scoped_for_aggregate().")
-    return queryset
-
-
-def read_scoped_queryset(
-    model: type[_ModelT],
-    actor: Any | None,
-    *,
-    action: str = "read",
-) -> models.QuerySet[_ModelT] | None:
-    """Return a queryset scoped to ``actor`` for models with a REBAC row policy."""
-
-    if not model_resource_type(model) or actor is None:
-        return None
-    manager = model._default_manager
-    with_actor = getattr(manager, "with_actor", None)
-    if not callable(with_actor):
-        if requires_angee_rebac_contract(model):
-            raise ImproperlyConfigured(f"{model._meta.label} manager must expose with_actor(actor).")
-        return None
-    queryset = with_actor(actor)
-    with_action = getattr(queryset, "with_action", None)
-    if callable(with_action):
-        queryset = with_action(action)
-    elif requires_angee_rebac_contract(model):
-        raise ImproperlyConfigured(f"{model._meta.label} querysets must expose with_action(action).")
-    return cast(models.QuerySet[_ModelT], queryset)
-
-
-def write_scoped_queryset(model: type[_ModelT]) -> models.QuerySet[_ModelT]:
-    """Return a write-target queryset with REBAC row scope and unredacted fields."""
-
-    manager = model._default_manager
-    for_write = getattr(manager, "for_write", None)
-    if callable(for_write):
-        return cast(models.QuerySet[_ModelT], for_write())
-    if requires_angee_rebac_contract(model):
-        raise ImproperlyConfigured(f"{model._meta.label} manager must expose for_write().")
-    return manager.all()
-
-
 def _relationship_subject(value: Any) -> SubjectRef:
     """Return one preflight relationship value as a REBAC subject reference."""
 
@@ -987,39 +829,6 @@ def _relationship_subject(value: Any) -> SubjectRef:
         pass
     ref = to_object_ref(value)
     return SubjectRef.of(ref.resource_type, ref.resource_id)
-
-
-def _instance_from_public_id_queryset(
-    queryset: models.QuerySet[_ModelT],
-    value: str,
-    *,
-    public_identity: SqidPublicIdentity | None = None,
-) -> _ModelT | None:
-    """Return the row addressed by ``value`` using ``queryset`` as the owner."""
-
-    if value == "":
-        return None
-
-    try:
-        if public_identity is not None:
-            lookup = public_identity.public_id_lookup(queryset.model, value)
-        else:
-            lookup_owner = getattr(queryset.model, "public_id_lookup", None)
-            if callable(lookup_owner):
-                lookup = dict(lookup_owner(value))
-            else:
-                pk = queryset.model._meta.pk
-                lookup = {pk.name: value} if pk is not None else {}
-        instance = queryset.filter(**lookup).first()
-    except (TypeError, ValueError):
-        return None
-    return cast(_ModelT | None, instance)
-
-
-def requires_angee_rebac_contract(model: type[models.Model]) -> bool:
-    """Return whether ``model`` is an Angee model with declared row authorization."""
-
-    return issubclass(model, AngeeModel) and bool(model_resource_type(model))
 
 
 def _is_contributed_extension_base(value: type) -> bool:

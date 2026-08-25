@@ -17,6 +17,7 @@ from angee.base.actors import actor_user_id
 from angee.base.emission import ModelClassAttribute, ModelDecorator
 from angee.base.fields import SqidField
 from angee.base.indexes import PatternOpsIndex
+from angee.base.scoping import system_queryset
 
 _ArchiveModelT = TypeVar("_ArchiveModelT", bound=models.Model)
 _HierarchyModelT = TypeVar("_HierarchyModelT", bound="HierarchyMixin")
@@ -504,7 +505,7 @@ class HierarchyMixin(models.Model):
             self._reject_cross_scope_parent(parent)
             new_path = self._hierarchy_path(parent)
             if new_path != self.path:
-                self._hierarchy_writer().filter(pk=self.pk).update(path=new_path)
+                system_queryset(type(self)).filter(pk=self.pk).update(path=new_path)
                 self.path = new_path
 
     def _save_reparented(self, *args: Any, **kwargs: Any) -> None:
@@ -532,7 +533,7 @@ class HierarchyMixin(models.Model):
                 # head. An empty old path (an unmaterialized row) skips the
                 # cascade: it has nothing under it, and ``LIKE '%'`` would
                 # rewrite the whole table.
-                self._hierarchy_writer().filter(path__startswith=old_path).update(
+                system_queryset(type(self)).filter(path__startswith=old_path).update(
                     path=Replace(F("path"), Value(old_path), Value(new_path))
                 )
 
@@ -556,18 +557,9 @@ class HierarchyMixin(models.Model):
         return self.path
 
     def _locked_paths(self, pks: list[Any]) -> dict[Any, str]:
-        """Return committed ``path`` values for ``pks``, row-locked where supported.
+        """Return committed paths, serializing overlapping moves when supported."""
 
-        Routes the lock through the queryset's ``lock_if_supported`` owner (the
-        greppable, backend-gated ``select_for_update`` helper the ``AngeeQuerySet``
-        exposes) rather than re-deciding the SQLite floor here: a locking backend
-        serializes overlapping moves on the maintained ``path``; SQLite has no row
-        locks and reads the committed paths unlocked (the documented floor).
-        """
-
-        writer = self._hierarchy_writer()
-        locker = getattr(writer, "lock_if_supported", None)
-        reader = locker(of=()) if callable(locker) else writer
+        reader = system_queryset(type(self), lock=())
         return dict(reader.filter(pk__in=pks).values_list("pk", "path"))
 
     def _hierarchy_needs_repath(self) -> bool:
@@ -586,7 +578,12 @@ class HierarchyMixin(models.Model):
     def _hierarchy_committed_parent_id(self) -> Any:
         """Return this row's committed ``parent_id`` from the database."""
 
-        return self._hierarchy_writer().filter(pk=self.pk).values_list("parent_id", flat=True).first()
+        return (
+            system_queryset(type(self))
+            .filter(pk=self.pk)
+            .values_list("parent_id", flat=True)
+            .first()
+        )
 
     def _hierarchy_parent(self) -> HierarchyMixin | None:
         """Return the parent instance (cached when assigned), or ``None`` for a root."""
@@ -618,18 +615,3 @@ class HierarchyMixin(models.Model):
             attname = self._meta.get_field(name).attname
             if getattr(self, attname) != getattr(parent, attname):
                 raise ValidationError({"parent": f"Parent must belong to the same {name}."})
-
-    def _hierarchy_writer(self) -> models.QuerySet[Self]:
-        """Return an unscoped queryset for the mixin's own path maintenance.
-
-        Path maintenance is a system fact, not an actor read: a reparent must
-        rewrite every descendant even where the acting user's REBAC scope hides
-        some, so the write elevates when the manager supports it. This assumes
-        ``_base_manager`` is unscoped-or-sudo (the framework default); a
-        consumer must not repoint ``Meta.base_manager_name`` at an actor-scoped
-        manager, or descendant rewrites would silently REBAC-scope.
-        """
-
-        queryset = type(self)._base_manager.all()
-        sudo = getattr(queryset, "sudo", None)
-        return cast("models.QuerySet[Self]", sudo() if callable(sudo) else queryset)

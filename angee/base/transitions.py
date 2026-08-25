@@ -58,6 +58,7 @@ from django.db import models, transaction
 from django.db.models.query_utils import DeferredAttribute
 
 from angee.base.fields import StateField, enum_member_for
+from angee.base.scoping import system_queryset
 
 Condition = Callable[[models.Model], bool]
 SuccessHook = Callable[[models.Model, Any, Any], None]
@@ -485,9 +486,6 @@ def save_state(instance: models.Model, source: Any, target: Any) -> None:
     the guard only *verifies*; ``instance.save`` still performs the ``source ->
     target`` column write, so ``post_save`` receivers, audit stamping, ``changes``
     publishers, and pre-save change trackers observe the real old->new transition.
-    On a locking backend the row lock serializes racers (the loser's re-read blocks
-    until the winner commits, then sees the moved state); SQLite has no row lock and
-    verifies unlocked — the documented floor.
     """
 
     field_name = cast(str | None, getattr(instance, "_angee_transition_save_field", None))
@@ -504,21 +502,9 @@ def save_state(instance: models.Model, source: Any, target: Any) -> None:
 
 
 def _verify_uncontended_source(instance: models.Model, field_name: str, source: Any, target: Any) -> None:
-    """Lock the row and confirm its committed state still equals ``source``.
+    """Lock the row and reject a committed state that already left ``source``."""
 
-    Raises :class:`TransitionNotAllowed` when a concurrent transition already left
-    ``source``. Runs unscoped (the base manager, elevated when it supports ``sudo``)
-    because reading committed state for an integrity guard is a system read on one
-    addressed row, mirroring the mixin path-maintenance writer, and routes the lock
-    through the queryset's ``lock_if_supported`` owner (backend-gated, SQLite-safe).
-    """
-
-    writer = type(instance)._base_manager.all()
-    sudo = getattr(writer, "sudo", None)
-    if callable(sudo):
-        writer = sudo()
-    locker = getattr(writer, "lock_if_supported", None)
-    reader = locker(of=()) if callable(locker) else writer
+    reader = system_queryset(type(instance), lock=())
     committed = reader.filter(pk=instance.pk).values_list(field_name, flat=True).first()
     field = cast(StateField, instance._meta.get_field(field_name))
     if _state_key(field, committed) != _state_key(field, source):

@@ -8,14 +8,16 @@ from django.apps import apps
 from django.db import connection, models
 from rebac import MissingActorError, RebacMixin, system_context
 
-from angee.base.mixins import RevisionMixin
-from angee.base.models import (
-    AngeeDataModel,
-    AngeeModel,
+from angee.base.identity import (
     instance_from_public_id,
     public_data_id_field,
     public_id_for,
     public_id_of,
+)
+from angee.base.mixins import RevisionMixin
+from angee.base.models import (
+    AngeeDataModel,
+    AngeeModel,
 )
 
 

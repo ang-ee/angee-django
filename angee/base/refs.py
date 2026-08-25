@@ -27,7 +27,7 @@ from django.db import models
 from rebac import ObjectRef, to_object_ref
 from rebac.resources import model_resource_type
 
-from angee.base.models import public_id_for
+from angee.base.identity import public_id_for
 
 
 @dataclass(frozen=True, slots=True)

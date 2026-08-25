@@ -44,6 +44,8 @@ from django_choices_field import TextChoicesField
 from django_sqids import SqidsField
 from sqids import Sqids
 
+from angee.base.scoping import system_queryset
+
 
 def _derive_fernet(label: str) -> Fernet:
     """Return the Fernet instance for one model column label."""
@@ -317,19 +319,11 @@ class FractionalRankField(models.FloatField):
     def rebalance(self, *, context: Mapping[str, Any], using: str | None = None) -> int:
         """Rewrite this field to a clean spread inside one exact context.
 
-        Returns the number of rows whose rank changed. Rows are ordered by their
-        committed ``(rank, pk)`` values, read through ``_base_manager`` (the
-        unscoped framework writer — a consumer's filtered default manager must
-        not hide context rows from a rewrite), locked through Angee's queryset
-        owner where supported, and staged outside both the old and final ranges
-        before the clean ranks are written. Staging prevents an immediate
-        contextual unique constraint from observing a transient collision
-        during the rewrite; the enclosing transaction keeps concurrent readers
-        on either the complete old order or the complete new order. A row
-        inserted into the context mid-rebalance is not covered by the lock —
-        the contextual unique constraint arbitrates it, and that writer rereads
-        and retries. The rank column must be NOT NULL; a NULL rank is a
-        consumer modelling error this rewrite does not repair.
+        Returns the number of rows whose rank changed. Rows are read in committed
+        ``(rank, pk)`` order through the model's system queryset and staged outside
+        both the old and final ranges before the clean ranks are written. Staging
+        avoids transient unique-constraint collisions. A concurrent insert is
+        arbitrated by that constraint and must retry. The rank must be NOT NULL.
         """
 
         model = getattr(self, "model", None)
@@ -339,15 +333,8 @@ class FractionalRankField(models.FloatField):
         database = using or router.db_for_write(model)
 
         with transaction.atomic(using=database):
-            writer = model._base_manager.using(database).filter(**context_filter)
-            sudo = getattr(writer, "sudo", None)
-            if callable(sudo):
-                writer = sudo()
-            locker = getattr(writer, "lock_if_supported", None)
-            reader = locker(of=()) if callable(locker) else writer
-            rows = list(
-                reader.only(model._meta.pk.name, self.name).order_by(self.name, model._meta.pk.name)
-            )
+            writer = system_queryset(model, using=database, lock=()).filter(**context_filter)
+            rows = list(writer.only(model._meta.pk.name, self.name).order_by(self.name, model._meta.pk.name))
             current = [self._coerce_endpoint(getattr(row, self.attname), name=self.attname) for row in rows]
             clean = self._clean_ranks(len(rows))
             changed = sum(rank != target for rank, target in zip(current, clean, strict=True))
