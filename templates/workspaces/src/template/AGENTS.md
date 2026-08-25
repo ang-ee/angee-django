@@ -25,6 +25,11 @@ there.
 - **`angee-arp/`** — arpee, the ARP product: the clean-room Odoo port as
   `arp.*` consumer addons. Present only when the stack opts in
   (`include_arp` — the repo is private).
+- **`hatch-angee/`** — the addon build backend + the composer's manifest/
+  dependency library (published to PyPI; what `[build-system]` and the
+  dependency projector consume).
+- **`strawberry-django-hasura/`** — the Hasura-style GraphQL surface library
+  the `angee.graphql` addon builds on (published to PyPI).
 - **`angee-templates/`** — the Copier templates that render stacks, projects,
   workspaces, and services (what `angee init` consumes).
 - **`angee-operator/`** — the `angee` CLI / operator daemon (Go).

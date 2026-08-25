@@ -161,6 +161,19 @@ sources:
     repo: https://github.com/ang-ee/angee-operator.git
     default_ref: main
     cache_path: sources/angee-operator
+  # Framework packaging siblings, developed alongside the platform: the addon
+  # build backend (hatch-angee) and the Hasura-style GraphQL surface library
+  # (strawberry-django-hasura).
+  hatch-angee:
+    kind: git
+    repo: https://github.com/ang-ee/hatch-angee.git
+    default_ref: main
+    cache_path: sources/hatch-angee
+  strawberry-django-hasura:
+    kind: git
+    repo: https://github.com/ang-ee/strawberry-django-hasura.git
+    default_ref: main
+    cache_path: sources/strawberry-django-hasura
 {% if addons_profile == "full" %}
   # The full platform composition opts into the bridge and example repos too.
   angee-messaging-bridges:
