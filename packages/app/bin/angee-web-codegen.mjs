@@ -33,6 +33,10 @@ const SCALARS = {
 };
 const ADDON_ENTRY_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx"];
 
+class RelationRepresentationError extends Error {
+  name = "RelationRepresentationError";
+}
+
 const options = parseOptions(process.argv.slice(2));
 const webRoot = resolveFromCwd(options["web-root"] ?? ".");
 const runtimeDir = resolveFromCwd(options.runtime ?? "../runtime");
@@ -650,6 +654,13 @@ function saveFields(metadataPath) {
   const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
   const resources = metadata?.angee?.resources;
   if (!Array.isArray(resources)) return [];
+  const resourcesByModelLabel = new Map(
+    resources.flatMap((resource) =>
+      typeof resource?.modelLabel === "string"
+        ? [[resource.modelLabel, resource]]
+        : [],
+    ),
+  );
   return resources
     .flatMap((resource) => {
       const modelLabel = resource?.modelLabel;
@@ -676,19 +687,29 @@ function saveFields(metadataPath) {
         patchType: nonEmptyString(patchType),
         linesInputType: nonEmptyString(linesInputType),
         linesField: lines.field,
-        selection: selectionFields(resource.fields, lines.field),
-        linesSelection: selectionFields(lines.fields, null),
+        selection: selectionFields(
+          resource.fields,
+          lines.field,
+          resourcesByModelLabel,
+          modelLabel,
+        ),
+        linesSelection: selectionFields(
+          lines.fields,
+          null,
+          resourcesByModelLabel,
+          `${modelLabel}.${lines.field}`,
+        ),
       }];
     })
     .sort((left, right) => left.modelLabel.localeCompare(right.modelLabel));
 }
 
 // The read selection for a save return type: the public `id`, then each readable
-// scalar/enum field bare and each relation as `{ id <labelAxis?> }` — enough for
-// the composing form to re-seed every declared field (and a picker's label) from
-// the saved row. The lines list is added by its own child selection, so it is
-// excluded here. Mirrors the parent form's own detail selection shape.
-function selectionFields(fields, excludeField) {
+// scalar/enum field bare and each relation as `{ id <recordRepresentation> }` —
+// enough for the composing form to re-seed every declared field (and a picker's
+// label) from the saved row. The lines list is added by its own child selection,
+// so it is excluded here. Mirrors the parent form's own detail selection shape.
+function selectionFields(fields, excludeField, resourcesByModelLabel, owner) {
   const parts = ["id"];
   const seen = new Set(["id"]);
   for (const field of fields ?? []) {
@@ -703,7 +724,13 @@ function selectionFields(fields, excludeField) {
     }
     seen.add(name);
     if (field.kind === "relation") {
-      parts.push(`${assertGraphQLName(name)} { id${relationLabelSelection(field)} }`);
+      parts.push(
+        `${assertGraphQLName(name)} { id${relationLabelSelection(
+          field,
+          resourcesByModelLabel,
+          `${owner}.${name}`,
+        )} }`,
+      );
     } else if (field.kind === "scalar" || field.kind === "enum") {
       parts.push(assertGraphQLName(name));
     }
@@ -712,11 +739,57 @@ function selectionFields(fields, excludeField) {
   return parts;
 }
 
-function relationLabelSelection(field) {
-  const axis = field?.relationLabelAxis;
-  return typeof axis === "string" && axis !== "" && axis !== "id"
-    ? ` ${assertGraphQLName(axis)}`
-    : "";
+function relationLabelSelection(
+  field,
+  resourcesByModelLabel,
+  owner,
+  visited = new Set(),
+) {
+  const targetLabel = nonEmptyString(field?.relationModelLabel);
+  if (!targetLabel) {
+    throw new RelationRepresentationError(
+      `Relation field "${owner}" does not declare relationModelLabel.`,
+    );
+  }
+  if (visited.has(targetLabel)) {
+    throw new RelationRepresentationError(
+      `Relation representation for "${owner}" contains a cycle at "${targetLabel}".`,
+    );
+  }
+  const target = resourcesByModelLabel.get(targetLabel);
+  if (!target) {
+    throw new RelationRepresentationError(
+      `Relation field "${owner}" targets missing resource metadata "${targetLabel}".`,
+    );
+  }
+  const representation = nonEmptyString(target.recordRepresentation);
+  if (!representation || representation === "id") return "";
+  const representationField = (target.fields ?? []).find(
+    (candidate) => candidate?.name === representation,
+  );
+  if (!representationField) {
+    throw new RelationRepresentationError(
+      `Record representation "${representation}" is not declared on "${targetLabel}".`,
+    );
+  }
+  const name = assertGraphQLName(representation);
+  if (
+    representationField.kind === "scalar"
+    || representationField.kind === "enum"
+  ) {
+    return ` ${name}`;
+  }
+  if (representationField.kind === "relation") {
+    return ` ${name} { id${relationLabelSelection(
+      representationField,
+      resourcesByModelLabel,
+      `${targetLabel}.${representation}`,
+      new Set(visited).add(targetLabel),
+    )} }`;
+  }
+  throw new RelationRepresentationError(
+    `Record representation "${targetLabel}.${representation}" must be a scalar, enum, or to-one relation.`,
+  );
 }
 
 function saveDocument(resource) {

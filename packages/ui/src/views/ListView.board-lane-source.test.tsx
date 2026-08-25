@@ -216,7 +216,7 @@ describe("ListView board laneSource", () => {
           fields: expect.arrayContaining([
             "id",
             "name",
-            { customer: ["name"] },
+            { customer: ["id", "name"] },
             { stage: ["id"] },
           ]),
         },

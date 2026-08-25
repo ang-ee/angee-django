@@ -39,8 +39,8 @@ export interface ModelFieldMetadata {
   currencyField?: string;
   relationTarget?: string;
   /** A `relation` field projected as a nested selectable object (vs a public-id
-   * scalar). Only these read a `{ id <label> }` sub-selection; an id projection
-   * stays a leaf. */
+   * scalar). A generated relation axis/filter is the equivalent proof for nodes
+   * whose raw projection flag remains false. */
   relationObject?: boolean;
   relationFilter?: ModelRelationFilterMetadata;
   filterable?: boolean;
@@ -52,6 +52,20 @@ export interface ModelFieldMetadata {
   creatable?: boolean;
   updatable?: boolean;
   requiredOnCreate?: boolean;
+}
+
+/**
+ * A relation-terminal read resolved to the concrete scalar paths GraphQL must
+ * select and the one path a list cell displays.
+ */
+export interface RelationRepresentationSelection {
+  selectionPaths: readonly string[];
+  displayPath: string;
+}
+
+/** Named build/runtime failure for a relation whose representation cannot resolve. */
+export class RelationRepresentationError extends Error {
+  override name = "RelationRepresentationError";
 }
 
 export interface ModelRootFieldMetadata {
@@ -542,16 +556,167 @@ export function lineReadSelectionPaths(
   if (lines.positionField) paths.add(lines.positionField);
   for (const field of Object.values(child.fields)) {
     if (field.kind === "relation") {
-      paths.add(`${field.name}.id`);
-      const label = field.relationTarget
-        ? metadata.types[field.relationTarget]?.recordRepresentation
-        : undefined;
-      if (label && label !== "id") paths.add(`${field.name}.${label}`);
+      const representation = relationRepresentationSelection(
+        field.name,
+        field.relationTarget,
+        metadata,
+      );
+      for (const path of representation.selectionPaths) paths.add(path);
     } else {
       paths.add(field.name);
     }
   }
   return [...paths];
+}
+
+/**
+ * Resolve a dotted field path when its terminal field is an object relation.
+ *
+ * The returned selection always includes the related record id plus every
+ * scalar path needed by its `recordRepresentation`; `displayPath` is the final
+ * representation scalar the column renderer reads. A non-relation terminal (or
+ * an id-projected relation scalar) returns `null`. Missing relation/type facts
+ * throw a named error instead of allowing a caller to emit a bare GraphQL object
+ * leaf.
+ */
+export function relationRepresentationForPath(
+  path: string,
+  model: ModelMetadata,
+  metadata: SchemaFieldMetadata,
+): RelationRepresentationSelection | null {
+  const segments = path.split(".");
+  let current = model;
+  for (const [index, segment] of segments.entries()) {
+    const field = current.fields[segment];
+    if (!field) return null;
+    const terminal = index === segments.length - 1;
+    if (terminal) {
+      if (!hasRelationObjectSelection(field)) return null;
+      return relationRepresentationSelection(path, field.relationTarget, metadata);
+    }
+    if (
+      !hasRelationObjectSelection(field)
+      || !field.relationTarget
+    ) {
+      return null;
+    }
+    current = requiredRelationTarget(field.relationTarget, path, metadata);
+  }
+  return null;
+}
+
+function relationRepresentationSelection(
+  prefix: string,
+  relationTarget: string | undefined,
+  metadata: SchemaFieldMetadata,
+): RelationRepresentationSelection {
+  if (!relationTarget) {
+    throw new RelationRepresentationError(
+      `Relation field "${prefix}" does not declare a relation target.`,
+    );
+  }
+  const related = requiredRelationTarget(relationTarget, prefix, metadata);
+  return representationSelection(prefix, related, metadata, new Set());
+}
+
+function representationSelection(
+  prefix: string,
+  model: ModelMetadata,
+  metadata: SchemaFieldMetadata,
+  visited: ReadonlySet<string>,
+): RelationRepresentationSelection {
+  if (visited.has(model.typeName)) {
+    throw new RelationRepresentationError(
+      `Relation representation for "${prefix}" contains a cycle at "${model.typeName}".`,
+    );
+  }
+  const nextVisited = new Set(visited).add(model.typeName);
+  const idPath = `${prefix}.id`;
+  const representation = model.recordRepresentation;
+  if (!representation || representation === "id") {
+    return { selectionPaths: [idPath], displayPath: idPath };
+  }
+  const nested = relationRepresentationForRepresentation(
+    representation,
+    model,
+    metadata,
+    nextVisited,
+  );
+  if (!nested) {
+    const displayPath = `${prefix}.${representation}`;
+    return {
+      selectionPaths: [idPath, displayPath],
+      displayPath,
+    };
+  }
+  return {
+    selectionPaths: [
+      idPath,
+      ...nested.selectionPaths.map((path) => `${prefix}.${path}`),
+    ],
+    displayPath: `${prefix}.${nested.displayPath}`,
+  };
+}
+
+function relationRepresentationForRepresentation(
+  path: string,
+  model: ModelMetadata,
+  metadata: SchemaFieldMetadata,
+  visited: ReadonlySet<string>,
+): RelationRepresentationSelection | null {
+  const segments = path.split(".");
+  let current = model;
+  for (const [index, segment] of segments.entries()) {
+    const field = current.fields[segment];
+    if (!field) {
+      throw new RelationRepresentationError(
+        `Record representation "${path}" is not declared on "${current.typeName}".`,
+      );
+    }
+    const terminal = index === segments.length - 1;
+    if (terminal) {
+      if (!hasRelationObjectSelection(field)) return null;
+      if (!field.relationTarget) {
+        throw new RelationRepresentationError(
+          `Relation field "${path}" does not declare a relation target.`,
+        );
+      }
+      const related = requiredRelationTarget(field.relationTarget, path, metadata);
+      return representationSelection(path, related, metadata, visited);
+    }
+    if (
+      !hasRelationObjectSelection(field)
+      || !field.relationTarget
+    ) {
+      return null;
+    }
+    current = requiredRelationTarget(field.relationTarget, path, metadata);
+  }
+  return null;
+}
+
+function hasRelationObjectSelection(field: ModelFieldMetadata): boolean {
+  // `relationObject` is the direct node-projection signal. A declared relation
+  // axis/filter is the second generated proof used by current Hasura nodes: the
+  // field can still be an object in the SDL even when the raw projection flag is
+  // false (projects.Project.product is the live example). A relation carrying
+  // neither proof may be an ID scalar and must remain a leaf.
+  return field.kind === "relation"
+    && (field.relationObject === true || field.relationFilter !== undefined);
+}
+
+function requiredRelationTarget(
+  typeName: string,
+  path: string,
+  metadata: SchemaFieldMetadata,
+): ModelMetadata {
+  const target = metadata.types[typeName];
+  if (!target) {
+    throw new RelationRepresentationError(
+      `Relation field "${path}" targets missing metadata type "${typeName}".`,
+    );
+  }
+  return target;
 }
 
 function relationTargetForLineField(

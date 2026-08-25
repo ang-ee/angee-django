@@ -80,15 +80,17 @@ import {
   type GroupDimension as HasuraGroupDimension,
 } from "@angee/refine";
 import {
-  type Row,
-  } from "@angee/metadata";
-import {
   ModelMetadataProvider,
+  schemaFieldMetadataFromDataResources,
+  type DataResourceFieldMetadata,
+  type DataResourceMetadata,
+  type Row,
+  type SchemaFieldMetadata,
 } from "@angee/metadata";
-import type {
-  SchemaFieldMetadata,
-} from "@angee/metadata";
-import { withTestResourceInventory } from "@angee/metadata/testing";
+import {
+  testDataResource,
+  withTestResourceInventory,
+} from "@angee/metadata/testing";
 import { installTestLocalStorage } from "../testing";
 import {
   AppRuntimeProvider,
@@ -1117,6 +1119,87 @@ const SNAKE_NOTE_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventor
   },
 });
 
+const TWO_GROUPED_LISTS_METADATA = schemaFieldMetadataFromDataResources([
+  groupedListResource("portfolio.ProductRoadmap", "product"),
+  groupedListResource("portfolio.InitiativeRoadmap", "initiative"),
+]);
+
+function groupedListResource(
+  modelLabel: string,
+  groupField: string,
+): DataResourceMetadata {
+  const modelName = modelLabel.split(".").at(-1)?.toLowerCase() ?? "roadmap";
+  return testDataResource(modelLabel, {
+    recordRepresentation: "title",
+    roots: {
+      aggregate: `${modelName}_aggregate`,
+      groups: `${modelName}_groups`,
+      groupsCount: `${modelName}_groups_count`,
+    },
+    typeNames: {
+      filter: `${modelName}_bool_exp`,
+      aggregate: `${modelName}_aggregate_fields`,
+      groupBySpec: `${modelName}_group_by`,
+      groupKey: `${modelName}_group_key`,
+      groupOrder: `${modelName}_group_order`,
+      having: `${modelName}_having`,
+    },
+    capabilities: ["list", "aggregate", "groups"],
+    fields: [resourceField("title"), relationResourceField(groupField)],
+    filterFields: ["title", groupField],
+    orderFields: ["title"],
+    aggregateFields: ["id"],
+    groupByFields: [groupField],
+    groupDimensions: [
+      {
+        field: groupField,
+        input: groupField.toUpperCase(),
+        key: `${groupField}_id`,
+        kind: "relation",
+        scalar: "ID",
+        filter: {
+          kind: "equality",
+          field: groupField,
+          valueKey: `${groupField}_id`,
+          lookup: "sqid",
+        },
+      },
+    ],
+    relationAxes: [
+      {
+        field: groupField,
+        modelLabel: `portfolio.${groupField[0]?.toUpperCase()}${groupField.slice(1)}`,
+        publicIdField: "sqid",
+      },
+    ],
+  });
+}
+
+function resourceField(name: string): DataResourceFieldMetadata {
+  return {
+    name,
+    kind: "scalar",
+    scalar: "String",
+    readable: true,
+    filterable: true,
+    sortable: true,
+    aggregatable: false,
+    groupable: true,
+    creatable: true,
+    updatable: true,
+    requiredOnCreate: false,
+  };
+}
+
+function relationResourceField(name: string): DataResourceFieldMetadata {
+  return {
+    ...resourceField(name),
+    kind: "relation",
+    scalar: null,
+    relationModelLabel: `portfolio.${name[0]?.toUpperCase()}${name.slice(1)}`,
+  };
+}
+
 function render(
   ui: ReactElement,
   options?: RenderOptions,
@@ -2053,6 +2136,47 @@ describe("ResourceList", () => {
       expect(latest?.searchParams.get("group")).toBe("updatedAt:month");
       expect(latest?.searchParams.get("view")).toBeNull();
     });
+  });
+
+  test("two grouped lists tolerate the sibling's bare group param without ping-pong", async () => {
+    const onUrlUpdate = vi.fn();
+    sdkMocks.groupByCalls.length = 0;
+    render(
+      <TestUrlState
+        searchParams="?group=initiative~initiative~initiative_id"
+        onUrlUpdate={onUrlUpdate}
+      >
+        <ModelMetadataProvider metadata={TWO_GROUPED_LISTS_METADATA}>
+          <ResourceList
+            resource="portfolio.ProductRoadmap"
+            columns={[{ field: "title", header: "Product roadmap" }]}
+            defaultGroup={{ field: "product" }}
+          />
+          <ResourceList
+            resource="portfolio.InitiativeRoadmap"
+            columns={[{ field: "title", header: "Initiative roadmap" }]}
+            defaultGroup={{ field: "initiative" }}
+          />
+        </ModelMetadataProvider>
+      </TestUrlState>,
+    );
+
+    await waitFor(() => {
+      const requestedDimensions = new Set(
+        sdkMocks.groupByCalls.flatMap((call) =>
+          call.dimensions.map((dimension) => dimension.input),
+        ),
+      );
+      expect(requestedDimensions).toEqual(new Set(["PRODUCT", "INITIATIVE"]));
+    });
+    await act(async () => {
+      await nextTask();
+      await nextTask();
+    });
+
+    expect(
+      onUrlUpdate.mock.calls.map(([url]) => url.searchParams.get("group")),
+    ).toEqual(["initiative~initiative~initiative_id"]);
   });
 
   test("seeds the default view without losing explicit list view selection", async () => {

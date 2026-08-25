@@ -23,6 +23,7 @@ export {
   lineChildModelMetadata,
   lineReadSelectionPaths,
   modelMetadataForLabel,
+  relationRepresentationForPath,
   relationFilterForRelation,
   resourceOperationTarget,
   schemaFieldMetadataFromAngeeSchemaMetadata,
@@ -55,6 +56,8 @@ export {
   type ModelRelationFilterMetadata,
   type ModelRelationFilterMode,
   type ModelRootFieldMetadata,
+  RelationRepresentationError,
+  type RelationRepresentationSelection,
   type SchemaFieldMetadata,
 } from "./metadata";
 export {

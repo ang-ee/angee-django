@@ -1,9 +1,15 @@
 import { describe, expect, test } from "vitest";
 
-import { lineChildModelMetadata, lineReadSelectionPaths } from "./artifact";
+import {
+  RelationRepresentationError,
+  lineChildModelMetadata,
+  lineReadSelectionPaths,
+  relationRepresentationForPath,
+} from "./artifact";
 import type {
   DataResourceFieldMetadata,
   DataResourceLinesMetadata,
+  ModelMetadata,
   SchemaFieldMetadata,
 } from "./artifact";
 
@@ -81,7 +87,7 @@ describe("lineReadSelectionPaths", () => {
     types: {
       ProductVariantType: {
         typeName: "ProductVariantType",
-        fields: {},
+        fields: { name: { name: "name", kind: "scalar", scalar: "String" } },
         recordRepresentation: "name",
       },
     },
@@ -103,15 +109,10 @@ describe("lineReadSelectionPaths", () => {
     ]);
   });
 
-  test("selects only the relation id when the target has no record representation", () => {
-    expect(lineReadSelectionPaths(LINES, { types: {} })).toEqual([
-      "id",
-      "position",
-      "product.id",
-      "priceUnit",
-      "role",
-      "taxes",
-    ]);
+  test("fails by name when the relation representation target is unavailable", () => {
+    expect(() => lineReadSelectionPaths(LINES, { types: {} })).toThrow(
+      RelationRepresentationError,
+    );
   });
 
   test("omits the order column when the child carries none", () => {
@@ -120,5 +121,56 @@ describe("lineReadSelectionPaths", () => {
       positionField: null,
     };
     expect(lineReadSelectionPaths(withoutPosition, schema)).not.toContain("position");
+  });
+});
+
+describe("relationRepresentationForPath", () => {
+  const model: ModelMetadata = {
+    typeName: "InitiativeProjectType",
+    fields: {
+      project: {
+        name: "project",
+        kind: "relation",
+        relationTarget: "ProjectType",
+        relationObject: true,
+      },
+    },
+  };
+  const schema: SchemaFieldMetadata = {
+    types: {
+      ProjectType: {
+        typeName: "ProjectType",
+        fields: {
+          product: {
+            name: "product",
+            kind: "relation",
+            relationTarget: "ProductType",
+            relationObject: false,
+            relationFilter: {
+              field: "product",
+              mode: "lookup",
+              lookup: "sqid",
+            },
+          },
+        },
+      },
+      ProductType: {
+        typeName: "ProductType",
+        recordRepresentation: "name",
+        fields: { name: { name: "name", kind: "scalar", scalar: "String" } },
+      },
+    },
+  };
+
+  test("expands a nested relation-terminal path to id plus representation", () => {
+    expect(relationRepresentationForPath("project.product", model, schema)).toEqual({
+      selectionPaths: ["project.product.id", "project.product.name"],
+      displayPath: "project.product.name",
+    });
+  });
+
+  test("leaves a scalar-terminal path to its caller", () => {
+    expect(relationRepresentationForPath("project.product.name", model, schema))
+      .toBeNull();
   });
 });
