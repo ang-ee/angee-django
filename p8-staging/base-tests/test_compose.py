@@ -10,6 +10,7 @@ from types import ModuleType, SimpleNamespace
 from typing import Any, ClassVar, cast
 
 import angee.compose as compose_package
+import angee.compose.rendering as rendering_module
 import angee.compose.runtime as runtime_module
 import pytest
 from angee.base.emission import ModelClassAttribute, ModelDecorator
@@ -180,7 +181,7 @@ def test_runtime_renders_resource_sources(tmp_path: Path) -> None:
 def test_runtime_model_render_plan_is_named() -> None:
     """The runtime model render plan is a named owner, not an anonymous tuple."""
 
-    assert is_dataclass(runtime_module.RuntimeModelRenderPlan)
+    assert is_dataclass(rendering_module.RuntimeModelRenderPlan)
 
 
 def test_runtime_model_render_plan_keeps_model_owned_meta(tmp_path: Path) -> None:
