@@ -9,6 +9,7 @@ from typing import Any, TypeVar
 from angee.base.impl import ImplClassField
 from angee.base.refs import canonical_record_model
 from angee.data import metadata as data_contract
+from angee.data.field_classification import is_to_one_relation
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from rebac.resources import model_resource_type
@@ -27,7 +28,6 @@ from angee.graphql.data.resource_fields import (
 )
 from angee.graphql.introspection import (
     FieldPathError,
-    is_to_one_relation,
     require_field_for_path,
 )
 

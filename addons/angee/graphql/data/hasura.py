@@ -19,7 +19,7 @@ from angee.base.scoping import (
     bind_actor,
     requires_angee_rebac_contract,
 )
-from angee.data.field_classification import model_field_scalar
+from angee.data.field_classification import is_to_one_relation, model_field_scalar
 from angee.data.metadata import (
     DataAggregateMeasureMetadata,
     DataGroupBucketFilterMetadata,
@@ -76,7 +76,6 @@ from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.introspection import (
     FieldPathError,
-    is_to_one_relation,
     require_field_for_path,
 )
 from angee.graphql.writes import write_queryset

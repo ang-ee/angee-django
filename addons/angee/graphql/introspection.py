@@ -35,12 +35,6 @@ def django_model(node: type) -> type[models.Model]:
     return definition.model
 
 
-def is_to_one_relation(field: models.Field[Any, Any]) -> bool:
-    """Return whether ``field`` is a forward to-one relation."""
-
-    return bool(getattr(field, "many_to_one", False) or getattr(field, "one_to_one", False))
-
-
 class FieldPathError(Exception):
     """A ``__``/``.``-separated relation path could not resolve to a leaf to-one field.
 
