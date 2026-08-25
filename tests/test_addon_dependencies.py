@@ -65,6 +65,27 @@ def test_composed_addon_dependencies_are_written_idempotently(tmp_path: Path) ->
     assert pyproject.stat().st_mtime_ns == first_stat.st_mtime_ns
 
 
+def test_composed_addon_dependencies_are_idempotent_when_group_is_not_last(tmp_path: Path) -> None:
+    """A table following the generated group does not cause byte drift."""
+
+    host = tmp_path / "host"
+    host.mkdir()
+    pyproject = host / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "host"\nversion = "0.0.0"\n\n'
+        '[dependency-groups]\ndev = ["pytest>=8"]\n\n'
+        '[tool.uv]\ndefault-groups = ["dev", "addons"]\n',
+        encoding="utf-8",
+    )
+    addon = _app_config(tmp_path / "fake-addon", "example.fake_mid_group", ("alpha>=1",))
+    projection = AddonDependencyGroup((addon,), project_dir=host)
+
+    assert projection.write() is AddonDependencyGroupResult.WRITTEN
+    first_write = pyproject.read_bytes()
+    assert projection.write() is AddonDependencyGroupResult.UNCHANGED
+    assert pyproject.read_bytes() == first_write
+
+
 def test_composed_addon_dependencies_skip_a_bare_host(tmp_path: Path) -> None:
     """A unit-test or bare project with no pyproject is an explicit no-op."""
 

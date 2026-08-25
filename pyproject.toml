@@ -3,7 +3,7 @@ requires = [
   # hatch-angee supports older hatchling releases, but PEP 639 license-files
   # metadata requires hatchling 1.27 or newer.
   "hatchling>=1.27",
-  "hatch-angee>=0.2.1",
+  "hatch-angee>=0.2.2",
 ]
 build-backend = "hatch_angee.build"
 
@@ -46,7 +46,7 @@ dependencies = [
   # <6.1: Django 6.1 adds fetch_mode to Model.from_db and django-zed-rebac's
   # override does not accept it yet; lift the cap when rebac supports 6.1.
   "django>=6.0,<6.1",
-  "hatch-angee>=0.2.1",
+  "hatch-angee>=0.2.2",
   "django-choices-field>=4.0.0",
   "django-yamlconf>=1.5.0",
   "django-environ>=0.12",
