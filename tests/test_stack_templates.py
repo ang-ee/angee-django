@@ -631,7 +631,7 @@ def test_project_python_dependencies_bootstrap_the_generated_addon_group() -> No
 
 
 def test_project_dependency_group_is_the_final_pyproject_table() -> None:
-    """The projector requires its generated table last for byte-stable rewrites."""
+    """Stable final placement remains belt-and-braces generated-file hygiene."""
 
     for rendered, _manifest in (
         _render_project_pyproject(),
