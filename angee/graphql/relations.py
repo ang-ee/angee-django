@@ -90,7 +90,11 @@ def actor_scoped_to_many(field_name: str) -> Any:
         if cached is not _UNCACHED and all(
             getattr(row, "_rebac_actor", None) == actor for row in cached
         ):
-            return cached
+            # Return the materialized rows, not the prefetched QuerySet: strawberry
+            # -django's list qs_hook clones any returned QuerySet (dropping its
+            # _result_cache) and re-fetches it once per parent, so handing back the
+            # cache object turns the batched prefetch into an N+1.
+            return list(cached)
 
         related_queryset = getattr(root, field_name).all()
         with_actor = getattr(related_queryset, "with_actor", None)
