@@ -23,13 +23,13 @@ from angee.data.metadata import (
     DataResourceTypeNames,
     serialize_data_resources,
 )
-from angee.graphql.data.metadata import make_data_resource_metadata
-from angee.graphql.data.resource_fields import model_resource_fields
 from django.db import models
 from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.state import ModelState, ProjectState
 from strawberry import auto
 
+from angee.graphql.data.metadata import make_data_resource_metadata
+from angee.graphql.data.resource_fields import model_resource_fields
 from angee.money.fields import MoneyField
 from tests.money_models import MoneyDocument, MoneyLine, MoneyStatement
 

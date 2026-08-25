@@ -10,6 +10,12 @@ import strawberry
 import strawberry_django
 from angee.base.models import instance_from_public_id, write_scoped_queryset
 from angee.data.metadata import DataResourceSubtitleMetadata
+from django.apps import apps
+from django.db.models import F
+from rebac import system_context
+from rebac.resources import model_resource_type
+from strawberry import auto
+
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     hasura_model_resource,
@@ -27,12 +33,6 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
-from django.apps import apps
-from django.db.models import F
-from rebac import system_context
-from rebac.resources import model_resource_type
-from strawberry import auto
-
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_display_label, user_public_id
 from angee.iam.permissions import request_from_info

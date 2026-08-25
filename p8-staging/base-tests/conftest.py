@@ -13,7 +13,6 @@ from typing import Any, cast
 import pytest
 import reversion
 from angee.addons import AddonContract
-from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from django.apps import AppConfig
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
@@ -23,6 +22,7 @@ from django.test import RequestFactory
 from rebac import actor_context, system_context
 
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
+from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClientOidc
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import Credential as AbstractCredential

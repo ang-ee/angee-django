@@ -22,9 +22,6 @@ from angee.base.models import (
     public_id_of,
 )
 from angee.data.field_classification import resource_field_kind, resource_field_widget
-from angee.graphql import subscriptions
-from angee.graphql.data.metadata import model_resource_fields, readable_model_field_names
-from angee.graphql.events import ChangePayload
 from django.apps import apps
 from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, get_user_model
 from django.contrib.auth.hashers import PBKDF2PasswordHasher
@@ -38,6 +35,9 @@ from rebac import actor_context, app_settings, system_context, to_object_ref, to
 from rebac.backends import backend
 from rebac.roles import grant
 
+from angee.graphql import subscriptions
+from angee.graphql.data.metadata import model_resource_fields, readable_model_field_names
+from angee.graphql.events import ChangePayload
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol

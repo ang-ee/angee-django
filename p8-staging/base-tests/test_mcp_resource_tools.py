@@ -14,7 +14,6 @@ from angee.data.metadata import (
     DataResourceRoots,
     DataResourceTypeNames,
 )
-from angee.graphql.schema import GraphQLSchemas
 from django.apps import apps
 from django.db import models
 from fastmcp import FastMCP
@@ -33,6 +32,7 @@ from graphql import (
     GraphQLString,
 )
 
+from angee.graphql.schema import GraphQLSchemas
 from angee.mcp.graphql import _CompiledTool, register_graphql_tools
 from angee.mcp.resource_tools import (
     DEFAULT_QUERY_LIMIT,

@@ -12,7 +12,6 @@ from typing import Any
 import pytest
 from angee.base.mixins import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
 from angee.data.field_classification import is_archive_field
-from angee.graphql.data.resource_fields import model_resource_fields
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
@@ -25,6 +24,7 @@ from rebac.actors import to_subject_ref
 from rebac.errors import PermissionDenied
 from rebac.roles import grant
 
+from angee.graphql.data.resource_fields import model_resource_fields
 from angee.storage import exceptions
 from angee.storage.models import FileManager, UploadState
 from angee.storage.signals import file_finalized

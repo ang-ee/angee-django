@@ -7,6 +7,11 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from angee.data.metadata import DataResourceEnumValueMetadata, DataResourceFieldMetadata
+from django.apps import apps
+from django.contrib.auth import get_user_model
+from strawberry import auto
+from strawberry.scalars import JSON
+
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
@@ -19,11 +24,6 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
-from django.apps import apps
-from django.contrib.auth import get_user_model
-from strawberry import auto
-from strawberry.scalars import JSON
-
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.parties.schema import PartyType

@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from angee.data.metadata import DataResourceFieldMetadata, DataResourceMetadata
-from angee.graphql.schema import GraphQLSchemas
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
@@ -23,6 +22,7 @@ from graphql import GraphQLInputObjectType, GraphQLList, GraphQLNonNull
 from rebac.field_visibility import gated_read_fields
 from strawberry.utils.str_converters import to_snake_case
 
+from angee.graphql.schema import GraphQLSchemas
 from angee.mcp.graphql import GraphQLTool, register_graphql_tools
 from mcp.types import ToolAnnotations
 
