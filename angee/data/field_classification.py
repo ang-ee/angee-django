@@ -26,6 +26,12 @@ def is_to_many_relation(field: models.Field[Any, Any]) -> bool:
     return bool(getattr(field, "many_to_many", False) or getattr(field, "one_to_many", False))
 
 
+def is_to_one_relation(field: models.Field[Any, Any]) -> bool:
+    """Return whether ``field`` is a forward to-one relation."""
+
+    return bool(getattr(field, "many_to_one", False) or getattr(field, "one_to_one", False))
+
+
 def resource_field_kind(
     field: models.Field[Any, Any] | None,
     *,
@@ -151,4 +157,3 @@ def _declared_projection_fact(field: models.Field[Any, Any] | None, name: str) -
     if value in (None, ""):
         return None
     return str(value)
-
