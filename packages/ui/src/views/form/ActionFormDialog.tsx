@@ -281,6 +281,7 @@ function ActionRelationControl({
   return (
     <RelationFieldWidget
       relation={relation}
+      filters={arg.filters}
       value={relationValueId(value)}
       readOnly={readOnly}
       placeholder={arg.placeholder}
@@ -319,6 +320,7 @@ function ActionRelationListControl({
   return (
     <RelationMultiFieldWidget
       relation={relation}
+      filters={arg.filters}
       value={Array.isArray(value) ? value : []}
       readOnly={readOnly}
       aria-label={typeof arg.label === "string" ? arg.label : arg.name}
@@ -340,9 +342,9 @@ function argDefaultValues(
       const prefill = arg.fromContext ?? defaultRelationListPrefill;
       values[arg.name] = [...prefill(context)];
     } else if (arg.argKind === "relation") {
-      values[arg.name] = "";
+      values[arg.name] = arg.defaultValue ?? "";
     } else {
-      values[arg.name] = emptyValueForField(arg);
+      values[arg.name] = arg.defaultValue ?? emptyValueForField(arg);
     }
   }
   return values;

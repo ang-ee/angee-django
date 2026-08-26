@@ -173,12 +173,11 @@ export function bucketFilterForGroup(
   const dimensionMetadata = groupDimensionForGroup(group, metadata);
   const extraction = groupExtractionForGroup(dimensionMetadata, group);
   const filter = extraction?.filter ?? dimensionMetadata.filter;
-  if (!filter) {
-    throw new Error(
-      `Resource metadata for group dimension "${dimensionMetadata.field}" does ` +
-        "not declare a bucket filter.",
-    );
-  }
+  // The backend can group nested relation dimensions that its direct-field
+  // bool-exp builder cannot filter. Those buckets are still useful summaries,
+  // but they cannot drill down to child groups/records; `undefined` is the
+  // existing grouped-surface capability signal for a non-expandable bucket.
+  if (!filter) return undefined;
   if (filter.kind === "range") {
     return bucketRangeDrillDownFilter(bucket, filter, dimensionMetadata);
   }

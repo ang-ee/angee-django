@@ -90,13 +90,20 @@ export function RecordActionBar({
   const runAction = React.useCallback(
     async (action: ActionDescriptor): Promise<void> => {
       if (action.confirm) {
+        const confirmation =
+          typeof action.confirm === "function" && record !== null
+            ? action.confirm(record)
+            : typeof action.confirm === "function"
+              ? null
+              : action.confirm;
+        if (confirmation === null) return;
         const confirmed = await confirm({
-          title: action.confirm.title,
-          ...(action.confirm.body !== undefined
-            ? { body: action.confirm.body }
+          title: confirmation.title,
+          ...(confirmation.body !== undefined
+            ? { body: confirmation.body }
             : {}),
-          ...(action.confirm.danger !== undefined
-            ? { danger: action.confirm.danger }
+          ...(confirmation.danger !== undefined
+            ? { danger: confirmation.danger }
             : {}),
           confirm: action.label,
         });
@@ -119,7 +126,7 @@ export function RecordActionBar({
         .mutateAsync({ action, values })
         .catch(() => undefined);
     },
-    [actionMutation, confirm, prompt],
+    [actionMutation, confirm, prompt, record],
   );
 
   // An action with a `visibleWhen` predicate shows only when the open record

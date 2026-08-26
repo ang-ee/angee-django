@@ -7,14 +7,17 @@ import {
 } from "@angee/refine";
 import {
   isClientRowModel,
+  modelMetadataForLabel,
   useModelMetadata,
   useSchemaFieldMetadata,
 } from "@angee/metadata";
 import type {
+  ModelFieldMetadata,
   Row,
 } from "@angee/metadata";
 
 import { useUiT } from "../i18n";
+import { useValueStable } from "../lib/use-value-stable";
 import { BoardView } from "./BoardView";
 import {
   withResourceViewScope,
@@ -152,8 +155,9 @@ function ListViewBody<TRow extends Row = Row>({
   defaultGroup,
   defaultGroups,
   calendar,
-  laneSource,
+  laneSource: laneSourceInput,
   onCreate,
+  onCreateInLane,
   createLabel,
   onRowClick,
   onListStateChange,
@@ -171,6 +175,14 @@ function ListViewBody<TRow extends Row = Row>({
   resourceView: ResourceViewContextValue;
 }): React.ReactElement {
   const t = useUiT();
+  // A board page declares `laneSource` inline (`{ field, filters: fn(id), … }`),
+  // so it arrives as a fresh identity every render. That identity cascades
+  // through `resolvedLaneSource` → the pinned board group → the group-state
+  // effect, which re-dispatches `setGroup` faster than the async URL write can
+  // settle `state.group` — an update-depth loop. Collapsing value-equal
+  // laneSource back to one identity lets the derived group memoise and the
+  // effect settle after a single dispatch.
+  const laneSource = useValueStable(laneSourceInput);
   const rowActionSurface = useRowActionsSurface(rowActions);
   const resolvedEmptyContent = emptyContent ?? t("list.empty");
   // The Calendar kind is offered only where the page declares occurrence sources;
@@ -195,7 +207,41 @@ function ListViewBody<TRow extends Row = Row>({
       return null;
     }
     if (!fieldMetadata) return null;
-    return { ...laneSource, relation, fieldMetadata };
+    const rankFieldMetadata = laneSource.rankField
+      ? modelMetadata?.fields[laneSource.rankField]
+      : undefined;
+    if (
+      laneSource.rankField
+      && modelMetadata
+      && !isBoardRankField(rankFieldMetadata)
+    ) {
+      throw new Error(
+        `ListView laneSource rankField "${laneSource.rankField}" must resolve to a non-null Float field.`,
+      );
+    }
+    const laneModelMetadata = modelMetadataForLabel(
+      schemaMetadata,
+      relation.resource,
+    );
+    const foldFieldMetadata = laneSource.foldField
+      ? laneModelMetadata?.fields[laneSource.foldField]
+      : undefined;
+    if (
+      laneSource.foldField
+      && laneModelMetadata
+      && !isBoardFoldField(foldFieldMetadata)
+    ) {
+      throw new Error(
+        `ListView laneSource foldField "${laneSource.foldField}" must resolve to a Boolean field on "${relation.resource}".`,
+      );
+    }
+    return {
+      ...laneSource,
+      relation,
+      fieldMetadata,
+      ...(rankFieldMetadata ? { rankFieldMetadata } : {}),
+      ...(foldFieldMetadata ? { foldFieldMetadata } : {}),
+    };
   }, [laneSource, modelMetadata, schemaMetadata]);
   const resolvedColumns = React.useMemo(
     () => columnsWithMetadataDefaults(columns, modelMetadata, schemaMetadata),
@@ -287,6 +333,7 @@ function ListViewBody<TRow extends Row = Row>({
       defaultGroup={defaultGroup}
       defaultGroups={defaultGroups}
       onCreate={onCreate}
+      onCreateInLane={onCreateInLane}
       createLabel={createLabel}
       onRowClick={onRowClick}
       onListStateChange={onListStateChange}
@@ -381,6 +428,7 @@ interface ListViewContentProps<TRow extends Row> {
   defaultGroup: ListViewProps<TRow>["defaultGroup"];
   defaultGroups: ListViewProps<TRow>["defaultGroups"];
   onCreate: ListViewProps<TRow>["onCreate"];
+  onCreateInLane: ListViewProps<TRow>["onCreateInLane"];
   createLabel: ListViewProps<TRow>["createLabel"];
   onRowClick: ListViewProps<TRow>["onRowClick"];
   onListStateChange: ListViewProps<TRow>["onListStateChange"];
@@ -414,6 +462,7 @@ function ListViewContent<TRow extends Row = Row>({
   defaultGroup,
   defaultGroups,
   onCreate,
+  onCreateInLane,
   createLabel,
   onRowClick,
   onListStateChange,
@@ -591,7 +640,10 @@ function ListViewContent<TRow extends Row = Row>({
           cardActionContext={cardActionContext}
           renderCard={renderCard}
           dragEnabled={surface.boardDragEnabled}
+          rankField={surface.boardRankField}
+          optimisticPlacementByRowId={surface.boardOptimisticPlacementByRowId}
           onCardMove={surface.onBoardCardMove}
+          onCreateInLane={onCreateInLane}
         />
       ) : flatMeasures.length > 0 && !clientRowModel ? (
         <FlatListBodyWithAggregate
@@ -645,6 +697,29 @@ function ListViewContent<TRow extends Row = Row>({
         />
       )}
     </ResourceListFrame>
+  );
+}
+
+function isBoardRankField(
+  field: ModelFieldMetadata | undefined,
+): field is ModelFieldMetadata {
+  return Boolean(
+    field
+    && field.kind === "scalar"
+    && field.scalar === "Float"
+    && field.readable !== false
+    && field.nullable !== true,
+  );
+}
+
+function isBoardFoldField(
+  field: ModelFieldMetadata | undefined,
+): field is ModelFieldMetadata {
+  return Boolean(
+    field
+    && field.kind === "scalar"
+    && field.scalar === "Boolean"
+    && field.readable !== false,
   );
 }
 

@@ -37,6 +37,12 @@ const TEST_METADATA = {
           valueKey: "owner",
         },
       },
+      {
+        field: "nestedOwner",
+        input: "nestedOwner",
+        key: "nestedOwner",
+        kind: "column",
+      },
     ],
   },
 } as unknown as ModelMetadata;
@@ -148,6 +154,43 @@ describe("buildGroupedRenderModel", () => {
       total: 5,
       unit: "groups",
     });
+  });
+
+  test("renders a filter-less group dimension as a non-expandable bucket", () => {
+    const filterlessParams = params({
+      groupStack: [{ field: "nestedOwner" }],
+    });
+    const initial = buildGroupedRenderModel<Row>(
+      new Map(),
+      EMPTY_LEAVES,
+      EMPTY_ROWS,
+      filterlessParams,
+    );
+    const rootKey = initial.groupScopes[0]?.key ?? "";
+    const rootResult = result([
+      { key: { nestedOwner: "Portfolio" }, count: 3 },
+    ]);
+    const model = buildGroupedRenderModel<Row>(
+      new Map([[rootKey, rootResult]]),
+      EMPTY_LEAVES,
+      EMPTY_ROWS,
+      {
+        ...filterlessParams,
+        expandedKeys: new Set(["any-requested-bucket"]),
+      },
+    );
+
+    expect(model.groupScopes).toHaveLength(1);
+    expect(model.leafScopes).toEqual([]);
+    expect(model.items).toEqual([
+      expect.objectContaining({
+        kind: "groupHeader",
+        label: "Portfolio",
+        count: 3,
+        expandable: false,
+        expanded: false,
+      }),
+    ]);
   });
 
   test.each([

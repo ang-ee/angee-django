@@ -63,6 +63,27 @@ describe("group operation codegen", () => {
       `Grouped resource notes.Note is missing required ${missingField}`,
     );
   });
+
+  test("expands a saved line relation to id plus its record representation", () => {
+    const generated = generateActions(SAVE_METADATA);
+
+    expect(generated).toMatch(
+      /"value": "product"[\s\S]{0,2000}"value": "id"[\s\S]{0,2000}"value": "name"/,
+    );
+  });
+
+  test("fails by name when codegen cannot resolve a relation representation", () => {
+    const [entry] = SAVE_METADATA.angee.resources;
+    const broken = {
+      angee: {
+        resources: entry ? [entry] : [],
+      },
+    };
+
+    expect(() => generateActions(broken)).toThrow(
+      /RelationRepresentationError/,
+    );
+  });
 });
 
 function generateActions(metadata: unknown): string {
@@ -153,6 +174,39 @@ const METADATA = {
         },
         groupDimensions: [{ key: "status" }],
         aggregateMeasures: [],
+      },
+    ],
+  },
+};
+
+const SAVE_METADATA = {
+  angee: {
+    resources: [
+      {
+        modelLabel: "sales.Order",
+        roots: { save: "order_save" },
+        fields: [],
+        linesResource: {
+          field: "lines",
+          modelLabel: "sales.OrderLine",
+          inputType: "OrderLineInput",
+          fields: [
+            {
+              name: "product",
+              kind: "relation",
+              readable: true,
+              relationModelLabel: "catalog.Product",
+            },
+          ],
+        },
+      },
+      {
+        modelLabel: "catalog.Product",
+        recordRepresentation: "name",
+        roots: {},
+        fields: [
+          { name: "name", kind: "scalar", readable: true },
+        ],
       },
     ],
   },

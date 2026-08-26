@@ -485,7 +485,7 @@ describe("bucketFilterForGroup", () => {
     ).toEqual({ status: "in_review" });
   });
 
-  test("fails fast when metadata omits the backend bucket filter", () => {
+  test("returns no drill-down filter when metadata omits the bucket filter", () => {
     const metadata = {
       ...GROUP_METADATA,
       resource: {
@@ -502,12 +502,12 @@ describe("bucketFilterForGroup", () => {
       },
     } as unknown as ModelMetadata;
 
-    expect(() =>
+    expect(
       bucketFilterForGroup(
         { key: { unfiltered: "x" }, count: 1 },
         { field: "unfiltered" },
         metadata,
       )
-    ).toThrow("does not declare a bucket filter");
+    ).toBeUndefined();
   });
 });

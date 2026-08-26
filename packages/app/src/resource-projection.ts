@@ -102,6 +102,15 @@ export function resourceRouteIndex(
   const childrenByParentName = childRoutesByParentName(routes);
   for (const route of routes) {
     if (!route.resource) continue;
+    if (route.path.includes("$")) {
+      throw new Error(
+        `Route "${route.name}" claims resource "${route.resource}" but its ` +
+          `path "${route.path}" is parameterized — a resource's collection ` +
+          `href must resolve with no params at boot. Parameterized pages ` +
+          `are projections: drop the resource claim and scope the page's ` +
+          `own surface instead.`,
+      );
+    }
     if (Object.prototype.hasOwnProperty.call(byResource, route.resource)) {
       throw new Error(
         `Route "${route.name}" claims resource "${route.resource}" already claimed by another route.`,

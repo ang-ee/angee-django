@@ -50,6 +50,8 @@ import {
 } from "@angee/refine";
 
 import { errorFromUnknown } from "../data/errors";
+import { useLatestRef } from "../lib/use-latest-ref";
+import { useValueStable } from "../lib/use-value-stable";
 import { useUiT } from "../i18n";
 import type { ResourceViewContextValue } from "./resource-view-context";
 import {
@@ -110,6 +112,7 @@ import {
   normaliseScopePage,
   type GroupedRenderParams,
 } from "./resource-view-grouped-model";
+import type { BoardCardPlacement } from "./resource-view-types";
 
 type RowRecord = BaseRecord & Row;
 type ResourceFilterInput = Record<string, unknown>;
@@ -203,7 +206,13 @@ interface FlatResourceViewPresentationSurface<TRow extends Row = Row>
   setPageSelection: (checked: boolean) => void;
   groupedRows: readonly RowGroup<TRow>[];
   boardDragEnabled: boolean;
-  onBoardCardMove?: (row: TRow, laneId: string | null) => void | Promise<void>;
+  boardRankField?: string;
+  boardOptimisticPlacementByRowId: ReadonlyMap<string, BoardCardPlacement>;
+  onBoardCardMove?: (
+    row: TRow,
+    laneId: string | null,
+    rank?: number,
+  ) => void | Promise<void>;
 }
 
 interface ResourceViewSurfaceBase<TRow extends Row = Row> {
@@ -238,6 +247,7 @@ export interface GroupedResourceViewSurface<TRow extends Row = Row>
 }
 
 const EMPTY_ARRAY = [] as const;
+const EMPTY_BOARD_PLACEMENTS: ReadonlyMap<string, BoardCardPlacement> = new Map();
 const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set();
 const EMPTY_EXPANDED_KEYS: ReadonlySet<string> = new Set();
 const EMPTY_LEAF_RESULTS: ReadonlyMap<string, AngeeListBatchEntry> = new Map();
@@ -841,17 +851,27 @@ export function useResourceViewSurface<TRow extends Row = Row>({
   const rowGroupStack = groupStack ?? resourceView.state.groupStack;
   const [expanded, setExpanded] = React.useState<ExpandedState>({});
   const dataResource = modelMetadata?.resource ?? null;
-  const refineFilters = React.useMemo(
-    () => crudFiltersFromFilterRecord(mergedFilter) ?? [],
-    [mergedFilter],
+  // Value-stabilise the filters/sorters handed to refine's useTable: a
+  // consumer's inline `baseFilter`/`order` (e.g. a board's) rebuilds
+  // `mergedFilter`/`sortOrder` every render, so these memos yield a fresh
+  // array identity each time. refine's internal permanent-filter/sorter sync
+  // effect keys on identity and loops ("Maximum update depth") — collapsing
+  // value-equal arrays back to one identity stops it.
+  const refineFilters = useValueStable(
+    React.useMemo(
+      () => crudFiltersFromFilterRecord(mergedFilter) ?? [],
+      [mergedFilter],
+    ),
   );
   const refineFiltersKey = React.useMemo(
     () => stableSerialize(refineFilters),
     [refineFilters],
   );
-  const refineSorters = React.useMemo(
-    () => refineSortersFromAngeeOrder(sortOrder) ?? [],
-    [sortOrder],
+  const refineSorters = useValueStable(
+    React.useMemo(
+      () => refineSortersFromAngeeOrder(sortOrder) ?? [],
+      [sortOrder],
+    ),
   );
   const listMeta = React.useMemo(
     () => ({ fields: refineFieldsFromPaths(requestedFields) }),
@@ -921,18 +941,27 @@ export function useResourceViewSurface<TRow extends Row = Row>({
       queryOptions: { enabled: active },
     },
   });
+  // Reset user-applied filters when the permanent/base filter changes. Key
+  // ONLY on the value (refineFiltersKey) — refine returns a fresh setFilters
+  // identity every render, so depending on it would re-run this effect every
+  // commit and loop. Call the latest setFilters through a ref instead.
+  const setFiltersRef = useLatestRef(tableResult.refineCore.setFilters);
   React.useEffect(() => {
-    tableResult.refineCore.setFilters([], "replace");
-  }, [refineFiltersKey, tableResult.refineCore.setFilters]);
+    setFiltersRef.current([], "replace");
+  }, [refineFiltersKey, setFiltersRef]);
   const rows = React.useMemo(
     () => tableResult.refineCore.result.data as readonly TRow[],
     [tableResult.refineCore.result.data],
   );
+  const refetchRows = React.useCallback(() => {
+    void tableResult.refineCore.tableQuery.refetch();
+  }, [tableResult.refineCore.tableQuery.refetch]);
   const boardLaneState = useBoardLaneState<TRow>({
     laneSource,
     modelMetadata,
     rows,
     enabled: active && resourceView.state.view === "board",
+    refetchRows,
   });
   const list = React.useMemo(
     () =>
@@ -1029,11 +1058,15 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
     () => (run.result.data ?? []) as readonly RowRecord[] as readonly TRow[],
     [run.result.data],
   );
+  const refetchRows = React.useCallback(() => {
+    void run.query.refetch();
+  }, [run.query.refetch]);
   const boardLaneState = useBoardLaneState<TRow>({
     laneSource,
     modelMetadata,
     rows: allRows,
     enabled: active && resourceView.state.view === "board",
+    refetchRows,
   });
   // The fetched page is capped; the only signal the in-browser set is actually
   // incomplete is the resource's own total exceeding the cap (a page that
@@ -1313,7 +1346,7 @@ function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
               table.getRowModel().rows,
               boardLaneState.source,
               boardLaneState.lanes,
-              boardLaneState.optimisticLaneByRowId,
+              boardLaneState.optimisticPlacementByRowId,
               t("list.emptyValue"),
               t("list.unknownValue"),
             )
@@ -1350,6 +1383,11 @@ function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
     setPageSelection,
     groupedRows,
     boardDragEnabled: boardLaneState?.dragEnabled ?? false,
+    ...(boardLaneState?.rankField
+      ? { boardRankField: boardLaneState.rankField }
+      : {}),
+    boardOptimisticPlacementByRowId:
+      boardLaneState?.optimisticPlacementByRowId ?? EMPTY_BOARD_PLACEMENTS,
     ...(boardLaneState?.onCardMove
       ? { onBoardCardMove: boardLaneState.onCardMove }
       : {}),

@@ -29,6 +29,7 @@ import type { Occurrence } from "./calendar/CalendarView";
 import type { AnyCalendarWindowSource } from "./calendar/use-calendar-window";
 import type { DndPayload } from "../lib/dnd";
 import type { RowActionDeclaration } from "./RowActions";
+import type { CrudFilter, CrudSort } from "@refinedev/core";
 
 /**
  * The calendar kind's data declaration. The windowed-collection surface fetches
@@ -53,6 +54,22 @@ export interface BoardLaneSource {
   field: string;
   /** Optional display-field override; defaults to the related model representation. */
   labelField?: string;
+  /** Server-side filters narrowing the related rows that become board lanes. */
+  filters?: readonly CrudFilter[];
+  /** Explicit server order for the related rows that become board lanes. */
+  sorters?: readonly CrudSort[];
+  /** Writable Float field that owns manual order inside this lane context.
+   * A ResourceList create form declares it (usually `createOnly`) to submit the
+   * lane quick-create seed through FormView's existing default-values contract. */
+  rankField?: string;
+  /** Boolean field on the related lane resource that declares its default fold. */
+  foldField?: string;
+}
+
+/** One card's optimistic board placement while its server write settles. */
+export interface BoardCardPlacement {
+  laneId: string;
+  rank?: number;
 }
 
 export interface CardActionContext {
@@ -112,6 +129,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   defaultGroups?: ResourceViewDefaultGroups;
   /** Called when the list's create command is invoked. */
   onCreate?: () => void;
+  /** Quick-create seam for a board lane; the resource page owns opening create. */
+  onCreateInLane?: (laneId: string | null, rank?: number) => void;
   /** Label for the list's create command. */
   createLabel?: ReactNode;
   /** Called when a row is activated. */

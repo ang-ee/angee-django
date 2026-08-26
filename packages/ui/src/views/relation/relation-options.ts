@@ -7,6 +7,7 @@ import {
   useList,
   type BaseRecord,
   type CrudFilter,
+  type CrudSort,
   type HttpError,
   } from "@refinedev/core";
 import {
@@ -19,6 +20,7 @@ import {
   useModelMetadata,
 } from "@angee/metadata";
 
+import { useValueStable } from "../../lib/use-value-stable";
 import type { RelationOption } from "../../widgets/RelationField";
 import type { RelationFieldInfo } from "../model-metadata-defaults";
 import { DEFAULT_PAGE_SIZE } from "../page-size";
@@ -27,6 +29,8 @@ export const RELATION_OPTION_LIMIT = 200;
 
 export interface RelationOptionsConfig {
   labelField?: string;
+  /** Additional scalar fields a composing surface needs from each option row. */
+  fields?: readonly string[];
   pageSize?: number;
   enabled?: boolean;
   sort?: boolean;
@@ -37,6 +41,8 @@ export interface RelationOptionsConfig {
    * resource's own queryset exposes.
    */
   filters?: readonly CrudFilter[];
+  /** Explicit server order for relations whose row sequence is semantic. */
+  sorters?: readonly CrudSort[];
 }
 
 export interface RelationOptionsList {
@@ -47,6 +53,7 @@ export interface RelationOptionsList {
 export interface RelationOptionsResult {
   list: RelationOptionsList;
   options: readonly RelationOption[];
+  rows: readonly Row[];
 }
 
 export function useRelationOptions(
@@ -55,17 +62,26 @@ export function useRelationOptions(
 ): RelationOptionsResult {
   const {
     enabled = true,
+    fields: extraFields,
     filters,
     labelField: optionLabelField,
     pageSize = RELATION_OPTION_LIMIT,
     sort = false,
+    sorters,
   } = config;
   const labelField = optionLabelField ?? relation?.labelField ?? "id";
+  // Stabilise filters/sorters by VALUE: a consumer that declares them inline
+  // (e.g. a board's `laneSource.filters`) rebuilds the array every render, and
+  // forwarding a fresh identity into refine's `useList` drives an update loop.
+  // A value-equal array keeps a stable identity, so plausible inline props are
+  // safe without every caller memoising.
+  const stableFilters = useValueStable(filters);
+  const stableSorters = useValueStable(sorters);
   const metadata = useModelMetadata(relation?.resource ?? "");
   const resource = metadata?.resource ?? null;
   const fields = React.useMemo(
-    () => refineFieldsFromPaths(["id", labelField]),
-    [labelField],
+    () => refineFieldsFromPaths(["id", labelField, ...(extraFields ?? [])]),
+    [extraFields, labelField],
   );
   const run = useList<RowRecord, HttpError>({
     resource: resource ? refineResourceName(resource) : "__angee_disabled__",
@@ -75,7 +91,8 @@ export function useRelationOptions(
       currentPage: 1,
       pageSize: pageSize ?? DEFAULT_PAGE_SIZE,
     },
-    ...(filters ? { filters: [...filters] } : {}),
+    ...(stableFilters ? { filters: [...stableFilters] } : {}),
+    ...(stableSorters ? { sorters: [...stableSorters] } : {}),
     meta: { fields },
     queryOptions: {
       enabled: enabled && relation !== null && resource !== null,
@@ -98,7 +115,7 @@ export function useRelationOptions(
     () => relationOptionsFromRows(rows, labelField, { sort }),
     [labelField, rows, sort],
   );
-  return React.useMemo(() => ({ list, options }), [list, options]);
+  return React.useMemo(() => ({ list, options, rows }), [list, options, rows]);
 }
 
 /**

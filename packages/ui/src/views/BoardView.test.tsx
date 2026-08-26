@@ -33,6 +33,15 @@ const dndMocks = vi.hoisted(() => {
       transform: null,
       isDragging: false,
     })),
+    useSortable: vi.fn(() => ({
+      attributes: { "data-sortable": "true" },
+      listeners: { onKeyDown: vi.fn() },
+      setNodeRef: vi.fn(),
+      setActivatorNodeRef: vi.fn((node) => dndMocks.setActivatorNodeRef(node)),
+      transform: null,
+      transition: undefined,
+      isDragging: false,
+    })),
     useDroppable: vi.fn(() => ({
       setNodeRef: vi.fn(),
       isOver: false,
@@ -63,7 +72,10 @@ vi.mock("@dnd-kit/core", () => ({
   useDroppable: dndMocks.useDroppable,
 }));
 vi.mock("@dnd-kit/sortable", () => ({
+  SortableContext: ({ children }: { children: React.ReactNode }) => children,
   sortableKeyboardCoordinates: "sortableKeyboardCoordinates",
+  useSortable: dndMocks.useSortable,
+  verticalListSortingStrategy: "verticalListSortingStrategy",
 }));
 
 beforeEach(() => {
@@ -71,6 +83,7 @@ beforeEach(() => {
   dndMocks.useSensor.mockClear();
   dndMocks.useSensors.mockClear();
   dndMocks.useDraggable.mockClear();
+  dndMocks.useSortable.mockClear();
   dndMocks.useDroppable.mockClear();
   dndMocks.pointerWithin.mockClear();
   dndMocks.rectIntersection.mockClear();
@@ -83,6 +96,7 @@ afterEach(() => cleanup());
 interface DemoRow extends Row {
   id: string;
   label: string;
+  sort_order?: number;
   tags?: readonly string[];
   wordCount?: number;
 }
@@ -228,7 +242,10 @@ describe("BoardView", () => {
             },
           },
         },
-        over: { id: "next" },
+        over: {
+          id: "board-lane:next",
+          data: { current: { type: "board-lane", laneId: "next" } },
+        },
       });
     });
 
@@ -261,6 +278,48 @@ describe("BoardView", () => {
     expect(dndMocks.setActivatorNodeRef).toHaveBeenCalled();
   });
 
+  test("requests the midpoint rank when a sortable card moves inside its lane", () => {
+    const onCardMove = vi.fn();
+    renderBoard({
+      groups: [
+        lane([
+          { id: "1", label: "First", sort_order: 1024 },
+          { id: "2", label: "Second", sort_order: 2048 },
+          { id: "3", label: "Third", sort_order: 3072 },
+        ]),
+      ],
+      dragEnabled: true,
+      rankField: "sort_order",
+      onCardMove,
+    });
+
+    act(() => {
+      dndMocks.contextProps?.onDragEnd?.({
+        active: {
+          id: "1",
+          data: {
+            current: {
+              type: "board-card",
+              row: { id: "1", label: "First", sort_order: 1024 },
+              laneId: "data",
+            },
+          },
+        },
+        over: {
+          id: "2",
+          data: { current: { type: "board-card", laneId: "data" } },
+        },
+      });
+    });
+
+    expect(dndMocks.useSortable).toHaveBeenCalledTimes(3);
+    expect(onCardMove).toHaveBeenCalledWith(
+      { id: "1", label: "First", sort_order: 1024 },
+      "data",
+      2560,
+    );
+  });
+
   test("ignores drag-end events with malformed card data", () => {
     const onCardMove = vi.fn();
     renderBoard({
@@ -278,7 +337,10 @@ describe("BoardView", () => {
             },
           },
         },
-        over: { id: "next" },
+        over: {
+          id: "board-lane:next",
+          data: { current: { type: "board-lane", laneId: "next" } },
+        },
       });
     });
 
@@ -302,7 +364,10 @@ describe("BoardView", () => {
             },
           },
         },
-        over: { id: "" },
+        over: {
+          id: "board-lane:",
+          data: { current: { type: "board-lane", laneId: "" } },
+        },
       });
     });
 
