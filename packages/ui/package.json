@@ -236,28 +236,28 @@
       "import": "./src/views/form/FormView.tsx"
     },
     "./views/List": {
-      "types": "./src/views/List.tsx",
-      "import": "./src/views/List.tsx"
+      "types": "./src/views/resource/List.tsx",
+      "import": "./src/views/resource/List.tsx"
     },
     "./views/ListView": {
-      "types": "./src/views/ListView.tsx",
-      "import": "./src/views/ListView.tsx"
+      "types": "./src/views/resource/ListView.tsx",
+      "import": "./src/views/resource/ListView.tsx"
     },
     "./views/RelationPicker": {
       "types": "./src/views/relation/RelationPicker.tsx",
       "import": "./src/views/relation/RelationPicker.tsx"
     },
     "./views/ResourceList": {
-      "types": "./src/views/ResourceList.tsx",
-      "import": "./src/views/ResourceList.tsx"
+      "types": "./src/views/resource/ResourceList.tsx",
+      "import": "./src/views/resource/ResourceList.tsx"
     },
     "./views/RowsListView": {
-      "types": "./src/views/RowsListView.tsx",
-      "import": "./src/views/RowsListView.tsx"
+      "types": "./src/views/resource/RowsListView.tsx",
+      "import": "./src/views/resource/RowsListView.tsx"
     },
     "./views/documents": {
-      "types": "./src/views/documents.ts",
-      "import": "./src/views/documents.ts"
+      "types": "./src/views/resource/documents.ts",
+      "import": "./src/views/resource/documents.ts"
     },
     "./views/enum-options": {
       "types": "./src/views/relation/enum-options.ts",
@@ -276,8 +276,8 @@
       "import": "./src/views/index.ts"
     },
     "./views/model-metadata-defaults": {
-      "types": "./src/views/model-metadata-defaults.ts",
-      "import": "./src/views/model-metadata-defaults.ts"
+      "types": "./src/views/resource/model-metadata-defaults.ts",
+      "import": "./src/views/resource/model-metadata-defaults.ts"
     },
     "./views/page/index": {
       "types": "./src/views/page/index.ts",
@@ -288,8 +288,8 @@
       "import": "./src/views/page/types.ts"
     },
     "./views/record-action": {
-      "types": "./src/views/record-action.ts",
-      "import": "./src/views/record-action.ts"
+      "types": "./src/views/resource/record-action.ts",
+      "import": "./src/views/resource/record-action.ts"
     },
     "./views/relation-facet": {
       "types": "./src/views/relation/relation-facet.ts",
@@ -300,40 +300,40 @@
       "import": "./src/views/relation/relation-options.ts"
     },
     "./views/resource-routing": {
-      "types": "./src/views/resource-routing.ts",
-      "import": "./src/views/resource-routing.ts"
+      "types": "./src/views/resource/resource-routing.ts",
+      "import": "./src/views/resource/resource-routing.ts"
     },
     "./views/resource-view-context": {
-      "types": "./src/views/resource-view-context.tsx",
-      "import": "./src/views/resource-view-context.tsx"
+      "types": "./src/views/resource/resource-view-context.tsx",
+      "import": "./src/views/resource/resource-view-context.tsx"
     },
     "./views/resource-view-list-body": {
-      "types": "./src/views/resource-view-list-body.tsx",
-      "import": "./src/views/resource-view-list-body.tsx"
+      "types": "./src/views/resource/resource-view-list-body.tsx",
+      "import": "./src/views/resource/resource-view-list-body.tsx"
     },
     "./views/resource-view-model": {
-      "types": "./src/views/resource-view-model.ts",
-      "import": "./src/views/resource-view-model.ts"
+      "types": "./src/views/resource/resource-view-model.ts",
+      "import": "./src/views/resource/resource-view-model.ts"
     },
     "./views/resource-view-surface": {
-      "types": "./src/views/resource-view-surface.ts",
-      "import": "./src/views/resource-view-surface.ts"
+      "types": "./src/views/resource/resource-view-surface.ts",
+      "import": "./src/views/resource/resource-view-surface.ts"
     },
     "./views/resource-view-types": {
-      "types": "./src/views/resource-view-types.ts",
-      "import": "./src/views/resource-view-types.ts"
+      "types": "./src/views/resource/resource-view-types.ts",
+      "import": "./src/views/resource/resource-view-types.ts"
     },
     "./views/resource-view-utils": {
-      "types": "./src/views/resource-view-utils.ts",
-      "import": "./src/views/resource-view-utils.ts"
+      "types": "./src/views/resource/resource-view-utils.ts",
+      "import": "./src/views/resource/resource-view-utils.ts"
     },
     "./views/scalar-facet": {
       "types": "./src/views/relation/scalar-facet.ts",
       "import": "./src/views/relation/scalar-facet.ts"
     },
     "./views/useBulkDelete": {
-      "types": "./src/views/useBulkDelete.ts",
-      "import": "./src/views/useBulkDelete.ts"
+      "types": "./src/views/resource/useBulkDelete.ts",
+      "import": "./src/views/resource/useBulkDelete.ts"
     },
     "./views/useScopedTreeExplorer": {
       "types": "./src/views/tree/useScopedTreeExplorer.ts",
@@ -579,28 +579,28 @@
         "default": "./dist/views/form/FormView.js"
       },
       "./views/List": {
-        "types": "./dist/views/List.d.ts",
-        "default": "./dist/views/List.js"
+        "types": "./dist/views/resource/List.d.ts",
+        "default": "./dist/views/resource/List.js"
       },
       "./views/ListView": {
-        "types": "./dist/views/ListView.d.ts",
-        "default": "./dist/views/ListView.js"
+        "types": "./dist/views/resource/ListView.d.ts",
+        "default": "./dist/views/resource/ListView.js"
       },
       "./views/RelationPicker": {
         "types": "./dist/views/relation/RelationPicker.d.ts",
         "default": "./dist/views/relation/RelationPicker.js"
       },
       "./views/ResourceList": {
-        "types": "./dist/views/ResourceList.d.ts",
-        "default": "./dist/views/ResourceList.js"
+        "types": "./dist/views/resource/ResourceList.d.ts",
+        "default": "./dist/views/resource/ResourceList.js"
       },
       "./views/RowsListView": {
-        "types": "./dist/views/RowsListView.d.ts",
-        "default": "./dist/views/RowsListView.js"
+        "types": "./dist/views/resource/RowsListView.d.ts",
+        "default": "./dist/views/resource/RowsListView.js"
       },
       "./views/documents": {
-        "types": "./dist/views/documents.d.ts",
-        "default": "./dist/views/documents.js"
+        "types": "./dist/views/resource/documents.d.ts",
+        "default": "./dist/views/resource/documents.js"
       },
       "./views/enum-options": {
         "types": "./dist/views/relation/enum-options.d.ts",
@@ -619,8 +619,8 @@
         "default": "./dist/views/index.js"
       },
       "./views/model-metadata-defaults": {
-        "types": "./dist/views/model-metadata-defaults.d.ts",
-        "default": "./dist/views/model-metadata-defaults.js"
+        "types": "./dist/views/resource/model-metadata-defaults.d.ts",
+        "default": "./dist/views/resource/model-metadata-defaults.js"
       },
       "./views/page/index": {
         "types": "./dist/views/page/index.d.ts",
@@ -631,8 +631,8 @@
         "default": "./dist/views/page/types.js"
       },
       "./views/record-action": {
-        "types": "./dist/views/record-action.d.ts",
-        "default": "./dist/views/record-action.js"
+        "types": "./dist/views/resource/record-action.d.ts",
+        "default": "./dist/views/resource/record-action.js"
       },
       "./views/relation-facet": {
         "types": "./dist/views/relation/relation-facet.d.ts",
@@ -643,40 +643,40 @@
         "default": "./dist/views/relation/relation-options.js"
       },
       "./views/resource-routing": {
-        "types": "./dist/views/resource-routing.d.ts",
-        "default": "./dist/views/resource-routing.js"
+        "types": "./dist/views/resource/resource-routing.d.ts",
+        "default": "./dist/views/resource/resource-routing.js"
       },
       "./views/resource-view-context": {
-        "types": "./dist/views/resource-view-context.d.ts",
-        "default": "./dist/views/resource-view-context.js"
+        "types": "./dist/views/resource/resource-view-context.d.ts",
+        "default": "./dist/views/resource/resource-view-context.js"
       },
       "./views/resource-view-list-body": {
-        "types": "./dist/views/resource-view-list-body.d.ts",
-        "default": "./dist/views/resource-view-list-body.js"
+        "types": "./dist/views/resource/resource-view-list-body.d.ts",
+        "default": "./dist/views/resource/resource-view-list-body.js"
       },
       "./views/resource-view-model": {
-        "types": "./dist/views/resource-view-model.d.ts",
-        "default": "./dist/views/resource-view-model.js"
+        "types": "./dist/views/resource/resource-view-model.d.ts",
+        "default": "./dist/views/resource/resource-view-model.js"
       },
       "./views/resource-view-surface": {
-        "types": "./dist/views/resource-view-surface.d.ts",
-        "default": "./dist/views/resource-view-surface.js"
+        "types": "./dist/views/resource/resource-view-surface.d.ts",
+        "default": "./dist/views/resource/resource-view-surface.js"
       },
       "./views/resource-view-types": {
-        "types": "./dist/views/resource-view-types.d.ts",
-        "default": "./dist/views/resource-view-types.js"
+        "types": "./dist/views/resource/resource-view-types.d.ts",
+        "default": "./dist/views/resource/resource-view-types.js"
       },
       "./views/resource-view-utils": {
-        "types": "./dist/views/resource-view-utils.d.ts",
-        "default": "./dist/views/resource-view-utils.js"
+        "types": "./dist/views/resource/resource-view-utils.d.ts",
+        "default": "./dist/views/resource/resource-view-utils.js"
       },
       "./views/scalar-facet": {
         "types": "./dist/views/relation/scalar-facet.d.ts",
         "default": "./dist/views/relation/scalar-facet.js"
       },
       "./views/useBulkDelete": {
-        "types": "./dist/views/useBulkDelete.d.ts",
-        "default": "./dist/views/useBulkDelete.js"
+        "types": "./dist/views/resource/useBulkDelete.d.ts",
+        "default": "./dist/views/resource/useBulkDelete.js"
       },
       "./views/useScopedTreeExplorer": {
         "types": "./dist/views/tree/useScopedTreeExplorer.d.ts",

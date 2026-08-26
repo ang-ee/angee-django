@@ -38,7 +38,7 @@ import {
   type FormValues,
   type LinesSeed,
 } from "./form-view-model";
-import { useSaveOperation } from "../resource-operations";
+import { useSaveOperation } from "../resource/resource-operations";
 import { validationErrorsFromError } from "./validation-errors";
 import { useUnsavedChangesNavigationGuard } from "./use-unsaved-changes-navigation-guard";
 

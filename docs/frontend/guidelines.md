@@ -123,7 +123,7 @@ TanStack apply the URL-owned filter object to in-memory rows.
 - **Schema dependence stops at the composition boundary.** `@angee/refine`,
   `@angee/metadata`, and `@angee/ui` stay schema-independent; when they need a
   bespoke operation they hand-author a typed `TypedDocumentNode` (see
-  `ui/views/documents.ts`) rather than importing a project runtime. `@angee/app`
+  `ui/views/resource/documents.ts`) rather than importing a project runtime. `@angee/app`
   is the sanctioned schema-dependent composition package, and it and addon web
   packages consume generated documents from the composed stack's `@angee/gql`.
 - **Generated authored operations are typed, never hand-mirrored.** In a

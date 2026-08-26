@@ -5,7 +5,7 @@ import {
   CALENDAR_ANCHOR_FORMAT,
   CALENDAR_VIEW_MODES,
   type CalendarViewMode,
-} from "../resource-view-model";
+} from "../resource/resource-view-model";
 
 // The calendar kind's period-nav math and labels, derived from mode + anchor —
 // no FullCalendar imperative API. The date formats mirror the resource-view

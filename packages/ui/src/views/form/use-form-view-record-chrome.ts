@@ -12,7 +12,7 @@ import {
   type SlotContribution,
 } from "../../runtime";
 import { optionToken } from "../../widgets/types";
-import type { RecordChromeContext } from "../record-chrome-context";
+import type { RecordChromeContext } from "../resource/record-chrome-context";
 import {
   FORM_VIEW_RECORD_CHROME_SLOT,
   formViewRecordActionsSlot,

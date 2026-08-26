@@ -45,7 +45,7 @@ import {
   relationFieldInfo,
   relationListFieldInfo,
   type RelationFieldInfo,
-} from "../model-metadata-defaults";
+} from "../resource/model-metadata-defaults";
 import type { FieldDescriptor } from "../page";
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";

@@ -17,7 +17,7 @@ import type {
   ResourceToolbarFilterField,
   ResourceToolbarFilterOption,
 } from "../../toolbars";
-import type { ResourceViewFilter, ResourceViewGroup } from "../resource-view-model";
+import type { ResourceViewFilter, ResourceViewGroup } from "../resource/resource-view-model";
 import { facetRequestSpec } from "./facet-query";
 import { useUiT } from "../../i18n";
 import type { UiTranslate } from "../../i18n";
@@ -26,10 +26,10 @@ import {
   groupLabel,
   hasuraGroupDimension,
   hasuraGroupOrderForDimensions,
-} from "../resource-view-list-body";
-import { resourceFieldGroupLabel } from "../model-metadata-defaults";
+} from "../resource/resource-view-list-body";
+import { resourceFieldGroupLabel } from "../resource/model-metadata-defaults";
 import type { ColumnDescriptor } from "../page";
-import { useGroupOperation } from "../resource-operations";
+import { useGroupOperation } from "../resource/resource-operations";
 
 const SCALAR_FACET_OPTION_LIMIT = 200;
 const EMPTY_FILTER_OPTIONS: readonly ResourceToolbarFilterOption[] = [];

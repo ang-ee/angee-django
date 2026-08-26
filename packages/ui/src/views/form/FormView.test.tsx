@@ -59,7 +59,7 @@ import {
   type FormField,
   type FormSubmitContext,
 } from "./FormView";
-import { useRecordChromeContext } from "../record-chrome-context";
+import { useRecordChromeContext } from "../resource/record-chrome-context";
 import {
   Action,
   Field,

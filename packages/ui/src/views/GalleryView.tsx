@@ -8,8 +8,8 @@ import { Card } from "../ui/card";
 import { Checkbox } from "../ui/checkbox";
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
 import { textRoleVariants } from "../ui/text";
-import { ListEmpty } from "./resource-view-list-body";
-import type { ListEmptyContent } from "./resource-view-types";
+import { ListEmpty } from "./resource/resource-view-list-body";
+import type { ListEmptyContent } from "./resource/resource-view-types";
 
 /**
  * The card-grid View — a frameless sibling of `ListView` that renders each row

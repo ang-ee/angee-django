@@ -24,7 +24,7 @@ import {
   fieldsWithMetadataDefaults,
   relationFieldInfo,
   type RelationFieldInfo,
-} from "../model-metadata-defaults";
+} from "../resource/model-metadata-defaults";
 import type { RecordDeleteAction } from "./RecordActionBar";
 import { formViewSectionsSlot } from "./form-view-slots";
 import {

@@ -6,8 +6,8 @@ import { cn } from "../lib/cn";
 import { SectionEyebrow } from "../ui/section-eyebrow";
 import { TimelineEntry } from "../fragments/TimelineEntry";
 import { dateFromUnknown } from "../widgets/date-format";
-import { ListEmpty } from "./resource-view-list-body";
-import type { ListEmptyContent } from "./resource-view-types";
+import { ListEmpty } from "./resource/resource-view-list-body";
+import type { ListEmptyContent } from "./resource/resource-view-types";
 
 /**
  * The chronological View — rows bucketed by day (newest first), each rendered

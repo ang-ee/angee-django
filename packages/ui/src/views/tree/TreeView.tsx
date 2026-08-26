@@ -9,8 +9,8 @@ import {
   type DndPayload,
 } from "../../lib/dnd";
 import { Tree, type TreeNode } from "../../ui/tree";
-import { ListEmpty } from "../resource-view-list-body";
-import type { ListEmptyContent } from "../resource-view-types";
+import { ListEmpty } from "../resource/resource-view-list-body";
+import type { ListEmptyContent } from "../resource/resource-view-types";
 
 /**
  * The hierarchical View: flat `rows` carrying a self-referential `parent`

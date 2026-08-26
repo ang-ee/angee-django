@@ -3,7 +3,7 @@ import type { CrudFilter } from "@refinedev/core";
 
 import type { WidgetField } from "../../widgets/types";
 import { Many2ManyEdit } from "../../widgets/many2many";
-import type { RelationFieldInfo } from "../model-metadata-defaults";
+import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 import { useRelationOptions } from "./relation-options";
 
 export interface RelationMultiFieldWidgetProps {

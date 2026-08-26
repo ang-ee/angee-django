@@ -5,8 +5,8 @@ import {
 } from "@angee/metadata";
 
 import type { WidgetOption } from "../../widgets";
-import { BaseImplChoices, type ImplChoice } from "../documents";
-import { enumValueLabel } from "../resource-view-list-body";
+import { BaseImplChoices, type ImplChoice } from "../resource/documents";
+import { enumValueLabel } from "../resource/resource-view-list-body";
 
 /**
  * SDL-derived `<select>` options for an enum field, with lower-cased values.

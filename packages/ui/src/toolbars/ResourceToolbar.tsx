@@ -31,17 +31,17 @@ import type {
   ResourceViewGroupGranularity,
   ResourceViewKind,
   ResourceViewLookupOperator,
-} from "../views/resource-view-model";
+} from "../views/resource/resource-view-model";
 import {
   RESOURCE_VIEW_GROUP_GRANULARITIES,
   resourceViewGroupsEqual,
   resourceViewKindCapabilities,
-} from "../views/resource-view-model";
-import { groupFieldLabel } from "../views/resource-view-list-body";
+} from "../views/resource/resource-view-model";
+import { groupFieldLabel } from "../views/resource/resource-view-list-body";
 import {
   filterOperatorLabel,
   labelText,
-} from "../views/resource-view-utils";
+} from "../views/resource/resource-view-utils";
 
 const FILTER_TEXT_COMMIT_DELAY_MS = 300;
 

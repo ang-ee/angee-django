@@ -9,7 +9,7 @@ import { SlotOutlet } from "../../lib/slot-outlet";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import {
   RecordChromeProvider,
-} from "../record-chrome-context";
+} from "../resource/record-chrome-context";
 import { RecordActionBar } from "./RecordActionBar";
 import type {
   FieldDescriptor,
