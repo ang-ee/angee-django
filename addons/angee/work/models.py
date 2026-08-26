@@ -663,6 +663,16 @@ class Cycle(AuditMixin, AngeeDataModel):
         return self
 
 
+_WORK_UNLOADED = object()
+"""Snapshot marker for a queue/stage id whose column was deferred at load.
+
+Snapshots must read ``__dict__``, never the field descriptor: touching a
+deferred ``queue_id``/``stage_id`` during ``__init__`` or ``refresh_from_db``
+fires a nested partial refresh whose reload re-enters ``__init__`` with the
+*other* id deferred — an unbounded mutual recursion of one query per level.
+"""
+
+
 class TaskWork(StagedModelMixin, AngeeModel):
     """Same-row work contribution folded into ``projects.Task``."""
 
@@ -758,8 +768,7 @@ class TaskWork(StagedModelMixin, AngeeModel):
         super().__init__(*args, **kwargs)
         object.__setattr__(self, "_work_track_status", True)
         object.__setattr__(self, "_work_status_assigned", explicit_status)
-        object.__setattr__(self, "_work_loaded_queue_id", getattr(self, "queue_id", None))
-        object.__setattr__(self, "_work_loaded_stage_id", getattr(self, "stage_id", None))
+        self._work_snapshot_loaded_ids()
 
     # Django QuerySet.update() bypasses the A1 authored-status and verb-only
     # system-stage boundaries by nature; the API routes through instance saves,
@@ -795,8 +804,33 @@ class TaskWork(StagedModelMixin, AngeeModel):
         finally:
             object.__setattr__(self, "_work_track_status", True)
             object.__setattr__(self, "_work_status_assigned", False)
-            object.__setattr__(self, "_work_loaded_queue_id", self.queue_id)
-            object.__setattr__(self, "_work_loaded_stage_id", self.stage_id)
+            self._work_snapshot_loaded_ids()
+
+    def _work_snapshot_loaded_ids(self) -> None:
+        """Snapshot loaded queue/stage ids without touching deferred columns."""
+
+        for attname in ("queue_id", "stage_id"):
+            value = self.__dict__.get(attname, _WORK_UNLOADED)
+            object.__setattr__(self, f"_work_loaded_{attname}", value)
+
+    def _work_loaded_id(self, attname: str) -> Any:
+        """Return the as-loaded id, resolving a deferred column only on demand."""
+
+        snapshot = getattr(self, f"_work_loaded_{attname}", _WORK_UNLOADED)
+        if snapshot is not _WORK_UNLOADED:
+            return snapshot
+        if attname in self.__dict__:
+            # Assigned after being loaded deferred: the loaded value is gone
+            # from the instance, so ask the row itself.
+            value = (
+                type(self)._base_manager.filter(pk=self.pk).values_list(attname, flat=True).first()
+            )
+        else:
+            # Still deferred means never assigned: the lazy load below IS the
+            # loaded value (and no longer recurses, per _work_snapshot_loaded_ids).
+            value = getattr(self, attname)
+        object.__setattr__(self, f"_work_loaded_{attname}", value)
+        return value
 
     def full_clean(self, *args: Any, **kwargs: Any) -> None:
         """Let Django normalize fields without inventing a direct status write.
@@ -864,8 +898,7 @@ class TaskWork(StagedModelMixin, AngeeModel):
                 kwargs["update_fields"] = update_fields
             super().save(*args, **kwargs)
         object.__setattr__(self, "_work_status_assigned", False)
-        object.__setattr__(self, "_work_loaded_queue_id", self.queue_id)
-        object.__setattr__(self, "_work_loaded_stage_id", self.stage_id)
+        self._work_snapshot_loaded_ids()
 
     def complete(self) -> Any:
         """Move to the first completed stage, or use the base verb without a queue."""
@@ -1169,7 +1202,7 @@ class TaskWork(StagedModelMixin, AngeeModel):
     def _reject_direct_system_stage_transition(self) -> None:
         """Reserve entry into triage and duplicate stages for their owning verbs."""
 
-        loaded_stage_id = getattr(self, "_work_loaded_stage_id", None)
+        loaded_stage_id = self._work_loaded_id("stage_id")
         if (
             self.stage_id is None
             or loaded_stage_id == self.stage_id
@@ -1188,12 +1221,8 @@ class TaskWork(StagedModelMixin, AngeeModel):
         """Infer queue from cycle/stage, then personal queue and default stage."""
 
         changed: set[str] = set()
-        queue_cleared = (
-            getattr(self, "_work_loaded_queue_id", None) is not None and self.queue_id is None
-        )
-        stage_cleared = (
-            getattr(self, "_work_loaded_stage_id", None) is not None and self.stage_id is None
-        )
+        queue_cleared = self.queue_id is None and self._work_loaded_id("queue_id") is not None
+        stage_cleared = self.stage_id is None and self._work_loaded_id("stage_id") is not None
         if queue_cleared != stage_cleared or (queue_cleared and self.cycle_id is not None):
             raise ValidationError(
                 "stage and cycle imply their queue — clear queue, stage, and cycle together"
@@ -1230,7 +1259,7 @@ class TaskWork(StagedModelMixin, AngeeModel):
             return set()
         category = str(self.stage.get_category())
         now = timezone.now()
-        loaded_stage_id = getattr(self, "_work_loaded_stage_id", None)
+        loaded_stage_id = self._work_loaded_id("stage_id")
         stage_changed = self._state.adding or loaded_stage_id != self.stage_id
         old_category = self._stage_category(loaded_stage_id) if stage_changed else category
 
