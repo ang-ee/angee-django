@@ -19,6 +19,7 @@ const sdkMocks = vi.hoisted(() => ({
   useListOptions: null as {
     resource?: string;
     dataProviderName?: string;
+    sorters?: readonly unknown[];
     meta?: { fields?: unknown };
   } | null,
   rows: [
@@ -34,6 +35,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
     useList: (options?: {
       resource?: string;
       dataProviderName?: string;
+      sorters?: readonly unknown[];
       meta?: { fields?: unknown };
     }) => {
       sdkMocks.useListOptions = options ?? null;
@@ -83,11 +85,17 @@ describe("useRelationOptions", () => {
 
     render(
       <ModelMetadataProvider metadata={metadata}>
-        <RelationOptionsProbe relation={stageRelation} />
+        <RelationOptionsProbe
+          relation={stageRelation}
+          sorters={[{ field: "position", order: "asc" }]}
+        />
       </ModelMetadataProvider>,
     );
 
     expect(sdkMocks.useListOptions?.resource).toBe("stages");
+    expect(sdkMocks.useListOptions?.sorters).toEqual([
+      { field: "position", order: "asc" },
+    ]);
     expect(sdkMocks.useListOptions?.meta?.fields).toEqual(["id", "name"]);
     expect(screen.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
       "stg_30: Proposal",
@@ -99,10 +107,12 @@ describe("useRelationOptions", () => {
 
 function RelationOptionsProbe({
   relation,
+  sorters,
 }: {
   relation: RelationFieldInfo;
+  sorters?: readonly { field: string; order: "asc" | "desc" }[];
 }) {
-  const { options } = useRelationOptions(relation);
+  const { options } = useRelationOptions(relation, { sorters });
   return (
     <ul>
       {options.map((option) => (

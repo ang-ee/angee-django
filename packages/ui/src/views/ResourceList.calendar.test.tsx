@@ -13,6 +13,7 @@ import type { ResourceListCalendarSpec } from "./ResourceList";
 // are the only things exercised.
 const captured = vi.hoisted(() => ({
   listCalendar: undefined as CalendarViewSpec | undefined,
+  onCreateInLane: undefined as ListViewProps["onCreateInLane"],
   formDefaults: undefined as Record<string, unknown> | undefined,
 }));
 
@@ -24,6 +25,7 @@ vi.mock("@tanstack/react-router", () => ({
 vi.mock("./ListView", () => ({
   ListView: (props: ListViewProps & { calendar?: CalendarViewSpec }) => {
     captured.listCalendar = props.calendar;
+    captured.onCreateInLane = props.onCreateInLane;
     return null;
   },
 }));
@@ -62,6 +64,7 @@ const SPEC: ResourceListCalendarSpec = {
 
 beforeEach(() => {
   captured.listCalendar = undefined;
+  captured.onCreateInLane = undefined;
   captured.formDefaults = undefined;
 });
 afterEach(cleanup);
@@ -102,6 +105,31 @@ describe("ResourceList calendar quick-create", () => {
     expect(captured.formDefaults).toEqual({
       start: "2026-06-17T14:00:00.000Z",
       end: "2026-06-17T15:00:00.000Z",
+    });
+  });
+
+  test("lane create merges its lane and rank with list-owned defaults", () => {
+    const onSelect = vi.fn();
+    const baseProps = {
+      resource: "pm.Task",
+      columns: [],
+      formFields: [{ name: "title" }],
+      laneSource: { field: "stage", rankField: "sort_order" },
+      createDefaults: { workspace: "workspace-1" },
+      onSelect,
+    } as const;
+    const { rerender } = render(<ResourceList {...baseProps} />);
+
+    act(() => {
+      captured.onCreateInLane?.("stage-progress", 3072);
+    });
+    expect(onSelect).toHaveBeenCalledWith(null);
+
+    rerender(<ResourceList {...baseProps} creating />);
+    expect(captured.formDefaults).toEqual({
+      workspace: "workspace-1",
+      stage: "stage-progress",
+      sort_order: 3072,
     });
   });
 });

@@ -47,6 +47,13 @@ export function useResourceViewGroupState({
     resourceView.state.groupStack,
     validCurrentGroupStack,
   );
+  // A non-empty valid subset is a spelling/stack repair owned by this view
+  // (for example camel-case URL state canonicalized to snake_case metadata).
+  // No valid groups means the shared bare URL value belongs to another sibling
+  // data view; render this view's default locally without writing the foreign
+  // value back and starting a group-param ping-pong.
+  const hasCanonicalizableGroupStack =
+    hasInvalidGroupStack && validCurrentGroupStack.length > 0;
   // The previous applied default is transition memory: reading it here is
   // required to distinguish a newly-declared default from one the user cleared.
   // Converting this to render state would add a second reconciliation render and
@@ -120,7 +127,7 @@ export function useResourceViewGroupState({
     resourceView.state.group,
   ]);
   React.useEffect(() => {
-    if (!hasInvalidGroupStack) return;
+    if (!hasCanonicalizableGroupStack) return;
     if (resourceViewGroupStacksEqual(
       resourceView.state.groupStack,
       effectiveGroupStack,
@@ -128,7 +135,7 @@ export function useResourceViewGroupState({
     resourceView.setGroupStack(effectiveGroupStack);
   }, [
     effectiveGroupStack,
-    hasInvalidGroupStack,
+    hasCanonicalizableGroupStack,
     resourceView.setGroupStack,
     resourceView.state.groupStack,
   ]);

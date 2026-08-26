@@ -1,4 +1,5 @@
 import { useMemo, type ReactElement } from "react";
+import type { CrudFilter } from "@refinedev/core";
 
 import type { WidgetField } from "../../widgets/types";
 import { Many2ManyEdit } from "../../widgets/many2many";
@@ -11,6 +12,8 @@ export interface RelationMultiFieldWidgetProps {
   onChange?: (value: readonly unknown[]) => void;
   readOnly?: boolean;
   relation: RelationFieldInfo;
+  /** Server-side filters narrowing the rows offered by the multi-picker. */
+  filters?: readonly CrudFilter[];
   "aria-label"?: string;
 }
 
@@ -28,10 +31,12 @@ export function RelationMultiFieldWidget({
   onChange,
   readOnly,
   relation,
+  filters,
   "aria-label": ariaLabel,
 }: RelationMultiFieldWidgetProps): ReactElement {
   const { options } = useRelationOptions(relation, {
     enabled: !readOnly,
+    filters,
     sort: true,
   });
   const field = useMemo<WidgetField>(

@@ -21,6 +21,7 @@ import type { UiTranslate } from "../i18n";
 interface LaneFieldSource {
   field: string;
   fieldMetadata: { relationObject?: boolean };
+  rankField?: string;
 }
 
 export function requestedFieldPaths<TRow extends Row>(
@@ -38,8 +39,10 @@ export function requestedFieldPaths<TRow extends Row>(
       : null;
   const paths = new Set<string>(["id"]);
   for (const column of columns) {
-    const head = column.field.split(".", 1)[0] ?? column.field;
-    if (knownNames === null || knownNames.has(head)) paths.add(column.field);
+    for (const path of column.selectionPaths ?? [column.field]) {
+      const head = path.split(".", 1)[0] ?? path;
+      if (knownNames === null || knownNames.has(head)) paths.add(path);
+    }
   }
   for (const extra of extraFields ?? []) paths.add(extra);
   if (laneSource) {
@@ -48,6 +51,7 @@ export function requestedFieldPaths<TRow extends Row>(
         ? `${laneSource.field}.id`
         : laneSource.field,
     );
+    if (laneSource.rankField) paths.add(laneSource.rankField);
   }
   return [...paths];
 }

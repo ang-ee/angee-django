@@ -5,7 +5,9 @@ import type {
   Row,
   SchemaFieldMetadata,
 } from "@angee/metadata";
+import { RelationRepresentationError, rowValueAtPath } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
+import { refineFieldsFromPaths } from "@angee/refine";
 
 import {
   buildFilterFields,
@@ -21,6 +23,7 @@ import {
   relationListFieldInfo,
 } from "./model-metadata-defaults";
 import { RESOURCE_VIEW_GROUP_GRANULARITIES } from "./resource-view-model";
+import { requestedFieldPaths } from "./resource-view-codecs";
 import type { ColumnDescriptor, FieldDescriptor } from "./page";
 
 const NOTE_METADATA: ModelMetadata = {
@@ -738,6 +741,12 @@ describe("relation column read expansion", () => {
         label: "Location",
       },
       quantity: { name: "quantity", kind: "scalar", scalar: "Decimal" },
+      project: {
+        name: "project",
+        kind: "relation",
+        relationTarget: "ProjectType",
+        relationObject: true,
+      },
     },
   };
   const schema: SchemaFieldMetadata = {
@@ -745,12 +754,36 @@ describe("relation column read expansion", () => {
       ProductVariantType: {
         typeName: "ProductVariantType",
         recordRepresentation: "display_name",
-        fields: {},
+        fields: {
+          display_name: {
+            name: "display_name",
+            kind: "scalar",
+            scalar: "String",
+          },
+        },
       },
       LocationType: {
         typeName: "LocationType",
         recordRepresentation: "name",
         fields: {},
+      },
+      ProjectType: {
+        typeName: "ProjectType",
+        recordRepresentation: "title",
+        fields: {
+          title: { name: "title", kind: "scalar", scalar: "String" },
+          product: {
+            name: "product",
+            kind: "relation",
+            relationTarget: "ProductVariantType",
+            relationObject: false,
+            relationFilter: {
+              field: "product",
+              mode: "lookup",
+              lookup: "sqid",
+            },
+          },
+        },
       },
     },
   };
@@ -762,6 +795,10 @@ describe("relation column read expansion", () => {
       schema,
     );
     expect(column?.field).toBe("product.display_name");
+    expect(column?.selectionPaths).toEqual([
+      "product.id",
+      "product.display_name",
+    ]);
     // The label renders as a scalar, so the relation's many2one edit widget drops.
     expect(column?.widget).toBeUndefined();
     expect(column?.header).toBe("Product");
@@ -775,9 +812,10 @@ describe("relation column read expansion", () => {
     expect(column?.field).toBe("product.id");
   });
 
-  test("without schema metadata a relation column still reads its id, never a leaf object", () => {
-    const [column] = columnsWithMetadataDefaults<Row>([{ field: "product" }], metadata);
-    expect(column?.field).toBe("product.id");
+  test("without target metadata a relation column fails with a named error", () => {
+    expect(() =>
+      columnsWithMetadataDefaults<Row>([{ field: "product" }], metadata)
+    ).toThrow(RelationRepresentationError);
   });
 
   test("a to-one FK projected as a public-id scalar stays a leaf (not sub-selected)", () => {
@@ -787,23 +825,85 @@ describe("relation column read expansion", () => {
     expect(column?.field).toBe("location");
   });
 
-  test("an explicit dotted relation path and scalar columns are left untouched", () => {
+  test("expands a nested relation-terminal path and pins its GraphQL selection", () => {
     const resolved = columnsWithMetadataDefaults<Row>(
-      [{ field: "product.default_code" }, { field: "quantity" }],
+      [{ field: "project.product" }, { field: "quantity" }],
       metadata,
       schema,
     );
-    expect(resolved[0]?.field).toBe("product.default_code");
+    expect(resolved[0]?.field).toBe("project.product.display_name");
+    expect(resolved[0]?.selectionPaths).toEqual([
+      "project.product.id",
+      "project.product.display_name",
+    ]);
     expect(resolved[1]?.field).toBe("quantity");
+    expect(requestedFieldPaths(resolved, undefined, metadata)).toEqual([
+      "id",
+      "project.product.id",
+      "project.product.display_name",
+      "quantity",
+    ]);
   });
 
-  test("a column that pins its own render or widget keeps its relation field verbatim", () => {
+  test("keeps an explicit scalar path structural when an intermediate relation target has no metadata", () => {
+    const message: ModelMetadata = {
+      typeName: "MessageType",
+      fields: {
+        thread: {
+          name: "thread",
+          kind: "relation",
+          relationTarget: "ThreadType",
+          relationObject: true,
+        },
+      },
+    };
+    const messagingSchema: SchemaFieldMetadata = {
+      types: {
+        ThreadType: {
+          typeName: "ThreadType",
+          fields: {
+            title: {
+              name: "title",
+              kind: "relation",
+              relationTarget: "FragmentType",
+              relationObject: true,
+            },
+          },
+        },
+      },
+    };
+    const resolved = columnsWithMetadataDefaults<Row>(
+      [{ field: "thread.title.text" }],
+      message,
+      messagingSchema,
+    );
+
+    expect(resolved[0]?.field).toBe("thread.title.text");
+    expect(resolved[0]?.selectionPaths).toBeUndefined();
+    const requested = requestedFieldPaths(resolved, undefined, message);
+    expect(refineFieldsFromPaths(requested)).toEqual([
+      "id",
+      { thread: [{ title: ["text"] }] },
+    ]);
+    expect(
+      rowValueAtPath(
+        { thread: { title: { text: "Live inbox title" } } },
+        resolved[0]?.field ?? "",
+      ),
+    ).toBe("Live inbox title");
+  });
+
+  test("a custom renderer keeps its relation field but still selects the representation", () => {
     const [rendered] = columnsWithMetadataDefaults<Row>(
       [{ field: "product", render: () => null }],
       metadata,
       schema,
     );
     expect(rendered?.field).toBe("product");
+    expect(rendered?.selectionPaths).toEqual([
+      "product.id",
+      "product.display_name",
+    ]);
   });
 });
 

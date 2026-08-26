@@ -40,6 +40,8 @@ const listRows = vi.hoisted(() => ({
   ] as Row[],
 }));
 
+const listOptions = vi.hoisted(() => [] as unknown[]);
+
 vi.mock("@refinedev/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@refinedev/core")>();
   return {
@@ -47,8 +49,10 @@ vi.mock("@refinedev/core", async (importOriginal) => {
     useInvalidate: () => vi.fn(async () => undefined),
     useList: (options?: {
       resource?: string;
+      filters?: readonly unknown[];
       queryOptions?: { enabled?: boolean };
     }) => {
+      listOptions.push(options);
       const enabled = options?.queryOptions?.enabled !== false;
       const rows =
         options?.resource === "journals"
@@ -121,14 +125,21 @@ const registerPaymentArgs: readonly ActionArg[] = [
     argKind: "relationList",
     resource: "Invoice",
     label: "Invoices",
+    filters: [{ field: "status", operator: "eq", value: "submitted" }],
   },
   {
     name: "journal",
     argKind: "relation",
     resource: "Journal",
     label: "Journal",
+    filters: [{ field: "kind", operator: "eq", value: "bank" }],
   },
-  { name: "date", widget: "text", label: "Date" },
+  {
+    name: "date",
+    widget: "text",
+    label: "Date",
+    defaultValue: "2026-07-05",
+  },
   { name: "amount", widget: "text", label: "Amount", optional: true },
 ];
 
@@ -194,7 +205,10 @@ function renderDialog(action: ActionDescriptor): void {
 
 describe("ActionFormDialog", () => {
   afterEach(() => cleanup());
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listOptions.length = 0;
+  });
 
   test("prefills the relation list from context and renders every arg", async () => {
     renderDialog(registerPaymentAction(vi.fn()));
@@ -206,7 +220,35 @@ describe("ActionFormDialog", () => {
     expect(screen.getByRole("button", { name: "Journal" })).toBeTruthy();
     // The scalars render editable inputs.
     expect(screen.getByRole("textbox", { name: "Date" })).toBeTruthy();
+    expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Date" }).value)
+      .toBe("2026-07-05");
     expect(screen.getByRole("textbox", { name: "Amount" })).toBeTruthy();
+  });
+
+  test("forwards a relation argument's declared filters to its option query", async () => {
+    renderDialog(registerPaymentAction(vi.fn()));
+
+    await pickJournal("Bank Journal");
+
+    expect(listOptions).toContainEqual(
+      expect.objectContaining({
+        resource: "journals",
+        filters: [{ field: "kind", operator: "eq", value: "bank" }],
+      }),
+    );
+  });
+
+  test("forwards a relation-list argument's declared filters to its option query", async () => {
+    renderDialog(registerPaymentAction(vi.fn()));
+
+    await screen.findByText("INV-1");
+
+    expect(listOptions).toContainEqual(
+      expect.objectContaining({
+        resource: "invoices",
+        filters: [{ field: "status", operator: "eq", value: "submitted" }],
+      }),
+    );
   });
 
   test("binds an in-band field error, stays open, then closes and toasts on success", async () => {
