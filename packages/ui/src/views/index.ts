@@ -37,7 +37,7 @@ export {
   RelationPicker,
   type RelationPickerProps,
   type RelationCreateConfig,
-} from "./RelationPicker";
+} from "./relation/RelationPicker";
 export {
   LabeledDescriptorField,
   MutationDialog,
@@ -48,8 +48,8 @@ export {
   type MutationDialogRelation,
   type MutationDialogValues,
   mutationDialogValueCodecs,
-} from "./MutationDialog";
-export { RowsField, type RowsValue } from "./RowsField";
+} from "./form/MutationDialog";
+export { RowsField, type RowsValue } from "./form/RowsField";
 export {
   deserializeFormSpec,
   formSpecInitialValues,
@@ -57,16 +57,16 @@ export {
   type FormSpecFieldDescriptor,
   type FormSpecFieldType,
   type FormSpecRelationCreate,
-} from "./form-spec";
+} from "./form/form-spec";
 export {
   ActionFormDialog,
   type ActionFormDialogProps,
-} from "./ActionFormDialog";
+} from "./form/ActionFormDialog";
 export {
   useActionForm,
   type UseActionFormOptions,
   type UseActionFormResult,
-} from "./use-action-form";
+} from "./form/use-action-form";
 export {
   useDottedPathFieldErrors,
   lineRowErrorsFromDottedPaths,
@@ -75,17 +75,17 @@ export {
   type DottedPathFieldErrorMap,
   type DottedPathFieldErrors,
   type ValidationErrors,
-} from "./validation-errors";
+} from "./form/validation-errors";
 export {
   FieldDescriptorControl,
   type FieldDescriptorControlProps,
-} from "./field-descriptor-control";
+} from "./form/field-descriptor-control";
 export {
   useEnumOptions,
   useImplCategory,
   useImplChoices,
   useImplPrefill,
-} from "./enum-options";
+} from "./relation/enum-options";
 export {
   GraphView,
   type GraphViewEdge,
@@ -97,20 +97,20 @@ export {
   type GraphViewConnection,
   type GraphViewPosition,
 } from "./GraphView";
-export { DashboardView, type DashboardViewProps } from "./DashboardView";
-export { TreeView, type TreeViewProps } from "./TreeView";
+export { DashboardView, type DashboardViewProps } from "./dashboard/DashboardView";
+export { TreeView, type TreeViewProps } from "./tree/TreeView";
 export {
   ScopedExplorerPane,
   type ScopedExplorerController,
   type ScopedExplorerPaneProps,
   type ScopedExplorerRootPicker,
-} from "./ScopedExplorerPane";
+} from "./tree/ScopedExplorerPane";
 export {
   useScopedTreeExplorer,
   type ScopedTreeExplorerController,
   type ScopedTreeExplorerOption,
   type UseScopedTreeExplorerOptions,
-} from "./useScopedTreeExplorer";
+} from "./tree/useScopedTreeExplorer";
 export { GalleryView, type GalleryViewProps } from "./GalleryView";
 export { TimelineView, type TimelineViewProps } from "./TimelineView";
 export {
@@ -119,7 +119,7 @@ export {
   type CalendarViewMode,
   type CalendarWindow,
   type Occurrence,
-} from "./CalendarView";
+} from "./calendar/CalendarView";
 export {
   useCalendarWindow,
   calendarWindowBounds,
@@ -128,12 +128,12 @@ export {
   type CalendarWindowBounds,
   type CalendarWindowSource,
   type UseCalendarWindowResult,
-} from "./use-calendar-window";
+} from "./calendar/use-calendar-window";
 export {
   CalendarCollectionSurface,
   type CalendarCollectionSurfaceProps,
   type CalendarWindowFetch,
-} from "./calendar-collection-surface";
+} from "./calendar/calendar-collection-surface";
 export {
   Tree,
   FolderTree,
@@ -143,7 +143,7 @@ export {
   type FolderTreeProps,
 } from "../ui/tree";
 export { Metric, type MetricProps } from "./dashboard/Metric";
-export { Form, type FormProps } from "./Form";
+export { Form, type FormProps } from "./form/Form";
 export {
   FormView,
   FORM_VIEW_RECORD_ACTIONS_SLOT,
@@ -159,13 +159,13 @@ export {
   type RecordPanelContext,
   type RecordToolbarContext,
   type RecordTabDescriptor,
-} from "./FormView";
+} from "./form/FormView";
 export {
   RecordChromeProvider,
   useRecordChromeContext,
   type RecordChromeContext,
 } from "./record-chrome-context";
-export { EditableLines, type EditableLinesProps } from "./EditableLines";
+export { EditableLines, type EditableLinesProps } from "./form/EditableLines";
 export {
   diffLines,
   duplicateLineRow,
@@ -175,7 +175,7 @@ export {
   recordLinesToRows,
   type LineDiff,
   type LineDiffConfig,
-} from "./editable-lines";
+} from "./form/editable-lines";
 export {
   ResourceList,
   ResourceCreate,
@@ -199,11 +199,11 @@ export {
 export {
   DeletePreviewDialog,
   type DeletePreviewDialogProps,
-} from "./DeletePreviewDialog";
+} from "./tree/DeletePreviewDialog";
 export {
   DeletePreviewTree,
   type DeletePreviewTreeProps,
-} from "./DeletePreviewTree";
+} from "./tree/DeletePreviewTree";
 export { useBulkDelete, type UseBulkDeleteResult } from "./useBulkDelete";
 export {
   recordActionId,
@@ -229,7 +229,7 @@ export {
   useRelationFacets,
   type RelationFacets,
   type RelationFacetOptions,
-} from "./relation-facet";
+} from "./relation/relation-facet";
 export {
   useRelationOptions,
   relationOptionsFromRows,
@@ -237,7 +237,7 @@ export {
   type RelationOptionsConfig,
   type RelationOptionsList,
   type RelationOptionsResult,
-} from "./relation-options";
+} from "./relation/relation-options";
 export * from "./resource-view-model";
 export * from "./resource-view-context";
 export type { StringIdRow } from "./resource-view-surface";

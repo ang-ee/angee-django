@@ -93,8 +93,8 @@ interface DynamicI18nKeyFamily {
 const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
   frameworkCriticalExport("resourcePageRoutes", "@angee/app", "src/define-base-addon.ts"),
   frameworkCriticalExport("expectValidBaseAddon", "@angee/app", "src/testing.tsx"),
-  frameworkCriticalExport("MutationDialog", "@angee/ui", "src/views/MutationDialog.tsx"),
-  frameworkCriticalExport("ScopedExplorerPane", "@angee/ui", "src/views/ScopedExplorerPane.tsx"),
+  frameworkCriticalExport("MutationDialog", "@angee/ui", "src/views/form/MutationDialog.tsx"),
+  frameworkCriticalExport("ScopedExplorerPane", "@angee/ui", "src/views/tree/ScopedExplorerPane.tsx"),
   frameworkCriticalExport("PrimaryPanePublisher", "@angee/ui", "src/layouts/primary-pane-context.tsx"),
   frameworkCriticalExport("useLatestRef", "@angee/ui", "src/lib/use-latest-ref.ts"),
   frameworkCriticalExport("useAngeeDeletePreview", "@angee/refine", "src/dialect/hooks.tsx"),

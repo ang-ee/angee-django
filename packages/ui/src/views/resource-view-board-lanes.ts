@@ -18,7 +18,7 @@ import type { RelationFieldInfo } from "./model-metadata-defaults";
 import {
   relationSelectedOption,
   useRelationOptions,
-} from "./relation-options";
+} from "./relation/relation-options";
 import { leafTableRows } from "./resource-view-codecs";
 import { readPath, type RowGroup } from "./resource-view-list-body";
 import type { BoardLaneSource } from "./resource-view-types";

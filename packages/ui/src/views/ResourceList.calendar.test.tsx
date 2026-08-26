@@ -4,7 +4,7 @@ import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { CalendarViewSpec } from "./resource-view-types";
-import type { FormViewProps } from "./FormView";
+import type { FormViewProps } from "./form/FormView";
 import type { ListViewProps } from "./resource-view-types";
 import type { ResourceListCalendarSpec } from "./ResourceList";
 
@@ -28,7 +28,7 @@ vi.mock("./ListView", () => ({
   },
 }));
 
-vi.mock("./FormView", () => ({
+vi.mock("./form/FormView", () => ({
   FormView: (props: FormViewProps) => {
     captured.formDefaults = props.defaultValues as Record<string, unknown> | undefined;
     return null;

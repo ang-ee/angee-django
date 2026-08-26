@@ -25,8 +25,8 @@ import type {
   ResourceListSnapshot,
 } from "./resource-view-surface";
 import type { ColumnDescriptor, FacetDescriptor } from "./page";
-import type { Occurrence } from "./CalendarView";
-import type { AnyCalendarWindowSource } from "./use-calendar-window";
+import type { Occurrence } from "./calendar/CalendarView";
+import type { AnyCalendarWindowSource } from "./calendar/use-calendar-window";
 import type { DndPayload } from "../lib/dnd";
 import type { RowActionDeclaration } from "./RowActions";
 

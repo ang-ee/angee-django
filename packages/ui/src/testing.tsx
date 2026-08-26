@@ -3,7 +3,7 @@ import * as React from "react";
 import type {
   MutationDialogProps,
   MutationDialogValues,
-} from "./views/MutationDialog";
+} from "./views/form/MutationDialog";
 
 export type MutationDialogTestDoubleProps = MutationDialogProps<
   Record<string, unknown>,
