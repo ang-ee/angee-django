@@ -179,9 +179,14 @@ example project, so it brings the whole stack up for you.
    curl -fsSL https://angee.ai/install.sh | sh
    ```
 
-   You also need **Docker** (for container Services), **process-compose** (for
-   local Services), and **git** (for git Sources). See the operator's
-   [Getting started](https://docs.angee.ai/guide/getting-started) for details.
+   You also need **Docker** (for container Services — or Colima/OrbStack; the
+   `docker compose` plugin must be present), **process-compose** (for local
+   Services), and **git** (for git Sources). The bundled dev stack also needs
+   **uv** + **Python ≥ 3.14**, **Node ≥ 22.13** + **pnpm** + **npx**, and
+   **libmagic** (the `storage` addon links `python-magic` against it —
+   `brew install libmagic` on macOS). Run `angee doctor` to verify all of them.
+   See the operator's
+   [Getting started](https://docs.angee.ai/cli/getting-started) for details.
 
 3. **Render and bring up a stack.**
 
