@@ -239,17 +239,18 @@ jobs:
     workdir: source://app
     command: ["pnpm", "install"]
 
-  # First-run lifecycle in one command. provision OWNS waiting for postgres (it does
-  # its own wait-for-db), so it declares no depends_on — process-compose starts it
-  # with the stack up and it blocks on the DB itself. --demo loads demo resources;
-  # --force-rebac makes the source permissions.zed the truth on every re-up.
+  # First-run lifecycle in one command. A fresh host seeds its addon dependency
+  # group empty, so the manifest-only bootstrap must fill it and uv must install it
+  # before provision imports Django settings (the otherwise-unreachable fresh-host
+  # deadlock). provision OWNS waiting for postgres, so it declares no depends_on.
+  # --demo loads demo resources; --force-rebac makes permissions.zed authoritative.
   # Bare `uv run`: the rendered project pyproject at the stack root owns framework
   # resolution (django-angee editable, postgres extra baked into the dep) and pins
   # uv's cache to the stack-owned caches/uv — no --project, --extra, or UV_CACHE_DIR.
   provision:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "python", "manage.py", "angee", "provision", "--demo", "--force-rebac"]
+    command: ["sh", "-c", "uv run python -m angee.compose.bootstrap && uv sync && exec uv run python manage.py angee provision --demo --force-rebac"]
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
@@ -356,9 +357,11 @@ services:
   # angee-django backend. The project mounts at /app OVER the image's /app workdir.
   # framework == source runs the deps-only base image and links the framework editable
   # from sources/angee-django at start (also installs psycopg since the base image bakes
-  # deps WITHOUT the postgres extra; --inexact avoids pruning). framework == baked runs a
-  # code-baked runtime image, so it skips the uv sync. provision owns the first-run DAG
-  # and the wait-for-db, so there is no pg-wait loop here.
+  # deps WITHOUT the postgres extra; --inexact avoids pruning). The source sync first
+  # makes the framework bootstrap importable; bootstrap then fills the fresh host's
+  # addon group and the host sync installs it before Django settings load. framework ==
+  # baked runs a code-baked runtime image and skips these syncs. provision owns the
+  # first-run DAG and wait-for-db, so there is no pg-wait loop here.
   django:
     runtime: container
     image: {{ django_image }}
@@ -387,7 +390,7 @@ services:
       - sh
       - "-c"
       - >-
-        {% if framework == "source" %}uv sync --frozen --inexact --extra postgres --project sources/angee-django && {% endif %}python manage.py angee provision --bootstrap-admin
+        {% if framework == "source" %}uv sync --frozen --inexact --extra postgres --project sources/angee-django && python -m angee.compose.bootstrap && uv sync --inexact && {% endif %}python manage.py angee provision --bootstrap-admin
         && CADDY_IP=$$(python -c 'import socket; print(socket.gethostbyname("caddy"))')
         && exec python -m uvicorn angee.asgi:application --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "$$CADDY_IP"
     after: [postgres, redis]
@@ -435,9 +438,9 @@ services:
       CACHE_URL: "{{ redis_url }}"
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
       {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
-    # In source mode each container runs its own uv sync before importing psycopg — a
-    # known per-container startup cost. Then wait for django's migrations (healthchecks
-    # are deferred) and exec celery.
+    # In source mode each container first links the framework so it can import psycopg,
+    # then waits for django's migrations. That barrier also guarantees django projected
+    # the fresh host's addon group; sync it into this container's own venv before celery.
     command:
       - sh
       - "-c"
@@ -448,7 +451,7 @@ services:
         [ "$$n" -ge 300 ] && { echo 'django migrations not ready after 300s:' >&2; cat /tmp/migratewait.err >&2; exit 1; };
         echo "waiting for django migrations ($$n/300)..."; sleep 1;
         done;
-        exec celery -A angee.jobs.celery:app {% if role == "beat" %}beat{% else %}worker{% endif %}{% if role != "worker" and role != "beat" %} -Q {{ role }} --pool threads --concurrency 8{% endif %} --loglevel=INFO
+        {% if framework == "source" %}uv sync --inexact; {% endif %}exec celery -A angee.jobs.celery:app {% if role == "beat" %}beat{% else %}worker{% endif %}{% if role != "worker" and role != "beat" %} -Q {{ role }} --pool threads --concurrency 8{% endif %} --loglevel=INFO
     after: [django, redis]
 {% endif %}
 {% endif %}{% endfor %}

@@ -492,8 +492,8 @@ def test_local_stack_copier_contract() -> None:
     assert manifest["caddy_image"]["default"] == "caddy:2.9-alpine"
 
 
-def test_local_django_source_mode_links_framework_editable_on_base_image() -> None:
-    """Default source mode runs the deps-only base image and links the checkout at start."""
+def test_local_django_source_mode_bootstraps_fresh_host_dependencies() -> None:
+    """Source containers project and install addon deps before importing Django apps."""
 
     stack = _render_local_stack(framework="source")
     django = stack["services"]["django"]
@@ -501,7 +501,11 @@ def test_local_django_source_mode_links_framework_editable_on_base_image() -> No
     assert django["image"] == "ghcr.io/ang-ee/django-angee-base:latest"
     command = django["command"][-1]
     assert "uv sync --frozen --inexact --extra postgres --project sources/angee-django" in command
+    assert "python -m angee.compose.bootstrap" in command
+    assert "uv sync --inexact" in command
     assert "python manage.py angee provision --bootstrap-admin" in command
+    assert command.index("python -m angee.compose.bootstrap") < command.index("uv sync --inexact")
+    assert command.index("uv sync --inexact") < command.index("python manage.py angee provision")
     assert "exec python -m uvicorn angee.asgi:application --host 0.0.0.0 --port 8000" in command
     # The PYTHONPATH hack is deleted — the editable link owns the framework on sys.path.
     assert "PYTHONPATH" not in django["env"]
@@ -512,6 +516,8 @@ def test_local_django_source_mode_links_framework_editable_on_base_image() -> No
         assert service["image"] == "ghcr.io/ang-ee/django-angee-base:latest"
         assert "PYTHONPATH" not in service["env"]
         assert "uv sync --frozen --inexact --extra postgres --project sources/angee-django" in service["command"][-1]
+        assert service["command"][-1].index("done;") < service["command"][-1].index("uv sync --inexact")
+        assert service["command"][-1].index("uv sync --inexact") < service["command"][-1].index("exec celery")
 
 
 def test_local_django_baked_mode_skips_uv_sync() -> None:
@@ -664,6 +670,11 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
         "angee.agents",
         "angee.knowledge",
         "angee.workflows",
+        "angee.work",
+        "angee.intake",
+        "angee.money",
+        "angee.proposals",
+        "angee.portfolio",
         "angee.messaging_integrate_whatsapp",
         "angee.messaging_integrate_telegram",
         "angee.messaging_integrate_matrix",
@@ -700,8 +711,12 @@ def test_dev_stack_has_exactly_the_four_lifecycle_jobs() -> None:
     stack = _render_dev_stack()
 
     assert set(stack["jobs"]) == {"deps", "provision", "operator-schema", "codegen"}
-    provision = " ".join(stack["jobs"]["provision"]["command"])
-    assert "manage.py angee provision --demo --force-rebac" in provision
+    assert stack["jobs"]["provision"]["command"] == [
+        "sh",
+        "-c",
+        "uv run python -m angee.compose.bootstrap && uv sync "
+        "&& exec uv run python manage.py angee provision --demo --force-rebac",
+    ]
     assert stack["jobs"]["provision"]["workdir"] == "source://app"
     assert stack["jobs"]["provision"]["env"]["ANGEE_PROJECT_DIR"] == "."
     # provision has no depends_on — it owns waiting for the DB itself.
@@ -793,16 +808,23 @@ def test_dev_stack_runs_bare_uv_against_the_project_root_pyproject() -> None:
 
     The chained projects/web pyproject resolves django-angee editable from the
     framework slot (postgres extra baked into the dep) and pins uv's cache to the
-    stack-owned caches/uv — so every process command is bare ``uv run``: no
-    ``--project``, no ``--extra``, no UV_CACHE_DIR override, in any layout.
+    stack-owned caches/uv — so every uv invocation is bare: no ``--project``, no
+    ``--extra``, no UV_CACHE_DIR override, in any layout. Provision uses a shell
+    only to sequence the manifest bootstrap and its follow-up sync.
     """
 
     stack = _render_dev_stack()  # operator-rewritten defaults
 
     assert stack["sources"]["app"]["path"] == "."
     assert stack["sources"]["framework"]["path"] == "workspaces/src/angee-django"
+    provision = stack["jobs"]["provision"]
+    assert provision["workdir"] == "source://app"
+    assert provision["command"][:2] == ["sh", "-c"]
+    assert "--project" not in provision["command"][-1]
+    assert "--extra" not in provision["command"][-1]
+    assert "UV_CACHE_DIR" not in provision.get("env", {})
+
     for node in (
-        stack["jobs"]["provision"],
         stack["jobs"]["operator-schema"],
         stack["services"]["django"],
         stack["services"]["celery-worker"],
@@ -931,8 +953,8 @@ def test_dev_stack_keeps_absolute_source_paths_verbatim() -> None:
     assert stack["sources"]["framework"]["path"] == "/opt/angee-django"
     # The rendered pyproject (whose framework_source_path follows framework_path)
     # owns resolution even for an external checkout — commands stay bare `uv run`.
-    assert stack["jobs"]["provision"]["command"][:2] == ["uv", "run"]
-    assert "--project" not in stack["jobs"]["provision"]["command"]
+    assert stack["jobs"]["provision"]["command"][:2] == ["sh", "-c"]
+    assert "--project" not in stack["jobs"]["provision"]["command"][-1]
 
 
 def test_dev_stack_keeps_stack_answers_separate_from_workspace_answers() -> None:

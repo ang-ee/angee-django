@@ -41,6 +41,13 @@ INSTALLED_APPS:
   - angee.messaging
 {% if addons_profile == "full" %}
   - angee.projects
+  # Product-management suite. Keep each web-bearing top-level addon explicit so
+  # full-profile codegen sees every authored GraphQL document root.
+  - angee.work
+  - angee.intake
+  - angee.money
+  - angee.proposals
+  - angee.portfolio
   - angee.messaging_integrate_imap
   - angee.nexus
   - angee.spaces
