@@ -2,7 +2,7 @@
 
 This is the front door. Read it once, end to end, and you will know what Angee
 is, what you can build with it, how much exists today, and exactly what to run
-once you have cloned it. Everything here links out to the doc that
+on a fresh machine. Everything here links out to the doc that
 owns the detail — this page stays the map, not the territory.
 
 ## What is Angee?
@@ -153,57 +153,53 @@ run a business-critical product on unattended.
 
 ## How do I get it?
 
-Angee is open source under the **LGPL-3.0** license — clone it, no invitation
-needed. The framework, base addons, and default Host all live in one repository:
-
-- **[`ang-ee/angee-django`](https://github.com/ang-ee/angee-django)** — the
-  framework, base addons, and default Host (the Django / React Runtime).
-
-The operator and CLI install as a binary (below); you do not need to clone them.
+Angee is open source under the **LGPL-3.0** license. The operator installs as a
+binary; its default template knows the framework source repositories, so you do
+not clone them by hand. `angee dev` materializes the sources declared by the
+rendered stack.
 
 ## Set it up
 
-Start from the Django / React Runtime; it ships the Stack template and the
-example project, so it brings the whole stack up for you.
+The default `dev` Stack template renders the project host, then `angee dev`
+materializes its framework sources and boots the complete stack.
 
-1. **Clone the framework.**
+1. **Install the `angee` CLI.**
 
    ```sh
-   git clone https://github.com/ang-ee/angee-django.git
-   cd angee-django
+   brew install ang-ee/tap/angee
    ```
 
-2. **Install the `angee` CLI.** From a release:
+   Or use the release installer:
 
    ```sh
-   curl -fsSL https://angee.ai/install.sh | sh
+   curl -fsSL https://raw.githubusercontent.com/ang-ee/angee-operator/main/scripts/install.sh | sh
    ```
 
    You also need **Docker** (for container Services), **process-compose** (for
    local Services), and **git** (for git Sources). See the operator's
-   [Getting started](https://docs.angee.ai/guide/getting-started) for details.
+   [Getting started](https://docs.angee.ai/cli/getting-started) for details.
 
-3. **Render and bring up a stack.**
+2. **Render and bring up a stack.**
 
    Before `angee init`, check for an existing current or ancestor
    `angee.yaml`. If one exists, it already owns this checkout: use that
    `ANGEE_ROOT` — never initialize a stack under a source checkout.
+   On macOS, do not choose a path under `/tmp`: its symlinked path currently
+   trips the operator's persistence check.
 
    ```sh
-   angee init         # render the framework-dev stack (project host at the root)
-   angee dev          # materialize sources + the src workspace, provision, boot
+   angee init myproject   # dev is the default template; add -y for non-interactive use
+   cd myproject
+   angee dev              # materialize sources and boot everything
    ```
 
-   `angee dev` is the only supported way to run the local stack — don't start
-   Django, Vite, Daphne, or workers by hand. The rendered manifest declares the
-   framework repos as sources; `angee dev` clones them, cuts the `src`
-   workspace (every repo a sibling worktree slot), and runs the composed host
-   at the stack root against those slots.
-
-   The other stack layout is a **self-contained instance** you
-   `angee stack init` from the `local` stack template, which runs everything on
-   docker-compose; that is how a downstream project or a shared local platform
-   is run.
+   There is no `--dev` flag: `dev` is the default value of `-t/--template`.
+   `angee dev` is the supported bring-up command for the whole local stack;
+   `angee up` starts container Services only. Don't start Django, Vite, Daphne,
+   or workers by hand. The rendered manifest declares the framework repos as
+   sources; `angee dev` clones them, cuts the `src` workspace (every repo a
+   sibling worktree slot), and runs the composed host at the stack root against
+   those slots.
 
 ### Optional Ollama inference
 
@@ -212,7 +208,8 @@ inference. It is disabled by default because the image and model store are large
 Enable it when rendering the stack:
 
 ```sh
-angee init --input enable_ollama=true --input ollama_port=11434
+angee init myproject --input enable_ollama=true --input ollama_port=11434
+cd myproject
 angee dev
 # In another shell after the stack is up:
 docker compose -f docker-compose.yaml exec ollama ollama pull llama3.2

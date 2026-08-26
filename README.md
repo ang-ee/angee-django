@@ -68,7 +68,8 @@ are.*
 
 - **Python ≥ 3.14** and [uv](https://docs.astral.sh/uv/)
 - **Node ≥ 22.13** and [pnpm](https://pnpm.io/)
-- The **`angee` CLI** — `curl -fsSL https://angee.ai/install.sh | sh`
+- The **`angee` CLI** — `brew install ang-ee/tap/angee`, or use the release
+  installer below
 - **Docker** (container Services), **process-compose** (local Services), and
   **git** (git Sources)
 
@@ -84,13 +85,17 @@ boots. This repository is one of those sources — you normally work on it insid
 a framework-dev stack's `src` workspace, not as a standalone checkout.
 
 ```sh
-curl -fsSL https://angee.ai/install.sh | sh   # the angee CLI, if not already installed
-angee init                                    # render the framework-dev stack
-angee dev                                     # materialize sources + workspaces, boot
+brew install ang-ee/tap/angee      # or: curl -fsSL https://raw.githubusercontent.com/ang-ee/angee-operator/main/scripts/install.sh | sh
+angee init myproject               # dev is the default template; add -y for non-interactive use
+cd myproject
+angee dev                          # materialize sources and boot everything
 ```
 
-`angee dev` is the only supported way to bring the local stack up — never start
-Django, Vite, Daphne, or workers by hand. For the full onboarding path
+On macOS, create the stack in a normal working directory, not under `/tmp`:
+that symlinked path currently fails the operator's persistence check. `angee
+dev` is the only supported way to bring the whole local stack up; `angee up`
+starts container services only. Never start Django, Vite, Daphne, or workers by
+hand. For the full onboarding path
 (one-shot management commands and isolated workspaces), see
 **[Get Started → Set it up](https://docs.angee.ai/guide/getstarted#set-it-up)**.
 
