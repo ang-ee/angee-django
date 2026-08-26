@@ -12,7 +12,7 @@ import type { RelationOption } from "../../widgets/RelationField";
 import {
   formFieldsFromMetadata,
   type RelationFieldInfo,
-} from "../model-metadata-defaults";
+} from "../resource/model-metadata-defaults";
 import { RelationPicker } from "./RelationPicker";
 import { useRelationOptions } from "./relation-options";
 

@@ -3,7 +3,7 @@ import type {
   ModelRelationFilterMode,
 } from "@angee/metadata";
 
-import type { ResourceViewGroup } from "../resource-view-model";
+import type { ResourceViewGroup } from "../resource/resource-view-model";
 import { PAGE_ELEMENT_SLOT } from "./types";
 
 export interface FacetProps {

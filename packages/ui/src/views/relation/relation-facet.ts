@@ -21,21 +21,21 @@ import type {
   ResourceToolbarFilterOption,
   ResourceToolbarGroupOption,
 } from "../../toolbars";
-import type { ResourceViewFilter, ResourceViewGroup } from "../resource-view-model";
+import type { ResourceViewFilter, ResourceViewGroup } from "../resource/resource-view-model";
 import { facetRequestSpec } from "./facet-query";
 import {
   resourceViewGroupToAggregateDimension,
   groupLabelDimension,
   hasuraGroupDimension,
   hasuraGroupOrderForDimensions,
-} from "../resource-view-list-body";
+} from "../resource/resource-view-list-body";
 import {
   resourceFieldGroupLabel,
   relationFieldInfo,
   type RelationFieldInfo,
-} from "../model-metadata-defaults";
+} from "../resource/model-metadata-defaults";
 import type { FacetDescriptor } from "../page";
-import { useGroupOperation } from "../resource-operations";
+import { useGroupOperation } from "../resource/resource-operations";
 
 const RELATION_FACET_OPTION_LIMIT = 200;
 const EMPTY_FILTER_OPTIONS: readonly ResourceToolbarFilterOption[] = [];

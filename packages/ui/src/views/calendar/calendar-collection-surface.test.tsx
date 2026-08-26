@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { CalendarViewProps, Occurrence } from "./CalendarView";
-import type { CalendarViewSpec } from "../resource-view-types";
+import type { CalendarViewSpec } from "../resource/resource-view-types";
 import type { AnyCalendarWindowSource } from "./use-calendar-window";
 
 // Capture the CalendarView props (so the interaction callbacks can be driven
@@ -42,7 +42,7 @@ vi.mock("./use-calendar-window", () => ({
 }));
 
 import { CalendarCollectionSurface } from "./calendar-collection-surface";
-import { ResourceViewProvider, useResourceView } from "../resource-view-context";
+import { ResourceViewProvider, useResourceView } from "../resource/resource-view-context";
 
 const SOURCE = { document: {}, variables: () => ({}), select: () => [] } as
   unknown as AnyCalendarWindowSource;

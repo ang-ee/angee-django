@@ -2,7 +2,7 @@
 // list/form views, their collection⇄record page composition, and aggregate
 // panels. Hosts configure them with descriptors or with the page element DSL.
 
-export { List, type ListComponent, type ListProps } from "./List";
+export { List, type ListComponent, type ListProps } from "./resource/List";
 export {
   ListView,
   type ListViewProps,
@@ -14,13 +14,13 @@ export {
   type ListViewNavigationScope,
   type ResourceListSnapshot,
   type ColumnAlign,
-} from "./ListView";
+} from "./resource/ListView";
 export {
   useListRecordNavigation,
   type UseListRecordNavigationOptions,
   type UseListRecordNavigationResult,
-} from "./use-list-record-navigation";
-export { RowsListView, type RowsListViewProps } from "./RowsListView";
+} from "./resource/use-list-record-navigation";
+export { RowsListView, type RowsListViewProps } from "./resource/RowsListView";
 export {
   defineRowAction,
   rowIdVariables,
@@ -32,7 +32,7 @@ export {
   type RowActionToastCopy,
   type TypedAuthoredRowActionDeclaration,
   type TypedPageRowActionDeclaration,
-} from "./RowActions";
+} from "./resource/RowActions";
 export {
   RelationPicker,
   type RelationPickerProps,
@@ -164,7 +164,7 @@ export {
   RecordChromeProvider,
   useRecordChromeContext,
   type RecordChromeContext,
-} from "./record-chrome-context";
+} from "./resource/record-chrome-context";
 export { EditableLines, type EditableLinesProps } from "./form/EditableLines";
 export {
   diffLines,
@@ -189,13 +189,13 @@ export {
   type DrawerResourceListProps,
   type ResourceRecordPlacement,
   type RecordSmartButtonDescriptor,
-} from "./ResourceList";
-export { useRouteRecordId } from "./resource-routing";
+} from "./resource/ResourceList";
+export { useRouteRecordId } from "./resource/resource-routing";
 export {
   AggregatePanel,
   type AggregatePanelProps,
   type AggregateDimension,
-} from "./AggregatePanel";
+} from "./resource/AggregatePanel";
 export {
   DeletePreviewDialog,
   type DeletePreviewDialogProps,
@@ -204,7 +204,7 @@ export {
   DeletePreviewTree,
   type DeletePreviewTreeProps,
 } from "./tree/DeletePreviewTree";
-export { useBulkDelete, type UseBulkDeleteResult } from "./useBulkDelete";
+export { useBulkDelete, type UseBulkDeleteResult } from "./resource/useBulkDelete";
 export {
   recordActionId,
   useActionResultMutation,
@@ -217,14 +217,14 @@ export {
   type UseActionResultMutationOptions,
   type UseRecordActionOptions,
   type UseRecordChromeActionMutationOptions,
-} from "./record-action";
-export { useAuthoredResourceMutation } from "./authored-resource-mutation";
+} from "./resource/record-action";
+export { useAuthoredResourceMutation } from "./resource/authored-resource-mutation";
 export {
   useActionResultRun,
   type ActionResultRun,
   type ActionResultRunOptions,
-} from "./action-result-run";
-export { RecordPager, type RecordNavigation } from "./RecordPager";
+} from "./resource/action-result-run";
+export { RecordPager, type RecordNavigation } from "./resource/RecordPager";
 export {
   useRelationFacets,
   type RelationFacets,
@@ -238,9 +238,9 @@ export {
   type RelationOptionsList,
   type RelationOptionsResult,
 } from "./relation/relation-options";
-export * from "./resource-view-model";
-export * from "./resource-view-context";
-export type { StringIdRow } from "./resource-view-surface";
+export * from "./resource/resource-view-model";
+export * from "./resource/resource-view-context";
+export type { StringIdRow } from "./resource/resource-view-surface";
 export {
   Action,
   Column,

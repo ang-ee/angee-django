@@ -20,7 +20,7 @@ import type { RelationOption } from "../../widgets/RelationField";
 import { EditableLines } from "./EditableLines";
 import { FieldDescriptorControl } from "./field-descriptor-control";
 import type { FieldDescriptor } from "../page";
-import type { RelationFieldInfo } from "../model-metadata-defaults";
+import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { relationSelectedOption } from "../relation/relation-options";
 import {

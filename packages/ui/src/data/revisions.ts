@@ -6,7 +6,7 @@ import {
   type UseAngeeRevisionsResult,
 } from "@angee/refine";
 import type { ResourceTypeName } from "@angee/metadata";
-import { useRevisionOperation } from "../views/resource-operations";
+import { useRevisionOperation } from "../views/resource/resource-operations";
 
 export interface UseResourceRevisionsOptions {
   enabled?: boolean;

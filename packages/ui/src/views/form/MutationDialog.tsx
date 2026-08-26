@@ -22,7 +22,7 @@ import { useUiT } from "../../i18n";
 import { relationValueId } from "../../widgets/types";
 import { FieldDescriptorControl } from "./field-descriptor-control";
 import type { FormSpecFieldDescriptor } from "./form-spec";
-import { relationFieldInfoForResource } from "../model-metadata-defaults";
+import { relationFieldInfoForResource } from "../resource/model-metadata-defaults";
 import { RelationPicker, type RelationCreateConfig } from "../relation/RelationPicker";
 import { useRelationOptions } from "../relation/relation-options";
 import type { FieldDescriptor } from "../page";

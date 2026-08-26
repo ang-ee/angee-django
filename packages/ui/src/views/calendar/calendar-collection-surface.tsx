@@ -18,15 +18,15 @@ import {
   calendarPeriodTitle,
   shiftCalendarAnchor,
 } from "./calendar-view-controls";
-import type { ResourceViewContextValue } from "../resource-view-context";
+import type { ResourceViewContextValue } from "../resource/resource-view-context";
 import {
   DEFAULT_RESOURCE_VIEW_PAGE_SIZE,
   todayCalendarAnchor,
   type ResourceViewKind,
-} from "../resource-view-model";
-import type { CalendarViewSpec } from "../resource-view-types";
-import { ResourceListFrame } from "../ResourceListFrame";
-import { useResourceToolbarProps } from "../resource-toolbar-props";
+} from "../resource/resource-view-model";
+import type { CalendarViewSpec } from "../resource/resource-view-types";
+import { ResourceListFrame } from "../resource/ResourceListFrame";
+import { useResourceToolbarProps } from "../resource/resource-toolbar-props";
 
 // The windowed-collection surface at the `ListView` seam — a component boundary
 // beside the client/grouped/server bodies, so the calendar's window-keyed fetch

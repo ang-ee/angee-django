@@ -4,11 +4,11 @@ import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { LazyBoundary } from "../../fragments/LazyBoundary";
 import { LoadingPanel } from "../../fragments/LoadingPanel";
 import { useUiT } from "../../i18n";
-import type { CalendarViewMode } from "../resource-view-model";
+import type { CalendarViewMode } from "../resource/resource-view-model";
 
 // The window mode is a family fact (`resource-view-model` owns `mode`/`anchor`);
 // the View re-exports the name so occurrence-shape consumers keep one import.
-export type { CalendarViewMode } from "../resource-view-model";
+export type { CalendarViewMode } from "../resource/resource-view-model";
 
 /**
  * One expanded occurrence — the wire shape a server-side occurrence query

@@ -7,7 +7,7 @@ import {
 import {
   Filter,
   type ResourceViewFilter,
-} from "../resource-view-model";
+} from "../resource/resource-view-model";
 
 export function facetRequestSpec(
   spec: FacetRequestSpec,

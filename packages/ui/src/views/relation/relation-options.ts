@@ -22,8 +22,8 @@ import {
 
 import { useValueStable } from "../../lib/use-value-stable";
 import type { RelationOption } from "../../widgets/RelationField";
-import type { RelationFieldInfo } from "../model-metadata-defaults";
-import { DEFAULT_PAGE_SIZE } from "../page-size";
+import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
+import { DEFAULT_PAGE_SIZE } from "../resource/page-size";
 
 export const RELATION_OPTION_LIMIT = 200;
 

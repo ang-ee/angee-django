@@ -11,7 +11,7 @@ import { titleCase } from "../../lib/titleCase";
 import { relationValueId } from "../../widgets/types";
 import { FieldDescriptorControl } from "./field-descriptor-control";
 import { emptyDialogValue, emptyValueForField } from "./MutationDialog";
-import { relationFieldInfoForResource } from "../model-metadata-defaults";
+import { relationFieldInfoForResource } from "../resource/model-metadata-defaults";
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import { useActionForm } from "./use-action-form";

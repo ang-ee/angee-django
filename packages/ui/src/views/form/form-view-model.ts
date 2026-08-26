@@ -17,7 +17,7 @@ import {
   type FieldDescriptor,
   type GroupDescriptor,
 } from "../page";
-import type { RelationFieldInfo } from "../model-metadata-defaults";
+import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 
 export type FormValues = Record<string, unknown>;
 

@@ -13,7 +13,7 @@ import {
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { useRelationOptions } from "./relation-options";
-import type { RelationFieldInfo } from "../model-metadata-defaults";
+import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 
 const sdkMocks = vi.hoisted(() => ({
   useListOptions: null as {
