@@ -2,7 +2,17 @@
   "name": "@angee/ui",
   "version": "0.0.0",
   "license": "LGPL-3.0-or-later",
-  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ang-ee/angee-react.git",
+    "directory": "ui"
+  },
+  "homepage": "https://docs.angee.ai/react/",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "type": "module",
   "sideEffects": [
     "**/*.css"
@@ -310,10 +320,318 @@
       "import": "./src/data/*.ts"
     }
   },
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./styles.css": "./dist/styles/index.css",
+      "./testing": {
+        "types": "./dist/testing.d.ts",
+        "default": "./dist/testing.js"
+      },
+      "./lib": {
+        "types": "./dist/lib/index.d.ts",
+        "default": "./dist/lib/index.js"
+      },
+      "./lib/slot-outlet": {
+        "types": "./dist/lib/slot-outlet.d.ts",
+        "default": "./dist/lib/slot-outlet.js"
+      },
+      "./lib/variant-context": {
+        "types": "./dist/lib/variant-context.d.ts",
+        "default": "./dist/lib/variant-context.js"
+      },
+      "./lib/*": {
+        "types": "./dist/lib/*.d.ts",
+        "default": "./dist/lib/*.js"
+      },
+      "./chrome/Glyph": {
+        "types": "./dist/chrome/Glyph.d.ts",
+        "default": "./dist/chrome/Glyph.js"
+      },
+      "./chrome/AgentGlyph": {
+        "types": "./dist/chrome/AgentGlyph.d.ts",
+        "default": "./dist/chrome/AgentGlyph.js"
+      },
+      "./chrome/icon-registry": {
+        "types": "./dist/chrome/icon-registry.d.ts",
+        "default": "./dist/chrome/icon-registry.js"
+      },
+      "./i18n": {
+        "types": "./dist/i18n/index.d.ts",
+        "default": "./dist/i18n/index.js"
+      },
+      "./runtime": {
+        "types": "./dist/runtime/index.d.ts",
+        "default": "./dist/runtime/index.js"
+      },
+      "./runtime/make-context": {
+        "types": "./dist/runtime/make-context.d.ts",
+        "default": "./dist/runtime/make-context.js"
+      },
+      "./runtime/contracts": {
+        "types": "./dist/runtime/contracts.d.ts",
+        "default": "./dist/runtime/contracts.js"
+      },
+      "./runtime/*": {
+        "types": "./dist/runtime/*.d.ts",
+        "default": "./dist/runtime/*.js"
+      },
+      "./i18n/en": {
+        "types": "./dist/i18n/en.d.ts",
+        "default": "./dist/i18n/en.js"
+      },
+      "./ui/widget-control": {
+        "types": "./dist/ui/widget-control.d.ts",
+        "default": "./dist/ui/widget-control.js"
+      },
+      "./ui/*": {
+        "types": "./dist/ui/*.d.ts",
+        "default": "./dist/ui/*.js"
+      },
+      "./widgets/index": {
+        "types": "./dist/widgets/index.d.ts",
+        "default": "./dist/widgets/index.js"
+      },
+      "./widgets/codemirror-editor": {
+        "types": "./dist/widgets/codemirror-editor.d.ts",
+        "default": "./dist/widgets/codemirror-editor.js"
+      },
+      "./widgets/date-format": {
+        "types": "./dist/widgets/date-format.d.ts",
+        "default": "./dist/widgets/date-format.js"
+      },
+      "./widgets/label": {
+        "types": "./dist/widgets/label.d.ts",
+        "default": "./dist/widgets/label.js"
+      },
+      "./widgets/markdown-codemirror": {
+        "types": "./dist/widgets/markdown-codemirror.d.ts",
+        "default": "./dist/widgets/markdown-codemirror.js"
+      },
+      "./widgets/status-tones": {
+        "types": "./dist/widgets/status-tones.d.ts",
+        "default": "./dist/widgets/status-tones.js"
+      },
+      "./widgets/types": {
+        "types": "./dist/widgets/types.d.ts",
+        "default": "./dist/widgets/types.js"
+      },
+      "./widgets/*": {
+        "types": "./dist/widgets/*.d.ts",
+        "default": "./dist/widgets/*.js"
+      },
+      "./feedback/index": {
+        "types": "./dist/feedback/index.d.ts",
+        "default": "./dist/feedback/index.js"
+      },
+      "./feedback/error-message": {
+        "types": "./dist/feedback/error-message.d.ts",
+        "default": "./dist/feedback/error-message.js"
+      },
+      "./feedback/refine-notification": {
+        "types": "./dist/feedback/refine-notification.d.ts",
+        "default": "./dist/feedback/refine-notification.js"
+      },
+      "./feedback/use-busy-run": {
+        "types": "./dist/feedback/use-busy-run.d.ts",
+        "default": "./dist/feedback/use-busy-run.js"
+      },
+      "./feedback/*": {
+        "types": "./dist/feedback/*.d.ts",
+        "default": "./dist/feedback/*.js"
+      },
+      "./chrome/app-rail-model": {
+        "types": "./dist/chrome/app-rail-model.d.ts",
+        "default": "./dist/chrome/app-rail-model.js"
+      },
+      "./chrome/app-rail-preferences": {
+        "types": "./dist/chrome/app-rail-preferences.d.ts",
+        "default": "./dist/chrome/app-rail-preferences.js"
+      },
+      "./chrome/index": {
+        "types": "./dist/chrome/index.d.ts",
+        "default": "./dist/chrome/index.js"
+      },
+      "./chrome/menu-tree": {
+        "types": "./dist/chrome/menu-tree.d.ts",
+        "default": "./dist/chrome/menu-tree.js"
+      },
+      "./chrome/refine-menu": {
+        "types": "./dist/chrome/refine-menu.d.ts",
+        "default": "./dist/chrome/refine-menu.js"
+      },
+      "./chrome/*": {
+        "types": "./dist/chrome/*.d.ts",
+        "default": "./dist/chrome/*.js"
+      },
+      "./fragments/index": {
+        "types": "./dist/fragments/index.d.ts",
+        "default": "./dist/fragments/index.js"
+      },
+      "./fragments/*": {
+        "types": "./dist/fragments/*.d.ts",
+        "default": "./dist/fragments/*.js"
+      },
+      "./layouts/index": {
+        "types": "./dist/layouts/index.d.ts",
+        "default": "./dist/layouts/index.js"
+      },
+      "./layouts/slots": {
+        "types": "./dist/layouts/slots.d.ts",
+        "default": "./dist/layouts/slots.js"
+      },
+      "./layouts/*": {
+        "types": "./dist/layouts/*.d.ts",
+        "default": "./dist/layouts/*.js"
+      },
+      "./page/index": {
+        "types": "./dist/page/index.d.ts",
+        "default": "./dist/page/index.js"
+      },
+      "./page/*": {
+        "types": "./dist/page/*.d.ts",
+        "default": "./dist/page/*.js"
+      },
+      "./toolbars/index": {
+        "types": "./dist/toolbars/index.d.ts",
+        "default": "./dist/toolbars/index.js"
+      },
+      "./toolbars/*": {
+        "types": "./dist/toolbars/*.d.ts",
+        "default": "./dist/toolbars/*.js"
+      },
+      "./preview/index": {
+        "types": "./dist/preview/index.d.ts",
+        "default": "./dist/preview/index.js"
+      },
+      "./preview/model": {
+        "types": "./dist/preview/model.d.ts",
+        "default": "./dist/preview/model.js"
+      },
+      "./preview/registry": {
+        "types": "./dist/preview/registry.d.ts",
+        "default": "./dist/preview/registry.js"
+      },
+      "./preview/*": {
+        "types": "./dist/preview/*.d.ts",
+        "default": "./dist/preview/*.js"
+      },
+      "./communication/index": {
+        "types": "./dist/communication/index.d.ts",
+        "default": "./dist/communication/index.js"
+      },
+      "./communication/*": {
+        "types": "./dist/communication/*.d.ts",
+        "default": "./dist/communication/*.js"
+      },
+      "./views/documents": {
+        "types": "./dist/views/documents.d.ts",
+        "default": "./dist/views/documents.js"
+      },
+      "./views/enum-options": {
+        "types": "./dist/views/enum-options.d.ts",
+        "default": "./dist/views/enum-options.js"
+      },
+      "./views/facet-query": {
+        "types": "./dist/views/facet-query.d.ts",
+        "default": "./dist/views/facet-query.js"
+      },
+      "./views/form-view-surface": {
+        "types": "./dist/views/form-view-surface.d.ts",
+        "default": "./dist/views/form-view-surface.js"
+      },
+      "./views/index": {
+        "types": "./dist/views/index.d.ts",
+        "default": "./dist/views/index.js"
+      },
+      "./views/resource-view-types": {
+        "types": "./dist/views/resource-view-types.d.ts",
+        "default": "./dist/views/resource-view-types.js"
+      },
+      "./views/resource-view-utils": {
+        "types": "./dist/views/resource-view-utils.d.ts",
+        "default": "./dist/views/resource-view-utils.js"
+      },
+      "./views/model-metadata-defaults": {
+        "types": "./dist/views/model-metadata-defaults.d.ts",
+        "default": "./dist/views/model-metadata-defaults.js"
+      },
+      "./views/page/index": {
+        "types": "./dist/views/page/index.d.ts",
+        "default": "./dist/views/page/index.js"
+      },
+      "./views/page/types": {
+        "types": "./dist/views/page/types.d.ts",
+        "default": "./dist/views/page/types.js"
+      },
+      "./views/record-action": {
+        "types": "./dist/views/record-action.d.ts",
+        "default": "./dist/views/record-action.js"
+      },
+      "./views/relation-facet": {
+        "types": "./dist/views/relation-facet.d.ts",
+        "default": "./dist/views/relation-facet.js"
+      },
+      "./views/relation-options": {
+        "types": "./dist/views/relation-options.d.ts",
+        "default": "./dist/views/relation-options.js"
+      },
+      "./views/resource-routing": {
+        "types": "./dist/views/resource-routing.d.ts",
+        "default": "./dist/views/resource-routing.js"
+      },
+      "./views/resource-view-model": {
+        "types": "./dist/views/resource-view-model.d.ts",
+        "default": "./dist/views/resource-view-model.js"
+      },
+      "./views/resource-view-surface": {
+        "types": "./dist/views/resource-view-surface.d.ts",
+        "default": "./dist/views/resource-view-surface.js"
+      },
+      "./views/scalar-facet": {
+        "types": "./dist/views/scalar-facet.d.ts",
+        "default": "./dist/views/scalar-facet.js"
+      },
+      "./views/useBulkDelete": {
+        "types": "./dist/views/useBulkDelete.d.ts",
+        "default": "./dist/views/useBulkDelete.js"
+      },
+      "./views/useScopedTreeExplorer": {
+        "types": "./dist/views/useScopedTreeExplorer.d.ts",
+        "default": "./dist/views/useScopedTreeExplorer.js"
+      },
+      "./views/validation-errors": {
+        "types": "./dist/views/validation-errors.d.ts",
+        "default": "./dist/views/validation-errors.js"
+      },
+      "./views/*": {
+        "types": "./dist/views/*.d.ts",
+        "default": "./dist/views/*.js"
+      },
+      "./data/revisions": {
+        "types": "./dist/data/revisions.d.ts",
+        "default": "./dist/data/revisions.js"
+      },
+      "./data/errors": {
+        "types": "./dist/data/errors.d.ts",
+        "default": "./dist/data/errors.js"
+      },
+      "./data/*": {
+        "types": "./dist/data/*.d.ts",
+        "default": "./dist/data/*.js"
+      }
+    }
+  },
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
-    "build": "tsc --noEmit"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R src/styles dist/styles && cp src/views/calendar-surface.css dist/views/calendar-surface.css"
   },
   "dependencies": {
     "@angee/logo-react": "^0.2.1",
