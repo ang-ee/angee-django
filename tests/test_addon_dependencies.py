@@ -51,7 +51,7 @@ def test_composed_addon_dependencies_are_written_idempotently(tmp_path: Path) ->
     )
     addon = _app_config(tmp_path / "fake-addon", "example.fake", ("zeta>=2", "alpha>=1", "alpha>=1"))
     plain_core = _app_config(tmp_path / "fake-core", "angee.base", None)
-    projection = AddonDependencyGroup((addon, plain_core), project_dir=host)
+    projection = AddonDependencyGroup.from_app_configs((addon, plain_core), project_dir=host)
 
     assert projection.write() is AddonDependencyGroupResult.WRITTEN
     first_stat = pyproject.stat()
@@ -78,7 +78,7 @@ def test_composed_addon_dependencies_are_idempotent_when_group_is_not_last(tmp_p
         encoding="utf-8",
     )
     addon = _app_config(tmp_path / "fake-addon", "example.fake_mid_group", ("alpha>=1",))
-    projection = AddonDependencyGroup((addon,), project_dir=host)
+    projection = AddonDependencyGroup.from_app_configs((addon,), project_dir=host)
 
     assert projection.write() is AddonDependencyGroupResult.WRITTEN
     first_write = pyproject.read_bytes()
@@ -93,7 +93,7 @@ def test_composed_addon_dependencies_skip_a_bare_host(tmp_path: Path) -> None:
     host = tmp_path / "host"
     host.mkdir()
 
-    projection = AddonDependencyGroup((addon,), project_dir=host)
+    projection = AddonDependencyGroup.from_app_configs((addon,), project_dir=host)
 
     assert projection.write() is AddonDependencyGroupResult.SKIPPED_NO_PYPROJECT
     assert projection.check() is AddonDependencyGroupResult.SKIPPED_NO_PYPROJECT
@@ -148,4 +148,4 @@ def test_composed_addon_dependency_write_wraps_os_errors(
     monkeypatch.setattr(dependencies_module, "write_block", fail_write)
 
     with pytest.raises(RuntimeError, match="read-only pyproject"):
-        AddonDependencyGroup((addon,), project_dir=host).write()
+        AddonDependencyGroup.from_app_configs((addon,), project_dir=host).write()

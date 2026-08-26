@@ -8,7 +8,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from django.apps import AppConfig
-from hatch_angee import ManifestError, ProjectError, compile_dependencies, parse_manifest, write_block
+from hatch_angee import AddonManifest, ManifestError, ProjectError, compile_dependencies, parse_manifest, write_block
 
 
 class AddonDependencyGroupResult(StrEnum):
@@ -29,18 +29,92 @@ class AddonDependencyGroupResult(StrEnum):
 class AddonDependencyGroup:
     """Project the composed folder addons into the host dependency group.
 
-    The Django app graph owns which apps are composed. A co-located
-    ``addon.toml`` marks a folder addon and owns its dependencies; hatch-angee
-    owns parsing, union compilation, and the round-trip-safe pyproject edit.
-    Plain Django apps, including the framework core, have no manifest and
-    therefore contribute nothing.
+    A co-located ``addon.toml`` marks a folder addon and owns its dependencies;
+    hatch-angee owns parsing, union compilation, discovery, and the
+    round-trip-safe pyproject edit. The normal build adapts the resolved Django
+    app graph through :meth:`from_app_configs`; the pre-Django bootstrap adapts
+    manifest roots through :meth:`from_manifest_roots`. Both paths converge on
+    the same manifest compile/write core. Plain Django apps, including the
+    framework core, have no manifest and therefore contribute nothing.
     """
 
-    def __init__(self, addons: Iterable[AppConfig], *, project_dir: Path | None) -> None:
-        """Store the resolved app graph and host project directory."""
+    def __init__(self, manifests: Iterable[AddonManifest], *, project_dir: Path | None) -> None:
+        """Store the resolved addon manifests and host project directory."""
 
-        self.addons = tuple(addons)
+        self.manifests = tuple(manifests)
         self.project_dir = project_dir
+
+    @classmethod
+    def from_app_configs(
+        cls,
+        addons: Iterable[AppConfig],
+        *,
+        project_dir: Path | None,
+    ) -> AddonDependencyGroup:
+        """Adapt an already-resolved Django app graph into the projector."""
+
+        try:
+            manifests = tuple(
+                parse_manifest(marker)
+                for addon in addons
+                if (marker := Path(addon.path) / "addon.toml").is_file()
+            )
+        except (ManifestError, OSError) as error:
+            raise RuntimeError(str(error)) from error
+        return cls(manifests, project_dir=project_dir)
+
+    @classmethod
+    def from_manifest_roots(
+        cls,
+        roots: Iterable[str],
+        available_manifests: Iterable[AddonManifest],
+        *,
+        project_dir: Path | None,
+    ) -> AddonDependencyGroup:
+        """Resolve root folder addons and their manifest-only dependency closure.
+
+        Discovery order is source precedence, so the first manifest for a name
+        wins just as the first importable addon root does during Django boot.
+        Dependencies without manifests are core or ordinary Django apps and do
+        not contribute to the generated dependency group.
+        """
+
+        manifests_by_name: dict[str, AddonManifest] = {}
+        for manifest in available_manifests:
+            manifests_by_name.setdefault(manifest.name, manifest)
+
+        root_names = tuple(roots)
+        seen_roots: set[str] = set()
+        for root in root_names:
+            if root in seen_roots:
+                raise RuntimeError(f"Duplicate root app {root!r}")
+            seen_roots.add(root)
+
+        ordered: list[AddonManifest] = []
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(name: str) -> None:
+            manifest = manifests_by_name.get(name)
+            if manifest is None or name in visited:
+                return
+            if name in visiting:
+                raise RuntimeError(f"Cycle in app dependencies at {name}")
+            seen_dependencies: set[str] = set()
+            for dependency in manifest.depends_on:
+                if dependency in seen_dependencies:
+                    raise RuntimeError(f"{name} declares duplicate dependency {dependency!r}")
+                seen_dependencies.add(dependency)
+            visiting.add(name)
+            for dependency in sorted(manifest.depends_on):
+                visit(dependency)
+            visiting.remove(name)
+            visited.add(name)
+            ordered.append(manifest)
+
+        for root in root_names:
+            visit(root)
+        return cls(ordered, project_dir=project_dir)
 
     @property
     def pyproject_path(self) -> Path | None:
@@ -51,15 +125,7 @@ class AddonDependencyGroup:
     def compile(self) -> tuple[str, ...]:
         """Compile the enabled folder-addon dependency union without writing."""
 
-        try:
-            manifests = tuple(
-                parse_manifest(marker)
-                for addon in self.addons
-                if (marker := Path(addon.path) / "addon.toml").is_file()
-            )
-            return compile_dependencies(manifests)
-        except (ManifestError, ProjectError, OSError) as error:
-            raise RuntimeError(str(error)) from error
+        return compile_dependencies(self.manifests)
 
     def write(self) -> AddonDependencyGroupResult:
         """Project dependencies and report whether the host changed or was skipped."""

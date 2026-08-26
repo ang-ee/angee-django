@@ -59,6 +59,18 @@ class ProjectContract:
     def compose(self) -> None:
         """Populate ``namespace`` from project settings, defaults, and addon contracts."""
 
+        root = self.load()
+        prepend_import_paths((*self.namespace.get("ANGEE_ADDON_DIRS", ()), root))
+        Composer(self.namespace).compose_settings()
+
+    def load(self) -> Path:
+        """Load project settings and defaults without composing the Django app graph.
+
+        This is the standalone settings seam for pre-Django bootstraps that need
+        project declarations such as ``INSTALLED_APPS`` and
+        ``ANGEE_ADDON_DIRS`` before addon dependencies make the apps importable.
+        """
+
         self._reset_settings()
         root = project_dir()
         self._read_project_env(root)
@@ -69,9 +81,7 @@ class ProjectContract:
         self._load_yaml_settings(project_settings, root)
         self._reject_unexpected_yamlconf_sources(project_settings, root, settings_module)
         self._apply_defaults(project_settings, root)
-
-        prepend_import_paths((*self.namespace.get("ANGEE_ADDON_DIRS", ()), root))
-        Composer(self.namespace).compose_settings()
+        return root
 
     def _read_project_env(self, root: Path) -> None:
         """Load the project-root ``.env`` into the environment, process env winning.

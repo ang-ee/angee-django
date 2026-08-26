@@ -185,9 +185,14 @@ nothing.
 The hatch-angee writer preserves unrelated TOML comments and formatting, writes
 atomically, and leaves an identical file untouched. A bare host with no
 `pyproject.toml` is an explicit build-time skip so framework unit tests and minimal
-Django projects can still emit a runtime. A fresh generated host therefore
-bootstraps in two dependency steps: sync the core, run `manage.py angee build` to
-materialize the addon group, then sync again to install that group.
+Django projects can still emit a runtime. A fresh generated host must bootstrap
+before Django loads addon apps: run `uv sync`, then
+`uv run python -m angee.compose.bootstrap` to resolve the root addons'
+manifest-only dependency closure and materialize the addon group, `uv sync`
+again to install that group, and only then `uv run manage.py angee build`. The
+standalone bootstrap reuses `ProjectContract`'s bounded django-yamlconf loader
+and the same `AddonDependencyGroup` compile/write core as the normal build path;
+it never creates an `AppConfig` or touches Django's app registry.
 
 `ComposeConfig.import_models()` is the Django app-loading hook. In app-populate
 phase 2 it calls `emit_if_stale()` and then imports generated models:

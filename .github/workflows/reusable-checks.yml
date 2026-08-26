@@ -153,6 +153,9 @@ jobs:
       - name: Compose the runtime and SDL (no database needed)
         working-directory: stack
         run: |
+          uv sync
+          uv run python -m angee.compose.bootstrap
+          uv sync
           uv run manage.py angee build
           uv run manage.py schema
       - name: Install the stack JS workspace and generate typed documents

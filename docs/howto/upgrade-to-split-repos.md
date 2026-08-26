@@ -70,8 +70,9 @@ symptom is a context-provider error at runtime ("No QueryClient set",
 
 ```sh
 uv sync                              # bootstrap django-angee
-uv run manage.py angee build         # write the composed addons dependency group
+uv run python -m angee.compose.bootstrap  # write the addons dependency group pre-Django
 uv sync                              # install the generated addons group
+uv run manage.py angee build         # compose the runtime
 pnpm install                         # relink the workspace
 angee dev                            # or restart services
 ```

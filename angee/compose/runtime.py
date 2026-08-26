@@ -196,7 +196,7 @@ class Runtime:
     def addon_dependency_group(self) -> AddonDependencyGroup:
         """Return the dependency projector for this runtime's composed host."""
 
-        return AddonDependencyGroup(self.addons, project_dir=self.project_dir)
+        return AddonDependencyGroup.from_app_configs(self.addons, project_dir=self.project_dir)
 
     def build(self) -> AddonDependencyGroupResult:
         """Emit stale sources, project addon dependencies, then materialize migrations."""
