@@ -2,7 +2,17 @@
   "name": "@angee/refine",
   "version": "0.0.0",
   "license": "LGPL-3.0-or-later",
-  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ang-ee/angee-react.git",
+    "directory": "refine"
+  },
+  "homepage": "https://docs.angee.ai/react/",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "type": "module",
   "sideEffects": false,
   "exports": {
@@ -11,10 +21,21 @@
       "import": "./src/index.ts"
     }
   },
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "build": "tsc --noEmit"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@graphql-typed-document-node/core": "^3.2.0",

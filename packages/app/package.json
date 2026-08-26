@@ -2,7 +2,17 @@
   "name": "@angee/app",
   "version": "0.0.0",
   "license": "LGPL-3.0-or-later",
-  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ang-ee/angee-react.git",
+    "directory": "app"
+  },
+  "homepage": "https://docs.angee.ai/react/",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "type": "module",
   "sideEffects": false,
   "bin": {
@@ -46,10 +56,56 @@
       "import": "./config/vitest.ts"
     }
   },
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "bin": {
+      "angee-web-codegen": "./dist/bin/angee-web-codegen.mjs"
+    },
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./create-app": {
+        "types": "./dist/create-app.d.ts",
+        "default": "./dist/create-app.js"
+      },
+      "./define-addon": {
+        "types": "./dist/define-addon.d.ts",
+        "default": "./dist/define-addon.js"
+      },
+      "./auth": {
+        "types": "./dist/auth/index.d.ts",
+        "default": "./dist/auth/index.js"
+      },
+      "./testing": {
+        "types": "./dist/testing.d.ts",
+        "default": "./dist/testing.js"
+      },
+      "./providers/i18n": {
+        "types": "./dist/providers/i18n.d.ts",
+        "default": "./dist/providers/i18n.js"
+      },
+      "./providers/auth": {
+        "types": "./dist/providers/auth.d.ts",
+        "default": "./dist/providers/auth.js"
+      },
+      "./vite": {
+        "types": "./dist/config/vite.d.ts",
+        "default": "./dist/config/vite.js"
+      },
+      "./vitest": {
+        "types": "./dist/config/vitest.d.ts",
+        "default": "./dist/config/vitest.js"
+      }
+    }
+  },
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
-    "build": "tsc --noEmit"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R dist/src/. dist && rm -rf dist/src && mkdir -p dist/bin && cp bin/angee-web-codegen.mjs dist/bin/angee-web-codegen.mjs"
   },
   "dependencies": {
     "@angee/logo-react": "^0.2.1",
@@ -97,6 +153,7 @@
     "@tanstack/react-router": "^1.170.16",
     "@tanstack/react-table": "^8.21.3",
     "@testing-library/react": "^16.1.0",
+    "@types/node": "^26.0.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "happy-dom": "^20.10.6",
