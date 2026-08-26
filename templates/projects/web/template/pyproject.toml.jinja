@@ -1,8 +1,9 @@
 # This project's Python environment: `uv run manage.py …` from the project root
 # resolves django-angee (and its postgres driver) with no --project flag — uv owns
-# framework location, manage.py stays a thin entrypoint. `angee build` projects
-# addon-owned dependencies, including direct source references, into this host's
-# generated addons group.
+# framework location, manage.py stays a thin entrypoint. Fresh-host sequence:
+# `uv sync` -> `uv run python -m angee.compose.bootstrap` -> `uv sync` ->
+# `manage.py angee build`. The standalone bootstrap projects addon-owned
+# dependencies into the generated group before Django loads them.
 [project]
 name = "{{ project_name }}"
 version = "0.0.0"
