@@ -357,6 +357,11 @@ class RecordBindingManager(AngeeManager):
         if record.pk is None:
             return
         content_type, object_id = canonical_record_target(record)
+        # object_id is an integer column, so a row with a non-integer primary
+        # key (django Session's string key, for one) can never carry bindings —
+        # and coercing its pk into the filter raises on every such delete.
+        if not isinstance(object_id, int):
+            return
         bindings = self.model._base_manager.filter(content_type=content_type, object_id=object_id)
         if not bindings.exists():
             return
