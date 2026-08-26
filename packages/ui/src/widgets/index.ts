@@ -88,7 +88,7 @@ const markdownPreviewWidget = lazyWidget(
  * document lines remain owned by `EditableLines`.
  */
 const rowsWidget = lazyWidget(
-  () => import("../views/RowsField").then((m) => m.rowsWidget),
+  () => import("../views/form/RowsField").then((m) => m.rowsWidget),
   { edit: true },
 );
 

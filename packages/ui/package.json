@@ -223,33 +223,57 @@
       "types": "./src/communication/*.tsx",
       "import": "./src/communication/*.tsx"
     },
+    "./views/DeletePreviewTree": {
+      "types": "./src/views/tree/DeletePreviewTree.tsx",
+      "import": "./src/views/tree/DeletePreviewTree.tsx"
+    },
+    "./views/Form": {
+      "types": "./src/views/form/Form.tsx",
+      "import": "./src/views/form/Form.tsx"
+    },
+    "./views/FormView": {
+      "types": "./src/views/form/FormView.tsx",
+      "import": "./src/views/form/FormView.tsx"
+    },
+    "./views/List": {
+      "types": "./src/views/List.tsx",
+      "import": "./src/views/List.tsx"
+    },
+    "./views/ListView": {
+      "types": "./src/views/ListView.tsx",
+      "import": "./src/views/ListView.tsx"
+    },
+    "./views/RelationPicker": {
+      "types": "./src/views/relation/RelationPicker.tsx",
+      "import": "./src/views/relation/RelationPicker.tsx"
+    },
+    "./views/ResourceList": {
+      "types": "./src/views/ResourceList.tsx",
+      "import": "./src/views/ResourceList.tsx"
+    },
+    "./views/RowsListView": {
+      "types": "./src/views/RowsListView.tsx",
+      "import": "./src/views/RowsListView.tsx"
+    },
     "./views/documents": {
       "types": "./src/views/documents.ts",
       "import": "./src/views/documents.ts"
     },
     "./views/enum-options": {
-      "types": "./src/views/enum-options.ts",
-      "import": "./src/views/enum-options.ts"
+      "types": "./src/views/relation/enum-options.ts",
+      "import": "./src/views/relation/enum-options.ts"
     },
     "./views/facet-query": {
-      "types": "./src/views/facet-query.ts",
-      "import": "./src/views/facet-query.ts"
+      "types": "./src/views/relation/facet-query.ts",
+      "import": "./src/views/relation/facet-query.ts"
     },
     "./views/form-view-surface": {
-      "types": "./src/views/form-view-surface.ts",
-      "import": "./src/views/form-view-surface.ts"
+      "types": "./src/views/form/form-view-surface.ts",
+      "import": "./src/views/form/form-view-surface.ts"
     },
     "./views/index": {
       "types": "./src/views/index.ts",
       "import": "./src/views/index.ts"
-    },
-    "./views/resource-view-types": {
-      "types": "./src/views/resource-view-types.ts",
-      "import": "./src/views/resource-view-types.ts"
-    },
-    "./views/resource-view-utils": {
-      "types": "./src/views/resource-view-utils.ts",
-      "import": "./src/views/resource-view-utils.ts"
     },
     "./views/model-metadata-defaults": {
       "types": "./src/views/model-metadata-defaults.ts",
@@ -268,16 +292,24 @@
       "import": "./src/views/record-action.ts"
     },
     "./views/relation-facet": {
-      "types": "./src/views/relation-facet.ts",
-      "import": "./src/views/relation-facet.ts"
+      "types": "./src/views/relation/relation-facet.ts",
+      "import": "./src/views/relation/relation-facet.ts"
     },
     "./views/relation-options": {
-      "types": "./src/views/relation-options.ts",
-      "import": "./src/views/relation-options.ts"
+      "types": "./src/views/relation/relation-options.ts",
+      "import": "./src/views/relation/relation-options.ts"
     },
     "./views/resource-routing": {
       "types": "./src/views/resource-routing.ts",
       "import": "./src/views/resource-routing.ts"
+    },
+    "./views/resource-view-context": {
+      "types": "./src/views/resource-view-context.tsx",
+      "import": "./src/views/resource-view-context.tsx"
+    },
+    "./views/resource-view-list-body": {
+      "types": "./src/views/resource-view-list-body.tsx",
+      "import": "./src/views/resource-view-list-body.tsx"
     },
     "./views/resource-view-model": {
       "types": "./src/views/resource-view-model.ts",
@@ -287,25 +319,29 @@
       "types": "./src/views/resource-view-surface.ts",
       "import": "./src/views/resource-view-surface.ts"
     },
+    "./views/resource-view-types": {
+      "types": "./src/views/resource-view-types.ts",
+      "import": "./src/views/resource-view-types.ts"
+    },
+    "./views/resource-view-utils": {
+      "types": "./src/views/resource-view-utils.ts",
+      "import": "./src/views/resource-view-utils.ts"
+    },
     "./views/scalar-facet": {
-      "types": "./src/views/scalar-facet.ts",
-      "import": "./src/views/scalar-facet.ts"
+      "types": "./src/views/relation/scalar-facet.ts",
+      "import": "./src/views/relation/scalar-facet.ts"
     },
     "./views/useBulkDelete": {
       "types": "./src/views/useBulkDelete.ts",
       "import": "./src/views/useBulkDelete.ts"
     },
     "./views/useScopedTreeExplorer": {
-      "types": "./src/views/useScopedTreeExplorer.ts",
-      "import": "./src/views/useScopedTreeExplorer.ts"
+      "types": "./src/views/tree/useScopedTreeExplorer.ts",
+      "import": "./src/views/tree/useScopedTreeExplorer.ts"
     },
     "./views/validation-errors": {
-      "types": "./src/views/validation-errors.ts",
-      "import": "./src/views/validation-errors.ts"
-    },
-    "./views/*": {
-      "types": "./src/views/*.tsx",
-      "import": "./src/views/*.tsx"
+      "types": "./src/views/form/validation-errors.ts",
+      "import": "./src/views/form/validation-errors.ts"
     },
     "./data/revisions": {
       "types": "./src/data/revisions.ts",
@@ -530,33 +566,57 @@
         "types": "./dist/communication/*.d.ts",
         "default": "./dist/communication/*.js"
       },
+      "./views/DeletePreviewTree": {
+        "types": "./dist/views/tree/DeletePreviewTree.d.ts",
+        "default": "./dist/views/tree/DeletePreviewTree.js"
+      },
+      "./views/Form": {
+        "types": "./dist/views/form/Form.d.ts",
+        "default": "./dist/views/form/Form.js"
+      },
+      "./views/FormView": {
+        "types": "./dist/views/form/FormView.d.ts",
+        "default": "./dist/views/form/FormView.js"
+      },
+      "./views/List": {
+        "types": "./dist/views/List.d.ts",
+        "default": "./dist/views/List.js"
+      },
+      "./views/ListView": {
+        "types": "./dist/views/ListView.d.ts",
+        "default": "./dist/views/ListView.js"
+      },
+      "./views/RelationPicker": {
+        "types": "./dist/views/relation/RelationPicker.d.ts",
+        "default": "./dist/views/relation/RelationPicker.js"
+      },
+      "./views/ResourceList": {
+        "types": "./dist/views/ResourceList.d.ts",
+        "default": "./dist/views/ResourceList.js"
+      },
+      "./views/RowsListView": {
+        "types": "./dist/views/RowsListView.d.ts",
+        "default": "./dist/views/RowsListView.js"
+      },
       "./views/documents": {
         "types": "./dist/views/documents.d.ts",
         "default": "./dist/views/documents.js"
       },
       "./views/enum-options": {
-        "types": "./dist/views/enum-options.d.ts",
-        "default": "./dist/views/enum-options.js"
+        "types": "./dist/views/relation/enum-options.d.ts",
+        "default": "./dist/views/relation/enum-options.js"
       },
       "./views/facet-query": {
-        "types": "./dist/views/facet-query.d.ts",
-        "default": "./dist/views/facet-query.js"
+        "types": "./dist/views/relation/facet-query.d.ts",
+        "default": "./dist/views/relation/facet-query.js"
       },
       "./views/form-view-surface": {
-        "types": "./dist/views/form-view-surface.d.ts",
-        "default": "./dist/views/form-view-surface.js"
+        "types": "./dist/views/form/form-view-surface.d.ts",
+        "default": "./dist/views/form/form-view-surface.js"
       },
       "./views/index": {
         "types": "./dist/views/index.d.ts",
         "default": "./dist/views/index.js"
-      },
-      "./views/resource-view-types": {
-        "types": "./dist/views/resource-view-types.d.ts",
-        "default": "./dist/views/resource-view-types.js"
-      },
-      "./views/resource-view-utils": {
-        "types": "./dist/views/resource-view-utils.d.ts",
-        "default": "./dist/views/resource-view-utils.js"
       },
       "./views/model-metadata-defaults": {
         "types": "./dist/views/model-metadata-defaults.d.ts",
@@ -575,16 +635,24 @@
         "default": "./dist/views/record-action.js"
       },
       "./views/relation-facet": {
-        "types": "./dist/views/relation-facet.d.ts",
-        "default": "./dist/views/relation-facet.js"
+        "types": "./dist/views/relation/relation-facet.d.ts",
+        "default": "./dist/views/relation/relation-facet.js"
       },
       "./views/relation-options": {
-        "types": "./dist/views/relation-options.d.ts",
-        "default": "./dist/views/relation-options.js"
+        "types": "./dist/views/relation/relation-options.d.ts",
+        "default": "./dist/views/relation/relation-options.js"
       },
       "./views/resource-routing": {
         "types": "./dist/views/resource-routing.d.ts",
         "default": "./dist/views/resource-routing.js"
+      },
+      "./views/resource-view-context": {
+        "types": "./dist/views/resource-view-context.d.ts",
+        "default": "./dist/views/resource-view-context.js"
+      },
+      "./views/resource-view-list-body": {
+        "types": "./dist/views/resource-view-list-body.d.ts",
+        "default": "./dist/views/resource-view-list-body.js"
       },
       "./views/resource-view-model": {
         "types": "./dist/views/resource-view-model.d.ts",
@@ -594,25 +662,29 @@
         "types": "./dist/views/resource-view-surface.d.ts",
         "default": "./dist/views/resource-view-surface.js"
       },
+      "./views/resource-view-types": {
+        "types": "./dist/views/resource-view-types.d.ts",
+        "default": "./dist/views/resource-view-types.js"
+      },
+      "./views/resource-view-utils": {
+        "types": "./dist/views/resource-view-utils.d.ts",
+        "default": "./dist/views/resource-view-utils.js"
+      },
       "./views/scalar-facet": {
-        "types": "./dist/views/scalar-facet.d.ts",
-        "default": "./dist/views/scalar-facet.js"
+        "types": "./dist/views/relation/scalar-facet.d.ts",
+        "default": "./dist/views/relation/scalar-facet.js"
       },
       "./views/useBulkDelete": {
         "types": "./dist/views/useBulkDelete.d.ts",
         "default": "./dist/views/useBulkDelete.js"
       },
       "./views/useScopedTreeExplorer": {
-        "types": "./dist/views/useScopedTreeExplorer.d.ts",
-        "default": "./dist/views/useScopedTreeExplorer.js"
+        "types": "./dist/views/tree/useScopedTreeExplorer.d.ts",
+        "default": "./dist/views/tree/useScopedTreeExplorer.js"
       },
       "./views/validation-errors": {
-        "types": "./dist/views/validation-errors.d.ts",
-        "default": "./dist/views/validation-errors.js"
-      },
-      "./views/*": {
-        "types": "./dist/views/*.d.ts",
-        "default": "./dist/views/*.js"
+        "types": "./dist/views/form/validation-errors.d.ts",
+        "default": "./dist/views/form/validation-errors.js"
       },
       "./data/revisions": {
         "types": "./dist/data/revisions.d.ts",
@@ -631,7 +703,7 @@
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R src/styles dist/styles && cp src/views/calendar-surface.css dist/views/calendar-surface.css"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R src/styles dist/styles && cp src/views/calendar/calendar-surface.css dist/views/calendar/calendar-surface.css"
   },
   "dependencies": {
     "@angee/logo-react": "^0.2.1",

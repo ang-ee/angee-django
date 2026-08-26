@@ -27,8 +27,8 @@ import {
   type ResourceViewGroup,
   type ResourceViewKind,
 } from "./resource-view-model";
-import { CalendarCollectionSurface } from "./calendar-collection-surface";
-import { DeletePreviewDialog } from "./DeletePreviewDialog";
+import { CalendarCollectionSurface } from "./calendar/calendar-collection-surface";
+import { DeletePreviewDialog } from "./tree/DeletePreviewDialog";
 import {
   useClientResourceViewSurface,
   useGroupedResourceViewSurface,
@@ -64,8 +64,8 @@ import {
 } from "./resource-view-utils";
 import { columnsWithMetadataDefaults, relationFieldInfo } from "./model-metadata-defaults";
 import type { ColumnDescriptor } from "./page";
-import { useRelationFacets } from "./relation-facet";
-import { useScalarFacets } from "./scalar-facet";
+import { useRelationFacets } from "./relation/relation-facet";
+import { useScalarFacets } from "./relation/scalar-facet";
 import { useBulkDelete } from "./useBulkDelete";
 import {
   requireDataResource,

@@ -13,19 +13,19 @@ import {
   DialogRoot,
 } from "../ui/dialog";
 import { ControlBandProvider } from "../layouts/ControlBand";
-import { DeletePreviewDialog } from "./DeletePreviewDialog";
+import { DeletePreviewDialog } from "./tree/DeletePreviewDialog";
 import {
   ListView,
   type ListColumn,
   type ListViewProps,
   type ResourceListSnapshot,
 } from "./ListView";
-import { FormView, type FormField, type FormViewProps } from "./FormView";
+import { FormView, type FormField, type FormViewProps } from "./form/FormView";
 import type {
   ListComponent,
   ListProps,
 } from "./List";
-import type { FormProps } from "./Form";
+import type { FormProps } from "./form/Form";
 import { RoutedRecordController } from "./resource-routing";
 import { useBulkDelete } from "./useBulkDelete";
 import {
@@ -42,8 +42,8 @@ import {
   type ResourceViewKind,
 } from "./resource-view-model";
 import type { BoardLaneSource, CalendarViewSpec } from "./resource-view-types";
-import type { Occurrence } from "./CalendarView";
-import type { AnyCalendarWindowSource } from "./use-calendar-window";
+import type { Occurrence } from "./calendar/CalendarView";
+import type { AnyCalendarWindowSource } from "./calendar/use-calendar-window";
 import {
   parsePageActions,
   parsePageColumns,
