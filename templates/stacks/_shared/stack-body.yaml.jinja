@@ -453,7 +453,10 @@ services:
       CACHE_URL: "{{ redis_url }}"
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
       {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
-{% if stack_flavor == "framework" %}    # Sync the framework workspace before waiting for django's migrations.
+{% if stack_flavor == "framework" %}    # Sync the framework workspace (psycopg for the wait probe), wait for django's
+    # migrations — that barrier also guarantees django's bootstrap projected the
+    # fresh host's addon group — then sync AGAIN so this container's venv holds the
+    # addon-owned deps (axes, …) before celery imports the composed settings.
     command:
       - sh
       - "-c"
@@ -464,7 +467,7 @@ services:
         [ "$$n" -ge 300 ] && { echo 'django migrations not ready after 300s:' >&2; cat /tmp/migratewait.err >&2; exit 1; };
         echo "waiting for django migrations ($$n/300)..."; sleep 1;
         done;
-        exec celery -A angee.jobs.celery:app {% if role == "beat" %}beat{% else %}worker{% endif %}{% if role != "worker" and role != "beat" %} -Q {{ role }} --pool threads --concurrency 8{% endif %} --loglevel=INFO{% endif %}{% if stack_flavor == "instance" %}    # In source mode each container first links the framework so it can import psycopg,
+        uv sync --inexact; exec celery -A angee.jobs.celery:app {% if role == "beat" %}beat{% else %}worker{% endif %}{% if role != "worker" and role != "beat" %} -Q {{ role }} --pool threads --concurrency 8{% endif %} --loglevel=INFO{% endif %}{% if stack_flavor == "instance" %}    # In source mode each container first links the framework so it can import psycopg,
     # then waits for django's migrations. That barrier also guarantees django projected
     # the fresh host's addon group; sync it into this container's own venv before celery.
     command:
@@ -554,6 +557,7 @@ services:
       - sh
       - "-c"
       - >-
+        corepack enable pnpm;
         n=0;
         until [ -s caches/js-deps.done ]; do
         n=$$((n+1));
@@ -576,6 +580,7 @@ services:
       - sh
       - "-c"
       - >-
+        corepack enable pnpm;
         n=0;
         until [ -s caches/js-deps.done ]; do
         n=$$((n+1));

@@ -929,7 +929,12 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
     assert django["env"]["DATABASE_URL"] == "postgres://angee:${secret.db-password}@postgres:5432/angee"
     assert django["env"]["ANGEE_OPERATOR_URL"] == "http://host.docker.internal:${ports.operator}"
     for name in ("celery-worker", "celery-beat"):
-        assert "uv sync --inexact; n=0" in stack["services"][name]["command"][-1]
+        celery_command = stack["services"][name]["command"][-1]
+        # Pre-wait sync gives the wait probe psycopg; the post-wait sync installs the
+        # addon group django's bootstrap projected (axes, …) before celery composes.
+        assert "uv sync --inexact; n=0" in celery_command
+        assert celery_command.index("done;") < celery_command.rindex("uv sync --inexact")
+        assert celery_command.rindex("uv sync --inexact") < celery_command.index("exec celery")
 
     frontend = stack["services"]["frontend"]
     assert frontend["image"] == "node:22-bookworm-slim"
@@ -946,6 +951,9 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
 
     storybook = stack["services"]["storybook"]
     assert storybook["image"] == "node:22-bookworm-slim"
+    # Each container enables its own corepack shim — the frontend container's
+    # `corepack enable` does not reach sibling containers.
+    assert storybook["command"][-1].startswith("corepack enable pnpm;")
     assert "until [ -s caches/js-deps.done ]" in storybook["command"][-1]
     assert "exec pnpm --filter @angee/storybook dev --no-open --host 0.0.0.0" in storybook["command"][-1]
     assert storybook["ports"] == ["${ports.storybook}:6006"]
@@ -976,6 +984,7 @@ def test_dev_stack_docker_mode_playwright_services_are_edge_routed() -> None:
     assert server["image"] == "mcr.microsoft.com/playwright:v1.62.1-noble"
     assert server["route"] == {"port": 3100, "auth": "forward"}
     assert "ports" not in server
+    assert server["command"][-1].startswith("corepack enable pnpm;")
     assert "exec pnpm --filter @angee/e2e exec playwright run-server" in server["command"][-1]
     assert server["after"] == ["frontend"]
 
