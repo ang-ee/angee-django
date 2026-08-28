@@ -1,5 +1,7 @@
 import { test, expect, roleStatePath } from "@angee/e2e";
 
+import { OperatorWorkspacesPage } from "../pages/operator-workspaces-page";
+
 // The operator console is admin-only at the server (the daemon connection is
 // null for everyone else). The routes themselves are not UI-gated, so the real
 // boundary is what each role sees once the section pane asks for the connection.
@@ -50,6 +52,89 @@ test.describe("operator console — admin", () => {
     await page.goto("/operator/sources");
     await expect(page.getByText("framework")).toBeVisible({ timeout: 20000 });
     await expect(page.getByText("app")).toBeVisible();
+  });
+
+  test("workspace create lists templates and binds preflight errors to inputs", async ({
+    page,
+  }) => {
+    const workspaces = new OperatorWorkspacesPage(page);
+    await workspaces.gotoReady();
+    await workspaces.openCreate();
+
+    await workspaces.templatePicker.click();
+    await expect(workspaces.templateOption("agent-default")).toBeVisible();
+    await expect(workspaces.templateOption("src")).toBeVisible();
+    await expect(workspaces.templateOption("claude-code")).toHaveCount(0);
+    await workspaces.templateOption("agent-default").click();
+
+    // The shipped workspace templates currently have defaults for every input.
+    // Stub only the daemon's preflight response to pin the dialog's per-field
+    // error rendering; the create/destroy test below uses the real daemon.
+    await page.route("**/operator/graphql", async (route) => {
+      const body = route.request().postDataJSON() as {
+        operationName?: string;
+      } | null;
+      if (body?.operationName !== "OperatorWorkspacePreflight") {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            workspaceCreatePreflight: {
+              ok: false,
+              template: "workspaces/agent-default",
+              resolvedTemplate: "workspaces/agent-default",
+              effectiveInputs: [],
+              missingRequired: ["agent_name"],
+              invalidInputs: [],
+            },
+          },
+        }),
+      });
+    });
+
+    await workspaces.input("agent_name").fill("");
+    await workspaces.createButton.click();
+    await expect(page.getByText("This input is required.")).toBeVisible();
+  });
+
+  test("creates and destroys a light agent-default workspace", async ({ page }) => {
+    const workspaces = new OperatorWorkspacesPage(page);
+    const name = `e2e-agent-workspace-${Date.now().toString(36)}`;
+
+    try {
+      await workspaces.gotoReady();
+      await workspaces.openCreate();
+      await workspaces.chooseTemplate("agent-default");
+      await workspaces.input("Name").fill(name);
+      await workspaces.createButton.click();
+
+      await expect(page).toHaveURL(
+        new RegExp(`/operator/workspaces/${name}$`),
+        { timeout: 30000 },
+      );
+      await expect(page.getByRole("heading", { name })).toBeVisible();
+
+      await workspaces.gotoReady();
+      await expect(workspaces.workspaceRow(name)).toBeVisible();
+      await workspaces.workspaceRow(name).click();
+      await workspaces.confirmDestroy();
+      await expect(page.getByText("Workspace not found")).toBeVisible({
+        timeout: 30000,
+      });
+    } finally {
+      // A failed assertion must not leave the shared e2e stack dirty. If the row
+      // still exists, revisit its detail and use the console's real destroy flow.
+      await workspaces.gotoReady().catch(() => undefined);
+      const row = workspaces.workspaceRow(name);
+      if (await row.isVisible().catch(() => false)) {
+        await row.click();
+        await workspaces.confirmDestroy();
+      }
+    }
   });
 });
 

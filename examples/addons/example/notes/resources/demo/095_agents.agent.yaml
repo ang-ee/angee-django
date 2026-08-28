@@ -1,7 +1,7 @@
-# Two ready-to-provision demo agents over the Anthropic provider owned by
-# agents_integrate_anthropic. One row targets each agent runtime (`runtime_class`), so the
-# demo shows both the claude-code and opencode runtimes end to end. Each is wired to its
-# runtime's model handle and the shared agent-default workspace template. After a fresh seed:
+# Two stopped, ready-to-provision demo agents over the Anthropic provider owned by
+# agents_integrate_anthropic target each agent runtime (`runtime_class`), so the demo shows
+# both claude-code and opencode end to end. A third template row showcases the framework-dev
+# combination without provisioning or cloning it automatically. After a fresh seed:
 #   1. connect a usable Anthropic credential (Providers page), then on each agent set its
 #      `inference_credential` (Agents page) to override the Anthropic addon's placeholder,
 #   2. click Provision on the agent and watch the workspace + service come up.
@@ -30,6 +30,34 @@ rows:
       model: agents_integrate_anthropic.model_claude_demo
       workspace_template: notes.tpl_agent_default
       runtime_class: claude_code
+      lifecycle: draft
+      runtime_status: stopped
+      workspace: ""
+      service: ""
+      last_error: ""
+      mcp_servers:
+        - agents.mcp_angee
+  # Showcase blueprint only: template rows have no clone/use action yet. Its src workspace
+  # and dev-flavour claude-code service are intentionally heavier than the runnable demo.
+  - _xref: agent_framework_dev_template
+    fields:
+      name: Framework Dev Agent
+      owner: iam.user_admin
+      is_template: true
+      instructions: |
+        You are a framework development agent working across the Angee source slots.
+        Keep changes focused, run each repository's checks, and commit only inside the
+        workspace branch when explicitly asked.
+      model: agents_integrate_anthropic.model_claude_demo
+      workspace_template: notes.tpl_src_workspace
+      runtime_class: claude_code
+      service_inputs:
+        flavor: dev
+      lifecycle: draft
+      runtime_status: stopped
+      workspace: ""
+      service: ""
+      last_error: ""
       mcp_servers:
         - agents.mcp_angee
   # The opencode counterpart. No `mcp_servers`: the agent-default workspace writes a
@@ -45,3 +73,8 @@ rows:
       model: agents_integrate_anthropic.model_opencode_demo
       workspace_template: notes.tpl_agent_default
       runtime_class: opencode
+      lifecycle: draft
+      runtime_status: stopped
+      workspace: ""
+      service: ""
+      last_error: ""

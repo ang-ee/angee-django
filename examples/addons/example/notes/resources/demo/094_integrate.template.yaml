@@ -1,4 +1,4 @@
-# The agent-default workspace + service templates, pre-materialised so demo agents can
+# The agent workspaces + service templates, pre-materialised so demo agents can
 # reference them before a source sync runs. Keyed by (source, path)
 # to exactly match what the local-templates source (085) discovers, so a later Refresh
 # upserts these rows instead of duplicating them. `name`/`kind` mirror each template's
@@ -8,6 +8,11 @@
   kind: workspace
   name: agent-default
   path: templates/workspaces/agent-default
+- xref: tpl_src_workspace
+  source: notes.source_local_templates
+  kind: workspace
+  name: src
+  path: templates/workspaces/src
 - xref: tpl_claude_code
   source: notes.source_local_templates
   kind: service
