@@ -60,6 +60,16 @@ export class OperatorWorkspacesPage extends PageObject {
     await expect(this.templatePicker).toContainText(name);
   }
 
+  async openWorkspace(name: string): Promise<void> {
+    // A full navigation, not a list-link click: the detail surface renders
+    // "No record selected" when the route lands before the collection query
+    // settles, so load the detail URL directly.
+    await this.page.goto(`/operator/workspaces/${name}`);
+    await expect(
+      this.page.getByRole("heading", { name }),
+    ).toBeVisible({ timeout: 20000 });
+  }
+
   async confirmDestroy(): Promise<void> {
     await this.destroyButton.click();
     const confirmation = this.page.getByRole("dialog", {
