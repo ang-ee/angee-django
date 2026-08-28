@@ -136,6 +136,12 @@ django_port:
 ui_port:
   type: int
   default: 5173
+# 8090, not 8080: the conventional framework-dev stack owns 8080, and an instance
+# rendered beside it must not share the process-compose control port — a shared
+# port lets one stack's `angee down` stop the other's local processes.
+process_compose_port:
+  type: int
+  default: 8090
 
 # Extra Celery queues, comma-separated; each renders a dedicated `celery-<queue>`
 # worker service (threads pool) beside the shared worker. An addon running

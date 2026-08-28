@@ -286,6 +286,7 @@ def _render_local_stack(*, framework: str = "source", celery_queues: str = "") -
         "framework": framework,
         "instance_name": "angee-local",
         "operator_port": "9000",
+        "process_compose_port": "8090",
         "ui_port": "5173",
         "web_image": "ghcr.io/ang-ee/angee-web:latest",
         "web_path": "web",
@@ -507,6 +508,9 @@ def test_local_stack_copier_contract() -> None:
     assert manifest["framework"]["choices"] == ["source", "baked"]
     assert manifest["django_image"]["default"] == "ghcr.io/ang-ee/django-angee-base:latest"
     assert manifest["caddy_image"]["default"] == "caddy:2.9-alpine"
+    # 8090 ≠ the dev stack's 8080: side-by-side stacks must not share the
+    # process-compose control port (a shared port lets one stack's down stop the other).
+    assert manifest["process_compose_port"]["default"] == 8090
 
 
 def test_local_django_source_mode_bootstraps_fresh_host_dependencies() -> None:
@@ -1079,6 +1083,18 @@ def test_uv_caches_are_stack_owned() -> None:
 
     for gitignore_path in (LOCAL_STACK_GITIGNORE, DEV_STACK_GITIGNORE):
         assert "/caches/" in gitignore_path.read_text(encoding="utf-8")
+
+
+def test_every_stack_leases_its_process_compose_control_port() -> None:
+    """All three cells declare ports.process_compose — the operator daemon is a
+    runtime:local service in every mode, and a stack without an explicit lease
+    falls back to the proccompose backend's shared default port, letting one
+    stack's `angee down` tear down its neighbor's local processes (observed live:
+    a docker-mode scratch stack stopped the resident dev stack's django/vite)."""
+
+    assert _render_dev_stack()["ports"]["process_compose"]["value"] == 8080
+    assert _render_dev_docker_stack()["ports"]["process_compose"]["value"] == 8080
+    assert _render_local_stack()["ports"]["process_compose"]["value"] == 8090
 
 
 def test_secret_key_is_mode_invariant() -> None:

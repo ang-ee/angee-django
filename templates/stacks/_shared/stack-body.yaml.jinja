@@ -90,9 +90,12 @@ ports:
   # The operator daemon's port — services reference it as ${ports.operator}.
   operator: { value: {{ operator_port }}, export_env: ANGEE_OPERATOR_PORT }
   django: { value: {{ django_port }}, export_env: DJANGO_PORT }
-{% if runtime_mode == "process" %}
+{# Unconditional: the operator daemon is runtime:local in ALL modes, and without an #}
+{# explicit lease the proccompose backend falls back to a shared default port — one #}
+{# stack's `angee down` then tears down its neighbor's local processes. #}
   # The operator reads process_compose for the process-compose control port.
   process_compose: { value: {{ process_compose_port }}, export_env: PROCESS_COMPOSE_PORT }
+{% if runtime_mode == "process" %}
   postgres: { value: {{ postgres_port }}, export_env: POSTGRES_PORT }
   redis: { value: {{ redis_port }}, export_env: REDIS_PORT }{# Optional entries share the outer endif line so disabled output stays byte-identical. #}
 {% if enable_ollama %}  ollama: { value: {{ ollama_port }}, export_env: OLLAMA_PORT }{% endif %}{% endif %}
