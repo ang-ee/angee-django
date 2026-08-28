@@ -1,0 +1,255 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+# The stack overlays into the project root (ANGEE_ROOT=.), but the PROJECT owns the
+# canonical .copier-answers.yml (rendered by the chained projects/web). The stack
+# keeps its OWN answers file so it never clobbers the project's.
+_answers_file: .copier-answers.stack.yml
+_preserve_symlinks: true
+
+_message_after_copy: |
+  Framework-dev stack rendered — the root folder IS the stack and a project host
+  (ANGEE_ROOT=.). Runtime mode: "{{ runtime_mode }}".
+
+  - process (default): Django, Celery, Vite, and Storybook run as local processes;
+    Postgres and Redis run as containers with published ports.
+  - docker: Django, Celery, Vite, Storybook, Playwright, Postgres, and Redis run as
+    containers; the operator daemon remains host-local and orchestrates Docker.
+
+  1. Bring it up. `angee dev` materializes the declared source caches, cuts the
+     `src` workspace (every framework repo as a sibling worktree slot), runs the
+     dependency/provision/codegen lifecycle, and boots:
+       angee dev
+  2. Point an external CLI shell at the tokenized local operator (run from this
+     root; `angee secret reveal` reads the stack's secrets backend):
+       export ANGEE_OPERATOR_URL=http://127.0.0.1:{{ operator_port }}
+       export ANGEE_OPERATOR_TOKEN="$(angee secret reveal operator-token)"
+
+  App (process): http://localhost:{{ ui_port }}
+  {% if ingress_domain == "localhost" %}
+  App (docker):  http://<host>:{{ ui_port }}
+  Playwright MCP (docker): http://localhost:{{ edge_port }}/playwright-mcp/mcp
+  Browser server (docker): ws://localhost:{{ edge_port }}/playwright-server/
+  {% else %}
+  UX (docker): https://{{ ingress_domain }}/
+  Agents: wss://{{ ingress_domain }}/<service>/
+  Playwright MCP (docker): https://{{ ingress_domain }}/playwright-mcp/mcp
+  Browser server route (docker): https://{{ ingress_domain }}/playwright-server/
+  Browser WebSocket clients use wss://{{ ingress_domain }}/playwright-server/.
+  {% endif %}
+  The Playwright endpoints are edge-routed with forward-auth; mint a route token
+  via `angee token` before connecting.
+
+  Frame: the framework repos live in workspaces/src/ — see its AGENTS.md.
+
+_angee:
+  schema: 1
+  kind: stack
+  name: dev
+  include_root: "../.."  # pins templates/ in chain snapshots, so ../../_shared/ includes resolve
+  description: >-
+    The framework-dev stack: the root folder IS the stack AND the project host
+    (ANGEE_ROOT=.). It chains the `projects/web` project template to scaffold
+    the host (manage.py, settings.yaml, pyproject, addons, web), then overlays a
+    process- or Docker-mode manifest against the framework source slots the
+    stack's `src` workspace materializes under workspaces/src/. `angee dev` owns
+    the whole bring-up: caches, the src workspace cut, dependency installation,
+    provision/codegen, and boot.
+  inputs:
+    runtime_mode:
+      type: str
+      default: process
+      choices: [process, docker]
+      help: Run framework application services as local processes or Docker containers.
+    django_image:
+      type: str
+      default: "ghcr.io/ang-ee/django-angee-base:latest"
+      help: Image used by Docker-mode Django and Celery services.
+    node_image:
+      type: str
+      default: "node:22-bookworm-slim"
+      help: Image used by Docker-mode frontend and Storybook services.
+    playwright_image:
+      type: str
+      default: "mcr.microsoft.com/playwright:v1.62.1-noble"
+      help: Playwright browser-server image pinned to the @angee/e2e lock version.
+    playwright_mcp_image:
+      type: str
+      default: "mcr.microsoft.com/playwright/mcp:v0.0.76"
+      help: Playwright MCP image pinned to the repo's @playwright/mcp version.
+    ingress_domain:
+      type: str
+      default: localhost
+      help: Public DNS name serves the UX through the Caddy edge at https://<name> with automatic Let's Encrypt TLS on host ports 443/80; localhost keeps plain local HTTP on edge_port.
+  # Chain the project template first so the stack overlays a real host, then this
+  # template adds only the stack overlay (angee.yaml, settings/workspace files).
+  # The ref is relative to THIS template's directory; downstream it can pin a
+  # remote ref, e.g. github.com/ang-ee/angee-templates//templates/projects/web?ref=<tag>.
+  chain:
+    - template: ../../projects/web
+      inputs:
+        project_name: "${inputs.project_name}"
+        web_path: "${inputs.web_path}"
+        addon_namespace: "${inputs.addon_namespace}"
+        addon_installer_backend: operator
+        include_operator_installer: true
+        addons_profile: "${inputs.addons_profile}"
+        include_arp: "${inputs.include_arp}"
+        olm_cxxflags: "${inputs.olm_cxxflags}"
+        framework_workspace: true
+        # The rendered pyproject resolves django-angee editable from the same
+        # slot the stack's processes run, so `uv run manage.py` works bare from
+        # the stack root with no --project flag.
+        framework_source_path: "${inputs.framework_path}"
+
+project_name:
+  type: str
+  default: app
+  help: Machine name of the project host; also the chained project's name.
+
+# Directory + import namespace for this project's own consumer addons (addons/<ns>/,
+# referenced in INSTALLED_APPS as <ns>.<app>). Must be a valid Python identifier.
+# Copier-go does not evaluate Jinja defaults before chain-input substitution, so
+# keep this concrete; override it alongside `project_name` for custom projects.
+addon_namespace:
+  type: str
+  default: app
+  help: Import namespace for this project's consumer addons; a valid Python identifier.
+
+project_path:
+  type: path
+  default: "."
+  help: Path to the project host root. The project IS the stack root (`.`) — the chained projects/web template renders it there. Absolute paths are accepted and kept as-is for an externally-scaffolded host.
+
+framework_path:
+  type: path
+  default: "workspaces/src/angee-django"
+  help: Path to the angee-django source slot — the editable framework checkout the rendered pyproject resolves and the stack's `framework` source points at. Default is the src workspace slot `angee dev` materializes.
+
+web_path:
+  type: str
+  default: "web"
+  help: Path to the project's Vite web package, relative to `project_path`. Its package owns the `dev` and `codegen` scripts for the composed project's generated GraphQL operation types.
+
+runtime_mode:
+  type: str
+  default: process
+  choices: [process, docker]
+  help: Run framework application services as local processes or Docker containers.
+
+django_image:
+  type: str
+  default: "ghcr.io/ang-ee/django-angee-base:latest"
+  help: Image used by Docker-mode Django and Celery services.
+
+node_image:
+  type: str
+  default: "node:22-bookworm-slim"
+  help: Image used by Docker-mode frontend and Storybook services.
+
+playwright_image:
+  type: str
+  default: "mcr.microsoft.com/playwright:v1.62.1-noble"
+  help: Playwright browser-server image pinned to the @angee/e2e lock version.
+
+playwright_mcp_image:
+  type: str
+  default: "mcr.microsoft.com/playwright/mcp:v0.0.76"
+  help: Playwright MCP image pinned to the repo's @playwright/mcp version.
+
+ingress_domain:
+  type: str
+  default: localhost
+  help: Public DNS name serves the UX through the Caddy edge at https://<name> with automatic Let's Encrypt TLS on host ports 443/80; localhost keeps plain local HTTP on edge_port.
+
+# Which addon roster the host composes. `base` renders the consumer scaffold
+# (base addons only); `full` renders the whole platform composition — every
+# base addon plus the messaging bridges and the notes example — and declares
+# the bridges/examples source repos so the stack materializes them.
+addons_profile:
+  type: str
+  default: base
+  choices:
+    - base
+    - full
+  help: Addon roster for the host — base (consumer scaffold) or full (the whole platform composition incl. bridges + examples).
+
+# Stack source name for the src workspace's private work-state slot. Empty (the
+# default) renders no work-state wiring — a clean-machine stack must not depend
+# on a private repository. Framework maintainers set this to their work-state
+# source (and declare that source on the stack) to get `.work/` in the workspace.
+work_state_source:
+  type: str
+  default: ""
+  help: Stack source name for the src workspace's private work-state slot; empty = no work-state.
+
+# Opt-in: arpee, the ARP product (a clean-room Odoo port as arp.* consumer
+# addons). Declares the PRIVATE ang-ee/angee-arp repo as a source with its
+# workspace slot, addon dir, and web globs — the addons stay out of
+# INSTALLED_APPS until installed (the marketplace catalogs and composes them).
+include_arp:
+  type: bool
+  default: false
+  help: Declare the private ang-ee/angee-arp source (arpee's arp.* addons) with its slot, addon dir, and web globs.
+
+olm_cxxflags:
+  type: str
+  default: "-fdelayed-template-parsing"
+  help: CXXFLAGS for python-olm, installed through the Matrix addon's mautrix[encryption] dependency in the generated addons group; empty renders no override — pass empty on GCC/Linux.
+
+django_port:
+  type: int
+  default: 8000
+
+ui_port:
+  type: int
+  default: 5173
+
+storybook_port:
+  type: int
+  default: 6006
+
+operator_port:
+  type: int
+  default: 9000
+
+postgres_port:
+  type: int
+  default: 5433
+
+redis_port:
+  type: int
+  default: 6379
+
+enable_ollama:
+  type: bool
+  default: false
+  help: >-
+    Run the shared Ollama container for local inference. Models are pulled
+    manually and persist under the dev stack.
+
+ollama_port:
+  type: int
+  default: 11434
+  help: >-
+    Host port published by the optional Ollama container. Set the inference
+    provider base_url when this differs from 11434.
+
+# Host port the Caddy edge publishes (ws://localhost:<edge_port>/<service>/). Defaults
+# to 80 for the base stack; workspaces lease a distinct value from operator.port_pool.edge
+# so parallel stacks on one host don't all contend for :80.
+edge_port:
+  type: int
+  default: 80
+
+process_compose_port:
+  type: int
+  default: 8080
+
+# Extra Celery queues, comma-separated; each renders a dedicated `celery-<queue>`
+# worker service (threads pool) beside the shared worker. An addon running
+# long-lived tasks names its queue here — e.g. `whatsapp,telegram` for live
+# channel sessions (messaging_integrate_whatsapp, messaging_integrate_telegram).
+celery_queues:
+  type: str
+  default: ""

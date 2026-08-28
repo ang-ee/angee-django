@@ -1,0 +1,127 @@
+# Dev defaults; a deployment overrides each through the matching YAMLCONF_ env
+# var (django-yamlconf). A plain YAMLCONF_SECRET_KEY replaces the string as-is;
+# DEBUG and ALLOWED_HOSTS carry a `:jsonenv` marker so YAMLCONF_DEBUG /
+# YAMLCONF_ALLOWED_HOSTS are JSON-decoded into a bool / list (see
+# docs/backend/guidelines.md). The `:jsonenv` key is a marker, not a setting.
+SECRET_KEY: {{ project_name }}-dev-key
+
+DEBUG: true
+DEBUG:jsonenv: true
+
+ALLOWED_HOSTS:
+  - "*"
+ALLOWED_HOSTS:jsonenv: true
+
+# {{ project_title }} composes the Angee base addons as its foundation —
+# identity & permissions (iam), tiered data (resources), files (storage),
+# connectors (integrate), partners (parties), messaging, OIDC login, platform,
+# the VCS-backed marketplace tier, and the operator console — and adds its own
+# capabilities as consumer addons under addons/{{ addon_namespace }}/*.
+{% if addons_profile == "full" %}
+# The `full` profile is the whole platform composition: every base addon, the
+# personal-messaging bridges, and the framework notes example — the roster the
+# framework-dev stack composes and CI renders to exercise the composed schema.
+{% endif %}
+INSTALLED_APPS:
+  - angee.iam
+  - angee.resources
+{% if addons_profile == "full" %}
+  - angee.integrate_iphone
+{% endif %}
+  - angee.storage
+{% if addons_profile == "full" %}
+  - angee.storage_integrate
+  - angee.storage_integrate_iphone
+{% endif %}
+  - angee.integrate
+  - angee.parties
+{% if addons_profile == "full" %}
+  - angee.parties_integrate_carddav
+{% endif %}
+  - angee.messaging
+{% if addons_profile == "full" %}
+  - angee.projects
+  # Product-management suite. Keep each web-bearing top-level addon explicit so
+  # full-profile codegen sees every authored GraphQL document root.
+  - angee.work
+  - angee.intake
+  - angee.money
+  - angee.proposals
+  - angee.portfolio
+  - angee.messaging_integrate_imap
+  - angee.nexus
+  - angee.spaces
+  - angee.tags
+  - angee.agents
+  - angee.knowledge
+  - angee.posts
+  - angee.workflows
+  # Agent-session workflow steps + the start_agent_session / post_agent_message
+  # mutations the angee.agents web console calls (depends on workflows + agents,
+  # both already composed; model-less, so no migrations).
+  - angee.workflows_agents
+  # Contact-dedupe governance workflow (scan -> review Decision -> apply) over
+  # parties merge primitives; model-less, seeds the "Deduplicate contacts"
+  # workflow via `resources load`.
+  - angee.workflows_parties
+  # In-process agent runtime (pydantic-ai): registers the "pydantic" key in
+  # ANGEE_AGENT_RUNTIME_CLASSES so agents can run as Celery turns with no
+  # workspace/service; model-less (sessions/turns live in angee.agents).
+  - angee.agents_runtime_pydantic
+  # Ollama inference backend: an OpenAI-compatible subclass, so it needs no
+  # credential and no extra dependency. Points at a natively-run Ollama on
+  # localhost:11434 by default; `refreshProviderModels` lists what is installed.
+  - angee.agents_integrate_ollama
+{% endif %}
+  - angee.iam_integrate_oidc
+  - angee.platform
+  - angee.platform_integrate_vcs
+{% if addons_profile == "full" %}
+  # GitHub VCS backend: lets a VcsBridge read repositories over the GitHub REST
+  # API, so the marketplace can discover addons from a GitHub remote rather than
+  # only a local checkout.
+  - angee.integrate_github
+{% endif %}
+{% if include_operator_installer %}
+  - angee.platform_integrate_operator
+{% endif %}
+  - angee.operator
+  # Consumer addons land here as they are built.
+  # - {{ addon_namespace }}.example
+{% if addons_profile == "full" %}
+  - angee.messaging_integrate_whatsapp
+  - angee.messaging_integrate_telegram
+  - angee.messaging_integrate_signal
+  # The matrix bridge's addon manifest projects mautrix[encryption]/python-olm
+  # into the host pyproject's generated addons dependency group.
+  - angee.messaging_integrate_matrix
+  - angee.messaging_integrate_slack
+  - angee.messaging_integrate_imessage
+  - angee.messaging_integrate_meta
+  - angee.messaging_integrate_facebook
+  - angee.messaging_integrate_discord
+  # Framework notes example, referenced in place from the examples source slot.
+  - example.notes
+{% endif %}
+
+ANGEE_ADDON_DIRS:
+  - "{BASE_DIR}/addons"
+{% if framework_workspace %}
+  - "{BASE_DIR}/workspaces/src/angee-base/addons"
+{% if addons_profile == "full" %}
+  - "{BASE_DIR}/workspaces/src/angee-messaging-bridges/addons"
+  - "{BASE_DIR}/workspaces/src/angee-examples/addons"
+{% endif %}
+{% if include_arp %}
+  - "{BASE_DIR}/workspaces/src/angee-arp/addons"
+{% endif %}
+{% endif %}
+ANGEE_RUNTIME_DIR: "{BASE_DIR}/runtime"
+# This root IS the stack (ANGEE_ROOT=.), so data lives at the stack's persist
+# `./data` directly — host processes (the process-compose dev stack) and the
+# docker stack's `./data:/app/data` bind both land in the same directory.
+ANGEE_DATA_DIR: "{BASE_DIR}/data"
+
+{% if addon_installer_backend != "local" %}
+ANGEE_ADDON_INSTALLER_BACKEND: {{ addon_installer_backend }}
+{% endif %}

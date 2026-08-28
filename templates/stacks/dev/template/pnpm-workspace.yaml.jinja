@@ -1,0 +1,27 @@
+# This project's JS workspace for the process-compose dev stack: the web package's
+# `@angee/*: workspace:*` deps resolve against the framework packages in the local
+# `workspaces/src/angee-react` slot and the addon fragments in the source slots, so
+# Vite serves live framework JS. The dev stack's `deps` job runs `pnpm install`
+# here (source://app). Never `pnpm install` inside a slot — a private install forks
+# dependency identities for every linked framework package.
+packages:
+  - "{{ web_path }}"
+  - "addons/*/*/web"
+  - "workspaces/src/angee-react/app"
+  - "workspaces/src/angee-react/ui"
+  - "workspaces/src/angee-react/refine"
+  - "workspaces/src/angee-react/metadata"
+  - "workspaces/src/angee-react/storybook"
+  - "workspaces/src/angee-react/e2e"
+  - "workspaces/src/angee-base/addons/angee/*/web"
+{% if addons_profile == "full" %}
+  - "workspaces/src/angee-messaging-bridges/addons/angee/*/web"
+  - "workspaces/src/angee-examples/addons/*/*/web"
+  - "workspaces/src/angee-examples/e2e"
+{% endif %}
+{% if include_arp %}
+  - "workspaces/src/angee-arp/addons/arp/*/web"
+{% endif %}
+allowBuilds:
+  esbuild: true
+  "@tailwindcss/oxide": true

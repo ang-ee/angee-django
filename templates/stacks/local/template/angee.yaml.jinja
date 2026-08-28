@@ -1,0 +1,21 @@
+{# stacks/local wrapper: docker-compose self-contained instance. Set axes + address #}
+{# variables, then include the one shared manifest body (../../_shared, resolved from #}
+{# the template `_subdirectory` — the renderer's loader base). `framework` #}
+{# (source|baked) is read directly in the shared body. #}
+{% set stack_flavor = "instance" %}
+{% set runtime_mode = "docker" %}
+{# Address variables: docker mode reaches services by compose service name; only the #}
+{# host-local operator daemon is reached via the host gateway (host.docker.internal). #}
+{% set database_url = "postgres://angee:${secret.db-password}@postgres:5432/angee" %}
+{% set redis_url = "redis://redis:6379/0" %}
+{% set celery_broker_url = "redis://redis:6379/1" %}
+{% set operator_url = "http://host.docker.internal:${ports.operator}" %}
+{% set mcp_url = "http://django:8000/mcp" %}
+{% set operator_bind = "127.0.0.1" %}
+{% set pgdata_mount = "./data/pgdata" %}
+{# uv's cache: the framework pyproject pins cache-dir ".angee/caches/uv", resolved #}
+{# against the CWD — in the django container that is /app (the project mount), which #}
+{# would mint a stray nested `.angee/` on the host. Pin the stack-owned, gitignored #}
+{# ./caches/uv instead (/app/caches/uv inside the mount). #}
+{% set uv_cache_dir = "/app/caches/uv" %}
+{% include "../../_shared/stack-body.yaml.jinja" %}
