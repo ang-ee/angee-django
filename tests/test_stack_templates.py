@@ -1,12 +1,13 @@
 """Regression coverage for operator stack templates.
 
-Both stack templates (``stacks/dev`` = process mode, ``stacks/local`` = docker mode)
-render from ONE shared manifest body (``stacks/_shared/stack-body.yaml.jinja``): each
-``angee.yaml.jinja`` is a thin ``{% set %}`` header that includes it. The mini-renderer
-below inlines that include, then evaluates the template constructs the operator's
-pongo2 engine handles — ``{% set %}``, nested equality/bare-flag conditionals,
-and the celery ``{% for role in [...] %}`` loop — so the contract tests pin
-whatever the templates compute, never a value re-derived here.
+Both stack templates (``stacks/dev`` = process or docker mode, ``stacks/local`` =
+docker mode) render from ONE shared manifest body
+(``stacks/_shared/stack-body.yaml.jinja``): each ``angee.yaml.jinja`` is a thin
+``{% set %}`` header that includes it. The mini-renderer below inlines that include,
+then evaluates the template constructs the operator's pongo2 engine handles —
+``{% set %}``, nested equality/bare-flag conditionals, and the celery
+``{% for role in [...] %}`` loop — so the contract tests pin whatever the templates
+compute, never a value re-derived here.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ LOCAL_AGENTS_TEMPLATE = ROOT / "templates" / "stacks" / "local" / "template" / "
 LOCAL_CLAUDE_TEMPLATE = ROOT / "templates" / "stacks" / "local" / "template" / "CLAUDE.md"
 DEV_COPIER = ROOT / "templates" / "stacks" / "dev" / "copier.yml"
 DEV_TEMPLATE = ROOT / "templates" / "stacks" / "dev" / "template" / "angee.yaml.jinja"
+DEV_PNPM_WORKSPACE = DEV_TEMPLATE.with_name("pnpm-workspace.yaml.jinja")
 DEV_AGENTS_TEMPLATE = DEV_TEMPLATE.with_name("AGENTS.md.jinja")
 DEV_CLAUDE_TEMPLATE = DEV_TEMPLATE.with_name("CLAUDE.md")
 DEV_STACK_GITIGNORE = DEV_TEMPLATE.with_name(".gitignore.jinja")
@@ -301,6 +303,7 @@ def _render_dev_stack(
     celery_queues: str = "",
     enable_ollama: bool = False,
     ollama_port: str = "11434",
+    _runtime_mode: str = "process",
 ) -> dict[str, Any]:
     """Render the process-mode framework-dev stack enough for YAML contract tests.
 
@@ -316,23 +319,35 @@ def _render_dev_stack(
         "addons_profile": addons_profile,
         "include_arp": "true" if include_arp else "",
         "celery_queues": celery_queues,
+        "django_image": "ghcr.io/ang-ee/django-angee-base:latest",
         "django_port": "8000",
         "edge_port": "80",
         "enable_ollama": "true" if enable_ollama else "",
         "framework_path": framework_path,
+        "ingress_domain": "localhost",
+        "node_image": "node:22-bookworm-slim",
         "ollama_port": ollama_port,
         "operator_port": "9000",
+        "playwright_image": "mcr.microsoft.com/playwright:v1.62.1-noble",
+        "playwright_mcp_image": "mcr.microsoft.com/playwright/mcp:v0.0.76",
         "postgres_port": "5433",
         "process_compose_port": "8080",
         "project_name": "app",
         "project_path": project_path,
         "redis_port": "6379",
+        "runtime_mode": _runtime_mode,
         "storybook_port": "6006",
         "ui_port": "5173",
         "web_path": "web",
         "work_state_source": work_state_source,
     }
     return _render_stack_manifest(DEV_TEMPLATE, variables)
+
+
+def _render_dev_docker_stack(*, celery_queues: str = "") -> dict[str, Any]:
+    """Render the Docker-mode framework-dev stack with every dev input present."""
+
+    return _render_dev_stack(celery_queues=celery_queues, _runtime_mode="docker")
 
 
 def _render_project_settings(
@@ -440,8 +455,10 @@ def test_both_stacks_render_from_one_shared_body() -> None:
     assert dev_include == SHARED_BODY == local_include
 
     dev = _render_dev_stack()
+    dev_docker = _render_dev_docker_stack()
     local = _render_local_stack()
     assert SHARED_SERVICES <= set(dev["services"])
+    assert SHARED_SERVICES <= set(dev_docker["services"])
     assert SHARED_SERVICES <= set(local["services"])
 
 
@@ -877,6 +894,119 @@ def test_dev_stack_declares_the_framework_sources_and_the_src_workspace() -> Non
     assert "workspaces" not in local
 
 
+def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
+    """Docker mode keeps the framework roster while folding jobs into containers."""
+
+    stack = _render_dev_docker_stack()
+
+    for name in (
+        "angee-django",
+        "angee-react",
+        "angee-base",
+        "angee-templates",
+        "angee-operator",
+        "hatch-angee",
+        "strawberry-django-hasura",
+    ):
+        assert stack["sources"][name]["kind"] == "git"
+    assert stack["sources"]["framework"]["path"] == "workspaces/src/angee-django"
+    assert stack["workspaces"]["src"] == {"template": "workspaces/src"}
+
+    assert "jobs" not in stack
+    assert stack["services"]["operator"]["runtime"] == "local"
+    for name in ("django", "celery-worker", "celery-beat", "frontend", "storybook"):
+        assert stack["services"][name]["runtime"] == "container"
+
+    django = stack["services"]["django"]
+    django_command = django["command"][-1]
+    for fragment in (
+        "python -m angee.compose.bootstrap",
+        "python manage.py angee provision --demo --force-rebac",
+        "python manage.py operator_schema",
+        "python manage.py runserver 0.0.0.0:8000",
+    ):
+        assert fragment in django_command
+    assert django["env"]["DATABASE_URL"] == "postgres://angee:${secret.db-password}@postgres:5432/angee"
+    assert django["env"]["ANGEE_OPERATOR_URL"] == "http://host.docker.internal:${ports.operator}"
+    for name in ("celery-worker", "celery-beat"):
+        assert "uv sync --inexact; n=0" in stack["services"][name]["command"][-1]
+
+    frontend = stack["services"]["frontend"]
+    assert frontend["image"] == "node:22-bookworm-slim"
+    assert frontend["mounts"] == ["source://app:/app"]
+    assert frontend["env"]["ANGEE_DJANGO_URL"] == "http://django:8000"
+    frontend_command = frontend["command"][-1]
+    assert frontend_command.startswith("rm -f caches/js-deps.done && corepack enable pnpm && pnpm install")
+    assert "runtime/schemas/console.graphql" in frontend_command
+    assert "runtime/schemas/public.graphql" in frontend_command
+    assert "pnpm --dir web codegen" in frontend_command
+    assert "date > caches/js-deps.done" in frontend_command
+    assert "exec pnpm --dir web dev --host 0.0.0.0" in frontend_command
+    assert frontend["ports"] == ["${ports.ui}:5173"]
+
+    storybook = stack["services"]["storybook"]
+    assert storybook["image"] == "node:22-bookworm-slim"
+    assert "until [ -s caches/js-deps.done ]" in storybook["command"][-1]
+    assert "exec pnpm --filter @angee/storybook dev --no-open --host 0.0.0.0" in storybook["command"][-1]
+    assert storybook["ports"] == ["${ports.storybook}:6006"]
+
+    assert stack["ingress"] == {
+        "type": "caddy",
+        "routing": "path",
+        "tls": "off",
+        "domain": "localhost",
+        "port": 80,
+        "verify": "host.docker.internal:9000",
+    }
+    assert "admin-password" not in stack["secrets"]
+    assert "ports" not in stack["services"]["postgres"]
+    assert "ports" not in stack["services"]["redis"]
+    assert stack["ports"]["ui"] == {"value": 5173, "export_env": "ANGEE_UI_PORT"}
+    assert stack["ports"]["storybook"] == {"value": 6006, "export_env": "STORYBOOK_PORT"}
+
+
+def test_dev_stack_docker_mode_playwright_services_are_edge_routed() -> None:
+    """Docker-mode Playwright endpoints are route-only and forward-authenticated."""
+
+    stack = _render_dev_docker_stack()
+    server = stack["services"]["playwright-server"]
+    mcp = stack["services"]["playwright-mcp"]
+
+    assert server["runtime"] == "container"
+    assert server["image"] == "mcr.microsoft.com/playwright:v1.62.1-noble"
+    assert server["route"] == {"port": 3100, "auth": "forward"}
+    assert "ports" not in server
+    assert "exec pnpm --filter @angee/e2e exec playwright run-server" in server["command"][-1]
+    assert server["after"] == ["frontend"]
+
+    assert mcp["runtime"] == "container"
+    assert mcp["image"] == "mcr.microsoft.com/playwright/mcp:v0.0.76"
+    assert mcp["route"] == {"port": 8931, "auth": "forward"}
+    assert "ports" not in mcp
+    assert mcp["mounts"] == ["bind://./data/playwright:/data/profile"]
+    assert mcp["command"] == [
+        "--headless",
+        "--browser",
+        "chromium",
+        "--no-sandbox",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8931",
+        "--user-data-dir",
+        "/data/profile",
+    ]
+    assert stack["persist"]["playwright-profile"] == {
+        "subpath": "./data/playwright",
+        "scope": "stack",
+    }
+
+    workspace = DEV_PNPM_WORKSPACE.read_text(encoding="utf-8")
+    e2e_glob = '  - "workspaces/src/angee-react/e2e"'
+    assert workspace.count(e2e_glob) == 1
+    assert workspace.index(e2e_glob) < workspace.index('{% if addons_profile == "full" %}')
+
+
 def test_dev_stack_chains_the_project_host_with_the_framework_slot() -> None:
     """The dev chain renders the host at the stack root wired to the src slots."""
 
@@ -897,6 +1027,22 @@ def test_dev_stack_chains_the_project_host_with_the_framework_slot() -> None:
     assert manifest["addons_profile"]["default"] == "base"
     assert manifest["work_state_source"]["default"] == ""
 
+    defaults = {
+        "runtime_mode": "process",
+        "django_image": "ghcr.io/ang-ee/django-angee-base:latest",
+        "node_image": "node:22-bookworm-slim",
+        "playwright_image": "mcr.microsoft.com/playwright:v1.62.1-noble",
+        "playwright_mcp_image": "mcr.microsoft.com/playwright/mcp:v0.0.76",
+        "ingress_domain": "localhost",
+    }
+    for name, default in defaults.items():
+        assert manifest[name]["type"] == "str"
+        assert manifest[name]["default"] == default
+        assert manifest["_angee"]["inputs"][name]["default"] == default
+    assert manifest["runtime_mode"]["choices"] == ["process", "docker"]
+    assert manifest["_angee"]["inputs"]["runtime_mode"]["choices"] == ["process", "docker"]
+    assert "ensure" not in manifest["_angee"]
+
     # The stack root's `templates` symlink resolves name-based template refs from
     # the angee-templates source cache — never from a framework checkout.
     assert DEV_TEMPLATES_SYMLINK.is_symlink()
@@ -916,9 +1062,11 @@ def test_uv_caches_are_stack_owned() -> None:
     for name in ("django", "celery-worker", "celery-beat"):
         assert "UV_CACHE_DIR" not in dev["services"][name]["env"]
 
+    dev_docker = _render_dev_docker_stack()
     local = _render_local_stack()
-    for name in ("django", "celery-worker", "celery-beat"):
-        assert local["services"][name]["env"]["UV_CACHE_DIR"] == "/app/caches/uv"
+    for stack in (dev_docker, local):
+        for name in ("django", "celery-worker", "celery-beat"):
+            assert stack["services"][name]["env"]["UV_CACHE_DIR"] == "/app/caches/uv"
 
     for gitignore_path in (LOCAL_STACK_GITIGNORE, DEV_STACK_GITIGNORE):
         assert "/caches/" in gitignore_path.read_text(encoding="utf-8")
@@ -935,10 +1083,12 @@ def test_secret_key_is_mode_invariant() -> None:
     """
 
     dev = _render_dev_stack()
+    dev_docker = _render_dev_docker_stack()
     local = _render_local_stack()
     assert "secret-key" in dev["secrets"]
+    assert "secret-key" in dev_docker["secrets"]
     assert "secret-key" in local["secrets"]
-    for stack in (dev, local):
+    for stack in (dev, dev_docker, local):
         for name in ("django", "celery-worker", "celery-beat"):
             assert stack["services"][name]["env"]["YAMLCONF_SECRET_KEY"] == "${secret.secret-key}"
     assert dev["jobs"]["provision"]["env"]["YAMLCONF_SECRET_KEY"] == "${secret.secret-key}"
@@ -959,13 +1109,15 @@ def test_dev_stack_keeps_absolute_source_paths_verbatim() -> None:
 
 def test_dev_stack_keeps_stack_answers_separate_from_workspace_answers() -> None:
     manifest = yaml.safe_load(DEV_COPIER.read_text(encoding="utf-8"))
-    stack = _render_dev_stack()
 
     assert manifest["_answers_file"] == ".copier-answers.stack.yml"
-    assert stack["template"]["answers_file"] == ".copier-answers.stack.yml"
+    for stack in (_render_dev_stack(), _render_dev_docker_stack()):
+        assert stack["template"]["answers_file"] == ".copier-answers.stack.yml"
 
 
 def test_dev_stack_prunes_dead_playwright_inputs() -> None:
+    """Playwright returns as Docker-mode services, never host-port/browser inputs."""
+
     manifest = yaml.safe_load(DEV_COPIER.read_text(encoding="utf-8"))
 
     assert "playwright_port" not in manifest
@@ -976,6 +1128,8 @@ def test_dev_stack_prunes_dead_playwright_inputs() -> None:
 def test_stack_answer_files_are_ignored_where_stacks_overlay_project_roots() -> None:
     for path in (ROOT_GITIGNORE, PROJECT_GITIGNORE, LOCAL_STACK_GITIGNORE, DEV_STACK_GITIGNORE):
         assert "/.copier-answers.stack.yml" in path.read_text(encoding="utf-8")
+    for stack in (_render_dev_stack(), _render_dev_docker_stack(), _render_local_stack()):
+        assert stack["template"]["answers_file"] == ".copier-answers.stack.yml"
 
 
 def test_dev_stack_local_processes_do_not_depend_on_container_services() -> None:
@@ -1000,7 +1154,7 @@ def test_celery_queue_workers_render_in_both_modes() -> None:
     A blank input (the default) renders no extra service.
     """
 
-    for render in (_render_dev_stack, _render_local_stack):
+    for render in (_render_dev_stack, _render_dev_docker_stack, _render_local_stack):
         stack = render()
         assert {name for name in stack["services"] if name.startswith("celery-")} == {
             "celery-worker",
@@ -1016,6 +1170,13 @@ def test_celery_queue_workers_render_in_both_modes() -> None:
     assert "beat" not in command
     # The queue worker shares the shared block's env owner verbatim.
     assert dev_service["env"] == dev["services"]["celery-worker"]["env"]
+
+    dev_docker = _render_dev_docker_stack(celery_queues="whatsapp")
+    dev_docker_service = dev_docker["services"]["celery-whatsapp"]
+    assert dev_docker_service["runtime"] == "container"
+    assert "uv sync --inexact; n=0" in dev_docker_service["command"][-1]
+    assert "worker -Q whatsapp --pool threads --concurrency 8" in dev_docker_service["command"][-1]
+    assert dev_docker_service["env"] == dev_docker["services"]["celery-worker"]["env"]
 
     local = _render_local_stack(celery_queues="whatsapp")
     local_service = local["services"]["celery-whatsapp"]

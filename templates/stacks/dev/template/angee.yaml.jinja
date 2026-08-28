@@ -1,9 +1,8 @@
-{# stacks/dev wrapper: process-compose framework-dev stack. Set axes + address #}
+{# stacks/dev wrapper: framework-dev stack. Set the flavor axis + address #}
 {# variables, then include the one shared manifest body. The include path resolves #}
 {# from the template's `_subdirectory` root (the renderer's loader base). #}
 {% set stack_flavor = "framework" %}
-{% set runtime_mode = "process" %}
-{% set ingress_domain_value = "localhost" %}
+{% set ingress_domain_value = ingress_domain %}
 {# The OPERATOR owns path-input translation (copierx.ResolvePathInputs): every render #}
 {# flow rewrites a relative `type: path` input to be ANGEE_ROOT-relative before this #}
 {# template sees it, and an absolute input arrives verbatim. The project host IS the #}
@@ -14,13 +13,14 @@
 {# from the framework slot, postgres extra baked into the dep) and pins uv's cache #}
 {# to the stack-owned caches/uv — so process commands run bare `uv run` with no #}
 {# --project, no --extra, and no UV_CACHE_DIR override in any layout. #}
-{# Address variables: process mode reaches postgres/redis/operator on 127.0.0.1:${ports.x} #}
-{# and the host gateway (host.docker.internal) where containers must reach the host. #}
-{% set database_url = "postgres://angee:${secret.db-password}@127.0.0.1:${ports.postgres}/angee" %}
-{% set redis_url = "redis://127.0.0.1:${ports.redis}/0" %}
-{% set celery_broker_url = "redis://127.0.0.1:${ports.redis}/1" %}
-{% set operator_url = "http://127.0.0.1:${ports.operator}" %}
-{% set mcp_url = "http://host.docker.internal:${ports.django}/mcp" %}
+{# Process mode reaches published ports; Docker mode uses Compose DNS and the host gateway. #}
+{# Guarded sets stay on one physical line for pongo2 and the contract-test mini-renderer. #}
+{% if runtime_mode == "process" %}{% set database_url = "postgres://angee:${secret.db-password}@127.0.0.1:${ports.postgres}/angee" %}{% endif %}{% if runtime_mode == "docker" %}{% set database_url = "postgres://angee:${secret.db-password}@postgres:5432/angee" %}{% endif %}
+{% if runtime_mode == "process" %}{% set redis_url = "redis://127.0.0.1:${ports.redis}/0" %}{% endif %}{% if runtime_mode == "docker" %}{% set redis_url = "redis://redis:6379/0" %}{% endif %}
+{% if runtime_mode == "process" %}{% set celery_broker_url = "redis://127.0.0.1:${ports.redis}/1" %}{% endif %}{% if runtime_mode == "docker" %}{% set celery_broker_url = "redis://redis:6379/1" %}{% endif %}
+{% if runtime_mode == "process" %}{% set operator_url = "http://127.0.0.1:${ports.operator}" %}{% endif %}{% if runtime_mode == "docker" %}{% set operator_url = "http://host.docker.internal:${ports.operator}" %}{% endif %}
+{% if runtime_mode == "process" %}{% set mcp_url = "http://host.docker.internal:${ports.django}/mcp" %}{% endif %}{% if runtime_mode == "docker" %}{% set mcp_url = "http://django:8000/mcp" %}{% endif %}
 {% set operator_bind = "0.0.0.0" %}
 {% set pgdata_mount = "./data/pgdata" %}
+{% if runtime_mode == "docker" %}{% set uv_cache_dir = "/app/caches/uv" %}{% endif %}
 {% include "../../_shared/stack-body.yaml.jinja" %}

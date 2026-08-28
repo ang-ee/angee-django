@@ -6,14 +6,14 @@
 {# selects framework-dev versus self-contained instance structure; runtime_mode #}
 {# selects process versus container execution where those genuinely differ. #}
 {# framework = stacks/dev — owns ingress, the framework source roster, and src workspace. #}
-{#   Its current process runtime uses local `uv run` processes against the checkout, #}
-{#   with published postgres/redis ports and a jobs-owned lifecycle. #}
+{#   Process uses local commands + jobs; docker folds the lifecycle into containers. #}
+{#   Both modes run directly against the framework workspace's source checkouts. #}
 {# instance = stacks/local — owns bootstrap-admin secrets and the static frontend. #}
 {#   Its docker runtime uses the compose network and runs the lifecycle inside the #}
 {#   django container command, with Caddy serving the built SPA. #}
 {# Wrapper-provided variables: stack_flavor, runtime_mode, database_url, redis_url, #}
 {# celery_broker_url, operator_url, mcp_url, operator_bind, pgdata_mount, and #}
-{# (process only) app_source, framework_source — plus the dev copier inputs #}
+{# (process only) app_source; framework_source — plus the dev copier inputs #}
 {# addons_profile and work_state_source, which gate sources/workspace blocks. #}
 version: 1
 kind: stack
@@ -96,9 +96,12 @@ ports:
   postgres: { value: {{ postgres_port }}, export_env: POSTGRES_PORT }
   redis: { value: {{ redis_port }}, export_env: REDIS_PORT }{# Optional entries share the outer endif line so disabled output stays byte-identical. #}
 {% if enable_ollama %}  ollama: { value: {{ ollama_port }}, export_env: OLLAMA_PORT }{% endif %}{% endif %}
-{% if runtime_mode == "docker" %}
+{% if runtime_mode == "docker" %}{% if stack_flavor == "framework" %}
   ui: { value: {{ ui_port }}, export_env: ANGEE_UI_PORT }
-{% endif %}
+  storybook: { value: {{ storybook_port }}, export_env: STORYBOOK_PORT }
+{% endif %}{% if stack_flavor == "instance" %}
+  ui: { value: {{ ui_port }}, export_env: ANGEE_UI_PORT }
+{% endif %}{% endif %}
 
 # Local state angee owns and must guarantee exists before any job/container runs.
 # The operator materializes these on every bring-up (StackPrepare). Subpaths are
@@ -112,7 +115,9 @@ persist:
 {% if enable_ollama %}  ollama: { subpath: ./data/ollama, scope: stack }{% endif %}{% endif %}
 {% if runtime_mode == "docker" %}
   # App media/static (ANGEE_DATA_DIR -> /app/data via the django bind mount).
-  app-data: { subpath: ./data, scope: stack }
+  app-data: { subpath: ./data, scope: stack }{% if stack_flavor == "framework" %}
+  # Playwright MCP's persistent Chromium user-data directory.
+  playwright-profile: { subpath: ./data/playwright, scope: stack }{% endif %}
   # The Postgres data volume under ./data so one dir holds the instance's mutable state.
   pgdata: { subpath: ./data/pgdata, scope: stack }
 {% endif %}
@@ -353,7 +358,10 @@ services:
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
     after: [provision]
 {% endif %}
-{% if runtime_mode == "docker" %}
+{% if runtime_mode == "docker" %}{% if stack_flavor == "framework" %}
+  # Framework-dev backend: sync the editable workspace, bootstrap the generated
+  # addon dependency group, provision demo data and schemas, then keep Django's
+  # source autoreloader as the serving owner.{% endif %}{% if stack_flavor == "instance" %}
   # angee-django backend. The project mounts at /app OVER the image's /app workdir.
   # framework == source runs the deps-only base image and links the framework editable
   # from sources/angee-django at start (also installs psycopg since the base image bakes
@@ -361,7 +369,7 @@ services:
   # makes the framework bootstrap importable; bootstrap then fills the fresh host's
   # addon group and the host sync installs it before Django settings load. framework ==
   # baked runs a code-baked runtime image and skips these syncs. provision owns the
-  # first-run DAG and wait-for-db, so there is no pg-wait loop here.
+  # first-run DAG and wait-for-db, so there is no pg-wait loop here.{% endif %}
   django:
     runtime: container
     image: {{ django_image }}
@@ -386,7 +394,14 @@ services:
       CACHE_URL: "{{ redis_url }}"
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
       {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
-{% if stack_flavor == "instance" %}    command:
+{% if stack_flavor == "framework" %}    command:
+      - sh
+      - "-c"
+      - >-
+        uv sync --inexact && python -m angee.compose.bootstrap && uv sync --inexact
+        && python manage.py angee provision --demo --force-rebac
+        && python manage.py operator_schema
+        && exec python manage.py runserver 0.0.0.0:8000{% endif %}{% if stack_flavor == "instance" %}    command:
       - sh
       - "-c"
       - >-
@@ -438,7 +453,18 @@ services:
       CACHE_URL: "{{ redis_url }}"
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
       {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
-{% if stack_flavor == "instance" %}    # In source mode each container first links the framework so it can import psycopg,
+{% if stack_flavor == "framework" %}    # Sync the framework workspace before waiting for django's migrations.
+    command:
+      - sh
+      - "-c"
+      - >-
+        trap 'exit 0' TERM INT; uv sync --inexact; n=0;
+        until python -c "import os,psycopg; conn=psycopg.connect(os.environ['DATABASE_URL']); cur=conn.cursor(); cur.execute('select 1 from django_migrations limit 1'); row=cur.fetchone(); conn.close(); raise SystemExit(0 if row else 1)" 2>/tmp/migratewait.err; do
+        n=$$((n+1));
+        [ "$$n" -ge 300 ] && { echo 'django migrations not ready after 300s:' >&2; cat /tmp/migratewait.err >&2; exit 1; };
+        echo "waiting for django migrations ($$n/300)..."; sleep 1;
+        done;
+        exec celery -A angee.jobs.celery:app {% if role == "beat" %}beat{% else %}worker{% endif %}{% if role != "worker" and role != "beat" %} -Q {{ role }} --pool threads --concurrency 8{% endif %} --loglevel=INFO{% endif %}{% if stack_flavor == "instance" %}    # In source mode each container first links the framework so it can import psycopg,
     # then waits for django's migrations. That barrier also guarantees django projected
     # the fresh host's addon group; sync it into this container's own venv before celery.
     command:
@@ -483,7 +509,93 @@ services:
       STORYBOOK_PORT: "{{ storybook_port }}"
     after: [deps]
 {% endif %}
-{% if runtime_mode == "docker" %}{% if stack_flavor == "instance" %}
+{% if runtime_mode == "docker" %}{% if stack_flavor == "framework" %}
+  # Vite dev server for containerized framework development.
+  frontend:
+    runtime: container
+    image: {{ node_image }}
+    mounts:
+      - source://app:/app
+    workdir: /app
+    env:
+      ANGEE_DJANGO_URL: http://django:8000
+      ANGEE_UI_PORT: "{{ ui_port }}"
+      ANGEE_OPERATOR_URL: "{{ operator_url }}"
+    command:
+      - sh
+      - "-c"
+      - >-
+        rm -f caches/js-deps.done
+        && corepack enable pnpm
+        && pnpm install
+        && n=0
+        && until [ -s runtime/schemas/console.graphql ] && [ -s runtime/schemas/public.graphql ]; do
+        n=$$((n+1));
+        [ "$$n" -ge 120 ] && { echo 'runtime GraphQL schemas not ready after 120s' >&2; ls -R runtime >&2 || true; exit 1; };
+        echo "waiting for runtime GraphQL schemas ($$n/120)..."; sleep 1;
+        done
+        && pnpm --dir {{ web_path }} codegen
+        && date > caches/js-deps.done
+        && exec pnpm --dir {{ web_path }} dev --host 0.0.0.0
+    after: [django]
+    ports:
+      - "${ports.ui}:{{ ui_port }}"
+
+  # Storybook waits for the shared pnpm install and codegen sentinel.
+  storybook:
+    runtime: container
+    image: {{ node_image }}
+    mounts:
+      - source://app:/app
+    workdir: /app
+    env:
+      STORYBOOK_PORT: "{{ storybook_port }}"
+    command:
+      - sh
+      - "-c"
+      - >-
+        n=0;
+        until [ -s caches/js-deps.done ]; do
+        n=$$((n+1));
+        [ "$$n" -ge 300 ] && { echo 'JS dependencies not ready after 300s' >&2; exit 1; };
+        echo "waiting for JS dependencies ($$n/300)..."; sleep 1;
+        done;
+        exec pnpm --filter @angee/storybook dev --no-open --host 0.0.0.0
+    after: [frontend]
+    ports:
+      - "${ports.storybook}:{{ storybook_port }}"
+
+  # Remote Playwright browser server using the framework workspace's locked runner.
+  playwright-server:
+    runtime: container
+    image: {{ playwright_image }}
+    mounts:
+      - source://app:/app
+    workdir: /app
+    command:
+      - sh
+      - "-c"
+      - >-
+        n=0;
+        until [ -s caches/js-deps.done ]; do
+        n=$$((n+1));
+        [ "$$n" -ge 300 ] && { echo 'JS dependencies not ready after 300s' >&2; exit 1; };
+        echo "waiting for JS dependencies ($$n/300)..."; sleep 1;
+        done;
+        exec pnpm --filter @angee/e2e exec playwright run-server --host 0.0.0.0 --port 3100
+    after: [frontend]
+    route: { port: 3100, auth: forward }
+
+  # Persistent headless Playwright MCP server behind forward-auth ingress.
+  playwright-mcp:
+    runtime: container
+    image: {{ playwright_mcp_image }}
+    mounts:
+      - bind://./data/playwright:/data/profile
+    command: ["--headless", "--browser", "chromium", "--no-sandbox", "--host", "0.0.0.0", "--port", "8931", "--user-data-dir", "/data/profile"]
+    after: [frontend]
+    route: { port: 8931, auth: forward }
+{% endif %}{% endif %}{% if runtime_mode == "docker" %}{% if stack_flavor == "instance" %}
   # Static frontend build for Caddy ingress. A compose-visible service (not a job)
   # because Caddy depends on it in the container graph. The @angee/* packages are baked
   # into the web image; in source mode the first node -e overlays each package's src/

@@ -9,21 +9,30 @@ _preserve_symlinks: true
 
 _message_after_copy: |
   Framework-dev stack rendered — the root folder IS the stack and a project host
-  (ANGEE_ROOT=.). Operator + Postgres + Redis run as containers with published
-  ports; Django, Celery, Vite, and Storybook run as local processes against the
-  framework source slots in workspaces/src/.
+  (ANGEE_ROOT=.). Runtime mode: "{{ runtime_mode }}".
+
+  - process (default): Django, Celery, Vite, and Storybook run as local processes;
+    Postgres and Redis run as containers with published ports.
+  - docker: Django, Celery, Vite, Storybook, Playwright, Postgres, and Redis run as
+    containers; the operator daemon remains host-local and orchestrates Docker.
 
   1. Bring it up. `angee dev` materializes the declared source caches, cuts the
      `src` workspace (every framework repo as a sibling worktree slot), runs the
-     deps/provision/codegen jobs, and boots:
+     dependency/provision/codegen lifecycle, and boots:
        angee dev
   2. Point an external CLI shell at the tokenized local operator (run from this
      root; `angee secret reveal` reads the stack's secrets backend):
        export ANGEE_OPERATOR_URL=http://127.0.0.1:{{ operator_port }}
        export ANGEE_OPERATOR_TOKEN="$(angee secret reveal operator-token)"
 
-  App:      http://localhost:{{ ui_port }}
-  Frame:    the framework repos live in workspaces/src/ — see its AGENTS.md.
+  App (process): http://localhost:{{ ui_port }}
+  App (docker):  http://<host>:{{ ui_port }}
+  Playwright MCP (docker): http://{{ ingress_domain }}:{{ edge_port }}/playwright-mcp/mcp
+  Browser server (docker): ws://{{ ingress_domain }}:{{ edge_port }}/playwright-server/
+  The Playwright endpoints are edge-routed with forward-auth; mint a route token
+  via `angee token` before connecting.
+
+  Frame: the framework repos live in workspaces/src/ — see its AGENTS.md.
 
 _angee:
   schema: 1
@@ -33,12 +42,37 @@ _angee:
   description: >-
     The framework-dev stack: the root folder IS the stack AND the project host
     (ANGEE_ROOT=.). It chains the `projects/web` project template to scaffold
-    the host (manage.py, settings.yaml, pyproject, addons, web), then overlays
-    a process-compose manifest — operator + postgres (pgvector) + redis as
-    containers, Django/Celery/Vite/Storybook as local `uv run`/pnpm processes
-    against the framework source slots the stack's `src` workspace
-    materializes under workspaces/src/. `angee dev` owns the whole bring-up:
-    caches, the src workspace cut, deps/provision/codegen, boot.
+    the host (manage.py, settings.yaml, pyproject, addons, web), then overlays a
+    process- or Docker-mode manifest against the framework source slots the
+    stack's `src` workspace materializes under workspaces/src/. `angee dev` owns
+    the whole bring-up: caches, the src workspace cut, dependency installation,
+    provision/codegen, and boot.
+  inputs:
+    runtime_mode:
+      type: str
+      default: process
+      choices: [process, docker]
+      help: Run framework application services as local processes or Docker containers.
+    django_image:
+      type: str
+      default: "ghcr.io/ang-ee/django-angee-base:latest"
+      help: Image used by Docker-mode Django and Celery services.
+    node_image:
+      type: str
+      default: "node:22-bookworm-slim"
+      help: Image used by Docker-mode frontend and Storybook services.
+    playwright_image:
+      type: str
+      default: "mcr.microsoft.com/playwright:v1.62.1-noble"
+      help: Playwright browser-server image pinned to the @angee/e2e lock version.
+    playwright_mcp_image:
+      type: str
+      default: "mcr.microsoft.com/playwright/mcp:v0.0.76"
+      help: Playwright MCP image pinned to the repo's @playwright/mcp version.
+    ingress_domain:
+      type: str
+      default: localhost
+      help: Hostname used by the edge-routed Playwright service URLs.
   # Chain the project template first so the stack overlays a real host, then this
   # template adds only the stack overlay (angee.yaml, settings/workspace files).
   # The ref is relative to THIS template's directory; downstream it can pin a
@@ -88,6 +122,37 @@ web_path:
   type: str
   default: "web"
   help: Path to the project's Vite web package, relative to `project_path`. Its package owns the `dev` and `codegen` scripts for the composed project's generated GraphQL operation types.
+
+runtime_mode:
+  type: str
+  default: process
+  choices: [process, docker]
+  help: Run framework application services as local processes or Docker containers.
+
+django_image:
+  type: str
+  default: "ghcr.io/ang-ee/django-angee-base:latest"
+  help: Image used by Docker-mode Django and Celery services.
+
+node_image:
+  type: str
+  default: "node:22-bookworm-slim"
+  help: Image used by Docker-mode frontend and Storybook services.
+
+playwright_image:
+  type: str
+  default: "mcr.microsoft.com/playwright:v1.62.1-noble"
+  help: Playwright browser-server image pinned to the @angee/e2e lock version.
+
+playwright_mcp_image:
+  type: str
+  default: "mcr.microsoft.com/playwright/mcp:v0.0.76"
+  help: Playwright MCP image pinned to the repo's @playwright/mcp version.
+
+ingress_domain:
+  type: str
+  default: localhost
+  help: Hostname used by the edge-routed Playwright service URLs.
 
 # Which addon roster the host composes. `base` renders the consumer scaffold
 # (base addons only); `full` renders the whole platform composition — every
