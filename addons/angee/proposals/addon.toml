@@ -1,0 +1,25 @@
+[addon]
+name = "angee.proposals"
+description = "PM-backed solicitation rounds with sealed proposals, comparison, and review."
+keywords = ["proposals", "solicitation", "competition", "comparison", "review"]
+category = "Productivity"
+depends_on = [
+  "angee.money",
+  "angee.parties",
+  "angee.projects",
+]
+
+[resources]
+master = []
+demo = [
+  { path = "resources/demo/005_iam.user.yaml", depends_on = "iam:resources/demo/010_iam.user.yaml" },
+  { path = "resources/demo/010_projects.project.yaml", depends_on = ["resources/demo/005_iam.user.yaml", "projects:resources/demo/010_projects.project.yaml"] },
+  { path = "resources/demo/015_parties.party.yaml", depends_on = "resources/demo/005_iam.user.yaml" },
+  { path = "resources/demo/016_parties.handle.yaml", depends_on = "resources/demo/015_parties.party.yaml" },
+  { path = "resources/demo/020_proposals.round.yaml", depends_on = ["resources/demo/010_projects.project.yaml", "resources/demo/015_parties.party.yaml"] },
+  { path = "resources/demo/030_proposals.topic.yaml", depends_on = "resources/demo/020_proposals.round.yaml" },
+  { path = "resources/demo/035_messaging.thread.yaml", depends_on = "resources/demo/016_parties.handle.yaml" },
+  { path = "resources/demo/036_messaging.message.yaml", depends_on = "resources/demo/035_messaging.thread.yaml" },
+  { path = "resources/demo/040_proposals.proposal.yaml", depends_on = ["resources/demo/020_proposals.round.yaml", "resources/demo/036_messaging.message.yaml", "money:resources/master/010_money.currency.yaml"] },
+  { path = "resources/demo/050_proposals.answer.yaml", depends_on = ["resources/demo/030_proposals.topic.yaml", "resources/demo/040_proposals.proposal.yaml"] },
+]

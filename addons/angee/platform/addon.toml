@@ -1,0 +1,13 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.platform"
+description = "The admin console — schema/addon explorer, the marketplace board, and contributed sections"
+keywords = ["console", "admin", "explorer"]
+category = "Platform"
+depends_on = ["angee.iam", "angee.resources"]
+dependencies = [
+  # Comment/format-preserving YAML round-trip: the AddonInstaller's settings.yaml
+  # INSTALLED_APPS install/uninstall edit (pyyaml round-trips lose comments/layout).
+  "ruamel.yaml>=0.18",
+]

@@ -1,0 +1,17 @@
+_meta:
+  model: portfolio.InitiativeProject
+rows:
+  - xref: resilient_booking
+    fields:
+      initiative: portfolio.resilient_seasons
+      project: portfolio.accessible_plot_booking
+      sort_order: 1024.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: harvest_seed_exchange
+    fields:
+      initiative: portfolio.shared_harvests
+      project: portfolio.seed_exchange
+      sort_order: 1024.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

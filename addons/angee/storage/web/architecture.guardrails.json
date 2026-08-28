@@ -1,0 +1,10 @@
+{
+  "dynamicI18nKeyFamilies": [
+    {
+      "namespace": "storage",
+      "owner": "UploadStatus",
+      "prefix": "upload.status.",
+      "values": ["hashing", "uploading", "finalizing", "done", "deduped", "failed"]
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+_meta:
+  model: proposals.Proposal
+rows:
+  - xref: mvp_alice
+    fields:
+      round: proposals.mvp_bakeoff
+      responder: iam.user_alice
+      state: submitted
+      submitted_at: 2026-09-13 10:00:00+00:00
+      submitted_by: iam.user_alice
+      cost: "18000.00"
+      currency: money.eur
+      staffing: Alice plus one design partner
+      timeframe_start: 2026-09-21
+      timeframe_end: 2026-10-30
+      confidence: high
+      valid_until: 2026-09-30
+      created_by: iam.user_admin
+      updated_by: iam.user_alice
+  - xref: mvp_bob
+    fields:
+      round: proposals.mvp_bakeoff
+      responder: iam.user_bob
+      state: draft
+      cost: "15000.00"
+      currency: money.eur
+      staffing: Bob
+      timeframe_start: 2026-09-21
+      timeframe_end: 2026-11-06
+      confidence: medium
+      valid_until: 2026-09-30
+      created_by: iam.user_admin
+      updated_by: iam.user_bob
+  - xref: mvp_carla
+    fields:
+      round: proposals.mvp_bakeoff
+      responder: proposals.user_carla
+      state: draft
+      staffing: Carla and an integration specialist
+      timeframe_start: 2026-09-28
+      timeframe_end: 2026-11-13
+      confidence: medium
+      valid_until: 2026-09-30
+      created_by: iam.user_admin
+      updated_by: proposals.user_carla
+  - xref: flat_cabanyal
+    fields:
+      round: proposals.valencia_flat_hunt
+      party: proposals.landlord_cabanyal
+      source_message: proposals.flat_cabanyal_offer
+      state: submitted
+      submitted_at: 2026-09-16 09:05:00+00:00
+      submitted_by: iam.user_alice
+      cost: "1450.00"
+      currency: money.eur
+      staffing: Direct landlord
+      timeframe_start: 2026-10-01
+      timeframe_end: 2027-09-30
+      confidence: high
+      valid_until: 2026-09-25
+      capture_parser_version: proposals.capture.v1
+      capture_payload_hash: 35bbde8083395c8228362406ba50bbf25f1cc156f5ab77d34297a18e645fd8a0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: flat_russafa
+    fields:
+      round: proposals.valencia_flat_hunt
+      party: proposals.landlord_russafa
+      source_message: proposals.flat_russafa_offer
+      state: submitted
+      submitted_at: 2026-09-17 10:05:00+00:00
+      submitted_by: iam.user_alice
+      cost: "1325.00"
+      currency: money.eur
+      staffing: Managed by owner
+      timeframe_start: 2026-10-05
+      timeframe_end: 2027-10-04
+      confidence: medium
+      valid_until: 2026-09-24
+      capture_parser_version: proposals.capture.v1
+      capture_payload_hash: 5b814b4e23d75dfbe97455bd4108acaf8e9c2feb00c01a87be79ba0e78083335
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

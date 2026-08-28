@@ -1,0 +1,8 @@
+# Ollama serves locally without a credential. A blank base_url delegates to the
+# backend's default endpoint; operators can still override it on the provider row.
+- xref: provider_ollama_demo
+  owner: iam.user_admin
+  vendor: agents_integrate_ollama.ollama
+  backend_class: ollama
+  lifecycle: connected
+  name: Ollama

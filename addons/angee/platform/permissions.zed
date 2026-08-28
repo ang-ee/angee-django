@@ -1,0 +1,26 @@
+// Authorization schema for the platform addon.
+// @rebac_package: platform
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+definition platform/explorer {
+    // The platform console only reflects metadata the composer already built, so
+    // a single `read` permission gates the introspection query. Platform admins
+    // (angee/role:admin) reach it through a const-backed relation — synthetic, no
+    // per-object tuple, the same universal-admin path operator/connection uses —
+    // so a superuser resolves as a reader without a seeded grant. A table-less
+    // (`managed = False`) `PlatformExplorer` model backs the type only to satisfy
+    // the rebac.E009 system check and is never read.
+    relation admin: angee/role // rebac:const=admin
+
+    permission read = admin->member
+}
+
+definition platform/addon {
+    // The Addon reflection table is system-synced (post_migrate), never authored,
+    // so it is read-only over GraphQL: platform admins read every row through the
+    // same const-backed admin relation; there are no write permissions.
+    relation admin: angee/role // rebac:const=admin
+
+    permission read = admin->member
+}

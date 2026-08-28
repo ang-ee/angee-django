@@ -1,0 +1,12 @@
+_meta:
+  model: knowledge.Vault
+rows:
+  - xref: vault_handbook
+    fields:
+      owner: iam.user_admin
+      name: Handbook
+      description: The team handbook — guides, architecture, and how we work.
+      icon: book
+      accent: indigo
+      created_by: iam.user_admin
+      updated_by: iam.user_admin

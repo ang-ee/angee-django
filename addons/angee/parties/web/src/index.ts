@@ -1,0 +1,100 @@
+import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
+import { type BaseMenuItem } from "@angee/ui";
+import { lazyRouteComponent } from "@tanstack/react-router";
+import { AtSign, Building2, CircleDot, Contact, HeartHandshake, LayoutDashboard, UserCheck, Users } from "lucide-react";
+import { enPartiesMessages } from "./i18n";
+
+// One rail root ("Parties") whose children are the People and Organizations
+// pages. The root is route-less and inherits its target from the first child.
+const partiesMenu: readonly BaseMenuItem[] = [
+  {
+    id: "parties",
+    label: "Parties",
+    icon: "parties",
+    children: [
+      { id: "parties.overview", label: "Overview", route: "parties.overview", icon: "overview" },
+      { id: "parties.people", label: "People", route: "parties.people", icon: "parties" },
+      {
+        id: "parties.organizations",
+        label: "Organizations",
+        route: "parties.organizations",
+        icon: "organization",
+      },
+      { id: "parties.circles", label: "Circles", route: "parties.circles", icon: "circle" },
+      {
+        id: "parties.relationships",
+        label: "Relationships",
+        route: "parties.relationships",
+        icon: "relationship",
+      },
+      { id: "parties.handles", label: "Handles", route: "parties.handles", icon: "handle" },
+      { id: "parties.review", label: "Review", route: "parties.review", icon: "user-check" },
+      {
+        id: "parties.directories",
+        label: "Directories",
+        route: "parties.directories",
+        icon: "address-book",
+      },
+    ],
+  },
+];
+
+const parties = defineBaseAddon({
+  id: "parties",
+  routes: [
+    {
+      name: "parties.overview",
+      path: "/parties",
+      layout: "console",
+      component: lazyRouteComponent(() => import("./OverviewPage"), "OverviewPage"),
+    },
+    ...resourcePageRoutes("parties.people", "/parties/people", lazyRouteComponent(() => import("./PeoplePage"), "PeoplePage"), "parties.Person"),
+    ...resourcePageRoutes(
+      "parties.organizations",
+      "/parties/organizations",
+      lazyRouteComponent(() => import("./OrganizationsPage"), "OrganizationsPage"),
+      "parties.Organization",
+    ),
+    ...resourcePageRoutes("parties.circles", "/parties/circles", lazyRouteComponent(() => import("./CirclesPage"), "CirclesPage"), "parties.Circle"),
+    ...resourcePageRoutes(
+      "parties.relationships",
+      "/parties/relationships",
+      lazyRouteComponent(() => import("./RelationshipsPage"), "RelationshipsPage"),
+      "parties.Relationship",
+    ),
+    ...resourcePageRoutes("parties.handles", "/parties/handles", lazyRouteComponent(() => import("./HandlesPage"), "HandlesPage"), "parties.Handle"),
+    {
+      name: "parties.review",
+      path: "/parties/review",
+      layout: "console",
+      component: lazyRouteComponent(() => import("./ReviewPage"), "ReviewPage"),
+    },
+    {
+      name: "parties.merge",
+      path: "/parties/merge/$left/$right",
+      layout: "console",
+      // Param-bearing routes must name their chrome parent (the review queue is
+      // the merge flow's home per its breadcrumb).
+      parent: "parties.review",
+      component: lazyRouteComponent(() => import("./MergePage"), "MergePage"),
+    },
+    ...resourcePageRoutes("parties.directories", "/parties/directories", lazyRouteComponent(() => import("./DirectoriesPage"), "DirectoriesPage"), "parties.Directory"),
+  ],
+  menus: partiesMenu,
+  icons: {
+    parties: Users,
+    overview: LayoutDashboard,
+    organization: Building2,
+    "address-book": Contact,
+    handle: AtSign,
+    circle: CircleDot,
+    relationship: HeartHandshake,
+    "user-check": UserCheck,
+  },
+  i18n: { parties: enPartiesMessages },
+});
+
+export { PARTIES_OVERVIEW_SLOT, PARTIES_REVIEW_TOOLBAR_SLOT } from "./slots";
+export { senderDisplayName, type SenderIdentity } from "./identity";
+
+export default parties;

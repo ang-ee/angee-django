@@ -1,0 +1,16 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.workflows"
+description = "Workflow definitions, steps, edges, and triggers"
+keywords = ["workflows", "automation", "orchestration"]
+category = "Workflows"
+depends_on = ["angee.iam", "angee.jobs"]
+dependencies = [
+  "croniter>=6.0",
+]
+
+[[migrations]]
+name = "workflow_stable_key"
+app_label = "workflows"
+module = "runtime_migrations.workflow_stable_key"

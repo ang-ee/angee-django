@@ -1,0 +1,48 @@
+_meta:
+  model: proposals.Topic
+rows:
+  - xref: mvp_architecture
+    fields:
+      round: proposals.mvp_bakeoff
+      key: architecture
+      name: Architecture
+      hint: Describe the service boundaries and the smallest durable platform shape.
+      sort_order: 1024.0
+      created_by: iam.user_admin
+      updated_by: iam.user_admin
+  - xref: mvp_delivery
+    fields:
+      round: proposals.mvp_bakeoff
+      key: delivery
+      name: Delivery plan
+      hint: Explain the MVP sequence, risks, and validation checkpoints.
+      sort_order: 2048.0
+      created_by: iam.user_admin
+      updated_by: iam.user_admin
+  - xref: mvp_integrations
+    fields:
+      round: proposals.mvp_bakeoff
+      key: integrations
+      name: Integrations
+      hint: Name required bridges and how failures remain recoverable.
+      sort_order: 3072.0
+      created_by: iam.user_admin
+      updated_by: iam.user_admin
+  - xref: flat_location
+    fields:
+      round: proposals.valencia_flat_hunt
+      key: location
+      name: Location and transport
+      hint: Walking access, transit, and street noise.
+      sort_order: 1024.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: flat_terms
+    fields:
+      round: proposals.valencia_flat_hunt
+      key: terms
+      name: Lease terms
+      hint: Deposit, included costs, duration, and availability.
+      sort_order: 2048.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

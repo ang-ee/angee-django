@@ -1,0 +1,176 @@
+// Authorization schema for the messaging addon.
+// @rebac_package: messaging
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 8
+
+// Each messaging row is owned by the user that created it (sync writes set
+// created_by to the channel owner), with platform admins reaching every row via
+// the const-backed angee/role:admin membership. A Channel is a multi-table
+// inheritance child of integrate/integration, so its access derives from the
+// parent integration the way integrate/vcs_bridge and parties/directory do.
+
+definition messaging/channel {
+    relation integration: integrate/integration // rebac:field=integration_ptr
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read   = integration->read + admin->member
+    permission write  = integration->write + admin->member
+    permission delete = integration->write + admin->member
+}
+
+definition messaging/thread {
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission share  = owner + editor + admin->member
+    permission delete = owner + admin->member
+}
+
+definition messaging/message {
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission delete = owner + admin->member
+}
+
+definition messaging/thread_attachment {
+    relation thread: messaging/thread // rebac:field=thread
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = thread->read + owner + editor + reader + admin->member
+    permission write  = thread->write + owner + editor + admin->member
+    permission delete = thread->write + owner + admin->member
+}
+
+definition messaging/thread_follower {
+    relation thread: messaging/thread // rebac:field=thread
+    relation attachment: messaging/thread_attachment // rebac:field=attachment
+    relation user: auth/user // rebac:field=user
+    relation owner: auth/user // rebac:field=created_by
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = user + owner + thread->read + attachment->read + admin->member
+    permission write  = user + owner + thread->write + attachment->write + admin->member
+    permission delete = user + owner + thread->write + attachment->write + admin->member
+}
+
+definition messaging/thread_activity {
+    relation thread: messaging/thread // rebac:field=thread
+    relation attachment: messaging/thread_attachment // rebac:field=attachment
+    relation user: auth/user // rebac:field=user
+    relation owner: auth/user // rebac:field=created_by
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = user + owner + thread->read + attachment->read + admin->member
+    permission write  = user + owner + thread->write + attachment->write + admin->member
+    permission delete = user + owner + thread->write + attachment->write + admin->member
+}
+
+definition messaging/thread_notification {
+    relation thread: messaging/thread // rebac:field=thread
+    relation attachment: messaging/thread_attachment // rebac:field=attachment
+    relation message: messaging/message // rebac:field=message
+    relation user: auth/user // rebac:field=user
+    relation owner: auth/user // rebac:field=created_by
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = user + owner + thread->read + attachment->read + message->read + admin->member
+    permission write  = user + owner + admin->member
+    permission delete = user + owner + admin->member
+}
+
+definition messaging/part {
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission delete = owner + admin->member
+}
+
+definition messaging/tracking_value {
+    relation message: messaging/message // rebac:field=message
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = message->read + owner + editor + reader + admin->member
+    permission write  = message->write + owner + editor + admin->member
+    permission delete = message->write + owner + admin->member
+}
+
+// A Fragment is content-addressed and shared across owners (dedup by text hash),
+// so it carries no REBAC type — a per-owner read on a shared row would hide the
+// text from every owner but the first. Its visibility rides the owning part/message
+// (each gated below); the row is reached only through a readable part, never alone.
+
+definition messaging/message_edge {
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission delete = owner + admin->member
+}
+
+definition messaging/participant {
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission delete = owner + admin->member
+}
+
+definition messaging/reaction {
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission delete = owner + admin->member
+}
+
+definition messaging/message_star {
+    relation message: messaging/message // rebac:field=message
+    relation user: auth/user // rebac:field=user
+    relation owner: auth/user // rebac:field=created_by
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = user + owner + message->read + admin->member
+    permission write  = user + owner + admin->member
+    permission delete = user + owner + admin->member
+}

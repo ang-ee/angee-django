@@ -1,0 +1,43 @@
+// Authorization schema for the money addon.
+// @rebac_package: money
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+// Roles-as-namespace anchor, mirroring sequence/role: `includes` lets one money
+// role imply another, and resources gate on `effective_member` so granted +
+// implied members both resolve. Platform admins (angee/role:admin) reach every
+// money role through the const-backed `admin` relation — synthetic, no per-object
+// tuple — the same universal-admin path the resource types below use.
+definition money/role {
+    relation member:   auth/user | auth/group#member | angee/role:admin#member
+    relation includes: money/role#effective_member
+    relation admin:    angee/role // rebac:const=admin
+
+    permission effective_member = member + includes + admin->member
+}
+
+// Currencies are a shared master catalogue: every authenticated user reads them
+// (products, orders, invoices reference a currency), while configuration is
+// admin-only. The create path preflights `create` through the write backend and
+// runs elevated, so an admin is granted and everyone else denied on writes.
+definition money/currency {
+    relation admin:   angee/role // rebac:const=admin
+    relation manager: money/role:money_admin#effective_member
+
+    permission create = admin->member + manager
+    permission read   = authenticated
+    permission write  = admin->member + manager
+    permission delete = admin->member + manager
+}
+
+// Exchange rates are dated financial configuration: read by any authenticated
+// user, written only by an admin (the same posture as the catalogue).
+definition money/rate {
+    relation admin:   angee/role // rebac:const=admin
+    relation manager: money/role:money_admin#effective_member
+
+    permission create = admin->member + manager
+    permission read   = authenticated
+    permission write  = admin->member + manager
+    permission delete = admin->member + manager
+}

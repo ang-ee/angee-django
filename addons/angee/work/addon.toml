@@ -1,0 +1,20 @@
+[addon]
+name = "angee.work"
+description = "Operational queues, named stages, cycles, and triage folded into project tasks."
+keywords = ["work", "queues", "stages", "cycles", "triage", "planning"]
+category = "Productivity"
+depends_on = [
+  "angee.jobs",
+  "angee.messaging",
+  "angee.projects",
+  "angee.sequence",
+  "angee.spaces",
+]
+
+[resources]
+master = []
+demo = [
+  { path = "resources/demo/010_work.queue.yaml", depends_on = "iam:resources/demo/010_iam.user.yaml" },
+  { path = "resources/demo/015_work.cycle.yaml", depends_on = "resources/demo/010_work.queue.yaml" },
+  { path = "resources/demo/020_projects.task.yaml", depends_on = ["resources/demo/015_work.cycle.yaml", "projects:resources/demo/031_projects.task.yaml"] },
+]

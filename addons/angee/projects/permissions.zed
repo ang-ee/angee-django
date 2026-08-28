@@ -1,0 +1,74 @@
+// Authorization schema for bounded projects and their work.
+// @rebac_package: projects
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+definition projects/project {
+    relation owner:  auth/user // rebac:field=created_by
+    relation reader: auth/user | auth/group#member
+    relation editor: auth/user | auth/group#member
+    relation admin:  angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + reader + editor + admin->member
+    permission write  = owner + editor + admin->member
+    permission share  = owner + editor + admin->member
+    permission delete = owner + admin->member
+}
+
+definition projects/milestone {
+    relation project: projects/project // rebac:field=project
+    relation admin:   angee/role // rebac:const=admin
+
+    permission create = project->write + admin->member
+    permission read   = project->read + admin->member
+    permission write  = project->write + admin->member
+    permission delete = project->write + admin->member
+}
+
+definition projects/task {
+    relation project: projects/project // rebac:field=project
+    relation owner:   auth/user // rebac:field=created_by
+    relation admin:   angee/role // rebac:const=admin
+
+    // With a project set, its grant arms apply. A NULL project contributes no
+    // arrow result, leaving the creator as the standalone task owner.
+    permission create = authenticated
+    permission read   = project->read + owner + admin->member
+    permission write  = project->write + owner + admin->member
+    permission delete = project->write + owner + admin->member
+}
+
+definition projects/task_relation {
+    relation task:         projects/task // rebac:field=task
+    relation related_task: projects/task // rebac:field=related_task
+    relation admin:        angee/role // rebac:const=admin
+
+    permission create = task->write + admin->member
+    permission read   = (task->read & related_task->read) + admin->member
+    permission write  = task->write + admin->member
+    permission delete = task->write + admin->member
+}
+
+definition projects/participant {
+    relation project: projects/project // rebac:field=project
+    relation admin:   angee/role // rebac:const=admin
+
+    permission create = project->write + admin->member
+    permission read   = project->read + admin->member
+    permission write  = project->write + admin->member
+    permission delete = project->write + admin->member
+}
+
+// Link's target is a GenericForeignKey, so its manager mirrors the canonical
+// target into exactly one of these stored relations in the same transaction.
+definition projects/link {
+    relation project: projects/project
+    relation task:    projects/task
+    relation admin:   angee/role // rebac:const=admin
+
+    permission create = project->write + task->write + admin->member
+    permission read   = project->read + task->read + admin->member
+    permission write  = project->write + task->write + admin->member
+    permission delete = project->write + task->write + admin->member
+}

@@ -1,0 +1,21 @@
+_meta:
+  model: parties.Party
+rows:
+  - xref: neighborhood_committee
+    fields:
+      display_name: Neighborhood committee
+      notes: Requester for the competitive MVP round.
+      created_by: iam.user_admin
+      updated_by: iam.user_admin
+  - xref: landlord_cabanyal
+    fields:
+      display_name: Cabanyal Homes
+      notes: Direct landlord contacted during the flat hunt.
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: landlord_russafa
+    fields:
+      display_name: Russafa Living
+      notes: Independent landlord contacted during the flat hunt.
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

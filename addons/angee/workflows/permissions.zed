@@ -1,0 +1,78 @@
+// Authorization schema for the workflows addon.
+// @rebac_package: workflows
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 2
+
+definition workflows/workflow {
+    relation owner: auth/user // rebac:field=created_by
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = owner + admin->member
+    permission write = owner + admin->member
+    permission delete = owner + admin->member
+}
+
+definition workflows/step {
+    relation workflow: workflows/workflow // rebac:field=workflow
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = workflow->write + admin->member
+    permission read = workflow->read + admin->member
+    permission write = workflow->write + admin->member
+    permission delete = workflow->write + admin->member
+}
+
+definition workflows/edge {
+    relation workflow: workflows/workflow // rebac:field=workflow
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = workflow->write + admin->member
+    permission read = workflow->read + admin->member
+    permission write = workflow->write + admin->member
+    permission delete = workflow->write + admin->member
+}
+
+definition workflows/trigger {
+    relation workflow: workflows/workflow // rebac:field=workflow
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = workflow->write + admin->member
+    permission read = workflow->read + admin->member
+    permission write = workflow->write + admin->member
+    permission delete = workflow->write + admin->member
+}
+
+definition workflows/run {
+    relation owner: auth/user // rebac:field=created_by
+    relation workflow: workflows/workflow // rebac:field=workflow
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = workflow->write + admin->member
+    permission read = owner + workflow->read + admin->member
+    permission write = owner + workflow->write + admin->member
+    permission delete = admin->member
+}
+
+definition workflows/step_run {
+    relation run: workflows/run // rebac:field=run
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = run->write + admin->member
+    permission read = run->read + admin->member
+    permission write = run->write + admin->member
+    permission delete = admin->member
+}
+
+definition workflows/decision {
+    relation assignee: auth/user | angee/role#member
+    relation requester: auth/user
+    relation escalation: auth/user | angee/role#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission act = (assignee - requester) + admin->member
+    permission read = assignee + requester + escalation + admin->member
+    permission write = admin->member
+    permission delete = admin->member
+}

@@ -1,0 +1,321 @@
+# MIME taxonomy (master tier). Model inferred from the `storage.mimetype`
+# filename. Adopted by mime_type so a pre-existing row is linked instead of
+# duplicated; master rows re-sync from this file when it changes.
+#
+# `icon_key` names a lucide icon for the frontend icon registry. The
+# `application/octet-stream` row is the catch-all finalize falls back to and
+# must always exist.
+
+# image
+- xref: image_png
+  mime_type: image/png
+  category: image
+  label: PNG image
+  icon_key: image
+- xref: image_jpeg
+  mime_type: image/jpeg
+  category: image
+  label: JPEG image
+  icon_key: image
+- xref: image_gif
+  mime_type: image/gif
+  category: image
+  label: GIF image
+  icon_key: image
+- xref: image_webp
+  mime_type: image/webp
+  category: image
+  label: WebP image
+  icon_key: image
+- xref: image_svg
+  mime_type: image/svg+xml
+  category: image
+  label: SVG image
+  icon_key: image
+- xref: image_heic
+  mime_type: image/heic
+  category: image
+  label: HEIC image
+  icon_key: image
+- xref: image_heif
+  mime_type: image/heif
+  category: image
+  label: HEIF image
+  icon_key: image
+- xref: image_avif
+  mime_type: image/avif
+  category: image
+  label: AVIF image
+  icon_key: image
+- xref: image_tiff
+  mime_type: image/tiff
+  category: image
+  label: TIFF image
+  icon_key: image
+- xref: image_bmp
+  mime_type: image/bmp
+  category: image
+  label: Bitmap image
+  icon_key: image
+- xref: image_icon
+  mime_type: image/vnd.microsoft.icon
+  category: image
+  label: Icon
+  icon_key: image
+
+# video
+- xref: video_mp4
+  mime_type: video/mp4
+  category: video
+  label: MP4 video
+  icon_key: video
+- xref: video_quicktime
+  mime_type: video/quicktime
+  category: video
+  label: QuickTime video
+  icon_key: video
+- xref: video_webm
+  mime_type: video/webm
+  category: video
+  label: WebM video
+  icon_key: video
+- xref: video_matroska
+  mime_type: video/x-matroska
+  category: video
+  label: Matroska video
+  icon_key: video
+- xref: video_avi
+  mime_type: video/x-msvideo
+  category: video
+  label: AVI video
+  icon_key: video
+
+# audio
+- xref: audio_mpeg
+  mime_type: audio/mpeg
+  category: audio
+  label: MP3 audio
+  icon_key: music
+- xref: audio_wav
+  mime_type: audio/wav
+  category: audio
+  label: WAV audio
+  icon_key: music
+- xref: audio_ogg
+  mime_type: audio/ogg
+  category: audio
+  label: Ogg audio
+  icon_key: music
+- xref: audio_flac
+  mime_type: audio/flac
+  category: audio
+  label: FLAC audio
+  icon_key: music
+- xref: audio_mp4
+  mime_type: audio/mp4
+  category: audio
+  label: AAC audio
+  icon_key: music
+
+# document
+- xref: document_pdf
+  mime_type: application/pdf
+  category: document
+  label: PDF document
+  icon_key: file-text
+- xref: document_word
+  mime_type: application/vnd.openxmlformats-officedocument.wordprocessingml.document
+  category: document
+  label: Word document
+  icon_key: file-text
+- xref: document_word_legacy
+  mime_type: application/msword
+  category: document
+  label: Word 97-2003 document
+  icon_key: file-text
+- xref: document_odt
+  mime_type: application/vnd.oasis.opendocument.text
+  category: document
+  label: OpenDocument text
+  icon_key: file-text
+- xref: document_rtf
+  mime_type: application/rtf
+  category: document
+  label: Rich text document
+  icon_key: file-text
+- xref: document_epub
+  mime_type: application/epub+zip
+  category: document
+  label: EPUB book
+  icon_key: file-text
+
+# spreadsheet
+- xref: spreadsheet_excel
+  mime_type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+  category: spreadsheet
+  label: Excel spreadsheet
+  icon_key: table
+- xref: spreadsheet_excel_legacy
+  mime_type: application/vnd.ms-excel
+  category: spreadsheet
+  label: Excel 97-2003 spreadsheet
+  icon_key: table
+- xref: spreadsheet_ods
+  mime_type: application/vnd.oasis.opendocument.spreadsheet
+  category: spreadsheet
+  label: OpenDocument spreadsheet
+  icon_key: table
+- xref: spreadsheet_csv
+  mime_type: text/csv
+  category: spreadsheet
+  label: CSV file
+  icon_key: table
+- xref: spreadsheet_tsv
+  mime_type: text/tab-separated-values
+  category: spreadsheet
+  label: TSV file
+  icon_key: table
+
+# presentation
+- xref: presentation_powerpoint
+  mime_type: application/vnd.openxmlformats-officedocument.presentationml.presentation
+  category: presentation
+  label: PowerPoint presentation
+  icon_key: presentation
+- xref: presentation_powerpoint_legacy
+  mime_type: application/vnd.ms-powerpoint
+  category: presentation
+  label: PowerPoint 97-2003 presentation
+  icon_key: presentation
+- xref: presentation_odp
+  mime_type: application/vnd.oasis.opendocument.presentation
+  category: presentation
+  label: OpenDocument presentation
+  icon_key: presentation
+
+# text
+- xref: text_plain
+  mime_type: text/plain
+  category: text
+  label: Plain text
+  icon_key: file-text
+- xref: text_markdown
+  mime_type: text/markdown
+  category: text
+  label: Markdown
+  icon_key: file-text
+- xref: text_html
+  mime_type: text/html
+  category: text
+  label: HTML
+  icon_key: code
+
+# code
+- xref: code_json
+  mime_type: application/json
+  category: code
+  label: JSON
+  icon_key: code
+- xref: code_xml
+  mime_type: application/xml
+  category: code
+  label: XML
+  icon_key: code
+- xref: code_yaml
+  mime_type: application/yaml
+  category: code
+  label: YAML
+  icon_key: code
+- xref: code_javascript
+  mime_type: text/javascript
+  category: code
+  label: JavaScript
+  icon_key: code
+- xref: code_css
+  mime_type: text/css
+  category: code
+  label: CSS
+  icon_key: code
+- xref: code_python
+  mime_type: text/x-python
+  category: code
+  label: Python
+  icon_key: code
+
+# archive
+- xref: archive_zip
+  mime_type: application/zip
+  category: archive
+  label: ZIP archive
+  icon_key: archive
+- xref: archive_gzip
+  mime_type: application/gzip
+  category: archive
+  label: Gzip archive
+  icon_key: archive
+- xref: archive_tar
+  mime_type: application/x-tar
+  category: archive
+  label: Tar archive
+  icon_key: archive
+- xref: archive_7z
+  mime_type: application/x-7z-compressed
+  category: archive
+  label: 7-Zip archive
+  icon_key: archive
+- xref: archive_rar
+  mime_type: application/vnd.rar
+  category: archive
+  label: RAR archive
+  icon_key: archive
+
+# font
+- xref: font_woff2
+  mime_type: font/woff2
+  category: font
+  label: WOFF2 font
+  icon_key: type
+- xref: font_woff
+  mime_type: font/woff
+  category: font
+  label: WOFF font
+  icon_key: type
+- xref: font_ttf
+  mime_type: font/ttf
+  category: font
+  label: TrueType font
+  icon_key: type
+- xref: font_otf
+  mime_type: font/otf
+  category: font
+  label: OpenType font
+  icon_key: type
+
+# model
+- xref: model_gltf
+  mime_type: model/gltf-binary
+  category: model
+  label: glTF model
+  icon_key: box
+- xref: model_stl
+  mime_type: model/stl
+  category: model
+  label: STL model
+  icon_key: box
+- xref: model_obj
+  mime_type: model/obj
+  category: model
+  label: OBJ model
+  icon_key: box
+
+# other
+- xref: other_octet_stream
+  mime_type: application/octet-stream
+  category: other
+  label: Binary file
+  icon_key: file
+- xref: other_sqlite
+  mime_type: application/vnd.sqlite3
+  category: other
+  label: SQLite database
+  icon_key: database

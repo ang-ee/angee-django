@@ -1,0 +1,11 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.operator"
+description = "Bridge to the operator daemon — drives the local stack and the admin console"
+keywords = ["operator", "daemon", "stack"]
+category = "Platform"
+depends_on = ["angee.iam", "angee.integrate"]
+
+[web]
+codegen = { schema = "operator", sdl = "schema/operator.graphql", documents = "documents.daemon.ts", types = true }

@@ -1,0 +1,41 @@
+_meta:
+  model: projects.Task
+rows:
+  - xref: map_plots
+    fields:
+      project: projects.neighborhood_garden
+      milestone: projects.plots_ready
+      title: Map the garden plots
+      note: Mark accessible paths and leave room for the shared compost area.
+      assignee: iam.user_alice
+      priority: high
+      due_date: 2026-09-12
+      sort_order: 1024.0
+      sub_sort_order: 1024.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: weekly_tools
+    fields:
+      project: projects.neighborhood_garden
+      title: Inspect and tidy shared tools
+      note: Check handles, clean soil from tools, and record anything that needs replacement.
+      assignee: iam.user_bob
+      priority: medium
+      due_date: 2026-09-04
+      recurrence: FREQ=WEEKLY;BYDAY=FR
+      sort_order: 2048.0
+      sub_sort_order: 2048.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: opening_day
+    fields:
+      project: projects.neighborhood_garden
+      title: Prepare opening day
+      note: Bring the people, materials, and final site checks together.
+      assignee: iam.user_alice
+      priority: urgent
+      due_date: 2026-11-30
+      sort_order: 3072.0
+      sub_sort_order: 3072.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

@@ -1,0 +1,39 @@
+# Default third-party vendor catalogue (master tier). Model inferred from the
+# `integrate.vendor` filename. Adopted by slug so a pre-existing vendor is linked
+# instead of duplicated; master rows re-sync from this file when it changes.
+- xref: google
+  slug: google
+  display_name: Google
+  website_url: https://www.google.com
+- xref: microsoft
+  slug: microsoft
+  display_name: Microsoft
+  website_url: https://www.microsoft.com
+- xref: github
+  slug: github
+  display_name: GitHub
+  website_url: https://github.com
+- xref: gitlab
+  slug: gitlab
+  display_name: GitLab
+  website_url: https://gitlab.com
+- xref: slack
+  slug: slack
+  display_name: Slack
+  website_url: https://slack.com
+- xref: anthropic
+  slug: anthropic
+  display_name: Anthropic
+  website_url: https://www.anthropic.com
+- xref: gemini
+  slug: gemini
+  display_name: Google Gemini
+  website_url: https://gemini.google.com
+- xref: grok
+  slug: grok
+  display_name: Grok
+  website_url: https://x.ai/grok
+- xref: openai
+  slug: openai
+  display_name: OpenAI
+  website_url: https://openai.com

@@ -1,0 +1,19 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.iam_integrate_oidc"
+description = "OIDC single sign-on — login and account linking over any OpenID Connect provider"
+keywords = ["oidc", "login", "sso"]
+category = "Integration"
+depends_on = ["angee.iam", "angee.integrate", "angee.parties"]
+dependencies = [
+  "pyjwt[crypto]>=2.12",
+]
+
+[resources]
+install = [
+  { path = "resources/install/010_integrate.oauthclient.yaml", adopt = ["slug", "environment"] },
+]
+demo = [
+  { path = "resources/demo/010_integrate.oauthclient.yaml", adopt = ["slug", "environment"] },
+]

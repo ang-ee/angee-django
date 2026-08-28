@@ -1,0 +1,18 @@
+[addon]
+name = "angee.portfolio"
+description = "Phasal products, strategic initiatives, health updates, and releases."
+keywords = ["portfolio", "products", "initiatives", "roadmaps", "releases"]
+category = "Productivity"
+depends_on = [
+  "angee.projects",
+]
+
+[resources]
+master = []
+demo = [
+  { path = "resources/demo/010_portfolio.product.yaml", depends_on = "projects:resources/demo/010_projects.project.yaml" },
+  { path = "resources/demo/020_portfolio.initiative.yaml", depends_on = ["resources/demo/010_portfolio.product.yaml", "iam:resources/demo/010_iam.user.yaml"] },
+  { path = "resources/demo/030_projects.project.yaml", depends_on = ["resources/demo/010_portfolio.product.yaml", "iam:resources/demo/010_iam.user.yaml"] },
+  { path = "resources/demo/040_portfolio.initiative_project.yaml", depends_on = ["resources/demo/020_portfolio.initiative.yaml", "resources/demo/030_projects.project.yaml"] },
+  { path = "resources/demo/050_portfolio.release.yaml", depends_on = "resources/demo/010_portfolio.product.yaml" },
+]

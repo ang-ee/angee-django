@@ -1,0 +1,22 @@
+_meta:
+  model: portfolio.Release
+rows:
+  - xref: garden_2_2
+    fields:
+      product: portfolio.neighborhood_garden
+      name: "2.2"
+      status: shipped
+      target_date: 2026-08-01
+      shipped_on: 2026-08-03
+      notes: Plot maps and shared-tool tracking for the first season.
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: garden_2_3
+    fields:
+      product: portfolio.neighborhood_garden
+      name: "2.3"
+      status: in_progress
+      target_date: 2027-04-30
+      notes: Seed exchange and participation improvements.
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

@@ -1,0 +1,28 @@
+_meta:
+  model: portfolio.Initiative
+rows:
+  - xref: resilient_seasons
+    fields:
+      name: Make every growing season resilient
+      body: Improve planning, access, and shared infrastructure across seasons.
+      owner: iam.user_alice
+      status: active
+      target_date: 2027-06-30
+      target_date_resolution: half_year
+      priority: 10
+      sort_order: 1024.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: shared_harvests
+    fields:
+      parent: portfolio.resilient_seasons
+      name: Grow shared harvest participation
+      body: Make it simple for every neighbour to contribute and benefit.
+      owner: iam.user_bob
+      status: planned
+      target_date: 2027-03-31
+      target_date_resolution: quarter
+      priority: 20
+      sort_order: 1024.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

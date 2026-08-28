@@ -1,0 +1,12 @@
+_meta:
+  model: workflows.Workflow
+rows:
+  - xref: agent_session
+    fields:
+      name: Agent session
+      description: Run one durable, multi-turn in-process agent conversation.
+      subject_declaration: agents.agentsession
+      # A conversation is intentionally long-lived; the engine ceiling remains
+      # a runaway guard while each delivered user turn consumes one claim.
+      max_steps: 100000
+      budget: {}

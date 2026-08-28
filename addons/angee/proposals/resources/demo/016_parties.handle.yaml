@@ -1,0 +1,21 @@
+_meta:
+  model: parties.Handle
+rows:
+  - xref: landlord_cabanyal_email
+    fields:
+      platform: email
+      value: offers@cabanyal-homes.example
+      display_name: Cabanyal Homes
+      party: proposals.landlord_cabanyal
+      party_link_confirmed: true
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: landlord_russafa_email
+    fields:
+      platform: email
+      value: hello@russafa-living.example
+      display_name: Russafa Living
+      party: proposals.landlord_russafa
+      party_link_confirmed: true
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

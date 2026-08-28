@@ -1,0 +1,56 @@
+// Authorization schema for the posts addon.
+// @rebac_package: posts
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 4
+
+// Feed and Quota access derives from their integrate/integration parent or FK;
+// system-created quota rows intentionally need no created_by owner. Platform admins
+// reach every row through const-backed angee/role:admin membership.
+
+definition posts/feed {
+    relation integration: integrate/integration // rebac:field=integration_ptr
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read   = integration->read + admin->member
+    permission write  = integration->write + admin->member
+    permission delete = integration->write + admin->member
+}
+
+definition posts/feed_follow {
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission delete = owner + admin->member
+}
+
+// PostMetrics is a one-to-one projection off a messaging/message (the rolled-up
+// public engagement counts). Read derives from the message the way the sibling
+// projections messaging/message_star and messaging/tracking_value do, so the counts
+// are exactly as visible as the post itself — a message reader is not denied its
+// engagement just because it did not own the feed sync that wrote the row.
+definition posts/post_metrics {
+    relation message: messaging/message // rebac:field=message
+    relation owner: auth/user // rebac:field=created_by
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = message->read + owner + admin->member
+    permission write  = owner + admin->member
+    permission delete = owner + admin->member
+}
+
+definition posts/quota {
+    relation integration: integrate/integration // rebac:field=integration
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read   = integration->read + admin->member
+    permission write  = integration->write + admin->member
+    permission delete = integration->write + admin->member
+}

@@ -1,0 +1,28 @@
+_meta:
+  model: knowledge.Page
+rows:
+  - xref: page_guides
+    fields:
+      vault: knowledge.vault_handbook
+      kind: folder
+      title: Guides
+      created_by: iam.user_admin
+  - xref: page_getting_started
+    fields:
+      vault: knowledge.vault_handbook
+      parent: knowledge.page_guides
+      kind: note
+      title: Getting Started
+      created_by: iam.user_admin
+  - xref: page_architecture
+    fields:
+      vault: knowledge.vault_handbook
+      kind: note
+      title: Architecture
+      created_by: iam.user_admin
+  - xref: page_wikilinks
+    fields:
+      vault: knowledge.vault_handbook
+      kind: note
+      title: Wikilinks
+      created_by: iam.user_admin

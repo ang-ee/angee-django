@@ -1,0 +1,390 @@
+import * as React from "react";
+import {
+  Action,
+  Button,
+  Chip,
+  Column,
+  EmptyState,
+  Field,
+  Form,
+  Group,
+  List,
+  ListView,
+  MutationDialog,
+  mutationDialogValueCodecs,
+  ResourceList,
+  SplitPane,
+  SplitPaneHandle,
+  SplitPanes,
+  Glyph,
+  cn,
+  defineRowAction,
+  rowIdVariables,
+  type ListColumn,
+  type MutationDialogField,
+  type MutationDialogValues,
+  type RecordPanelContext,
+  type RecordTabDescriptor,
+  type ResourceListSnapshot,
+  type RowActionDeclaration,
+  type StringIdRow,
+  useAuthoredResourceMutation,
+} from "@angee/ui";
+import { ThreadTranscript } from "@angee/messaging";
+
+import {
+  AddSpaceMembership,
+  RemoveSpaceMembership,
+  SPACE_MEMBERSHIP_INVALIDATES,
+  UpdateSpaceMembershipRole,
+} from "./documents";
+import { useSpacesT } from "./i18n";
+
+const MODEL = "spaces.Group";
+
+type MembershipRow = StringIdRow;
+interface SpaceThreadRow extends StringIdRow {
+  title?: { text?: string | null } | null;
+  groups?: ReadonlyArray<{ id?: string | null; name?: string | null } | null> | null;
+}
+const EMPTY_THREAD_ROWS: readonly SpaceThreadRow[] = [];
+type SpaceMembershipRole = "OWNER" | "MODERATOR" | "MEMBER" | "VIEWER";
+
+/** Narrow a dialog value onto the wire's MembershipRole enum, defaulting MEMBER. */
+function membershipRole(value: unknown): SpaceMembershipRole {
+  return (
+    value === "OWNER"
+    || value === "MODERATOR"
+    || value === "MEMBER"
+    || value === "VIEWER"
+  )
+    ? value
+    : "MEMBER";
+}
+
+function threadColumns(
+  t: ReturnType<typeof useSpacesT>,
+  selectedThreadId: string | null,
+): readonly ListColumn<SpaceThreadRow>[] {
+  return [
+    {
+      field: "title.text",
+      header: t("group.threads.title"),
+      render: (thread) => (
+        <span
+          className={cn(
+            "block min-w-0 truncate",
+            thread.id === selectedThreadId && "font-semibold text-fg",
+          )}
+        >
+          {thread.title?.text || thread.id}
+        </span>
+      ),
+    },
+    {
+      field: "groups",
+      header: t("group.threads.audience"),
+      render: (thread) => (
+        <span className="inline-flex min-w-0 flex-wrap items-center gap-1">
+          {(thread.groups ?? []).map((group, index) => (
+            <Chip key={group?.id ?? `${group?.name ?? "unknown"}:${index}`} tone="info" size="sm">
+              {group?.name || group?.id || t("group.threads.unknownAudience")}
+            </Chip>
+          ))}
+        </span>
+      ),
+    },
+    { field: "message_count", header: t("group.threads.messages") },
+    { field: "last_message_at" },
+  ];
+}
+
+function GroupRosterTab({ recordId }: RecordPanelContext): React.ReactElement {
+  const t = useSpacesT();
+  const [addOpen, setAddOpen] = React.useState(false);
+  const [roleRow, setRoleRow] = React.useState<MembershipRow | null>(null);
+  const [add, addState] = useAuthoredResourceMutation(AddSpaceMembership, {
+    invalidateModels: SPACE_MEMBERSHIP_INVALIDATES,
+  });
+  const [updateRole, updateState] = useAuthoredResourceMutation(
+    UpdateSpaceMembershipRole,
+    { invalidateModels: SPACE_MEMBERSHIP_INVALIDATES },
+  );
+  const busy = addState.fetching || updateState.fetching;
+  const roleOptions = React.useMemo(
+    () => [
+      { value: "OWNER", label: t("group.roster.role.owner") },
+      { value: "MODERATOR", label: t("group.roster.role.moderator") },
+      { value: "MEMBER", label: t("group.roster.role.member") },
+      { value: "VIEWER", label: t("group.roster.role.viewer") },
+    ],
+    [t],
+  );
+  const addFields = React.useMemo<readonly MutationDialogField[]>(
+    () => [
+      {
+        name: "party",
+        label: t("group.roster.party"),
+        required: true,
+        relation: { resource: "parties.Party", labelField: "display_name" },
+      },
+      {
+        name: "role",
+        label: t("group.roster.role"),
+        widget: "select",
+        options: roleOptions,
+        required: true,
+      },
+    ],
+    [roleOptions, t],
+  );
+  const roleFields = React.useMemo<readonly MutationDialogField[]>(
+    () => [
+      {
+        name: "role",
+        label: t("group.roster.role"),
+        widget: "select",
+        options: roleOptions,
+        required: true,
+      },
+    ],
+    [roleOptions, t],
+  );
+  const columns = React.useMemo<readonly ListColumn<MembershipRow>[]>(
+    () => [
+      { field: "party.display_name", header: t("group.roster.party") },
+      { field: "role", header: t("group.roster.role") },
+      { field: "is_confirmed" },
+      { field: "source" },
+      { field: "created_at" },
+    ],
+    [t],
+  );
+  const rowActions = React.useMemo<readonly RowActionDeclaration<MembershipRow>[]>(
+    () => [
+      defineRowAction({
+        kind: "page",
+        id: "change-membership-role",
+        label: t("group.roster.changeRole"),
+        icon: "pencil",
+        variant: "ghost",
+        disabled: () => busy,
+        pendingPolicy: "disable-actions",
+        onSelect: (row: MembershipRow) => setRoleRow(row),
+      }),
+      defineRowAction({
+        kind: "authored",
+        id: "remove-membership",
+        label: t("group.roster.remove"),
+        document: RemoveSpaceMembership,
+        variables: rowIdVariables,
+        invalidateModels: SPACE_MEMBERSHIP_INVALIDATES,
+        confirm: {
+          title: () => t("group.roster.removeTitle"),
+          body: () => t("group.roster.removeDescription"),
+          confirm: () => t("group.roster.remove"),
+        },
+        toast: {
+          title: () => t("group.roster.removeError"),
+          description: () => t("group.roster.removeError"),
+        },
+        icon: "trash",
+        variant: "ghost",
+        disabled: () => busy,
+        pendingPolicy: "disable-actions",
+      }),
+    ],
+    [busy, t],
+  );
+  return (
+    <>
+      <ListView<MembershipRow>
+        resource="spaces.Membership"
+        scope="local"
+        fields={["id", "party.display_name", "role", "is_confirmed", "source", "created_at"]}
+        baseFilter={{ group: { exact: recordId } }}
+        columns={columns}
+        rowActions={rowActions}
+        toolbarActions={
+          <Button type="button" variant="primary" size="sm" onClick={() => setAddOpen(true)}>
+            <Glyph decorative name="plus" />
+            {t("group.roster.add")}
+          </Button>
+        }
+        emptyContent={t("group.roster.empty")}
+      />
+      <MutationDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        title={t("group.roster.add")}
+        fields={addFields}
+        initialValues={{ role: "MEMBER" }}
+        submitLabel={t("group.roster.add")}
+        submittingLabel={t("group.roster.adding")}
+        errorFallback={t("group.roster.addError")}
+        parseValues={parseAddMembershipValues}
+        onSubmit={(values) =>
+          add({
+            group: recordId,
+            party: values.party,
+            role: values.role,
+          })
+        }
+      />
+      <MutationDialog
+        open={roleRow !== null}
+        onOpenChange={(open) => {
+          if (!open) setRoleRow(null);
+        }}
+        title={t("group.roster.changeRole")}
+        fields={roleFields}
+        initialValues={{ role: String(roleRow?.role ?? "MEMBER") }}
+        submitLabel={t("group.roster.saveRole")}
+        submittingLabel={t("group.roster.savingRole")}
+        errorFallback={t("group.roster.roleError")}
+        parseValues={parseMembershipRoleValues}
+        onSubmit={(values) =>
+          updateRole({
+            id: roleRow?.id ?? "",
+            role: values.role,
+          })
+        }
+        onSubmitted={() => setRoleRow(null)}
+      />
+    </>
+  );
+}
+
+function parseAddMembershipValues(values: MutationDialogValues) {
+  return {
+    party: mutationDialogValueCodecs.requiredString(values.party, "party"),
+    role: membershipRole(values.role),
+  };
+}
+
+function parseMembershipRoleValues(values: MutationDialogValues) {
+  // The update `_set` surface writes the lowercase model value, unlike the add
+  // mutation's real enum. Parsing owns that wire casing; submit adds row context.
+  return { role: membershipRole(values.role).toLowerCase() };
+}
+
+function GroupThreadsTab({ recordId }: RecordPanelContext): React.ReactElement {
+  const t = useSpacesT();
+  const [selectedThread, setSelectedThread] = React.useState<{
+    groupId: string;
+    threadId: string;
+  } | null>(null);
+  const [listState, setListState] =
+    React.useState<ResourceListSnapshot<SpaceThreadRow> | null>(null);
+  const selectedThreadId =
+    selectedThread?.groupId === recordId ? selectedThread.threadId : null;
+  const threadRows = listState?.rows ?? EMPTY_THREAD_ROWS;
+  const activeThread = React.useMemo(
+    () =>
+      threadRows.find((thread) => thread.id === selectedThreadId)
+      ?? threadRows[0]
+      ?? null,
+    [selectedThreadId, threadRows],
+  );
+  const activeThreadId = activeThread?.id ?? null;
+  const columns = React.useMemo(
+    () => threadColumns(t, activeThreadId),
+    [activeThreadId, t],
+  );
+  const handleListStateChange = React.useCallback(
+    (state: ResourceListSnapshot<SpaceThreadRow>) => setListState(state),
+    [],
+  );
+  const handleThreadClick = React.useCallback(
+    (thread: SpaceThreadRow) => {
+      setSelectedThread({ groupId: recordId, threadId: thread.id });
+    },
+    [recordId],
+  );
+
+  return (
+    <SplitPanes
+      direction="horizontal"
+      panelIds={["threads", "transcript"]}
+      className="min-h-[32rem] rounded-6 border border-border-subtle bg-sheet"
+    >
+      <SplitPane id="threads" defaultSize={38} minSize={28} maxSize={55} className="bg-sheet">
+        <ListView<SpaceThreadRow>
+          resource="spaces.GroupThread"
+          scope="local"
+          fields={["id", "title.text", "groups.id", "groups.name", "message_count", "last_message_at"]}
+          baseFilter={{ groups: { exact: recordId } }}
+          columns={columns}
+          onRowClick={handleThreadClick}
+          onListStateChange={handleListStateChange}
+          emptyContent={t("group.threads.empty")}
+        />
+      </SplitPane>
+      <SplitPaneHandle />
+      <SplitPane id="transcript" defaultSize={62} minSize={40} className="bg-canvas p-3">
+        {activeThreadId ? (
+          <ThreadTranscript threadId={activeThreadId} />
+        ) : (
+          <EmptyState
+            fill
+            icon="comments"
+            title={t("group.threads.empty")}
+            className="min-h-full"
+          />
+        )}
+      </SplitPane>
+    </SplitPanes>
+  );
+}
+
+function groupRecordTabs(t: ReturnType<typeof useSpacesT>): readonly RecordTabDescriptor[] {
+  return [
+    {
+      id: "roster",
+      label: t("group.tabs.roster"),
+      render: (context) => <GroupRosterTab {...context} />,
+    },
+    {
+      id: "threads",
+      label: t("group.tabs.threads"),
+      render: (context) => <GroupThreadsTab {...context} />,
+    },
+  ];
+}
+
+/** Shared spaces compose the common resource list, roster list, and messaging thread detail. */
+export function SpacesPage(): React.ReactElement {
+  const t = useSpacesT();
+  const tabs = React.useMemo(() => groupRecordTabs(t), [t]);
+  return (
+    <ResourceList resource={MODEL} placement="inline" routed recordTabs={tabs}>
+      <List resource={MODEL}>
+        <Column field="name" />
+        <Column field="parent.name" header={t("group.parent")} />
+        <Column field="visibility" header={t("group.visibility")} />
+        <Column field="created_at" />
+      </List>
+      <Form resource={MODEL}>
+        <Field name="name" title />
+        <Group label={t("group.details")} columns={2}>
+          <Field name="slug" />
+          <Field name="parent" label={t("group.parent")} />
+          <Field name="visibility" label={t("group.visibility")} readOnly />
+        </Group>
+        <Field name="description" />
+        <Action
+          id="visibility-public"
+          label={t("group.makePublic")}
+          set={{ visibility: "public" }}
+          visibleWhen={(record) => record.visibility !== "PUBLIC"}
+        />
+        <Action
+          id="visibility-private"
+          label={t("group.makePrivate")}
+          set={{ visibility: "private" }}
+          visibleWhen={(record) => record.visibility !== "PRIVATE"}
+        />
+      </Form>
+    </ResourceList>
+  );
+}

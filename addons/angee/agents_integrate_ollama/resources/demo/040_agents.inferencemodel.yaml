@@ -1,0 +1,10 @@
+# Ollama model ids are tag-qualified local handles. Refreshing the provider adds
+# every locally installed chat model and its `ollama/` broker-prefixed sibling.
+- xref: model_ollama_demo
+  provider: agents_integrate_ollama.provider_ollama_demo
+  name: llama3.2:latest
+  display_name: Llama 3.2
+- xref: model_ollama_broker_demo
+  provider: agents_integrate_ollama.provider_ollama_demo
+  name: ollama/llama3.2:latest
+  display_name: Llama 3.2 (Ollama)

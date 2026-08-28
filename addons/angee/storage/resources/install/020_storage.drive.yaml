@@ -1,0 +1,9 @@
+# Default drive (install tier, loaded once). `assets` is the drive uploads
+# target when they name none (ANGEE_STORAGE_DEFAULT_DRIVE). Access is granted
+# per drive through REBAC tuples; see permissions.zed.
+- xref: assets
+  slug: assets
+  backend: storage.local
+  name: Assets
+  description: Default drive for uploaded assets.
+  prefix: assets

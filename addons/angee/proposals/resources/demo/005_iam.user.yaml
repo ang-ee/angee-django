@@ -1,0 +1,27 @@
+_meta:
+  model: iam.User
+rows:
+  - xref: user_carla
+    fields:
+      username: carla
+      email: carla@example.com
+      password: "!"
+      is_staff: false
+      is_superuser: false
+      is_active: true
+  - xref: user_diego
+    fields:
+      username: diego
+      email: diego@example.com
+      password: "!"
+      is_staff: false
+      is_superuser: false
+      is_active: true
+  - xref: user_erin
+    fields:
+      username: erin
+      email: erin@example.com
+      password: "!"
+      is_staff: false
+      is_superuser: false
+      is_active: true
