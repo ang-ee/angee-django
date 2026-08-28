@@ -27,3 +27,4 @@ def test_addon_dependency_group_matches_manifests() -> None:
     actual = _read_toml(PROJECT_ROOT / "pyproject.toml")["dependency-groups"]["addons"]
 
     assert tuple(actual) == expected
+# P8 split provenance: angee-base side of pre-90bdd58b tests/test_addon_dependencies.py; kept separate because it guards addon-manifest compilation.

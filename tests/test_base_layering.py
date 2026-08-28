@@ -112,3 +112,4 @@ def test_compose_has_no_rebac_permission_renderer() -> None:
     """Per-addon REBAC schemas stay with their owning apps."""
 
     assert not (COMPOSE / "rebac.py").exists()
+# P8 split provenance: angee-base side of pre-90bdd58b tests/test_layering.py; kept separate because it guards addon dependency direction.
