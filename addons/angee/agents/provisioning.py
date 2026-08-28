@@ -254,7 +254,8 @@ def _render_agent(
     """Drive the daemon render for one agent over its REST API; return instance names.
 
     The daemon owns the template ref format and the secret store. If service render
-    fails after the workspace exists, the workspace is torn down so a retry starts clean.
+    fails after the workspace exists, its persisted service entry and then the
+    workspace are torn down so a retry starts clean.
     """
 
     daemon = OperatorDaemon.from_settings()
@@ -268,9 +269,12 @@ def _render_agent(
     if on_workspace_created is not None:
         on_workspace_created(workspace)
     try:
-        service = _render_service(daemon, plan, workspace)
-        if service and on_service_created is not None:
-            on_service_created(service)
+        service = _render_service(
+            daemon,
+            plan,
+            workspace,
+            on_service_created=on_service_created,
+        )
     except Exception:
         with contextlib.suppress(Exception):  # best-effort rollback; surface the original failure
             daemon.destroy_workspace(workspace)
@@ -278,15 +282,44 @@ def _render_agent(
     return {"workspace": workspace, "service": service}
 
 
-def _render_service(daemon: OperatorDaemon, plan: _RenderPlan, workspace: str) -> str:
-    """Render an agent's service into ``workspace``; ``""`` for workspace-only agents."""
+def _render_service(
+    daemon: OperatorDaemon,
+    plan: _RenderPlan,
+    workspace: str,
+    *,
+    on_service_created: Callable[[str], None] | None = None,
+) -> str:
+    """Render and start an agent service; ``""`` for workspace-only agents.
+
+    Creation and start are separate daemon calls so the returned service name is
+    available for rollback when ``ServiceUp`` fails after persisting the manifest.
+    """
 
     if plan.service_template is None:
         return ""
     service_ref = daemon.resolve_template_ref(name=plan.service_template[0], kind=plan.service_template[1])
     if not service_ref:
         raise ValueError(f"No operator service template matches {plan.service_template[0]!r}.")
-    return daemon.create_service(template=service_ref, workspace=workspace, inputs=plan.service_inputs)
+    service = daemon.create_service(
+        template=service_ref,
+        workspace=workspace,
+        inputs=plan.service_inputs,
+        start=False,
+    )
+    if not service:
+        raise ValueError("The operator did not return a service.")
+    try:
+        if on_service_created is not None:
+            on_service_created(service)
+        daemon.start_service(service)
+    except Exception:
+        # ServiceCreate deliberately preserves the manifest entry when ServiceUp
+        # fails. Remove it before the caller tears down the mounted workspace;
+        # a concurrent/retried cleanup may already have removed it.
+        with contextlib.suppress(Exception):  # best-effort rollback; surface the start failure
+            daemon.destroy_service(service)
+        raise
+    return service
 
 
 def _render_plan(agent: Any) -> _RenderPlan:

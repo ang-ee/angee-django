@@ -83,6 +83,25 @@ export const enOperatorMessages: Record<string, string> = {
   "workspaces.column.path": "Path",
   "workspaces.column.port": "Port",
   "workspaces.column.ttl": "TTL",
+  "workspaces.create.action": "New workspace",
+  "workspaces.create.title": "Create workspace",
+  "workspaces.create.description":
+    "Choose a workspace template, then provide the inputs it declares.",
+  "workspaces.create.template": "Workspace template",
+  "workspaces.create.templatePlaceholder": "Select a workspace template…",
+  "workspaces.create.name": "Name",
+  "workspaces.create.nameDescription":
+    "Optional. Leave blank to use the template's naming rule.",
+  "workspaces.create.ttl": "TTL",
+  "workspaces.create.ttlDescription":
+    "Optional lifetime, such as 30m, 2h, or 7d.",
+  "workspaces.create.submit": "Create workspace",
+  "workspaces.create.submitting": "Creating workspace…",
+  "workspaces.create.cancel": "Cancel",
+  "workspaces.create.required": "This input is required.",
+  "workspaces.create.validationFailed":
+    "Check the highlighted template inputs.",
+  "workspaces.create.failed": "Could not create workspace.",
   "workspaces.syncBase": "Sync base",
   "workspaces.destroy": "Destroy",
   "workspaces.destroy.confirm.title": "Destroy workspace?",

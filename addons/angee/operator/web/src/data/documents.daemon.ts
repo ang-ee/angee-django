@@ -337,6 +337,25 @@ export const SERVICE_CREATE_MUTATION = graphql(`
 
 // Render a workspace template into a new worktree workspace. `object.template` is
 // the daemon's own template ref (see SERVICE_CREATE_MUTATION).
+export const WORKSPACE_PREFLIGHT_MUTATION = graphql(`
+  mutation OperatorWorkspacePreflight($input: WorkspaceCreateInput!) {
+    workspaceCreatePreflight(input: $input) {
+      ok
+      template
+      resolvedTemplate
+      effectiveInputs {
+        key
+        value
+      }
+      missingRequired
+      invalidInputs {
+        field
+        reason
+      }
+    }
+  }
+`);
+
 export const WORKSPACE_CREATE_MUTATION = graphql(`
   mutation OperatorWorkspaceCreate($object: workspaces_insert_input!) {
     insert_workspaces_one(object: $object) {

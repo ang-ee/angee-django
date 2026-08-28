@@ -753,11 +753,15 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(agents_console_ta
         def create_service(
             self, *, template: str, workspace: str, inputs: dict[str, str], start: bool = True, name: str = ""
         ) -> str:
+            assert start is False
             with system_context(reason="test.agents.render.verify_workspace_recorded"):
                 agent.refresh_from_db()
                 calls.append(("recorded_workspace", agent.workspace, str(agent.lifecycle)))
             calls.append(("service", template, workspace, inputs))
             return "svc-bot"
+
+        def start_service(self, name: str) -> None:
+            calls.append(("start_service", name))
 
         def destroy_service(self, name: str) -> None:
             calls.append(("destroy_service", name))
@@ -794,6 +798,7 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(agents_console_ta
         "workspace",
         "recorded_workspace",
         "service",
+        "start_service",
         "recorded_service",
     ]
     assert calls[0] == ("secret", f"agent-{agent.sqid}-inference", "x")
@@ -802,7 +807,8 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(agents_console_ta
     assert calls[3][1] == "ref:claude-code"
     assert calls[3][2] == "ws-bot"
     assert calls[3][3]["auth_env"] == f'      ANTHROPIC_API_KEY: "${{secret.agent-{agent.sqid}-inference}}"'
-    assert calls[4] == ("recorded_service", "svc-bot", "provisioning")
+    assert calls[4] == ("start_service", "svc-bot")
+    assert calls[5] == ("recorded_service", "svc-bot", "provisioning")
 
     # Deprovision tears down the workspace via the daemon and clears the record.
     deprovision = "mutation($id: ID!){ deprovision_agent(id: $id){ ok message } }"
@@ -871,9 +877,13 @@ def test_provision_agent_reenters_existing_provisioning_row(agents_console_table
             calls.append(template)
             return "ws-double"
 
-        def create_service(self, *, template: str, workspace: str, inputs: dict[str, str]) -> str:
+        def create_service(self, *, template: str, workspace: str, inputs: dict[str, str], start: bool = True) -> str:
+            assert start is False
             calls.append(f"{template}:{workspace}")
             return "svc-double"
+
+        def start_service(self, name: str) -> None:
+            assert name == "svc-double"
 
     monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _FakeDaemon)
 
@@ -971,10 +981,10 @@ def test_provision_agent_reports_racing_deprovision_without_clobbering_state(
         assert (agent.workspace, agent.service, str(agent.lifecycle)) == ("", "", "deprovisioning")
 
 
-def test_provision_agent_failure_tears_down_workspace_and_records_error(
+def test_provision_agent_failure_tears_down_service_then_workspace_and_records_error(
     agents_console_tables: None, monkeypatch: Any
 ) -> None:
-    """A service-render failure tears the orphaned workspace down and marks error."""
+    """A service-start failure removes its persisted entry before the workspace."""
 
     admin = _platform_admin("agt-fail-admin")
     vcs = _vcs_bridge("agt-fail-tpl", config={"stub_repos": REPOS})
@@ -992,7 +1002,7 @@ def test_provision_agent_failure_tears_down_workspace_and_records_error(
         )
     agent_id = _public_id(agent.sqid)
 
-    destroyed: list[str] = []
+    destroyed: list[tuple[str, str]] = []
     recorded: list[tuple[str, str]] = []
 
     class _FailingDaemon:
@@ -1006,14 +1016,26 @@ def test_provision_agent_failure_tears_down_workspace_and_records_error(
         def create_workspace(self, *, template: str, inputs: dict[str, str]) -> str:
             return "ws-doomed"
 
-        def create_service(self, *, template: str, workspace: str, inputs: dict[str, str]) -> str:
+        def create_service(self, *, template: str, workspace: str, inputs: dict[str, str], start: bool = True) -> str:
+            assert start is False
             with system_context(reason="test.agents.fail.verify_workspace_recorded"):
                 agent.refresh_from_db()
                 recorded.append((agent.workspace, str(agent.lifecycle)))
+            return "svc-doomed"
+
+        def start_service(self, name: str) -> None:
+            assert name == "svc-doomed"
+            with system_context(reason="test.agents.fail.verify_service_recorded"):
+                agent.refresh_from_db()
+                recorded.append((agent.service, str(agent.lifecycle)))
             raise RuntimeError("image build failed")
 
+        def destroy_service(self, name: str) -> None:
+            destroyed.append(("service", name))
+            raise OperatorDaemonNotFound(f'service "{name}" is already gone')
+
         def destroy_workspace(self, name: str) -> None:
-            destroyed.append(name)
+            destroyed.append(("workspace", name))
 
     monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _FailingDaemon)
 
@@ -1026,8 +1048,14 @@ def test_provision_agent_failure_tears_down_workspace_and_records_error(
         )
     )["provision_agent"]
     assert result["ok"] is False and "image build failed" in result["message"]
-    assert recorded == [("ws-doomed", "provisioning")]
-    assert destroyed == ["ws-doomed"]  # the orphaned workspace was torn back down
+    assert recorded == [
+        ("ws-doomed", "provisioning"),
+        ("svc-doomed", "provisioning"),
+    ]
+    assert destroyed == [
+        ("service", "svc-doomed"),
+        ("workspace", "ws-doomed"),
+    ]
     with system_context(reason="test.agents.fail.verify"):
         agent.refresh_from_db()
         # Run state errored; the rolled-back workspace leaves the lifecycle a clean DRAFT.
@@ -1167,8 +1195,12 @@ def test_reprovision_agent_recreates_service_over_existing_workspace(
         def create_service(
             self, *, template: str, workspace: str, inputs: dict[str, str], start: bool = True, name: str = ""
         ) -> str:
+            assert start is False
             calls.append(("create_service", template, workspace))
             return "svc-new"
+
+        def start_service(self, name: str) -> None:
+            calls.append(("start_service", name))
 
     monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _FakeDaemon)
 

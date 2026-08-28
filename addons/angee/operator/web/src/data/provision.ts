@@ -7,6 +7,7 @@ import {
   SERVICE_CREATE_MUTATION,
   WORKSPACE_CREATE_MUTATION,
   WORKSPACE_DESTROY_MUTATION,
+  WORKSPACE_PREFLIGHT_MUTATION,
   WORKSPACE_STATUS_SUBSCRIPTION,
 } from "./documents.daemon";
 import { useMemo } from "react";
@@ -61,6 +62,11 @@ export function toAnswerList(inputs: unknown): KeyValueInput[] {
 /** Render a workspace template through the daemon's workspace resource insert. */
 export function useWorkspaceCreate(): OperatorActionHook<typeof WORKSPACE_CREATE_MUTATION> {
   return useOperatorAction(WORKSPACE_CREATE_MUTATION);
+}
+
+/** Validate workspace template answers before materialising a workspace. */
+export function useWorkspacePreflight(): OperatorActionHook<typeof WORKSPACE_PREFLIGHT_MUTATION> {
+  return useOperatorAction(WORKSPACE_PREFLIGHT_MUTATION);
 }
 
 /** Render a service template through the daemon's service resource insert. */

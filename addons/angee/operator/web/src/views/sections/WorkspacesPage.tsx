@@ -1,5 +1,5 @@
-import { cn, RowsListView, Skeleton, textRoleVariants, type ListColumn } from "@angee/ui";
-import { useCallback, useMemo, type ReactNode } from "react";
+import { Button, Glyph, cn, RowsListView, Skeleton, textRoleVariants, type ListColumn } from "@angee/ui";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
@@ -17,6 +17,7 @@ import {
   useWorkspaceActions,
   type WorkspaceRowAction,
 } from "./workspace-actions";
+import { WorkspaceCreateDialog } from "./WorkspaceCreateDialog";
 
 type WorkspaceRowData = DaemonRow<WorkspaceRef>;
 type WorkspaceSourceRowData = DaemonRow<WorkspaceSourceStatus>;
@@ -29,6 +30,7 @@ export interface WorkspacesPageProps {
 /** Workspaces page: the daemon's worktree workspaces. Rows open the detail page. */
 export function WorkspacesPage({ names }: WorkspacesPageProps = {}): ReactNode {
   const t = useOperatorT();
+  const [createOpen, setCreateOpen] = useState(false);
   const selectRows = useCallback<OperatorRowsSelector<WorkspaceRowData>>(
     (snapshot) => daemonRowsByName(
       snapshot.workspaces.filter(
@@ -81,13 +83,22 @@ export function WorkspacesPage({ names }: WorkspacesPageProps = {}): ReactNode {
   );
 
   return (
-    <OperatorRowsList<WorkspaceRowData>
-      sections={{ workspaces: true }}
-      selectRows={selectRows}
-      columns={columns}
-      rowHref={(workspace) => workspaceDetailPath(workspace.name)}
-      emptyContent={t("workspaces.empty")}
-    />
+    <>
+      <OperatorRowsList<WorkspaceRowData>
+        sections={{ workspaces: true }}
+        selectRows={selectRows}
+        columns={columns}
+        rowHref={(workspace) => workspaceDetailPath(workspace.name)}
+        toolbarActions={
+          <Button type="button" variant="primary" size="sm" onClick={() => setCreateOpen(true)}>
+            <Glyph decorative name="plus" />
+            {t("workspaces.create.action")}
+          </Button>
+        }
+        emptyContent={t("workspaces.empty")}
+      />
+      <WorkspaceCreateDialog open={createOpen} onOpenChange={setCreateOpen} />
+    </>
   );
 }
 

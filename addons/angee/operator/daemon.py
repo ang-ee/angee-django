@@ -191,6 +191,11 @@ class OperatorDaemon:
         data = self._request("POST", f"{self._base()}/services/create", payload)
         return str((data or {}).get("name") or "")
 
+    def start_service(self, name: str) -> None:
+        """Bring up a rendered service (``POST /services/{name}/up``)."""
+
+        self._request("POST", f"{self._base()}/services/{quote(name, safe='')}/up", {})
+
     def destroy_workspace(self, name: str) -> None:
         """Destroy a workspace and its files (``POST /workspaces/{name}/destroy``)."""
 
