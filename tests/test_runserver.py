@@ -75,6 +75,6 @@ def test_force_process_reload_exits_with_django_reload_code(
     monkeypatch.setattr(runserver_module.os, "_exit", fake_exit)
 
     with pytest.raises(_Exited):
-        runserver_module._force_process_reload(Path("../angee-base/addons/angee/agents/schema.py"))
+        runserver_module._force_process_reload(Path("addons/angee/agents/schema.py"))
 
     assert captured["code"] == 3

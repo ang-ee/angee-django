@@ -15,7 +15,7 @@ _message_after_copy: |
   - source (default): the django service runs the deps-only base image
     (ghcr.io/ang-ee/django-angee-base) and links the framework editable from a local
     checkout at container start. Clone it at the stack root FIRST:
-      git clone https://github.com/ang-ee/angee-django sources/angee-django
+      git clone https://github.com/ang-ee/angee-django sources/angee
   - baked: set framework=baked and django_image=ghcr.io/ang-ee/django-angee:latest to
     run a code-baked runtime image (no source checkout, no per-start uv sync).
 
@@ -34,8 +34,8 @@ _message_after_copy: |
   Login:    admin / the generated admin-password secret in .env
 
   The framework's notes example is NOT installed by default (INSTALLED_APPS is
-  base-only). Add it later by declaring a git source onto ang-ee/angee-examples
-  and enabling example.notes in settings.yaml's INSTALLED_APPS.
+  base-only). Add it later by adding `sources/angee/examples/addons` to
+  ANGEE_ADDON_DIRS and enabling example.notes in settings.yaml's INSTALLED_APPS.
 
 _angee:
   schema: 1
@@ -49,14 +49,14 @@ _angee:
     overlays a Postgres-backed `angee.yaml` — operator + postgres (pgvector) +
     redis + django (DATABASE_URL → postgres) + Caddy serving the built SPA. By
     default (`framework=source`) the django service runs the deps-only base image
-    and links the framework editable from a local `sources/angee-django` checkout
+    and links the framework editable from a local `sources/angee` checkout
     at container start; `framework=baked` runs a code-baked runtime image instead.
     This is how you run your own Angee app locally on a real Postgres database.
   # Chain the project template first so the stack overlays a real host, then this
   # template adds only the stack overlay (angee.yaml, .gitignore). The ref is
   # relative to THIS template's directory (the operator's chain resolver joins it
   # against the stack template dir); downstream this can instead pin a remote ref,
-  # e.g. github.com/ang-ee/angee-templates//templates/projects/web?ref=<tag>.
+  # e.g. github.com/ang-ee/angee-django//templates/projects/web?ref=<tag>.
   chain:
     - template: ../../projects/web
       inputs:
@@ -68,7 +68,7 @@ _angee:
         # The rendered pyproject resolves django-angee editable from the same
         # checkout the framework=source stack runs, so `uv run manage.py` works
         # bare from the instance root.
-        framework_source_path: sources/angee-django
+        framework_source_path: sources/angee
 
 # Machine name of the instance: the compose project's friendly label (the operator
 # derives a root-unique project id from it) AND the chained project's name (seeds
@@ -95,8 +95,8 @@ web_path:
   help: Path of the web package relative to the project root.
 
 # How the django service obtains the framework code. `source` (default) runs the
-# deps-only base image and links the framework editable from a `sources/angee-django`
-# checkout at container start (`uv sync --project sources/angee-django`) — the checkout
+# deps-only base image and links the framework editable from a `sources/angee`
+# checkout at container start (`uv sync --project sources/angee`) — the checkout
 # must exist at the stack root, so clone it there. `baked` runs a code-baked runtime
 # image with the framework already installed (no source checkout, no per-start uv sync);
 # set django_image=ghcr.io/ang-ee/django-angee:latest yourself when choosing baked.
@@ -106,11 +106,11 @@ framework:
   choices:
     - source
     - baked
-  help: How the django service obtains framework code. source = deps-only base image + editable link from sources/angee-django; baked = code-baked runtime image (also set django_image to the runtime image).
+  help: How the django service obtains framework code. source = deps-only base image + editable link from sources/angee; baked = code-baked runtime image (also set django_image to the runtime image).
 
 # The image the django/celery services run. Default is the deps-only base image
 # (deps + uv + git, framework code NOT baked): `framework=source` links the framework
-# editable into the baked /opt/.venv from sources/angee-django at start. For
+# editable into the baked /opt/.venv from sources/angee at start. For
 # `framework=baked`, set this to the code-baked runtime image ghcr.io/ang-ee/django-angee:latest.
 django_image:
   type: str

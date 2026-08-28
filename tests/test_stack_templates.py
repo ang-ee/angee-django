@@ -278,7 +278,7 @@ def _render_local_stack(*, framework: str = "source", celery_queues: str = "") -
     """Render the docker-mode local stack enough for YAML contract tests."""
 
     variables = {
-        "_src_path": "https://github.com/ang-ee/angee-templates/tree/main/templates/stacks/local",
+        "_src_path": "https://github.com/ang-ee/angee-django/tree/main/templates/stacks/local",
         "caddy_image": "caddy:2.9-alpine",
         "celery_queues": celery_queues,
         "django_image": "ghcr.io/ang-ee/django-angee-base:latest",
@@ -297,7 +297,7 @@ def _render_local_stack(*, framework: str = "source", celery_queues: str = "") -
 def _render_dev_stack(
     *,
     project_path: str = ".",
-    framework_path: str = "workspaces/src/angee-django",
+    framework_path: str = "workspaces/src/angee",
     addons_profile: str = "base",
     include_arp: bool = False,
     work_state_source: str = "",
@@ -503,6 +503,9 @@ def test_both_stacks_render_shared_root_agent_instructions() -> None:
 def test_local_stack_copier_contract() -> None:
     manifest = yaml.safe_load(LOCAL_COPIER.read_text(encoding="utf-8"))
 
+    message = manifest["_message_after_copy"]
+    assert "git clone https://github.com/ang-ee/angee-django sources/angee" in message
+    assert "sources/angee/examples/addons" in message
     assert "angee dev" in manifest["_message_after_copy"]
     # The CLI shell recipe reads the token through the secrets backend owner —
     # never by hand-parsing .env, whose values are quoted.
@@ -528,7 +531,7 @@ def test_local_django_source_mode_bootstraps_fresh_host_dependencies() -> None:
 
     assert django["image"] == "ghcr.io/ang-ee/django-angee-base:latest"
     command = django["command"][-1]
-    assert "uv sync --frozen --inexact --extra postgres --project sources/angee-django" in command
+    assert "uv sync --frozen --inexact --extra postgres --project sources/angee" in command
     assert "python -m angee.compose.bootstrap" in command
     assert "uv sync --inexact" in command
     assert "python manage.py angee provision --bootstrap-admin" in command
@@ -538,12 +541,12 @@ def test_local_django_source_mode_bootstraps_fresh_host_dependencies() -> None:
     # The PYTHONPATH hack is deleted — the editable link owns the framework on sys.path.
     assert "PYTHONPATH" not in django["env"]
 
-    assert stack["sources"]["framework"]["path"] == "sources/angee-django"
+    assert stack["sources"]["framework"]["path"] == "sources/angee"
     for service_name in ("celery-worker", "celery-beat"):
         service = stack["services"][service_name]
         assert service["image"] == "ghcr.io/ang-ee/django-angee-base:latest"
         assert "PYTHONPATH" not in service["env"]
-        assert "uv sync --frozen --inexact --extra postgres --project sources/angee-django" in service["command"][-1]
+        assert "uv sync --frozen --inexact --extra postgres --project sources/angee" in service["command"][-1]
         assert service["command"][-1].index("done;") < service["command"][-1].index("uv sync --inexact")
         assert service["command"][-1].index("uv sync --inexact") < service["command"][-1].index("exec celery")
 
@@ -593,10 +596,10 @@ def test_local_stack_renders_single_caddy_frontend_ingress() -> None:
     assert "try_files {path} /index.html" in caddyfile_command
 
     frontend_command = stack["services"]["frontend-build"]["command"][-1]
-    # source-mode graft: overlay each @angee package's src/ from the sibling checkouts,
-    # then symlink each package into the mounted project's node_modules.
-    assert "project/sources/angee-react" in frontend_command
-    assert "project/sources/angee-base/addons/angee" in frontend_command
+    # Source-mode graft: overlay each @angee package src from the monorepo and
+    # external bridge checkout, then symlink it into the mounted project.
+    assert "project/sources/angee/packages" in frontend_command
+    assert "project/sources/angee/addons/angee" in frontend_command
     assert "project/sources/angee-messaging-bridges/addons/angee" in frontend_command
     assert "fs.cpSync(srcDir,dstDir" in frontend_command
     assert 'path.join(root,"project/web/node_modules/@angee")' in frontend_command
@@ -644,7 +647,7 @@ def test_project_python_dependencies_bootstrap_the_generated_addon_group() -> No
     base_text, base = _render_project_pyproject()
     full_text, full = _render_project_pyproject(
         addons_profile="full",
-        framework_source_path="workspaces/src/angee-django",
+        framework_source_path="workspaces/src/angee",
         olm_cxxflags="-fdelayed-template-parsing",
     )
 
@@ -657,7 +660,7 @@ def test_project_python_dependencies_bootstrap_the_generated_addon_group() -> No
 
     assert "extra-build-variables" not in base["tool"]["uv"]
     assert full["tool"]["uv"]["sources"]["django-angee"] == {
-        "path": "workspaces/src/angee-django",
+        "path": "workspaces/src/angee",
         "editable": True,
     }
     assert full["tool"]["uv"]["extra-build-variables"]["python-olm"] == {
@@ -672,7 +675,7 @@ def test_project_dependency_group_is_the_final_pyproject_table() -> None:
         _render_project_pyproject(),
         _render_project_pyproject(
             addons_profile="full",
-            framework_source_path="workspaces/src/angee-django",
+            framework_source_path="workspaces/src/angee",
             olm_cxxflags="-fdelayed-template-parsing",
         ),
     ):
@@ -712,16 +715,16 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
         assert app in full["INSTALLED_APPS"]
     assert full["ANGEE_ADDON_DIRS"] == [
         "{BASE_DIR}/addons",
-        "{BASE_DIR}/workspaces/src/angee-base/addons",
+        "{BASE_DIR}/workspaces/src/angee/addons",
         "{BASE_DIR}/workspaces/src/angee-messaging-bridges/addons",
-        "{BASE_DIR}/workspaces/src/angee-examples/addons",
+        "{BASE_DIR}/workspaces/src/angee/examples/addons",
     ]
 
     # base profile in the framework-workspace layout still finds the base addons.
     base_ws = _render_project_settings(framework_workspace=True)
     assert base_ws["ANGEE_ADDON_DIRS"] == [
         "{BASE_DIR}/addons",
-        "{BASE_DIR}/workspaces/src/angee-base/addons",
+        "{BASE_DIR}/workspaces/src/angee/addons",
     ]
 
     # include_arp adds only the discovery dir — never roster entries.
@@ -822,8 +825,8 @@ def test_dev_stack_keeps_the_process_only_frontend_services() -> None:
     assert stack["services"]["frontend"]["command"] == ["pnpm", "--dir", "web", "dev"]
     assert "provision" in stack["services"]["frontend"]["after"]
 
-    # Storybook runs in the STACK workspace (deps installed the angee-react
-    # storybook slot as a member) — a private install inside a slot would fork
+    # Storybook runs in the STACK workspace (deps installed the monorepo
+    # storybook package as a member) — a private install inside a slot would fork
     # dependency identities for every linked framework package.
     storybook = stack["services"]["storybook"]
     assert storybook["workdir"] == "source://app"
@@ -844,7 +847,7 @@ def test_dev_stack_runs_bare_uv_against_the_project_root_pyproject() -> None:
     stack = _render_dev_stack()  # operator-rewritten defaults
 
     assert stack["sources"]["app"]["path"] == "."
-    assert stack["sources"]["framework"]["path"] == "workspaces/src/angee-django"
+    assert stack["sources"]["framework"]["path"] == "workspaces/src/angee"
     provision = stack["jobs"]["provision"]
     assert provision["workdir"] == "source://app"
     assert provision["command"][:2] == ["sh", "-c"]
@@ -871,37 +874,44 @@ def test_dev_stack_declares_the_framework_sources_and_the_src_workspace() -> Non
 
     stack = _render_dev_stack()
 
-    for name in ("angee-django", "angee-react", "angee-base", "angee-templates", "angee-operator"):
-        record = stack["sources"][name]
-        assert record["kind"] == "git"
-        assert record["repo"] == f"https://github.com/ang-ee/{name}.git"
-        assert record["default_ref"] == "main"
-        assert record["cache_path"] == f"sources/{name}"
-    # The base profile leaves the bridge/example repos out (opt-in per the split).
-    assert "angee-messaging-bridges" not in stack["sources"]
-    assert "angee-examples" not in stack["sources"]
+    assert set(stack["sources"]) == {"app", "framework", "angee"}
+    assert stack["sources"]["angee"] == {
+        "kind": "git",
+        "repo": "https://github.com/ang-ee/angee-django.git",
+        "default_ref": "main",
+        "cache_path": "sources/angee",
+    }
 
     assert stack["workspaces"]["src"] == {"template": "workspaces/src"}
 
     full = _render_dev_stack(addons_profile="full")
-    for name in ("angee-messaging-bridges", "angee-examples"):
-        assert full["sources"][name]["repo"] == f"https://github.com/ang-ee/{name}.git"
+    assert set(full["sources"]) == {
+        "app",
+        "framework",
+        "angee",
+        "angee-messaging-bridges",
+    }
+    assert full["sources"]["angee-messaging-bridges"] == {
+        "kind": "git",
+        "repo": "https://github.com/ang-ee/angee-messaging-bridges.git",
+        "default_ref": "main",
+        "cache_path": "sources/angee-messaging-bridges",
+    }
 
     # arpee is its own opt-in (a private product repo): absent from base AND
     # full profiles, declared only by include_arp.
-    assert "angee-arp" not in stack["sources"]
-    assert "angee-arp" not in full["sources"]
     arp = _render_dev_stack(include_arp=True)
+    assert set(arp["sources"]) == {"app", "framework", "angee", "angee-arp"}
     assert arp["sources"]["angee-arp"]["repo"] == "https://github.com/ang-ee/angee-arp.git"
     assert arp["sources"]["angee-arp"]["cache_path"] == "sources/angee-arp"
 
-    wired = _render_dev_stack(work_state_source="work-angee-django")
-    assert wired["workspaces"]["src"]["inputs"] == {"work_state_source": "work-angee-django"}
+    wired = _render_dev_stack(work_state_source="work-angee")
+    assert wired["workspaces"]["src"]["inputs"] == {"work_state_source": "work-angee"}
 
     # The local docker instance keeps its own source story (framework checkout at
-    # sources/angee-django) — no framework git-source block, no workspace cut.
+    # sources/angee) — no framework git-source block, no workspace cut.
     local = _render_local_stack()
-    assert "angee-react" not in local["sources"]
+    assert set(local["sources"]) == {"app", "framework"}
     assert "workspaces" not in local
 
 
@@ -910,17 +920,9 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
 
     stack = _render_dev_docker_stack()
 
-    for name in (
-        "angee-django",
-        "angee-react",
-        "angee-base",
-        "angee-templates",
-        "angee-operator",
-        "hatch-angee",
-        "strawberry-django-hasura",
-    ):
-        assert stack["sources"][name]["kind"] == "git"
-    assert stack["sources"]["framework"]["path"] == "workspaces/src/angee-django"
+    assert set(stack["sources"]) == {"app", "framework", "angee"}
+    assert stack["sources"]["angee"]["kind"] == "git"
+    assert stack["sources"]["framework"]["path"] == "workspaces/src/angee"
     assert stack["workspaces"]["src"] == {"template": "workspaces/src"}
 
     assert "jobs" not in stack
@@ -1053,9 +1055,17 @@ def test_dev_stack_docker_mode_playwright_services_are_edge_routed() -> None:
     }
 
     workspace = DEV_PNPM_WORKSPACE.read_text(encoding="utf-8")
-    e2e_glob = '  - "workspaces/src/angee-react/e2e"'
-    assert workspace.count(e2e_glob) == 1
-    assert workspace.index(e2e_glob) < workspace.index('{% if addons_profile == "full" %}')
+    framework_globs = (
+        "  - \"workspaces/src/angee/packages/*\"",
+        "  - \"workspaces/src/angee/addons/angee/*/web\"",
+    )
+    full_profile_globs = (
+        "  - \"workspaces/src/angee/examples/addons/*/*/web\"",
+        "  - \"workspaces/src/angee/examples/e2e\"",
+    )
+    guard_index = workspace.index("{% if addons_profile == \"full\" %}")
+    assert all(workspace.index(glob) < guard_index for glob in framework_globs)
+    assert all(workspace.index(glob) > guard_index for glob in full_profile_globs)
 
 
 def test_dev_stack_chains_the_project_host_with_the_framework_slot() -> None:
@@ -1072,7 +1082,7 @@ def test_dev_stack_chains_the_project_host_with_the_framework_slot() -> None:
     assert inputs["addon_installer_backend"] == "operator"
     assert inputs["include_operator_installer"] is True
 
-    assert manifest["framework_path"]["default"] == "workspaces/src/angee-django"
+    assert manifest["framework_path"]["default"] == "workspaces/src/angee"
     assert manifest["project_path"]["default"] == "."
     assert manifest["addons_profile"]["choices"] == ["base", "full"]
     assert manifest["addons_profile"]["default"] == "base"
@@ -1095,9 +1105,9 @@ def test_dev_stack_chains_the_project_host_with_the_framework_slot() -> None:
     assert "ensure" not in manifest["_angee"]
 
     # The stack root's `templates` symlink resolves name-based template refs from
-    # the angee-templates source cache — never from a framework checkout.
+    # the consolidated angee source cache.
     assert DEV_TEMPLATES_SYMLINK.is_symlink()
-    assert str(DEV_TEMPLATES_SYMLINK.readlink()) == "sources/angee-templates/templates"
+    assert str(DEV_TEMPLATES_SYMLINK.readlink()) == "sources/angee/templates"
 
 
 def test_uv_caches_are_stack_owned() -> None:
@@ -1160,10 +1170,10 @@ def test_secret_key_is_mode_invariant() -> None:
 def test_dev_stack_keeps_absolute_source_paths_verbatim() -> None:
     """Absolute copier inputs are kept as-is (neither `../`-prefixed nor collapsed)."""
 
-    stack = _render_dev_stack(project_path="/srv/project", framework_path="/opt/angee-django")
+    stack = _render_dev_stack(project_path="/srv/project", framework_path="/opt/angee")
 
     assert stack["sources"]["app"]["path"] == "/srv/project"
-    assert stack["sources"]["framework"]["path"] == "/opt/angee-django"
+    assert stack["sources"]["framework"]["path"] == "/opt/angee"
     # The rendered pyproject (whose framework_source_path follows framework_path)
     # owns resolution even for an external checkout — commands stay bare `uv run`.
     assert stack["jobs"]["provision"]["command"][:2] == ["sh", "-c"]

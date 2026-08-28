@@ -17,8 +17,8 @@ _message_after_copy: |
     containers; the operator daemon remains host-local and orchestrates Docker.
 
   1. Bring it up. `angee dev` materializes the declared source caches, cuts the
-     `src` workspace (every framework repo as a sibling worktree slot), runs the
-     dependency/provision/codegen lifecycle, and boots:
+     `src` workspace (the consolidated framework plus optional external addon
+     worktrees), runs the dependency/provision/codegen lifecycle, and boots:
        angee dev
   2. Point an external CLI shell at the tokenized local operator (run from this
      root; `angee secret reveal` reads the stack's secrets backend):
@@ -40,7 +40,7 @@ _message_after_copy: |
   The Playwright endpoints are edge-routed with forward-auth; mint a route token
   via `angee token` before connecting.
 
-  Frame: the framework repos live in workspaces/src/ — see its AGENTS.md.
+  Frame: the framework source lives in workspaces/src/angee/ — see its AGENTS.md.
 
 _angee:
   schema: 1
@@ -51,10 +51,10 @@ _angee:
     The framework-dev stack: the root folder IS the stack AND the project host
     (ANGEE_ROOT=.). It chains the `projects/web` project template to scaffold
     the host (manage.py, settings.yaml, pyproject, addons, web), then overlays a
-    process- or Docker-mode manifest against the framework source slots the
-    stack's `src` workspace materializes under workspaces/src/. `angee dev` owns
-    the whole bring-up: caches, the src workspace cut, dependency installation,
-    provision/codegen, and boot.
+    process- or Docker-mode manifest against the framework source slot and the
+    optional external slots its `src` workspace materializes under
+    workspaces/src/. `angee dev` owns the whole bring-up: caches, the src
+    workspace cut, dependency installation, provision/codegen, and boot.
   inputs:
     runtime_mode:
       type: str
@@ -84,7 +84,7 @@ _angee:
   # Chain the project template first so the stack overlays a real host, then this
   # template adds only the stack overlay (angee.yaml, settings/workspace files).
   # The ref is relative to THIS template's directory; downstream it can pin a
-  # remote ref, e.g. github.com/ang-ee/angee-templates//templates/projects/web?ref=<tag>.
+  # remote ref, e.g. github.com/ang-ee/angee-django//templates/projects/web?ref=<tag>.
   chain:
     - template: ../../projects/web
       inputs:
@@ -123,8 +123,8 @@ project_path:
 
 framework_path:
   type: path
-  default: "workspaces/src/angee-django"
-  help: Path to the angee-django source slot — the editable framework checkout the rendered pyproject resolves and the stack's `framework` source points at. Default is the src workspace slot `angee dev` materializes.
+  default: "workspaces/src/angee"
+  help: Path to the consolidated angee source slot — the editable framework checkout the rendered pyproject resolves and the stack's `framework` source points at. Default is the src workspace slot `angee dev` materializes.
 
 web_path:
   type: str
@@ -165,14 +165,14 @@ ingress_domain:
 # Which addon roster the host composes. `base` renders the consumer scaffold
 # (base addons only); `full` renders the whole platform composition — every
 # base addon plus the messaging bridges and the notes example — and declares
-# the bridges/examples source repos so the stack materializes them.
+# the external bridges source repo so the stack materializes it.
 addons_profile:
   type: str
   default: base
   choices:
     - base
     - full
-  help: Addon roster for the host — base (consumer scaffold) or full (the whole platform composition incl. bridges + examples).
+  help: Addon roster for the host — base (consumer scaffold) or full (the whole platform composition incl. external bridges + in-tree examples).
 
 # Stack source name for the src workspace's private work-state slot. Empty (the
 # default) renders no work-state wiring — a clean-machine stack must not depend

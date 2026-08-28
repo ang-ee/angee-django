@@ -90,7 +90,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          path: stack/workspaces/src/angee-django
+          path: stack/workspaces/src/angee
       - uses: actions/checkout@v4
         if: ${{ inputs.addons-profile == 'full' }}
         with:
@@ -110,22 +110,11 @@ jobs:
           node-version: "26"
       - name: Render the stack (local template ref — no registry round-trip)
         run: >-
-          angee stack init "$GITHUB_WORKSPACE/stack/workspaces/src/angee-django/templates/stacks/dev"
+          angee stack init "$GITHUB_WORKSPACE/stack/workspaces/src/angee/templates/stacks/dev"
           "$GITHUB_WORKSPACE/stack" --force --yes
           --input project_name=ci-stack
           --input addons_profile=${{ inputs.addons-profile }}
           --input olm_cxxflags=
-      - name: Expose the monorepo through the current stack-template paths
-        working-directory: stack/workspaces/src
-        run: |
-          mkdir -p angee-react angee-base angee-examples
-          for package in app ui refine metadata storybook e2e; do
-            ln -s "../angee-django/packages/$package" "angee-react/$package"
-          done
-          ln -s ../angee-django/addons angee-base/addons
-          ln -s ../angee-django/examples/addons angee-examples/addons
-          ln -s ../angee-django/examples/e2e angee-examples/e2e
-          ln -s angee-django angee-templates
       - name: Compose the runtime and SDL (no database needed)
         working-directory: stack
         run: |
@@ -145,5 +134,5 @@ jobs:
           pnpm -r typecheck
           pnpm -r test
       - name: Pytest against the composed stack
-        working-directory: stack/workspaces/src/angee-django
+        working-directory: stack/workspaces/src/angee
         run: uv run pytest -q ${{ inputs.pytest-extra-args }}

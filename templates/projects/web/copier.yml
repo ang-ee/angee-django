@@ -92,10 +92,9 @@ include_arp:
   default: false
   help: Add the angee-arp workspace slot's addons dir to ANGEE_ADDON_DIRS (no roster entries).
 
-# Whether the host sits at the root of a stack that materializes the framework
-# source repos as workspace slots (workspaces/src/<repo>). When true, the addon
-# dirs point into those slots so the composer finds the base (and, per profile,
-# bridge/example) addons in source form.
+# Whether the host sits at the root of a stack that materializes the consolidated
+# framework source as workspaces/src/angee. When true, addon discovery points into
+# that monorepo slot and, per profile, the optional external bridge slot.
 framework_workspace:
   type: bool
   default: false
@@ -129,7 +128,7 @@ react_version:
 # Where the rendered pyproject.toml resolves django-angee from. Empty (default)
 # emits a plain PyPI dependency; a path (relative to the project root) emits a
 # `[tool.uv.sources]` editable override onto a local framework checkout — the
-# `stacks/local` chain passes `sources/angee-django` so host-run `uv run manage.py`
+# `stacks/local` chain passes `sources/angee` so host-run `uv run manage.py`
 # and the framework=source stack share one code source. For a framework=baked
 # instance without a checkout, blank this or keep the checkout cloned.
 framework_source_path:

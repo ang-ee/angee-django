@@ -34,14 +34,14 @@ collapse the first-run lifecycle into one `manage.py angee provision` command.
   process-compose. It declares the consolidated framework plus optional external
   git `sources:` and the `src` workspace; `angee dev` materializes their clone
   caches, cuts the workspace, and runs Django/Celery/Vite/Storybook as local
-  processes against those worktrees. The
-  rendered pyproject resolves `django-angee` editable from the angee-django slot,
-  so `uv run manage.py` works bare from the root. For developing the framework —
+  processes against those worktrees. The rendered pyproject resolves
+  `django-angee` editable from the consolidated `angee` slot, so
+  `uv run manage.py` works bare from the root. For developing the framework —
   or a consumer project against live framework source.
 - **`stacks/local`** (`runtime_mode: docker`) — a self-contained instance run on
   docker-compose. You own the root. By default (`framework=source`) the django/celery
   services run the deps-only base image and link the framework editable from a local
-  `sources/angee-django` checkout at container start; `framework=baked` runs a
+  `sources/angee` checkout at container start; `framework=baked` runs a
   code-baked runtime image instead. `provision` runs inside the django container. This
   is how you run your own Angee app locally on a real (Postgres + pgvector) database.
 
@@ -76,14 +76,14 @@ stack regenerates it disposably, so it is ignored there.) Everything a tool rege
 resolved secrets, the operator's compiled compose files, materialized sources, the
 Postgres volume — stays out of git. The database is a stack service and the app
 reads `DATABASE_URL`, so no SQLite file lives in the tree. Add the framework's
-in-repo example later by including `examples/addons` in discovery and enabling
-it in `INSTALLED_APPS`.
+in-repo example later by including `sources/angee/examples/addons` in
+discovery and enabling it in `INSTALLED_APPS`.
 
 > **Status.** The `local` template now *is* this shape: a thin `kind: stack` that
 > chains `projects/web` and includes the shared manifest body in `docker` mode. By
 > default (`framework=source`) its django/celery services run the deps-only
 > `ghcr.io/ang-ee/django-angee-base` image and link the framework editable from a
-> `sources/angee-django` checkout at container start (clone it at the stack root first);
+> `sources/angee` checkout at container start (clone it at the stack root first);
 > `framework=baked` runs the code-baked `ghcr.io/ang-ee/django-angee` runtime image
 > instead. It runs on `pgvector/pgvector:pg17`, drives first start through
 > `manage.py angee provision --bootstrap-admin` (which bootstraps a generated `admin`
@@ -102,7 +102,7 @@ container start, and `stack init` validates that source exists — so clone it f
 
 ```sh
 mkdir -p ~/.angee/sources
-git clone https://github.com/ang-ee/angee-django ~/.angee/sources/angee-django
+git clone https://github.com/ang-ee/angee-django ~/.angee/sources/angee
 angee stack init https://github.com/ang-ee/angee-django/tree/main/templates/stacks/local ~/.angee
 angee dev --root ~/.angee
 export ANGEE_OPERATOR_URL=http://127.0.0.1:9000

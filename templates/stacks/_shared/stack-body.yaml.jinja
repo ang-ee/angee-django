@@ -144,60 +144,22 @@ sources:
   framework:
     kind: local
     path: {{ framework_source }}
-  # The framework source repos. `angee dev` materializes each as a clone cache
-  # under sources/ and cuts the `src` workspace's worktree slots from them; the
-  # templates repo also backs the stack's `templates` symlink for name-based
-  # template resolution (ws create, stack update) without a network round-trip.
-  angee-django:
+  # The consolidated framework source. `angee dev` materializes its clone cache
+  # under sources/angee and cuts the `src` workspace's one framework worktree
+  # from it. The same checkout owns core, addons, packages, examples, and templates.
+  angee:
     kind: git
     repo: https://github.com/ang-ee/angee-django.git
     default_ref: main
-    cache_path: sources/angee-django
-  angee-react:
-    kind: git
-    repo: https://github.com/ang-ee/angee-react.git
-    default_ref: main
-    cache_path: sources/angee-react
-  angee-base:
-    kind: git
-    repo: https://github.com/ang-ee/angee-base.git
-    default_ref: main
-    cache_path: sources/angee-base
-  angee-templates:
-    kind: git
-    repo: https://github.com/ang-ee/angee-templates.git
-    default_ref: main
-    cache_path: sources/angee-templates
-  angee-operator:
-    kind: git
-    repo: https://github.com/ang-ee/angee-operator.git
-    default_ref: main
-    cache_path: sources/angee-operator
-  # Framework packaging siblings, developed alongside the platform: the addon
-  # build backend (hatch-angee) and the Hasura-style GraphQL surface library
-  # (strawberry-django-hasura).
-  hatch-angee:
-    kind: git
-    repo: https://github.com/ang-ee/hatch-angee.git
-    default_ref: main
-    cache_path: sources/hatch-angee
-  strawberry-django-hasura:
-    kind: git
-    repo: https://github.com/ang-ee/strawberry-django-hasura.git
-    default_ref: main
-    cache_path: sources/strawberry-django-hasura
+    cache_path: sources/angee
 {% if addons_profile == "full" %}
-  # The full platform composition opts into the bridge and example repos too.
+  # The full platform composition opts into the external messaging bridges.
+  # Examples already live inside the consolidated angee checkout.
   angee-messaging-bridges:
     kind: git
     repo: https://github.com/ang-ee/angee-messaging-bridges.git
     default_ref: main
     cache_path: sources/angee-messaging-bridges
-  angee-examples:
-    kind: git
-    repo: https://github.com/ang-ee/angee-examples.git
-    default_ref: main
-    cache_path: sources/angee-examples
 {% endif %}
 {% if include_arp %}
   # arpee, the ARP product (arp.* consumer addons; PRIVATE repo — opt-in).
@@ -210,10 +172,10 @@ sources:
 {% endif %}
 
 {% if stack_flavor == "framework" %}
-# The conventional all-source workspace: every framework repo as a sibling
-# worktree slot under workspaces/src/. `angee dev` cuts it from the declared
-# sources on bring-up; the host's pyproject, addon dirs, and pnpm globs all
-# point into its slots.
+# The conventional all-source workspace: one consolidated framework worktree
+# under workspaces/src/angee plus optional external-addon worktrees. `angee dev`
+# cuts it from the declared sources on bring-up; the host's pyproject, addon dirs,
+# and pnpm globs all point into those slots.
 workspaces:
   src:
     template: workspaces/src
@@ -226,11 +188,11 @@ workspaces:
 {% if framework == "source" %}
   # framework == source: run the deps-only base image and link the framework editable
   # from this checkout at container start. The checkout must exist at the stack root —
-  # clone it there:  git clone https://github.com/ang-ee/angee-django sources/angee-django
-  # It is NOT mounted separately; it lives inside the app mount at /app/sources/angee-django.
+  # clone it there:  git clone https://github.com/ang-ee/angee-django sources/angee
+  # It is NOT mounted separately; it lives inside the app mount at /app/sources/angee.
   framework:
     kind: local
-    path: sources/angee-django
+    path: sources/angee
 {% endif %}
 {% endif %}
 
@@ -245,7 +207,7 @@ jobs:
   # nearest workspace root, so in the repo layout (project under examples/) this
   # installs the framework workspace, and in the project-at-root layout it installs
   # the project's own workspace (whose globs include the framework packages under
-  # sources/angee-django).
+  # sources/angee).
   deps:
     runtime: local
     workdir: source://app
@@ -369,9 +331,9 @@ services:
   # Framework-dev backend: sync the editable workspace, bootstrap the generated
   # addon dependency group, provision demo data and schemas, then keep Django's
   # source autoreloader as the serving owner.{% endif %}{% if stack_flavor == "instance" %}
-  # angee-django backend. The project mounts at /app OVER the image's /app workdir.
+  # Angee backend. The project mounts at /app OVER the image's /app workdir.
   # framework == source runs the deps-only base image and links the framework editable
-  # from sources/angee-django at start (also installs psycopg since the base image bakes
+  # from sources/angee at start (also installs psycopg since the base image bakes
   # deps WITHOUT the postgres extra; --inexact avoids pruning). The source sync first
   # makes the framework bootstrap importable; bootstrap then fills the fresh host's
   # addon group and the host sync installs it before Django settings load. framework ==
@@ -412,7 +374,7 @@ services:
       - sh
       - "-c"
       - >-
-        {% if framework == "source" %}uv sync --frozen --inexact --extra postgres --project sources/angee-django && python -m angee.compose.bootstrap && uv sync --inexact && {% endif %}python manage.py angee provision --bootstrap-admin
+        {% if framework == "source" %}uv sync --frozen --inexact --extra postgres --project sources/angee && python -m angee.compose.bootstrap && uv sync --inexact && {% endif %}python manage.py angee provision --bootstrap-admin
         && CADDY_IP=$$(python -c 'import socket; print(socket.gethostbyname("caddy"))')
         && exec python -m uvicorn angee.asgi:application --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "$$CADDY_IP"{% endif %}
     after: [postgres, redis]
@@ -481,7 +443,7 @@ services:
       - sh
       - "-c"
       - >-
-        trap 'exit 0' TERM INT; {% if framework == "source" %}uv sync --frozen --inexact --extra postgres --project sources/angee-django; {% endif %}n=0;
+        trap 'exit 0' TERM INT; {% if framework == "source" %}uv sync --frozen --inexact --extra postgres --project sources/angee; {% endif %}n=0;
         until python -c "import os,psycopg; conn=psycopg.connect(os.environ['DATABASE_URL']); cur=conn.cursor(); cur.execute('select 1 from django_migrations limit 1'); row=cur.fetchone(); conn.close(); raise SystemExit(0 if row else 1)" 2>/tmp/migratewait.err; do
         n=$$((n+1));
         [ "$$n" -ge 300 ] && { echo 'django migrations not ready after 300s:' >&2; cat /tmp/migratewait.err >&2; exit 1; };
@@ -508,7 +470,7 @@ services:
 
   # Storybook component workshop (@angee/storybook): renders @angee/ui with mocked
   # fixtures. It runs in the STACK workspace — the deps job installed it as a
-  # member (the pnpm-workspace globs include the angee-react storybook slot). A
+  # member (the pnpm-workspace globs include the monorepo's storybook package). A
   # private install inside a slot would fork dependency identities for every
   # linked framework package (two react-query = no QueryClient), so never add one.
   storybook:
@@ -617,7 +579,7 @@ services:
   # Static frontend build for Caddy ingress. A compose-visible service (not a job)
   # because Caddy depends on it in the container graph. The @angee/* packages are baked
   # into the web image; in source mode the first node -e overlays each package's src/
-  # from the sibling React and addon source checkouts so the built SPA reflects
+  # from the monorepo packages and addon sources so the built SPA reflects
   # local source JS (a no-op in baked mode, where the checkouts are absent). The second
   # node -e symlinks each package into the mounted project's node_modules before
   # codegen/build resolves runtime/web/app.ts.
@@ -633,7 +595,7 @@ services:
       - >-
         cd /opt/angee-web
         && printf 'packages:\n  - "packages/*"\n  - "project/{{ web_path }}"\n' > pnpm-workspace.yaml
-        && node -e 'const fs=require("node:fs"); const path=require("node:path"); const root="/opt/angee-web"; const packageDirs=[]; const addImmediate=(base)=>{ if (!fs.existsSync(base)) return; for (const dir of fs.readdirSync(base)) { const source=path.join(base,dir); if (fs.existsSync(path.join(source,"package.json"))) packageDirs.push(source); } }; const addAddonWeb=(base)=>{ if (!fs.existsSync(base)) return; for (const dir of fs.readdirSync(base)) { const source=path.join(base,dir,"web"); if (fs.existsSync(path.join(source,"package.json"))) packageDirs.push(source); } }; addImmediate(path.join(root,"project/sources/angee-react")); addAddonWeb(path.join(root,"project/sources/angee-base/addons/angee")); addAddonWeb(path.join(root,"project/sources/angee-messaging-bridges/addons/angee")); for (const source of packageDirs) { const manifest=JSON.parse(fs.readFileSync(path.join(source,"package.json"),"utf8")); if (typeof manifest.name !== "string" || !manifest.name.startsWith("@angee/")) continue; const target=path.join(root,"packages",manifest.name.slice("@angee/".length)); const srcDir=path.join(source,"src"); const dstDir=path.join(target,"src"); if (!fs.existsSync(srcDir) || !fs.existsSync(target)) continue; fs.rmSync(dstDir,{recursive:true,force:true}); fs.cpSync(srcDir,dstDir,{recursive:true,force:true}); }'
+        && node -e 'const fs=require("node:fs"); const path=require("node:path"); const root="/opt/angee-web"; const packageDirs=[]; const addImmediate=(base)=>{ if (!fs.existsSync(base)) return; for (const dir of fs.readdirSync(base)) { const source=path.join(base,dir); if (fs.existsSync(path.join(source,"package.json"))) packageDirs.push(source); } }; const addAddonWeb=(base)=>{ if (!fs.existsSync(base)) return; for (const dir of fs.readdirSync(base)) { const source=path.join(base,dir,"web"); if (fs.existsSync(path.join(source,"package.json"))) packageDirs.push(source); } }; addImmediate(path.join(root,"project/sources/angee/packages")); addAddonWeb(path.join(root,"project/sources/angee/addons/angee")); addAddonWeb(path.join(root,"project/sources/angee-messaging-bridges/addons/angee")); for (const source of packageDirs) { const manifest=JSON.parse(fs.readFileSync(path.join(source,"package.json"),"utf8")); if (typeof manifest.name !== "string" || !manifest.name.startsWith("@angee/")) continue; const target=path.join(root,"packages",manifest.name.slice("@angee/".length)); const srcDir=path.join(source,"src"); const dstDir=path.join(target,"src"); if (!fs.existsSync(srcDir) || !fs.existsSync(target)) continue; fs.rmSync(dstDir,{recursive:true,force:true}); fs.cpSync(srcDir,dstDir,{recursive:true,force:true}); }'
         && pnpm install
         && node -e 'const fs=require("node:fs"); const path=require("node:path"); const root="/opt/angee-web"; const packages=path.join(root,"packages"); const scope=path.join(root,"project/{{ web_path }}/node_modules/@angee"); fs.mkdirSync(scope,{recursive:true}); for (const dir of fs.readdirSync(packages)) { const target=path.join(packages,dir); const packageJson=path.join(target,"package.json"); if (!fs.existsSync(packageJson)) continue; const manifest=JSON.parse(fs.readFileSync(packageJson,"utf8")); if (typeof manifest.name !== "string" || !manifest.name.startsWith("@angee/")) continue; const link=path.join(scope,manifest.name.slice("@angee/".length)); if (fs.existsSync(link)) continue; try { fs.unlinkSync(link); } catch (error) { if (error.code !== "ENOENT") throw error; } fs.symlinkSync(path.relative(scope,target),link,"dir"); }'
         && n=0

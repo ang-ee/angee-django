@@ -1,5 +1,6 @@
 """Regression coverage for workspace template contracts."""
 
+import re
 from pathlib import Path
 
 import yaml
@@ -7,23 +8,16 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 SRC_COPIER = ROOT / "templates" / "workspaces" / "src" / "copier.yml"
 SRC_CODE_WORKSPACE = ROOT / "templates" / "workspaces" / "src" / "template" / "angee.code-workspace"
+SRC_AGENTS = ROOT / "templates" / "workspaces" / "src" / "template" / "AGENTS.md"
 
-# Every framework source repo the src workspace materializes as a worktree slot.
-SRC_SLOTS = {
-    "angee-django",
-    "angee-react",
-    "angee-base",
-    "angee-messaging-bridges",
-    "angee-examples",
-    "angee-arp",
-    "angee-templates",
-    "angee-operator",
-}
+SRC_SLOTS = {"angee", "angee-messaging-bridges", "angee-arp"}
+OPTIONAL_SLOTS = {"angee-messaging-bridges", "angee-arp"}
 
 
-def test_src_workspace_materializes_every_framework_repo_as_a_worktree_slot() -> None:
+def test_src_workspace_materializes_one_framework_worktree_and_optional_externals() -> None:
     manifest = yaml.safe_load(SRC_COPIER.read_text(encoding="utf-8"))
     sources = manifest["_angee"]["sources"]
+    assert set(sources) == SRC_SLOTS | {"work-state"}
 
     for slot in SRC_SLOTS:
         record = sources[slot]
@@ -32,14 +26,27 @@ def test_src_workspace_materializes_every_framework_repo_as_a_worktree_slot() ->
         assert record["branch"] == "${inputs.branch_prefix}/${name | slug}"
         assert record["subpath"] == slot
 
-    # The opt-in repos skip when the stack declares no source for them.
-    for slot in ("angee-messaging-bridges", "angee-examples", "angee-arp"):
+    assert "optional" not in sources["angee"]
+    for slot in OPTIONAL_SLOTS:
         assert sources[slot]["optional"] is True
+    assert sources["angee"]["ref"] == "${inputs.angee_ref}"
+    for slot in OPTIONAL_SLOTS:
+        assert sources[slot]["ref"] == "main"
 
-    # angee-django can pin a ratified branch; every other slot follows base_ref.
-    assert sources["angee-django"]["ref"] == "${inputs.angee_django_ref}"
-    for slot in SRC_SLOTS - {"angee-django"}:
-        assert sources[slot]["ref"] == "${inputs.base_ref}"
+    inputs = manifest["_angee"]["inputs"]
+    assert set(inputs) == {
+        "agent_name",
+        "mcp_json",
+        "branch_prefix",
+        "angee_ref",
+        "work_state_source",
+    }
+    assert inputs["angee_ref"] == {
+        "type": "str",
+        "default": "main",
+        "help": "Mainline ref for the consolidated framework source slot.",
+    }
+    assert manifest["angee_ref"] == {"type": "str", "default": "main"}
 
 
 def test_src_workspace_preserves_its_claude_symlink() -> None:
@@ -77,11 +84,22 @@ def test_src_workspace_work_state_is_opt_in_via_source_name_input() -> None:
 
 
 def test_src_workspace_code_workspace_lists_every_slot() -> None:
-    """The rendered code-workspace file opens all slots (and .work) side by side."""
+    """The rendered code-workspace file opens exactly the new slots and work state."""
 
     text = SRC_CODE_WORKSPACE.read_text(encoding="utf-8")
-    for slot in SRC_SLOTS | {".work"}:
-        assert f'"path": "{slot}"' in text
+    assert set(re.findall(r'"path": "([^"]+)"', text)) == SRC_SLOTS | {".work"}
+
+
+def test_src_workspace_agents_describes_the_consolidated_framework_slot() -> None:
+    text = SRC_AGENTS.read_text(encoding="utf-8")
+
+    assert "**`angee/`** — the consolidated framework repository" in text
+    for area in ("`angee/`", "`addons/`", "`packages/`", "`examples/`", "`templates/`"):
+        assert area in text
+    assert "consumes their PyPI releases" in text
+    assert "never `git checkout`" in text
+    assert "Never `pnpm install` inside a slot" in text
+    assert "commit and push continuously" in text
 
 
 def test_src_workspace_declares_agent_inputs_and_fail_loud_instance_naming() -> None:

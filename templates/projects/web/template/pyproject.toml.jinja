@@ -13,9 +13,9 @@ dependencies = ["django-angee[postgres]"]
 {% if framework_source_path %}
 
 [tool.uv.sources]
-# Framework editable from the local checkout ({{ framework_source_path }}) — the
-# same source a `framework=source` stack runs, so host-run management commands and
-# the stack share one code source.
+# Framework editable from the consolidated source checkout
+# ({{ framework_source_path }}) — the same source a `framework=source` stack
+# runs, so host-run management commands and the stack share one code source.
 django-angee = { path = "{{ framework_source_path }}", editable = true }
 {% endif %}
 

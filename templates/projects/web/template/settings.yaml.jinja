@@ -100,17 +100,17 @@ INSTALLED_APPS:
   - angee.messaging_integrate_meta
   - angee.messaging_integrate_facebook
   - angee.messaging_integrate_discord
-  # Framework notes example, referenced in place from the examples source slot.
+  # Framework notes example, referenced in place from the monorepo examples tree.
   - example.notes
 {% endif %}
 
 ANGEE_ADDON_DIRS:
   - "{BASE_DIR}/addons"
 {% if framework_workspace %}
-  - "{BASE_DIR}/workspaces/src/angee-base/addons"
+  - "{BASE_DIR}/workspaces/src/angee/addons"
 {% if addons_profile == "full" %}
   - "{BASE_DIR}/workspaces/src/angee-messaging-bridges/addons"
-  - "{BASE_DIR}/workspaces/src/angee-examples/addons"
+  - "{BASE_DIR}/workspaces/src/angee/examples/addons"
 {% endif %}
 {% if include_arp %}
   - "{BASE_DIR}/workspaces/src/angee-arp/addons"

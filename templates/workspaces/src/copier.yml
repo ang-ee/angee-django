@@ -9,11 +9,10 @@ _angee:
   kind: workspace
   name: src
   description: >-
-    Conventional all-source workspace. Each Git slot is a worktree on
-    workspace/<name>, cut from its declared base ref because the cache may
-    already have that ref checked out. Update one slot through
-    workspaceSourcePull (`angee ws source pull`); do not switch the worktree to
-    its base ref.
+    Conventional framework-source workspace. The consolidated angee checkout
+    is one worktree on workspace/<name>, with optional external-addon worktrees
+    for messaging bridges and arpee. Update a slot through workspaceSourcePull
+    (`angee ws source pull`); do not switch the worktree to its base ref.
   instance_naming:
     pattern: "${inputs.agent_name | slug | truncate(48)}"
     max_length: 48
@@ -29,94 +28,41 @@ _angee:
     branch_prefix:
       type: str
       default: workspace
-    base_ref:
+    angee_ref:
       type: str
       default: main
-      help: Mainline ref for every source slot except angee-django.
-    angee_django_ref:
-      type: str
-      default: main
-      help: Mainline ref for angee-django; override while a ratified change lives on another branch.
+      help: Mainline ref for the consolidated framework source slot.
     work_state_source:
       type: str
       default: ""
       help: Stack source name for the private work-state slot; empty renders a slot the operator skips (a clean-machine stack has no private work-state source).
   sources:
-    angee-django:
-      source: angee-django
+    angee:
+      source: angee
       mode: worktree
-      ref: "${inputs.angee_django_ref}"
+      ref: "${inputs.angee_ref}"
       branch: "${inputs.branch_prefix}/${name | slug}"
-      subpath: angee-django
-    angee-react:
-      source: angee-react
-      mode: worktree
-      ref: "${inputs.base_ref}"
-      branch: "${inputs.branch_prefix}/${name | slug}"
-      subpath: angee-react
-    angee-base:
-      source: angee-base
-      mode: worktree
-      ref: "${inputs.base_ref}"
-      branch: "${inputs.branch_prefix}/${name | slug}"
-      subpath: angee-base
+      subpath: angee
     angee-messaging-bridges:
       source: angee-messaging-bridges
       mode: worktree
-      ref: "${inputs.base_ref}"
+      ref: main
       branch: "${inputs.branch_prefix}/${name | slug}"
       subpath: angee-messaging-bridges
-      # Opt-in repo: a base-profile stack declares no source for it; skip.
-      optional: true
-    angee-examples:
-      source: angee-examples
-      mode: worktree
-      ref: "${inputs.base_ref}"
-      branch: "${inputs.branch_prefix}/${name | slug}"
-      subpath: angee-examples
-      # Opt-in repo: a base-profile stack declares no source for it; skip.
-      optional: true
-    hatch-angee:
-      source: hatch-angee
-      mode: worktree
-      ref: "${inputs.base_ref}"
-      branch: "${inputs.branch_prefix}/${name | slug}"
-      subpath: hatch-angee
-      # Packaging sibling: older stacks may not declare it; skip.
-      optional: true
-    strawberry-django-hasura:
-      source: strawberry-django-hasura
-      mode: worktree
-      ref: "${inputs.base_ref}"
-      branch: "${inputs.branch_prefix}/${name | slug}"
-      subpath: strawberry-django-hasura
-      # Packaging sibling: older stacks may not declare it; skip.
+      # Opt-in external addon repo: a base-profile stack declares no source for it; skip.
       optional: true
     angee-arp:
       source: angee-arp
       mode: worktree
-      ref: "${inputs.base_ref}"
+      ref: main
       branch: "${inputs.branch_prefix}/${name | slug}"
       subpath: angee-arp
       # Opt-in product repo (arpee): skip when the stack declares no source.
       optional: true
-    angee-templates:
-      source: angee-templates
-      mode: worktree
-      ref: "${inputs.base_ref}"
-      branch: "${inputs.branch_prefix}/${name | slug}"
-      subpath: angee-templates
-    angee-operator:
-      source: angee-operator
-      mode: worktree
-      ref: "${inputs.base_ref}"
-      branch: "${inputs.branch_prefix}/${name | slug}"
-      subpath: angee-operator
     # Inherit the declared Source kind: Git sources clone, while local sources
     # materialize as symlinks. A fixed `kind: local` here breaks Git stacks.
     # The source name comes from the work_state_source input; when it is empty
-    # the slot resolves to its own (undeclared) name and `optional` skips it —
-    # private work-state is strictly opt-in.
+    # the slot resolves to its own undeclared name and `optional` skips it.
     work-state:
       source: "${inputs.work_state_source}"
       subpath: .work
@@ -134,11 +80,7 @@ branch_prefix:
   type: str
   default: workspace
 
-base_ref:
-  type: str
-  default: main
-
-angee_django_ref:
+angee_ref:
   type: str
   default: main
 
