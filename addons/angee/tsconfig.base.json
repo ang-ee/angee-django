@@ -1,11 +1,16 @@
 {
   "compilerOptions": {
     // Base-addon fragments typecheck against the stack's composed generated
-    // documents: a stack is the host, so the fixture is the stack root's own
-    // runtime/gql (this repo is a slot at <stack>/workspaces/<ws>/<repo>).
-    // The addon subtree owns this one fixture path.
+    // documents. A standalone monorepo checkout may cache the same generated
+    // tree under .angee/runtime; a composed stack remains the authoritative
+    // fallback when this repo is a slot at <stack>/workspaces/<ws>/<repo>.
+    // TypeScript tries the paths in order, so neither topology is hard-coded
+    // as the only valid host for the addon subtree.
     "paths": {
-      "@angee/gql/*": ["../../../../../runtime/gql/*"]
+      "@angee/gql/*": [
+        "../../.angee/runtime/gql/*",
+        "../../../../../runtime/gql/*"
+      ]
     },
     "target": "ES2022",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],

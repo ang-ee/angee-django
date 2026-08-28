@@ -102,6 +102,7 @@ test.describe("operator console — admin", () => {
   });
 
   test("creates and destroys a light agent-default workspace", async ({ page }) => {
+    const workspaces = new OperatorWorkspacesPage(page);
     // The console's workspace detail loses the record-resolution race at mount
     // (fresh loads and post-create navigation render the list instead of the
     // detail; deep links share the root cause), so the destroy leg cannot run

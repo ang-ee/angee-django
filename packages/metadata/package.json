@@ -4,8 +4,8 @@
   "license": "LGPL-3.0-or-later",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ang-ee/angee-react.git",
-    "directory": "metadata"
+    "url": "git+https://github.com/ang-ee/angee-django.git",
+    "directory": "packages/metadata"
   },
   "homepage": "https://docs.angee.ai/react/",
   "files": [

@@ -6,8 +6,8 @@ import ts from "typescript";
 
 import { baseIcons } from "@angee/ui";
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const WORKSPACE_ROOT = resolve(REPO_ROOT, "..");
+const MONOREPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const PACKAGES_ROOT = join(MONOREPO_ROOT, "packages");
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx"]);
 const DELETED_SHELLS = new Set([
   "@angee/base",
@@ -27,23 +27,13 @@ const FRAMEWORK_IMPORT_RULES: Record<string, readonly string[]> = {
   "@angee/ui": ["@angee/refine", "@angee/metadata"],
   "@angee/app": ["@angee/refine", "@angee/metadata", "@angee/ui"],
 };
-const REQUIRED_ADDON_REPOSITORIES = [
-  "angee-base",
-  "angee-messaging-bridges",
-  "angee-examples",
+const REQUIRED_ADDON_ROOTS = [
+  join(MONOREPO_ROOT, "addons"),
+  join(MONOREPO_ROOT, "examples", "addons"),
 ] as const;
-const MISSING_ADDON_REPOSITORIES = missingAddonRepositories();
-const SKIP_WORKSPACE_GUARDRAILS = MISSING_ADDON_REPOSITORIES.length > 0;
-const WORKSPACE_GUARDRAILS_NOTICE =
-  `[architecture guardrails] Skipping workspace addon assertions; missing required addon repositories: ${MISSING_ADDON_REPOSITORIES.join(", ")}.`;
-
-if (SKIP_WORKSPACE_GUARDRAILS) {
-  if (process.env.ANGEE_WORKSPACE_GUARDRAILS === "require") {
-    throw new Error(
-      `Architecture guardrail is missing required addon repositories: ${MISSING_ADDON_REPOSITORIES.join(", ")}`,
-    );
-  }
-}
+const OPTIONAL_ADDON_ROOTS = [
+  resolve(MONOREPO_ROOT, "../angee-messaging-bridges/addons"),
+] as const;
 
 interface PackageRoot {
   name: string;
@@ -135,18 +125,11 @@ const UI_DYNAMIC_I18N_KEY_FAMILIES: readonly DynamicI18nKeyFamily[] = [
 ];
 
 describe("React architecture guardrails", () => {
-  if (SKIP_WORKSPACE_GUARDRAILS) {
-    test("reports why workspace addon assertions are skipped", () => {
-      console.warn(WORKSPACE_GUARDRAILS_NOTICE);
-      expect(MISSING_ADDON_REPOSITORIES.length).toBeGreaterThan(0);
-    });
-  }
-
   test("framework and tooling imports follow layering and declared dependencies", () => {
     expect(importViolations(repositoryPackageRoots())).toEqual([]);
   });
 
-  test.skipIf(SKIP_WORKSPACE_GUARDRAILS)(
+  test(
     "framework, tooling, and addon imports follow layering and declared dependencies",
     () => {
       expect(importViolations(allPackageRoots())).toEqual([]);
@@ -154,7 +137,7 @@ describe("React architecture guardrails", () => {
   );
 
   test("relative package escape detection reports a seeded violation", () => {
-    const root = join(REPO_ROOT, "ui");
+    const root = join(PACKAGES_ROOT, "ui");
     const file = join(root, "src", "views", "ListView.tsx");
     const pkg = { name: "@angee/ui", root };
 
@@ -163,12 +146,12 @@ describe("React architecture guardrails", () => {
     expect(isApprovedRelativeEscape(pkg, file, "../../../app/src/create-app")).toBe(false);
   });
 
-  test.skipIf(SKIP_WORKSPACE_GUARDRAILS)(
-    "discovers every required addon repository from workspace siblings",
+  test(
+    "discovers the explicit in-repo addon roots",
     () => {
-      expect(addonRepositoryRoots().map((root) => basename(dirname(root)))).toEqual(
-        expect.arrayContaining([...REQUIRED_ADDON_REPOSITORIES]),
-      );
+      expect(REQUIRED_ADDON_ROOTS.map((root) => relative(MONOREPO_ROOT, root)))
+        .toEqual(["addons", join("examples", "addons")]);
+      expect(addonRepositoryRoots()).toEqual(expect.arrayContaining([...REQUIRED_ADDON_ROOTS]));
     },
   );
 
@@ -176,9 +159,9 @@ describe("React architecture guardrails", () => {
     expect(() => registryArray(
       { criticalExports: {} },
       "criticalExports",
-      join(REPO_ROOT, "fixture", "architecture.guardrails.json"),
+      join(PACKAGES_ROOT, "fixture", "architecture.guardrails.json"),
     )).toThrow(
-      "Invalid addon guardrail registry angee-react/fixture/architecture.guardrails.json: "
+      "Invalid addon guardrail registry packages/fixture/architecture.guardrails.json: "
       + "criticalExports must be an array",
     );
   });
@@ -188,7 +171,7 @@ describe("React architecture guardrails", () => {
       .toEqual(["ui"]);
   });
 
-  test.skipIf(SKIP_WORKSPACE_GUARDRAILS)(
+  test(
     "declared addon web package edges stay acyclic",
     () => {
       const addons = addonPackageRoots();
@@ -215,7 +198,7 @@ describe("React architecture guardrails", () => {
     expect(invalidCriticalExports(FRAMEWORK_CRITICAL_EXPORTS)).toEqual([]);
   });
 
-  test.skipIf(SKIP_WORKSPACE_GUARDRAILS)(
+  test(
     "critical shared owners have a production consumer",
     () => {
       const declarations = [
@@ -255,7 +238,7 @@ describe("React architecture guardrails", () => {
     ];
 
     expect(unusedI18nKeys(fixtureKeys, fixtureSources, new Set())).toEqual([
-      "fixture.planted.dead (angee-react/app/fixture/i18n.ts)",
+      "fixture.planted.dead (packages/app/fixture/i18n.ts)",
     ]);
   });
 
@@ -268,7 +251,7 @@ describe("React architecture guardrails", () => {
     expect(unusedI18nKeys(bundles, sources, frameworkDynamicI18nKeys())).toEqual([]);
   });
 
-  test.skipIf(SKIP_WORKSPACE_GUARDRAILS)(
+  test(
     "every bundled i18n key is referenced statically or by a typed dynamic family",
     () => {
       const packages = allPackageRoots();
@@ -297,7 +280,7 @@ describe("React architecture guardrails", () => {
     expect([...new Set(missing)].sort()).toEqual([]);
   });
 
-  test.skipIf(SKIP_WORKSPACE_GUARDRAILS)(
+  test(
     "every authored glyph literal resolves from the base or addon registries",
     () => {
       const productionFiles = allPackageRoots().flatMap((pkg) =>
@@ -349,7 +332,7 @@ function frameworkCriticalExport(
   packageName: string,
   ownerFile: string,
 ): CriticalExportDeclaration {
-  const packageRoot = resolve(REPO_ROOT, FRAMEWORK_PACKAGES.get(packageName) ?? "");
+  const packageRoot = resolve(PACKAGES_ROOT, FRAMEWORK_PACKAGES.get(packageName) ?? "");
   return { name, ownerFile: join(packageRoot, ownerFile) };
 }
 
@@ -364,7 +347,7 @@ function repositoryPackageRoots(): PackageRoot[] {
   return [
     ...[...FRAMEWORK_PACKAGES.entries()].map(([name, root]) => ({
       name,
-      root: resolve(REPO_ROOT, root),
+      root: resolve(PACKAGES_ROOT, root),
     })),
     ...toolingPackageRoots(),
   ];
@@ -372,7 +355,7 @@ function repositoryPackageRoots(): PackageRoot[] {
 
 function toolingPackageRoots(): PackageRoot[] {
   return ["storybook", "e2e"]
-    .map((entry) => resolve(REPO_ROOT, entry))
+    .map((entry) => resolve(PACKAGES_ROOT, entry))
     .filter((root) => existsSync(join(root, "package.json")))
     .map(packageRoot);
 }
@@ -392,25 +375,19 @@ function addonPackageRoots(): PackageRoot[] {
 }
 
 function addonRepositoryRoots(): string[] {
-  const roots = readdirSync(WORKSPACE_ROOT)
-    .map((entry) => join(WORKSPACE_ROOT, entry, "addons"))
-    .filter((root) => existsSync(root) && statSync(root).isDirectory());
-  const discovered = new Set(roots.map((root) => basename(dirname(root))));
-  const missing = REQUIRED_ADDON_REPOSITORIES.filter((name) => !discovered.has(name));
+  const missing = REQUIRED_ADDON_ROOTS.filter(
+    (root) => !existsSync(root) || !statSync(root).isDirectory(),
+  );
   if (missing.length > 0) {
-    throw new Error(`Architecture guardrail is missing required addon repositories: ${missing.join(", ")}`);
+    throw new Error(
+      "Architecture guardrail is missing required addon roots: "
+      + missing.map(workspaceRelative).join(", "),
+    );
   }
-  return roots.sort();
-}
-
-function missingAddonRepositories(): string[] {
-  if (process.env.ANGEE_WORKSPACE_GUARDRAILS === "skip") {
-    return [...REQUIRED_ADDON_REPOSITORIES];
-  }
-  return REQUIRED_ADDON_REPOSITORIES.filter((name) => {
-    const root = join(WORKSPACE_ROOT, name, "addons");
-    return !existsSync(root) || !statSync(root).isDirectory();
-  });
+  return [
+    ...REQUIRED_ADDON_ROOTS,
+    ...OPTIONAL_ADDON_ROOTS.filter((root) => existsSync(root) && statSync(root).isDirectory()),
+  ].sort();
 }
 
 function importViolations(packages: readonly PackageRoot[]): string[] {
@@ -438,7 +415,7 @@ function importViolations(packages: readonly PackageRoot[]): string[] {
           violations.push(`${rel} imports deleted shell ${importedPackage}`);
           continue;
         }
-        // Generated schemas are injected into sibling addon fragments by the
+        // Generated schemas are injected into addon fragments by the
         // composed stack; only packages in this repository must reject them.
         if (
           importedPackage !== pkg.name
@@ -464,7 +441,7 @@ function importViolations(packages: readonly PackageRoot[]): string[] {
 }
 
 function isRepositoryPackage(pkg: PackageRoot): boolean {
-  const rel = relative(REPO_ROOT, pkg.root);
+  const rel = relative(PACKAGES_ROOT, pkg.root);
   return rel !== ".." && !rel.startsWith(`..${sep}`);
 }
 
@@ -741,7 +718,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function i18nBundleKeys(packages: readonly PackageRoot[]): I18nBundleKey[] {
   const bundleFiles = [
-    join(REPO_ROOT, "ui", "src", "i18n", "en.ts"),
+    join(PACKAGES_ROOT, "ui", "src", "i18n", "en.ts"),
     ...packages.map((pkg) => join(pkg.root, "src", "i18n.ts")),
   ].filter((file) => existsSync(file));
   return bundleFiles.flatMap((file) => {
@@ -758,7 +735,7 @@ function i18nBundleKeys(packages: readonly PackageRoot[]): I18nBundleKey[] {
 }
 
 function i18nNamespace(file: string, text: string): string {
-  if (resolve(file) === resolve(REPO_ROOT, "ui", "src", "i18n", "en.ts")) return "ui";
+  if (resolve(file) === resolve(PACKAGES_ROOT, "ui", "src", "i18n", "en.ts")) return "ui";
   const declared = text.match(/createNamespaceT\(\s*["']([^"']+)["']/)?.[1];
   if (declared) return declared;
   const packageRootPath = resolve(dirname(file), "..");
@@ -940,7 +917,7 @@ function isStoryFile(file: string): boolean {
 }
 
 function workspaceRelative(file: string): string {
-  return relative(WORKSPACE_ROOT, file);
+  return relative(MONOREPO_ROOT, file);
 }
 
 function escapeRegExp(value: string): string {
