@@ -1,0 +1,218 @@
+import * as React from "react";
+
+export type DottedPathFieldErrorMap = Readonly<
+  Record<string, readonly string[]>
+>;
+
+export interface DottedPathFieldErrors {
+  replace: (errors: DottedPathFieldErrorMap) => void;
+  clear: () => void;
+  messagesFor: (field: string) => readonly string[];
+  clearField: (field: string) => void;
+  formSummary: string | null;
+}
+
+/** Field- and form-level validation messages extracted from a save failure. */
+export interface ValidationErrors {
+  /** Messages keyed by SDL (camelCase) field name. */
+  fieldErrors: Record<string, string[]>;
+  /** Non-field / form-level messages. */
+  formErrors: string[];
+}
+
+/**
+ * Project `<field>.<row index>.<child field>` errors into the row-indexed
+ * validation contract consumed by editable line cells.
+ */
+export function lineRowErrorsFromDottedPaths(
+  errors: DottedPathFieldErrorMap,
+  field: string,
+): readonly (ValidationErrors | undefined)[] | undefined {
+  const prefix = `${field}.`;
+  const byRow = new Map<number, ValidationErrors>();
+  for (const [path, messages] of Object.entries(errors)) {
+    if (!path.startsWith(prefix)) continue;
+    const match = /^(\d+)\.(.+)$/.exec(path.slice(prefix.length));
+    if (!match) continue;
+    const index = Number(match[1]);
+    const childField = match[2] as string;
+    const entry = byRow.get(index) ?? { fieldErrors: {}, formErrors: [] };
+    entry.fieldErrors[childField] = [
+      ...(entry.fieldErrors[childField] ?? []),
+      ...messages,
+    ];
+    byRow.set(index, entry);
+  }
+  if (byRow.size === 0) return undefined;
+  const rows: (ValidationErrors | undefined)[] = [];
+  const maxIndex = Math.max(...byRow.keys());
+  for (let index = 0; index <= maxIndex; index += 1) rows.push(byRow.get(index));
+  return rows;
+}
+
+interface GraphQLErrorLike {
+  message?: unknown;
+  extensions?: Record<string, unknown> | null;
+}
+
+/**
+ * Extract per-field and form-level validation messages from a mutation error.
+ * The GraphQL runtime surfaces Django model-validation failures as structured
+ * extensions; the base form binds field messages and shows the rest at form
+ * level.
+ */
+export function validationErrorsFromError(error: unknown): ValidationErrors {
+  const fieldErrors: Record<string, string[]> = {};
+  const formErrors: string[] = [];
+  let structured = false;
+
+  for (const graphQLError of graphQLErrorsOf(error)) {
+    const extensions = graphQLError.extensions ?? undefined;
+    const validation = validationErrorMap(extensions?.validationErrors);
+    if (validation) {
+      structured = true;
+      for (const [field, messages] of Object.entries(validation)) {
+        fieldErrors[field] = [...(fieldErrors[field] ?? []), ...messages];
+      }
+    }
+    const form = extensions?.formErrors;
+    if (Array.isArray(form)) {
+      structured = true;
+      for (const message of form) {
+        if (typeof message === "string") formErrors.push(message);
+      }
+    }
+  }
+
+  if (!structured) {
+    const message = validationErrorMessage(error);
+    if (message) formErrors.push(message);
+  }
+  return { fieldErrors, formErrors };
+}
+
+/** Parse an opaque JSON scalar as a field-to-messages validation map. */
+export function validationErrorMap(
+  value: unknown,
+): Record<string, string[]> | null {
+  if (!isStringListMap(value)) return null;
+  return Object.fromEntries(
+    Object.entries(value).map(([field, messages]) => [field, [...messages]]),
+  );
+}
+
+/**
+ * Re-scope the descendant-message strings returned by
+ * {@link useDottedPathFieldErrors} to one nested dotted path. Exact messages
+ * lose their path prefix; deeper descendants retain it for another nested
+ * owner. Matching keeps the owner's exact-or-dot-boundary rule.
+ */
+export function messagesForDottedPath(
+  messages: readonly string[],
+  path: string,
+): readonly string[] {
+  const exactPrefix = `${path}: `;
+  const descendantPrefix = `${path}.`;
+  return messages.flatMap((message) => {
+    if (message.startsWith(exactPrefix)) {
+      return [message.slice(exactPrefix.length)];
+    }
+    return message.startsWith(descendantPrefix) ? [message] : [];
+  });
+}
+
+/** Direct messages from a scoped list, excluding its dotted descendants. */
+export function directDottedPathMessages(
+  messages: readonly string[],
+  path: string,
+): readonly string[] {
+  const descendantPrefix = `${path}.`;
+  return messages.filter((message) => !message.startsWith(descendantPrefix));
+}
+
+/**
+ * Own a field-to-messages map whose keys may address nested values with dotted
+ * paths. A field binds its exact key and descendants, editing it clears the
+ * same boundary, and keys belonging to no rendered field fold into one form
+ * summary.
+ */
+export function useDottedPathFieldErrors(
+  fieldNames: readonly string[] = EMPTY_FIELD_NAMES,
+): DottedPathFieldErrors {
+  const [errors, setErrors] = React.useState<DottedPathFieldErrorMap>({});
+  const replace = React.useCallback(
+    (next: DottedPathFieldErrorMap) => setErrors(next),
+    [],
+  );
+  const clear = React.useCallback(() => setErrors({}), []);
+  const messagesFor = React.useCallback(
+    (field: string): readonly string[] =>
+      Object.entries(errors).flatMap(([path, messages]) => {
+        if (path === field) return messages;
+        if (!dottedPathBelongsToField(path, field)) return [];
+        return messages.map((message) => `${path}: ${message}`);
+      }),
+    [errors],
+  );
+  const clearField = React.useCallback((field: string) => {
+    setErrors((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(
+          ([path]) => !dottedPathBelongsToField(path, field),
+        ),
+      ),
+    );
+  }, []);
+  const formSummary = React.useMemo(
+    () =>
+      dottedPathErrorSummary(
+        Object.fromEntries(
+          Object.entries(errors).filter(
+            ([path]) =>
+              !fieldNames.some((field) =>
+                dottedPathBelongsToField(path, field),
+              ),
+          ),
+        ),
+      ),
+    [errors, fieldNames],
+  );
+  return { replace, clear, messagesFor, clearField, formSummary };
+}
+
+function dottedPathBelongsToField(path: string, field: string): boolean {
+  return path === field || path.startsWith(`${field}.`);
+}
+
+function dottedPathErrorSummary(
+  errors: DottedPathFieldErrorMap,
+): string | null {
+  const messages = Object.entries(errors).flatMap(([field, entries]) =>
+    entries.map((message) => `${field}: ${message}`),
+  );
+  return messages.length > 0 ? messages.join(" ") : null;
+}
+
+function graphQLErrorsOf(error: unknown): readonly GraphQLErrorLike[] {
+  if (error && typeof error === "object" && "graphQLErrors" in error) {
+    const list = (error as { graphQLErrors?: unknown }).graphQLErrors;
+    if (Array.isArray(list)) return list as GraphQLErrorLike[];
+  }
+  return [];
+}
+
+function isStringListMap(value: unknown): value is Record<string, string[]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value).every(
+    (entry) =>
+      Array.isArray(entry) && entry.every((item) => typeof item === "string"),
+  );
+}
+
+function validationErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message.replace(/^\[\w+\]\s*/, "");
+  if (typeof error === "string") return error.replace(/^\[\w+\]\s*/, "");
+  return "Could not save record.";
+}
+
+const EMPTY_FIELD_NAMES: readonly string[] = [];
