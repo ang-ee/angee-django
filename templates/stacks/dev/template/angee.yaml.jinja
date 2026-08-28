@@ -1,7 +1,9 @@
-{# stacks/dev wrapper: process-compose framework-dev stack. Set mode + address #}
+{# stacks/dev wrapper: process-compose framework-dev stack. Set axes + address #}
 {# variables, then include the one shared manifest body. The include path resolves #}
 {# from the template's `_subdirectory` root (the renderer's loader base). #}
+{% set stack_flavor = "framework" %}
 {% set runtime_mode = "process" %}
+{% set ingress_domain_value = "localhost" %}
 {# The OPERATOR owns path-input translation (copierx.ResolvePathInputs): every render #}
 {# flow rewrites a relative `type: path` input to be ANGEE_ROOT-relative before this #}
 {# template sees it, and an absolute input arrives verbatim. The project host IS the #}

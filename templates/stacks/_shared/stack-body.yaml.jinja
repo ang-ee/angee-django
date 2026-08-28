@@ -1,34 +1,34 @@
 {# Shared stack manifest body for BOTH stack templates. NOTE: pongo2 (the operator's #}
 {# renderer) only supports SINGLE-LINE jinja comments — never span lines with one {#. #}
-{# The two thin wrappers (stacks/dev, stacks/local) each set `runtime_mode` and the #}
-{# address variables in a `{% set %}` header, then include this one file at column 0. #}
-{# Everything below is the single source of truth for the manifest; runtime_mode #}
-{# branches appear ONLY where the two modes genuinely differ. #}
-{# process = stacks/dev — a process-compose dev stack. Framework + project run as #}
-{#   local `uv run` processes against a source checkout; postgres/redis are #}
-{#   containers with published host ports; the edge Caddy fronts routed services; #}
-{#   the lifecycle runs as jobs. #}
-{# docker = stacks/local — a docker-compose self-contained instance. Every service #}
-{#   is a container on the compose network; the lifecycle runs inside the django #}
-{#   container command; Caddy serves the built SPA. #}
-{# Wrapper-provided variables: runtime_mode, database_url, redis_url, #}
+{# The two thin wrappers each set `stack_flavor`, `runtime_mode`, and address #}
+{# variables in a `{% set %}` header, then include this one file at column 0. #}
+{# Everything below is the single source of truth for the manifest. stack_flavor #}
+{# selects framework-dev versus self-contained instance structure; runtime_mode #}
+{# selects process versus container execution where those genuinely differ. #}
+{# framework = stacks/dev — owns ingress, the framework source roster, and src workspace. #}
+{#   Its current process runtime uses local `uv run` processes against the checkout, #}
+{#   with published postgres/redis ports and a jobs-owned lifecycle. #}
+{# instance = stacks/local — owns bootstrap-admin secrets and the static frontend. #}
+{#   Its docker runtime uses the compose network and runs the lifecycle inside the #}
+{#   django container command, with Caddy serving the built SPA. #}
+{# Wrapper-provided variables: stack_flavor, runtime_mode, database_url, redis_url, #}
 {# celery_broker_url, operator_url, mcp_url, operator_bind, pgdata_mount, and #}
 {# (process only) app_source, framework_source — plus the dev copier inputs #}
 {# addons_profile and work_state_source, which gate sources/workspace blocks. #}
 version: 1
 kind: stack
-{% if runtime_mode == "process" %}
+{% if stack_flavor == "framework" %}
 name: {{ project_name }}
 {% endif %}
-{% if runtime_mode == "docker" %}
+{% if stack_flavor == "instance" %}
 name: {{ instance_name }}
 {% endif %}
 
 template:
-{% if runtime_mode == "process" %}
+{% if stack_flavor == "framework" %}
   active: stacks/dev
 {% endif %}
-{% if runtime_mode == "docker" %}
+{% if stack_flavor == "instance" %}
   active: {{ _src_path }}
 {% endif %}
   # The PROJECT owns the canonical .copier-answers.yml (dev is chained under a
@@ -36,7 +36,7 @@ template:
   # file so it never clobbers the project's.
   answers_file: .copier-answers.stack.yml
 
-{% if runtime_mode == "process" %}
+{% if stack_flavor == "framework" %}
 # Edge ingress. The operator's central Caddy fronts every service that declares a
 # `route:` block (e.g. the agent chat WebSocket) and forward-auths each upgrade
 # against the operator's /edge/verify. Without an `ingress.type: caddy` stack the
@@ -51,7 +51,7 @@ ingress:
   type: caddy
   routing: path
   tls: "off"   # quoted: bare YAML `off` is boolean false; the operator wants the string
-  domain: localhost
+  domain: {{ ingress_domain_value }}
   # Host port the edge publishes. 80 for the base stack; a workspace leases a distinct
   # value (operator.port_pool.edge) so parallel stacks on one host don't all fight for :80.
   port: {{ edge_port }}
@@ -76,7 +76,7 @@ secrets:
   # in .env, so a re-render keeps the key stable.
   secret-key: { generated: true, length: 50 }
   operator-token: { generated: true, length: 32 }
-{% if runtime_mode == "docker" %}
+{% if stack_flavor == "instance" %}
   # First-admin password. Generated into .env and consumed through YAMLCONF so the
   # IAM bootstrap reads the same declarative surface as any operator override.
   admin-password: { generated: true, length: 32 }
@@ -128,7 +128,7 @@ sources:
     # The application source IS this root — the project is the stack.
     path: .
 {% endif %}
-{% if runtime_mode == "process" %}
+{% if stack_flavor == "framework" %}
   framework:
     kind: local
     path: {{ framework_source }}
@@ -197,7 +197,7 @@ sources:
 {% endif %}
 {% endif %}
 
-{% if runtime_mode == "process" %}
+{% if stack_flavor == "framework" %}
 # The conventional all-source workspace: every framework repo as a sibling
 # worktree slot under workspaces/src/. `angee dev` cuts it from the declared
 # sources on bring-up; the host's pyproject, addon dirs, and pnpm globs all
@@ -210,7 +210,7 @@ workspaces:
       work_state_source: {{ work_state_source }}
 {% endif %}
 {% endif %}
-{% if runtime_mode == "docker" %}
+{% if stack_flavor == "instance" %}
 {% if framework == "source" %}
   # framework == source: run the deps-only base image and link the framework editable
   # from this checkout at container start. The checkout must exist at the stack root —
@@ -375,9 +375,9 @@ services:
       ANGEE_PROJECT_DIR: /app
       DATABASE_URL: "{{ database_url }}"
       YAMLCONF_SECRET_KEY: "${secret.secret-key}"
-      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_USERNAME: "admin"
+{% if stack_flavor == "instance" %}      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_USERNAME: "admin"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_EMAIL: "admin@example.com"
-      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_PASSWORD: "${secret.admin-password}"
+      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_PASSWORD: "${secret.admin-password}"{% endif %}
       ANGEE_OPERATOR_GRAPHQL_ENDPOINT: "/operator/graphql"
       ANGEE_OPERATOR_URL: "{{ operator_url }}"
       ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
@@ -386,13 +386,13 @@ services:
       CACHE_URL: "{{ redis_url }}"
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
       {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
-    command:
+{% if stack_flavor == "instance" %}    command:
       - sh
       - "-c"
       - >-
         {% if framework == "source" %}uv sync --frozen --inexact --extra postgres --project sources/angee-django && python -m angee.compose.bootstrap && uv sync --inexact && {% endif %}python manage.py angee provision --bootstrap-admin
         && CADDY_IP=$$(python -c 'import socket; print(socket.gethostbyname("caddy"))')
-        && exec python -m uvicorn angee.asgi:application --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "$$CADDY_IP"
+        && exec python -m uvicorn angee.asgi:application --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "$$CADDY_IP"{% endif %}
     after: [postgres, redis]
 {% endif %}
 
@@ -438,7 +438,7 @@ services:
       CACHE_URL: "{{ redis_url }}"
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
       {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
-    # In source mode each container first links the framework so it can import psycopg,
+{% if stack_flavor == "instance" %}    # In source mode each container first links the framework so it can import psycopg,
     # then waits for django's migrations. That barrier also guarantees django projected
     # the fresh host's addon group; sync it into this container's own venv before celery.
     command:
@@ -451,7 +451,7 @@ services:
         [ "$$n" -ge 300 ] && { echo 'django migrations not ready after 300s:' >&2; cat /tmp/migratewait.err >&2; exit 1; };
         echo "waiting for django migrations ($$n/300)..."; sleep 1;
         done;
-        {% if framework == "source" %}uv sync --inexact; {% endif %}exec celery -A angee.jobs.celery:app {% if role == "beat" %}beat{% else %}worker{% endif %}{% if role != "worker" and role != "beat" %} -Q {{ role }} --pool threads --concurrency 8{% endif %} --loglevel=INFO
+        {% if framework == "source" %}uv sync --inexact; {% endif %}exec celery -A angee.jobs.celery:app {% if role == "beat" %}beat{% else %}worker{% endif %}{% if role != "worker" and role != "beat" %} -Q {{ role }} --pool threads --concurrency 8{% endif %} --loglevel=INFO{% endif %}
     after: [django, redis]
 {% endif %}
 {% endif %}{% endfor %}
@@ -483,7 +483,7 @@ services:
       STORYBOOK_PORT: "{{ storybook_port }}"
     after: [deps]
 {% endif %}
-{% if runtime_mode == "docker" %}
+{% if runtime_mode == "docker" %}{% if stack_flavor == "instance" %}
   # Static frontend build for Caddy ingress. A compose-visible service (not a job)
   # because Caddy depends on it in the container graph. The @angee/* packages are baked
   # into the web image; in source mode the first node -e overlays each package's src/
@@ -569,4 +569,4 @@ services:
     after: [django, frontend-build]
     ports:
       - "{{ ui_port }}:80"
-{% endif %}
+{% endif %}{% endif %}

@@ -1,7 +1,8 @@
-{# stacks/local wrapper: docker-compose self-contained instance. Set mode + address #}
+{# stacks/local wrapper: docker-compose self-contained instance. Set axes + address #}
 {# variables, then include the one shared manifest body (../../_shared, resolved from #}
 {# the template `_subdirectory` — the renderer's loader base). `framework` #}
 {# (source|baked) is read directly in the shared body. #}
+{% set stack_flavor = "instance" %}
 {% set runtime_mode = "docker" %}
 {# Address variables: docker mode reaches services by compose service name; only the #}
 {# host-local operator daemon is reached via the host gateway (host.docker.internal). #}
