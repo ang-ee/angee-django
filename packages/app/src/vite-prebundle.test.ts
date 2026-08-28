@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { ConfigEnv, Plugin, UserConfig } from "vite";
 
-import { angeePrebundleForce, angeePrebundleForcePlugin } from "../config/vite";
+import { angeePrebundleForce, angeePrebundleForcePlugin, angeeUIAllowedHosts } from "../config/vite";
 
 // The `config` hook ignores its plugin-context `this`, so drop it for the call.
 type ConfigHookFn = (config: UserConfig, env: ConfigEnv) => unknown;
@@ -16,6 +16,21 @@ function runConfigHook(plugin: Plugin, command: "serve" | "build"): unknown {
   const env: ConfigEnv = { command, mode: command === "serve" ? "development" : "production" };
   return handler?.({}, env);
 }
+
+describe("angeeUIAllowedHosts", () => {
+  test("leaves Vite defaults untouched when unset or empty", () => {
+    expect(angeeUIAllowedHosts(undefined)).toBeUndefined();
+    expect(angeeUIAllowedHosts("")).toBeUndefined();
+    expect(angeeUIAllowedHosts(" , ")).toBeUndefined();
+  });
+
+  test("parses and trims comma-separated public hostnames", () => {
+    expect(angeeUIAllowedHosts("dev.example.com, preview.example.com")).toEqual([
+      "dev.example.com",
+      "preview.example.com",
+    ]);
+  });
+});
 
 // The prebundle cache-bust: `optimizeDeps.force` flips true only when a linked
 // `@angee/*` package source changed since the last start, so a workspace edit is

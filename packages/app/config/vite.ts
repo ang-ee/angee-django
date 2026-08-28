@@ -29,6 +29,19 @@ const operator = process.env.ANGEE_OPERATOR_URL ?? "http://127.0.0.1:9000";
 // The angee workspace allocates a unique UI port and exports it; honour it so a
 // workspace's frontend (and the e2e harness targeting it) do not collide on 5173.
 const uiPort = Number(process.env.ANGEE_UI_PORT ?? 5173);
+// A public Caddy edge proxies its hostname to this dev server; recent Vite
+// versions otherwise reject that unknown Host header with a 403. Keep the
+// property absent when unset so Vite's own default host policy remains intact.
+// Exported for unit coverage of the comma-separated environment seam.
+export function angeeUIAllowedHosts(value: string | undefined): string[] | undefined {
+  const hosts = (value ?? "")
+    .split(",")
+    .map((host) => host.trim())
+    .filter(Boolean);
+  return hosts.length > 0 ? hosts : undefined;
+}
+
+const uiAllowedHosts = angeeUIAllowedHosts(process.env.ANGEE_UI_ALLOWED_HOSTS);
 
 // The project's `@angee/*` dependency set, read from the package.json at the
 // config cwd (the web package Vite runs in) and sorted for a deterministic
@@ -205,6 +218,7 @@ export function defineAngeeWebViteConfig({
     optimizeDeps: prebundleAngeePackages ? { include: angeePackages } : { exclude: angeePackages },
     server: {
       host: true,
+      ...(uiAllowedHosts ? { allowedHosts: uiAllowedHosts } : {}),
       port: uiPort,
       strictPort: true,
       proxy: {
