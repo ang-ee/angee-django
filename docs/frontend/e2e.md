@@ -123,6 +123,25 @@ ANGEE_UI_PORT=<ui-port> pnpm --filter @angee-example/notes-e2e test:e2e
 browser drives exactly the SPA the workspace is serving. Override the whole URL
 with `E2E_BASE_URL` if needed.
 
+### Against a containerized stack with a remote browser
+
+Point the suite at the frontend URL as seen **from the browser** and connect to
+the edge-routed Playwright browser server:
+
+```sh
+E2E_BASE_URL=http://frontend:5301 \
+E2E_WS_ENDPOINT=ws://localhost:8081/playwright-server/ \
+E2E_WS_TOKEN=<operator-route-bearer> \
+pnpm --filter @angee-example/notes-e2e test:e2e
+```
+
+When the browser server runs in the Compose network, the browser-visible URL
+uses Compose DNS (for example, `http://frontend:5301`). Only browser-backed
+fixtures use the websocket connection: Playwright `request` fixtures, including
+setup authentication, still run in the driver process, and `storageState` files
+stay local to the runner. The driver must therefore also be able to reach the
+configured frontend URL (for example, by running in the Compose network).
+
 ### Against an already-running stack (quick local loop)
 
 With `angee dev` already up from the stack root (UI on `5173`):
@@ -135,12 +154,14 @@ pnpm --filter @angee-example/notes-e2e report                             # open
 
 ## Environment contract
 
-The harness reads only these, all exported by the workspace/stack:
+The harness reads these environment variables:
 
 | Variable | Meaning | Default |
 |---|---|---|
 | `ANGEE_UI_PORT` | Port the Vite SPA serves on | `5173` |
 | `E2E_BASE_URL` | Full SPA origin (overrides `ANGEE_UI_PORT`) | derived |
+| `E2E_WS_ENDPOINT` | Playwright browser-server websocket URL | local browser |
+| `E2E_WS_TOKEN` | Operator route bearer for the websocket edge | unset |
 | `CI` | Enables retries, `forbidOnly`, fail-fast reporter | unset |
 
 GraphQL and CSRF are reached **through the SPA origin** (`/graphql/public/`,
@@ -149,11 +170,12 @@ cookie the specs persist is the one the browser sends.
 
 ## CI
 
-e2e is **excluded from the default test run** (`pnpm -r test` runs Vitest only;
-the e2e package exposes `test:e2e`, not `test`). A dedicated GitHub Actions job
-owns it: create a workspace, `angee dev`, `playwright install`, run the suite,
-and upload the HTML report + traces as artifacts. Because the workspace gives the
-job its own database and ports, parallel CI runs do not collide.
+Browser e2e is **excluded from the default test run**: `pnpm -r test` runs
+Vitest, including the `@angee/e2e` harness unit tests, while a consumer suite
+exposes its browser run separately as `test:e2e`. A dedicated GitHub Actions job
+owns that run: create a workspace, `angee dev`, `playwright install`, run the
+suite, and upload the HTML report + traces as artifacts. Because the workspace
+gives the job its own database and ports, parallel CI runs do not collide.
 
 > **Operator job (pending live validation).** The intended one-command path is an
 > opt-in operator job that runs `playwright test` after the `django` and `frontend`

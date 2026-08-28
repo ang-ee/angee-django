@@ -9,7 +9,7 @@ export {
 } from "./graphql";
 export { loginViaApi, roleStatePath, type Credentials } from "./auth";
 export { PageObject } from "./pom";
-export { resolveBaseURL } from "./env";
+export { resolveBaseURL, resolveConnectOptions } from "./env";
 // Type-only re-export so Page Objects never import from @playwright/test (the
 // dual-instance trap, docs/e2e.md); types are erased, so this is safe.
 export type { Locator, Page } from "@playwright/test";

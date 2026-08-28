@@ -1,6 +1,6 @@
 import { defineConfig, devices, type PlaywrightTestConfig } from "@playwright/test";
 
-import { resolveBaseURL } from "./env";
+import { resolveBaseURL, resolveConnectOptions } from "./env";
 
 export interface E2EConfigOptions {
   /** Directory holding specs and the auth setup, relative to the config. */
@@ -28,6 +28,7 @@ export function defineE2EConfig(
   options: E2EConfigOptions = {},
 ): PlaywrightTestConfig {
   const isCI = Boolean(process.env.CI);
+  const connectOptions = resolveConnectOptions();
   // Pull framework-owned seams out of the flat spread so a consumer override
   // can't silently drop baseURL or the setup dependency (e2e-003).
   const { use: useOverride, projects: projectsOverride, ...restOverrides } = options.overrides ?? {};
@@ -47,7 +48,12 @@ export function defineE2EConfig(
       { name: "setup", testMatch: /.*\.setup\.ts/ },
       {
         name: "chromium",
-        use: { ...devices["Desktop Chrome"] },
+        use: {
+          ...devices["Desktop Chrome"],
+          // Request-fixture calls run in the driver process and storageState
+          // files stay local to the runner; only the browser connects remotely.
+          ...(connectOptions ? { connectOptions } : {}),
+        },
         dependencies: ["setup"],
       },
     ],
