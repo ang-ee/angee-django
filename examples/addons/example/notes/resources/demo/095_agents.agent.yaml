@@ -1,0 +1,80 @@
+# Two stopped, ready-to-provision demo agents over the Anthropic provider owned by
+# agents_integrate_anthropic target each agent runtime (`runtime_class`), so the demo shows
+# both claude-code and opencode end to end. A third template row showcases the framework-dev
+# combination without provisioning or cloning it automatically. After a fresh seed:
+#   1. connect a usable Anthropic credential (Providers page), then on each agent set its
+#      `inference_credential` (Agents page) to override the Anthropic addon's placeholder,
+#   2. click Provision on the agent and watch the workspace + service come up.
+# Until a usable credential is set, provisioning is refused (the placeholder carries no
+# secret) rather than bringing up an agent that can't authenticate.
+#
+# The runtime — not the provider — owns how a credential becomes container env, because
+# the same token feeds different runtimes differently: claude-code accepts an Anthropic
+# OAuth (Personal Plans) token *or* an API key, while opencode uses an API-key credential
+# by default (it refuses an OAuth-only one up front). OpenCode's OAuth path is opt-in and
+# off by default — it needs a community auth plugin in the opencode image and using a
+# Pro/Max token there is against Anthropic's terms (see ANGEE_OPENCODE_OAUTH_ENABLED).
+#
+# Uses the nested `_meta`/`rows` form because Agent has a `model` field, which collides
+# with the flat format's reserved `model` (Django-model) key.
+_meta:
+  model: agents.Agent
+rows:
+  - _xref: agent_demo
+    fields:
+      name: Demo Agent
+      owner: iam.user_admin
+      instructions: |
+        You are a helpful coding agent working in /workspace. Keep changes small and
+        explain what you did.
+      model: agents_integrate_anthropic.model_claude_demo
+      workspace_template: notes.tpl_agent_default
+      runtime_class: claude_code
+      lifecycle: draft
+      runtime_status: stopped
+      workspace: ""
+      service: ""
+      last_error: ""
+      mcp_servers:
+        - agents.mcp_angee
+  # Showcase blueprint only: template rows have no clone/use action yet. Its src workspace
+  # and dev-flavour claude-code service are intentionally heavier than the runnable demo.
+  - _xref: agent_framework_dev_template
+    fields:
+      name: Framework Dev Agent
+      owner: iam.user_admin
+      is_template: true
+      instructions: |
+        You are a framework development agent working across the Angee source slots.
+        Keep changes focused, run each repository's checks, and commit only inside the
+        workspace branch when explicitly asked.
+      model: agents_integrate_anthropic.model_claude_demo
+      workspace_template: notes.tpl_src_workspace
+      runtime_class: claude_code
+      service_inputs:
+        flavor: dev
+      lifecycle: draft
+      runtime_status: stopped
+      workspace: ""
+      service: ""
+      last_error: ""
+      mcp_servers:
+        - agents.mcp_angee
+  # The opencode counterpart. No `mcp_servers`: the agent-default workspace writes a
+  # `.mcp.json` (claude-code's format), which opencode does not read — wiring the platform
+  # MCP server into opencode means emitting its own config, a separate follow-up.
+  - _xref: agent_demo_opencode
+    fields:
+      name: Demo Agent (OpenCode)
+      owner: iam.user_admin
+      instructions: |
+        You are a helpful coding agent working in /workspace. Keep changes small and
+        explain what you did.
+      model: agents_integrate_anthropic.model_opencode_demo
+      workspace_template: notes.tpl_agent_default
+      runtime_class: opencode
+      lifecycle: draft
+      runtime_status: stopped
+      workspace: ""
+      service: ""
+      last_error: ""
