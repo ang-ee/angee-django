@@ -152,7 +152,7 @@ def test_workflows_parties_resource_backfills_key_across_existing_lineage(
 
 
 def _notes_workflow_addon() -> Addon:
-    path = _REPO_ROOT.parent / "angee-examples/addons/example/notes"
+    path = _REPO_ROOT / "examples/addons/example/notes"
     resources = {
         "master": (),
         "install": (),
