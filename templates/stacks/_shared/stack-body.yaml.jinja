@@ -600,7 +600,11 @@ services:
     image: {{ playwright_mcp_image }}
     mounts:
       - bind://./data/playwright:/data/profile
-    command: ["--headless", "--browser", "chromium", "--no-sandbox", "--host", "0.0.0.0", "--port", "8931", "--user-data-dir", "/data/profile"]
+    # --allowed-hosts "*": requests arrive through the edge with the ingress domain as
+    # Host; the MCP's own host check is a DNS-rebinding guard for unauthenticated local
+    # servers, and THIS endpoint is route-only (never host-published) behind the
+    # operator's forward-auth, so the edge bearer is the real gate.
+    command: ["--headless", "--browser", "chromium", "--no-sandbox", "--host", "0.0.0.0", "--port", "8931", "--allowed-hosts", "*", "--user-data-dir", "/data/profile"]
     after: [frontend]
     route: { port: 8931, auth: forward }
 {% endif %}{% endif %}{% if runtime_mode == "docker" %}{% if stack_flavor == "instance" %}

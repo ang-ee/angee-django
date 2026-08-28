@@ -1006,6 +1006,10 @@ def test_dev_stack_docker_mode_playwright_services_are_edge_routed() -> None:
         "0.0.0.0",
         "--port",
         "8931",
+        # The edge bearer is the gate; the MCP host check would reject the
+        # ingress domain Host header on this route-only, never-published port.
+        "--allowed-hosts",
+        "*",
         "--user-data-dir",
         "/data/profile",
     ]
