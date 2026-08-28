@@ -1,8 +1,8 @@
 # @angee-example/notes-e2e
 
 The reference Playwright e2e suite for the notes example — the worked example a
-consumer copies for their own product suite. It composes the `@angee/e2e`
-harness (the angee-react repo) and runs against a live, seeded Angee stack with
+consumer copies for their own product suite. It composes the in-repo
+`@angee/e2e` harness and runs against a live, seeded Angee stack with
 `example.notes` composed (the framework-dev stack's `full` addon profile).
 
 ```sh

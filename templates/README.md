@@ -31,10 +31,10 @@ only where the two modes differ. Both chain `projects/web` to scaffold the host 
 collapse the first-run lifecycle into one `manage.py angee provision` command.
 
 - **`stacks/dev`** (`runtime_mode: process`) — the framework-dev stack, run on
-  process-compose. It declares the framework repos as git `sources:` and the
-  `src` workspace; `angee dev` materializes the clone caches, cuts the workspace
-  (every framework repo as a sibling worktree slot under `workspaces/src/`), and
-  runs Django/Celery/Vite/Storybook as local processes against those slots. The
+  process-compose. It declares the consolidated framework plus optional external
+  git `sources:` and the `src` workspace; `angee dev` materializes their clone
+  caches, cuts the workspace, and runs Django/Celery/Vite/Storybook as local
+  processes against those worktrees. The
   rendered pyproject resolves `django-angee` editable from the angee-django slot,
   so `uv run manage.py` works bare from the root. For developing the framework —
   or a consumer project against live framework source.
@@ -76,8 +76,8 @@ stack regenerates it disposably, so it is ignored there.) Everything a tool rege
 resolved secrets, the operator's compiled compose files, materialized sources, the
 Postgres volume — stays out of git. The database is a stack service and the app
 reads `DATABASE_URL`, so no SQLite file lives in the tree. Add the framework's
-example later by adding a source onto `ang-ee/angee-examples` and enabling it in
-`INSTALLED_APPS`.
+in-repo example later by including `examples/addons` in discovery and enabling
+it in `INSTALLED_APPS`.
 
 > **Status.** The `local` template now *is* this shape: a thin `kind: stack` that
 > chains `projects/web` and includes the shared manifest body in `docker` mode. By
@@ -103,7 +103,7 @@ container start, and `stack init` validates that source exists — so clone it f
 ```sh
 mkdir -p ~/.angee/sources
 git clone https://github.com/ang-ee/angee-django ~/.angee/sources/angee-django
-angee stack init https://github.com/ang-ee/angee-templates/tree/main/templates/stacks/local ~/.angee
+angee stack init https://github.com/ang-ee/angee-django/tree/main/templates/stacks/local ~/.angee
 angee dev --root ~/.angee
 export ANGEE_OPERATOR_URL=http://127.0.0.1:9000
 # `angee secret reveal` reads the stack's secrets backend — never hand-parse .env
@@ -133,7 +133,7 @@ then update from the template:
 
 ```sh
 sed -i.bak \
-  's#active: stacks/local#active: https://github.com/ang-ee/angee-templates/tree/main/templates/stacks/local#' \
+  's#active: stacks/local#active: https://github.com/ang-ee/angee-django/tree/main/templates/stacks/local#' \
   ~/.angee/angee.yaml
 angee stack update --root ~/.angee --template
 ```

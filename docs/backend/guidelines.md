@@ -75,7 +75,7 @@ that layering tests enforce:
 - `angee.base` is the model foundation (models, fields, mixins, managers,
   querysets, and model emission declarations). It must not import `angee.compose`,
   `angee.graphql`, or addon packages.
-- `angee.graphql` is the `angee-base` folder addon's GraphQL runtime (schema
+- `angee.graphql` is the `addons/angee/graphql` folder addon's GraphQL runtime (schema
   assembly, Strawberry helpers, serving, subscriptions, and SDL commands). It
   may import `angee.base`, never `angee.compose`.
 - `angee.compose` is the build-time composer. It may import `angee.base` and

@@ -196,10 +196,10 @@ materializes its framework sources and boots the complete stack.
    There is no `--dev` flag: `dev` is the default value of `-t/--template`.
    `angee dev` is the supported bring-up command for the whole local stack;
    `angee up` starts container Services only. Don't start Django, Vite, Daphne,
-   or workers by hand. The rendered manifest declares the framework repos as
-   sources; `angee dev` clones them, cuts the `src` workspace (every repo a
-   sibling worktree slot), and runs the composed host at the stack root against
-   those slots.
+   or workers by hand. The rendered manifest declares the consolidated framework
+   source plus optional external sources; `angee dev` materializes them, cuts the
+   `src` workspace, and runs the composed host at the stack root against those
+   worktrees.
 
 ### Optional Ollama inference
 
@@ -226,8 +226,8 @@ To run one-shot management commands against the example (emit runtime sources,
 migrate, sync permissions, load data, check the GraphQL SDL), drive its
 `manage.py` through `uv` from the root — the full sequence is in
 [`AGENTS.md`](../../AGENTS.md) under "Run From The Root". To work on a change in
-isolation, create a src-style workspace — every framework repo as a sibling
-worktree slot pinned to `workspace/<name>`:
+isolation, create a src-style workspace — the consolidated framework source and
+optional external sources are pinned to `workspace/<name>`:
 
 ```sh
 # Resolve angee_root with .agents/skills/angee-workspace/SKILL.md.

@@ -9,7 +9,7 @@
   "scripts": {
     "changeset": "pnpm dlx @changesets/cli@2.29.7",
     "version-packages": "pnpm dlx @changesets/cli@2.29.7 version",
-    "release": "pnpm -r build && pnpm dlx @changesets/cli@2.29.7 publish",
+    "release": "pnpm -r --filter './packages/**' --filter '!@angee/storybook' build && pnpm dlx @changesets/cli@2.29.7 publish",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test"
   }

@@ -56,8 +56,8 @@ Two pieces, at the two levels that own them:
     API and persist its `storageState`, used by the setup project.
   - `PageObject` — the base for the **Page Object Model**, Angee's default
     authoring style (see below).
-- **Reference specs** (the sibling `angee-examples` repo's `e2e/`) — the worked example a consumer
-  copies. `playwright.config.ts`, an `auth.setup.ts` that authenticates the seeded
+- **Reference specs** (`examples/e2e/`) — the worked example a consumer copies.
+  `playwright.config.ts`, an `auth.setup.ts` that authenticates the seeded
   `alice`/`bob`, Page Objects under `pages/`, and specs under `tests/`.
 
 A consumer addon adds e2e by creating its own `<project>/e2e` package that depends
@@ -101,7 +101,7 @@ parallel mutation flakiness ever demands it, the seam to add it is the workspace
 dozens of notes, not three). Specs assert durable invariants — a known record is
 present, two users' scopes are disjoint, an anonymous write is denied with
 `PERMISSION_DENIED` — never a volatile row count. See
-the angee-examples suite's `e2e/tests/notes.spec.ts`.
+`examples/e2e/tests/notes.spec.ts`.
 
 ## Running e2e
 

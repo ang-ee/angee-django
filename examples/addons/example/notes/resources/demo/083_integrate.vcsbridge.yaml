@@ -1,6 +1,6 @@
 # The local-template VCS bridge. `config.local_root` is resolved against BASE_DIR
-# (the stack root) by LocalVCSBackend; the angee-templates source cache is the
-# checkout where templates/ lives.
+# (the stack root) by LocalVCSBackend; the consolidated framework checkout is
+# the source that now owns templates/.
 - xref: vcs_local_templates
   owner: iam.user_admin
   vendor: notes.vendor_local
@@ -8,5 +8,5 @@
   credential: notes.cred_local_templates
   lifecycle: connected
   config:
-    local_root: "sources/angee-templates"
-    local_name: angee-templates
+    local_root: "sources/angee-django"
+    local_name: angee-django

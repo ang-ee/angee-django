@@ -1,15 +1,16 @@
 # Contributing to Angee
 
-Thanks for your interest in Angee. This repository is the framework core and the
-base addons shipped with it (see `README.md`).
+Thanks for your interest in Angee. This repository contains the framework core,
+standard addons, React packages, examples, and templates shipped together (see
+`README.md`).
 
 ## Before you start
 
 - Read **`AGENTS.md`** — it is the contributor entry point and states the
   architecture constitution every change must satisfy.
 - The development process and coding principles live in `docs/guidelines.md`;
-  backend and frontend specifics in `docs/backend/guidelines.md` and the
-  [Frontend Guidelines](https://docs.angee.ai/react/guidelines). The opinionated dependency stack is
+  backend and frontend specifics in `docs/backend/guidelines.md` and
+  `docs/frontend/guidelines.md`. The opinionated dependency stack is
   `docs/stack.md`, and terms are defined in `docs/glossary.md`.
 
 ## Running the stack

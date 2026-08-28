@@ -5,8 +5,8 @@ boring, proven libraries into one deterministic product surface. Before adding,
 replacing, or hand-rolling a capability, check the opinionated stack in
 `docs/stack.md`; it is the single source of truth for which library owns what.
 The dependency manifests lock the install shape: `pyproject.toml` + `uv.lock`
-for Python here, and the stack host's `package.json` + `pnpm-workspace.yaml` +
-`pnpm-lock.yaml` for TypeScript (the JS packages live in sibling repos).
+for Python, and the root `package.json` + `pnpm-workspace.yaml` +
+`pnpm-lock.yaml` for the one TypeScript workspace.
 
 The framework owns the seams, not the concerns. Product logic belongs in addons.
 The composer turns addon contracts and project settings into a runnable project.
@@ -17,9 +17,8 @@ A project declares the root apps it composes through Django `INSTALLED_APPS`.
 This repository holds the Angee framework core: the language and the loom — the
 data contract, composer, model toolkit, serving seams, and jobs seam. The core is
 not an addon. Everything that gives a product a capability, including its API
-protocol, is an addon; framework addons live in the sibling `angee-base` repo,
-and consumer addons are a product team's own code. See `docs/glossary.md` for
-these terms.
+protocol, is an addon; framework addons live under `addons/`, and consumer
+addons are a product team's own code. See `docs/glossary.md` for these terms.
 
 The first question for any change is *what level does it belong to?*
 
@@ -40,36 +39,82 @@ stack DRY.
 A map by role, not a file inventory — core module docstrings and addon contracts
 own the current behavior, and this points to those owners. The framework core at
 `angee/` is the one real Python package (`django-angee`); product capabilities
-live in addons from sibling source repos, materialized side by side as workspace
-slots by a stack's `src` workspace. The `angee.*` namespace spans the core and
-the base addons across repos without changing any import.
+live beside it under `addons/`. The `angee.*` namespace spans the core and base
+addons without changing any import.
 
 ```text
-.                           # a workspace slot: <stack>/workspaces/<ws>/angee-django
+.                           # the consolidated framework source checkout
 ├── angee/                  # `django-angee` — framework core + composer (PEP 420 namespace, no __init__.py)
 │   ├── base/               # framework core: the model toolkit (abstract models, mixins, fields, managers)
 │   ├── data/               # framework core: the product data-surface description contract
 │   ├── compose/            # the composer — emits the concrete runtime (`manage.py angee build`)
 │   └── jobs/               # the Celery seam (broker wiring, beat, queue routing)
 ├── docs/                   # intent docs — glossary, stack, guidelines, and `docs/howto/`
-├── tests/                  # framework-core tests (composition, contracts, jobs, serving seams, …)
+├── addons/                 # standard `angee.*` folder addons + co-located web fragments
+├── packages/               # `@angee/{app,ui,refine,metadata}` + Storybook/e2e tooling
+├── examples/               # showcase consumer addons + reference Playwright suite
+├── templates/              # Copier project / stack / workspace / service templates
+├── tests/                  # merged core, addon, and template contract tests
 ├── .agents/                # shared agent methodology — reviewer agents, commands, skills, workflows (`.agents/README.md`; public)
 ├── .work/                  # private agent work-state — plans, notes, handovers (gitignored symlink to a separate private repo; never mirrored)
 ├── README.md               # human entry point; `AGENTS.md` is the agent/contributor entry point
-└── pyproject.toml, uv.lock # the Python package + locked graph
-
-# Sibling workspace slots (their own repos, side by side):
-../angee-react/             # `@angee/app`, `ui`, `refine`, `metadata` + the storybook and e2e workshops
-../angee-base/              # base folder addons, including the `angee.graphql` runtime, with co-located `web/` fragments
-../angee-messaging-bridges/ # the opt-in personal-messaging bridge addons
-../angee-examples/          # showcase consumer addons (`example.notes`) + the reference e2e suite
-../angee-templates/         # the Copier templates — project / stack / workspace / service kinds
-../angee-operator/          # the `angee` CLI / operator daemon (Go)
+└── pyproject.toml, uv.lock, package.json, pnpm-lock.yaml
 ```
+
+The opt-in personal-messaging bridges remain in the external
+`angee-messaging-bridges` repository. The Go operator, `hatch-angee`, and
+`strawberry-django-hasura` also remain independently published repositories.
 
 You edit **source models** in addons; the composer emits the concrete apps and
 the `runtime/` tree. Generated `runtime/` is output — change the source, not the
 artifact (see `docs/glossary.md`).
+
+## Area Rules
+
+### Framework core (`angee/`)
+
+The core owns composition language and shared machinery inherited by every
+project. It must not absorb product capability or addon vocabulary. Run the
+full Python suite before handoff because core changes can affect every composed
+area.
+
+### Framework addons (`addons/`)
+
+Each standard addon is a source folder with an `addon.toml`, not a separately
+distributed Python package. Keep its capability, manifest, resources,
+permissions, and `web/` fragment together. Generated SDL and `@angee/gql`
+documents belong to the composed host; never move them into source or core.
+
+### Frontend packages (`packages/`)
+
+Schema independence is an invariant for the published framework packages: they
+must not import project-generated `@angee/gql/*` modules. Package layering is
+`refine` and `metadata` → rented libraries, `ui` → `refine` + `metadata`, and
+`app` → all three. `packages/tsconfig.base.json` and
+`packages/vitest.shared.ts` own shared package configuration. Update
+`packages/app/src/architecture-guardrails.test.ts` deliberately when changing a
+package edge or shared export.
+
+### Examples (`examples/`)
+
+Examples are consumer code and the reference for third-party addon authors.
+They may consume framework addons and packages but never become dependencies of
+them. Keep the example addon and its e2e coverage representative of public
+extension seams rather than privileged monorepo internals.
+
+### Templates (`templates/`)
+
+Templates own the source that renders projects, stacks, workspaces, and
+services. Change the template, not rendered output, and update the corresponding
+contract tests under `tests/`. Preserve Copier answers and path semantics across
+the complete template chain.
+
+### Checks by area
+
+Run `uv run pytest -q` for Python, addon, or template changes. Run
+`pnpm -r typecheck` and `pnpm -r test` for package or addon-web changes, and the
+package build/distribution checks for published frontend surfaces. Meaningful UI
+changes also require browser verification described in `docs/frontend/`.
 
 ## Constitution
 
@@ -123,7 +168,7 @@ cleaner.
   addon `AppConfig`, a model/manager/queryset, a schema contract, or a specific
   class. If no owner exists, create or extend the smallest owner at the right
   level before adding callers.
-- **Sibling inventory:** search for the same page type, model pattern, schema
+- **Analog inventory:** search for the same page type, model pattern, schema
   pattern, or integration pattern in at least two nearby addons/packages. If the
   same shape appears twice, fix the shared owner or document why the shapes have
   different intent.
@@ -269,8 +314,8 @@ uv run manage.py schema --check           # SDL, after runtime load
 ```
 
 For an isolated branch, load `.agents/skills/angee-workspace/SKILL.md` and
-follow its **Create Workspace** workflow — the src template cuts every
-framework repo as a sibling worktree slot on `workspace/<name>`.
+follow its **Create Workspace** workflow — the src template cuts the consolidated
+framework source plus optional external sources on `workspace/<name>`.
 
 A workspace is pinned to `workspace/<name>` — never `git checkout`/`switch`
 inside it; make a new workspace for a different branch.
@@ -308,8 +353,7 @@ A change is done only when the code and the architecture are both checked.
 - The opinionated stack lives in `docs/stack.md`; manifests lock exact
   dependency setup.
 - Backend rules live in `docs/backend/guidelines.md`.
-- Frontend rules live in the
-  [Frontend Guidelines](https://docs.angee.ai/react/guidelines).
+- Frontend rules live in `docs/frontend/guidelines.md`.
 - Root rules stay here. Do not duplicate language-specific guidance in this
   file.
 
@@ -320,9 +364,8 @@ Durable project knowledge is checked in, not held in any agent's private memory
 
 - **Durable knowledge — conventions, gotchas/pitfalls, and architecture
   decisions — goes into the checked-in docs.** When you learn something that will
-  matter next time, extend the owning guideline (`docs/backend/guidelines.md`, the
-  [Frontend Guidelines](https://docs.angee.ai/react/guidelines),
-  `docs/guidelines.md`, or `docs/stack.md`) as a
+  matter next time, extend the owning guideline (`docs/backend/guidelines.md`,
+  `docs/frontend/guidelines.md`, `docs/guidelines.md`, or `docs/stack.md`) as a
   terse rule or a `Pitfalls` entry. Don't restate code contracts (field/API
   inventories) — those live beside the code (see "Let Code Carry Code Contracts"
   in `docs/guidelines.md`).

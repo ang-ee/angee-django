@@ -533,17 +533,13 @@ Hard-won traps — the wise learn from others' mistakes
 - **A new web package needs `pnpm install` + a Vite restart** (Vite snapshots
   workspace packages at start) plus registration in the host `main.tsx` addons and
   `package.json`.
-- **A sibling repo's `pnpm install` can stomp this repo's per-package
-  `node_modules`.** A downstream checkout that links `@angee/*` by path (e.g. a
-  downstream project checkout) rewrites `<pkg>/node_modules` symlinks into *its own*
-  `.pnpm` store; TS then loads two `vite`/`vitest` type identities and every
-  package typecheck fails with `Excessive stack depth comparing types
-  'UserConfig' and 'UserConfig'` in `vitest.shared.ts` — nothing in this repo's
-  diff is at fault. Fix the environment, not the types: remove the stomped
-  per-package `node_modules` dirs and re-run `pnpm install` here (a plain or
-  `--force` install alone does not re-link them). Diagnose with
-  `readlink app/node_modules/vitest` — it must not point into the
-  sibling repo.
+- **Install JS dependencies once at the monorepo root.** Never run `pnpm install`
+  inside `packages/`, `addons/`, or `examples/`: a nested install forks linked
+  `vite`/`vitest` identities and can produce `Excessive stack depth comparing
+  types 'UserConfig' and 'UserConfig'` in `vitest.shared.ts`. Fix that environment
+  by removing the nested package `node_modules` and reinstalling at the root;
+  do not weaken the types. Every workspace package must resolve through the one
+  root virtual store.
 - **Prebundled `@angee/*` source edits are cache-busted by source signature, not
   a manual wipe.** A project that consumes `@angee/*` as installed packages
   (`prebundleAngeePackages: true`) prebundles them; Vite's optimizer hash comes
@@ -554,17 +550,16 @@ Hard-won traps — the wise learn from others' mistakes
   changed vs a persisted marker — a source edit re-optimizes, an unchanged tree
   stays cached. The in-repo example excludes `@angee/*` (linked source, HMR) so
   this never applies there.
-- **Start new addon web packages from the `ang-ee/angee-templates` repo's `templates/addons/web`.** The Copier template
+- **Start new addon web packages from `templates/addons/web`.** The Copier template
   owns the current ceremony: `defineBaseAddon`, `resourcePageRoutes`, lazy routed
   pages, `createNamespaceT`, `expectValidBaseAddon`, and package/test wiring.
   Don't copy an older addon and then manually chase drift.
 - **Architecture guardrails are tests, not review folklore.** After changing a
   framework package edge, addon package dependency, or newly exported shared owner,
-  update the owning guardrail deliberately:
-  `app/src/architecture-guardrails.test.ts` for the React/tooling tree,
-  or its `architecture-guardrails.addons.test.ts` sibling for addon/example
-  scope. Record the intended package edge or deliberate public-export allowance;
-  do not bypass it with an undeclared import or a second local implementation.
+  update `packages/app/src/architecture-guardrails.test.ts` deliberately. It owns
+  both the package tree and the explicit addon/example roots. Record the intended
+  edge or public-export allowance; do not bypass it with an undeclared import or
+  a second local implementation.
 - **`ResourceList` still needs a form declaration, even for read-only records.** Give
   discovered/read-only resources a `<Form>` child or `formFields` with read-only fields;
   an all-read-only form never assembles an update mutation. Delete affordances are
@@ -671,8 +666,8 @@ For page/addon changes, run a primitive-drift scan and explain every hit outside
 `@angee/ui`:
 
 ```sh
-rg -n '<table\b|<thead\b|<tbody\b|<tr\b|<td\b|<th\b|role="grid"|useReactTable|manualPagination' . ../angee-base/addons ../angee-messaging-bridges/addons -g '*.tsx'
-rg -n 'useAuthored(Query|Mutation)<|interface .*Data|interface .*Variables|fetch\([^)]*graphql|gql`' . ../angee-base/addons ../angee-messaging-bridges/addons -g '*.ts' -g '*.tsx'
+rg -n '<table\b|<thead\b|<tbody\b|<tr\b|<td\b|<th\b|role="grid"|useReactTable|manualPagination' packages addons examples ../angee-messaging-bridges/addons -g '*.tsx'
+rg -n 'useAuthored(Query|Mutation)<|interface .*Data|interface .*Variables|fetch\([^)]*graphql|gql`' packages addons examples ../angee-messaging-bridges/addons -g '*.ts' -g '*.tsx'
 ```
 
 Run the architecture guardrail when changing package layering, public shared

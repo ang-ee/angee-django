@@ -56,7 +56,7 @@ Outline your objectives. A specified goal keeps you focused and ensures your cod
 meets requirements. Keep the description concise and clear for teammates. Document
 it in the README or a GitHub issue so the team has access.
 Include relevant links or references. For architecture work, include the owner
-map, sibling inventory, dependency owner, naming vocabulary, and what existing
+map, analog inventory, dependency owner, naming vocabulary, and what existing
 code should become unnecessary.
 
 ### 4. Discuss
