@@ -34,6 +34,9 @@ export function WorkspaceCreateDialog({
   const t = useOperatorT();
   const navigate = useNavigate();
   const { snapshot } = useOperatorSnapshot({ templates: true });
+  // The detail view resolves its record from the workspaces snapshot; the
+  // post-create navigation must not race the next snapshot push (see submit).
+  const { refetch: refetchWorkspaces } = useOperatorSnapshot({ workspaces: true });
   const preflight = useWorkspacePreflight();
   const create = useWorkspaceCreate();
   const [templateRef, setTemplateRef] = React.useState("");
@@ -142,6 +145,10 @@ export function WorkspaceCreateDialog({
       }
       const workspace = (await create.run({ object }))?.insert_workspaces_one;
       if (!workspace) throw new Error(t("workspaces.create.failed"));
+      // Pull the snapshot before navigating: the detail resolves by name from
+      // the workspaces pane, and navigating ahead of the refresh bounces the
+      // route back to the list.
+      await Promise.resolve(refetchWorkspaces()).catch(() => undefined);
       onOpenChange(false);
       void navigate({ to: workspaceDetailPath(workspace.name) });
     } catch (cause) {
