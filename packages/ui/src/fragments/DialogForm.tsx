@@ -37,7 +37,9 @@ export function DialogForm({
       <Dialog.Portal>
         <Dialog.Backdrop />
         <Dialog.Content placement={placement} size={size}>
-          <FormRoot layout="plain" onSubmit={onSubmit}>
+          {/* The form sits between the height-capped Content and the scrolling
+              Body, so it must carry the flex column for the cap to reach Body. */}
+          <FormRoot layout="plain" className="flex min-h-0 flex-col" onSubmit={onSubmit}>
             <Dialog.Header>
               <div className="flex items-start gap-3">
                 <div className="min-w-0 flex-1">

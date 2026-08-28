@@ -21,9 +21,14 @@ export const dialogVariants = tv({
     backdrop:
       "fixed inset-0 z-modal-backdrop bg-overlay animate-apps-modal-fade",
     content:
-      "fixed left-1/2 z-modal max-w-[calc(100vw-2rem)] -translate-x-1/2 overflow-hidden rounded-12 border border-border-subtle bg-sheet shadow-lg outline-none animate-apps-modal-pop",
-    header: "space-y-1.5 px-5 pt-5",
-    body: cn(textRoleVariants({ role: "description" }), "px-5 py-3"),
+      "fixed left-1/2 z-modal flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col overflow-hidden rounded-12 border border-border-subtle bg-sheet shadow-lg outline-none animate-apps-modal-pop",
+    header: "shrink-0 space-y-1.5 px-5 pt-5",
+    // min-h-0 + overflow-y-auto: a dialog taller than its placement cap scrolls its
+    // body instead of pushing the footer (and its submit action) off-viewport.
+    body: cn(
+      textRoleVariants({ role: "description" }),
+      "min-h-0 flex-1 overflow-y-auto px-5 py-3",
+    ),
     footer:
       "flex items-center justify-end gap-2 border-t border-border-subtle bg-sheet-2 px-5 py-3",
     title: "text-base font-semibold leading-snug text-fg",
@@ -38,9 +43,11 @@ export const dialogVariants = tv({
       lg: { content: "w-[44rem]" },
     },
     placement: {
-      default: { content: "top-modal-top" },
-      prompt: { content: "top-[30vh]" },
-      center: { content: "top-1/2 -translate-y-1/2" },
+      // Each placement caps the dialog below its own top offset so the footer
+      // always stays on screen; the body slot owns the overflow scrolling.
+      default: { content: "top-modal-top max-h-[calc(100vh-var(--spacing-modal-top)-2rem)]" },
+      prompt: { content: "top-[30vh] max-h-[calc(70vh-2rem)]" },
+      center: { content: "top-1/2 -translate-y-1/2 max-h-[calc(100vh-4rem)]" },
     },
   },
   defaultVariants: {
