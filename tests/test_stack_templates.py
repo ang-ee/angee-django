@@ -304,6 +304,7 @@ def _render_dev_stack(
     celery_queues: str = "",
     enable_ollama: bool = False,
     ollama_port: str = "11434",
+    ingress_domain: str = "localhost",
     _runtime_mode: str = "process",
 ) -> dict[str, Any]:
     """Render the process-mode framework-dev stack enough for YAML contract tests.
@@ -325,7 +326,7 @@ def _render_dev_stack(
         "edge_port": "80",
         "enable_ollama": "true" if enable_ollama else "",
         "framework_path": framework_path,
-        "ingress_domain": "localhost",
+        "ingress_domain": ingress_domain,
         "node_image": "node:22-bookworm-slim",
         "ollama_port": ollama_port,
         "operator_port": "9000",
@@ -345,10 +346,16 @@ def _render_dev_stack(
     return _render_stack_manifest(DEV_TEMPLATE, variables)
 
 
-def _render_dev_docker_stack(*, celery_queues: str = "") -> dict[str, Any]:
+def _render_dev_docker_stack(
+    *, celery_queues: str = "", ingress_domain: str = "localhost"
+) -> dict[str, Any]:
     """Render the Docker-mode framework-dev stack with every dev input present."""
 
-    return _render_dev_stack(celery_queues=celery_queues, _runtime_mode="docker")
+    return _render_dev_stack(
+        celery_queues=celery_queues,
+        ingress_domain=ingress_domain,
+        _runtime_mode="docker",
+    )
 
 
 def _render_project_settings(
@@ -952,6 +959,7 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
     assert "date > caches/js-deps.done" in frontend_command
     assert "exec pnpm --dir web dev --host 0.0.0.0" in frontend_command
     assert frontend["ports"] == ["${ports.ui}:5173"]
+    assert "ANGEE_UI_ALLOWED_HOSTS" not in frontend["env"]
 
     storybook = stack["services"]["storybook"]
     assert storybook["image"] == "node:22-bookworm-slim"
@@ -975,6 +983,32 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
     assert "ports" not in stack["services"]["redis"]
     assert stack["ports"]["ui"] == {"value": 5173, "export_env": "ANGEE_UI_PORT"}
     assert stack["ports"]["storybook"] == {"value": 6006, "export_env": "STORYBOOK_PORT"}
+
+
+def test_dev_stack_hostname_mode_secures_the_ux_ingress() -> None:
+    """A public dev hostname routes the Docker UX through automatic edge TLS."""
+
+    stack = _render_dev_docker_stack(ingress_domain="dev.example.com")
+
+    assert stack["ingress"] == {
+        "type": "caddy",
+        "routing": "path",
+        "tls": "auto",
+        "domain": "dev.example.com",
+        "verify": "host.docker.internal:9000",
+    }
+    frontend = stack["services"]["frontend"]
+    assert frontend["route"] == {"port": 5173, "path": "/", "auth": "none"}
+    assert "ports" not in frontend
+    assert frontend["env"]["ANGEE_UI_ALLOWED_HOSTS"] == "dev.example.com"
+    assert stack["services"]["playwright-server"]["route"] == {
+        "port": 3100,
+        "auth": "forward",
+    }
+    assert stack["services"]["playwright-mcp"]["route"] == {
+        "port": 8931,
+        "auth": "forward",
+    }
 
 
 def test_dev_stack_docker_mode_playwright_services_are_edge_routed() -> None:

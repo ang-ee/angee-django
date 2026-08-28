@@ -43,18 +43,22 @@ template:
 # operator treats routed services as unrouted and `agentChatEndpoint` can't hand
 # the browser a reachable URL.
 #
-# Dev uses `routing: path` + `tls: off`: one shared host with a `/<service>/` prefix
+{% if ingress_domain_value == "localhost" %}# Dev uses `routing: path` + `tls: off`: one shared host with a `/<service>/` prefix
 # per agent (no per-agent subdomain/DNS), and plain ws. `localhost` always resolves,
 # so a freshly provisioned agent is reachable at ws://localhost:<edge_port>/<service>/
-# with zero DNS or cert setup.
+# with zero DNS or cert setup.{% else %}
+# With a public DNS name, Caddy serves container routes over automatic TLS on host
+# ports 443/80. Docker mode routes the Vite UX at `/`; process mode keeps its local
+# frontend on ui_port because runtime-local services cannot be routed. Its routed
+# container services still use TLS; the Playwright routes exist only in Docker mode.{% endif %}
 ingress:
   type: caddy
   routing: path
-  tls: "off"   # quoted: bare YAML `off` is boolean false; the operator wants the string
+  tls: {% if ingress_domain_value == "localhost" %}"off"   # quoted: bare YAML `off` is boolean false; the operator wants the string{% else %}auto{% endif %}
   domain: {{ ingress_domain_value }}
-  # Host port the edge publishes. 80 for the base stack; a workspace leases a distinct
+{% if ingress_domain_value == "localhost" %}{# edge_port applies only in localhost mode; automatic TLS pins host ports 443/80. #}  # Host port the edge publishes. 80 for the base stack; a workspace leases a distinct
   # value (operator.port_pool.edge) so parallel stacks on one host don't all fight for :80.
-  port: {{ edge_port }}
+  port: {{ edge_port }}{% endif %}
   # The edge runs as a container; this dev stack's operator is `runtime: local`, so
   # forward_auth must reach it on the host instead of the default `operator:9000`.
   verify: host.docker.internal:{{ operator_port }}
@@ -526,7 +530,8 @@ services:
     env:
       ANGEE_DJANGO_URL: http://django:8000
       ANGEE_UI_PORT: "{{ ui_port }}"
-      ANGEE_OPERATOR_URL: "{{ operator_url }}"
+      ANGEE_OPERATOR_URL: "{{ operator_url }}"{% if ingress_domain_value == "localhost" %}{% else %}
+      ANGEE_UI_ALLOWED_HOSTS: "{{ ingress_domain_value }}"{% endif %}
     command:
       - sh
       - "-c"
@@ -543,9 +548,10 @@ services:
         && pnpm --dir {{ web_path }} codegen
         && date > caches/js-deps.done
         && exec pnpm --dir {{ web_path }} dev --host 0.0.0.0
-    after: [django]
+    after: [django]{% if ingress_domain_value == "localhost" %}
     ports:
-      - "${ports.ui}:{{ ui_port }}"
+      - "${ports.ui}:{{ ui_port }}"{% else %}
+    route: { port: {{ ui_port }}, path: /, auth: none }{% endif %}
 
   # Storybook waits for the shared pnpm install and codegen sentinel.
   storybook:

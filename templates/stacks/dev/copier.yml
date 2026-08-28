@@ -26,9 +26,17 @@ _message_after_copy: |
        export ANGEE_OPERATOR_TOKEN="$(angee secret reveal operator-token)"
 
   App (process): http://localhost:{{ ui_port }}
+  {% if ingress_domain == "localhost" %}
   App (docker):  http://<host>:{{ ui_port }}
-  Playwright MCP (docker): http://{{ ingress_domain }}:{{ edge_port }}/playwright-mcp/mcp
-  Browser server (docker): ws://{{ ingress_domain }}:{{ edge_port }}/playwright-server/
+  Playwright MCP (docker): http://localhost:{{ edge_port }}/playwright-mcp/mcp
+  Browser server (docker): ws://localhost:{{ edge_port }}/playwright-server/
+  {% else %}
+  UX (docker): https://{{ ingress_domain }}/
+  Agents: wss://{{ ingress_domain }}/<service>/
+  Playwright MCP (docker): https://{{ ingress_domain }}/playwright-mcp/mcp
+  Browser server route (docker): https://{{ ingress_domain }}/playwright-server/
+  Browser WebSocket clients use wss://{{ ingress_domain }}/playwright-server/.
+  {% endif %}
   The Playwright endpoints are edge-routed with forward-auth; mint a route token
   via `angee token` before connecting.
 
@@ -72,7 +80,7 @@ _angee:
     ingress_domain:
       type: str
       default: localhost
-      help: Hostname used by the edge-routed Playwright service URLs.
+      help: Public DNS name serves the UX through the Caddy edge at https://<name> with automatic Let's Encrypt TLS on host ports 443/80; localhost keeps plain local HTTP on edge_port.
   # Chain the project template first so the stack overlays a real host, then this
   # template adds only the stack overlay (angee.yaml, settings/workspace files).
   # The ref is relative to THIS template's directory; downstream it can pin a
@@ -152,7 +160,7 @@ playwright_mcp_image:
 ingress_domain:
   type: str
   default: localhost
-  help: Hostname used by the edge-routed Playwright service URLs.
+  help: Public DNS name serves the UX through the Caddy edge at https://<name> with automatic Let's Encrypt TLS on host ports 443/80; localhost keeps plain local HTTP on edge_port.
 
 # Which addon roster the host composes. `base` renders the consumer scaffold
 # (base addons only); `full` renders the whole platform composition — every
