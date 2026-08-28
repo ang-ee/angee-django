@@ -14,6 +14,10 @@ _angee:
     so the service carries no in-container Caddy, token verifier, or auth secret.
   name_pattern: "agent-${workspace.name}"
   inputs:
+    flavor:
+      type: str
+      default: base
+      choices: [base, dev]
     auth_env:
       type: str
       default: ""
@@ -34,6 +38,17 @@ _angee:
       help: >-
         Pre-rendered YAML env lines (one per credentialed MCP server) setting each
         server's bearer from its operator secret; .mcp.json reads them via ${VAR}.
+    git_user_name:
+      type: str
+      default: Angee Agent
+    git_user_email:
+      type: str
+      default: agent@angee.local
+
+flavor:
+  type: str
+  default: base
+  choices: [base, dev]
 
 auth_env:
   type: str
@@ -51,3 +66,11 @@ permission_mode:
 mcp_env:
   type: str
   default: ""
+
+git_user_name:
+  type: str
+  default: Angee Agent
+
+git_user_email:
+  type: str
+  default: agent@angee.local

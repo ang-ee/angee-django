@@ -14,7 +14,18 @@ _angee:
     already have that ref checked out. Update one slot through
     workspaceSourcePull (`angee ws source pull`); do not switch the worktree to
     its base ref.
+  instance_naming:
+    pattern: "${inputs.agent_name | slug | truncate(48)}"
+    max_length: 48
   inputs:
+    agent_name:
+      type: str
+      default: ""
+      help: Display name for the agent; also seeds the workspace instance name.
+    mcp_json:
+      type: str
+      default: '{"mcpServers": {}}'
+      help: The agent's MCP server config as a JSON document, written to .mcp.json.
     branch_prefix:
       type: str
       default: workspace
@@ -111,6 +122,14 @@ _angee:
       subpath: .work
       optional: true
 
+agent_name:
+  type: str
+  default: ""
+
+mcp_json:
+  type: str
+  default: '{"mcpServers": {}}'
+
 branch_prefix:
   type: str
   default: workspace
@@ -126,4 +145,3 @@ angee_django_ref:
 work_state_source:
   type: str
   default: ""
-

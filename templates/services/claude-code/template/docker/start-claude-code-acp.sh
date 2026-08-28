@@ -66,4 +66,8 @@ fs.writeFileSync(
 NODE
 fi
 
+if command -v git >/dev/null 2>&1; then
+  git config --global --add safe.directory '*'
+fi
+
 exec stdio-to-ws claude-agent-acp --port "${PORT:-3007}"

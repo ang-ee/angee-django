@@ -82,3 +82,27 @@ def test_src_workspace_code_workspace_lists_every_slot() -> None:
     text = SRC_CODE_WORKSPACE.read_text(encoding="utf-8")
     for slot in SRC_SLOTS | {".work"}:
         assert f'"path": "{slot}"' in text
+
+
+def test_src_workspace_declares_agent_inputs_and_fail_loud_instance_naming() -> None:
+    """Agent-created src workspaces derive names without a mass-name fallback."""
+
+    manifest = yaml.safe_load(SRC_COPIER.read_text(encoding="utf-8"))
+
+    for inputs in (manifest["_angee"]["inputs"], manifest):
+        assert inputs["agent_name"]["type"] == "str"
+        assert inputs["agent_name"]["default"] == ""
+        assert inputs["mcp_json"]["type"] == "str"
+        assert inputs["mcp_json"]["default"] == '{"mcpServers": {}}'
+
+    assert manifest["_angee"]["instance_naming"] == {
+        "pattern": "${inputs.agent_name | slug | truncate(48)}",
+        "max_length": 48,
+    }
+
+
+def test_src_workspace_writes_agent_mcp_config_verbatim() -> None:
+    """The MCP document is passed through with the same safe filter as agent-default."""
+
+    mcp_template = SRC_COPIER.parent / "template" / ".mcp.json.jinja"
+    assert mcp_template.read_text(encoding="utf-8") == "{{ mcp_json | safe }}\n"

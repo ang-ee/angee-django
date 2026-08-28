@@ -1,0 +1,50 @@
+# Claude Code ACP agent, exposed as a WebSocket by stdio-to-ws on :3007 (route.port).
+# The operator's central Caddy terminates TLS + edge auth, so this image carries no
+# Caddy and no token verifier — just the agent and the stdio<->ws bridge.
+#
+# The ACP claude adapter is @agentclientprotocol/claude-agent-acp (the older
+# @zed-industries/claude-code-acp is deprecated/renamed). Pin it so the agent and the
+# web client's @agentclientprotocol/sdk track the same protocol version.
+FROM node:22-slim
+
+COPY start-claude-code-acp.sh /usr/local/bin/start-claude-code-acp
+
+RUN npm install -g @agentclientprotocol/claude-agent-acp@0.52.0 stdio-to-ws \
+    && chmod +x /usr/local/bin/start-claude-code-acp \
+    && mkdir -p /workspace /home/node/.claude \
+    && chown -R node:node /workspace /home/node/.claude
+{%- if flavor == "dev" %}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        git \
+        jq \
+        openssh-client \
+        procps \
+    && install -m 0755 -d /etc/apt/keyrings /etc/apt/sources.list.d \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && printf '%s  %s\n' \
+        '6084d5d7bd8e288441e0e94fc6275570895da18e6751f70f057485dc2d1a811b' \
+        '/etc/apt/keyrings/githubcli-archive-keyring.gpg' \
+        | sha256sum --check --strict - \
+    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && printf 'deb [arch=%s signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\n' \
+        "$(dpkg --print-architecture)" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gh \
+    && curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv-installer.sh \
+    && env UV_UNMANAGED_INSTALL=/usr/local/bin sh /tmp/uv-installer.sh \
+    && corepack enable \
+    && rm -f /tmp/uv-installer.sh \
+    && rm -rf /var/lib/apt/lists/*
+{%- endif %}
+
+USER node
+WORKDIR /workspace
+EXPOSE 3007
+
+CMD ["start-claude-code-acp"]
