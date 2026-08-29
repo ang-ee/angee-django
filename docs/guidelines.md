@@ -71,7 +71,7 @@ Once you clearly understand the problem and the solution you want to implement,
 start coding. Follow the best practices and established principles for the
 framework you're using — for this project, that means the language-specific rules
 in [Backend Guidelines](backend/guidelines.md) and
-[Frontend Guidelines](/react/guidelines), and the library ownership in
+[Frontend Guidelines](frontend/guidelines.md), and the library ownership in
 [the opinionated stack](stack.md).
 
 ### 6. Stop
@@ -206,7 +206,7 @@ elements and reassemble them from the ground up.
 - Follow the best practices for the framework you're using — for example, PEP 8
   for Python. For this project, the specifics live in
   [Backend Guidelines](backend/guidelines.md) and
-  [Frontend Guidelines](/react/guidelines).
+  [Frontend Guidelines](frontend/guidelines.md).
 
 ### Name So Code Can Be Found, Not Guessed
 
@@ -225,7 +225,7 @@ naming taxes every future reader, forever — so naming gets special attention h
   own; match the surrounding ecosystem so the framework can locate code by name
   (convention over configuration). The concrete per-language conventions — modeled
   on Django for the backend — live in [Backend Guidelines](backend/guidelines.md)
-  and [Frontend Guidelines](/react/guidelines).
+  and [Frontend Guidelines](frontend/guidelines.md).
 
 > A **smart** person learns from their mistakes, but a truly **wise** person
 > learns from the mistakes of others.
@@ -335,7 +335,7 @@ work in the Django / React Runtime. It sits above the language-specific rules:
   language or layer.
 - **[Backend Guidelines](backend/guidelines.md)** — Python, Django, and the
   composer.
-- **[Frontend Guidelines](/react/guidelines)** — TypeScript, React, and the
+- **[Frontend Guidelines](frontend/guidelines.md)** — TypeScript, React, and the
   rendered experience.
 - **[The Opinionated Stack](stack.md)** — which library owns which concern.
 - **[Glossary](glossary.md)** — shared vocabulary (composer, host, addon, seams…).

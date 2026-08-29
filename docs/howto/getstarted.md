@@ -276,7 +276,7 @@ docs that own each detail:
 - **[Development guidelines](../guidelines.md)** — the process and coding
   principles for all work here.
 - **[Backend guidelines](../backend/guidelines.md)** and
-  **[Frontend guidelines](/react/guidelines)** — the language-specific
+  **[Frontend guidelines](../frontend/guidelines.md)** — the language-specific
   rules.
 - **[Composer](../composer.md)** — how addon contracts become a runnable
   project.

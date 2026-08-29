@@ -51,7 +51,7 @@ addons without changing any import.
 │   └── jobs/               # the Celery seam (broker wiring, beat, queue routing)
 ├── docs/                   # intent docs — glossary, stack, guidelines, and `docs/howto/`
 ├── addons/                 # standard `angee.*` folder addons + co-located web fragments
-├── packages/               # `@angee/{app,ui,refine,metadata}` + Storybook/e2e tooling
+├── packages/               # `@angee/{app,ui,refine,metadata}` + Storybook/e2e tooling (guide: docs/frontend/e2e.md)
 ├── examples/               # showcase consumer addons + reference Playwright suite
 ├── templates/              # Copier project / stack / workspace / service templates
 ├── tests/                  # merged core, addon, and template contract tests

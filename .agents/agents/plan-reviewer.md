@@ -26,7 +26,7 @@ and treat them as the source of truth:
 - `docs/guidelines.md` — development process, coding principles, the red flags.
 - `docs/stack.md` — which library owns which concern (the opinionated stack).
 - `docs/glossary.md` — the shared vocabulary.
-- `docs/backend/guidelines.md` and `https://docs.angee.ai/react/guidelines` — the area rules the
+- `docs/backend/guidelines.md` and `docs/frontend/guidelines.md` — the area rules the
   plan will be built against.
 - `.agents/commands/lift.md` — the lift contract the plan must satisfy (reconstruct,
   never copy; green-field, no provenance; stay DRY and land at the right level; defer

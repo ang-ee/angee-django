@@ -35,7 +35,7 @@ conventions and has never seen the source.
    wired in its repo.
 2. **Understand here.** Read `AGENTS.md`, `docs/guidelines.md`, `docs/stack.md`,
    `docs/glossary.md`, and the relevant `docs/backend/guidelines.md` /
-   `https://docs.angee.ai/react/guidelines`. Scan existing local code for the patterns, naming,
+   `docs/frontend/guidelines.md`. Scan existing local code for the patterns, naming,
    and primitives you should match and reuse.
 3. **Decide placement and level.** Framework/base addon or consumer addon? Where in
    the local layout does it belong? What does the local stack already provide that you

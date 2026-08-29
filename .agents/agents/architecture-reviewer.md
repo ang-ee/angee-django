@@ -23,7 +23,7 @@ and treat them as the source of truth:
   imports, docstrings, framework contracts, and the per-area Checks.
 - `docs/stack.md` — which library owns which concern (the opinionated stack).
 - `docs/glossary.md` — the shared vocabulary.
-- `https://docs.angee.ai/react/guidelines` — only when reviewing frontend.
+- `docs/frontend/guidelines.md` — only when reviewing frontend.
 
 Quote the rule a finding violates. A mismatch between code and docs is itself a
 finding (AGENTS.md). If no rule clearly applies, fall back to the host framework's
