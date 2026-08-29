@@ -127,6 +127,11 @@ caddy_image:
   default: "caddy:2.9-alpine"
   help: Caddy image serving the built SPA and proxying backend paths over the Docker network.
 
+operator_image:
+  type: str
+  default: "ghcr.io/ang-ee/angee-operator:latest"
+  help: Operator daemon image for Docker-mode stacks (the daemon runs as a container over the docker socket).
+
 operator_port:
   type: int
   default: 9000

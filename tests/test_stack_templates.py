@@ -286,6 +286,7 @@ def _render_local_stack(*, framework: str = "source", celery_queues: str = "") -
         "framework": framework,
         "instance_name": "angee-local",
         "operator_port": "9000",
+        "operator_image": "ghcr.io/ang-ee/angee-operator:latest",
         "process_compose_port": "8090",
         "ui_port": "5173",
         "web_image": "ghcr.io/ang-ee/angee-web:latest",
@@ -330,6 +331,7 @@ def _render_dev_stack(
         "node_image": "node:22-bookworm-slim",
         "ollama_port": ollama_port,
         "operator_port": "9000",
+        "operator_image": "ghcr.io/ang-ee/angee-operator:latest",
         "playwright_image": "mcr.microsoft.com/playwright:v1.62.1-noble",
         "playwright_mcp_image": "mcr.microsoft.com/playwright/mcp:v0.0.76",
         "postgres_port": "5433",
@@ -619,8 +621,15 @@ def test_local_stack_uses_operator_backed_addon_installer() -> None:
     assert chain_inputs["include_operator_installer"] is True
     assert "operator-token" in stack["secrets"]
     assert stack["services"]["django"]["env"]["ANGEE_OPERATOR_TOKEN"] == "${secret.operator-token}"
-    assert stack["services"]["operator"]["env"]["ANGEE_OPERATOR_TOKEN"] == "${secret.operator-token}"
-    assert '--token "$ANGEE_OPERATOR_TOKEN"' in stack["services"]["operator"]["command"][-1]
+    # Docker mode containerizes the daemon: the token rides argv via the secret
+    # substitution (compose env-file interpolation), and the stack root mounts at
+    # its host-identical path so in-container compose writes agree with the host.
+    operator = stack["services"]["operator"]
+    assert operator["runtime"] == "container"
+    assert operator["command"][-2:] == ["--token", "${secret.operator-token}"]
+    assert "bind://.:${stack.root}" in operator["mounts"]
+    assert "bind:///var/run/docker.sock:/var/run/docker.sock" in operator["mounts"]
+    assert operator["ports"] == ["127.0.0.1:${ports.operator}:9000"]
 
 
 def test_project_template_can_render_operator_addon_installer_settings() -> None:
@@ -926,7 +935,12 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
     assert stack["workspaces"]["src"] == {"template": "workspaces/src"}
 
     assert "jobs" not in stack
-    assert stack["services"]["operator"]["runtime"] == "local"
+    operator_svc = stack["services"]["operator"]
+    assert operator_svc["runtime"] == "container"
+    assert operator_svc["image"] == "ghcr.io/ang-ee/angee-operator:latest"
+    assert operator_svc["ports"] == ["${ports.operator}:9000"]
+    assert "bind://.:${stack.root}" in operator_svc["mounts"]
+    assert stack["services"]["django"]["env"]["ANGEE_OPERATOR_URL"] == "http://operator:9000"
     for name in ("django", "celery-worker", "celery-beat", "frontend", "storybook"):
         assert stack["services"][name]["runtime"] == "container"
 
@@ -940,7 +954,7 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
     ):
         assert fragment in django_command
     assert django["env"]["DATABASE_URL"] == "postgres://angee:${secret.db-password}@postgres:5432/angee"
-    assert django["env"]["ANGEE_OPERATOR_URL"] == "http://host.docker.internal:${ports.operator}"
+    assert django["env"]["ANGEE_OPERATOR_URL"] == "http://operator:9000"
     for name in ("celery-worker", "celery-beat"):
         celery_command = stack["services"][name]["command"][-1]
         # Pre-wait sync gives the wait probe psycopg; the post-wait sync installs the
@@ -978,7 +992,7 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
         "tls": "off",
         "domain": "localhost",
         "port": 80,
-        "verify": "host.docker.internal:9000",
+        "verify": "operator:9000",
     }
     assert "admin-password" not in stack["secrets"]
     assert "ports" not in stack["services"]["postgres"]
@@ -997,12 +1011,15 @@ def test_dev_stack_hostname_mode_secures_the_ux_ingress() -> None:
         "routing": "path",
         "tls": "auto",
         "domain": "dev.example.com",
-        "verify": "host.docker.internal:9000",
+        "verify": "operator:9000",
     }
     frontend = stack["services"]["frontend"]
     assert frontend["route"] == {"port": 5173, "path": "/", "auth": "none"}
     assert "ports" not in frontend
     assert frontend["env"]["ANGEE_UI_ALLOWED_HOSTS"] == "dev.example.com"
+    assert stack["services"]["django"]["env"]["ANGEE_PUBLIC_ORIGIN"] == "https://dev.example.com"
+    localhost_stack = _render_dev_docker_stack()
+    assert "ANGEE_PUBLIC_ORIGIN" not in localhost_stack["services"]["django"]["env"]
     assert stack["services"]["playwright-server"]["route"] == {
         "port": 3100,
         "auth": "forward",

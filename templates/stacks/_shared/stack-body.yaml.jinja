@@ -61,7 +61,7 @@ ingress:
   port: {{ edge_port }}{% endif %}
   # The edge runs as a container; this dev stack's operator is `runtime: local`, so
   # forward_auth must reach it on the host instead of the default `operator:9000`.
-  verify: host.docker.internal:{{ operator_port }}
+{% if runtime_mode == "docker" %}  verify: operator:9000  # the operator container, resolved over the compose default network{% else %}  verify: host.docker.internal:{{ operator_port }}{% endif %}
 {% endif %}
 
 # The operator daemon owns stack-secret management. The console bearer is a
@@ -257,7 +257,20 @@ services:
   # The operator daemon for THIS stack: it serves the console's data and runs the
   # stack. `angee operator --root .` resolves the stack root by walking up.
   operator:
-    runtime: local
+{% if runtime_mode == "docker" %}{# Docker mode: the daemon is a container over the docker socket. The stack root #}
+{# mounts at its host-identical path (${stack.root}) so the compose files it writes #}
+{# and the sources/workspaces it manages agree with the host daemon; the token rides #}
+{# argv via compose env-file interpolation (same exposure as the shell-expanded local #}
+{# form). A docker-mode host needs only the angee CLI, docker, and git. #}
+    runtime: container
+    image: {{ operator_image }}
+    command: ["--root", "${stack.root}", "--bind", "0.0.0.0", "--port", "9000", "--token", "${secret.operator-token}"]
+    mounts:
+      - "bind://.:${stack.root}"
+      - "bind:///var/run/docker.sock:/var/run/docker.sock"
+    ports:
+      - "{% if operator_bind == "127.0.0.1" %}127.0.0.1:{% endif %}${ports.operator}:9000"
+{% endif %}{% if runtime_mode == "process" %}    runtime: local
     command:
       - sh
       - "-c"
@@ -266,7 +279,7 @@ services:
       - exec angee operator --root . --bind {{ operator_bind }} --port ${ports.operator} --token "$ANGEE_OPERATOR_TOKEN"
     env:
       ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
-
+{% endif %}
   # pgvector/pgvector:pg17 = stock Postgres 17 + pgvector, so a retrieval backend has
   # vector columns without a rebuild. The password comes from the db-password secret.
   postgres:
@@ -352,7 +365,8 @@ services:
       ANGEE_PROJECT_DIR: /app
       DATABASE_URL: "{{ database_url }}"
       YAMLCONF_SECRET_KEY: "${secret.secret-key}"
-{% if stack_flavor == "instance" %}      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_USERNAME: "admin"
+{% if ingress_domain_value == "localhost" %}{% else %}      ANGEE_PUBLIC_ORIGIN: "https://{{ ingress_domain_value }}"
+{% endif %}{% if stack_flavor == "instance" %}      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_USERNAME: "admin"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_EMAIL: "admin@example.com"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_PASSWORD: "${secret.admin-password}"{% endif %}
       ANGEE_OPERATOR_GRAPHQL_ENDPOINT: "/operator/graphql"

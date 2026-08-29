@@ -27,6 +27,14 @@ if _BASE_DIR is None:
 BASE_DIR = resolve_path(_BASE_DIR)
 DEBUG = bool(globals().get("DEBUG", False))
 ALLOWED_HOSTS = globals().get("ALLOWED_HOSTS", ["*"] if DEBUG else [])
+# Behind a TLS ingress the browser's Origin is the public https host while the
+# proxied request reaches Django as plain http, so the CSRF origin check needs
+# the public origin declared. The stack sets ANGEE_PUBLIC_ORIGIN whenever an
+# ingress domain fronts the app.
+CSRF_TRUSTED_ORIGINS = list(_sequence(globals().get("CSRF_TRUSTED_ORIGINS", ())))
+_public_origin = os.environ.get("ANGEE_PUBLIC_ORIGIN")
+if _public_origin and _public_origin not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append(_public_origin)
 USE_TZ = globals().get("USE_TZ", True)
 DEFAULT_AUTO_FIELD = globals().get("DEFAULT_AUTO_FIELD", "django.db.models.BigAutoField")
 

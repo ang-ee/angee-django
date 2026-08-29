@@ -56,6 +56,10 @@ _angee:
     workspaces/src/. `angee dev` owns the whole bring-up: caches, the src
     workspace cut, dependency installation, provision/codegen, and boot.
   inputs:
+    operator_image:
+      type: str
+      default: "ghcr.io/ang-ee/angee-operator:latest"
+      help: Operator daemon image for Docker-mode stacks (the daemon runs as a container over the docker socket).
     runtime_mode:
       type: str
       default: process
@@ -208,6 +212,11 @@ ui_port:
 storybook_port:
   type: int
   default: 6006
+
+operator_image:
+  type: str
+  default: "ghcr.io/ang-ee/angee-operator:latest"
+  help: Operator daemon image for Docker-mode stacks (the daemon runs as a container over the docker socket).
 
 operator_port:
   type: int
