@@ -992,7 +992,7 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
         "tls": "off",
         "domain": "localhost",
         "port": 80,
-        "verify": "host.docker.internal:9000",
+        "verify": "operator:9000",
     }
     assert "admin-password" not in stack["secrets"]
     assert "ports" not in stack["services"]["postgres"]
@@ -1011,7 +1011,7 @@ def test_dev_stack_hostname_mode_secures_the_ux_ingress() -> None:
         "routing": "path",
         "tls": "auto",
         "domain": "dev.example.com",
-        "verify": "host.docker.internal:9000",
+        "verify": "operator:9000",
     }
     frontend = stack["services"]["frontend"]
     assert frontend["route"] == {"port": 5173, "path": "/", "auth": "none"}

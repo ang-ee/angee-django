@@ -61,7 +61,7 @@ ingress:
   port: {{ edge_port }}{% endif %}
   # The edge runs as a container; this dev stack's operator is `runtime: local`, so
   # forward_auth must reach it on the host instead of the default `operator:9000`.
-  verify: host.docker.internal:{{ operator_port }}
+{% if runtime_mode == "docker" %}  verify: operator:9000  # the operator container, resolved over the compose default network{% else %}  verify: host.docker.internal:{{ operator_port }}{% endif %}
 {% endif %}
 
 # The operator daemon owns stack-secret management. The console bearer is a
