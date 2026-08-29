@@ -1,0 +1,14 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.agents"
+description = "AI agents — the inference provider/model catalogue and the runtimes agents run on"
+keywords = ["agents", "ai", "inference"]
+category = "Agents"
+depends_on = ["angee.integrate", "angee.operator", "angee.mcp"]
+
+[resources]
+demo = [
+  { path = "resources/demo/010_integrate.credential.yaml", depends_on = "iam:resources/demo/010_iam.user.yaml", adopt = ["user", "name"] },
+  { path = "resources/demo/020_agents.mcpserver.yaml", depends_on = "resources/demo/010_integrate.credential.yaml", adopt = "name" },
+]

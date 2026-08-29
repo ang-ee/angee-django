@@ -1,0 +1,10 @@
+# The Anthropic provider is a concrete integration child. The demo seeds baseline
+# model handles, and `refreshProviderModels` can replace/extend them from Anthropic
+# once the provider has a usable credential.
+- xref: provider_anthropic_demo
+  owner: iam.user_admin
+  vendor: integrate.anthropic
+  backend_class: anthropic
+  credential: agents_integrate_anthropic.cred_anthropic_demo
+  lifecycle: connected
+  name: Anthropic

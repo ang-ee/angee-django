@@ -1,0 +1,13 @@
+_meta:
+  model: messaging.Channel
+rows:
+  - xref: demo_requests
+    fields:
+      display_name: Demo requests
+      vendor: integrate.slack
+      owner: iam.user_alice
+      backend_class: manual
+      intake_queue: work.eng
+      intake_trigger: all_messages
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

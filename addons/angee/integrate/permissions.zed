@@ -1,0 +1,117 @@
+// Authorization schema for the integrate addon.
+// @rebac_package: integrate
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 7
+
+definition integrate/oauth_client {
+    relation admin: angee/role // rebac:const=admin
+
+    // Const-arrow create resolves against the empty resource id the pre_save
+    // signal supplies on insert: it grants a member of the const admin role and
+    // denies everyone else, so the create signal gates console creates directly —
+    // no elevation, no GraphQL gate. Admin-only by design (OAuthClient holds
+    // OAuth secrets, projection-excluded).
+    permission create = admin->member
+    permission read = admin->member
+    permission write = admin->member
+    permission delete = admin->member
+}
+
+definition integrate/external_account {
+    relation owner: auth/user
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = owner + admin->member
+    permission write = owner + admin->member
+    permission delete = owner + admin->member
+}
+
+definition integrate/credential {
+    relation owner: auth/user // rebac:field=user
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = owner + admin->member
+    permission write = owner + admin->member
+    permission delete = owner + admin->member
+}
+
+definition integrate/vendor {
+    relation admin: angee/role // rebac:const=admin
+
+    // Const-admin create can't gate an id-less insert, so console creates run
+    // elevated (system_context) behind PlatformAdminPermission. Catalogue rows
+    // are also seeded from install-tier resources.
+    permission create = admin->member
+    permission read = admin->member
+    permission write = admin->member
+    permission delete = admin->member
+}
+
+definition integrate/integration {
+    relation owner: auth/user // rebac:field=owner
+    relation admin: angee/role // rebac:const=admin
+
+    // Governs the admin-console Integration CRUD only (run elevated behind
+    // PlatformAdminPermission). Self-service `createIntegrationFromCredential`
+    // also creates elevated but is gated by credential ownership in the resolver,
+    // not by this permission.
+    permission create = admin->member
+    // The owner manages their own integration; platform admins reach all.
+    permission read = owner + admin->member
+    permission write = owner + admin->member
+    permission delete = owner + admin->member
+}
+
+definition integrate/webhook_subscription {
+    relation owner: auth/user // rebac:field=owner
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    // The owner manages their own outbound subscription; platform admins reach all.
+    permission read = owner + admin->member
+    permission write = owner + admin->member
+    permission delete = owner + admin->member
+}
+
+definition integrate/vcs_bridge {
+    relation integration: integrate/integration // rebac:field=integration_ptr
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    // VCS access derives from the parent integration; platform admins reach all.
+    permission read = integration->read + admin->member
+    permission write = integration->write + admin->member
+    permission delete = integration->write + admin->member
+}
+
+definition integrate/repository {
+    relation vcs_bridge: integrate/vcs_bridge // rebac:field=vcs_bridge
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = vcs_bridge->read + admin->member
+    permission write = vcs_bridge->write + admin->member
+    permission delete = vcs_bridge->write + admin->member
+}
+
+definition integrate/source {
+    relation repository: integrate/repository // rebac:field=repository
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = repository->read + admin->member
+    permission write = repository->write + admin->member
+    permission delete = repository->write + admin->member
+}
+
+definition integrate/template {
+    relation source: integrate/source // rebac:field=source
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = source->read + admin->member
+    permission write = source->write + admin->member
+    permission delete = source->write + admin->member
+}

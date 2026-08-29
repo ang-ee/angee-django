@@ -1,0 +1,294 @@
+import { describe, expect, test } from "vitest";
+
+import { composeAddons, defineAddon } from "./define-addon";
+
+const IDENTITY_CANONICALIZER = {
+  canonicalModelLabel: (spelling: string) => spelling,
+};
+
+describe("defineAddon", () => {
+  test("returns the manifest unchanged for typed authoring", () => {
+    const manifest = defineAddon({ id: "notes" });
+    expect(manifest).toEqual({ id: "notes" });
+  });
+});
+
+describe("composeAddons", () => {
+  test("concatenates routes in addon order", () => {
+    const a = defineAddon({ id: "a", routes: [{ name: "a.home", path: "/a", layout: "console" }] });
+    const b = defineAddon({ id: "b", routes: [{ name: "b.home", path: "/b", layout: "console" }] });
+    expect(
+      composeAddons([a, b], IDENTITY_CANONICALIZER).routes.map((r) => r.path),
+    ).toEqual(["/a", "/b"]);
+  });
+
+  test("rejects two routes that declare the same name", () => {
+    const a = defineAddon({ id: "a", routes: [{ name: "dup", path: "/a", layout: "console" }] });
+    const b = defineAddon({ id: "b", routes: [{ name: "dup", path: "/b", layout: "console" }] });
+    expect(() => composeAddons([a, b], IDENTITY_CANONICALIZER)).toThrow(/dup/);
+  });
+
+  test("rejects duplicate menu item ids across nested menus", () => {
+    const a = defineAddon({
+      id: "a",
+      menus: [
+        {
+          id: "root",
+          label: "Root",
+          children: [{ id: "dup", label: "Dup" }],
+        },
+      ],
+    });
+    const b = defineAddon({ id: "b", menus: [{ id: "dup", label: "Dup" }] });
+
+    expect(() => composeAddons([a, b], IDENTITY_CANONICALIZER)).toThrow(
+      /menu item id "dup"/,
+    );
+  });
+
+  test("defaults menu item id to route before claiming collisions", () => {
+    const composed = composeAddons([
+      defineAddon({
+        id: "notes",
+        menus: [
+          {
+            label: "Notes",
+            route: "notes.home",
+            children: [{ label: "Archive", route: "notes.archive" }],
+          },
+        ],
+      }),
+    ], IDENTITY_CANONICALIZER);
+
+    expect(composed.menus[0]?.id).toBe("notes.home");
+    expect(composed.menus[0]?.children?.[0]?.id).toBe("notes.archive");
+    expect(() =>
+      composeAddons([
+        defineAddon({ id: "a", menus: [{ route: "shared.route" }] }),
+        defineAddon({ id: "b", menus: [{ id: "shared.route" }] }),
+      ], IDENTITY_CANONICALIZER),
+    ).toThrow(/menu item id "shared.route"/);
+  });
+
+  test("requires a menu id when no route can own the default", () => {
+    expect(() =>
+      composeAddons(
+        [defineAddon({ id: "bad", menus: [{ label: "Bad" }] })],
+        IDENTITY_CANONICALIZER,
+      ),
+    ).toThrow(/without id or route/);
+  });
+
+  test("merges widget and i18n registries", () => {
+    const a = defineAddon({
+      id: "a",
+      widgets: { text: "TEXT" },
+      i18n: { notes: { title: "Title" } },
+    });
+    const b = defineAddon({ id: "b", widgets: { date: "DATE" } });
+    const composed = composeAddons([a, b], IDENTITY_CANONICALIZER);
+    expect(composed.widgets).toEqual({ text: "TEXT", date: "DATE" });
+    expect(composed.i18n).toEqual({ notes: { title: "Title" } });
+  });
+
+  test("orders chatter contributions by sequence, not addon order", () => {
+    const a = defineAddon({
+      id: "a",
+      chatter: [{ id: "late", sequence: 20 }],
+    });
+    const b = defineAddon({
+      id: "b",
+      chatter: [{ id: "early", sequence: 10 }],
+    });
+    expect(
+      composeAddons([a, b], IDENTITY_CANONICALIZER).chatter.map((c) => c.id),
+    ).toEqual([
+      "early",
+      "late",
+    ]);
+  });
+
+  test("keys chatter tabs by model and id and rejects a duplicate scope", () => {
+    const party = defineAddon({
+      id: "party-history",
+      chatter: [{ id: "history", model: "parties.Party" }],
+    });
+    const circle = defineAddon({
+      id: "circle-history",
+      chatter: [{ id: "history", model: "parties.Circle" }],
+    });
+    expect(
+      composeAddons([party, circle], IDENTITY_CANONICALIZER).chatter,
+    ).toHaveLength(2);
+
+    const duplicate = defineAddon({
+      id: "duplicate-party-history",
+      chatter: [{ id: "history", model: "parties.Party" }],
+    });
+    expect(() =>
+      composeAddons([party, duplicate], IDENTITY_CANONICALIZER),
+    ).toThrow(/chatter tab/);
+  });
+
+  test("two addons claiming one slot entry is a collision, not an override", () => {
+    // Silently letting addon array order pick the winner hid a real clash (the
+    // integrate/whatsapp record-verb ids). An addon that means to specialize
+    // another's verb contributes to the model-scoped slot its own model owns,
+    // where the merge is by declared specificity rather than by order.
+    const a = defineAddon({
+      id: "a",
+      slots: [{ slot: "header", id: "logo", sequence: 1, content: "A" }],
+    });
+    const b = defineAddon({
+      id: "b",
+      slots: [{ slot: "header", id: "logo", sequence: 2, content: "B" }],
+    });
+    expect(() => composeAddons([a, b], IDENTITY_CANONICALIZER)).toThrow(
+      /slot entry/,
+    );
+  });
+
+  test("canonicalizes route, form, chatter, and typed model-slot declarations before merging", () => {
+    const canonical = (spelling: string) =>
+      spelling === "Note" || spelling === "note" ? "notes.Note" : spelling;
+    const composed = composeAddons([
+      defineAddon({
+        id: "notes",
+        routes: [{ name: "notes.home", path: "/notes", resource: "Note" }],
+        forms: { note: "FORM" },
+        chatter: [{ id: "history", model: "Note" }],
+        slots: [
+          {
+            slot: "form-view.sections",
+            model: "Note",
+            id: "notes.extra",
+          },
+        ],
+      }),
+    ], { canonicalModelLabel: canonical });
+
+    expect(composed.routes[0]?.resource).toBe("notes.Note");
+    expect(composed.forms).toEqual({ "notes.Note": "FORM" });
+    expect(composed.chatter[0]?.model).toBe("notes.Note");
+    expect(composed.slots[0]).toMatchObject({
+      slot: "form-view.sections",
+      model: "notes.Note",
+      id: "notes.extra",
+    });
+  });
+
+  test("detects registry collisions after model aliases canonicalize", () => {
+    const canonical = (spelling: string) =>
+      spelling === "Note" ? "notes.Note" : spelling;
+
+    expect(() =>
+      composeAddons([
+        defineAddon({ id: "a", forms: { Note: "A" } }),
+        defineAddon({ id: "b", forms: { "notes.Note": "B" } }),
+      ], { canonicalModelLabel: canonical }),
+    ).toThrow(/form override "notes\.Note"/);
+  });
+
+  test("rejects an impl-scoped slot without a model", () => {
+    expect(() =>
+      composeAddons([
+        defineAddon({
+          id: "bad",
+          slots: [{ slot: "record-actions", impl: "vendor", id: "connect" }],
+        }),
+      ], IDENTITY_CANONICALIZER),
+    ).toThrow(/impl "vendor" without a model/);
+  });
+
+  test("rejects a model-scoped slot contribution without a model", () => {
+    expect(() =>
+      composeAddons(
+        [
+          defineAddon({
+            id: "bad",
+            slots: [{ slot: "form-view.sections", id: "dead-section" }],
+          }),
+        ],
+        IDENTITY_CANONICALIZER,
+      ),
+    ).toThrow(/model-scoped slot "form-view\.sections" without a model/);
+  });
+
+  test("the same slot id under a different slot is kept separate", () => {
+    const a = defineAddon({
+      id: "a",
+      slots: [
+        { slot: "header", id: "logo" },
+        { slot: "footer", id: "logo" },
+      ],
+    });
+    expect(composeAddons([a], IDENTITY_CANONICALIZER).slots).toHaveLength(2);
+  });
+
+  test("orders drawer contributions by sequence, not addon order", () => {
+    const a = defineAddon({
+      id: "a",
+      drawers: [
+        { id: "late", edge: "bottom", title: "Late", sequence: 20, render: () => null },
+      ],
+    });
+    const b = defineAddon({
+      id: "b",
+      drawers: [
+        { id: "early", edge: "bottom", title: "Early", sequence: 10, render: () => null },
+      ],
+    });
+    expect(
+      composeAddons([a, b], IDENTITY_CANONICALIZER).drawers.map((d) => d.id),
+    ).toEqual([
+      "early",
+      "late",
+    ]);
+  });
+
+  test("keeps the same drawer id separate under a different edge", () => {
+    const a = defineAddon({
+      id: "a",
+      drawers: [
+        { id: "logs", edge: "right", title: "Logs", render: () => null },
+        { id: "logs", edge: "bottom", title: "Logs", render: () => null },
+      ],
+    });
+    expect(composeAddons([a], IDENTITY_CANONICALIZER).drawers).toHaveLength(2);
+  });
+
+  test("rejects two drawers claiming the same edge and id", () => {
+    const a = defineAddon({
+      id: "a",
+      drawers: [{ id: "logs", edge: "bottom", title: "A", render: () => null }],
+    });
+    const b = defineAddon({
+      id: "b",
+      drawers: [{ id: "logs", edge: "bottom", title: "B", render: () => null }],
+    });
+    expect(() => composeAddons([a, b], IDENTITY_CANONICALIZER)).toThrow(/drawer/);
+  });
+
+  test("rejects two addons that declare the same widget key", () => {
+    const a = defineAddon({ id: "a", widgets: { text: "A" } });
+    const b = defineAddon({ id: "b", widgets: { text: "B" } });
+    expect(() => composeAddons([a, b], IDENTITY_CANONICALIZER)).toThrow(/text/);
+  });
+
+  test("merges data providers keyed by provider name", () => {
+    const a = defineAddon({ id: "a", dataProviders: { operator: "OP" } });
+    const b = defineAddon({ id: "b", dataProviders: { ledger: "LEDGER" } });
+    expect(composeAddons([a, b], IDENTITY_CANONICALIZER).dataProviders).toEqual({
+      operator: "OP",
+      ledger: "LEDGER",
+    });
+  });
+
+  test("rejects two addons that claim the same data provider name", () => {
+    const a = defineAddon({ id: "a", dataProviders: { operator: "A" } });
+    const b = defineAddon({ id: "b", dataProviders: { operator: "B" } });
+    expect(() => composeAddons([a, b], IDENTITY_CANONICALIZER)).toThrow(
+      /data provider "operator"/,
+    );
+  });
+});

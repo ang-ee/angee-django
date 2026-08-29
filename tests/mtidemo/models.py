@@ -14,9 +14,8 @@ and ``rebac sync`` loads its definitions.
 
 from __future__ import annotations
 
-from django.db import models
-
 from angee.base.models import AngeeDataModel
+from django.db import models
 
 
 class MtiParent(AngeeDataModel):

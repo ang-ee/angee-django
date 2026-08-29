@@ -1,0 +1,916 @@
+_meta:
+  model: notes.Note
+rows:
+- _xref: welcome
+  fields:
+    title: Welcome to Angee
+    body: This note is loaded from a demo resource file. Edit it, archive it, or star it to see
+      how the framework composes the runtime.
+    status: active
+    tags:
+    - onboarding
+    - backend
+    is_starred: true
+    reminder_at: '2026-06-01 09:00:00'
+    created_by: iam.user_alice
+    updated_by: iam.user_alice
+    created_at: '2026-05-31 09:00:00'
+    updated_at: '2026-05-31 17:00:00'
+- _xref: quarterly_planning
+  fields:
+    title: Quarterly planning
+    body: Outline the next quarter's themes and the slices that land first.
+    status: in_review
+    tags:
+    - planning
+    is_starred: false
+    created_by: iam.user_alice
+    updated_by: iam.user_admin
+    created_at: '2026-05-31 10:00:00'
+    updated_at: '2026-05-31 16:00:00'
+- _xref: reading_list
+  fields:
+    title: Reading list
+    body: Papers and posts to revisit when the composition work settles.
+    status: draft
+    tags:
+    - research
+    is_starred: true
+    created_by: iam.user_alice
+    updated_by: iam.user_alice
+    created_at: '2026-05-31 11:00:00'
+    updated_at: '2026-05-31 15:00:00'
+- _xref: draft
+  fields:
+    title: Draft idea
+    body: Keep the first slice small and explicit.
+    status: draft
+    tags:
+    - planning
+    is_starred: false
+    created_by: iam.user_bob
+    updated_by: iam.user_bob
+    created_at: '2026-05-30 09:00:00'
+    updated_at: '2026-05-30 12:00:00'
+- _xref: bug_triage
+  fields:
+    title: Bug triage notes
+    body: Group the open reports by subsystem before the standup.
+    status: in_review
+    tags:
+    - triage
+    - backend
+    is_starred: false
+    reminder_at: '2026-06-02 15:30:00'
+    created_by: iam.user_bob
+    updated_by: iam.user_admin
+    created_at: '2026-05-29 09:00:00'
+    updated_at: '2026-05-29 15:30:00'
+- _xref: one_on_one
+  fields:
+    title: 1:1 agenda
+    body: Career goals, current blockers, and feedback for the week.
+    status: active
+    tags:
+    - management
+    is_starred: true
+    created_by: iam.user_bob
+    updated_by: iam.user_bob
+    created_at: '2026-05-28 09:00:00'
+    updated_at: '2026-05-28 10:30:00'
+- _xref: team_handbook
+  fields:
+    title: Team handbook
+    body: 'How the team works: rituals, ownership, and on-call expectations.'
+    status: active
+    tags:
+    - reference
+    is_starred: false
+    created_by: iam.user_admin
+    updated_by: iam.user_admin
+    created_at: '2026-05-27 09:00:00'
+    updated_at: '2026-05-27 14:00:00'
+- _xref: release_checklist
+  fields:
+    title: Release checklist
+    body: Steps to cut a release once the build and migrations are verified.
+    status: active
+    tags:
+    - release
+    - backend
+    is_starred: false
+    reminder_at: '2026-06-05 17:00:00'
+    created_by: iam.user_admin
+    updated_by: iam.user_admin
+    created_at: '2026-05-26 09:00:00'
+    updated_at: '2026-05-26 17:00:00'
+- _xref: note_demo_01
+  fields:
+    title: Weekly product review
+    status: draft
+    tags:
+    - product
+    - planning
+    body: 'Demo note 01: weekly product review across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_bob
+    created_at: '2026-01-09 09:37:00'
+    updated_at: '2026-01-10 12:48:00'
+    is_starred: false
+- _xref: note_demo_02
+  fields:
+    title: Customer interview notes
+    status: in_review
+    tags:
+    - meeting-notes
+    - team
+    body: 'Demo note 02: customer interview notes across the example workspace. It gives list,
+      kanban, search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_admin
+    created_at: '2026-01-12 10:44:00'
+    updated_at: '2026-01-14 17:06:00'
+    is_starred: false
+- _xref: note_demo_03
+  fields:
+    title: Launch checklist
+    status: archived
+    tags:
+    - research
+    - ai
+    body: 'Demo note 03: launch checklist across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_alice
+    created_at: '2026-01-15 11:51:00'
+    updated_at: '2026-01-18 21:24:00'
+    is_starred: false
+- _xref: note_demo_04
+  fields:
+    title: Research synthesis
+    status: active
+    tags:
+    - customer
+    - feedback
+    body: 'Demo note 04: research synthesis across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_bob
+    created_at: '2026-01-18 12:58:00'
+    updated_at: '2026-01-22 15:42:00'
+    is_starred: false
+- _xref: note_demo_05
+  fields:
+    title: Design critique follow ups
+    status: draft
+    tags:
+    - design
+    - review
+    body: 'Demo note 05: design critique follow ups across the example workspace. It gives list,
+      kanban, search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_admin
+    created_at: '2026-01-21 09:05:00'
+    updated_at: '2026-01-26 15:00:00'
+    reminder_at: '2026-01-29 17:00:00'
+    is_starred: false
+- _xref: note_demo_06
+  fields:
+    title: Incident review notes
+    status: in_review
+    tags:
+    - ops
+    - runbook
+    body: 'Demo note 06: incident review notes across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_alice
+    created_at: '2026-01-24 10:12:00'
+    updated_at: '2026-01-30 18:18:00'
+    is_starred: true
+- _xref: note_demo_07
+  fields:
+    title: Sales handoff summary
+    status: archived
+    tags:
+    - sales
+    - handoff
+    body: 'Demo note 07: sales handoff summary across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_bob
+    created_at: '2026-01-20 11:19:00'
+    updated_at: '2026-01-27 12:36:00'
+    is_starred: false
+- _xref: note_demo_08
+  fields:
+    title: Release train status
+    status: active
+    tags:
+    - engineering
+    - release
+    body: 'Demo note 08: release train status across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_admin
+    created_at: '2026-01-23 12:26:00'
+    updated_at: '2026-01-31 16:54:00'
+    is_starred: false
+- _xref: note_demo_09
+  fields:
+    title: Roadmap risk register
+    status: draft
+    tags:
+    - strategy
+    - q3
+    body: 'Demo note 09: roadmap risk register across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_alice
+    created_at: '2026-01-26 12:33:00'
+    updated_at: '2026-01-26 20:12:00'
+    is_starred: false
+- _xref: note_demo_10
+  fields:
+    title: Support escalation notes
+    status: in_review
+    tags:
+    - support
+    - triage
+    body: 'Demo note 10: support escalation notes across the example workspace. It gives list,
+      kanban, search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_bob
+    created_at: '2026-01-29 08:40:00'
+    updated_at: '2026-01-30 09:30:00'
+    reminder_at: '2026-02-02 11:30:00'
+    is_starred: false
+- _xref: note_demo_11
+  fields:
+    title: Forecast assumptions
+    status: archived
+    tags:
+    - finance
+    - forecast
+    body: 'Demo note 11: forecast assumptions across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_admin
+    created_at: '2026-02-01 09:47:00'
+    updated_at: '2026-02-03 12:48:00'
+    is_starred: false
+- _xref: note_demo_12
+  fields:
+    title: Hiring pipeline sync
+    status: active
+    tags:
+    - people
+    - hiring
+    body: 'Demo note 12: hiring pipeline sync across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_alice
+    created_at: '2026-02-04 10:54:00'
+    updated_at: '2026-02-07 17:06:00'
+    is_starred: true
+- _xref: note_demo_13
+  fields:
+    title: API ergonomics review
+    status: draft
+    tags:
+    - product
+    - planning
+    body: 'Demo note 13: API ergonomics review across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_bob
+    created_at: '2026-02-07 12:01:00'
+    updated_at: '2026-02-11 21:24:00'
+    is_starred: false
+- _xref: note_demo_14
+  fields:
+    title: Data quality audit
+    status: in_review
+    tags:
+    - meeting-notes
+    - team
+    body: 'Demo note 14: data quality audit across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_admin
+    created_at: '2026-02-03 13:08:00'
+    updated_at: '2026-02-08 15:42:00'
+    is_starred: false
+- _xref: note_demo_15
+  fields:
+    title: Partner onboarding plan
+    status: archived
+    tags:
+    - research
+    - ai
+    body: 'Demo note 15: partner onboarding plan across the example workspace. It gives list,
+      kanban, search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_alice
+    created_at: '2026-02-06 09:15:00'
+    updated_at: '2026-02-12 15:00:00'
+    reminder_at: '2026-02-15 17:00:00'
+    is_starred: false
+- _xref: note_demo_16
+  fields:
+    title: Performance budget notes
+    status: active
+    tags:
+    - customer
+    - feedback
+    body: 'Demo note 16: performance budget notes across the example workspace. It gives list,
+      kanban, search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_bob
+    created_at: '2026-02-09 10:22:00'
+    updated_at: '2026-02-16 19:18:00'
+    is_starred: false
+- _xref: note_demo_17
+  fields:
+    title: Accessibility pass
+    status: draft
+    tags:
+    - design
+    - review
+    body: 'Demo note 17: accessibility pass across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_admin
+    created_at: '2026-02-12 11:29:00'
+    updated_at: '2026-02-20 12:36:00'
+    is_starred: false
+- _xref: note_demo_18
+  fields:
+    title: Security review prep
+    status: in_review
+    tags:
+    - ops
+    - runbook
+    body: 'Demo note 18: security review prep across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_alice
+    created_at: '2026-02-15 11:36:00'
+    updated_at: '2026-02-15 15:54:00'
+    is_starred: true
+- _xref: note_demo_19
+  fields:
+    title: Billing workflow sketch
+    status: archived
+    tags:
+    - sales
+    - handoff
+    body: 'Demo note 19: billing workflow sketch across the example workspace. It gives list,
+      kanban, search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_bob
+    created_at: '2026-02-18 12:43:00'
+    updated_at: '2026-02-19 20:12:00'
+    is_starred: false
+- _xref: note_demo_20
+  fields:
+    title: Migration checklist
+    status: active
+    tags:
+    - engineering
+    - release
+    body: 'Demo note 20: migration checklist across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_admin
+    created_at: '2026-02-21 08:50:00'
+    updated_at: '2026-02-23 09:30:00'
+    reminder_at: '2026-02-26 11:30:00'
+    is_starred: false
+- _xref: note_demo_21
+  fields:
+    title: Documentation backlog
+    status: draft
+    tags:
+    - strategy
+    - q3
+    body: 'Demo note 21: documentation backlog across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_alice
+    created_at: '2026-02-17 09:57:00'
+    updated_at: '2026-02-20 13:48:00'
+    is_starred: false
+- _xref: note_demo_22
+  fields:
+    title: Experiment readout
+    status: in_review
+    tags:
+    - support
+    - triage
+    body: 'Demo note 22: experiment readout across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_bob
+    created_at: '2026-02-20 11:04:00'
+    updated_at: '2026-02-24 17:06:00'
+    is_starred: false
+- _xref: note_demo_23
+  fields:
+    title: On-call handoff
+    status: archived
+    tags:
+    - finance
+    - forecast
+    body: 'Demo note 23: on-call handoff across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_admin
+    created_at: '2026-02-23 12:11:00'
+    updated_at: '2026-02-28 21:24:00'
+    is_starred: false
+- _xref: note_demo_24
+  fields:
+    title: Workflow feedback
+    status: active
+    tags:
+    - people
+    - hiring
+    body: 'Demo note 24: workflow feedback across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_alice
+    created_at: '2026-02-26 13:18:00'
+    updated_at: '2026-03-04 15:42:00'
+    is_starred: true
+- _xref: note_demo_25
+  fields:
+    title: Marketplace ideas
+    status: draft
+    tags:
+    - product
+    - planning
+    body: 'Demo note 25: marketplace ideas across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_bob
+    created_at: '2026-03-01 09:25:00'
+    updated_at: '2026-03-08 15:00:00'
+    reminder_at: '2026-03-11 17:00:00'
+    is_starred: false
+- _xref: note_demo_26
+  fields:
+    title: Retention analysis
+    status: in_review
+    tags:
+    - meeting-notes
+    - team
+    body: 'Demo note 26: retention analysis across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_admin
+    created_at: '2026-03-04 09:32:00'
+    updated_at: '2026-03-12 18:18:00'
+    is_starred: false
+- _xref: note_demo_27
+  fields:
+    title: Admin UX notes
+    status: archived
+    tags:
+    - research
+    - ai
+    body: 'Demo note 27: admin UX notes across the example workspace. It gives list, kanban, search,
+      filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_alice
+    created_at: '2026-03-07 10:39:00'
+    updated_at: '2026-03-07 12:36:00'
+    is_starred: false
+- _xref: note_demo_28
+  fields:
+    title: Storage workflow test
+    status: active
+    tags:
+    - customer
+    - feedback
+    body: 'Demo note 28: storage workflow test across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_bob
+    created_at: '2026-03-03 11:46:00'
+    updated_at: '2026-03-04 15:54:00'
+    is_starred: false
+- _xref: note_demo_29
+  fields:
+    title: Auth policy review
+    status: draft
+    tags:
+    - design
+    - review
+    body: 'Demo note 29: auth policy review across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_admin
+    created_at: '2026-03-06 12:53:00'
+    updated_at: '2026-03-08 20:12:00'
+    is_starred: false
+- _xref: note_demo_30
+  fields:
+    title: Knowledge base cleanup
+    status: in_review
+    tags:
+    - ops
+    - runbook
+    body: 'Demo note 30: knowledge base cleanup across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_alice
+    created_at: '2026-03-09 09:00:00'
+    updated_at: '2026-03-12 09:30:00'
+    reminder_at: '2026-03-15 11:30:00'
+    is_starred: true
+- _xref: note_demo_31
+  fields:
+    title: Search relevance notes
+    status: archived
+    tags:
+    - sales
+    - handoff
+    body: 'Demo note 31: search relevance notes across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_bob
+    created_at: '2026-03-12 10:07:00'
+    updated_at: '2026-03-16 13:48:00'
+    is_starred: false
+- _xref: note_demo_32
+  fields:
+    title: Import pipeline plan
+    status: active
+    tags:
+    - engineering
+    - release
+    body: 'Demo note 32: import pipeline plan across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_admin
+    created_at: '2026-03-15 11:14:00'
+    updated_at: '2026-03-20 18:06:00'
+    is_starred: false
+- _xref: note_demo_33
+  fields:
+    title: Mobile layout review
+    status: draft
+    tags:
+    - strategy
+    - q3
+    body: 'Demo note 33: mobile layout review across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_alice
+    created_at: '2026-03-18 12:21:00'
+    updated_at: '2026-03-24 21:24:00'
+    is_starred: false
+- _xref: note_demo_34
+  fields:
+    title: Localization checklist
+    status: in_review
+    tags:
+    - support
+    - triage
+    body: 'Demo note 34: localization checklist across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_bob
+    created_at: '2026-03-21 13:28:00'
+    updated_at: '2026-03-28 15:42:00'
+    is_starred: false
+- _xref: note_demo_35
+  fields:
+    title: Analytics definitions
+    status: archived
+    tags:
+    - finance
+    - forecast
+    body: 'Demo note 35: analytics definitions across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_admin
+    created_at: '2026-03-17 08:35:00'
+    updated_at: '2026-03-25 14:00:00'
+    reminder_at: '2026-03-28 16:00:00'
+    is_starred: false
+- _xref: note_demo_36
+  fields:
+    title: Demo script outline
+    status: active
+    tags:
+    - people
+    - hiring
+    body: 'Demo note 36: demo script outline across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_alice
+    created_at: '2026-03-20 09:42:00'
+    updated_at: '2026-03-20 18:18:00'
+    is_starred: true
+- _xref: note_demo_37
+  fields:
+    title: Quarterly retro notes
+    status: draft
+    tags:
+    - product
+    - planning
+    body: 'Demo note 37: quarterly retro notes across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_bob
+    created_at: '2026-03-23 10:49:00'
+    updated_at: '2026-03-24 12:36:00'
+    is_starred: false
+- _xref: note_demo_38
+  fields:
+    title: Template library plan
+    status: in_review
+    tags:
+    - meeting-notes
+    - team
+    body: 'Demo note 38: template library plan across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_admin
+    created_at: '2026-03-26 11:56:00'
+    updated_at: '2026-03-28 16:54:00'
+    is_starred: false
+- _xref: note_demo_39
+  fields:
+    title: Forms polish list
+    status: archived
+    tags:
+    - research
+    - ai
+    body: 'Demo note 39: forms polish list across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_alice
+    created_at: '2026-03-29 13:03:00'
+    updated_at: '2026-04-01 20:12:00'
+    is_starred: false
+- _xref: note_demo_40
+  fields:
+    title: Kanban grooming
+    status: active
+    tags:
+    - customer
+    - feedback
+    body: 'Demo note 40: kanban grooming across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_bob
+    created_at: '2026-04-01 09:10:00'
+    updated_at: '2026-04-05 09:30:00'
+    reminder_at: '2026-04-08 11:30:00'
+    is_starred: false
+- _xref: note_demo_41
+  fields:
+    title: Permissions test matrix
+    status: draft
+    tags:
+    - design
+    - review
+    body: 'Demo note 41: permissions test matrix across the example workspace. It gives list,
+      kanban, search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_admin
+    created_at: '2026-04-04 10:17:00'
+    updated_at: '2026-04-09 13:48:00'
+    is_starred: false
+- _xref: note_demo_42
+  fields:
+    title: Operator console notes
+    status: in_review
+    tags:
+    - ops
+    - runbook
+    body: 'Demo note 42: operator console notes across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_alice
+    created_at: '2026-03-31 11:24:00'
+    updated_at: '2026-04-06 18:06:00'
+    is_starred: true
+- _xref: note_demo_43
+  fields:
+    title: Upload preview review
+    status: archived
+    tags:
+    - sales
+    - handoff
+    body: 'Demo note 43: upload preview review across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_bob
+    created_at: '2026-04-03 11:31:00'
+    updated_at: '2026-04-10 21:24:00'
+    is_starred: false
+- _xref: note_demo_44
+  fields:
+    title: Group by analytics
+    status: active
+    tags:
+    - engineering
+    - release
+    body: 'Demo note 44: group by analytics across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_admin
+    created_at: '2026-04-06 12:38:00'
+    updated_at: '2026-04-14 14:42:00'
+    is_starred: false
+- _xref: note_demo_45
+  fields:
+    title: OIDC provider checklist
+    status: draft
+    tags:
+    - strategy
+    - q3
+    body: 'Demo note 45: OIDC provider checklist across the example workspace. It gives list,
+      kanban, search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_alice
+    created_at: '2026-04-09 08:45:00'
+    updated_at: '2026-04-09 14:00:00'
+    reminder_at: '2026-04-12 16:00:00'
+    is_starred: false
+- _xref: note_demo_46
+  fields:
+    title: Vault taxonomy notes
+    status: in_review
+    tags:
+    - support
+    - triage
+    body: 'Demo note 46: vault taxonomy notes across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_bob
+    created_at: '2026-04-12 09:52:00'
+    updated_at: '2026-04-13 18:18:00'
+    is_starred: false
+- _xref: note_demo_47
+  fields:
+    title: Folder hygiene plan
+    status: archived
+    tags:
+    - finance
+    - forecast
+    body: 'Demo note 47: folder hygiene plan across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_admin
+    created_at: '2026-04-15 10:59:00'
+    updated_at: '2026-04-17 12:36:00'
+    is_starred: false
+- _xref: note_demo_48
+  fields:
+    title: Audit trail review
+    status: active
+    tags:
+    - people
+    - hiring
+    body: 'Demo note 48: audit trail review across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_alice
+    created_at: '2026-04-18 12:06:00'
+    updated_at: '2026-04-21 16:54:00'
+    is_starred: true
+- _xref: note_demo_49
+  fields:
+    title: Release announcement draft
+    status: draft
+    tags:
+    - product
+    - planning
+    body: 'Demo note 49: release announcement draft across the example workspace. It gives list,
+      kanban, search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_alice
+    updated_by: iam.user_bob
+    created_at: '2026-04-14 13:13:00'
+    updated_at: '2026-04-18 21:12:00'
+    is_starred: false
+- _xref: note_demo_50
+  fields:
+    title: End to end smoke plan
+    status: in_review
+    tags:
+    - meeting-notes
+    - team
+    body: 'Demo note 50: end to end smoke plan across the example workspace. It gives list, kanban,
+      search, filters, pagination, and date sorting enough varied data to feel real.
+
+      '
+    created_by: iam.user_admin
+    updated_by: iam.user_admin
+    created_at: '2026-04-17 09:20:00'
+    updated_at: '2026-04-22 09:30:00'
+    reminder_at: '2026-04-25 11:30:00'
+    is_starred: false

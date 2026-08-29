@@ -1,0 +1,13 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.integrate_github"
+description = "GitHub backend for the VCS inventory — reads repositories over the GitHub REST API"
+keywords = ["github", "vcs"]
+category = "Integration"
+depends_on = ["angee.integrate"]
+
+[resources]
+install = [
+  { path = "resources/install/010_integrate.oauthclient.yaml", adopt = ["slug", "environment"] },
+]

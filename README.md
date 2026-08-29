@@ -80,9 +80,9 @@ Before `angee init`, check for an existing current or ancestor
 `ANGEE_ROOT` — never initialize a stack under a source checkout.
 
 Angee runs as a **stack**: `angee init` renders a project host whose manifest
-declares the framework repos as sources, and `angee dev` materializes them and
-boots. This repository is one of those sources — you normally work on it inside
-a framework-dev stack's `src` workspace, not as a standalone checkout.
+declares the consolidated framework and optional external repositories as
+sources, and `angee dev` materializes them and boots. You normally work on this
+source inside a framework-dev stack's `src` workspace.
 
 ```sh
 brew install ang-ee/tap/angee      # or: curl -fsSL https://raw.githubusercontent.com/ang-ee/angee-operator/main/scripts/install.sh | sh
@@ -101,18 +101,19 @@ hand. For the full onboarding path
 
 ## Repository layout
 
-Angee's platform spans sibling repositories; this one holds the framework core —
-the one real Python package, `django-angee`:
+This repository holds the framework's source surfaces together:
 
 - **`angee/`** — the model and data contracts, ASGI and Celery seams, and the
   `manage.py angee build` composer.
-- **`docs/`**, **`tests/`** — the intent docs and the framework test suite.
+- **`addons/`** — the standard folder addons, including the GraphQL runtime,
+  with co-located web fragments.
+- **`packages/`** — the published `@angee/*` React packages and workshops.
+- **`examples/`** — showcase consumer addons and the reference e2e suite.
+- **`templates/`** — Copier sources for projects, stacks, workspaces, and services.
+- **`docs/`**, **`tests/`** — intent documentation and the merged contract suite.
 
-The React packages live in `ang-ee/angee-react`, the base addons (including the
-GraphQL runtime) in `ang-ee/angee-base`, the messaging bridges in
-`ang-ee/angee-messaging-bridges`, and the showcase consumer addons + reference
-e2e suite in `ang-ee/angee-examples`. A stack's `src` workspace materializes
-them all side by side as worktree slots.
+The optional personal-messaging bridges remain in
+`ang-ee/angee-messaging-bridges`.
 
 The full annotated layout lives in
 **[`AGENTS.md`](https://github.com/ang-ee/angee-django/blob/main/AGENTS.md)**.

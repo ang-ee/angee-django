@@ -1,0 +1,18 @@
+# OIDC login defaults for OAuth clients seeded by the integrate addon. This file
+# updates the existing rows by (slug, environment) only when the OIDC addon is
+# composed, because these fields are contributed by the addon extension.
+- xref: oauth_gemini_oidc
+  slug: gemini
+  environment: prod
+  provider_type: google
+  login_enabled: true
+  issuer: https://accounts.google.com
+  jwks_uri: https://www.googleapis.com/oauth2/v3/certs
+  discovery_url: https://accounts.google.com/.well-known/openid-configuration
+- xref: oauth_grok_oidc
+  slug: grok
+  environment: prod
+  provider_type: generic_oidc
+  login_enabled: true
+  issuer: https://auth.x.ai
+  discovery_url: https://auth.x.ai/.well-known/openid-configuration

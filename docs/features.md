@@ -18,9 +18,9 @@ actually unique to your product.
 
 - **A framework, not an app** — used to build SaaS, ERP (re-cut as the agentic
   "ARP"), and self-hosted personal apps. You compose it; you don't fork it.
-- **Addon-based** — every capability is one addon: a Django app (abstract models
-  + GraphQL + REBAC + resources) plus, when it has UI, a sibling React package
-  `@angee/<addon>-base` (routes, views, widgets, menus, i18n).
+- **Addon-based** — every capability is one addon: Django source (abstract models
+  + GraphQL + REBAC + resources) plus, when it has UI, a co-located `web/`
+  fragment (routes, views, widgets, menus, i18n).
 - **Composed, not patched** — `angee build` merges every addon by Python MRO into
   a generated `runtime/`. Deterministic (byte-identical, CI-checked); no
   monkey-patching, no runtime registration.

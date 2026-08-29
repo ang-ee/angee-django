@@ -1,0 +1,12 @@
+[addon]
+name = "angee.uom"
+description = "Units of measure: a category tree of convertible units with per-unit rounding."
+keywords = ["uom", "units", "measure", "conversion"]
+category = "Foundation"
+depends_on = ["angee.iam", "angee.resources", "angee.graphql"]
+
+[resources]
+master = [
+  "resources/master/010_uom.uomcategory.yaml",
+  { path = "resources/master/020_uom.uom.yaml", depends_on = "resources/master/010_uom.uomcategory.yaml" },
+]

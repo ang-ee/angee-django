@@ -1,0 +1,800 @@
+import { graphql, type DocumentType } from "@angee/gql/console";
+
+/** The model every messaging-owned channel surface binds to. */
+export const CHANNEL_MODEL = "messaging.Channel";
+
+// The models a record thread reads: the live-refresh keys for the thread/activity
+// queries and the invalidation set every chatter mutation republishes. One owner,
+// shared by both chatter panes.
+export const READ_MODELS = [
+  "parties.Handle",
+  "messaging.Thread",
+  "messaging.Message",
+  "messaging.ThreadFollower",
+  "messaging.ThreadActivity",
+  "messaging.ThreadNotification",
+  "messaging.Reaction",
+  "messaging.MessageStar",
+] as const;
+
+// The count probe only depends on receipt-moving rows and messages; it avoids
+// the wider thread payload's followers, activities, notifications, and handles.
+export const RECORD_UNREAD_COUNT_MODELS = [
+  "messaging.Message",
+  "messaging.ThreadFollower",
+] as const;
+
+export const ACTIVITY_AGENDA_MODELS = ["messaging.ThreadActivity"] as const;
+
+/** Messaging-owned cross-record agenda used by personal work projections. */
+export const ActivityAgendaDocument = graphql(`
+  query MessagingActivityAgenda($windowStart: Date!, $windowEnd: Date!) {
+    activity_agenda(window_start: $windowStart, window_end: $windowEnd) {
+      id
+      summary
+      due_date
+      state
+      status
+      attachment {
+        label
+        model_label
+        record_id
+      }
+    }
+  }
+`);
+
+/** Reopenable live-channel pairing state; updates ride channelChanged. */
+export const ChannelPairing = graphql(`
+  query ChannelPairing($id: ID!) {
+    channel_pairing(id: $id) {
+      state
+      qr
+      message
+      can_skip
+      account_label
+      duplicate_channel_name
+    }
+  }
+`);
+
+/** Bounded health summary for the Parties overview contribution. */
+export const MessagingChannelHealth = graphql(`
+  query MessagingChannelHealth($limit: Int!) {
+    channels(order_by: [{ display_name: asc }], limit: $limit) {
+      id
+      display_name
+      backend_class
+      pairing_state
+      last_sync_status
+      last_sync_completed_at
+      sync_error
+    }
+    channels_aggregate {
+      aggregate {
+        count
+      }
+    }
+  }
+`);
+
+// One owner for the record-feed message selection: the four operations that
+// return a full chatter message (the thread read + post/update/delete payloads)
+// spread this fragment instead of repeating the field set. `can_edit`/`can_delete`
+// are server-resolved capabilities (rebac + mail rules) the feed reads directly —
+// never a client heuristic. The client-preset resolves the fragment by name.
+export const RecordMessageFields = graphql(`
+  fragment RecordMessageFields on RecordMessageType {
+    id
+    preview
+    direction
+    status
+    starred
+    needaction
+    message_type
+    can_edit
+    can_delete
+    sender {
+      id
+      display_name
+      value
+    }
+    parent {
+      id
+      preview
+      message_type
+      subtype {
+        key
+        name
+        description
+      }
+    }
+    subtype {
+      key
+      name
+      description
+    }
+    sent_at
+    created_at
+    reaction_groups {
+      reaction
+      count
+      self_reacted
+      handles {
+        id
+        display_name
+        value
+      }
+    }
+    tracking_values {
+      id
+      position
+      field_name
+      field_label
+      old_display
+      new_display
+    }
+    parts {
+      id
+      role
+      disposition
+      cid
+      fragment {
+        text
+      }
+      file {
+        id
+        filename
+        title
+        size_bytes
+        url
+        mime_type {
+          mime_type
+          label
+        }
+      }
+    }
+  }
+`);
+
+// The channel conversation transcript reads the thread's messages straight off
+// the `messages` auto-CRUD resource — a fixed-size page ordered newest-first,
+// keyset-paginated on the `(sent_at, created_at)` cursor: "load older" passes the
+// oldest loaded row's timestamps instead of growing a re-fetched window, so a
+// million-message thread pages in constant work per fetch (the Zulip/Synapse
+// anchor-pagination shape, never OFFSET). `messages_aggregate` reports the thread
+// total on the head page so the view knows when older messages remain without
+// re-counting the thread for every keyset page. Only the fields a `ChatBubble`
+// transcript renders are selected.
+export const TranscriptMessageFields = graphql(`
+  fragment TranscriptMessageFields on MessageType {
+    id
+    direction
+    preview
+    message_type
+    sent_at
+    created_at
+    sender {
+      id
+      display_name
+      value
+      party_link_confirmed
+      party {
+        display_name
+      }
+    }
+    parts {
+      id
+      role
+      disposition
+      cid
+      fragment {
+        text
+      }
+      file {
+        id
+        filename
+        title
+        size_bytes
+        url
+        mime_type {
+          mime_type
+          label
+        }
+      }
+    }
+    reaction_groups {
+      reaction
+      count
+      self_reacted
+      handles {
+        id
+        display_name
+        value
+      }
+    }
+  }
+`);
+
+export const ThreadTranscriptDocument = graphql(`
+  query MessagingThreadTranscript(
+    $threadId: String!
+    $limit: Int!
+    $head: Boolean!
+    $beforeSentAt: DateTime!
+    $beforeCreatedAt: DateTime!
+  ) {
+    head_messages: messages(
+      where: { thread: { _eq: $threadId } }
+      order_by: [{ sent_at: desc }, { created_at: desc }]
+      limit: $limit
+    ) @include(if: $head) {
+      ...TranscriptMessageFields
+    }
+    messages_aggregate(where: { thread: { _eq: $threadId } }) @include(if: $head) {
+      aggregate {
+        count
+      }
+    }
+    older_messages: messages(
+      where: {
+        _and: [
+          { thread: { _eq: $threadId } }
+          {
+            _or: [
+              { sent_at: { _lt: $beforeSentAt } }
+              {
+                _and: [
+                  { sent_at: { _eq: $beforeSentAt } }
+                  { created_at: { _lte: $beforeCreatedAt } }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+      order_by: [{ sent_at: desc }, { created_at: desc }]
+      limit: $limit
+    ) @skip(if: $head) {
+      ...TranscriptMessageFields
+    }
+  }
+`);
+
+// The recipient picker's "add anyone" catalogue. IAM's `colleagues` surface
+// returns active users the actor reaches through REBAC; the admin-only `users`
+// catalogue is out of reach here by design.
+export const MessagingRecipientUsersDocument = graphql(`
+  query MessagingRecipientUsers($limit: Int = 100) {
+    colleagues(limit: $limit) {
+      id
+      username
+      display_name
+      email
+      is_active
+    }
+  }
+`);
+
+export const RecordThreadDocument = graphql(`
+  query MessagingRecordThread(
+    $modelLabel: String!
+    $recordId: ID!
+    $search: String = ""
+    $messageLimit: Int = 50
+    $before: ID = null
+    $after: ID = null
+    $around: ID = null
+  ) {
+    record_thread(
+      input: {
+        model_label: $modelLabel
+        record_id: $recordId
+        search: $search
+        message_limit: $messageLimit
+        before: $before
+        after: $after
+        around: $around
+      }
+    ) {
+      error
+      error_code
+      thread {
+        id
+        title {
+          text
+        }
+        message_count
+        last_message_at
+      }
+      message_result_count
+      messages {
+        ...RecordMessageFields
+      }
+      follower_count
+      is_following
+      self_follower {
+        id
+        notification_policy
+        subtype_keys
+        user {
+          id
+          username
+          display_name
+        }
+      }
+      suggested_recipients {
+        reason
+        source
+        user {
+          id
+          username
+          display_name
+          email
+          is_active
+        }
+      }
+      subtypes {
+        key
+        name
+        description
+        internal
+        default
+      }
+      unread_count
+      needaction_count
+      message_has_error
+      message_has_error_counter
+      attachment_count
+      notifications {
+        id
+        notification_type
+        notification_status
+        message {
+          id
+          preview
+        }
+      }
+      followers {
+        id
+        notification_policy
+        subtype_keys
+        user {
+          id
+          username
+          display_name
+        }
+      }
+      activity_count
+      activities {
+        id
+        activity_type
+        summary
+        note
+        due_date
+        completed_at
+        feedback
+        status
+        state
+        user {
+          id
+          username
+          display_name
+        }
+      }
+    }
+  }
+`);
+
+export const RecordThreadUnreadCountDocument = graphql(`
+  query MessagingRecordThreadUnreadCount($modelLabel: String!, $recordId: ID!) {
+    record_thread_unread_count(model_label: $modelLabel, record_id: $recordId)
+  }
+`);
+
+export const PostRecordMessageDocument = graphql(`
+  mutation MessagingPostRecordMessage(
+    $modelLabel: String!
+    $recordId: ID!
+    $body: String!
+    $kind: String = "comment"
+    $parentMessageId: ID = null
+    $attachmentIds: [ID!] = []
+    $recipientUserIds: [ID!] = []
+    $autofollowRecipients: Boolean = false
+  ) {
+    post_record_message(
+      input: {
+        model_label: $modelLabel
+        record_id: $recordId
+        body: $body
+        kind: $kind
+        parent_message_id: $parentMessageId
+        attachment_ids: $attachmentIds
+        recipient_user_ids: $recipientUserIds
+        autofollow_recipients: $autofollowRecipients
+      }
+    ) {
+      error
+      error_code
+      follower_count
+      is_following
+      unread_count
+      needaction_count
+      message_has_error
+      message_has_error_counter
+      activity_count
+      attachment_count
+      message {
+        ...RecordMessageFields
+      }
+      thread {
+        id
+        title {
+          text
+        }
+        message_count
+        last_message_at
+      }
+    }
+  }
+`);
+
+export const UpdateRecordMessageDocument = graphql(`
+  mutation MessagingUpdateRecordMessage(
+    $modelLabel: String!
+    $recordId: ID!
+    $messageId: ID!
+    $body: String!
+  ) {
+    update_record_message(
+      input: {
+        model_label: $modelLabel
+        record_id: $recordId
+        message_id: $messageId
+        body: $body
+      }
+    ) {
+      error
+      error_code
+      follower_count
+      is_following
+      unread_count
+      needaction_count
+      message_has_error
+      message_has_error_counter
+      activity_count
+      attachment_count
+      message {
+        ...RecordMessageFields
+      }
+      thread {
+        id
+        title {
+          text
+        }
+        message_count
+        last_message_at
+      }
+    }
+  }
+`);
+
+export const DeleteRecordMessageDocument = graphql(`
+  mutation MessagingDeleteRecordMessage(
+    $modelLabel: String!
+    $recordId: ID!
+    $messageId: ID!
+  ) {
+    delete_record_message(
+      input: {
+        model_label: $modelLabel
+        record_id: $recordId
+        message_id: $messageId
+      }
+    ) {
+      error
+      error_code
+      deleted_message_id
+      message_result_count
+      follower_count
+      is_following
+      unread_count
+      needaction_count
+      message_has_error
+      message_has_error_counter
+      activity_count
+      attachment_count
+      thread {
+        id
+        title {
+          text
+        }
+        message_count
+        last_message_at
+      }
+      messages {
+        ...RecordMessageFields
+      }
+    }
+  }
+`);
+
+export const SetRecordMessageReactionDocument = graphql(`
+  mutation MessagingSetRecordMessageReaction(
+    $modelLabel: String!
+    $recordId: ID!
+    $messageId: ID!
+    $reaction: String!
+    $action: String = "toggle"
+  ) {
+    set_record_message_reaction(
+      input: {
+        model_label: $modelLabel
+        record_id: $recordId
+        message_id: $messageId
+        reaction: $reaction
+        action: $action
+      }
+    ) {
+      error
+      error_code
+      reaction_groups {
+        reaction
+        count
+        self_reacted
+        handles {
+          id
+          display_name
+          value
+        }
+      }
+      message {
+        id
+        reaction_groups {
+          reaction
+          count
+          self_reacted
+          handles {
+            id
+            display_name
+            value
+          }
+        }
+      }
+    }
+  }
+`);
+
+export const SetRecordMessageStarredDocument = graphql(`
+  mutation MessagingSetRecordMessageStarred(
+    $modelLabel: String!
+    $recordId: ID!
+    $messageId: ID!
+    $starred: Boolean = null
+  ) {
+    set_record_message_starred(
+      input: {
+        model_label: $modelLabel
+        record_id: $recordId
+        message_id: $messageId
+        starred: $starred
+      }
+    ) {
+      error
+      error_code
+      starred
+      message {
+        id
+        starred
+      }
+    }
+  }
+`);
+
+export const MarkRecordThreadReadDocument = graphql(`
+  mutation MessagingMarkRecordThreadRead($modelLabel: String!, $recordId: ID!) {
+    mark_record_thread_read(
+      input: {
+        model_label: $modelLabel
+        record_id: $recordId
+      }
+    ) {
+      error
+      error_code
+      unread_count
+      needaction_count
+    }
+  }
+`);
+
+export const MarkRecordMessageDoneDocument = graphql(`
+  mutation MessagingMarkRecordMessageDone(
+    $modelLabel: String!
+    $recordId: ID!
+    $messageId: ID!
+  ) {
+    mark_record_message_done(
+      input: {
+        model_label: $modelLabel
+        record_id: $recordId
+        message_id: $messageId
+      }
+    ) {
+      error
+      error_code
+      unread_count
+      needaction_count
+      message {
+        id
+        needaction
+      }
+      thread {
+        id
+        title {
+          text
+        }
+        message_count
+        last_message_at
+      }
+    }
+  }
+`);
+
+export const SetRecordFollowingDocument = graphql(`
+  mutation MessagingSetRecordFollowing(
+    $modelLabel: String!
+    $recordId: ID!
+    $following: Boolean!
+    $notificationPolicy: String = "inbox"
+    $subtypeKeys: [String!] = []
+  ) {
+    set_record_following(
+      input: {
+        model_label: $modelLabel
+        record_id: $recordId
+        following: $following
+        notification_policy: $notificationPolicy
+        subtype_keys: $subtypeKeys
+      }
+    ) {
+      error
+      error_code
+      follower_count
+      is_following
+      follower {
+        id
+        notification_policy
+        subtype_keys
+      }
+    }
+  }
+`);
+
+export const ScheduleRecordActivityDocument = graphql(`
+  mutation MessagingScheduleRecordActivity(
+    $modelLabel: String!
+    $recordId: ID!
+    $summary: String!
+    $note: String = ""
+    $dueDate: Date
+    $activityType: String = "todo"
+  ) {
+    schedule_record_activity(
+      input: {
+        model_label: $modelLabel
+        record_id: $recordId
+        summary: $summary
+        note: $note
+        due_date: $dueDate
+        activity_type: $activityType
+      }
+    ) {
+      error
+      error_code
+      activity_count
+      activity {
+        id
+        activity_type
+        summary
+        note
+        due_date
+        completed_at
+        feedback
+        status
+        state
+        user {
+          id
+          username
+          display_name
+        }
+      }
+    }
+  }
+`);
+
+export const CompleteRecordActivityDocument = graphql(`
+  mutation MessagingCompleteRecordActivity(
+    $activityId: ID!
+    $feedback: String = ""
+  ) {
+    complete_record_activity(
+      input: {
+        activity_id: $activityId
+        feedback: $feedback
+      }
+    ) {
+      error
+      error_code
+      activity_count
+      activity {
+        id
+        summary
+        completed_at
+        feedback
+        status
+        state
+      }
+    }
+  }
+`);
+
+export const CancelRecordActivityDocument = graphql(`
+  mutation MessagingCancelRecordActivity($activityId: ID!) {
+    cancel_record_activity(input: { activity_id: $activityId }) {
+      error
+      error_code
+      activity_count
+      activity {
+        id
+        summary
+        completed_at
+        status
+        state
+      }
+    }
+  }
+`);
+
+// The activity tab reads only the scheduled activities, not the full message
+// feed: its own narrow window off `record_thread` so opening Activity never pulls
+// the messages / followers / recipients payload the Comments tab needs.
+export const RecordActivityThreadDocument = graphql(`
+  query MessagingRecordActivityThread($modelLabel: String!, $recordId: ID!) {
+    record_thread(input: { model_label: $modelLabel, record_id: $recordId }) {
+      error
+      error_code
+      activity_count
+      activities {
+        id
+        activity_type
+        summary
+        note
+        due_date
+        completed_at
+        feedback
+        status
+        state
+        user {
+          id
+          username
+          display_name
+        }
+      }
+    }
+  }
+`);
+
+export type ThreadTranscriptRow =
+  NonNullable<DocumentType<typeof ThreadTranscriptDocument>["head_messages"]>[number];
+
+export type RecordThreadPayload = DocumentType<typeof RecordThreadDocument>["record_thread"];
+export type RecordActivityThreadPayload =
+  DocumentType<typeof RecordActivityThreadDocument>["record_thread"];
+export type RecordMessageRow = NonNullable<RecordThreadPayload["messages"]>[number];
+export type RecordActivityRow = NonNullable<RecordActivityThreadPayload["activities"]>[number];
+export type RecordNotificationRow = NonNullable<RecordThreadPayload["notifications"]>[number];
+export type SuggestedRecipientRow =
+  NonNullable<RecordThreadPayload["suggested_recipients"]>[number];
+export type RecipientUserRow =
+  NonNullable<DocumentType<typeof MessagingRecipientUsersDocument>["colleagues"]>[number];

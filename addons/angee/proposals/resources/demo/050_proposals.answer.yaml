@@ -1,0 +1,66 @@
+_meta:
+  model: proposals.Answer
+rows:
+  - xref: mvp_alice_architecture
+    fields:
+      proposal: proposals.mvp_alice
+      topic: proposals.mvp_architecture
+      body: A modular Django core with addon-owned seams and a deliberately small React shell.
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: mvp_alice_delivery
+    fields:
+      proposal: proposals.mvp_alice
+      topic: proposals.mvp_delivery
+      body: Ship the record model, validate live capture, then add comparison and award controls.
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: mvp_bob_architecture
+    fields:
+      proposal: proposals.mvp_bob
+      topic: proposals.mvp_architecture
+      body: One deployable service with strict domain modules and an event seam for bridges.
+      created_by: iam.user_bob
+      updated_by: iam.user_bob
+  - xref: mvp_bob_delivery
+    fields:
+      proposal: proposals.mvp_bob
+      topic: proposals.mvp_delivery
+      body: Prototype the riskiest integration first, then harden the shared workflow.
+      created_by: iam.user_bob
+      updated_by: iam.user_bob
+  - xref: mvp_carla_architecture
+    fields:
+      proposal: proposals.mvp_carla
+      topic: proposals.mvp_architecture
+      body: Keep the core synchronous and isolate every external system behind an operator adapter.
+      created_by: proposals.user_carla
+      updated_by: proposals.user_carla
+  - xref: flat_cabanyal_location
+    fields:
+      proposal: proposals.flat_cabanyal
+      topic: proposals.flat_location
+      body: Ten minutes to the market and tram; quiet rear bedrooms.
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: flat_cabanyal_terms
+    fields:
+      proposal: proposals.flat_cabanyal
+      topic: proposals.flat_terms
+      body: Two months deposit; water included; twelve-month lease.
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: flat_russafa_location
+    fields:
+      proposal: proposals.flat_russafa
+      topic: proposals.flat_location
+      body: Central Russafa; bus at the corner; evening street noise.
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: flat_russafa_terms
+    fields:
+      proposal: proposals.flat_russafa
+      topic: proposals.flat_terms
+      body: One month deposit; utilities separate; twelve-month lease.
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

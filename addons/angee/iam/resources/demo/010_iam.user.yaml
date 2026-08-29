@@ -1,0 +1,27 @@
+_meta:
+  model: iam.User
+rows:
+  - xref: user_admin
+    fields:
+      username: admin
+      email: admin@example.com
+      password: pbkdf2_sha256$1200000$angeeDemoAdminSalt2026AA$vx7/tcKJj2SPWUGqzsqSxJGaHpVs+KR0J7U6nD/f1D0=
+      is_staff: true
+      is_superuser: true
+      is_active: true
+  - xref: user_alice
+    fields:
+      username: alice
+      email: alice@example.com
+      password: pbkdf2_sha256$1200000$angeeDemoAliceSalt2026AA$fia0l+CEsFM7y3HJdYOaJPHHgyE2S7bDScaPKG8mhPc=
+      is_staff: true
+      is_superuser: false
+      is_active: true
+  - xref: user_bob
+    fields:
+      username: bob
+      email: bob@example.com
+      password: pbkdf2_sha256$1200000$angeeDemoBobSalt2026AAAA$B5Hy5am24tzOsXR6o569MG/t4tnur8loRAUJaA8STWk=
+      is_staff: false
+      is_superuser: false
+      is_active: true

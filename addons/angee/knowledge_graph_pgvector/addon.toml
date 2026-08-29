@@ -1,0 +1,8 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.knowledge_graph_pgvector"
+description = "Semantic retrieval for the knowledge base — pgvector embeddings and graph-RAG search"
+keywords = ["pgvector", "embeddings", "knowledge"]
+category = "Integration"
+depends_on = ["angee.knowledge", "angee.mcp"]

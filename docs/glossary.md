@@ -21,7 +21,7 @@ composer, model toolkit, serving seams, and jobs seam. It is the `django-angee`
 wheel, not an addon.
 
 **Framework addon** — a reusable product capability that is part of Angee itself
-and builds on the framework core. Framework addons live in `angee-base`.
+and builds on the framework core. Framework addons live under `addons/`.
 
 **Consumer addon** — an addon written by a product team for a specific project,
 built on top of the framework and base addons.

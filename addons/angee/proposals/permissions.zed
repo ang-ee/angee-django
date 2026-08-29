@@ -1,0 +1,71 @@
+// Authorization schema for sealed proposal rounds.
+// @rebac_package: proposals
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+definition proposals/round {
+    relation task:        projects/task    // rebac:field=task
+    relation project:     projects/project // rebac:field=project
+    relation facilitator: auth/user        // rebac:field=facilitator
+    relation reader:      auth/user
+    relation evaluator:   auth/user
+    relation requester:   auth/user
+
+    permission create = task->write + project->write
+    permission read   = facilitator + reader + evaluator + requester
+    permission write  = facilitator
+    permission share  = facilitator
+    permission delete = facilitator
+}
+
+definition proposals/topic {
+    relation round: proposals/round // rebac:field=round
+
+    permission create = round->write
+    permission read   = round->read
+    permission write  = round->write
+    permission delete = round->write
+}
+
+definition proposals/proposal {
+    relation responder: auth/user       // rebac:field=responder
+    relation round:     proposals/round // rebac:field=round
+    relation editor:    auth/user
+    relation reader:    auth/user
+
+    permission create   = round->facilitator
+    permission read     = responder + reader + round->facilitator + round->evaluator + round->requester
+    permission write    = editor + round->facilitator
+    permission evaluate = round->evaluator + round->facilitator
+    permission publish  = responder + round->facilitator
+    permission withdraw = responder + round->facilitator
+    permission delete   = editor + round->facilitator
+
+    permission read__cost            = responder + round->facilitator + round->evaluator + round->requester
+    permission read__currency        = responder + round->facilitator + round->evaluator + round->requester
+    permission read__staffing        = responder + round->facilitator + round->evaluator + round->requester
+    permission read__confidence      = responder + round->facilitator + round->evaluator + round->requester
+    permission read__timeframe_start = responder + round->facilitator + round->evaluator + round->requester
+    permission read__timeframe_end   = responder + round->facilitator + round->evaluator + round->requester
+    permission read__valid_until     = responder + round->facilitator + round->evaluator + round->requester
+    permission read__source_message  = responder + round->facilitator + round->evaluator + round->requester
+}
+
+definition proposals/answer {
+    relation proposal: proposals/proposal // rebac:field=proposal
+
+    permission create = proposal->write
+    permission read   = proposal->read
+    permission write  = proposal->write
+    permission delete = proposal->write
+}
+
+definition proposals/review {
+    relation proposal: proposals/proposal // rebac:field=proposal
+    relation reviewer: auth/user          // rebac:field=reviewer
+
+    permission create = reviewer & proposal->evaluate
+    permission read   = reviewer + proposal->evaluate
+    permission write  = reviewer
+    permission delete = reviewer
+}

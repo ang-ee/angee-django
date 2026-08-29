@@ -1,0 +1,14 @@
+// Authorization schema for external-request evidence.
+// @rebac_package: intake
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+definition intake/need {
+    relation task:    projects/task    // rebac:field=task
+    relation project: projects/project // rebac:field=project
+
+    permission create = task->write + project->write
+    permission read   = task->read + project->read
+    permission write  = task->write + project->write
+    permission delete = task->write + project->write
+}

@@ -1,0 +1,13 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.nexus"
+description = "Relationship intelligence — interaction rollups, gravity/fading, and the cross-channel person timeline over parties and messaging"
+keywords = ["nexus", "contacts", "relationships", "timeline"]
+category = "Data"
+depends_on = ["angee.parties", "angee.messaging"]
+
+[[migrations]]
+name = "tie_pair_reshape"
+app_label = "nexus"
+module = "runtime_migrations.tie_pair_reshape"

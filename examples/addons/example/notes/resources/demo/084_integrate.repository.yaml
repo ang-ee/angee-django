@@ -1,0 +1,7 @@
+# The local checkout as an inventoried repository. The local backend reads from
+# the VCS bridge's config.local_root, not `remote` (a placeholder here).
+- xref: repo_local_templates
+  vcs_bridge: notes.vcs_local_templates
+  org: local
+  name: angee-django
+  remote: "file:///"

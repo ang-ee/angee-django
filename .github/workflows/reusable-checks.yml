@@ -14,28 +14,33 @@ on:
         type: string
         default: ""
       uv-enabled:
-        description: Run the standalone uv pytest lane (repos whose suites need sibling sources run pytest in the stack lane instead).
+        description: Run the monorepo's standalone uv pytest lane.
         required: false
         type: boolean
         default: true
       pnpm-enabled:
-        description: Run the pnpm typecheck and test lane.
+        description: Run package typecheck, test, build, and distribution checks.
         required: false
         type: boolean
         default: true
       stack-enabled:
-        description: Run the composed-stack lane (render a stack, build + codegen, check this repo's fragments and tests against the real composition).
+        description: Run addon fragment and pytest checks against a full composition.
         required: false
         type: boolean
         default: false
+      addons-profile:
+        description: Addon composition profile; full is the only lane that checks out bridges.
+        required: false
+        type: string
+        default: full
       angee-version:
         description: Release tag of the angee CLI the stack lane installs.
         required: false
         type: string
         default: latest
     secrets:
-      SIBLINGS_TOKEN:
-        description: Token able to read the sibling ang-ee repos (needed while they are private; the default token suffices once they are public).
+      BRIDGES_TOKEN:
+        description: Token able to read the optional messaging-bridges repo while it is private.
         required: false
 
 permissions:
@@ -55,20 +60,8 @@ jobs:
   pnpm:
     if: ${{ inputs.pnpm-enabled }}
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: repo
     steps:
-      # The caller's workspace links the framework React packages from the
-      # sibling angee-react checkout (the stack's sources/ layout), so CI
-      # reproduces that layout: the repo under ./repo, the sibling beside it.
       - uses: actions/checkout@v4
-        with:
-          path: repo
-      - uses: actions/checkout@v4
-        with:
-          repository: ang-ee/angee-react
-          path: angee-react
       - uses: pnpm/action-setup@v4
         with:
           version: 11.1.3
@@ -76,62 +69,34 @@ jobs:
         with:
           node-version: "26"
           cache: pnpm
-          cache-dependency-path: repo/pnpm-lock.yaml
-      - run: pnpm install --no-frozen-lockfile
-      - run: pnpm -r typecheck
-      - run: pnpm -r test
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r --filter './packages/**' typecheck
+      - run: pnpm -r --filter './packages/**' test
+      - run: pnpm -r --filter './packages/**' --filter '!@angee/storybook' build
+      - run: node packages/scripts/check-dist-imports.mjs
+      - run: node packages/ui/scripts/check-views-exports.mjs
 
   # The composed-stack lane dogfoods the two-command install path: install the
-  # released angee CLI, render the framework-dev stack from angee-templates,
+  # released angee CLI, render the in-repo framework-dev stack template,
   # compose it (angee build + schema + web codegen — no database needed), then
-  # typecheck/test THIS repo's fragments and run its pytest suite against the
+  # typecheck/test addon fragments and run pytest against the
   # real composition (the stack root's runtime/ is the @angee/gql fixture).
-  # CI pre-places the checkouts in the stack's workspace-slot layout, so the
-  # committed stack-relative paths resolve exactly as they do in a dev stack.
+  # The consolidated checkout supplies core, packages, addons, examples, and
+  # templates. Only the optional full-profile bridges remain external.
   stack:
     if: ${{ inputs.stack-enabled }}
     runs-on: ubuntu-latest
-    env:
-      REPO_NAME: ${{ github.event.repository.name }}
     steps:
       - uses: actions/checkout@v4
         with:
-          path: stack/workspaces/src/${{ github.event.repository.name }}
+          path: stack/workspaces/src/angee
       - uses: actions/checkout@v4
-        if: github.event.repository.name != 'angee-django'
-        with:
-          repository: ang-ee/angee-django
-          path: stack/workspaces/src/angee-django
-          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
-      - uses: actions/checkout@v4
-        if: github.event.repository.name != 'angee-react'
-        with:
-          repository: ang-ee/angee-react
-          path: stack/workspaces/src/angee-react
-          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
-      - uses: actions/checkout@v4
-        if: github.event.repository.name != 'angee-base'
-        with:
-          repository: ang-ee/angee-base
-          path: stack/workspaces/src/angee-base
-          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
-      - uses: actions/checkout@v4
-        if: github.event.repository.name != 'angee-messaging-bridges'
+        if: ${{ inputs.addons-profile == 'full' }}
         with:
           repository: ang-ee/angee-messaging-bridges
           path: stack/workspaces/src/angee-messaging-bridges
-          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
-      - uses: actions/checkout@v4
-        if: github.event.repository.name != 'angee-examples'
-        with:
-          repository: ang-ee/angee-examples
-          path: stack/workspaces/src/angee-examples
-          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
-      - uses: actions/checkout@v4
-        with:
-          repository: ang-ee/angee-templates
-          path: templates-repo
-          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+          token: ${{ secrets.BRIDGES_TOKEN || github.token }}
       - name: Install the angee CLI (the public install path)
         run: curl -fsSL https://raw.githubusercontent.com/ang-ee/angee-operator/main/scripts/install.sh | ANGEE_VERSION=${{ inputs.angee-version }} sh
       - uses: astral-sh/setup-uv@v6
@@ -145,10 +110,10 @@ jobs:
           node-version: "26"
       - name: Render the stack (local template ref — no registry round-trip)
         run: >-
-          angee stack init "$GITHUB_WORKSPACE/templates-repo/templates/stacks/dev"
+          angee stack init "$GITHUB_WORKSPACE/stack/workspaces/src/angee/templates/stacks/dev"
           "$GITHUB_WORKSPACE/stack" --force --yes
           --input project_name=ci-stack
-          --input addons_profile=full
+          --input addons_profile=${{ inputs.addons-profile }}
           --input olm_cxxflags=
       - name: Compose the runtime and SDL (no database needed)
         working-directory: stack
@@ -163,11 +128,11 @@ jobs:
         run: |
           pnpm install --no-frozen-lockfile
           pnpm --dir web codegen
-      - name: Typecheck and test this repo's fragments against the composition
+      - name: Typecheck and test all fragments against the composition
         working-directory: stack
         run: |
-          pnpm -r --filter "{./workspaces/src/$REPO_NAME/**}" typecheck
-          pnpm -r --filter "{./workspaces/src/$REPO_NAME/**}" test
+          pnpm -r typecheck
+          pnpm -r test
       - name: Pytest against the composed stack
-        working-directory: stack/workspaces/src/${{ github.event.repository.name }}
+        working-directory: stack/workspaces/src/angee
         run: uv run pytest -q ${{ inputs.pytest-extra-args }}

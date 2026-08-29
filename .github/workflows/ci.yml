@@ -13,7 +13,7 @@ jobs:
     secrets: inherit
     with:
       python-version: "3.14"
-      # No JS remains in this repo since the example host dissolved (P7); the
-      # composed-web coverage lives in the stack lane.
-      pnpm-enabled: false
+      # Packages are checked hermetically; addon fragments are checked again
+      # against generated GraphQL documents in the composed-stack lane.
+      pnpm-enabled: true
       stack-enabled: true

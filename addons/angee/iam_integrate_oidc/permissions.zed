@@ -1,0 +1,9 @@
+// Authorization schema for the OIDC login addon.
+// @rebac_package: iam_integrate_oidc
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 2
+//
+// OIDC no longer owns a separate resource type. Login-provider fields are folded
+// into integrate/oauth_client, whose permissions live in angee.integrate. Keep
+// this empty schema so `rebac sync` can prune package-managed rows from older
+// dev databases that installed the previous schema.

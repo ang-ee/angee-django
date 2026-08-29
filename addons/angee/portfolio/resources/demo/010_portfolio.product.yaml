@@ -1,0 +1,12 @@
+_meta:
+  model: portfolio.Product
+rows:
+  - xref: neighborhood_garden
+    fields:
+      name: Neighborhood garden
+      body: A shared area for the garden's long-lived direction and release history.
+      owner: iam.user_alice
+      lifecycle: active
+      originated_from: projects.neighborhood_garden
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

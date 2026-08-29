@@ -1,0 +1,8 @@
+packages:
+  - "packages/*"
+  - "addons/angee/*/web"
+  - "examples/addons/*/*/web"
+  - "examples/e2e"
+allowBuilds:
+  esbuild: true
+  "@tailwindcss/oxide": true

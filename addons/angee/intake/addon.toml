@@ -1,0 +1,18 @@
+[addon]
+name = "angee.intake"
+description = "External-request evidence captured onto project tasks and projects."
+keywords = ["intake", "requests", "needs", "triage", "customers"]
+category = "Productivity"
+depends_on = [
+  "angee.messaging",
+  "angee.parties",
+  "angee.projects",
+  "angee.work",
+]
+
+[resources]
+master = []
+demo = [
+  { path = "resources/demo/010_messaging.channel.yaml", depends_on = ["integrate:resources/master/010_integrate.vendor.yaml", "iam:resources/demo/010_iam.user.yaml", "work:resources/demo/010_work.queue.yaml"] },
+  { path = "resources/demo/020_intake.need.yaml", depends_on = ["work:resources/demo/020_projects.task.yaml", "projects:resources/demo/010_projects.project.yaml"] },
+]

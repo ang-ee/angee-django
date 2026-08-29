@@ -1,0 +1,42 @@
+# GitHub OAuth client seed (install tier). Model inferred from the
+# `integrate.oauthclient` filename; adopted by (slug, environment) so a
+# pre-existing row is linked, not duplicated.
+#
+# GitHub OAuth Apps have no public client — every deployment registers its own at
+# https://github.com/settings/developers and the app's callback URL must be the
+# console's `/integrate/connect/callback`. So this seed carries everything that is
+# the same everywhere (endpoints, scopes, claims) and leaves `client_id` /
+# `client_secret` blank: the row reads `needs_client` until an admin pastes the
+# two values from their own app, instead of asking them to hand-enter a dozen
+# fields on the generic provider form.
+- xref: oauth_github
+  slug: github
+  environment: prod
+  display_name: GitHub
+  icon: github
+  authorize_endpoint: https://github.com/login/oauth/authorize
+  token_endpoint: https://github.com/login/oauth/access_token
+  userinfo_endpoint: https://api.github.com/user
+  is_enabled: true
+  # OAuth Apps authenticate with the client secret and support neither PKCE nor
+  # (unless the app opts into expiring tokens) a refresh grant.
+  supports_pkce: false
+  supports_refresh: false
+  scopes_catalogue:
+    - repo
+    - public_repo
+    - read:org
+    - read:user
+    - user:email
+  # `repo` covers private repositories on `/user/repos` and `/orgs/{org}/repos`;
+  # `read:org` is what makes an org's repositories visible to the listing.
+  default_scopes:
+    - repo
+    - read:org
+    - read:user
+  # `GET /user` returns id/login/name/email/avatar_url. `name` may be null, so the
+  # account label reads the always-present `login`.
+  external_id_claim: id
+  email_claim: email
+  display_name_claim: login
+  avatar_url_claim: avatar_url

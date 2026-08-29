@@ -256,6 +256,77 @@ class FractionalRankField(models.FloatField):
         kwargs.setdefault("db_index", True)
         super().__init__(*args, **kwargs)
 
+    def has_default(self) -> bool:
+        """Expose model-owned append allocation as a server-side default.
+
+        Hasura input generation uses Django's field-owned ``has_default`` fact
+        to decide whether an insert column may be omitted.  A fractional rank
+        has no context-free literal default; ``pre_save`` supplies its
+        contextual append rank for every model write path.
+        """
+
+        return True
+
+    def get_default(self) -> None:
+        """Seed an omitted model value for model-owned append allocation."""
+
+        return None
+
+    def validate(self, value: Any, model_instance: models.Model) -> None:
+        """Allow the pending ``None`` that ``pre_save`` replaces with a rank."""
+
+        if value is None:
+            return
+        super().validate(value, model_instance)
+
+    def pre_save(self, model_instance: models.Model, add: bool) -> float:
+        """Honor an explicit rank or append within the model's unique context."""
+
+        value = super().pre_save(model_instance, add)
+        if value is not None:
+            return cast(float, value)
+        rank = self._append_rank_for_instance(model_instance)
+        setattr(model_instance, self.attname, rank)
+        return rank
+
+    def _append_rank_for_instance(self, instance: models.Model) -> float:
+        """Return the next rank from an unscoped scan of the instance context."""
+
+        model = type(instance)
+        context_fields = self._unique_context_fields(model)
+        context = {
+            context_field.attname: getattr(instance, context_field.attname)
+            for context_field in context_fields
+        }
+        database = router.db_for_write(model, instance=instance)
+        previous = (
+            system_queryset(model, using=database, lock=())
+            .filter(**context)
+            .order_by(f"-{self.name}")
+            .values_list(self.name, flat=True)
+            .first()
+        )
+        return self.get_append_rank(previous)
+
+    def _unique_context_fields(
+        self,
+        model: type[models.Model],
+    ) -> tuple[models.Field[Any, Any], ...]:
+        """Resolve the one field-based unique context declaring this rank."""
+
+        contexts = [
+            tuple(name for name in constraint.fields if name != self.name)
+            for constraint in model._meta.constraints
+            if isinstance(constraint, models.UniqueConstraint)
+            and self.name in constraint.fields
+        ]
+        if len(contexts) != 1:
+            raise ImproperlyConfigured(
+                f"{model._meta.label}.{self.name} must belong to exactly one "
+                "field-based UniqueConstraint so a missing rank can be allocated."
+            )
+        return tuple(model._meta.get_field(name) for name in contexts[0])
+
     def to_python(self, value: Any) -> float | None:
         """Coerce a rank and reject NaN or infinity at validation boundaries."""
 

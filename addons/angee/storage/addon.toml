@@ -1,0 +1,20 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.storage"
+description = "Drives, folders, and content-addressed files with chunked uploads"
+keywords = ["storage", "files", "drives"]
+category = "Data"
+depends_on = ["angee.iam", "angee.resources", "angee.graphql", "django.contrib.contenttypes"]
+dependencies = [
+  "python-magic>=0.4.27",
+]
+
+[resources]
+master = [
+  { path = "resources/master/010_storage.mimetype.yaml", adopt = "mime_type" },
+]
+install = [
+  { path = "resources/install/010_storage.backend.yaml", adopt = "slug" },
+  { path = "resources/install/020_storage.drive.yaml", adopt = "slug" },
+]

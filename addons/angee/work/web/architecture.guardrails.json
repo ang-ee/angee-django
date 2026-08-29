@@ -1,0 +1,20 @@
+{
+  "criticalExports": [
+    {
+      "name": "QUEUE_MODEL",
+      "ownerFile": "src/resources.ts"
+    },
+    {
+      "name": "STAGE_MODEL",
+      "ownerFile": "src/resources.ts"
+    },
+    {
+      "name": "CYCLE_MODEL",
+      "ownerFile": "src/resources.ts"
+    },
+    {
+      "name": "estimateLabel",
+      "ownerFile": "src/estimates.ts"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.storage_integrate"
+description = "External storage mounts synchronized through integration bridges"
+keywords = ["storage", "integrate", "mounts"]
+category = "Integration"
+depends_on = ["angee.storage", "angee.integrate"]
+
+[resources]
+master = [{ path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" }]

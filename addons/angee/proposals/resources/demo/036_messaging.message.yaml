@@ -1,0 +1,55 @@
+_meta:
+  model: messaging.Message
+rows:
+  - xref: flat_cabanyal_offer
+    fields:
+      thread: proposals.flat_cabanyal_offer_thread
+      sender: proposals.landlord_cabanyal_email
+      platform: email
+      direction: inbound
+      status: synced
+      message_type: email
+      external_id: demo:flat:cabanyal:offer-1
+      preview: Bright two-bedroom near the market, available October 1.
+      sent_at: 2026-09-16 09:00:00+00:00
+      received_at: 2026-09-16 09:01:00+00:00
+      metadata:
+        proposal_capture:
+          cost: "1450.00"
+          currency: EUR
+          staffing: Direct landlord
+          timeframe_start: "2026-10-01"
+          timeframe_end: "2027-09-30"
+          confidence: high
+          valid_until: "2026-09-25"
+          answers:
+            location: Ten minutes to the market and tram; quiet rear bedrooms.
+            terms: Two months deposit; water included; twelve-month lease.
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: flat_russafa_offer
+    fields:
+      thread: proposals.flat_russafa_offer_thread
+      sender: proposals.landlord_russafa_email
+      platform: email
+      direction: inbound
+      status: synced
+      message_type: email
+      external_id: demo:flat:russafa:offer-1
+      preview: Renovated one-bedroom in Russafa with flexible start date.
+      sent_at: 2026-09-17 10:00:00+00:00
+      received_at: 2026-09-17 10:02:00+00:00
+      metadata:
+        proposal_capture:
+          cost: "1325.00"
+          currency: EUR
+          staffing: Managed by owner
+          timeframe_start: "2026-10-05"
+          timeframe_end: "2027-10-04"
+          confidence: medium
+          valid_until: "2026-09-24"
+          answers:
+            location: Central Russafa; bus at the corner; evening street noise.
+            terms: One month deposit; utilities separate; twelve-month lease.
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

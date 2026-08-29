@@ -1,0 +1,12 @@
+_meta:
+  model: workflows.Trigger
+rows:
+  - xref: note_publish_event_trigger
+    fields:
+      workflow: notes.note_publish_approval
+      kind: event
+      enabled: false
+      config:
+        model: notes.note
+        condition:
+          status: in_review

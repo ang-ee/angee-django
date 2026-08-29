@@ -1,0 +1,18 @@
+{
+  // The Angee framework development workspace: one consolidated framework
+  // worktree plus optional external addons. Open THIS file so editors and
+  // agents see every materialized slot. See AGENTS.md beside it for the rules.
+  "folders": [
+    { "name": "angee", "path": "angee" },
+    { "name": "angee-messaging-bridges", "path": "angee-messaging-bridges" },
+    { "name": "angee-arp", "path": "angee-arp" },
+    { "name": ".work", "path": ".work" }
+  ],
+  "settings": {
+    "files.watcherExclude": {
+      "**/node_modules/**": true,
+      "**/.venv/**": true,
+      "**/runtime/**": true
+    }
+  }
+}

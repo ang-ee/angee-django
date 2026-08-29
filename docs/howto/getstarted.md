@@ -196,10 +196,57 @@ materializes its framework sources and boots the complete stack.
    There is no `--dev` flag: `dev` is the default value of `-t/--template`.
    `angee dev` is the supported bring-up command for the whole local stack;
    `angee up` starts container Services only. Don't start Django, Vite, Daphne,
-   or workers by hand. The rendered manifest declares the framework repos as
-   sources; `angee dev` clones them, cuts the `src` workspace (every repo a
-   sibling worktree slot), and runs the composed host at the stack root against
-   those slots.
+   or workers by hand. The rendered manifest declares the consolidated framework
+   source plus optional external sources; `angee dev` materializes them, cuts the
+   `src` workspace, and runs the composed host at the stack root against those
+   worktrees.
+
+### Containerized mode and remote hosts
+
+`runtime_mode` is a template input (a recorded answer, so one stack can switch
+later): the default `process` runs Django, Celery, Vite, and Storybook as local
+processes, while `docker` runs every application service in containers — the
+host then needs only the `angee` binary, Docker, and git (no uv, node, or
+pnpm). Docker mode also runs a headless Playwright browser server and a
+Playwright MCP service behind the stack's edge, both reachable only with an
+operator-minted route token.
+
+```sh
+angee init myproject -t dev --input runtime_mode=docker
+```
+
+On a remote host, add a public DNS name and the edge serves the whole UX over
+automatic Let's Encrypt TLS (ports 443/80; the Vite UX at the domain root,
+agent chat at wss://<domain>/<service>/, Playwright MCP at
+https://<domain>/playwright-mcp/mcp):
+
+```sh
+angee init myproject -t dev --input runtime_mode=docker --input ingress_domain=dev.example.com
+```
+
+The stack root must live on the machine whose Docker daemon runs it (bind
+mounts resolve on that filesystem) — ssh in and run `angee` there rather than
+pointing a remote `DOCKER_HOST` at it. With the default `localhost` domain the
+edge stays plain HTTP on `edge_port` and the UX is published directly.
+
+### Upgrading a stack rendered before the monorepo
+
+Stacks rendered while the framework lived in split repositories declare
+`angee-django`, `angee-react`, `angee-base`, and `angee-templates` (and
+optionally `angee-examples`) as separate sources. `angee stack update` cannot
+retire those keys — migrate the manifest surgically instead:
+
+```sh
+# dry-run first; --apply backs up angee.yaml and rewrites sources + answers
+uv run python scripts/migrate-stack-to-monorepo.py "$ANGEE_ROOT" --apply
+angee --root "$ANGEE_ROOT" stack update --template --overwrite
+# re-cut each workspaces/src workspace once its slots are clean and pushed:
+angee --root "$ANGEE_ROOT" ws destroy src && angee --root "$ANGEE_ROOT" dev
+```
+
+The script replaces exactly the donor sources with the single `angee` source
+and preserves every custom source; the workspace destroy guard refuses to drop
+unpushed work, so land anything in flight first.
 
 ### Optional Ollama inference
 
@@ -226,8 +273,8 @@ To run one-shot management commands against the example (emit runtime sources,
 migrate, sync permissions, load data, check the GraphQL SDL), drive its
 `manage.py` through `uv` from the root — the full sequence is in
 [`AGENTS.md`](../../AGENTS.md) under "Run From The Root". To work on a change in
-isolation, create a src-style workspace — every framework repo as a sibling
-worktree slot pinned to `workspace/<name>`:
+isolation, create a src-style workspace — the consolidated framework source and
+optional external sources are pinned to `workspace/<name>`:
 
 ```sh
 # Resolve angee_root with .agents/skills/angee-workspace/SKILL.md.
@@ -276,7 +323,7 @@ docs that own each detail:
 - **[Development guidelines](../guidelines.md)** — the process and coding
   principles for all work here.
 - **[Backend guidelines](../backend/guidelines.md)** and
-  **[Frontend guidelines](/react/guidelines)** — the language-specific
+  **[Frontend guidelines](../frontend/guidelines.md)** — the language-specific
   rules.
 - **[Composer](../composer.md)** — how addon contracts become a runnable
   project.

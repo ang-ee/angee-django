@@ -1,0 +1,13 @@
+// Additive REBAC extension — contributes to a definition owned by another addon.
+// @rebac_package: extcontrib
+// @rebac_schema_revision: 1
+
+// `scopedemo/doc` is owned by `tests.scopedemo`; this fragment contributes a
+// `reviewer` relation and unions it into the `read` arm without editing the
+// owner's permissions.zed. django-zed-rebac never reads this file — Angee's
+// build-time merge folds it into the owning package's effective schema.
+definition scopedemo/doc {
+    relation reviewer: auth/user
+
+    permission read = reviewer
+}

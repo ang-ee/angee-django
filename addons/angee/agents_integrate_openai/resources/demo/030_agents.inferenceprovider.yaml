@@ -1,0 +1,10 @@
+# The OpenAI provider is a concrete integration child. The demo seeds baseline
+# model handles, and `refreshProviderModels` can replace/extend them from OpenAI
+# once the provider has a usable credential.
+- xref: provider_openai_demo
+  owner: iam.user_admin
+  vendor: integrate.openai
+  backend_class: openai
+  credential: agents_integrate_openai.cred_openai_demo
+  lifecycle: connected
+  name: OpenAI

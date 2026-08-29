@@ -1,0 +1,939 @@
+# ISO-4217 currency catalogue (master tier). `decimal_places` is the minor-unit
+# exponent used by Currency.round: 0 for JPY/KRW and the CFA/other zero-minor
+# currencies, 3 for the Gulf dinars (BHD/IQD/JOD/KWD/LYD/OMR/TND), else 2
+# (MGA/MRU carry ISO exponent 2). `symbol` is best-effort; the plain code stands
+# in where a currency has no widely distinct symbol. Idempotency is the resource
+# ledger's (source_addon, xref) identity — xref is the lower-cased ISO code.
+_meta:
+  model: money.Currency
+rows:
+  - xref: aed
+    fields:
+      code: AED
+      name: "UAE Dirham"
+      symbol: "د.إ"
+      decimal_places: 2
+  - xref: afn
+    fields:
+      code: AFN
+      name: "Afghan Afghani"
+      symbol: "؋"
+      decimal_places: 2
+  - xref: all
+    fields:
+      code: ALL
+      name: "Albanian Lek"
+      symbol: "L"
+      decimal_places: 2
+  - xref: amd
+    fields:
+      code: AMD
+      name: "Armenian Dram"
+      symbol: "֏"
+      decimal_places: 2
+  - xref: ang
+    fields:
+      code: ANG
+      name: "Netherlands Antillean Guilder"
+      symbol: "ƒ"
+      decimal_places: 2
+  - xref: aoa
+    fields:
+      code: AOA
+      name: "Angolan Kwanza"
+      symbol: "Kz"
+      decimal_places: 2
+  - xref: ars
+    fields:
+      code: ARS
+      name: "Argentine Peso"
+      symbol: "$"
+      decimal_places: 2
+  - xref: aud
+    fields:
+      code: AUD
+      name: "Australian Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: awg
+    fields:
+      code: AWG
+      name: "Aruban Florin"
+      symbol: "ƒ"
+      decimal_places: 2
+  - xref: azn
+    fields:
+      code: AZN
+      name: "Azerbaijani Manat"
+      symbol: "₼"
+      decimal_places: 2
+  - xref: bam
+    fields:
+      code: BAM
+      name: "Bosnia-Herzegovina Convertible Mark"
+      symbol: "KM"
+      decimal_places: 2
+  - xref: bbd
+    fields:
+      code: BBD
+      name: "Barbadian Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: bdt
+    fields:
+      code: BDT
+      name: "Bangladeshi Taka"
+      symbol: "৳"
+      decimal_places: 2
+  - xref: bgn
+    fields:
+      code: BGN
+      name: "Bulgarian Lev"
+      symbol: "лв"
+      decimal_places: 2
+  - xref: bhd
+    fields:
+      code: BHD
+      name: "Bahraini Dinar"
+      symbol: "د.ب"
+      decimal_places: 3
+  - xref: bif
+    fields:
+      code: BIF
+      name: "Burundian Franc"
+      symbol: "FBu"
+      decimal_places: 0
+  - xref: bmd
+    fields:
+      code: BMD
+      name: "Bermudian Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: bnd
+    fields:
+      code: BND
+      name: "Brunei Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: bob
+    fields:
+      code: BOB
+      name: "Bolivian Boliviano"
+      symbol: "Bs."
+      decimal_places: 2
+  - xref: brl
+    fields:
+      code: BRL
+      name: "Brazilian Real"
+      symbol: "R$"
+      decimal_places: 2
+  - xref: bsd
+    fields:
+      code: BSD
+      name: "Bahamian Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: btn
+    fields:
+      code: BTN
+      name: "Bhutanese Ngultrum"
+      symbol: "Nu."
+      decimal_places: 2
+  - xref: bwp
+    fields:
+      code: BWP
+      name: "Botswana Pula"
+      symbol: "P"
+      decimal_places: 2
+  - xref: byn
+    fields:
+      code: BYN
+      name: "Belarusian Ruble"
+      symbol: "Br"
+      decimal_places: 2
+  - xref: bzd
+    fields:
+      code: BZD
+      name: "Belize Dollar"
+      symbol: "BZ$"
+      decimal_places: 2
+  - xref: cad
+    fields:
+      code: CAD
+      name: "Canadian Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: cdf
+    fields:
+      code: CDF
+      name: "Congolese Franc"
+      symbol: "FC"
+      decimal_places: 2
+  - xref: chf
+    fields:
+      code: CHF
+      name: "Swiss Franc"
+      symbol: "CHF"
+      decimal_places: 2
+  - xref: clp
+    fields:
+      code: CLP
+      name: "Chilean Peso"
+      symbol: "$"
+      decimal_places: 0
+  - xref: cny
+    fields:
+      code: CNY
+      name: "Chinese Yuan"
+      symbol: "¥"
+      decimal_places: 2
+  - xref: cop
+    fields:
+      code: COP
+      name: "Colombian Peso"
+      symbol: "$"
+      decimal_places: 2
+  - xref: crc
+    fields:
+      code: CRC
+      name: "Costa Rican Colón"
+      symbol: "₡"
+      decimal_places: 2
+  - xref: cup
+    fields:
+      code: CUP
+      name: "Cuban Peso"
+      symbol: "$"
+      decimal_places: 2
+  - xref: cve
+    fields:
+      code: CVE
+      name: "Cape Verdean Escudo"
+      symbol: "$"
+      decimal_places: 2
+  - xref: czk
+    fields:
+      code: CZK
+      name: "Czech Koruna"
+      symbol: "Kč"
+      decimal_places: 2
+  - xref: djf
+    fields:
+      code: DJF
+      name: "Djiboutian Franc"
+      symbol: "Fdj"
+      decimal_places: 0
+  - xref: dkk
+    fields:
+      code: DKK
+      name: "Danish Krone"
+      symbol: "kr"
+      decimal_places: 2
+  - xref: dop
+    fields:
+      code: DOP
+      name: "Dominican Peso"
+      symbol: "RD$"
+      decimal_places: 2
+  - xref: dzd
+    fields:
+      code: DZD
+      name: "Algerian Dinar"
+      symbol: "دج"
+      decimal_places: 2
+  - xref: egp
+    fields:
+      code: EGP
+      name: "Egyptian Pound"
+      symbol: "£"
+      decimal_places: 2
+  - xref: ern
+    fields:
+      code: ERN
+      name: "Eritrean Nakfa"
+      symbol: "Nfk"
+      decimal_places: 2
+  - xref: etb
+    fields:
+      code: ETB
+      name: "Ethiopian Birr"
+      symbol: "Br"
+      decimal_places: 2
+  - xref: eur
+    fields:
+      code: EUR
+      name: "Euro"
+      symbol: "€"
+      decimal_places: 2
+  - xref: fjd
+    fields:
+      code: FJD
+      name: "Fijian Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: fkp
+    fields:
+      code: FKP
+      name: "Falkland Islands Pound"
+      symbol: "£"
+      decimal_places: 2
+  - xref: gbp
+    fields:
+      code: GBP
+      name: "Pound Sterling"
+      symbol: "£"
+      decimal_places: 2
+  - xref: gel
+    fields:
+      code: GEL
+      name: "Georgian Lari"
+      symbol: "₾"
+      decimal_places: 2
+  - xref: ghs
+    fields:
+      code: GHS
+      name: "Ghanaian Cedi"
+      symbol: "₵"
+      decimal_places: 2
+  - xref: gip
+    fields:
+      code: GIP
+      name: "Gibraltar Pound"
+      symbol: "£"
+      decimal_places: 2
+  - xref: gmd
+    fields:
+      code: GMD
+      name: "Gambian Dalasi"
+      symbol: "D"
+      decimal_places: 2
+  - xref: gnf
+    fields:
+      code: GNF
+      name: "Guinean Franc"
+      symbol: "FG"
+      decimal_places: 0
+  - xref: gtq
+    fields:
+      code: GTQ
+      name: "Guatemalan Quetzal"
+      symbol: "Q"
+      decimal_places: 2
+  - xref: gyd
+    fields:
+      code: GYD
+      name: "Guyanaese Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: hkd
+    fields:
+      code: HKD
+      name: "Hong Kong Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: hnl
+    fields:
+      code: HNL
+      name: "Honduran Lempira"
+      symbol: "L"
+      decimal_places: 2
+  - xref: htg
+    fields:
+      code: HTG
+      name: "Haitian Gourde"
+      symbol: "G"
+      decimal_places: 2
+  - xref: huf
+    fields:
+      code: HUF
+      name: "Hungarian Forint"
+      symbol: "Ft"
+      decimal_places: 2
+  - xref: idr
+    fields:
+      code: IDR
+      name: "Indonesian Rupiah"
+      symbol: "Rp"
+      decimal_places: 2
+  - xref: ils
+    fields:
+      code: ILS
+      name: "Israeli New Shekel"
+      symbol: "₪"
+      decimal_places: 2
+  - xref: inr
+    fields:
+      code: INR
+      name: "Indian Rupee"
+      symbol: "₹"
+      decimal_places: 2
+  - xref: iqd
+    fields:
+      code: IQD
+      name: "Iraqi Dinar"
+      symbol: "ع.د"
+      decimal_places: 3
+  - xref: irr
+    fields:
+      code: IRR
+      name: "Iranian Rial"
+      symbol: "﷼"
+      decimal_places: 2
+  - xref: isk
+    fields:
+      code: ISK
+      name: "Icelandic Króna"
+      symbol: "kr"
+      decimal_places: 0
+  - xref: jmd
+    fields:
+      code: JMD
+      name: "Jamaican Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: jod
+    fields:
+      code: JOD
+      name: "Jordanian Dinar"
+      symbol: "د.ا"
+      decimal_places: 3
+  - xref: jpy
+    fields:
+      code: JPY
+      name: "Japanese Yen"
+      symbol: "¥"
+      decimal_places: 0
+  - xref: kes
+    fields:
+      code: KES
+      name: "Kenyan Shilling"
+      symbol: "KSh"
+      decimal_places: 2
+  - xref: kgs
+    fields:
+      code: KGS
+      name: "Kyrgystani Som"
+      symbol: "с"
+      decimal_places: 2
+  - xref: khr
+    fields:
+      code: KHR
+      name: "Cambodian Riel"
+      symbol: "៛"
+      decimal_places: 2
+  - xref: kmf
+    fields:
+      code: KMF
+      name: "Comorian Franc"
+      symbol: "CF"
+      decimal_places: 0
+  - xref: kpw
+    fields:
+      code: KPW
+      name: "North Korean Won"
+      symbol: "₩"
+      decimal_places: 2
+  - xref: krw
+    fields:
+      code: KRW
+      name: "South Korean Won"
+      symbol: "₩"
+      decimal_places: 0
+  - xref: kwd
+    fields:
+      code: KWD
+      name: "Kuwaiti Dinar"
+      symbol: "د.ك"
+      decimal_places: 3
+  - xref: kyd
+    fields:
+      code: KYD
+      name: "Cayman Islands Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: kzt
+    fields:
+      code: KZT
+      name: "Kazakhstani Tenge"
+      symbol: "₸"
+      decimal_places: 2
+  - xref: lak
+    fields:
+      code: LAK
+      name: "Lao Kip"
+      symbol: "₭"
+      decimal_places: 2
+  - xref: lbp
+    fields:
+      code: LBP
+      name: "Lebanese Pound"
+      symbol: "ل.ل"
+      decimal_places: 2
+  - xref: lkr
+    fields:
+      code: LKR
+      name: "Sri Lankan Rupee"
+      symbol: "Rs"
+      decimal_places: 2
+  - xref: lrd
+    fields:
+      code: LRD
+      name: "Liberian Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: lsl
+    fields:
+      code: LSL
+      name: "Lesotho Loti"
+      symbol: "L"
+      decimal_places: 2
+  - xref: lyd
+    fields:
+      code: LYD
+      name: "Libyan Dinar"
+      symbol: "ل.د"
+      decimal_places: 3
+  - xref: mad
+    fields:
+      code: MAD
+      name: "Moroccan Dirham"
+      symbol: "د.م."
+      decimal_places: 2
+  - xref: mdl
+    fields:
+      code: MDL
+      name: "Moldovan Leu"
+      symbol: "L"
+      decimal_places: 2
+  - xref: mga
+    fields:
+      code: MGA
+      name: "Malagasy Ariary"
+      symbol: "Ar"
+      decimal_places: 2
+  - xref: mkd
+    fields:
+      code: MKD
+      name: "Macedonian Denar"
+      symbol: "ден"
+      decimal_places: 2
+  - xref: mmk
+    fields:
+      code: MMK
+      name: "Myanmar Kyat"
+      symbol: "K"
+      decimal_places: 2
+  - xref: mnt
+    fields:
+      code: MNT
+      name: "Mongolian Tugrik"
+      symbol: "₮"
+      decimal_places: 2
+  - xref: mop
+    fields:
+      code: MOP
+      name: "Macanese Pataca"
+      symbol: "MOP$"
+      decimal_places: 2
+  - xref: mru
+    fields:
+      code: MRU
+      name: "Mauritanian Ouguiya"
+      symbol: "UM"
+      decimal_places: 2
+  - xref: mur
+    fields:
+      code: MUR
+      name: "Mauritian Rupee"
+      symbol: "₨"
+      decimal_places: 2
+  - xref: mvr
+    fields:
+      code: MVR
+      name: "Maldivian Rufiyaa"
+      symbol: "Rf"
+      decimal_places: 2
+  - xref: mwk
+    fields:
+      code: MWK
+      name: "Malawian Kwacha"
+      symbol: "MK"
+      decimal_places: 2
+  - xref: mxn
+    fields:
+      code: MXN
+      name: "Mexican Peso"
+      symbol: "$"
+      decimal_places: 2
+  - xref: myr
+    fields:
+      code: MYR
+      name: "Malaysian Ringgit"
+      symbol: "RM"
+      decimal_places: 2
+  - xref: mzn
+    fields:
+      code: MZN
+      name: "Mozambican Metical"
+      symbol: "MT"
+      decimal_places: 2
+  - xref: nad
+    fields:
+      code: NAD
+      name: "Namibian Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: ngn
+    fields:
+      code: NGN
+      name: "Nigerian Naira"
+      symbol: "₦"
+      decimal_places: 2
+  - xref: nio
+    fields:
+      code: NIO
+      name: "Nicaraguan Córdoba"
+      symbol: "C$"
+      decimal_places: 2
+  - xref: nok
+    fields:
+      code: NOK
+      name: "Norwegian Krone"
+      symbol: "kr"
+      decimal_places: 2
+  - xref: npr
+    fields:
+      code: NPR
+      name: "Nepalese Rupee"
+      symbol: "₨"
+      decimal_places: 2
+  - xref: nzd
+    fields:
+      code: NZD
+      name: "New Zealand Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: omr
+    fields:
+      code: OMR
+      name: "Omani Rial"
+      symbol: "ر.ع."
+      decimal_places: 3
+  - xref: pab
+    fields:
+      code: PAB
+      name: "Panamanian Balboa"
+      symbol: "B/."
+      decimal_places: 2
+  - xref: pen
+    fields:
+      code: PEN
+      name: "Peruvian Sol"
+      symbol: "S/"
+      decimal_places: 2
+  - xref: pgk
+    fields:
+      code: PGK
+      name: "Papua New Guinean Kina"
+      symbol: "K"
+      decimal_places: 2
+  - xref: php
+    fields:
+      code: PHP
+      name: "Philippine Peso"
+      symbol: "₱"
+      decimal_places: 2
+  - xref: pkr
+    fields:
+      code: PKR
+      name: "Pakistani Rupee"
+      symbol: "₨"
+      decimal_places: 2
+  - xref: pln
+    fields:
+      code: PLN
+      name: "Polish Złoty"
+      symbol: "zł"
+      decimal_places: 2
+  - xref: pyg
+    fields:
+      code: PYG
+      name: "Paraguayan Guaraní"
+      symbol: "₲"
+      decimal_places: 0
+  - xref: qar
+    fields:
+      code: QAR
+      name: "Qatari Riyal"
+      symbol: "ر.ق"
+      decimal_places: 2
+  - xref: ron
+    fields:
+      code: RON
+      name: "Romanian Leu"
+      symbol: "lei"
+      decimal_places: 2
+  - xref: rsd
+    fields:
+      code: RSD
+      name: "Serbian Dinar"
+      symbol: "дин."
+      decimal_places: 2
+  - xref: rub
+    fields:
+      code: RUB
+      name: "Russian Ruble"
+      symbol: "₽"
+      decimal_places: 2
+  - xref: rwf
+    fields:
+      code: RWF
+      name: "Rwandan Franc"
+      symbol: "FRw"
+      decimal_places: 0
+  - xref: sar
+    fields:
+      code: SAR
+      name: "Saudi Riyal"
+      symbol: "﷼"
+      decimal_places: 2
+  - xref: sbd
+    fields:
+      code: SBD
+      name: "Solomon Islands Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: scr
+    fields:
+      code: SCR
+      name: "Seychellois Rupee"
+      symbol: "₨"
+      decimal_places: 2
+  - xref: sdg
+    fields:
+      code: SDG
+      name: "Sudanese Pound"
+      symbol: "ج.س."
+      decimal_places: 2
+  - xref: sek
+    fields:
+      code: SEK
+      name: "Swedish Krona"
+      symbol: "kr"
+      decimal_places: 2
+  - xref: sgd
+    fields:
+      code: SGD
+      name: "Singapore Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: shp
+    fields:
+      code: SHP
+      name: "Saint Helena Pound"
+      symbol: "£"
+      decimal_places: 2
+  - xref: sle
+    fields:
+      code: SLE
+      name: "Sierra Leonean Leone"
+      symbol: "Le"
+      decimal_places: 2
+  - xref: sos
+    fields:
+      code: SOS
+      name: "Somali Shilling"
+      symbol: "Sh"
+      decimal_places: 2
+  - xref: srd
+    fields:
+      code: SRD
+      name: "Surinamese Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: ssp
+    fields:
+      code: SSP
+      name: "South Sudanese Pound"
+      symbol: "£"
+      decimal_places: 2
+  - xref: stn
+    fields:
+      code: STN
+      name: "São Tomé and Príncipe Dobra"
+      symbol: "Db"
+      decimal_places: 2
+  - xref: svc
+    fields:
+      code: SVC
+      name: "Salvadoran Colón"
+      symbol: "₡"
+      decimal_places: 2
+  - xref: syp
+    fields:
+      code: SYP
+      name: "Syrian Pound"
+      symbol: "£"
+      decimal_places: 2
+  - xref: szl
+    fields:
+      code: SZL
+      name: "Swazi Lilangeni"
+      symbol: "L"
+      decimal_places: 2
+  - xref: thb
+    fields:
+      code: THB
+      name: "Thai Baht"
+      symbol: "฿"
+      decimal_places: 2
+  - xref: tjs
+    fields:
+      code: TJS
+      name: "Tajikistani Somoni"
+      symbol: "SM"
+      decimal_places: 2
+  - xref: tmt
+    fields:
+      code: TMT
+      name: "Turkmenistani Manat"
+      symbol: "m"
+      decimal_places: 2
+  - xref: tnd
+    fields:
+      code: TND
+      name: "Tunisian Dinar"
+      symbol: "د.ت"
+      decimal_places: 3
+  - xref: top
+    fields:
+      code: TOP
+      name: "Tongan Paʻanga"
+      symbol: "T$"
+      decimal_places: 2
+  - xref: try
+    fields:
+      code: TRY
+      name: "Turkish Lira"
+      symbol: "₺"
+      decimal_places: 2
+  - xref: ttd
+    fields:
+      code: TTD
+      name: "Trinidad and Tobago Dollar"
+      symbol: "TT$"
+      decimal_places: 2
+  - xref: twd
+    fields:
+      code: TWD
+      name: "New Taiwan Dollar"
+      symbol: "NT$"
+      decimal_places: 2
+  - xref: tzs
+    fields:
+      code: TZS
+      name: "Tanzanian Shilling"
+      symbol: "TSh"
+      decimal_places: 2
+  - xref: uah
+    fields:
+      code: UAH
+      name: "Ukrainian Hryvnia"
+      symbol: "₴"
+      decimal_places: 2
+  - xref: ugx
+    fields:
+      code: UGX
+      name: "Ugandan Shilling"
+      symbol: "USh"
+      decimal_places: 0
+  - xref: usd
+    fields:
+      code: USD
+      name: "US Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: uyu
+    fields:
+      code: UYU
+      name: "Uruguayan Peso"
+      symbol: "$U"
+      decimal_places: 2
+  - xref: uzs
+    fields:
+      code: UZS
+      name: "Uzbekistani Som"
+      symbol: "сўм"
+      decimal_places: 2
+  - xref: ves
+    fields:
+      code: VES
+      name: "Venezuelan Bolívar"
+      symbol: "Bs.S"
+      decimal_places: 2
+  - xref: vnd
+    fields:
+      code: VND
+      name: "Vietnamese Dong"
+      symbol: "₫"
+      decimal_places: 0
+  - xref: vuv
+    fields:
+      code: VUV
+      name: "Vanuatu Vatu"
+      symbol: "VT"
+      decimal_places: 0
+  - xref: wst
+    fields:
+      code: WST
+      name: "Samoan Tala"
+      symbol: "WS$"
+      decimal_places: 2
+  - xref: xaf
+    fields:
+      code: XAF
+      name: "Central African CFA Franc"
+      symbol: "FCFA"
+      decimal_places: 0
+  - xref: xcd
+    fields:
+      code: XCD
+      name: "East Caribbean Dollar"
+      symbol: "$"
+      decimal_places: 2
+  - xref: xof
+    fields:
+      code: XOF
+      name: "West African CFA Franc"
+      symbol: "CFA"
+      decimal_places: 0
+  - xref: xpf
+    fields:
+      code: XPF
+      name: "CFP Franc"
+      symbol: "₣"
+      decimal_places: 0
+  - xref: yer
+    fields:
+      code: YER
+      name: "Yemeni Rial"
+      symbol: "﷼"
+      decimal_places: 2
+  - xref: zar
+    fields:
+      code: ZAR
+      name: "South African Rand"
+      symbol: "R"
+      decimal_places: 2
+  - xref: zmw
+    fields:
+      code: ZMW
+      name: "Zambian Kwacha"
+      symbol: "ZK"
+      decimal_places: 2
+  - xref: zwg
+    fields:
+      code: ZWG
+      name: "Zimbabwe Gold"
+      symbol: "ZiG"
+      decimal_places: 2

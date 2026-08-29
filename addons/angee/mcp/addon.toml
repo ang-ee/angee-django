@@ -1,0 +1,15 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.mcp"
+description = "An MCP server at /mcp — exposes addon tools to agents over authenticated StreamableHTTP"
+keywords = ["mcp", "tools"]
+category = "Agents"
+depends_on = ["angee.iam"]
+dependencies = [
+  "fastmcp>=3.4.2,<4",
+  "mcp>=1.2",
+]
+
+[mcp]
+tools = "mcp_tools.register"

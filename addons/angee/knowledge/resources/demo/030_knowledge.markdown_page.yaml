@@ -1,0 +1,40 @@
+_meta:
+  model: knowledge.MarkdownPage
+rows:
+  - xref: md_getting_started
+    fields:
+      page: knowledge.page_getting_started
+      body: |
+        # Getting Started
+
+        Welcome to the **Handbook**. Start here, then read the
+        [[Architecture]] overview to see how the pieces fit together.
+
+        - Pages form a tree inside a vault.
+        - A note carries a markdown body; a folder just groups pages.
+        - Link pages with `[[Wikilinks]]` to build backlinks.
+  - xref: md_architecture
+    fields:
+      page: knowledge.page_architecture
+      body: |
+        # Architecture
+
+        Angee composes boring, proven libraries into one product surface.
+
+        See [[Getting Started]] for the basics, and [[Wikilinks]] for how
+        pages reference one another.
+
+        ## Layers
+
+        1. The framework owns the seams.
+        2. Addons own the product logic.
+        3. The composer turns contracts into a runnable project.
+  - xref: md_wikilinks
+    fields:
+      page: knowledge.page_wikilinks
+      body: |
+        # Wikilinks
+
+        Type `[[Page title]]` to link another page in the same vault. A resolved
+        link becomes a **backlink** on the target — open [[Architecture]] and
+        you'll find this page listed in its backlinks panel.

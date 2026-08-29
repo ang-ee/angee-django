@@ -1,0 +1,767 @@
+{
+  "name": "@angee/ui",
+  "version": "0.0.0",
+  "license": "LGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ang-ee/angee-django.git",
+    "directory": "packages/ui"
+  },
+  "homepage": "https://docs.angee.ai/react/",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./styles.css": "./src/styles/index.css",
+    "./testing": {
+      "types": "./src/testing.tsx",
+      "import": "./src/testing.tsx"
+    },
+    "./lib": {
+      "types": "./src/lib/index.ts",
+      "import": "./src/lib/index.ts"
+    },
+    "./lib/slot-outlet": {
+      "types": "./src/lib/slot-outlet.tsx",
+      "import": "./src/lib/slot-outlet.tsx"
+    },
+    "./lib/variant-context": {
+      "types": "./src/lib/variant-context.tsx",
+      "import": "./src/lib/variant-context.tsx"
+    },
+    "./lib/*": {
+      "types": "./src/lib/*.ts",
+      "import": "./src/lib/*.ts"
+    },
+    "./chrome/Glyph": {
+      "types": "./src/chrome/Glyph.tsx",
+      "import": "./src/chrome/Glyph.tsx"
+    },
+    "./chrome/AgentGlyph": {
+      "types": "./src/chrome/AgentGlyph.tsx",
+      "import": "./src/chrome/AgentGlyph.tsx"
+    },
+    "./chrome/icon-registry": {
+      "types": "./src/chrome/icon-registry.ts",
+      "import": "./src/chrome/icon-registry.ts"
+    },
+    "./i18n": {
+      "types": "./src/i18n/index.ts",
+      "import": "./src/i18n/index.ts"
+    },
+    "./runtime": {
+      "types": "./src/runtime/index.ts",
+      "import": "./src/runtime/index.ts"
+    },
+    "./runtime/make-context": {
+      "types": "./src/runtime/make-context.ts",
+      "import": "./src/runtime/make-context.ts"
+    },
+    "./runtime/contracts": {
+      "types": "./src/runtime/contracts.ts",
+      "import": "./src/runtime/contracts.ts"
+    },
+    "./runtime/*": {
+      "types": "./src/runtime/*.ts",
+      "import": "./src/runtime/*.ts"
+    },
+    "./i18n/en": {
+      "types": "./src/i18n/en.ts",
+      "import": "./src/i18n/en.ts"
+    },
+    "./ui/widget-control": {
+      "types": "./src/ui/widget-control.ts",
+      "import": "./src/ui/widget-control.ts"
+    },
+    "./ui/*": {
+      "types": "./src/ui/*.tsx",
+      "import": "./src/ui/*.tsx"
+    },
+    "./widgets/index": {
+      "types": "./src/widgets/index.ts",
+      "import": "./src/widgets/index.ts"
+    },
+    "./widgets/codemirror-editor": {
+      "types": "./src/widgets/codemirror-editor.ts",
+      "import": "./src/widgets/codemirror-editor.ts"
+    },
+    "./widgets/date-format": {
+      "types": "./src/widgets/date-format.ts",
+      "import": "./src/widgets/date-format.ts"
+    },
+    "./widgets/label": {
+      "types": "./src/widgets/label.ts",
+      "import": "./src/widgets/label.ts"
+    },
+    "./widgets/markdown-codemirror": {
+      "types": "./src/widgets/markdown-codemirror.ts",
+      "import": "./src/widgets/markdown-codemirror.ts"
+    },
+    "./widgets/status-tones": {
+      "types": "./src/widgets/status-tones.ts",
+      "import": "./src/widgets/status-tones.ts"
+    },
+    "./widgets/types": {
+      "types": "./src/widgets/types.ts",
+      "import": "./src/widgets/types.ts"
+    },
+    "./widgets/*": {
+      "types": "./src/widgets/*.tsx",
+      "import": "./src/widgets/*.tsx"
+    },
+    "./feedback/index": {
+      "types": "./src/feedback/index.ts",
+      "import": "./src/feedback/index.ts"
+    },
+    "./feedback/error-message": {
+      "types": "./src/feedback/error-message.ts",
+      "import": "./src/feedback/error-message.ts"
+    },
+    "./feedback/refine-notification": {
+      "types": "./src/feedback/refine-notification.ts",
+      "import": "./src/feedback/refine-notification.ts"
+    },
+    "./feedback/use-busy-run": {
+      "types": "./src/feedback/use-busy-run.ts",
+      "import": "./src/feedback/use-busy-run.ts"
+    },
+    "./feedback/*": {
+      "types": "./src/feedback/*.tsx",
+      "import": "./src/feedback/*.tsx"
+    },
+    "./chrome/app-rail-model": {
+      "types": "./src/chrome/app-rail-model.ts",
+      "import": "./src/chrome/app-rail-model.ts"
+    },
+    "./chrome/app-rail-preferences": {
+      "types": "./src/chrome/app-rail-preferences.ts",
+      "import": "./src/chrome/app-rail-preferences.ts"
+    },
+    "./chrome/index": {
+      "types": "./src/chrome/index.ts",
+      "import": "./src/chrome/index.ts"
+    },
+    "./chrome/menu-tree": {
+      "types": "./src/chrome/menu-tree.ts",
+      "import": "./src/chrome/menu-tree.ts"
+    },
+    "./chrome/refine-menu": {
+      "types": "./src/chrome/refine-menu.ts",
+      "import": "./src/chrome/refine-menu.ts"
+    },
+    "./chrome/*": {
+      "types": "./src/chrome/*.tsx",
+      "import": "./src/chrome/*.tsx"
+    },
+    "./fragments/index": {
+      "types": "./src/fragments/index.ts",
+      "import": "./src/fragments/index.ts"
+    },
+    "./fragments/*": {
+      "types": "./src/fragments/*.tsx",
+      "import": "./src/fragments/*.tsx"
+    },
+    "./layouts/index": {
+      "types": "./src/layouts/index.ts",
+      "import": "./src/layouts/index.ts"
+    },
+    "./layouts/slots": {
+      "types": "./src/layouts/slots.ts",
+      "import": "./src/layouts/slots.ts"
+    },
+    "./layouts/*": {
+      "types": "./src/layouts/*.tsx",
+      "import": "./src/layouts/*.tsx"
+    },
+    "./page/index": {
+      "types": "./src/page/index.ts",
+      "import": "./src/page/index.ts"
+    },
+    "./page/*": {
+      "types": "./src/page/*.tsx",
+      "import": "./src/page/*.tsx"
+    },
+    "./toolbars/index": {
+      "types": "./src/toolbars/index.ts",
+      "import": "./src/toolbars/index.ts"
+    },
+    "./toolbars/*": {
+      "types": "./src/toolbars/*.tsx",
+      "import": "./src/toolbars/*.tsx"
+    },
+    "./preview/index": {
+      "types": "./src/preview/index.ts",
+      "import": "./src/preview/index.ts"
+    },
+    "./preview/model": {
+      "types": "./src/preview/model.ts",
+      "import": "./src/preview/model.ts"
+    },
+    "./preview/registry": {
+      "types": "./src/preview/registry.ts",
+      "import": "./src/preview/registry.ts"
+    },
+    "./preview/*": {
+      "types": "./src/preview/*.tsx",
+      "import": "./src/preview/*.tsx"
+    },
+    "./communication/index": {
+      "types": "./src/communication/index.ts",
+      "import": "./src/communication/index.ts"
+    },
+    "./communication/*": {
+      "types": "./src/communication/*.tsx",
+      "import": "./src/communication/*.tsx"
+    },
+    "./views/DeletePreviewTree": {
+      "types": "./src/views/tree/DeletePreviewTree.tsx",
+      "import": "./src/views/tree/DeletePreviewTree.tsx"
+    },
+    "./views/Form": {
+      "types": "./src/views/form/Form.tsx",
+      "import": "./src/views/form/Form.tsx"
+    },
+    "./views/FormView": {
+      "types": "./src/views/form/FormView.tsx",
+      "import": "./src/views/form/FormView.tsx"
+    },
+    "./views/List": {
+      "types": "./src/views/resource/List.tsx",
+      "import": "./src/views/resource/List.tsx"
+    },
+    "./views/ListView": {
+      "types": "./src/views/resource/ListView.tsx",
+      "import": "./src/views/resource/ListView.tsx"
+    },
+    "./views/RelationPicker": {
+      "types": "./src/views/relation/RelationPicker.tsx",
+      "import": "./src/views/relation/RelationPicker.tsx"
+    },
+    "./views/ResourceList": {
+      "types": "./src/views/resource/ResourceList.tsx",
+      "import": "./src/views/resource/ResourceList.tsx"
+    },
+    "./views/RowsListView": {
+      "types": "./src/views/resource/RowsListView.tsx",
+      "import": "./src/views/resource/RowsListView.tsx"
+    },
+    "./views/documents": {
+      "types": "./src/views/resource/documents.ts",
+      "import": "./src/views/resource/documents.ts"
+    },
+    "./views/enum-options": {
+      "types": "./src/views/relation/enum-options.ts",
+      "import": "./src/views/relation/enum-options.ts"
+    },
+    "./views/facet-query": {
+      "types": "./src/views/relation/facet-query.ts",
+      "import": "./src/views/relation/facet-query.ts"
+    },
+    "./views/form-view-surface": {
+      "types": "./src/views/form/form-view-surface.ts",
+      "import": "./src/views/form/form-view-surface.ts"
+    },
+    "./views/index": {
+      "types": "./src/views/index.ts",
+      "import": "./src/views/index.ts"
+    },
+    "./views/model-metadata-defaults": {
+      "types": "./src/views/resource/model-metadata-defaults.ts",
+      "import": "./src/views/resource/model-metadata-defaults.ts"
+    },
+    "./views/page/index": {
+      "types": "./src/views/page/index.ts",
+      "import": "./src/views/page/index.ts"
+    },
+    "./views/page/types": {
+      "types": "./src/views/page/types.ts",
+      "import": "./src/views/page/types.ts"
+    },
+    "./views/record-action": {
+      "types": "./src/views/resource/record-action.ts",
+      "import": "./src/views/resource/record-action.ts"
+    },
+    "./views/relation-facet": {
+      "types": "./src/views/relation/relation-facet.ts",
+      "import": "./src/views/relation/relation-facet.ts"
+    },
+    "./views/relation-options": {
+      "types": "./src/views/relation/relation-options.ts",
+      "import": "./src/views/relation/relation-options.ts"
+    },
+    "./views/resource-routing": {
+      "types": "./src/views/resource/resource-routing.ts",
+      "import": "./src/views/resource/resource-routing.ts"
+    },
+    "./views/resource-view-context": {
+      "types": "./src/views/resource/resource-view-context.tsx",
+      "import": "./src/views/resource/resource-view-context.tsx"
+    },
+    "./views/resource-view-list-body": {
+      "types": "./src/views/resource/resource-view-list-body.tsx",
+      "import": "./src/views/resource/resource-view-list-body.tsx"
+    },
+    "./views/resource-view-model": {
+      "types": "./src/views/resource/resource-view-model.ts",
+      "import": "./src/views/resource/resource-view-model.ts"
+    },
+    "./views/resource-view-surface": {
+      "types": "./src/views/resource/resource-view-surface.ts",
+      "import": "./src/views/resource/resource-view-surface.ts"
+    },
+    "./views/resource-view-types": {
+      "types": "./src/views/resource/resource-view-types.ts",
+      "import": "./src/views/resource/resource-view-types.ts"
+    },
+    "./views/resource-view-utils": {
+      "types": "./src/views/resource/resource-view-utils.ts",
+      "import": "./src/views/resource/resource-view-utils.ts"
+    },
+    "./views/scalar-facet": {
+      "types": "./src/views/relation/scalar-facet.ts",
+      "import": "./src/views/relation/scalar-facet.ts"
+    },
+    "./views/useBulkDelete": {
+      "types": "./src/views/resource/useBulkDelete.ts",
+      "import": "./src/views/resource/useBulkDelete.ts"
+    },
+    "./views/useScopedTreeExplorer": {
+      "types": "./src/views/tree/useScopedTreeExplorer.ts",
+      "import": "./src/views/tree/useScopedTreeExplorer.ts"
+    },
+    "./views/validation-errors": {
+      "types": "./src/views/form/validation-errors.ts",
+      "import": "./src/views/form/validation-errors.ts"
+    },
+    "./data/revisions": {
+      "types": "./src/data/revisions.ts",
+      "import": "./src/data/revisions.ts"
+    },
+    "./data/errors": {
+      "types": "./src/data/errors.ts",
+      "import": "./src/data/errors.ts"
+    },
+    "./data/*": {
+      "types": "./src/data/*.ts",
+      "import": "./src/data/*.ts"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./styles.css": "./dist/styles/index.css",
+      "./testing": {
+        "types": "./dist/testing.d.ts",
+        "default": "./dist/testing.js"
+      },
+      "./lib": {
+        "types": "./dist/lib/index.d.ts",
+        "default": "./dist/lib/index.js"
+      },
+      "./lib/slot-outlet": {
+        "types": "./dist/lib/slot-outlet.d.ts",
+        "default": "./dist/lib/slot-outlet.js"
+      },
+      "./lib/variant-context": {
+        "types": "./dist/lib/variant-context.d.ts",
+        "default": "./dist/lib/variant-context.js"
+      },
+      "./lib/*": {
+        "types": "./dist/lib/*.d.ts",
+        "default": "./dist/lib/*.js"
+      },
+      "./chrome/Glyph": {
+        "types": "./dist/chrome/Glyph.d.ts",
+        "default": "./dist/chrome/Glyph.js"
+      },
+      "./chrome/AgentGlyph": {
+        "types": "./dist/chrome/AgentGlyph.d.ts",
+        "default": "./dist/chrome/AgentGlyph.js"
+      },
+      "./chrome/icon-registry": {
+        "types": "./dist/chrome/icon-registry.d.ts",
+        "default": "./dist/chrome/icon-registry.js"
+      },
+      "./i18n": {
+        "types": "./dist/i18n/index.d.ts",
+        "default": "./dist/i18n/index.js"
+      },
+      "./runtime": {
+        "types": "./dist/runtime/index.d.ts",
+        "default": "./dist/runtime/index.js"
+      },
+      "./runtime/make-context": {
+        "types": "./dist/runtime/make-context.d.ts",
+        "default": "./dist/runtime/make-context.js"
+      },
+      "./runtime/contracts": {
+        "types": "./dist/runtime/contracts.d.ts",
+        "default": "./dist/runtime/contracts.js"
+      },
+      "./runtime/*": {
+        "types": "./dist/runtime/*.d.ts",
+        "default": "./dist/runtime/*.js"
+      },
+      "./i18n/en": {
+        "types": "./dist/i18n/en.d.ts",
+        "default": "./dist/i18n/en.js"
+      },
+      "./ui/widget-control": {
+        "types": "./dist/ui/widget-control.d.ts",
+        "default": "./dist/ui/widget-control.js"
+      },
+      "./ui/*": {
+        "types": "./dist/ui/*.d.ts",
+        "default": "./dist/ui/*.js"
+      },
+      "./widgets/index": {
+        "types": "./dist/widgets/index.d.ts",
+        "default": "./dist/widgets/index.js"
+      },
+      "./widgets/codemirror-editor": {
+        "types": "./dist/widgets/codemirror-editor.d.ts",
+        "default": "./dist/widgets/codemirror-editor.js"
+      },
+      "./widgets/date-format": {
+        "types": "./dist/widgets/date-format.d.ts",
+        "default": "./dist/widgets/date-format.js"
+      },
+      "./widgets/label": {
+        "types": "./dist/widgets/label.d.ts",
+        "default": "./dist/widgets/label.js"
+      },
+      "./widgets/markdown-codemirror": {
+        "types": "./dist/widgets/markdown-codemirror.d.ts",
+        "default": "./dist/widgets/markdown-codemirror.js"
+      },
+      "./widgets/status-tones": {
+        "types": "./dist/widgets/status-tones.d.ts",
+        "default": "./dist/widgets/status-tones.js"
+      },
+      "./widgets/types": {
+        "types": "./dist/widgets/types.d.ts",
+        "default": "./dist/widgets/types.js"
+      },
+      "./widgets/*": {
+        "types": "./dist/widgets/*.d.ts",
+        "default": "./dist/widgets/*.js"
+      },
+      "./feedback/index": {
+        "types": "./dist/feedback/index.d.ts",
+        "default": "./dist/feedback/index.js"
+      },
+      "./feedback/error-message": {
+        "types": "./dist/feedback/error-message.d.ts",
+        "default": "./dist/feedback/error-message.js"
+      },
+      "./feedback/refine-notification": {
+        "types": "./dist/feedback/refine-notification.d.ts",
+        "default": "./dist/feedback/refine-notification.js"
+      },
+      "./feedback/use-busy-run": {
+        "types": "./dist/feedback/use-busy-run.d.ts",
+        "default": "./dist/feedback/use-busy-run.js"
+      },
+      "./feedback/*": {
+        "types": "./dist/feedback/*.d.ts",
+        "default": "./dist/feedback/*.js"
+      },
+      "./chrome/app-rail-model": {
+        "types": "./dist/chrome/app-rail-model.d.ts",
+        "default": "./dist/chrome/app-rail-model.js"
+      },
+      "./chrome/app-rail-preferences": {
+        "types": "./dist/chrome/app-rail-preferences.d.ts",
+        "default": "./dist/chrome/app-rail-preferences.js"
+      },
+      "./chrome/index": {
+        "types": "./dist/chrome/index.d.ts",
+        "default": "./dist/chrome/index.js"
+      },
+      "./chrome/menu-tree": {
+        "types": "./dist/chrome/menu-tree.d.ts",
+        "default": "./dist/chrome/menu-tree.js"
+      },
+      "./chrome/refine-menu": {
+        "types": "./dist/chrome/refine-menu.d.ts",
+        "default": "./dist/chrome/refine-menu.js"
+      },
+      "./chrome/*": {
+        "types": "./dist/chrome/*.d.ts",
+        "default": "./dist/chrome/*.js"
+      },
+      "./fragments/index": {
+        "types": "./dist/fragments/index.d.ts",
+        "default": "./dist/fragments/index.js"
+      },
+      "./fragments/*": {
+        "types": "./dist/fragments/*.d.ts",
+        "default": "./dist/fragments/*.js"
+      },
+      "./layouts/index": {
+        "types": "./dist/layouts/index.d.ts",
+        "default": "./dist/layouts/index.js"
+      },
+      "./layouts/slots": {
+        "types": "./dist/layouts/slots.d.ts",
+        "default": "./dist/layouts/slots.js"
+      },
+      "./layouts/*": {
+        "types": "./dist/layouts/*.d.ts",
+        "default": "./dist/layouts/*.js"
+      },
+      "./page/index": {
+        "types": "./dist/page/index.d.ts",
+        "default": "./dist/page/index.js"
+      },
+      "./page/*": {
+        "types": "./dist/page/*.d.ts",
+        "default": "./dist/page/*.js"
+      },
+      "./toolbars/index": {
+        "types": "./dist/toolbars/index.d.ts",
+        "default": "./dist/toolbars/index.js"
+      },
+      "./toolbars/*": {
+        "types": "./dist/toolbars/*.d.ts",
+        "default": "./dist/toolbars/*.js"
+      },
+      "./preview/index": {
+        "types": "./dist/preview/index.d.ts",
+        "default": "./dist/preview/index.js"
+      },
+      "./preview/model": {
+        "types": "./dist/preview/model.d.ts",
+        "default": "./dist/preview/model.js"
+      },
+      "./preview/registry": {
+        "types": "./dist/preview/registry.d.ts",
+        "default": "./dist/preview/registry.js"
+      },
+      "./preview/*": {
+        "types": "./dist/preview/*.d.ts",
+        "default": "./dist/preview/*.js"
+      },
+      "./communication/index": {
+        "types": "./dist/communication/index.d.ts",
+        "default": "./dist/communication/index.js"
+      },
+      "./communication/*": {
+        "types": "./dist/communication/*.d.ts",
+        "default": "./dist/communication/*.js"
+      },
+      "./views/DeletePreviewTree": {
+        "types": "./dist/views/tree/DeletePreviewTree.d.ts",
+        "default": "./dist/views/tree/DeletePreviewTree.js"
+      },
+      "./views/Form": {
+        "types": "./dist/views/form/Form.d.ts",
+        "default": "./dist/views/form/Form.js"
+      },
+      "./views/FormView": {
+        "types": "./dist/views/form/FormView.d.ts",
+        "default": "./dist/views/form/FormView.js"
+      },
+      "./views/List": {
+        "types": "./dist/views/resource/List.d.ts",
+        "default": "./dist/views/resource/List.js"
+      },
+      "./views/ListView": {
+        "types": "./dist/views/resource/ListView.d.ts",
+        "default": "./dist/views/resource/ListView.js"
+      },
+      "./views/RelationPicker": {
+        "types": "./dist/views/relation/RelationPicker.d.ts",
+        "default": "./dist/views/relation/RelationPicker.js"
+      },
+      "./views/ResourceList": {
+        "types": "./dist/views/resource/ResourceList.d.ts",
+        "default": "./dist/views/resource/ResourceList.js"
+      },
+      "./views/RowsListView": {
+        "types": "./dist/views/resource/RowsListView.d.ts",
+        "default": "./dist/views/resource/RowsListView.js"
+      },
+      "./views/documents": {
+        "types": "./dist/views/resource/documents.d.ts",
+        "default": "./dist/views/resource/documents.js"
+      },
+      "./views/enum-options": {
+        "types": "./dist/views/relation/enum-options.d.ts",
+        "default": "./dist/views/relation/enum-options.js"
+      },
+      "./views/facet-query": {
+        "types": "./dist/views/relation/facet-query.d.ts",
+        "default": "./dist/views/relation/facet-query.js"
+      },
+      "./views/form-view-surface": {
+        "types": "./dist/views/form/form-view-surface.d.ts",
+        "default": "./dist/views/form/form-view-surface.js"
+      },
+      "./views/index": {
+        "types": "./dist/views/index.d.ts",
+        "default": "./dist/views/index.js"
+      },
+      "./views/model-metadata-defaults": {
+        "types": "./dist/views/resource/model-metadata-defaults.d.ts",
+        "default": "./dist/views/resource/model-metadata-defaults.js"
+      },
+      "./views/page/index": {
+        "types": "./dist/views/page/index.d.ts",
+        "default": "./dist/views/page/index.js"
+      },
+      "./views/page/types": {
+        "types": "./dist/views/page/types.d.ts",
+        "default": "./dist/views/page/types.js"
+      },
+      "./views/record-action": {
+        "types": "./dist/views/resource/record-action.d.ts",
+        "default": "./dist/views/resource/record-action.js"
+      },
+      "./views/relation-facet": {
+        "types": "./dist/views/relation/relation-facet.d.ts",
+        "default": "./dist/views/relation/relation-facet.js"
+      },
+      "./views/relation-options": {
+        "types": "./dist/views/relation/relation-options.d.ts",
+        "default": "./dist/views/relation/relation-options.js"
+      },
+      "./views/resource-routing": {
+        "types": "./dist/views/resource/resource-routing.d.ts",
+        "default": "./dist/views/resource/resource-routing.js"
+      },
+      "./views/resource-view-context": {
+        "types": "./dist/views/resource/resource-view-context.d.ts",
+        "default": "./dist/views/resource/resource-view-context.js"
+      },
+      "./views/resource-view-list-body": {
+        "types": "./dist/views/resource/resource-view-list-body.d.ts",
+        "default": "./dist/views/resource/resource-view-list-body.js"
+      },
+      "./views/resource-view-model": {
+        "types": "./dist/views/resource/resource-view-model.d.ts",
+        "default": "./dist/views/resource/resource-view-model.js"
+      },
+      "./views/resource-view-surface": {
+        "types": "./dist/views/resource/resource-view-surface.d.ts",
+        "default": "./dist/views/resource/resource-view-surface.js"
+      },
+      "./views/resource-view-types": {
+        "types": "./dist/views/resource/resource-view-types.d.ts",
+        "default": "./dist/views/resource/resource-view-types.js"
+      },
+      "./views/resource-view-utils": {
+        "types": "./dist/views/resource/resource-view-utils.d.ts",
+        "default": "./dist/views/resource/resource-view-utils.js"
+      },
+      "./views/scalar-facet": {
+        "types": "./dist/views/relation/scalar-facet.d.ts",
+        "default": "./dist/views/relation/scalar-facet.js"
+      },
+      "./views/useBulkDelete": {
+        "types": "./dist/views/resource/useBulkDelete.d.ts",
+        "default": "./dist/views/resource/useBulkDelete.js"
+      },
+      "./views/useScopedTreeExplorer": {
+        "types": "./dist/views/tree/useScopedTreeExplorer.d.ts",
+        "default": "./dist/views/tree/useScopedTreeExplorer.js"
+      },
+      "./views/validation-errors": {
+        "types": "./dist/views/form/validation-errors.d.ts",
+        "default": "./dist/views/form/validation-errors.js"
+      },
+      "./data/revisions": {
+        "types": "./dist/data/revisions.d.ts",
+        "default": "./dist/data/revisions.js"
+      },
+      "./data/errors": {
+        "types": "./dist/data/errors.d.ts",
+        "default": "./dist/data/errors.js"
+      },
+      "./data/*": {
+        "types": "./dist/data/*.d.ts",
+        "default": "./dist/data/*.js"
+      }
+    }
+  },
+  "scripts": {
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R src/styles dist/styles && cp src/views/calendar/calendar-surface.css dist/views/calendar/calendar-surface.css"
+  },
+  "dependencies": {
+    "@angee/logo-react": "^0.2.1",
+    "@angee/metadata": "workspace:*",
+    "@angee/refine": "workspace:*",
+    "@base-ui/react": "^1.6.0",
+    "@codemirror/commands": "^6.10.4",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/lang-markdown": "^6.0.0",
+    "@codemirror/state": "^6.7.0",
+    "@codemirror/view": "^6.43.3",
+    "@dagrejs/dagre": "^3.0.0",
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@fullcalendar/core": "^6.1.21",
+    "@fullcalendar/daygrid": "^6.1.21",
+    "@fullcalendar/interaction": "^6.1.21",
+    "@fullcalendar/react": "^6.1.21",
+    "@fullcalendar/timegrid": "^6.1.21",
+    "@refinedev/core": "^5.0.12",
+    "@refinedev/react-hook-form": "^5.0.4",
+    "@refinedev/react-table": "^6.0.1",
+    "@tanstack/react-table": "^8.21.3",
+    "@tanstack/react-virtual": "^3.14.3",
+    "@xyflow/react": "^12.11.1",
+    "cmdk": "^1.1.1",
+    "codemirror": "^6.0.0",
+    "date-fns": "^4.1.0",
+    "graphql-tag": "^2.12.6",
+    "lucide-react": "^1.21.0",
+    "nuqs": "^2.5.0",
+    "react-day-picker": "^10.0.1",
+    "react-hook-form": "^7.80.0",
+    "react-json-view-lite": "^2.5.0",
+    "react-markdown": "^10.1.0",
+    "react-resizable-panels": "^4.11.1",
+    "remark-gfm": "^4.0.1",
+    "tailwind-merge": "^3.6.0",
+    "tailwind-variants": "^3.2.0",
+    "tw-animate-css": "^1.0.0",
+    "use-debounce": "^10.1.1",
+    "valibot": "^1.4.2"
+  },
+  "peerDependencies": {
+    "@tanstack/react-router": "^1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@tanstack/react-query": "^5.101.1",
+    "@tanstack/react-router": "^1.170.16",
+    "@testing-library/react": "^16.1.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "happy-dom": "^20.10.6",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  }
+}

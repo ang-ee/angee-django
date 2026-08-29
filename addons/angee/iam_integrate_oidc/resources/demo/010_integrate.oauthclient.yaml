@@ -1,0 +1,27 @@
+# A disabled demo OIDC login connection. The client id is a placeholder — the real
+# authorize round-trip needs a deployment to configure and enable its own credentials.
+# OIDC login fields (discovery + policy) live on the one OAuth client row:
+# login_enabled marks it a login provider, discovery
+# fills the endpoints, and the email-domain allow-list gates login. Auto-link/create
+# stay off (defaults), so this demo verifies an identity but never provisions a user.
+- xref: demo_google
+  slug: google
+  environment: prod
+  icon: google
+  display_name: Google (demo)
+  provider_type: google
+  client_id: demo-oidc-client
+  is_enabled: false
+  login_enabled: true
+  authorize_endpoint: https://accounts.google.com/o/oauth2/v2/auth
+  token_endpoint: https://oauth2.googleapis.com/token
+  discovery_url: https://accounts.google.com/.well-known/openid-configuration
+  default_scopes:
+    - openid
+    - email
+  scopes_catalogue:
+    - openid
+    - email
+    - profile
+  allowed_email_domains:
+    - example.com

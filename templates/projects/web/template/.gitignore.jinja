@@ -1,0 +1,25 @@
+# Generated composer output — emitted by `manage.py angee build`, never edited.
+/runtime/
+
+# Chained-stack overlay files at the project root: a stack template renders its
+# manifest + its own answers file beside the project, and secrets live in .env.
+/.copier-answers.stack.yml
+/.env
+
+# Python
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.venv/
+# Stack/tool caches (uv's cache-dir per pyproject.toml).
+/caches/
+
+# JS
+node_modules/
+/{{ web_path }}/dist/
+/{{ web_path }}/.vite/
+
+# Scratch / reports
+/.playwright-mcp/
+/test-results/
+/playwright-report/

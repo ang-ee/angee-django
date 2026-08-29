@@ -1,0 +1,9 @@
+_meta:
+  model: workflows.Workflow
+rows:
+  - xref: note_publish_approval
+    fields:
+      name: Note publish approval
+      description: Demo workflow for reviewing a note before publish.
+      max_steps: 20
+      budget: {}
