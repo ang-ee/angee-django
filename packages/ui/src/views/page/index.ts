@@ -37,7 +37,6 @@ export { Tab } from "./Tab";
 export {
   PAGE_ELEMENT_SLOT,
   pageChildren,
-  pageElementKind,
   pageElementProps,
   type PageElement,
   type PageElementKind,

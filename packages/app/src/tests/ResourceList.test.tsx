@@ -2241,7 +2241,7 @@ describe("ResourceList", () => {
     );
   });
 
-  test("renders grouped lists expanded by default and collapses on toggle", async () => {
+  test("renders grouped lists folded and expands group items lazily", async () => {
     const onSelect = vi.fn();
 
     render(
@@ -2256,8 +2256,12 @@ describe("ResourceList", () => {
     );
 
     await screen.findByRole("button", { name: "Groups 1-2 / 3 groups" });
-    const activeGroup = await screen.findByRole("button", { name: "Active" });
-    // Root groups auto-expand once the group response lands.
+    const activeGroup = await screen.findByRole("button", { name: /Active/ });
+    expect(activeGroup.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("button", { name: "Open First" })).toBeNull();
+
+    fireEvent.click(activeGroup);
+
     await waitFor(() =>
       expect(activeGroup.getAttribute("aria-expanded")).toBe("true"),
     );
@@ -2265,15 +2269,7 @@ describe("ResourceList", () => {
       .toBeTruthy();
     expect(screen.getByText("1-2 / 2")).toBeTruthy();
 
-    // A toggle collapses; the user's collapse wins over the default seed.
-    fireEvent.click(activeGroup);
-    await waitFor(() =>
-      expect(activeGroup.getAttribute("aria-expanded")).toBe("false"),
-    );
-    expect(screen.queryByRole("button", { name: "Open First" })).toBeNull();
-
-    fireEvent.click(activeGroup);
-    fireEvent.click(await screen.findByRole("button", { name: "Open First" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open First" }));
     expect(onSelect).toHaveBeenCalledWith("note-1");
   });
 
@@ -2297,11 +2293,8 @@ describe("ResourceList", () => {
       </TestUrlState>,
     );
 
-    const activeGroup = await screen.findByRole("button", { name: "Active" });
-    // Groups auto-expand; the leaf rows are reachable without a toggle.
-    await waitFor(() =>
-      expect(activeGroup.getAttribute("aria-expanded")).toBe("true"),
-    );
+    const activeGroup = await screen.findByRole("button", { name: /Active/ });
+    fireEvent.click(activeGroup);
     fireEvent.click(await screen.findByRole("button", { name: "Open Second" }));
 
     const pager = await screen.findByRole("navigation", {
@@ -2349,7 +2342,7 @@ describe("ResourceList", () => {
       </TestUrlState>,
     );
 
-    const activeGroup = await screen.findByRole("button", { name: "Active" });
+    const activeGroup = await screen.findByRole("button", { name: /Active/ });
     expect(within(activeGroup).queryByText(/\bwords\b/i)).toBeNull();
     expect(
       (await screen.findByLabelText("Active Word Count: 30")).textContent,

@@ -34,7 +34,6 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
-from django.utils.text import slugify
 from rebac import (
     RelationshipTuple,
     SubjectRef,
@@ -77,7 +76,7 @@ class Group(HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
         PRIVATE = "private", "Private"
 
     name = models.CharField(max_length=200)
-    slug = models.SlugField(blank=True, unique=True)
+    slug = models.SlugField(unique=True)
     description = models.TextField(blank=True, default="")
     visibility = StateField(
         choices_enum=GroupVisibility,
@@ -110,18 +109,11 @@ class Group(HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
         return cast(Group, instance)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the group with a unique slug and reconcile its reader tuple."""
+        """Persist the group and reconcile its public-reader tuple atomically."""
 
         adding = self._state.adding
         loaded_visibility = getattr(self, "_loaded_visibility", _NEVER_LOADED)
         with transaction.atomic():
-            if not self.slug:
-                self.slug = self._available_slug()
-                update_fields = kwargs.get("update_fields")
-                if update_fields is not None:
-                    kwargs["update_fields"] = tuple(
-                        dict.fromkeys((*update_fields, "slug"))
-                    )
             super().save(*args, **kwargs)
             if (
                 adding
@@ -130,25 +122,6 @@ class Group(HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
             ):
                 self._reconcile_public_reader()
         self._loaded_visibility = self.visibility
-
-    def _available_slug(self) -> str:
-        """Return the first name-derived slug unused in the shared Group table."""
-
-        slug_field = self._meta.get_field("slug")
-        max_length = slug_field.max_length or 50
-        base = slugify(self.name)[:max_length] or "group"
-        owner_model = slug_field.model
-        candidates = owner_model.system_queryset(lock=())
-        if self.pk is not None:
-            candidates = candidates.exclude(pk=self.pk)
-
-        candidate = base
-        suffix = 1
-        while candidates.filter(slug=candidate).exists():
-            suffix += 1
-            ending = f"-{suffix}"
-            candidate = f"{base[: max_length - len(ending)]}{ending}"
-        return candidate
 
     def _reconcile_public_reader(self) -> None:
         """Grant or revoke this group's ``reader@auth/user:*`` relationship."""

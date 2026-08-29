@@ -705,9 +705,6 @@ class TaskWork(StagedModelMixin, AngeeModel):
     )
     hasura_aggregatable_fields = ("number", "estimate")
     hasura_groupable_fields = ("queue", "stage", "cycle")
-    # Projected as objects by the work type extension; the node class cannot
-    # see extension fields, so selection layers read this declaration.
-    hasura_object_relation_fields = ("queue", "stage", "cycle")
     hasura_insertable_fields = ("queue", "stage", "cycle", "estimate")
     hasura_updatable_fields = hasura_insertable_fields
     hasura_forbidden_insertable_fields = ("status",)
@@ -1210,9 +1207,6 @@ class TaskWork(StagedModelMixin, AngeeModel):
             self.stage_id is None
             or loaded_stage_id == self.stage_id
             or getattr(self, "_work_internal_status", False)
-            # Audited system bypass (resource seeding/provisioning) — the same
-            # precedent Stage.save applies to system-category stages.
-            or ambient_is_sudo()
         ):
             return
         category = str(self.stage.get_category())

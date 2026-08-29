@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import wraps
@@ -22,8 +21,6 @@ from angee.graphql.writes import instance_for_write
 _ActionTarget = TypeVar("_ActionTarget", bound=models.Model)
 _RebacActionTarget = TypeVar("_RebacActionTarget", bound=RebacMixin)
 _P = ParamSpec("_P")
-
-logger = logging.getLogger(__name__)
 
 
 @strawberry.type
@@ -116,8 +113,7 @@ def action_guard(
     ``ValidationError`` carrying ``error_dict`` becomes the field-keyed in-band
     ``validation_errors`` map a typed-args form binds). Any other exception
     propagates as a GraphQL error. ``@wraps`` preserves the resolver signature so a
-    Strawberry field decorated with it keeps its introspected arguments. Every
-    caught failure is logged with the action name and traceback before projection.
+    Strawberry field decorated with it keeps its introspected arguments.
     """
 
     caught = BASELINE_ACTION_ERRORS + tuple(errors)
@@ -128,7 +124,6 @@ def action_guard(
             try:
                 return resolver(*args, **kwargs)
             except caught as error:
-                logger.exception("GraphQL action %s failed", resolver.__name__)
                 return ActionResult.from_error(error, summary)
 
         return guarded

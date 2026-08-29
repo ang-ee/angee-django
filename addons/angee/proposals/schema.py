@@ -24,7 +24,6 @@ from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
-from angee.iam.schema import UserType
 from angee.messaging.schema import MessageType
 from angee.money.schema import CurrencyType
 from angee.parties.schema import PartyType
@@ -144,44 +143,6 @@ class ProposalType(AuthoredRefMixin, AngeeNode):
         """Return the responder's public id."""
 
         return _user_id(cast(Any, self).responder_id)
-
-    @strawberry_django.field(only=["submitted_by_id"])
-    def submitted_by(self) -> strawberry.ID | None:
-        """Return the submission actor's public id."""
-
-        return _user_id(cast(Any, self).submitted_by_id)
-
-    @strawberry_django.field(only=["decided_by_id"])
-    def decided_by(self) -> strawberry.ID | None:
-        """Return the decision actor's public id."""
-
-        return _user_id(cast(Any, self).decided_by_id)
-
-
-@strawberry_django.type(Proposal)
-class ConsoleProposalType(AuthoredRefMixin, AngeeNode):
-    """Console proposal projection with a label-bearing responder relation."""
-
-    state: auto
-    cost: auto
-    staffing: str | None
-    timeframe_start: auto
-    timeframe_end: auto
-    confidence: auto
-    valid_until: auto
-    capture_payload_hash: auto
-    capture_parser_version: auto
-    submitted_at: auto
-    decided_at: auto
-    created_at: auto
-    updated_at: auto
-
-    round: ProposalRoundType | None = actor_scoped_to_one("round")
-    party: PartyType | None = actor_scoped_to_one("party")
-    source_message: MessageType | None = actor_scoped_to_one("source_message")
-    track: ProjectType | None = actor_scoped_to_one("track")
-    currency: CurrencyType | None = actor_scoped_to_one("currency")
-    responder: UserType | None = actor_scoped_to_one("responder")
 
     @strawberry_django.field(only=["submitted_by_id"])
     def submitted_by(self) -> strawberry.ID | None:
@@ -359,7 +320,9 @@ class ProposalActionMutation:
         round_row = authorized_action_target(info, Round, round, "write")
         message_row = _permission_target(Message, message, "read", "proposals.graphql.capture_message")
         party_row = (
-            None if party is None else _permission_target(Party, party, "read", "proposals.graphql.capture_party")
+            None
+            if party is None
+            else _permission_target(Party, party, "read", "proposals.graphql.capture_party")
         )
         proposal = Proposal.objects.capture_from_message(message_row, round_row, party_row)
         return ActionResult(ok=True, message="Proposal captured.", id=proposal.sqid)
@@ -442,81 +405,73 @@ _TOPIC_RESOURCE = hasura_model_resource(
     write_backend=AngeeHasuraWriteBackend(Topic, public_id_fields=("round",)),
 )
 
-
-def _proposal_resource(node_type: type) -> Any:
-    """Build the same Proposal resource around one schema-specific node type."""
-
-    return hasura_model_resource(
-        node_type,
-        model=Proposal,
-        name="proposals",
-        filterable=[
-            "id",
-            "round",
-            "responder",
-            "party",
-            "state",
-            "track",
-            "submitted_at",
-            "submitted_by",
-            "decided_at",
-            "decided_by",
-            "created_at",
-            "updated_at",
-        ],
-        sortable=[
-            "round",
-            "state",
-            "submitted_at",
-            "decided_at",
-            "created_at",
-            "updated_at",
-        ],
-        aggregatable=["id"],
-        groupable=["round", "responder", "party", "state", "track"],
-        insertable=[
-            "round",
-            "responder",
-            "party",
-            "source_message",
-            "state",
-            "cost",
-            "currency",
-            "staffing",
-            "timeframe_start",
-            "timeframe_end",
-            "confidence",
-            "valid_until",
-        ],
-        updatable=[
-            "cost",
-            "currency",
-            "staffing",
-            "timeframe_start",
-            "timeframe_end",
-            "confidence",
-            "valid_until",
-        ],
-        field_id_decode={
-            "round": public_pk_decoder(Round),
-            "responder": public_pk_decoder(User),
-            "party": public_pk_decoder(Party),
-            "source_message": public_pk_decoder(Message),
-            "track": public_pk_decoder(Project),
-            "currency": public_pk_decoder(Currency),
-            "submitted_by": public_pk_decoder(User),
-            "decided_by": public_pk_decoder(User),
-        },
-        write_backend=AngeeHasuraWriteBackend(
-            Proposal,
-            public_id_fields=("round", "responder", "party", "source_message", "currency"),
-            delete_guard=lambda instance: instance.deletion_error(),
-        ),
-    )
-
-
-_PUBLIC_PROPOSAL_RESOURCE = _proposal_resource(ProposalType)
-_CONSOLE_PROPOSAL_RESOURCE = _proposal_resource(ConsoleProposalType)
+_PROPOSAL_RESOURCE = hasura_model_resource(
+    ProposalType,
+    model=Proposal,
+    name="proposals",
+    filterable=[
+        "id",
+        "round",
+        "responder",
+        "party",
+        "state",
+        "track",
+        "submitted_at",
+        "submitted_by",
+        "decided_at",
+        "decided_by",
+        "created_at",
+        "updated_at",
+    ],
+    sortable=[
+        "round",
+        "state",
+        "submitted_at",
+        "decided_at",
+        "created_at",
+        "updated_at",
+    ],
+    aggregatable=["id"],
+    groupable=["round", "responder", "party", "state", "track"],
+    insertable=[
+        "round",
+        "responder",
+        "party",
+        "source_message",
+        "state",
+        "cost",
+        "currency",
+        "staffing",
+        "timeframe_start",
+        "timeframe_end",
+        "confidence",
+        "valid_until",
+    ],
+    updatable=[
+        "cost",
+        "currency",
+        "staffing",
+        "timeframe_start",
+        "timeframe_end",
+        "confidence",
+        "valid_until",
+    ],
+    field_id_decode={
+        "round": public_pk_decoder(Round),
+        "responder": public_pk_decoder(User),
+        "party": public_pk_decoder(Party),
+        "source_message": public_pk_decoder(Message),
+        "track": public_pk_decoder(Project),
+        "currency": public_pk_decoder(Currency),
+        "submitted_by": public_pk_decoder(User),
+        "decided_by": public_pk_decoder(User),
+    },
+    write_backend=AngeeHasuraWriteBackend(
+        Proposal,
+        public_id_fields=("round", "responder", "party", "source_message", "currency"),
+        delete_guard=lambda instance: instance.deletion_error(),
+    ),
+)
 
 _ANSWER_RESOURCE = hasura_model_resource(
     ProposalAnswerType,
@@ -552,64 +507,49 @@ _REVIEW_RESOURCE = hasura_model_resource(
     write_backend=AngeeHasuraWriteBackend(Review, public_id_fields=("proposal", "reviewer")),
 )
 
-_COMMON_RESOURCE_TYPES = [
+_RESOURCE_TYPES = [
     *_ROUND_RESOURCE.types,
     *_TOPIC_RESOURCE.types,
+    *_PROPOSAL_RESOURCE.types,
     *_ANSWER_RESOURCE.types,
     *_REVIEW_RESOURCE.types,
 ]
 
-
-def _proposals_schema_bucket(proposal_resource: Any, proposal_type: type) -> dict[str, Any]:
-    """Return the shared proposal surface with its schema-specific Proposal node."""
-
-    return {
-        "query": [
-            _ROUND_RESOURCE.query,
-            _TOPIC_RESOURCE.query,
-            proposal_resource.query,
-            _ANSWER_RESOURCE.query,
-            _REVIEW_RESOURCE.query,
-        ],
-        "mutation": [
-            ProposalActionMutation,
-            _ROUND_RESOURCE.mutation,
-            _TOPIC_RESOURCE.mutation,
-            proposal_resource.mutation,
-            _ANSWER_RESOURCE.mutation,
-            _REVIEW_RESOURCE.mutation,
-        ],
-        "types": [
-            ProposalRoundType,
-            ProposalTopicType,
-            proposal_type,
-            ProposalAnswerType,
-            ProposalReviewType,
-            ProjectType,
-            TaskType,
-            PartyType,
-            MessageType,
-            CurrencyType,
-            *proposal_resource.types,
-            *_COMMON_RESOURCE_TYPES,
-        ],
-    }
-
-
-_PUBLIC_PROPOSALS_SCHEMA_BUCKET = _proposals_schema_bucket(
-    _PUBLIC_PROPOSAL_RESOURCE,
-    ProposalType,
-)
-_CONSOLE_PROPOSALS_SCHEMA_BUCKET = _proposals_schema_bucket(
-    _CONSOLE_PROPOSAL_RESOURCE,
-    ConsoleProposalType,
-)
-_CONSOLE_PROPOSALS_SCHEMA_BUCKET["types"].append(UserType)
+_PROPOSALS_SCHEMA_BUCKET = {
+    "query": [
+        _ROUND_RESOURCE.query,
+        _TOPIC_RESOURCE.query,
+        _PROPOSAL_RESOURCE.query,
+        _ANSWER_RESOURCE.query,
+        _REVIEW_RESOURCE.query,
+    ],
+    "mutation": [
+        ProposalActionMutation,
+        _ROUND_RESOURCE.mutation,
+        _TOPIC_RESOURCE.mutation,
+        _PROPOSAL_RESOURCE.mutation,
+        _ANSWER_RESOURCE.mutation,
+        _REVIEW_RESOURCE.mutation,
+    ],
+    "types": [
+        ProposalRoundType,
+        ProposalTopicType,
+        ProposalType,
+        ProposalAnswerType,
+        ProposalReviewType,
+        ProjectType,
+        TaskType,
+        PartyType,
+        MessageType,
+        CurrencyType,
+        *_RESOURCE_TYPES,
+    ],
+}
 
 schemas = {
-    "public": {**_PUBLIC_PROPOSALS_SCHEMA_BUCKET},
+    "public": {**_PROPOSALS_SCHEMA_BUCKET},
     "console": {
-        **_CONSOLE_PROPOSALS_SCHEMA_BUCKET,
+        **_PROPOSALS_SCHEMA_BUCKET,
         "subscription": [
             changes(Round, field="proposalRoundChanged"),
             changes(Topic, field="proposalTopicChanged"),

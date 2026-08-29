@@ -88,8 +88,7 @@ export function useRoundComparisonData(roundId: string): RoundComparisonState {
     () =>
       refineFieldsFromPaths([
         "id",
-        "responder.id",
-        "responder.display_name",
+        "responder",
         "party.display_name",
         "state",
         "cost",

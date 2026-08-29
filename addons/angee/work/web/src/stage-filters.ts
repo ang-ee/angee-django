@@ -9,3 +9,8 @@ export function queueStageFilters(queueId: string) {
     { field: "category", operator: "ne" as const, value: SYSTEM_STAGE_CATEGORIES[1] },
   ];
 }
+
+/** Task-side relation filter keeping system-staged rows off planning boards. */
+export const NON_SYSTEM_TASK_STAGE_FILTER = {
+  stage: { category: { _nin: [...SYSTEM_STAGE_CATEGORIES] } },
+};

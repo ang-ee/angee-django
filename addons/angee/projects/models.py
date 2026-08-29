@@ -122,7 +122,12 @@ class TaskManager(AngeeManager):
 
         field = cast(FractionalRankField, self.model._meta.get_field(field_name))
         with system_context(reason=f"projects.task.append_{field_name}"):
-            previous = self.filter(**context).order_by(f"-{field_name}").values_list(field_name, flat=True).first()
+            previous = (
+                self.filter(**context)
+                .order_by(f"-{field_name}")
+                .values_list(field_name, flat=True)
+                .first()
+            )
         return field.get_append_rank(previous)
 
 
@@ -178,7 +183,9 @@ class LinkManager(AngeeManager):
             else:
                 for name, value in values.items():
                     setattr(link, name, value)
-                link.sudo(reason="projects.link.upsert.update").save(update_fields=(*values, "updated_at"))
+                link.sudo(reason="projects.link.upsert.update").save(
+                    update_fields=(*values, "updated_at")
+                )
                 bind_actor(link, actor)
             write_relationships(
                 [
@@ -295,35 +302,6 @@ class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, Angee
         """Return the project title."""
 
         return self.title
-
-    def pause(self) -> Project:
-        """Pause this project, idempotently."""
-
-        return self._set_status(self.ProjectStatus.PAUSED)
-
-    def resume(self) -> Project:
-        """Return this project to open work, idempotently."""
-
-        return self._set_status(self.ProjectStatus.OPEN)
-
-    def complete(self) -> Project:
-        """Complete this project, idempotently."""
-
-        return self._set_status(self.ProjectStatus.DONE)
-
-    def drop(self) -> Project:
-        """Drop this project, idempotently."""
-
-        return self._set_status(self.ProjectStatus.DROPPED)
-
-    def _set_status(self, status: ProjectStatus) -> Project:
-        """Persist one lifecycle target while preserving exact replay no-ops."""
-
-        if self.status == status:
-            return self
-        self.status = status
-        self.save(update_fields=("status", "updated_at"))
-        return self
 
 
 class Milestone(AuditMixin, AngeeDataModel):
@@ -509,7 +487,11 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
     def complete(self) -> Task:
         """Mark this task done, idempotently preserving its first completion time."""
 
-        if self.status == self.TaskStatus.DONE and self.done_at is not None and self.dropped_at is None:
+        if (
+            self.status == self.TaskStatus.DONE
+            and self.done_at is not None
+            and self.dropped_at is None
+        ):
             return self
         self.status = self.TaskStatus.DONE
         self.done_at = self.done_at or timezone.now()
@@ -525,7 +507,11 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
             reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
         except ValueError as error:
             raise ValidationError({"reason": "Choose duplicate, declined, or obsolete."}) from error
-        if self.status == self.TaskStatus.DROPPED and self.dropped_reason == reason_member and self.dropped_at:
+        if (
+            self.status == self.TaskStatus.DROPPED
+            and self.dropped_reason == reason_member
+            and self.dropped_at
+        ):
             return self
         self.status = self.TaskStatus.DROPPED
         self.dropped_reason = reason_member
@@ -564,18 +550,26 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
             return
         if self.status == self.TaskStatus.DONE:
             if self.dropped_at is not None or self.dropped_reason is not None:
-                raise ValidationError({"status": "A done task cannot carry dropped state."})
+                raise ValidationError(
+                    {"status": "A done task cannot carry dropped state."}
+                )
             self.done_at = self.done_at or timezone.now()
             return
         if self.status == self.TaskStatus.DROPPED:
             if self.dropped_reason is None:
-                raise ValidationError({"dropped_reason": "A dropped task requires a dropped reason."})
+                raise ValidationError(
+                    {"dropped_reason": "A dropped task requires a dropped reason."}
+                )
             if self.done_at is not None:
-                raise ValidationError({"status": "A dropped task cannot carry a completion timestamp."})
+                raise ValidationError(
+                    {"status": "A dropped task cannot carry a completion timestamp."}
+                )
             self.dropped_at = self.dropped_at or timezone.now()
             return
         if self.done_at is not None or self.dropped_at is not None or self.dropped_reason is not None:
-            raise ValidationError({"status": "An open task cannot carry done or dropped state."})
+            raise ValidationError(
+                {"status": "An open task cannot carry done or dropped state."}
+            )
 
     def _validate_structure(self, *, lock: bool) -> None:
         """Validate milestone scope and the complete parent chain."""

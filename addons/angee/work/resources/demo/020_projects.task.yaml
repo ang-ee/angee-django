@@ -4,9 +4,7 @@ rows:
   - xref: eng_board_drag
     fields:
       queue: work.eng
-      stage: work.eng_in_progress
       cycle: work.eng_active
-      project: projects.neighborhood_garden
       title: Persist board drag as a stage write
       note: Keep stage as the fine-grained owner and project coarse task status from it.
       assignee: iam.user_alice
@@ -19,9 +17,7 @@ rows:
   - xref: eng_composition_smoke
     fields:
       queue: work.eng
-      stage: work.eng_backlog
       cycle: work.eng_active
-      project: projects.neighborhood_garden
       title: Exercise the projects plus work composition profile
       note: Confirm donor columns live on projects_task with no donor table.
       assignee: iam.user_bob
@@ -29,47 +25,5 @@ rows:
       estimate: 2.0
       sort_order: 9216.0
       sub_sort_order: 9216.0
-      created_by: iam.user_alice
-      updated_by: iam.user_alice
-  - xref: eng_triage_bed_delivery
-    fields:
-      queue: work.eng
-      stage: work.eng_triage
-      project: projects.neighborhood_garden
-      title: Confirm raised-bed delivery access
-      note: Validate the delivery route before the supplier books a vehicle.
-      assignee: iam.user_alice
-      priority: urgent
-      estimate: 2.0
-      sort_order: 10240.0
-      sub_sort_order: 10240.0
-      created_by: iam.user_alice
-      updated_by: iam.user_alice
-  - xref: eng_triage_volunteer_schedule
-    fields:
-      queue: work.eng
-      stage: work.eng_triage
-      project: projects.neighborhood_garden
-      title: Review volunteer orientation request
-      note: Decide whether an extra weekday orientation belongs in this cycle.
-      assignee: iam.user_bob
-      priority: medium
-      estimate: 1.0
-      sort_order: 11264.0
-      sub_sort_order: 11264.0
-      created_by: iam.user_alice
-      updated_by: iam.user_alice
-  - xref: eng_triage_water_access
-    fields:
-      queue: work.eng
-      stage: work.eng_triage
-      project: projects.neighborhood_garden
-      title: Investigate accessible water-point request
-      note: Confirm hose reach and an accessible turning area near the shared beds.
-      assignee: iam.user_alice
-      priority: high
-      estimate: 3.0
-      sort_order: 12288.0
-      sub_sort_order: 12288.0
       created_by: iam.user_alice
       updated_by: iam.user_alice

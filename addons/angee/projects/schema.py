@@ -26,7 +26,6 @@ from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
-from angee.iam.schema import UserType
 from angee.parties.schema import PartyType
 from angee.storage.schema import FolderType
 
@@ -224,25 +223,6 @@ class ProjectType(AuthoredRefMixin, AngeeNode):
         return optional_public_id(user_public_id(cast(Any, self).lead_id))
 
 
-@strawberry_django.type(Project)
-class ConsoleProjectType(AuthoredRefMixin, AngeeNode):
-    """Console project projection with a label-bearing lead relation."""
-
-    title: auto
-    body: auto
-    status: auto
-    start_date: auto
-    start_date_resolution: auto
-    target_date: auto
-    target_date_resolution: auto
-    created_at: auto
-    updated_at: auto
-
-    folder: FolderType | None = actor_scoped_to_one("folder")
-    converted_from: "ConsoleTaskType | None" = actor_scoped_to_one("converted_from")
-    lead: UserType | None = actor_scoped_to_one("lead")
-
-
 @strawberry_django.type(Milestone)
 class MilestoneType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a project milestone."""
@@ -290,38 +270,6 @@ class TaskType(AuthoredRefMixin, AngeeNode):
         """Return the delegated agent user's public id without exposing auth/user."""
 
         return optional_public_id(user_public_id(cast(Any, self).delegate_id))
-
-    @strawberry_django.field(only=["converted_from_activity_id"])
-    def converted_from_activity(self) -> strawberry.ID | None:
-        """Return the provenance activity's public id without exposing its row."""
-
-        activity_id = cast(Any, self).converted_from_activity_id
-        return None if activity_id is None else require_public_id(ThreadActivity, activity_id)
-
-
-@strawberry_django.type(Task)
-class ConsoleTaskType(AuthoredRefMixin, AngeeNode):
-    """Console task projection with label-bearing user relations."""
-
-    title: auto
-    note: auto
-    status: auto
-    dropped_reason: auto
-    priority: auto
-    due_date: auto
-    recurrence: auto
-    sort_order: auto
-    sub_sort_order: auto
-    done_at: auto
-    dropped_at: auto
-    created_at: auto
-    updated_at: auto
-
-    project: ConsoleProjectType | None = actor_scoped_to_one("project")
-    milestone: MilestoneType | None = actor_scoped_to_one("milestone")
-    parent: "ConsoleTaskType | None" = actor_scoped_to_one("parent")
-    assignee: UserType | None = actor_scoped_to_one("assignee")
-    delegate: UserType | None = actor_scoped_to_one("delegate")
 
     @strawberry_django.field(only=["converted_from_activity_id"])
     def converted_from_activity(self) -> strawberry.ID | None:
@@ -387,42 +335,6 @@ class ProjectLinkType(AuthoredRefMixin, AngeeNode):
 @strawberry.type
 class ProjectTaskActionMutation:
     """Row-authorized lifecycle and maturation actions."""
-
-    @strawberry.mutation
-    @action_guard("Pause project failed.")
-    def pause_project(self, info: strawberry.Info, id: PublicID) -> ActionResult:
-        """Pause one writable project."""
-
-        target = authorized_action_target(info, Project, id, "write")
-        target.pause()
-        return ActionResult(ok=True, message="Project paused.", id=target.sqid)
-
-    @strawberry.mutation
-    @action_guard("Resume project failed.")
-    def resume_project(self, info: strawberry.Info, id: PublicID) -> ActionResult:
-        """Resume one writable project."""
-
-        target = authorized_action_target(info, Project, id, "write")
-        target.resume()
-        return ActionResult(ok=True, message="Project resumed.", id=target.sqid)
-
-    @strawberry.mutation
-    @action_guard("Complete project failed.")
-    def complete_project(self, info: strawberry.Info, id: PublicID) -> ActionResult:
-        """Complete one writable project."""
-
-        target = authorized_action_target(info, Project, id, "write")
-        target.complete()
-        return ActionResult(ok=True, message="Project completed.", id=target.sqid)
-
-    @strawberry.mutation
-    @action_guard("Drop project failed.")
-    def drop_project(self, info: strawberry.Info, id: PublicID) -> ActionResult:
-        """Drop one writable project."""
-
-        target = authorized_action_target(info, Project, id, "write")
-        target.drop()
-        return ActionResult(ok=True, message="Project dropped.", id=target.sqid)
 
     @strawberry.mutation
     @action_guard("Complete task failed.")
@@ -501,89 +413,82 @@ class ProjectTaskActionMutation:
         return ActionResult(ok=True, message="Link attached.", id=link.sqid)
 
 
-def _project_resource(node_type: type) -> Any:
-    """Build the same Project resource around one schema-specific node type."""
-
-    return hasura_model_resource(
-        node_type,
-        model=Project,
-        name="projects",
-        filterable=[
-            "id",
-            "title",
-            "status",
-            "lead",
-            "start_date",
-            "start_date_resolution",
-            "target_date",
-            "target_date_resolution",
-            "folder",
-            "converted_from",
-            "created_at",
-            "updated_at",
-            *_PROJECT_EXTENSION_FILTER_FIELDS,
-        ],
-        sortable=[
-            "title",
-            "status",
-            "start_date",
-            "target_date",
-            "created_at",
-            "updated_at",
-            *_PROJECT_EXTENSION_ORDER_FIELDS,
-        ],
-        aggregatable=["id", *_PROJECT_EXTENSION_AGGREGATE_FIELDS],
-        groupable=[
-            "status",
-            "lead",
-            "start_date_resolution",
-            "target_date_resolution",
-            "folder",
-            "target_date",
-            *_PROJECT_EXTENSION_GROUP_FIELDS,
-        ],
-        insertable=[
-            "title",
-            "body",
-            "status",
-            "lead",
-            "start_date",
-            "start_date_resolution",
-            "target_date",
-            "target_date_resolution",
-            "folder",
-            *_PROJECT_EXTENSION_INSERT_FIELDS,
-        ],
-        updatable=[
-            "title",
-            "body",
-            "lead",
-            "start_date",
-            "start_date_resolution",
-            "target_date",
-            "target_date_resolution",
-            "folder",
-            *_PROJECT_EXTENSION_UPDATE_FIELDS,
-        ],
-        field_id_decode={
-            "lead": public_pk_decoder(User),
-            "folder": public_pk_decoder(Folder),
-            "converted_from": public_pk_decoder(Task),
-            **{
-                name: public_pk_decoder(Project._meta.get_field(name).related_model)
-                for name in _PROJECT_EXTENSION_PUBLIC_ID_FIELDS
-            },
+_PROJECT_RESOURCE = hasura_model_resource(
+    ProjectType,
+    model=Project,
+    name="projects",
+    filterable=[
+        "id",
+        "title",
+        "status",
+        "lead",
+        "start_date",
+        "start_date_resolution",
+        "target_date",
+        "target_date_resolution",
+        "folder",
+        "converted_from",
+        "created_at",
+        "updated_at",
+        *_PROJECT_EXTENSION_FILTER_FIELDS,
+    ],
+    sortable=[
+        "title",
+        "status",
+        "start_date",
+        "target_date",
+        "created_at",
+        "updated_at",
+        *_PROJECT_EXTENSION_ORDER_FIELDS,
+    ],
+    aggregatable=["id", *_PROJECT_EXTENSION_AGGREGATE_FIELDS],
+    groupable=[
+        "status",
+        "lead",
+        "start_date_resolution",
+        "target_date_resolution",
+        "folder",
+        "target_date",
+        *_PROJECT_EXTENSION_GROUP_FIELDS,
+    ],
+    insertable=[
+        "title",
+        "body",
+        "status",
+        "lead",
+        "start_date",
+        "start_date_resolution",
+        "target_date",
+        "target_date_resolution",
+        "folder",
+        *_PROJECT_EXTENSION_INSERT_FIELDS,
+    ],
+    updatable=[
+        "title",
+        "body",
+        "lead",
+        "start_date",
+        "start_date_resolution",
+        "target_date",
+        "target_date_resolution",
+        "folder",
+        *_PROJECT_EXTENSION_UPDATE_FIELDS,
+    ],
+    field_id_decode={
+        "lead": public_pk_decoder(User),
+        "folder": public_pk_decoder(Folder),
+        "converted_from": public_pk_decoder(Task),
+        **{
+            name: public_pk_decoder(Project._meta.get_field(name).related_model)
+            for name in _PROJECT_EXTENSION_PUBLIC_ID_FIELDS
         },
-        write_backend=AngeeHasuraWriteBackend(
-            Project,
-            public_id_fields=("lead", "folder", *_PROJECT_EXTENSION_PUBLIC_ID_FIELDS),
-        ),
-        declared_fields=_PROJECT_EXTENSION_DECLARED_FIELDS,
-    )
-
-
-_PUBLIC_PROJECT_RESOURCE = _project_resource(ProjectType)
-_CONSOLE_PROJECT_RESOURCE = _project_resource(ConsoleProjectType)
+    },
+    write_backend=AngeeHasuraWriteBackend(
+        Project,
+        public_id_fields=("lead", "folder", *_PROJECT_EXTENSION_PUBLIC_ID_FIELDS),
+    ),
+    declared_fields=_PROJECT_EXTENSION_DECLARED_FIELDS,
+)
 
 _MILESTONE_RESOURCE = hasura_model_resource(
     MilestoneType,
@@ -599,135 +504,127 @@ _MILESTONE_RESOURCE = hasura_model_resource(
     write_backend=AngeeHasuraWriteBackend(Milestone, public_id_fields=("project",)),
 )
 
-
-def _task_resource(node_type: type) -> Any:
-    """Build the same Task resource around one schema-specific node type."""
-
-    return hasura_model_resource(
-        node_type,
-        model=Task,
-        name="project_tasks",
-        filterable=[
-            "id",
-            "project",
-            "milestone",
-            "parent",
-            "title",
-            "status",
-            "dropped_reason",
-            "assignee",
-            "delegate",
-            "priority",
-            "due_date",
-            "recurrence",
-            "done_at",
-            "dropped_at",
-            "converted_from_activity",
-            "created_at",
-            "updated_at",
-            *_TASK_EXTENSION_FILTER_FIELDS,
-        ],
-        sortable=[
-            "project",
-            "milestone",
-            "parent",
-            "sort_order",
-            "sub_sort_order",
-            "title",
-            "status",
-            "priority",
-            "due_date",
-            "done_at",
-            "dropped_at",
-            "created_at",
-            "updated_at",
-            *_TASK_EXTENSION_ORDER_FIELDS,
-        ],
-        aggregatable=[
-            "id",
-            "sort_order",
-            "sub_sort_order",
-            *_TASK_EXTENSION_AGGREGATE_FIELDS,
-        ],
-        groupable=[
-            "project",
-            "milestone",
-            "parent",
-            "status",
-            "dropped_reason",
-            "assignee",
-            "delegate",
-            "priority",
-            "due_date",
-            *_TASK_EXTENSION_GROUP_FIELDS,
-        ],
-        insertable=[
-            *(
-                field
-                for field in (
-                    "project",
-                    "milestone",
-                    "parent",
-                    "title",
-                    "note",
-                    "status",
-                    "dropped_reason",
-                    "assignee",
-                    "delegate",
-                    "priority",
-                    "due_date",
-                    "recurrence",
-                    "sort_order",
-                    "sub_sort_order",
-                )
-                if field not in _TASK_EXTENSION_FORBIDDEN_INSERT_FIELDS
-            ),
-            *_TASK_EXTENSION_INSERT_FIELDS,
-        ],
-        updatable=[
-            "project",
-            "milestone",
-            "parent",
-            "title",
-            "note",
-            "assignee",
-            "delegate",
-            "priority",
-            "due_date",
-            "recurrence",
-            "sort_order",
-            "sub_sort_order",
-            *_TASK_EXTENSION_UPDATE_FIELDS,
-        ],
-        field_id_decode={
-            "project": public_pk_decoder(Project),
-            "milestone": public_pk_decoder(Milestone),
-            "parent": public_pk_decoder(Task),
-            "assignee": public_pk_decoder(User),
-            "delegate": public_pk_decoder(User),
-            "converted_from_activity": public_pk_decoder(ThreadActivity),
-            **{
-                name: public_pk_decoder(Task._meta.get_field(name).related_model)
-                for name in _TASK_EXTENSION_PUBLIC_ID_FIELDS
-            },
-        },
-        write_backend=AngeeHasuraWriteBackend(
-            Task,
-            public_id_fields=(
+_TASK_RESOURCE = hasura_model_resource(
+    TaskType,
+    model=Task,
+    name="project_tasks",
+    filterable=[
+        "id",
+        "project",
+        "milestone",
+        "parent",
+        "title",
+        "status",
+        "dropped_reason",
+        "assignee",
+        "delegate",
+        "priority",
+        "due_date",
+        "recurrence",
+        "done_at",
+        "dropped_at",
+        "converted_from_activity",
+        "created_at",
+        "updated_at",
+        *_TASK_EXTENSION_FILTER_FIELDS,
+    ],
+    sortable=[
+        "project",
+        "milestone",
+        "parent",
+        "sort_order",
+        "sub_sort_order",
+        "title",
+        "status",
+        "priority",
+        "due_date",
+        "done_at",
+        "dropped_at",
+        "created_at",
+        "updated_at",
+        *_TASK_EXTENSION_ORDER_FIELDS,
+    ],
+    aggregatable=[
+        "id",
+        "sort_order",
+        "sub_sort_order",
+        *_TASK_EXTENSION_AGGREGATE_FIELDS,
+    ],
+    groupable=[
+        "project",
+        "milestone",
+        "parent",
+        "status",
+        "dropped_reason",
+        "assignee",
+        "delegate",
+        "priority",
+        "due_date",
+        *_TASK_EXTENSION_GROUP_FIELDS,
+    ],
+    insertable=[
+        *(
+            field
+            for field in (
                 "project",
                 "milestone",
                 "parent",
+                "title",
+                "note",
+                "status",
+                "dropped_reason",
                 "assignee",
                 "delegate",
-                *_TASK_EXTENSION_PUBLIC_ID_FIELDS,
-            ),
+                "priority",
+                "due_date",
+                "recurrence",
+                "sort_order",
+                "sub_sort_order",
+            )
+            if field not in _TASK_EXTENSION_FORBIDDEN_INSERT_FIELDS
         ),
-        declared_fields=_TASK_EXTENSION_DECLARED_FIELDS,
-    )
-
-
-_PUBLIC_TASK_RESOURCE = _task_resource(TaskType)
-_CONSOLE_TASK_RESOURCE = _task_resource(ConsoleTaskType)
+        *_TASK_EXTENSION_INSERT_FIELDS,
+    ],
+    updatable=[
+        "project",
+        "milestone",
+        "parent",
+        "title",
+        "note",
+        "assignee",
+        "delegate",
+        "priority",
+        "due_date",
+        "recurrence",
+        "sort_order",
+        "sub_sort_order",
+        *_TASK_EXTENSION_UPDATE_FIELDS,
+    ],
+    field_id_decode={
+        "project": public_pk_decoder(Project),
+        "milestone": public_pk_decoder(Milestone),
+        "parent": public_pk_decoder(Task),
+        "assignee": public_pk_decoder(User),
+        "delegate": public_pk_decoder(User),
+        "converted_from_activity": public_pk_decoder(ThreadActivity),
+        **{
+            name: public_pk_decoder(Task._meta.get_field(name).related_model)
+            for name in _TASK_EXTENSION_PUBLIC_ID_FIELDS
+        },
+    },
+    write_backend=AngeeHasuraWriteBackend(
+        Task,
+        public_id_fields=(
+            "project",
+            "milestone",
+            "parent",
+            "assignee",
+            "delegate",
+            *_TASK_EXTENSION_PUBLIC_ID_FIELDS,
+        ),
+    ),
+    declared_fields=_TASK_EXTENSION_DECLARED_FIELDS,
+)
 
 _TASK_RELATION_RESOURCE = hasura_model_resource(
     TaskRelationType,
@@ -776,73 +673,49 @@ _LINK_RESOURCE = hasura_model_resource(
     write_backend=AngeeHasuraWriteBackend(Link),
 )
 
-_COMMON_RESOURCE_TYPES = [
+_RESOURCE_TYPES = [
+    *_PROJECT_RESOURCE.types,
     *_MILESTONE_RESOURCE.types,
+    *_TASK_RESOURCE.types,
     *_TASK_RELATION_RESOURCE.types,
     *_PARTICIPANT_RESOURCE.types,
     *_LINK_RESOURCE.types,
 ]
 
-
-def _projects_schema_bucket(
-    project_resource: Any,
-    project_type: type,
-    task_resource: Any,
-    task_type: type,
-) -> dict[str, Any]:
-    """Return the projects surface with its schema-specific Project and Task nodes."""
-
-    return {
-        "query": [
-            project_resource.query,
-            _MILESTONE_RESOURCE.query,
-            task_resource.query,
-            _TASK_RELATION_RESOURCE.query,
-            _PARTICIPANT_RESOURCE.query,
-            _LINK_RESOURCE.query,
-            revisions(project_type),
-        ],
-        "mutation": [
-            ProjectTaskActionMutation,
-            project_resource.mutation,
-            _MILESTONE_RESOURCE.mutation,
-            task_resource.mutation,
-            _TASK_RELATION_RESOURCE.mutation,
-            _PARTICIPANT_RESOURCE.mutation,
-            _LINK_RESOURCE.mutation,
-        ],
-        "types": [
-            project_type,
-            MilestoneType,
-            task_type,
-            TaskRelationType,
-            ProjectParticipantType,
-            ProjectLinkType,
-            *project_resource.types,
-            *task_resource.types,
-            *_COMMON_RESOURCE_TYPES,
-        ],
-    }
-
-
-_PUBLIC_PROJECTS_SCHEMA_BUCKET = _projects_schema_bucket(
-    _PUBLIC_PROJECT_RESOURCE,
-    ProjectType,
-    _PUBLIC_TASK_RESOURCE,
-    TaskType,
-)
-_CONSOLE_PROJECTS_SCHEMA_BUCKET = _projects_schema_bucket(
-    _CONSOLE_PROJECT_RESOURCE,
-    ConsoleProjectType,
-    _CONSOLE_TASK_RESOURCE,
-    ConsoleTaskType,
-)
-_CONSOLE_PROJECTS_SCHEMA_BUCKET["types"].append(UserType)
+_PROJECTS_SCHEMA_BUCKET = {
+    "query": [
+        _PROJECT_RESOURCE.query,
+        _MILESTONE_RESOURCE.query,
+        _TASK_RESOURCE.query,
+        _TASK_RELATION_RESOURCE.query,
+        _PARTICIPANT_RESOURCE.query,
+        _LINK_RESOURCE.query,
+        revisions(ProjectType),
+    ],
+    "mutation": [
+        ProjectTaskActionMutation,
+        _PROJECT_RESOURCE.mutation,
+        _MILESTONE_RESOURCE.mutation,
+        _TASK_RESOURCE.mutation,
+        _TASK_RELATION_RESOURCE.mutation,
+        _PARTICIPANT_RESOURCE.mutation,
+        _LINK_RESOURCE.mutation,
+    ],
+    "types": [
+        ProjectType,
+        MilestoneType,
+        TaskType,
+        TaskRelationType,
+        ProjectParticipantType,
+        ProjectLinkType,
+        *_RESOURCE_TYPES,
+    ],
+}
 
 schemas = {
-    "public": {**_PUBLIC_PROJECTS_SCHEMA_BUCKET},
+    "public": {**_PROJECTS_SCHEMA_BUCKET},
     "console": {
-        **_CONSOLE_PROJECTS_SCHEMA_BUCKET,
+        **_PROJECTS_SCHEMA_BUCKET,
         "subscription": [
             changes(Project, field="projectChanged"),
             changes(Milestone, field="projectMilestoneChanged"),

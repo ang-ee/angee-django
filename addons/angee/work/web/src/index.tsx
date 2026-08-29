@@ -35,37 +35,10 @@ const workRoutes: readonly BaseAddonRoute[] = [
     QUEUE_MODEL,
   ),
   {
-    name: "work.triage-hub",
-    path: "/work/triage",
-    layout: "console",
-    component: lazyRouteComponent(
-      () => import("./views/QueueHubPages"),
-      "TriageHubPage",
-    ),
-  },
-  {
-    name: "work.boards-hub",
-    path: "/work/boards",
-    layout: "console",
-    component: lazyRouteComponent(
-      () => import("./views/QueueHubPages"),
-      "BoardsHubPage",
-    ),
-  },
-  {
-    name: "work.cycles-hub",
-    path: "/work/cycles",
-    layout: "console",
-    component: lazyRouteComponent(
-      () => import("./views/QueueHubPages"),
-      "CyclesHubPage",
-    ),
-  },
-  {
     name: "work.board",
     path: "/work/queues/$queueId/board",
     layout: "console",
-    menu: "work.boards-hub",
+    menu: "work.queues",
     component: lazyRouteComponent(
       () => import("./views/QueueBoardPage"),
       "QueueBoardPage",
@@ -75,7 +48,7 @@ const workRoutes: readonly BaseAddonRoute[] = [
     name: "work.triage",
     path: "/work/queues/$queueId/triage",
     layout: "console",
-    menu: "work.triage-hub",
+    menu: "work.queues",
     component: lazyRouteComponent(
       () => import("./views/TriageInboxPage"),
       "TriageInboxPage",
@@ -85,7 +58,7 @@ const workRoutes: readonly BaseAddonRoute[] = [
     name: "work.cycles",
     path: "/work/queues/$queueId/cycles",
     layout: "console",
-    menu: "work.cycles-hub",
+    menu: "work.queues",
     // Projection page (PipelinePage rule): a parameterized route must not
     // claim a resource — the collection href could never resolve at boot.
     component: lazyRouteComponent(
@@ -97,7 +70,7 @@ const workRoutes: readonly BaseAddonRoute[] = [
     name: "work.cycle-board",
     path: "/work/queues/$queueId/cycles/$id",
     parent: "work.cycles",
-    menu: "work.cycles-hub",
+    menu: "work.queues",
     component: lazyRouteComponent(
       () => import("./views/CycleBoardPage"),
       "CycleBoardPage",
@@ -116,24 +89,6 @@ const workMenu: readonly BaseMenuItem[] = [
         label: "Queues",
         icon: "work-queue",
         route: "work.queues",
-      },
-      {
-        id: "work.triage-hub",
-        label: "Triage",
-        icon: "work-triage",
-        route: "work.triage-hub",
-      },
-      {
-        id: "work.boards-hub",
-        label: "Boards",
-        icon: "work-board",
-        route: "work.boards-hub",
-      },
-      {
-        id: "work.cycles-hub",
-        label: "Cycles",
-        icon: "work-cycle",
-        route: "work.cycles-hub",
       },
     ],
   },

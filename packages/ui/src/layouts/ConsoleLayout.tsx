@@ -138,7 +138,6 @@ function ConsoleWorkbench({
       className="area-content"
       autoSave="console.workbench"
       scrollMode="browser"
-      secondaryDefaultCollapsed
       primary={publishedPrimary ?? undefined}
       secondary={showChatter ? <Chatter /> : undefined}
       onPrimaryController={onPrimaryController}

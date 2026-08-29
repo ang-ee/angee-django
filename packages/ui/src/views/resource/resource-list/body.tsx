@@ -148,15 +148,14 @@ export function ResourceListBody<TRow extends Row = Row>({
     [calendar, handleSelectRecord],
   );
   const handleBoardCreateInLane = React.useCallback(
-    (laneId: string | null) => {
+    (laneId: string | null, rank?: number) => {
       if (!resolvedLaneSource) return;
       setQuickCreateDefaults({
         [resolvedLaneSource.field]: laneId,
+        ...(resolvedLaneSource.rankField && rank !== undefined
+          ? { [resolvedLaneSource.rankField]: rank }
+          : {}),
       });
-      // Creates omit the lane-local rank so the backend allocates in its true
-      // project context. Follow-up if it bites in practice: cross-lane drag
-      // midpoints can still collide because lanes are assignee-scoped while
-      // rank uniqueness is project-scoped.
       handleSelectRecord?.(null);
     },
     [handleSelectRecord, resolvedLaneSource],

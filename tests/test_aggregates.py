@@ -451,9 +451,7 @@ def test_hasura_nested_relation_group_dimension_matches_group_key_contract() -> 
     )
     assert group_key is not None
     assert nested.key in group_key.fields  # type: ignore[attr-defined]
-    # The relation label fallback resolves the related model's preferred
-    # display column even without a node surface (donor/scalar-id axes).
-    assert metadata.relation_axes[0].label_axis == "child__name"
+    assert metadata.relation_axes[0].label_axis is None
 
 
 def test_hasura_single_level_relation_group_metadata_is_byte_identical() -> None:

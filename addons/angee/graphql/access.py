@@ -35,11 +35,11 @@ def actor_can_read(resource: ObjectRef) -> bool:
 
 
 def assert_no_gated_read_fields(model: type[models.Model], field_names: Iterable[str], owner: str, reason: str) -> None:
-    if gated := sorted(name for name in set(field_names) if is_gated_read_axis(model, name)):
+    if gated := sorted(name for name in set(field_names) if _is_gated_read_axis(model, name)):
         raise ImproperlyConfigured(f"{model._meta.label}: {owner} {gated} are field-gated reads; {reason}")
 
 
-def is_gated_read_axis(model: type[models.Model], axis: str) -> bool:
+def _is_gated_read_axis(model: type[models.Model], axis: str) -> bool:
     """Whether a (possibly relation-leaf) group-by axis reads a field-gated column.
 
     A dotted axis (``party__display_name``) is never a field on ``model``, so it

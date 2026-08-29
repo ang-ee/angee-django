@@ -84,19 +84,6 @@ def resource_type_name(surface: type | None) -> str | None:
     return surface_name(surface)
 
 
-def resource_relation_surface(surface: type | None, name: str) -> object | None:
-    """Return the object surface projected by one to-one field, if any."""
-
-    value = _surface_field_type(surface, name)
-    try:
-        related_surface, is_list = _selection_surface(value)
-    except NotImplementedError:
-        return None
-    if is_list or get_object_definition(related_surface) is None:
-        return None
-    return related_surface
-
-
 def require_resource_selection_path(
     surface: type | None,
     path: str,
@@ -118,7 +105,11 @@ def require_resource_selection_path(
         definition = get_object_definition(current_surface)
         field = (
             next(
-                (candidate for candidate in definition.fields if _wire_field_name(candidate) == part),
+                (
+                    candidate
+                    for candidate in definition.fields
+                    if _wire_field_name(candidate) == part
+                ),
                 None,
             )
             if definition is not None
@@ -134,7 +125,8 @@ def require_resource_selection_path(
                 terminal_surface, _is_list = _selection_surface(field.type)
             except NotImplementedError as error:
                 raise ImproperlyConfigured(
-                    f"resource metadata for {model_label} cannot resolve {fact} selection path {path!r}: {error}"
+                    f"resource metadata for {model_label} cannot resolve {fact} "
+                    f"selection path {path!r}: {error}"
                 ) from error
             if get_object_definition(terminal_surface) is not None:
                 raise ImproperlyConfigured(
@@ -147,7 +139,8 @@ def require_resource_selection_path(
             next_surface, is_list = _selection_surface(field.type)
         except NotImplementedError as error:
             raise ImproperlyConfigured(
-                f"resource metadata for {model_label} cannot resolve {fact} selection path {path!r}: {error}"
+                f"resource metadata for {model_label} cannot resolve {fact} "
+                f"selection path {path!r}: {error}"
             ) from error
         if is_list or get_object_definition(next_surface) is None:
             traversed = ".".join(parts[: index + 1])

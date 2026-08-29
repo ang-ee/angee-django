@@ -62,7 +62,6 @@ from angee.graphql.data.metadata import (
     attach_data_resource_metadata,
     make_data_resource_metadata,
     model_resource_fields,
-    relation_group_by_fields,
     resource_fields,
     resource_type_name,
     resource_wire_field_name,
@@ -138,7 +137,9 @@ def _child_back_fk(parent_model: type[models.Model], relation: str) -> str:
     reverse = parent_model._meta.get_field(relation)
     field = getattr(reverse, "field", None)
     if field is None:
-        raise ImproperlyConfigured(f"{parent_model._meta.label}.{relation} is not a to-many child relation.")
+        raise ImproperlyConfigured(
+            f"{parent_model._meta.label}.{relation} is not a to-many child relation."
+        )
     return field.name
 
 
@@ -448,7 +449,9 @@ class AngeeHasuraWriteBackend:
                 field = None
             if getattr(field, "many_to_many", False):
                 instances = (
-                    tuple(_write_public_instance(related_model, item) for item in value) if value is not None else ()
+                    tuple(_write_public_instance(related_model, item) for item in value)
+                    if value is not None
+                    else ()
                 )
                 out[key] = list(instances) if value is not None else None
                 if instances:
@@ -542,10 +545,14 @@ def _public_id_field_models(
         try:
             field = model._meta.get_field(name)
         except FieldDoesNotExist as error:
-            raise ImproperlyConfigured(f"{model._meta.label} public id field {name!r} does not exist.") from error
+            raise ImproperlyConfigured(
+                f"{model._meta.label} public id field {name!r} does not exist."
+            ) from error
         related_model = getattr(field, "related_model", None)
         if not isinstance(related_model, type) or not issubclass(related_model, models.Model):
-            raise ImproperlyConfigured(f"{model._meta.label} public id field {name!r} must be a relation.")
+            raise ImproperlyConfigured(
+                f"{model._meta.label} public id field {name!r} must be a relation."
+            )
         related[name] = related_model
     return related
 
@@ -900,11 +907,10 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     another semantic fact extends the declaration and renderer together.
     """
 
-    active_groupable = relation_group_by_fields(node, model, tuple(groupable))
     for axis, fields in (
         ("filterable", filterable),
         ("sortable", sortable),
-        ("groupable", active_groupable),
+        ("groupable", groupable),
         ("aggregatable", aggregatable),
     ):
         assert_no_gated_read_fields(
@@ -982,7 +988,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             filterable=list(filterable),
             sortable=list(sortable),
             aggregatable=list(aggregatable),
-            groupable=list(active_groupable) or None,
+            groupable=list(groupable) or None,
             writable=list(writable) if writable is not None else None,
             insertable=list(insertable) if insertable is not None else None,
             updatable=list(updatable) if updatable is not None else None,
@@ -1011,7 +1017,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         filterable=tuple(filterable),
         sortable=tuple(sortable),
         aggregatable=tuple(aggregatable),
-        groupable=active_groupable,
+        groupable=tuple(groupable),
         json_paths=active_json_paths,
         insert=insert,
         update=update,
@@ -1160,7 +1166,9 @@ def _attach_lines_save(
             {save_root: strawberry.mutation(resolver=resolve_save, name=save_root)},
         )
     )
-    combined_mutation = strawberry.type(type(f"{res}__mutation", (resource.mutation, save_holder), {}))
+    combined_mutation = strawberry.type(
+        type(f"{res}__mutation", (resource.mutation, save_holder), {})
+    )
     return dataclasses.replace(resource, mutation=combined_mutation)
 
 
@@ -1208,7 +1216,9 @@ def attach_hasura_resource_metadata(
     delete_by_pk_root = resource_attr(resource, "delete_by_pk_root", f"delete_{name}_by_pk")
 
     parent_create_fields = (
-        resource_wire_field_names(insert_input_type, exclude=_parent_write_exclude(lines)) if insert else ()
+        resource_wire_field_names(insert_input_type, exclude=_parent_write_exclude(lines))
+        if insert
+        else ()
     )
     parent_update_fields = resource_wire_field_names(set_input_type, exclude=("id",)) if update else ()
     active_json_paths = dict(json_paths or {})
@@ -1256,7 +1266,11 @@ def attach_hasura_resource_metadata(
     if lines is not None:
         mutation_capabilities = (*mutation_capabilities, "save")
     if mutation_capabilities:
-        save_root = resource_wire_field_name(resource.mutation, f"{name}_save") if lines is not None else None
+        save_root = (
+            resource_wire_field_name(resource.mutation, f"{name}_save")
+            if lines is not None
+            else None
+        )
         attach_data_resource_metadata(
             resource.mutation,
             make_data_resource_metadata(
@@ -1389,7 +1403,6 @@ def _has_model_field(model: type[models.Model], name: str) -> bool:
         return False
     return True
 
-
 def _mutation_capabilities(
     *,
     insert: bool,
@@ -1419,7 +1432,10 @@ def _hasura_group_dimensions(
     """Return typed-key group metadata using the aggregate builder's public contract."""
 
     active_json_paths = dict(json_paths or {})
-    return tuple(_hasura_group_dimension(model, path, filterable, json_paths=active_json_paths) for path in groupable)
+    return tuple(
+        _hasura_group_dimension(model, path, filterable, json_paths=active_json_paths)
+        for path in groupable
+    )
 
 
 def _hasura_group_dimension(

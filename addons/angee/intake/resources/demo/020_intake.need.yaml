@@ -8,24 +8,3 @@ rows:
       body: Customers need a reliable export of their project activity.
       created_by: iam.user_alice
       updated_by: iam.user_alice
-  - xref: eng_triage_water_access
-    fields:
-      task: work.eng_triage_water_access
-      importance: important
-      body: Gardeners using mobility aids need a water point they can turn around beside.
-      created_by: iam.user_alice
-      updated_by: iam.user_alice
-  - xref: garden_accessible_beds
-    fields:
-      project: projects.neighborhood_garden
-      importance: important
-      body: Reserve raised beds with knee clearance near the accessible path.
-      created_by: iam.user_alice
-      updated_by: iam.user_alice
-  - xref: garden_tool_sponsorship
-    fields:
-      project: projects.neighborhood_garden
-      importance: normal
-      body: Publish a short list of shared tools local sponsors can donate.
-      created_by: iam.user_bob
-      updated_by: iam.user_bob

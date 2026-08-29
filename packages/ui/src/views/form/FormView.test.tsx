@@ -1157,9 +1157,8 @@ describe("FormView", () => {
       ).toBeTruthy(),
     );
     expect(sdkMocks.listEnabled).toBe(false);
-    expect(sdkMocks.recordSelection).toContain("vendor");
-    expect(sdkMocks.recordSelection).not.toContain("vendor.id");
-    expect(sdkMocks.recordSelection).not.toContain("vendor.display_name");
+    expect(sdkMocks.recordSelection).toContain("vendor.id");
+    expect(sdkMocks.recordSelection).toContain("vendor.display_name");
 
     // Opening the picker fires the option list once; its fresh label then wins.
     fireEvent.click(
@@ -1173,55 +1172,14 @@ describe("FormView", () => {
     );
   });
 
-  test("submits create on title Enter while omitting blank non-string values", async () => {
-    const metadata: SchemaFieldMetadata = {
-      types: {
-        NoteType: {
-          typeName: "NoteType",
-          fields: {
-            title: { name: "title", kind: "scalar", scalar: "String" },
-            note: { name: "note", kind: "scalar", scalar: "String" },
-            priority: { name: "priority", kind: "enum" },
-            assignee: {
-              name: "assignee",
-              kind: "scalar",
-              scalar: "ID",
-              relationTarget: "UserType",
-            },
-            deadline: { name: "deadline", kind: "scalar", scalar: "DateTime" },
-          },
-        },
-      },
-    };
-    renderWithProviders(
-      <FormView
-        resource="notes.Note"
-        fields={[
-          { name: "title", label: "Title", title: true },
-          { name: "note", label: "Note" },
-          {
-            name: "priority",
-            label: "Priority",
-            widget: "select",
-            options: [{ value: "high", label: "High" }],
-          },
-          {
-            name: "assignee",
-            label: "Assignee",
-            widget: "many2one",
-            options: [{ value: "user-1", label: "Ada" }],
-          },
-          { name: "deadline", label: "Deadline", widget: "datetime" },
-        ]}
-      />,
-      metadata,
-    );
+  test("omits unselected option fields from create payloads", async () => {
+    renderForm(null);
 
-    fireEvent.keyDown(screen.getByLabelText("Title"), { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
-      data: { title: "", note: "" },
+      data: { title: "", reminderAt: null },
     });
   });
 
@@ -1259,7 +1217,7 @@ describe("FormView", () => {
 
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
-      data: { title: "", status: "ACTIVE" },
+      data: { title: "", status: "ACTIVE", reminderAt: null },
     });
   });
 
@@ -2402,8 +2360,7 @@ describe("FormView", () => {
     expect(selection).toContain("id");
     expect(selection).toContain("username");
     expect(selection).toContain("email");
-    expect(selection).toContain("vendor"); // scalar-id relation → bare leaf
-    expect(selection).not.toContain("vendor.id");
+    expect(selection).toContain("vendor.id"); // relation → `<field>.id`
     expect(selection).not.toContain("password"); // write-only → never read back
   });
 
@@ -2456,42 +2413,26 @@ describe("FormView", () => {
     ]));
   });
 
-  test("blocks create and flags a missing required field in an inactive form tab", async () => {
+  test("blocks create and flags a missing required field inline", async () => {
     sdkMocks.record = null;
     sdkMocks.mutate.mockReset();
     const metadata: SchemaFieldMetadata = {
       types: {
         NoteType: {
           typeName: "NoteType",
-          fields: {
-            title: { name: "title", kind: "scalar", scalar: "String" },
-            deadline: { name: "deadline", kind: "scalar", scalar: "DateTime" },
-          },
-          rootFields: {
-            create: "createNote",
-            requiredCreateFields: ["deadline"],
-          },
+          fields: { code: { name: "code", kind: "scalar", scalar: "String" } },
+          rootFields: { create: "createNote", requiredCreateFields: ["code"] },
         },
       },
     };
 
     renderWithProviders(
-      <FormView resource="notes.Note" layout="tabs">
-        <Group label="Overview">
-          <Field name="title" label="Title" />
-        </Group>
-        <Group label="Schedule">
-          <Field name="deadline" label="Deadline" />
-        </Group>
-      </FormView>,
+      <FormView resource="notes.Note" fields={[{ name: "code", label: "Code" }]} />,
       metadata,
     );
-    fireEvent.keyDown(screen.getByLabelText("Title"), { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
-    expect(sdkMocks.mutate).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("tab", { name: "Schedule" }));
-
-    // The unmounted required field is retained as an inline error when its tab opens.
+    // The required field is flagged inline and the submit never reaches the server.
     await screen.findByText("This field is required.");
     expect(sdkMocks.mutate).not.toHaveBeenCalled();
   });

@@ -131,12 +131,7 @@ export function FormView(props: FormViewProps): React.ReactElement {
     typeof toolbarStart === "function"
       ? toolbarStart(recordToolbarContext)
       : toolbarStart;
-  const overview = <FormViewOverview surface={surface} layout={layout} />;
-  const overviewBody = recordChromeContext ? (
-    <RecordChromeProvider value={recordChromeContext}>
-      {overview}
-    </RecordChromeProvider>
-  ) : overview;
+  const overviewBody = <FormViewOverview surface={surface} layout={layout} />;
   const recordExtrasPanel =
     recordPanelContext && recordExtras ? (
       <div className={cn(FORM_VIEW_COLUMN_CLASS, "pb-12")}>
@@ -147,20 +142,6 @@ export function FormView(props: FormViewProps): React.ReactElement {
   const formElement = (
     <form
       className={cn("min-h-full bg-sheet", className)}
-      onKeyDown={(event) => {
-        if (
-          !isCreate ||
-          event.key !== "Enter" ||
-          event.defaultPrevented ||
-          event.nativeEvent.isComposing ||
-          !(event.target instanceof HTMLInputElement) ||
-          event.target.type !== "text"
-        ) {
-          return;
-        }
-        event.preventDefault();
-        void submitForm();
-      }}
       onSubmit={(event) => {
         void submitForm(event);
       }}
