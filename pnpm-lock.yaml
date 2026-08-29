@@ -1537,7 +1537,7 @@ importers:
         specifier: ^6.43.3
         version: 6.43.6
       '@dagrejs/dagre':
-        specifier: ^3.0.0
+        specifier: 3.0.0
         version: 3.0.0
       '@dnd-kit/core':
         specifier: ^6.3.1
