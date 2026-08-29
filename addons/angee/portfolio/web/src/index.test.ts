@@ -1,8 +1,13 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
-import { createRouteHref } from "@angee/ui";
+import { createRouteHref, Tab } from "@angee/ui";
+import * as React from "react";
 import { describe, expect, test } from "vitest";
 
 import portfolio, { INITIATIVE_MODEL, PRODUCT_MODEL } from "./index";
+import {
+  InitiativeUpdatesSection,
+  ProjectUpdatesSection,
+} from "./update-composer";
 import { PRODUCT_FORM_FIELDS } from "./views/ProductsPage";
 
 describe("portfolio addon manifest", () => {
@@ -50,6 +55,23 @@ describe("portfolio addon manifest", () => {
       "portfolio.project-updates",
       "portfolio.initiative-updates",
       "portfolio.task-release",
+    ]);
+
+    const updateSlots = portfolio.slots?.filter((slot) =>
+      slot.id.endsWith("-updates"),
+    );
+    expect(updateSlots).toHaveLength(2);
+    expect(updateSlots?.map((slot) => {
+      if (!React.isValidElement<{ children: React.ReactElement }>(slot.content)) {
+        return null;
+      }
+      return {
+        marker: slot.content.type,
+        child: slot.content.props.children.type,
+      };
+    })).toEqual([
+      { marker: Tab, child: ProjectUpdatesSection },
+      { marker: Tab, child: InitiativeUpdatesSection },
     ]);
   });
 

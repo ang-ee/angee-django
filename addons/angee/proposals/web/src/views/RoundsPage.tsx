@@ -99,26 +99,43 @@ export function RoundsPage(): React.ReactElement {
       >
         <Field name="name" title />
         <Field name="status" widget="statusbar" readOnly />
-        <Group label={t("round.group.target")} columns={2}>
-          <Field name="task" createOnly />
-          <Field name="project" createOnly />
-          <Field name="requester_party" />
-        </Group>
-        <Group label={t("round.group.ceremony")} columns={2}>
-          <Field name="facilitator" createOnly />
-          <Field name="opening_policy" options={openingPolicyOptions} />
-          <Field name="last_call_at" />
-          <Field name="submission_deadline" />
-          <Field name="outcome" readOnly />
-        </Group>
-        <Group label={t("round.group.receipts")} columns={2}>
-          <Field name="opened_at" readOnly />
-          <Field name="opened_by" readOnly />
-          <Field name="closed_at" readOnly />
-          <Field name="closed_by" readOnly />
-          <Field name="created_at" readOnly />
-          <Field name="updated_at" readOnly />
-        </Group>
+        {recordId === "new" ? (
+          <>
+            <Group label={t("round.group.target")} columns={2}>
+              <Field name="task" createOnly />
+              <Field name="project" createOnly />
+              <Field name="facilitator" createOnly />
+              <Field name="requester_party" createOnly />
+            </Group>
+            <Group label={t("round.group.ceremony")} columns={2}>
+              <Field name="last_call_at" createOnly />
+              <Field name="submission_deadline" createOnly />
+            </Group>
+          </>
+        ) : (
+          <>
+            <Group label={t("round.group.target")} columns={2}>
+              <Field name="task" createOnly />
+              <Field name="project" createOnly />
+              <Field name="requester_party" />
+            </Group>
+            <Group label={t("round.group.ceremony")} columns={2}>
+              <Field name="facilitator" createOnly />
+              <Field name="opening_policy" options={openingPolicyOptions} />
+              <Field name="last_call_at" />
+              <Field name="submission_deadline" />
+              <Field name="outcome" readOnly />
+            </Group>
+            <Group label={t("round.group.receipts")} columns={2}>
+              <Field name="opened_at" readOnly />
+              <Field name="opened_by" readOnly />
+              <Field name="closed_at" readOnly />
+              <Field name="closed_by" readOnly />
+              <Field name="created_at" readOnly />
+              <Field name="updated_at" readOnly />
+            </Group>
+          </>
+        )}
       </Form>
     </ResourceList>
   );

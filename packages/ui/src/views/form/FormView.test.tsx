@@ -64,6 +64,7 @@ import {
   Action,
   Field,
   Group,
+  Tab,
 } from "../page";
 
 const sdkMocks = vi.hoisted(() => ({
@@ -2005,6 +2006,109 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
       data: { title: "Slot Title", slotCode: "slot-1" },
     });
+  });
+
+  test("composes FORM_VIEW_SECTIONS_SLOT tabs through the saved-record tab owner", async () => {
+    sdkMocks.record = { id: "note-1", title: "Slot note" };
+
+    function SlotRecordPane(): ReactElement {
+      const context = useRecordChromeContext();
+      return <p>Pane for {context.recordId}</p>;
+    }
+
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      undefined,
+      undefined,
+      {
+        slots: [
+          {
+            ...formViewSectionsSlot("notes.Note"),
+            id: "notes.pane",
+            content: (
+              <Tab id="pane" label="Pane" badge={7}>
+                <SlotRecordPane />
+              </Tab>
+            ),
+          },
+        ],
+      },
+    );
+
+    const paneTab = await screen.findByRole("tab", { name: /Pane/ });
+    expect(paneTab.textContent).toContain("7");
+    fireEvent.click(paneTab);
+    expect(await screen.findByText("Pane for note-1")).toBeTruthy();
+  });
+
+  test("rejects a slot record tab that claims the reserved overview id", async () => {
+    sdkMocks.record = { id: "note-1", title: "Slot note" };
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(() =>
+        renderWithProviders(
+          <FormView resource="notes.Note" id="note-1">
+            <Field name="title" label="Title" title />
+          </FormView>,
+          undefined,
+          undefined,
+          {
+            slots: [
+              {
+                ...formViewSectionsSlot("notes.Note"),
+                id: "notes.overview",
+                content: (
+                  <Tab id="overview" label="Shadow overview">
+                    <p>contributed</p>
+                  </Tab>
+                ),
+              },
+            ],
+          },
+        ),
+      ).toThrow(/duplicate record tab id "overview"/);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  test("rejects a slot record tab whose id collides with a declared one", async () => {
+    sdkMocks.record = { id: "note-1", title: "Slot note" };
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(() =>
+        renderWithProviders(
+          <FormView
+            resource="notes.Note"
+            id="note-1"
+            recordTabs={[
+              { id: "pane", label: "Declared", render: () => <p>declared</p> },
+            ]}
+          >
+            <Field name="title" label="Title" title />
+          </FormView>,
+          undefined,
+          undefined,
+          {
+            slots: [
+              {
+                ...formViewSectionsSlot("notes.Note"),
+                id: "notes.pane",
+                content: (
+                  <Tab id="pane" label="Pane">
+                    <p>contributed</p>
+                  </Tab>
+                ),
+              },
+            ],
+          },
+        ),
+      ).toThrow(/duplicate record tab id "pane"/);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   test("reads many2one record ids and writes the flat relation field", async () => {
