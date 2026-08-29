@@ -834,10 +834,18 @@ def test_fractional_rank_rebalance_rejects_traversal_context_keys() -> None:
 def test_fractional_rank_rebalance_accepts_a_relation_attname_context() -> None:
     """A relation context key works as the field name or its column attname."""
 
+    class RankOwner(models.Model):
+        """Concrete relation target for relation-context rebalance tests."""
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+
     class RankedRelationContext(models.Model):
         """Concrete model used for relation-context rebalance tests."""
 
-        owner = models.ForeignKey("auth.User", on_delete=models.CASCADE, null=True)
+        owner = models.ForeignKey(RankOwner, on_delete=models.CASCADE, null=True)
         rank = FractionalRankField()
 
         class Meta:
@@ -849,6 +857,7 @@ def test_fractional_rank_rebalance_accepts_a_relation_attname_context() -> None:
             )
 
     with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(RankOwner)
         schema_editor.create_model(RankedRelationContext)
     try:
         field = RankedRelationContext._meta.get_field("rank")
@@ -859,3 +868,4 @@ def test_fractional_rank_rebalance_accepts_a_relation_attname_context() -> None:
     finally:
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(RankedRelationContext)
+            schema_editor.delete_model(RankOwner)
