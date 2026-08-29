@@ -26,19 +26,6 @@ default-groups = ["addons"]
 # Stack-owned cache (matches the stack services' UV_CACHE_DIR); gitignored.
 cache-dir = "caches/uv"
 
-{% if olm_cxxflags %}
-[tool.uv.extra-build-variables]
-# python-olm (resolved from the Matrix addon's mautrix[encryption] dependency
-# through the generated addons group) vendors the EOL libolm C++ source, which
-# modern clang rejects; deferring template semantic checks lets the sdist build
-# unchanged. Inert unless the composed group resolves python-olm. uv reads
-# [tool.uv] from THIS project root, not the editable framework dep, so the flag
-# must live here. GCC rejects the clang flag and needs none — a Linux render
-# passes olm_cxxflags empty, which drops this block. (Remove when mautrix moves
-# off libolm.)
-python-olm = { CXXFLAGS = "{{ olm_cxxflags }}" }
-{% endif %}
-
 # Keep this table last as belt-and-braces hygiene for stable generated diffs;
 # hatch_angee.write_block is byte-idempotent even when later tables follow it.
 [dependency-groups]

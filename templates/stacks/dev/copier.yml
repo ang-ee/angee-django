@@ -99,7 +99,6 @@ _angee:
         include_operator_installer: true
         addons_profile: "${inputs.addons_profile}"
         include_arp: "${inputs.include_arp}"
-        olm_cxxflags: "${inputs.olm_cxxflags}"
         framework_workspace: true
         # The rendered pyproject resolves django-angee editable from the same
         # slot the stack's processes run, so `uv run manage.py` works bare from
@@ -196,10 +195,6 @@ include_arp:
   default: false
   help: Declare the private ang-ee/angee-arp source (arpee's arp.* addons) with its slot, addon dir, and web globs.
 
-olm_cxxflags:
-  type: str
-  default: "-fdelayed-template-parsing"
-  help: CXXFLAGS for python-olm, installed through the Matrix addon's mautrix[encryption] dependency in the generated addons group; empty renders no override — pass empty on GCC/Linux.
 
 django_port:
   type: int
