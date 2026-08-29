@@ -6,3 +6,14 @@ packages:
 allowBuilds:
   esbuild: true
   "@tailwindcss/oxide": true
+
+# assistant-ui pinned EXACT: 0.14.29 / tap 0.9.15 regressed the chat composer
+# (ComposerPrimitive.Input drops all typed input — seen live on demo). The
+# internals (core/store/tap) float independently of the react package, so a
+# fresh lockfile needs the whole family held. Re-test the agent chat before
+# lifting any of these.
+overrides:
+  "@assistant-ui/react": 0.14.26
+  "@assistant-ui/core": 0.2.20
+  "@assistant-ui/store": 0.2.19
+  "@assistant-ui/tap": 0.9.3

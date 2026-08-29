@@ -21,7 +21,7 @@
     "@angee/refine": "workspace:*",
     "@angee/metadata": "workspace:*",
     "@angee/ui": "workspace:*",
-    "@assistant-ui/react": "^0.14.24",
+    "@assistant-ui/react": "0.14.26",
     "@refinedev/core": "^5.0.12",
     "@streamdown/code": "^1.1.1",
     "lucide-react": "^1.21.0",
