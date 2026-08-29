@@ -240,6 +240,9 @@ export function FormView(props: FormViewProps): React.ReactElement {
               {recordTabList.map((tab) => (
                 <Tabs.Tab key={tab.id} value={tab.id} icon={renderGlyph(tab.icon)}>
                   {tab.label}
+                  {tab.badge != null ? (
+                    <Tabs.Count>{tab.badge}</Tabs.Count>
+                  ) : null}
                 </Tabs.Tab>
               ))}
             </Tabs.List>

@@ -236,7 +236,7 @@ const metadata = {
           "sort_order",
           "sub_sort_order",
         ],
-        requiredCreateFields: ["title", "sort_order", "sub_sort_order"],
+        requiredCreateFields: ["title"],
         relationAxes: [
           {
             field: "project",
@@ -318,8 +318,6 @@ function TaskBoardFixture(): ReactElement {
             { name: "assignee", label: "Assignee" },
             { name: "priority", label: "Priority" },
             { name: "due_date", label: "Due date" },
-            { name: "sort_order", label: "Order", createOnly: true },
-            { name: "sub_sort_order", label: "Subtask order", createOnly: true },
           ]}
           recordId={recordId}
           creating={creating}

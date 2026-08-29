@@ -267,10 +267,10 @@ export function GraphView<
         onSelectionChange={
           onNodeSelect || onNodesSelect || onEdgeSelect
             ? ({ nodes: selectedNodes, edges: selectedEdges }) => {
-                const signature = [
-                  selectedNodes.map((node) => node.id).join(" "),
-                  selectedEdges.map((edge) => edge.id).join(" "),
-                ].join("|");
+                const signature = JSON.stringify([
+                  selectedNodes.map((node) => node.id),
+                  selectedEdges.map((edge) => edge.id),
+                ]);
                 if (lastSelectionSignature.current === signature) return;
                 lastSelectionSignature.current = signature;
                 onNodeSelect?.(selectedNodes[0]?.data.node ?? null);

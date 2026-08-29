@@ -2028,7 +2028,7 @@ describe("FormView", () => {
             ...formViewSectionsSlot("notes.Note"),
             id: "notes.pane",
             content: (
-              <Tab id="pane" label="Pane">
+              <Tab id="pane" label="Pane" badge={7}>
                 <SlotRecordPane />
               </Tab>
             ),
@@ -2037,8 +2037,41 @@ describe("FormView", () => {
       },
     );
 
-    fireEvent.click(await screen.findByRole("tab", { name: "Pane" }));
+    const paneTab = await screen.findByRole("tab", { name: /Pane/ });
+    expect(paneTab.textContent).toContain("7");
+    fireEvent.click(paneTab);
     expect(await screen.findByText("Pane for note-1")).toBeTruthy();
+  });
+
+  test("rejects a slot record tab that claims the reserved overview id", async () => {
+    sdkMocks.record = { id: "note-1", title: "Slot note" };
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(() =>
+        renderWithProviders(
+          <FormView resource="notes.Note" id="note-1">
+            <Field name="title" label="Title" title />
+          </FormView>,
+          undefined,
+          undefined,
+          {
+            slots: [
+              {
+                ...formViewSectionsSlot("notes.Note"),
+                id: "notes.overview",
+                content: (
+                  <Tab id="overview" label="Shadow overview">
+                    <p>contributed</p>
+                  </Tab>
+                ),
+              },
+            ],
+          },
+        ),
+      ).toThrow(/duplicate record tab id "overview"/);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   test("rejects a slot record tab whose id collides with a declared one", async () => {

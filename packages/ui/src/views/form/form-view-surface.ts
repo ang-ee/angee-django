@@ -76,6 +76,8 @@ export interface RecordTabDescriptor {
   id: string;
   label: React.ReactNode;
   icon?: React.ReactNode;
+  /** Rendered as a `Tabs.Count` beside the label (a count, a status dot). */
+  badge?: React.ReactNode;
   render: (context: RecordPanelContext) => React.ReactNode;
   /**
    * Keep the panel mounted even while inactive. Base UI mounts a keep-mounted
@@ -244,6 +246,9 @@ export function useFormViewSurface({
                 label: declaration.tab.label,
                 ...(declaration.tab.icon !== undefined
                   ? { icon: declaration.tab.icon }
+                  : {}),
+                ...(declaration.tab.badge !== undefined
+                  ? { badge: declaration.tab.badge }
                   : {}),
                 render: () => declaration.tab.children,
               },
@@ -558,9 +563,10 @@ function mergeRecordTabs(
   declared: readonly RecordTabDescriptor[],
   contributed: readonly RecordTabDescriptor[],
 ): readonly RecordTabDescriptor[] {
-  if (contributed.length === 0) return declared;
-  const tabs = [...declared, ...contributed];
-  const seen = new Set<string>();
+  const tabs =
+    contributed.length === 0 ? declared : [...declared, ...contributed];
+  // The fixed overview tab renders outside this list; its id is reserved.
+  const seen = new Set<string>([FORM_VIEW_OVERVIEW_TAB_ID]);
   for (const tab of tabs) {
     if (seen.has(tab.id)) {
       throw new Error(`FormView received duplicate record tab id "${tab.id}".`);

@@ -670,16 +670,36 @@ def test_fractional_rank_requires_exactly_one_unique_context() -> None:
 
             app_label = "auth"
 
+    class RankedOverconstrained(models.Model):
+        """Concrete model whose rank belongs to two unique contexts."""
+
+        lane = models.CharField(max_length=8)
+        tier = models.CharField(max_length=8)
+        rank = FractionalRankField()
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+            constraints = (
+                models.UniqueConstraint(fields=("lane", "rank"), name="ranked_over_lane_rank"),
+                models.UniqueConstraint(fields=("tier", "rank"), name="ranked_over_tier_rank"),
+            )
+
     with connection.schema_editor() as schema_editor:
         schema_editor.create_model(RankedUnconstrained)
+        schema_editor.create_model(RankedOverconstrained)
     try:
         with pytest.raises(ImproperlyConfigured, match="exactly one"):
             RankedUnconstrained.objects.create()
+        with pytest.raises(ImproperlyConfigured, match="exactly one"):
+            RankedOverconstrained.objects.create(lane="a", tier="x")
 
         explicit = RankedUnconstrained.objects.create(rank=64.0)
         assert explicit.rank == 64.0
     finally:
         with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(RankedOverconstrained)
             schema_editor.delete_model(RankedUnconstrained)
 
 
@@ -771,6 +791,17 @@ def test_fractional_rank_rebalance_rewrites_a_clean_spread() -> None:
         assert untouched.rank == 7.0
 
         assert field.rebalance(context={"lane": "a"}) == 0
+
+        # Every row shifts up into the rank its successor currently holds, so
+        # writing the clean spread directly (no staging pass) trips the unique
+        # constraint mid-statement; only the staged rewrite survives.
+        for occupied in (step / 2, step, step * 2):
+            RankedRebalance.objects.create(lane="c", rank=occupied)
+        assert field.rebalance(context={"lane": "c"}) == 3
+        crowded = list(
+            RankedRebalance.objects.filter(lane="c").order_by("rank").values_list("rank", flat=True)
+        )
+        assert crowded == [step, step * 2, step * 3]
     finally:
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(RankedRebalance)
@@ -797,3 +828,34 @@ def test_fractional_rank_rebalance_rejects_traversal_context_keys() -> None:
     for bad_context in ({"lane__icontains": "a"}, {"missing": 1}, {"rank": 1.0}):
         with pytest.raises(ImproperlyConfigured):
             field.rebalance(context=bad_context)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fractional_rank_rebalance_accepts_a_relation_attname_context() -> None:
+    """A relation context key works as the field name or its column attname."""
+
+    class RankedRelationContext(models.Model):
+        """Concrete model used for relation-context rebalance tests."""
+
+        owner = models.ForeignKey("auth.User", on_delete=models.CASCADE, null=True)
+        rank = FractionalRankField()
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+            constraints = (
+                models.UniqueConstraint(fields=("owner", "rank"), name="ranked_rel_owner_rank"),
+            )
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(RankedRelationContext)
+    try:
+        field = RankedRelationContext._meta.get_field("rank")
+        # Django resolves the column attname to the relation field itself, so
+        # both spellings address the same exact-match context.
+        assert field.rebalance(context={"owner": None}) == 0
+        assert field.rebalance(context={"owner_id": None}) == 0
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(RankedRelationContext)
