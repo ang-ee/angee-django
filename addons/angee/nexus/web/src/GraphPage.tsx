@@ -39,6 +39,7 @@ import { useNexusT } from "./i18n";
 
 const ROOT_LIMIT = 200;
 const GRAPH_LIMIT = 60;
+const GRAPH_LAYOUT = { rankdir: "LR" } as const;
 
 type GraphLens = "ego" | "circle" | "identity";
 
@@ -174,7 +175,7 @@ export function GraphPage(): React.ReactElement {
                   edges={edges}
                   nodeStyles={nodeStyles}
                   edgeStyles={edgeStyles}
-                  layout={{ rankdir: "LR" }}
+                  layout={GRAPH_LAYOUT}
                   onNodesSelect={(selected) => {
                     setSelectedNodeIds(selected.map((node) => node.id));
                     if (selected.length > 0) setSelectedEdgeId(null);
