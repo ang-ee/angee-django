@@ -234,10 +234,21 @@ export function useFormViewSurface({
       ),
     [slotDeclarations],
   );
-  const slotTabs = React.useMemo(
+  const slotRecordTabs = React.useMemo<readonly RecordTabDescriptor[]>(
     () =>
       slotDeclarations.flatMap((declaration) =>
-        declaration.kind === "tab" ? [declaration] : [],
+        declaration.kind === "tab" && declaration.tab.hidden !== true
+          ? [
+              {
+                id: declaration.tab.id,
+                label: declaration.tab.label,
+                ...(declaration.tab.icon !== undefined
+                  ? { icon: declaration.tab.icon }
+                  : {}),
+                render: () => declaration.tab.children,
+              },
+            ]
+          : [],
       ),
     [slotDeclarations],
   );
@@ -417,21 +428,13 @@ export function useFormViewSurface({
         gridGroups,
         declaredGroupSequences,
       );
-      const tabSections = chrome.recordChromeContext == null
-        ? []
-        : slotTabs.flatMap(({ tab, sequence, order }) =>
-            tab.hidden
-              ? []
-              : [formSectionFromTab(tab, sequence, order)],
-          );
       const stacked = groupSections.filter((section) => section.label == null);
-      const tabbedSections = [
-        ...groupSections.filter((section) => section.label != null),
-        ...tabSections,
-      ].sort(compareFormSections);
+      const tabbedSections = groupSections
+        .filter((section) => section.label != null)
+        .sort(compareFormSections);
       return [...stacked, ...tabbedSections];
     },
-    [chrome.recordChromeContext, declaredGroupSequences, gridFields, gridGroups, slotTabs],
+    [declaredGroupSequences, gridFields, gridGroups],
   );
   const subtitleParts = React.useMemo(
     () =>
@@ -475,7 +478,10 @@ export function useFormViewSurface({
       (save.displayRecord == null || !deleteVisibleWhen(save.displayRecord)))
       ? undefined
       : deleteAction;
-  const recordTabList = recordTabs ?? EMPTY_RECORD_TABS;
+  const recordTabList = React.useMemo(
+    () => mergeRecordTabs(recordTabs ?? EMPTY_RECORD_TABS, slotRecordTabs),
+    [recordTabs, slotRecordTabs],
+  );
 
   return {
     ...save,
@@ -526,23 +532,6 @@ function compareSlotDeclaration(
   return left.sequence - right.sequence || left.order - right.order;
 }
 
-function formSectionFromTab(
-  tab: TabDescriptor,
-  sequence: number,
-  order: number,
-): FormSectionModel {
-  return {
-    key: `tab:${tab.id}`,
-    label: tab.label,
-    icon: tab.icon,
-    badge: tab.badge,
-    fields: [],
-    render: () => tab.children,
-    sequence,
-    order,
-  };
-}
-
 function compareFormSections(
   left: FormSectionModel,
   right: FormSectionModel,
@@ -562,4 +551,21 @@ function developmentMode(): boolean {
     }
   ).process?.env?.NODE_ENV;
   return nodeEnv !== "production";
+}
+
+/** Append slot-contributed record tabs after the host-declared ones, fail-fast on id collisions. */
+function mergeRecordTabs(
+  declared: readonly RecordTabDescriptor[],
+  contributed: readonly RecordTabDescriptor[],
+): readonly RecordTabDescriptor[] {
+  if (contributed.length === 0) return declared;
+  const tabs = [...declared, ...contributed];
+  const seen = new Set<string>();
+  for (const tab of tabs) {
+    if (seen.has(tab.id)) {
+      throw new Error(`FormView received duplicate record tab id "${tab.id}".`);
+    }
+    seen.add(tab.id);
+  }
+  return tabs;
 }

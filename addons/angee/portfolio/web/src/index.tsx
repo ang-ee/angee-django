@@ -4,7 +4,12 @@ import {
   type BaseAddonRoute,
 } from "@angee/app";
 import { PROJECT_MODEL, TASK_MODEL } from "@angee/projects";
-import { formViewSectionsSlot, type BaseMenuItem } from "@angee/ui";
+import {
+  formViewSectionsSlot,
+  Glyph,
+  Tab,
+  type BaseMenuItem,
+} from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import {
   Activity,
@@ -15,7 +20,7 @@ import {
   Rocket,
 } from "lucide-react";
 
-import { enPortfolioMessages } from "./i18n";
+import { enPortfolioMessages, usePortfolioT } from "./i18n";
 import {
   projectPortfolioFormSection,
   taskReleaseFormSection,
@@ -25,6 +30,11 @@ import {
   InitiativeUpdatesSection,
   ProjectUpdatesSection,
 } from "./update-composer";
+
+function PortfolioUpdatesLabel() {
+  const t = usePortfolioT();
+  return <>{t("update.pane.title")}</>;
+}
 
 const portfolioRoutes: readonly BaseAddonRoute[] = [
   {
@@ -99,13 +109,29 @@ const portfolio = defineBaseAddon({
       ...formViewSectionsSlot(PROJECT_MODEL),
       id: "portfolio.project-updates",
       sequence: 45,
-      content: <ProjectUpdatesSection />,
+      content: (
+        <Tab
+          id="portfolio-updates"
+          label={<PortfolioUpdatesLabel />}
+          icon={<Glyph decorative name="portfolio-update" />}
+        >
+          <ProjectUpdatesSection />
+        </Tab>
+      ),
     },
     {
       ...formViewSectionsSlot(INITIATIVE_MODEL),
       id: "portfolio.initiative-updates",
       sequence: 45,
-      content: <InitiativeUpdatesSection />,
+      content: (
+        <Tab
+          id="portfolio-updates"
+          label={<PortfolioUpdatesLabel />}
+          icon={<Glyph decorative name="portfolio-update" />}
+        >
+          <InitiativeUpdatesSection />
+        </Tab>
+      ),
     },
     {
       ...formViewSectionsSlot(TASK_MODEL),

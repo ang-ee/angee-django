@@ -29,7 +29,7 @@ export function formViewRecordActionsSlot(
   return { slot: FORM_VIEW_RECORD_ACTIONS_SLOT, model: resource, impl };
 }
 
-/** Resolve the model-scoped contributed-form-section target. */
+/** Resolve model-scoped contributed form groups/actions and saved-record tabs. */
 export function formViewSectionsSlot(resource: string): ModelSlotTarget {
   return { slot: FORM_VIEW_SECTIONS_SLOT, model: resource };
 }

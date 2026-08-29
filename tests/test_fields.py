@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import pytest
 from django.conf import settings
-from django.core.exceptions import FieldError, ImproperlyConfigured
+from django.core.exceptions import FieldError, ImproperlyConfigured, ValidationError
 from django.db import connection, models
 from django.db.models import F, Value
 from django.db.models.functions import Concat
 
-from angee.base.fields import EncryptedField, SqidField, StateField, _derive_fernet
+from angee.base.fields import (
+    EncryptedField,
+    FractionalRankExhausted,
+    FractionalRankField,
+    SqidField,
+    StateField,
+    _derive_fernet,
+)
 from angee.base.mixins import SqidMixin
 
 
@@ -577,3 +585,215 @@ def test_sqid_field_rejects_non_string_prefix() -> None:
                 """Django model options for the test model."""
 
                 app_label = "auth"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fractional_rank_appends_within_its_unique_context() -> None:
+    """An omitted rank appends per context; an explicit rank is honored."""
+
+    class RankedItem(models.Model):
+        """Concrete model used for fractional-rank allocation tests."""
+
+        lane = models.CharField(max_length=8)
+        rank = FractionalRankField()
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+            constraints = (
+                models.UniqueConstraint(fields=("lane", "rank"), name="ranked_item_lane_rank"),
+            )
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(RankedItem)
+    try:
+        first = RankedItem.objects.create(lane="a")
+        second = RankedItem.objects.create(lane="a")
+        other_lane = RankedItem.objects.create(lane="b")
+        explicit = RankedItem.objects.create(lane="a", rank=512.0)
+
+        assert first.rank == FractionalRankField.STEP
+        assert second.rank == FractionalRankField.STEP * 2
+        assert other_lane.rank == FractionalRankField.STEP
+        assert explicit.rank == 512.0
+        after_explicit = RankedItem.objects.create(lane="a")
+        assert after_explicit.rank == second.rank + FractionalRankField.STEP
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(RankedItem)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fractional_rank_full_clean_allows_the_pending_none() -> None:
+    """``full_clean`` before save passes with the rank still unallocated."""
+
+    class RankedPending(models.Model):
+        """Concrete model used for pending-rank validation tests."""
+
+        lane = models.CharField(max_length=8)
+        rank = FractionalRankField()
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+            constraints = (
+                models.UniqueConstraint(fields=("lane", "rank"), name="ranked_pending_lane_rank"),
+            )
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(RankedPending)
+    try:
+        instance = RankedPending(lane="a")
+
+        instance.full_clean()
+        instance.save()
+
+        assert instance.rank == FractionalRankField.STEP
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(RankedPending)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fractional_rank_requires_exactly_one_unique_context() -> None:
+    """Allocation fails loudly without exactly one field-based unique context."""
+
+    class RankedUnconstrained(models.Model):
+        """Concrete model whose rank declares no unique context."""
+
+        rank = FractionalRankField()
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(RankedUnconstrained)
+    try:
+        with pytest.raises(ImproperlyConfigured, match="exactly one"):
+            RankedUnconstrained.objects.create()
+
+        explicit = RankedUnconstrained.objects.create(rank=64.0)
+        assert explicit.rank == 64.0
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(RankedUnconstrained)
+
+
+def test_fractional_rank_has_default_exposes_the_server_allocator() -> None:
+    """The Hasura-facing default facts advertise omittable inserts."""
+
+    field = FractionalRankField()
+
+    assert field.has_default() is True
+    assert field.get_default() is None
+
+
+def test_get_append_rank_steps_and_exhausts() -> None:
+    """Append ranks start at STEP, step cleanly, and exhaust loudly."""
+
+    step = FractionalRankField.STEP
+
+    assert FractionalRankField.get_append_rank(None) == step
+    assert FractionalRankField.get_append_rank(step) == step * 2
+    with pytest.raises(FractionalRankExhausted):
+        FractionalRankField.get_append_rank(float("1e308") * 1.7976)
+
+
+def test_get_rank_between_midpoints_and_edges() -> None:
+    """Between-neighbor ranks midpoint, prepend, append, and exhaust."""
+
+    step = FractionalRankField.STEP
+
+    assert FractionalRankField.get_rank_between(None, None) == step
+    assert FractionalRankField.get_rank_between(step, None) == step * 2
+    assert FractionalRankField.get_rank_between(None, step) == 0.0
+    midpoint = FractionalRankField.get_rank_between(step, step * 2)
+    assert step < midpoint < step * 2
+    with pytest.raises(ValueError, match="strictly less"):
+        FractionalRankField.get_rank_between(step * 2, step)
+    adjacent = math.nextafter(1.0, 2.0)
+    with pytest.raises(FractionalRankExhausted):
+        FractionalRankField.get_rank_between(1.0, adjacent)
+
+
+def test_fractional_rank_rejects_non_finite_values() -> None:
+    """NaN and infinity are refused on both coercion boundaries."""
+
+    field = FractionalRankField()
+
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValidationError):
+            field.to_python(bad)
+        with pytest.raises(ValidationError):
+            field.get_prep_value(bad)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fractional_rank_rebalance_rewrites_a_clean_spread() -> None:
+    """Rebalance rewrites one context to clean steps and reports the changes."""
+
+    class RankedRebalance(models.Model):
+        """Concrete model used for rank rebalance tests."""
+
+        lane = models.CharField(max_length=8)
+        rank = FractionalRankField()
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+            constraints = (
+                models.UniqueConstraint(fields=("lane", "rank"), name="ranked_rebalance_lane_rank"),
+            )
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(RankedRebalance)
+    try:
+        RankedRebalance.objects.create(lane="a", rank=0.25)
+        RankedRebalance.objects.create(lane="a", rank=0.5)
+        RankedRebalance.objects.create(lane="a", rank=9000.0)
+        untouched = RankedRebalance.objects.create(lane="b", rank=7.0)
+
+        field = RankedRebalance._meta.get_field("rank")
+        changed = field.rebalance(context={"lane": "a"})
+
+        assert changed == 3
+        ranks = list(
+            RankedRebalance.objects.filter(lane="a").order_by("rank").values_list("rank", flat=True)
+        )
+        step = FractionalRankField.STEP
+        assert ranks == [step, step * 2, step * 3]
+        untouched.refresh_from_db()
+        assert untouched.rank == 7.0
+
+        assert field.rebalance(context={"lane": "a"}) == 0
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(RankedRebalance)
+
+
+def test_fractional_rank_rebalance_rejects_traversal_context_keys() -> None:
+    """Context keys must be direct model fields, never lookups or the rank."""
+
+    class RankedContextGuard(models.Model):
+        """Concrete model used for rebalance-context validation tests."""
+
+        lane = models.CharField(max_length=8)
+        rank = FractionalRankField()
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+            constraints = (
+                models.UniqueConstraint(fields=("lane", "rank"), name="ranked_guard_lane_rank"),
+            )
+
+    field = RankedContextGuard._meta.get_field("rank")
+    for bad_context in ({"lane__icontains": "a"}, {"missing": 1}, {"rank": 1.0}):
+        with pytest.raises(ImproperlyConfigured):
+            field.rebalance(context=bad_context)
