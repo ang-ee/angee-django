@@ -35,8 +35,9 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/.venv \
 # `docker stop` shuts the ASGI server down cleanly. git: the composed stack's
 # addon dependency group pulls the pinned ang-ee/strawberry fork — git is needed
 # both to bake that closure and for the mounted-source `uv sync` at container
-# start. No compiler, no node (Vite is a separate image); the framework's own
-# wheels ship manylinux binaries.
+# start. No compiler, no node here (Vite is a separate image); the framework's
+# own wheels ship manylinux binaries — only the dev-facing `final` target below
+# adds a toolchain, for the composed addon closure's sdist-only deps.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libmagic1 tini ca-certificates git gosu \
     && rm -rf /var/lib/apt/lists/*
