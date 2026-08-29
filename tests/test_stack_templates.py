@@ -1017,6 +1017,9 @@ def test_dev_stack_hostname_mode_secures_the_ux_ingress() -> None:
     assert frontend["route"] == {"port": 5173, "path": "/", "auth": "none"}
     assert "ports" not in frontend
     assert frontend["env"]["ANGEE_UI_ALLOWED_HOSTS"] == "dev.example.com"
+    assert stack["services"]["django"]["env"]["ANGEE_PUBLIC_ORIGIN"] == "https://dev.example.com"
+    localhost_stack = _render_dev_docker_stack()
+    assert "ANGEE_PUBLIC_ORIGIN" not in localhost_stack["services"]["django"]["env"]
     assert stack["services"]["playwright-server"]["route"] == {
         "port": 3100,
         "auth": "forward",

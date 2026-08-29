@@ -365,7 +365,8 @@ services:
       ANGEE_PROJECT_DIR: /app
       DATABASE_URL: "{{ database_url }}"
       YAMLCONF_SECRET_KEY: "${secret.secret-key}"
-{% if stack_flavor == "instance" %}      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_USERNAME: "admin"
+{% if ingress_domain_value == "localhost" %}{% else %}      ANGEE_PUBLIC_ORIGIN: "https://{{ ingress_domain_value }}"
+{% endif %}{% if stack_flavor == "instance" %}      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_USERNAME: "admin"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_EMAIL: "admin@example.com"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_PASSWORD: "${secret.admin-password}"{% endif %}
       ANGEE_OPERATOR_GRAPHQL_ENDPOINT: "/operator/graphql"

@@ -55,6 +55,20 @@ def _default_installed_apps(tmp_path: Path, roots: tuple[str, ...]) -> tuple[str
     return tuple(defaults["INSTALLED_APPS"])
 
 
+def test_public_origin_joins_csrf_trusted_origins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ANGEE_PUBLIC_ORIGIN (set by ingress-fronted stacks) is a CSRF trusted origin."""
+
+    monkeypatch.setenv("ANGEE_PUBLIC_ORIGIN", "https://demo.example.com")
+    defaults = runpy.run_module(
+        "angee.compose.defaults",
+        init_globals={"BASE_DIR": tmp_path},
+        run_name="__test_effective_defaults__",
+    )
+    assert defaults["CSRF_TRUSTED_ORIGINS"] == ["https://demo.example.com"]
+
+
 def test_project_dir_owner_discovers_explicit_manage_and_ancestor_roots(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
