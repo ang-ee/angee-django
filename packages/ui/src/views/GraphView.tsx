@@ -397,6 +397,11 @@ function layoutGraph<
   nodes: RenderNode<TNodeKind, TNodeMeta>[];
   edges: RenderEdge<TEdgeKind, TEdgeMeta>[];
 } {
+  // @dagrejs/dagre is pinned EXACT at 3.0.0: 3.1.0/3.1.1 regress on large
+  // multigraphs with >=3 parallel edges between one node pair (dagre's
+  // intersectRect throws "Not possible to find intersection inside of the
+  // rectangle" — live repro: the platform model graph's created_by/updated_by/
+  // owner edges). Re-test with the platform graph before widening the range.
   const graph = new dagre.graphlib.Graph({ directed: true, multigraph: true });
   graph.setDefaultEdgeLabel(() => ({}));
   graph.setGraph(layout);
