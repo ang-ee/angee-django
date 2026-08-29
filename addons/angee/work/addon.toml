@@ -15,6 +15,7 @@ depends_on = [
 master = []
 demo = [
   { path = "resources/demo/010_work.queue.yaml", depends_on = "iam:resources/demo/010_iam.user.yaml" },
-  { path = "resources/demo/015_work.cycle.yaml", depends_on = "resources/demo/010_work.queue.yaml" },
+  { path = "resources/demo/012_work.stage.yaml", depends_on = "resources/demo/010_work.queue.yaml", adopt = ["queue", "name"] },
+  { path = "resources/demo/015_work.cycle.yaml", depends_on = "resources/demo/012_work.stage.yaml" },
   { path = "resources/demo/020_projects.task.yaml", depends_on = ["resources/demo/015_work.cycle.yaml", "projects:resources/demo/031_projects.task.yaml"] },
 ]

@@ -195,6 +195,17 @@ describe("MutationDialog", () => {
         (label) => `${label} must be a whole number.`,
       ),
     ).toThrow("Port must be a whole number.");
+
+    const localMidnight = mutationDialogValueCodecs.datetime(
+      "2026-08-31T00:00",
+    );
+    expect(localMidnight).toMatch(
+      /^2026-08-31T00:00:00[+-]\d{2}:\d{2}$/,
+    );
+    expect(mutationDialogValueCodecs.datetime("")).toBeNull();
+    expect(() => mutationDialogValueCodecs.datetime("not-a-date")).toThrow(
+      "datetime value was not a valid ISO-8601 date-time",
+    );
   });
 
   test("shows owner-level busy feedback and locks both footer actions", async () => {

@@ -210,8 +210,15 @@ export function useRowActionsSurface<TRow extends Row>(
 ): RowActionsSurface<TRow> {
   const controller = useRowActionsController<TRow>();
   const render = React.useCallback((row: TRow) => {
-    if (!actions?.some((action) => action.visible(row))) return null;
-    return <DeclaredRowActions actions={actions} controller={controller} row={row} />;
+    const visibleActions = actions?.filter((action) => action.visible(row));
+    if (!visibleActions || visibleActions.length === 0) return null;
+    return (
+      <VisibleRowActions
+        actions={visibleActions}
+        controller={controller}
+        row={row}
+      />
+    );
   }, [actions, controller]);
   return React.useMemo(
     () => ({ hasActions: (actions?.length ?? 0) > 0, render }),
@@ -234,8 +241,23 @@ export function DeclaredRowActions<TRow extends Row>({
   const visibleActions = actions.filter((action) => action.visible(row));
   if (visibleActions.length === 0) return null;
   return (
+    <VisibleRowActions
+      actions={visibleActions}
+      controller={controller}
+      row={row}
+    />
+  );
+}
+
+/** Paint a visibility-resolved action set without evaluating its predicates again. */
+function VisibleRowActions<TRow extends Row>({
+  actions,
+  controller,
+  row,
+}: DeclaredRowActionsProps<TRow>): React.ReactElement {
+  return (
     <div className="flex justify-end gap-1">
-      {visibleActions.map((action) =>
+      {actions.map((action) =>
         action.kind === "authored" ? (
           <AuthoredRowActionButton
             key={action.id}

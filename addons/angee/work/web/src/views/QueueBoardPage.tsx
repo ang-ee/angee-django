@@ -14,10 +14,7 @@ import * as React from "react";
 
 import { useQueueContext } from "../context";
 import { useWorkT } from "../i18n";
-import {
-  NON_SYSTEM_TASK_STAGE_FILTER,
-  queueStageFilters,
-} from "../stage-filters";
+import { queueStageFilters } from "../stage-filters";
 import { WorkTaskCard, type WorkTaskRow } from "../task-work";
 
 const TASK_MODEL = "projects.Task";
@@ -64,10 +61,11 @@ export function QueueBoardPage(): React.ReactElement {
           <List<WorkTaskRow>
             resource={TASK_MODEL}
             defaultView="board"
-            baseFilter={{
-              queue: { exact: queueId },
-              ...NON_SYSTEM_TASK_STAGE_FILTER,
-            }}
+            // System-staged rows never render: the lanes come from
+            // queueStageFilters, which excludes triage/duplicate stages —
+            // `stage` is an ID comparison on the wire, so a nested
+            // stage.category filter is not expressible here.
+            baseFilter={{ queue: { exact: queueId } }}
             order={{ sort_order: "ASC" }}
             laneSource={{
               field: "stage",

@@ -13,6 +13,9 @@ describe("work addon manifest", () => {
     expect((work.routes ?? []).map((route) => route.name)).toEqual([
       "work.queues",
       "work.queues.record",
+      "work.triage-hub",
+      "work.boards-hub",
+      "work.cycles-hub",
       "work.board",
       "work.triage",
       "work.cycles",
@@ -40,6 +43,9 @@ describe("work addon manifest", () => {
     expect(href("work.queues.record", { id: "queue 1" })).toBe(
       "/work/queues/queue%201",
     );
+    expect(href("work.triage-hub")).toBe("/work/triage");
+    expect(href("work.boards-hub")).toBe("/work/boards");
+    expect(href("work.cycles-hub")).toBe("/work/cycles");
     expect(href("work.board", { queueId: "eng/1" })).toBe(
       "/work/queues/eng%2F1/board",
     );
@@ -54,6 +60,9 @@ describe("work addon manifest", () => {
   test("registers one place, task extensions, and every work glyph", () => {
     expect(work.menus?.[0]?.children?.map((item) => item.route)).toEqual([
       "work.queues",
+      "work.triage-hub",
+      "work.boards-hub",
+      "work.cycles-hub",
     ]);
     expect(work.slots?.map((slot) => slot.id)).toEqual([
       "work.task-fields",

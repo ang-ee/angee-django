@@ -2,7 +2,7 @@ import * as React from "react";
 import { type Row } from "@angee/metadata";
 import { getCoreRowModel, useReactTable, type ColumnDef, type Row as TableRowModel } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { crudFiltersFromFilterRecord, hasuraWhereFromCrudFilters, useAngeeAggregate, useAngeeGroupByBatch, useAngeeListBatch, type GroupByBatchScope } from "@angee/refine";
+import { crudFiltersFromFilterRecord, hasuraWhereFromCrudFilters, stableSerialize, useAngeeAggregate, useAngeeGroupByBatch, useAngeeListBatch, type GroupByBatchScope } from "@angee/refine";
 import { useUiT } from "../../../i18n";
 import { type ResourceListOrder } from "../resource-view-model";
 import { estimateGroupedItemSize, groupFieldLabel, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures } from "../resource-view-list-body";
@@ -31,6 +31,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   resourceView,
   modelMetadata = null,
   groupStack,
+  defaultExpandedGroups = "all",
   laneSource,
   onListStateChange,
 }: UseResourceViewSurfaceProps<TRow>): GroupedResourceViewSurface<TRow> {
@@ -90,17 +91,44 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     enabled: rowGroupStack.length > 0 && measures.length > 0,
   });
 
-  // Collapse state and per-scope pager pages (one map, keyed by cumulative scope).
-  const [expandedKeys, setExpandedKeys] =
-    React.useState<ReadonlySet<string>>(EMPTY_EXPANDED_KEYS);
+  // Expansion belongs to the active grouping axis. Root buckets discovered in
+  // later pages auto-expand under the default "all" policy unless the user has
+  // explicitly collapsed that bucket; nested groups remain user-driven.
+  const expansionAxisKey = React.useMemo(
+    () => stableSerialize([rowGroupStack, defaultExpandedGroups]),
+    [defaultExpandedGroups, rowGroupStack],
+  );
+  const [expansionState, setExpansionState] =
+    React.useState<GroupExpansionState>(() => emptyGroupExpansion(expansionAxisKey));
+  const activeExpansion =
+    expansionState.axisKey === expansionAxisKey
+      ? expansionState
+      : emptyGroupExpansion(expansionAxisKey);
+  const expandedKeys = React.useMemo(
+    () => effectiveExpandedKeys(activeExpansion),
+    [activeExpansion],
+  );
   const toggleGroup = React.useCallback((key: string) => {
-    setExpandedKeys((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
+    setExpansionState((current) => {
+      const base =
+        current.axisKey === expansionAxisKey
+          ? current
+          : emptyGroupExpansion(expansionAxisKey);
+      const currentlyExpanded =
+        !base.collapsedKeys.has(key)
+        && (base.defaultExpandedKeys.has(key) || base.explicitExpandedKeys.has(key));
+      const collapsedKeys = new Set(base.collapsedKeys);
+      const explicitExpandedKeys = new Set(base.explicitExpandedKeys);
+      if (currentlyExpanded) {
+        collapsedKeys.add(key);
+        explicitExpandedKeys.delete(key);
+      } else {
+        collapsedKeys.delete(key);
+        explicitExpandedKeys.add(key);
+      }
+      return { ...base, collapsedKeys, explicitExpandedKeys };
     });
-  }, []);
+  }, [expansionAxisKey]);
   const [pageByScope, setPageByScope] =
     React.useState<Record<string, number>>({});
   const setScopePage = React.useCallback((key: string, page: number) => {
@@ -164,6 +192,32 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       ),
     [groupByResults, renderParams],
   );
+  const rootBucketKeys = React.useMemo(
+    () =>
+      scopeModel.items.flatMap((item) =>
+        item.kind === "groupHeader" && item.depth === 0
+          ? [item.bucketKey]
+          : [],
+      ),
+    [scopeModel.items],
+  );
+  React.useEffect(() => {
+    if (defaultExpandedGroups !== "all" || rootBucketKeys.length === 0) return;
+    setExpansionState((current) => {
+      const base =
+        current.axisKey === expansionAxisKey
+          ? current
+          : emptyGroupExpansion(expansionAxisKey);
+      const defaultExpandedKeys = new Set(base.defaultExpandedKeys);
+      let changed = current.axisKey !== expansionAxisKey;
+      for (const key of rootBucketKeys) {
+        if (base.collapsedKeys.has(key) || defaultExpandedKeys.has(key)) continue;
+        defaultExpandedKeys.add(key);
+        changed = true;
+      }
+      return changed ? { ...base, defaultExpandedKeys } : current;
+    });
+  }, [defaultExpandedGroups, expansionAxisKey, rootBucketKeys]);
   const desiredGroupScopes = scopeModel.groupScopes;
   const leafScopes = scopeModel.leafScopes;
   React.useEffect(() => {
@@ -309,4 +363,33 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     tableScrollRef,
     rowVirtualizer,
   };
+}
+
+interface GroupExpansionState {
+  axisKey: string;
+  collapsedKeys: ReadonlySet<string>;
+  explicitExpandedKeys: ReadonlySet<string>;
+  defaultExpandedKeys: ReadonlySet<string>;
+}
+
+function emptyGroupExpansion(axisKey: string): GroupExpansionState {
+  return {
+    axisKey,
+    collapsedKeys: EMPTY_EXPANDED_KEYS,
+    explicitExpandedKeys: EMPTY_EXPANDED_KEYS,
+    defaultExpandedKeys: EMPTY_EXPANDED_KEYS,
+  };
+}
+
+function effectiveExpandedKeys(state: GroupExpansionState): ReadonlySet<string> {
+  if (
+    state.defaultExpandedKeys.size === 0
+    && state.explicitExpandedKeys.size === 0
+  ) {
+    return EMPTY_EXPANDED_KEYS;
+  }
+  const expanded = new Set(state.defaultExpandedKeys);
+  for (const key of state.explicitExpandedKeys) expanded.add(key);
+  for (const key of state.collapsedKeys) expanded.delete(key);
+  return expanded;
 }

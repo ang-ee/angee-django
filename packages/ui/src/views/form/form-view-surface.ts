@@ -13,12 +13,16 @@ import { useUiT, type UiTranslate } from "../../i18n";
 import {
   hasDirectPageElement,
   hasPageField,
+  pageChildren,
+  pageElementKind,
   parsePageActions,
   parsePageFields,
   parsePageGroups,
+  parsePageTabs,
   type ActionDescriptor,
   type FieldDescriptor,
   type GroupDescriptor,
+  type TabDescriptor,
 } from "../page";
 import {
   fieldsWithMetadataDefaults,
@@ -173,12 +177,69 @@ export function useFormViewSurface({
     [modelLabel],
   );
   const sectionEntries = useModelSlot(sectionTarget);
+  React.useEffect(() => {
+    if (!developmentMode()) return;
+    for (const entry of sectionEntries) {
+      for (const child of pageChildren(entry.content as React.ReactNode)) {
+        const marker = React.isValidElement(child)
+          ? pageElementKind(child.type)
+          : null;
+        if (marker === "group" || marker === "action" || marker === "tab") {
+          continue;
+        }
+        console.warn(
+          `FormView slot "${sectionTarget.slot}" contribution "${entry.id}" `
+            + `has unsupported direct marker "${marker ?? "unmarked"}"; `
+            + "only Group, Action, and Tab declarations are discovered.",
+        );
+      }
+    }
+  }, [sectionEntries, sectionTarget.slot]);
+  const slotDeclarations = React.useMemo(
+    () =>
+      sectionEntries.flatMap((entry, entryOrder) => {
+        const sequence = entry.sequence ?? 0;
+        return [
+          ...parsePageGroups(entry.content as React.ReactNode).map(
+            (group, childOrder) => ({
+              kind: "group" as const,
+              group,
+              sequence,
+              order: entryOrder * 1000 + childOrder,
+            }),
+          ),
+          ...parsePageTabs(entry.content as React.ReactNode).map(
+            (tab, childOrder) => ({
+              kind: "tab" as const,
+              tab,
+              sequence,
+              order: entryOrder * 1000 + childOrder,
+            }),
+          ),
+        ];
+      }).sort(compareSlotDeclaration),
+    [sectionEntries],
+  );
   const slotGroups = React.useMemo(
     () =>
-      sectionEntries.flatMap((entry) =>
-        parsePageGroups(entry.content as React.ReactNode),
+      slotDeclarations.flatMap((declaration) =>
+        declaration.kind === "group" ? [declaration.group] : [],
       ),
-    [sectionEntries],
+    [slotDeclarations],
+  );
+  const slotGroupSequences = React.useMemo(
+    () =>
+      slotDeclarations.flatMap((declaration) =>
+        declaration.kind === "group" ? [declaration.sequence] : [],
+      ),
+    [slotDeclarations],
+  );
+  const slotTabs = React.useMemo(
+    () =>
+      slotDeclarations.flatMap((declaration) =>
+        declaration.kind === "tab" ? [declaration] : [],
+      ),
+    [slotDeclarations],
   );
   const slotActions = React.useMemo(
     () =>
@@ -206,9 +267,17 @@ export function useFormViewSurface({
     () => overrideFields ?? fields ?? childFields,
     [childFields, fields, overrideFields],
   );
+  const baseGroups = overrideGroups ?? groups ?? childGroups;
   const declaredGroups = React.useMemo(
-    () => [...(overrideGroups ?? groups ?? childGroups), ...slotGroups],
-    [childGroups, groups, overrideGroups, slotGroups],
+    () => [...baseGroups, ...slotGroups],
+    [baseGroups, slotGroups],
+  );
+  const declaredGroupSequences = React.useMemo(
+    () => [
+      ...baseGroups.map(() => 0),
+      ...slotGroupSequences,
+    ],
+    [baseGroups, slotGroupSequences],
   );
   const declaredActions = React.useMemo(
     () => [...(overrideActions ?? actions ?? childActions), ...slotActions],
@@ -262,7 +331,12 @@ export function useFormViewSurface({
     const paths = new Set<string>(["id"]);
     for (const field of formFields) {
       if (modelMetadata && !modelMetadata.fields[field.name]) continue;
-      addFieldSelection(paths, field, relationByField.get(field.name));
+      addFieldSelection(
+        paths,
+        field,
+        relationByField.get(field.name),
+        modelMetadata?.fields[field.name],
+      );
     }
     const lines = isCreate ? null : modelMetadata?.resource?.linesResource;
     if (lines?.field) {
@@ -337,8 +411,27 @@ export function useFormViewSurface({
       ]
     : [];
   const sections = React.useMemo(
-    () => formSections(gridFields, gridGroups),
-    [gridFields, gridGroups],
+    () => {
+      const groupSections = formSections(
+        gridFields,
+        gridGroups,
+        declaredGroupSequences,
+      );
+      const tabSections = chrome.recordChromeContext == null
+        ? []
+        : slotTabs.flatMap(({ tab, sequence, order }) =>
+            tab.hidden
+              ? []
+              : [formSectionFromTab(tab, sequence, order)],
+          );
+      const stacked = groupSections.filter((section) => section.label == null);
+      const tabbedSections = [
+        ...groupSections.filter((section) => section.label != null),
+        ...tabSections,
+      ].sort(compareFormSections);
+      return [...stacked, ...tabbedSections];
+    },
+    [chrome.recordChromeContext, declaredGroupSequences, gridFields, gridGroups, slotTabs],
   );
   const subtitleParts = React.useMemo(
     () =>
@@ -410,4 +503,63 @@ export function useFormViewSurface({
     tabbed: recordPanelContext != null && recordTabList.length > 0,
     visibleDeleteAction,
   };
+}
+
+type SlotFormDeclaration =
+  | {
+      kind: "group";
+      group: GroupDescriptor;
+      sequence: number;
+      order: number;
+    }
+  | {
+      kind: "tab";
+      tab: TabDescriptor;
+      sequence: number;
+      order: number;
+    };
+
+function compareSlotDeclaration(
+  left: SlotFormDeclaration,
+  right: SlotFormDeclaration,
+): number {
+  return left.sequence - right.sequence || left.order - right.order;
+}
+
+function formSectionFromTab(
+  tab: TabDescriptor,
+  sequence: number,
+  order: number,
+): FormSectionModel {
+  return {
+    key: `tab:${tab.id}`,
+    label: tab.label,
+    icon: tab.icon,
+    badge: tab.badge,
+    fields: [],
+    render: () => tab.children,
+    sequence,
+    order,
+  };
+}
+
+function compareFormSections(
+  left: FormSectionModel,
+  right: FormSectionModel,
+): number {
+  return (left.sequence ?? 0) - (right.sequence ?? 0)
+    || (left.order ?? 0) - (right.order ?? 0);
+}
+
+function developmentMode(): boolean {
+  const viteEnv = (
+    import.meta as ImportMeta & { readonly env?: { readonly DEV?: boolean } }
+  ).env;
+  if (typeof viteEnv?.DEV === "boolean") return viteEnv.DEV;
+  const nodeEnv = (
+    globalThis as typeof globalThis & {
+      process?: { env?: { NODE_ENV?: string } };
+    }
+  ).process?.env?.NODE_ENV;
+  return nodeEnv !== "production";
 }

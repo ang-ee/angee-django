@@ -39,6 +39,8 @@ export interface WorkbenchProps {
   primarySize?: number;
   /** Secondary pane default width, percent. */
   secondarySize?: number;
+  /** Start the secondary pane collapsed when no persisted layout exists. */
+  secondaryDefaultCollapsed?: boolean;
   /** Receives the primary pane's collapse controller (or null on unmount). */
   onPrimaryController?: (controller: CollapsiblePane | null) => void;
   /** Receives the secondary pane's collapse controller (or null on unmount). */
@@ -69,6 +71,7 @@ export function Workbench({
   autoSave,
   primarySize = 18,
   secondarySize = 26,
+  secondaryDefaultCollapsed = false,
   onPrimaryController,
   onSecondaryController,
   scrollMode = "contained",
@@ -81,7 +84,9 @@ export function Workbench({
   // Controllers stay inert when their pane is not rendered (their imperative
   // handles simply never mount).
   const primaryController = useCollapsiblePane();
-  const secondaryController = useCollapsiblePane();
+  const secondaryController = useCollapsiblePane({
+    defaultCollapsed: secondaryDefaultCollapsed,
+  });
   usePublishedController(primaryController, onPrimaryController, hasPrimary);
   usePublishedController(secondaryController, onSecondaryController, hasSecondary);
 
@@ -150,9 +155,10 @@ export function Workbench({
           <SplitPaneHandle />
           <SplitPane
             id="secondary"
-            defaultSize={secondarySize}
+            defaultSize={secondaryDefaultCollapsed ? 0 : secondarySize}
             minSize={16}
             collapsible
+            collapsedSize={0}
             panelRef={secondaryController.panelRef}
             onResize={secondaryController.onResize}
             className="min-h-0 min-w-0 border-l border-border-subtle bg-sheet-2"

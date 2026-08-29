@@ -6,6 +6,7 @@ import {
 } from "@angee/metadata";
 import type { CrudFilter } from "@refinedev/core";
 import { stringValue as wireStringValue } from "@angee/refine";
+import { format } from "date-fns";
 
 import { errorMessage } from "../../feedback";
 import { DialogForm } from "../../fragments/DialogForm";
@@ -20,6 +21,7 @@ import {
 import type { DialogPlacement, DialogSize } from "../../ui/dialog";
 import { useUiT } from "../../i18n";
 import { relationValueId } from "../../widgets/types";
+import { dateFromUnknown } from "../../widgets/date-format";
 import { FieldDescriptorControl } from "./field-descriptor-control";
 import type { FormSpecFieldDescriptor } from "./form-spec";
 import { relationFieldInfoForResource } from "../resource/model-metadata-defaults";
@@ -106,7 +108,9 @@ export type MutationDialogParseValues<TValues> = (
  * declaration field rather than presenting translated user validation copy.
  * `verbatimString` is the explicit exception for whitespace-sensitive secrets;
  * `integer` takes a label-aware translated formatter because malformed numeric
- * input is reachable user validation.
+ * input is reachable user validation. `datetime` is the action-argument wire
+ * boundary: it preserves the picked local wall time and adds that instant's
+ * local UTC offset, so Django never receives a naive datetime.
  */
 export const mutationDialogValueCodecs = {
   string(value: unknown): string | null {
@@ -147,6 +151,23 @@ export const mutationDialogValueCodecs = {
       throw new TypeError(invalidMessage(fieldLabel));
     }
     return parsed;
+  },
+  datetime(value: unknown): string | null {
+    if (value == null || (typeof value === "string" && value.trim() === "")) {
+      return null;
+    }
+    const parsed = dateFromUnknown(value);
+    if (parsed === null) {
+      throw new TypeError(
+        "MutationDialog invariant: datetime value was not a valid ISO-8601 date-time.",
+      );
+    }
+    const offsetMinutes = -parsed.getTimezoneOffset();
+    const offsetSign = offsetMinutes < 0 ? "-" : "+";
+    const absoluteOffset = Math.abs(offsetMinutes);
+    const offsetHours = String(Math.floor(absoluteOffset / 60)).padStart(2, "0");
+    const offsetRemainder = String(absoluteOffset % 60).padStart(2, "0");
+    return `${format(parsed, "yyyy-MM-dd'T'HH:mm:ss")}${offsetSign}${offsetHours}:${offsetRemainder}`;
   },
 } as const;
 

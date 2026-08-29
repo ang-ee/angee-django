@@ -127,6 +127,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   defaultGroup?: ResourceViewGroup | null;
   /** Per-view group defaults seeded by the resource list. */
   defaultGroups?: ResourceViewDefaultGroups;
+  /** Initial expansion policy for server-grouped list roots. Defaults to all. */
+  defaultExpandedGroups?: "all" | "none";
   /** Called when the list's create command is invoked. */
   onCreate?: () => void;
   /** Quick-create seam for a board lane; the resource page owns opening create. */

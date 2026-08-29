@@ -15,10 +15,7 @@ import * as React from "react";
 import { useCycleContext, useQueueContext } from "../context";
 import { CycleCloseControl } from "../cycle-actions";
 import { useWorkT } from "../i18n";
-import {
-  NON_SYSTEM_TASK_STAGE_FILTER,
-  queueStageFilters,
-} from "../stage-filters";
+import { queueStageFilters } from "../stage-filters";
 import { WorkTaskCard, type WorkTaskRow } from "../task-work";
 
 const TASK_MODEL = "projects.Task";
@@ -83,10 +80,11 @@ export function CycleBoardPage(): React.ReactElement {
           <List<WorkTaskRow>
             resource={TASK_MODEL}
             defaultView="board"
+            // System-staged rows never render: lane filters exclude
+            // triage/duplicate — `stage` is an ID comparison on the wire.
             baseFilter={{
               queue: { exact: queueId },
               cycle: { exact: id },
-              ...NON_SYSTEM_TASK_STAGE_FILTER,
             }}
             order={{ sort_order: "ASC" }}
             laneSource={{

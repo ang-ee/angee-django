@@ -115,6 +115,33 @@ class TaskWorkExtension:
         return cast(Any, self).work_key
 
 
+@strawberry_django.type(Task, name="ConsoleTaskType", extend=True)
+class ConsoleTaskWorkExtension:
+    """Contribute work columns onto the console task node."""
+
+    number: auto
+    estimate: auto
+    snoozed_until: auto
+    started_triage_at: auto
+    triaged_at: auto
+
+    queue: WorkQueueType | None = actor_scoped_to_one("queue")
+    stage: WorkStageType | None = actor_scoped_to_one("stage")
+    cycle: WorkCycleType | None = actor_scoped_to_one("cycle")
+
+    @strawberry_django.field(only=["snoozed_by_id"])
+    def snoozed_by(self) -> strawberry.ID | None:
+        """Return the snoozing user's public id without exposing auth/user."""
+
+        return optional_public_id(user_public_id(cast(Any, self).snoozed_by_id))
+
+    @strawberry.field
+    def work_key(self) -> str | None:
+        """Return the queue-keyed task number, such as ``ENG-42``."""
+
+        return cast(Any, self).work_key
+
+
 @strawberry.type
 class WorkActionMutation:
     """Row-authorized task triage and cycle lifecycle actions."""
@@ -340,6 +367,10 @@ schemas = {
     "public": {**_WORK_SCHEMA_BUCKET},
     "console": {
         **_WORK_SCHEMA_BUCKET,
+        "type_extensions": [
+            *_WORK_SCHEMA_BUCKET["type_extensions"],
+            ConsoleTaskWorkExtension,
+        ],
         "subscription": [
             changes(Queue, field="workQueueChanged"),
             changes(Stage, field="workStageChanged"),

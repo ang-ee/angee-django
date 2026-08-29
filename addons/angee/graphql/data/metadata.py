@@ -9,11 +9,12 @@ from typing import Any, TypeVar
 from angee.base.impl import ImplClassField
 from angee.base.refs import canonical_record_model
 from angee.data import metadata as data_contract
-from angee.data.field_classification import is_to_one_relation
+from angee.data.field_classification import is_to_one_relation, model_field_scalar
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from rebac.resources import model_resource_type
 
+from angee.graphql.access import is_gated_read_axis
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.resource_fields import (
     input_wire_fields,
@@ -22,6 +23,7 @@ from angee.graphql.data.resource_fields import (
     require_unique_resource_fields,
     required_input_wire_fields,
     resource_fields,
+    resource_relation_surface,
     resource_type_name,
     resource_wire_field_name,
     resource_wire_field_names,
@@ -39,6 +41,7 @@ __all__ = [
     "model_resource_fields",
     "readable_model_field_names",
     "resource_fields",
+    "relation_group_by_fields",
     "resource_type_name",
     "resource_wire_field_name",
     "resource_wire_field_names",
@@ -173,11 +176,20 @@ def make_data_resource_metadata(
         else ()
     )
     active_fields = (
-        data_contract.merge_resource_fields(generated_fields, declared_fields)
-        if declared_fields
-        else generated_fields
+        data_contract.merge_resource_fields(generated_fields, declared_fields) if declared_fields else generated_fields
     )
     active_fields = require_unique_resource_fields(exposed_model_label, active_fields)
+    object_relations = _declared_object_relation_names(model)
+    if object_relations:
+        # Same-row donors project some to-one relations as objects via a
+        # name-targeted type extension the node class cannot see; the donor's
+        # model base declares them so selection layers emit sub-selections.
+        active_fields = tuple(
+            dataclasses.replace(field, relation_object=True)
+            if field.name in object_relations and field.kind == "relation"
+            else field
+            for field in active_fields
+        )
     record_representation = _record_representation_field(active_fields)
     active_subtitle = _resource_subtitle(
         model=model,
@@ -307,16 +319,8 @@ def _resource_subtitle(
         updated=timestamp_path("auto_now"),
     )
     active = data_contract.DataResourceSubtitleMetadata(
-        created=(
-            declared.created
-            if declared is not None and declared.created is not None
-            else defaults.created
-        ),
-        updated=(
-            declared.updated
-            if declared is not None and declared.updated is not None
-            else defaults.updated
-        ),
+        created=(declared.created if declared is not None and declared.created is not None else defaults.created),
+        updated=(declared.updated if declared is not None and declared.updated is not None else defaults.updated),
         word_count=declared.word_count if declared is not None else None,
     )
     for field_def in dataclasses.fields(data_contract.DataResourceSubtitleMetadata):
@@ -333,42 +337,137 @@ def _resource_subtitle(
                 model_label=model_label,
                 fact=f"subtitle.{field_def.name}",
             )
-    has_fact = any(
-        getattr(active, field_def.name) is not None
-        for field_def in dataclasses.fields(active)
-    )
+    has_fact = any(getattr(active, field_def.name) is not None for field_def in dataclasses.fields(active))
     return active if has_fact else None
 
 
 def _record_representation_field(fields: tuple[data_contract.DataResourceFieldMetadata, ...]) -> str | None:
     """Return the backend-owned display field for a resource record."""
 
-    candidates = (
-        "title",
-        "name",
-        "displayName",
-        "display_name",
-        "fullName",
-        "full_name",
-        "label",
-        "username",
-        "email",
-        "slug",
-    )
+    return next(iter(_record_representation_fields(fields)), None)
+
+
+def _declared_object_relation_names(model: type[models.Model] | None) -> frozenset[str]:
+    """Return relation fields a same-row donor projects as objects.
+
+    Donor extensions declare ``hasura_object_relation_fields`` on their model
+    base (the same MRO-walk idiom as the other ``hasura_*`` declarations); the
+    composed runtime model inherits the base, so the fact is readable here even
+    though the node class never sees the extension's type fields.
+    """
+
+    if model is None:
+        return frozenset()
+    names: set[str] = set()
+    for cls in model.__mro__:
+        value = cls.__dict__.get("hasura_object_relation_fields")
+        if value:
+            names.update(str(item) for item in value)
+    return frozenset(names)
+
+
+#: Backend-owned display-field precedence, shared by record representation and
+#: the relation group-label fallback.
+_PREFERRED_DISPLAY_FIELDS: tuple[str, ...] = (
+    "title",
+    "name",
+    "displayName",
+    "display_name",
+    "fullName",
+    "full_name",
+    "label",
+    "username",
+    "email",
+    "slug",
+)
+
+
+def _record_representation_fields(
+    fields: tuple[data_contract.DataResourceFieldMetadata, ...],
+) -> tuple[str, ...]:
+    """Return display-scalar candidates in backend-owned precedence order."""
+
+    preferred = _PREFERRED_DISPLAY_FIELDS
     by_name = {field.name: field for field in fields}
-    for candidate in candidates:
-        if _is_display_scalar(by_name.get(candidate)):
-            return candidate
-    for field in fields:
-        if _is_display_scalar(field):
-            return field.name
-    return None
+    candidates = [candidate for candidate in preferred if _is_display_scalar(by_name.get(candidate))]
+    candidates.extend(field.name for field in fields if field.name not in preferred and _is_display_scalar(field))
+    return tuple(candidates)
 
 
 def _is_display_scalar(field: data_contract.DataResourceFieldMetadata | None) -> bool:
     """Return whether ``field`` is suitable as a compact record label."""
 
     return field is not None and field.kind == "scalar" and field.scalar == "String"
+
+
+def relation_group_by_fields(
+    node_type: type,
+    model: type[models.Model],
+    group_by_fields: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Add one ORM-backed display axis for each direct relation group axis.
+
+    The Hasura group-key type is built before resource metadata is attached, so
+    relation labels must enter the group declaration at this seam. Explicit
+    scalar relation-leaf axes keep ownership. Otherwise the related Strawberry
+    object supplies the record-representation precedence, while Django confirms
+    the selected label is a concrete string column that aggregation may group
+    by. Computed labels therefore fall through to the next model-backed display
+    field (for example, ``UserType.display_name`` falls back to ``username``).
+    """
+
+    expanded = list(group_by_fields)
+    explicit_labels = _relation_label_axes(model, group_by_fields)
+    for path in group_by_fields:
+        if "__" in path or path in explicit_labels:
+            continue
+        try:
+            relation = model._meta.get_field(path)
+        except FieldDoesNotExist:
+            continue
+        if not is_to_one_relation(relation):
+            continue
+        related_model = getattr(relation, "related_model", None)
+        if not isinstance(related_model, type) or not issubclass(related_model, models.Model):
+            continue
+        related_surface = resource_relation_surface(node_type, path)
+        if related_surface is not None:
+            related_fields = resource_fields(
+                related_surface,
+                related_model,
+                filter_fields=(),
+                order_fields=(),
+                aggregate_fields=(),
+                group_by_fields=(),
+                create_fields=(),
+                update_fields=(),
+                required_create_fields=(),
+                relation_axes=(),
+            )
+            candidates = _record_representation_fields(related_fields)
+        else:
+            # Donor-contributed and scalar-id relation axes carry no node
+            # surface; fall back to the preferred display names over the
+            # related Django model. The concrete-String and gated-read checks
+            # below still bound what may enter the group key.
+            candidates = _PREFERRED_DISPLAY_FIELDS
+        for candidate in candidates:
+            try:
+                model_field = related_model._meta.get_field(candidate)
+            except FieldDoesNotExist:
+                continue
+            if (
+                isinstance(model_field, models.Field)
+                and model_field.concrete
+                and not model_field.is_relation
+                and model_field_scalar(model_field) == "String"
+            ):
+                label_axis = f"{path}__{model_field.name}"
+                if is_gated_read_axis(model, label_axis):
+                    continue
+                expanded.append(label_axis)
+                break
+    return tuple(expanded)
 
 
 def _impl_fields(
