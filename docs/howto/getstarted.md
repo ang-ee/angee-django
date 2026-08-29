@@ -201,6 +201,53 @@ materializes its framework sources and boots the complete stack.
    `src` workspace, and runs the composed host at the stack root against those
    worktrees.
 
+### Containerized mode and remote hosts
+
+`runtime_mode` is a template input (a recorded answer, so one stack can switch
+later): the default `process` runs Django, Celery, Vite, and Storybook as local
+processes, while `docker` runs every application service in containers — the
+host then needs only the `angee` binary, Docker, and git (no uv, node, or
+pnpm). Docker mode also runs a headless Playwright browser server and a
+Playwright MCP service behind the stack's edge, both reachable only with an
+operator-minted route token.
+
+```sh
+angee init myproject -t dev --input runtime_mode=docker
+```
+
+On a remote host, add a public DNS name and the edge serves the whole UX over
+automatic Let's Encrypt TLS (ports 443/80; the Vite UX at the domain root,
+agent chat at wss://<domain>/<service>/, Playwright MCP at
+https://<domain>/playwright-mcp/mcp):
+
+```sh
+angee init myproject -t dev --input runtime_mode=docker --input ingress_domain=dev.example.com
+```
+
+The stack root must live on the machine whose Docker daemon runs it (bind
+mounts resolve on that filesystem) — ssh in and run `angee` there rather than
+pointing a remote `DOCKER_HOST` at it. With the default `localhost` domain the
+edge stays plain HTTP on `edge_port` and the UX is published directly.
+
+### Upgrading a stack rendered before the monorepo
+
+Stacks rendered while the framework lived in split repositories declare
+`angee-django`, `angee-react`, `angee-base`, and `angee-templates` (and
+optionally `angee-examples`) as separate sources. `angee stack update` cannot
+retire those keys — migrate the manifest surgically instead:
+
+```sh
+# dry-run first; --apply backs up angee.yaml and rewrites sources + answers
+uv run python scripts/migrate-stack-to-monorepo.py "$ANGEE_ROOT" --apply
+angee --root "$ANGEE_ROOT" stack update --template --overwrite
+# re-cut each workspaces/src workspace once its slots are clean and pushed:
+angee --root "$ANGEE_ROOT" ws destroy src && angee --root "$ANGEE_ROOT" dev
+```
+
+The script replaces exactly the donor sources with the single `angee` source
+and preserves every custom source; the workspace destroy guard refuses to drop
+unpushed work, so land anything in flight first.
+
 ### Optional Ollama inference
 
 The dev stack can run one shared, operator-managed Ollama container for local
