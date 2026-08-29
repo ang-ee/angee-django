@@ -65,6 +65,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # --- final: the lean base + the baked venv (git inherited for the dev uv sync) --
 FROM base AS final
+# The dev image's contract is a mounted-source `uv sync` of the composed host's
+# FULL addon closure at container start — which includes sdist-only deps (the
+# matrix bridge's python-olm builds libolm via cmake). The toolchain therefore
+# belongs to this target alone; the derived `runtime` image builds from `deps`
+# and stays compiler-free.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=deps --chown=angee:angee /opt/.venv /opt/.venv
 USER root
 ENTRYPOINT ["tini", "--", "/usr/local/bin/angee-django-entrypoint"]
