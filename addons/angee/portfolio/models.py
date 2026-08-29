@@ -644,6 +644,9 @@ class ProjectPortfolio(AngeeModel):
     hasura_sortable_fields = hasura_readable_fields
     hasura_aggregatable_fields = ("priority", "sort_order")
     hasura_groupable_fields = ("product", "health", "priority")
+    # Projected as an object by the portfolio type extension (see work's
+    # hasura_object_relation_fields precedent).
+    hasura_object_relation_fields = ("product",)
     hasura_insertable_fields = ("product", "priority", "sort_order")
     hasura_updatable_fields = hasura_insertable_fields
 
@@ -699,6 +702,8 @@ class TaskPortfolio(AngeeModel):
     hasura_sortable_fields = hasura_readable_fields
     hasura_aggregatable_fields: tuple[str, ...] = ()
     hasura_groupable_fields = hasura_readable_fields
+    # Projected as an object by the portfolio type extension.
+    hasura_object_relation_fields = ("release",)
     hasura_insertable_fields = hasura_readable_fields
     hasura_updatable_fields = hasura_readable_fields
 

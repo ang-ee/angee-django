@@ -25,7 +25,7 @@ from angee.graphql.data.metadata import (
 from angee.graphql.ids import PublicID, instance_for_id
 from angee.graphql.introspection import django_model, surface_name
 
-_SURFACE_CACHE: dict[tuple[type[models.Model], str], type] = {}
+_SURFACE_CACHE: dict[tuple[type[models.Model], str, type], type] = {}
 _REVISION_TYPE_CACHE: dict[tuple[type[models.Model], str], Any] = {}
 _REVISION_FIRST_DEFAULT = 50
 _REVISION_FIRST_MAX = 200
@@ -50,7 +50,10 @@ def revisions(
         raise ImproperlyConfigured(f"revisions({surface_name(node)}) needs revisioned_fields")
 
     singular = name or model._meta.model_name
-    cache_key = (model, singular)
+    # A model may intentionally expose different node projections in different
+    # named schemas. Cache the revision surface by node as well as model/name so
+    # its resource metadata keeps the matching schema-specific node type.
+    cache_key = (model, singular, node)
     if cached := _SURFACE_CACHE.get(cache_key):
         return cached
 
@@ -91,7 +94,7 @@ def _revision_resolver(model: type[models.Model], revision_type: Any) -> Any:
         instance = _resolve_instance(model, str(id))
         if instance is None:
             return []
-        versions = cast(Any, instance).revisions[:_revision_first(first)]
+        versions = cast(Any, instance).revisions[: _revision_first(first)]
         return [revision_type(instance, version) for version in versions]
 
     resolve.__annotations__ = {

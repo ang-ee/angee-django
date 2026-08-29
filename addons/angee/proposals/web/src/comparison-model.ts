@@ -64,8 +64,14 @@ export function isEmptyComparisonValue(value: unknown): boolean {
 export function proposalColumnLabel(proposal: ComparisonProposal): string {
   const party = String(proposal.party?.display_name ?? "").trim();
   if (party) return party;
-  const responder = String(proposal.responder ?? "").trim();
+  const responder = responderLabel(proposal.responder);
   return responder || proposal.id;
+}
+
+function responderLabel(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  return String((value as { display_name?: unknown }).display_name ?? "").trim();
 }
 
 function numericOrder(value: unknown): number {

@@ -372,13 +372,28 @@ function GroupedHeaderRow<TRow extends Row>({
   trailingColumn,
   unavailableLabel,
 }: GroupedHeaderRowProps<TRow>): React.ReactElement {
-  const headerId = React.useId();
   const { bucket, bucketKey, depth, label, count, expandable, expanded } = item;
+  const toggle = (): void => {
+    if (expandable) onToggle(bucketKey);
+  };
   return (
-    <TableRow>
+    <TableRow
+      className={expandable ? "cursor-pointer" : undefined}
+      tabIndex={expandable ? 0 : undefined}
+      aria-expanded={expandable ? expanded : false}
+      onClick={toggle}
+      onKeyDown={(event) => {
+        if (
+          event.target === event.currentTarget
+          && (event.key === "Enter" || event.key === " ")
+        ) {
+          event.preventDefault();
+          toggle();
+        }
+      }}
+    >
       <TableCell className="h-9 w-8 bg-sheet-2 p-0">
         <button
-          id={headerId}
           type="button"
           className={cn(
             "flex min-h-9 w-full items-center justify-center px-2 text-left text-13 outline-none",
@@ -390,8 +405,9 @@ function GroupedHeaderRow<TRow extends Row>({
           aria-label={label}
           aria-expanded={expandable ? expanded : false}
           aria-disabled={!expandable}
-          onClick={() => {
-            if (expandable) onToggle(bucketKey);
+          onClick={(event) => {
+            event.stopPropagation();
+            toggle();
           }}
         >
           <Glyph

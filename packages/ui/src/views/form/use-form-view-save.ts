@@ -33,6 +33,7 @@ import {
   emptyDraft,
   fieldValidationSummary,
   formValuesEqual,
+  missingRequiredFieldNames,
   mutationData,
   recordToValues,
   type FormValues,
@@ -142,13 +143,14 @@ export function useFormViewSave({
     });
   }, []);
   const requiredFieldNames = React.useMemo<ReadonlySet<string>>(() => {
+    if (!isCreate) return new Set();
     const required = new Set(modelMetadata?.rootFields?.requiredCreateFields ?? []);
     return new Set(
       formFields
         .filter((field) => required.has(field.name) && !field.readOnly)
         .map((field) => field.name),
     );
-  }, [formFields, modelMetadata]);
+  }, [formFields, isCreate, modelMetadata]);
   const writableFieldNames = React.useMemo<ReadonlySet<string> | null>(() => {
     const writable = isCreate
       ? modelMetadata?.rootFields?.createFields
@@ -340,6 +342,7 @@ export function useFormViewSave({
       }
       const data = mutationData(value, formFields, {
         dirtyFields: form.formState.dirtyFields as Record<string, unknown>,
+        fieldMetadata: modelMetadata?.fields,
         isCreate,
         seededFieldNames: createSeedNames,
         writableFields: writableFieldNames,
@@ -378,6 +381,7 @@ export function useFormViewSave({
       linesActive,
       linesConfig,
       linesField,
+      modelMetadata,
       resource,
       runSubmit,
       seedLineRows,
@@ -386,7 +390,37 @@ export function useFormViewSave({
       form.formState.dirtyFields,
     ],
   );
-  const submitForm = form.handleSubmit(submitValues);
+  const submitWithRegisteredValidation = form.handleSubmit(submitValues);
+  const submitForm = React.useCallback(
+    async (event?: React.BaseSyntheticEvent): Promise<void> => {
+      if (isCreate) {
+        const missing = missingRequiredFieldNames(
+          form.getValues(),
+          formFields,
+          requiredFieldNames,
+        );
+        if (missing.length > 0) {
+          event?.preventDefault();
+          for (const name of missing) {
+            form.setError(name, {
+              type: "required",
+              message: t("form.required"),
+            });
+          }
+          return;
+        }
+      }
+      await submitWithRegisteredValidation(event);
+    },
+    [
+      form,
+      formFields,
+      isCreate,
+      requiredFieldNames,
+      submitWithRegisteredValidation,
+      t,
+    ],
+  );
   const applyPatch = React.useCallback(
     async (patch: Record<string, unknown>): Promise<Row | null> => {
       if (id == null) throw new Error("No open record to update.");
@@ -476,8 +510,10 @@ export function useFormViewSave({
   ]);
 
   const setValueRef = useLatestRef(form.setValue);
+  const clearErrorsRef = useLatestRef(form.clearErrors);
   const afterFieldChange = React.useCallback(
     (field: FieldDescriptor, value: unknown): void => {
+      clearErrorsRef.current(field.name);
       if (isCreate || !field.createOnly) {
         const seeds = field.prefill?.(value);
         if (seeds) {
@@ -504,7 +540,7 @@ export function useFormViewSave({
         });
       }
     },
-    [defaultSlugSource, formFields, isCreate, setValueRef],
+    [clearErrorsRef, defaultSlugSource, formFields, isCreate, setValueRef],
   );
   const fieldReadOnly = React.useCallback(
     (field: FieldDescriptor): boolean =>

@@ -20,7 +20,7 @@ const topics: ComparisonTopic[] = [
 const proposal: ComparisonProposal = {
   id: "prp_1",
   party: { display_name: "Northstar" },
-  responder: "user_1",
+  responder: { id: "user_1", display_name: "Alice" },
   cost: null,
 };
 const answers: ComparisonAnswer[] = [
@@ -60,10 +60,15 @@ describe("proposal comparison model", () => {
     expect(isEmptyComparisonValue("0")).toBe(false);
   });
 
-  test("labels external responders by party before the user id", () => {
+  test("labels external responders by party before the user label", () => {
     expect(proposalColumnLabel(proposal)).toBe("Northstar");
-    expect(proposalColumnLabel({ id: "prp_2", responder: "user_2" })).toBe(
-      "user_2",
+    expect(
+      proposalColumnLabel({
+        id: "prp_2",
+        responder: { id: "user_2", display_name: "Alice" },
+      }),
+    ).toBe(
+      "Alice",
     );
   });
 });

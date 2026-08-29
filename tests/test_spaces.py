@@ -159,9 +159,10 @@ def test_group_console_insert_establishes_private_creator_access(
         outsider=outsider,
         create_mutation="""
             mutation CreateGroup {
-              insert_space_groups_one(object: {name: "Private", slug: "private"}) {
+              insert_space_groups_one(object: {name: "Private"}) {
                 id
                 name
+                slug
               }
             }
             """,
@@ -183,6 +184,7 @@ def test_group_console_insert_establishes_private_creator_access(
         update_root="update_space_groups_by_pk",
     )
     assert created["name"] == "Private"
+    assert created["slug"] == "private"
     assert readable == {"id": created["id"], "name": "Private", "description": ""}
     assert updated == {"id": created["id"], "description": "Creator write"}
 
@@ -244,9 +246,13 @@ def test_group_crud_slug_uniqueness_and_unscoped_hierarchy(spaces_tables: None) 
 
     del spaces_tables
     with system_context(reason="spaces group crud"):
-        root = Group.objects.create(name="Community", slug="community")
-        child = Group.objects.create(name="Moderators", slug="moderators", parent=root)
+        root = Group.objects.create(name="Community")
+        sibling = Group.objects.create(name="Community")
+        child = Group.objects.create(name="Moderators", parent=root)
 
+        assert root.slug == "community"
+        assert sibling.slug == "community-2"
+        assert child.slug == "moderators"
         assert child.parent == root
         assert child.path.startswith(root.path)
 
@@ -259,6 +265,7 @@ def test_group_crud_slug_uniqueness_and_unscoped_hierarchy(spaces_tables: None) 
             Group.objects.create(name="Duplicate", slug="community")
 
         child.delete()
+        sibling.delete()
         root.delete()
         assert Group.objects.count() == 0
 

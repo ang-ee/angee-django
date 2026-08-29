@@ -43,7 +43,7 @@ def test_action_result_carries_created_record_id() -> None:
     assert created.id == "pay_abc123"
 
 
-def test_action_guard_maps_baseline_domain_errors() -> None:
+def test_action_guard_maps_baseline_domain_errors(caplog: pytest.LogCaptureFixture) -> None:
     """The guard maps each baseline domain error to an in-band ``ActionResult``."""
 
     @action_guard("Could not register the payment.")
@@ -59,10 +59,13 @@ def test_action_guard_maps_baseline_domain_errors() -> None:
     ok = register("ok")
     assert ok.ok is True
 
-    validation = register("validation")
+    with caplog.at_level("ERROR", logger=actions_module.__name__):
+        validation = register("validation")
     assert validation.ok is False
     assert validation.message == "Could not register the payment."
     assert validation.validation_errors == {"amount": ["Exceeds the balance."]}
+    assert "GraphQL action register failed" in caplog.messages
+    assert caplog.records[-1].exc_info is not None
 
     transition = register("transition")
     assert transition.ok is False

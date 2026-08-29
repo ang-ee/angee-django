@@ -10,7 +10,11 @@ import { useUiT } from "../../i18n";
 import { titleCase } from "../../lib/titleCase";
 import { relationValueId } from "../../widgets/types";
 import { FieldDescriptorControl } from "./field-descriptor-control";
-import { emptyDialogValue, emptyValueForField } from "./MutationDialog";
+import {
+  emptyDialogValue,
+  emptyValueForField,
+  mutationDialogValueCodecs,
+} from "./MutationDialog";
 import { relationFieldInfoForResource } from "../resource/model-metadata-defaults";
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
@@ -69,7 +73,7 @@ export function ActionFormDialog({
       // `run` is reached only when `action.submit` is set (guarded below); the
       // fallback just keeps the return total for the optional descriptor field.
       if (!action.submit) return { ok: true, message: "" };
-      return action.submit(collected, context);
+      return action.submit(serializeActionArgValues(args, collected), context);
     },
     onSuccess: () => {
       onSucceeded?.();
@@ -330,6 +334,23 @@ function ActionRelationListControl({
 }
 
 const EMPTY_ARGS: readonly ActionArg[] = [];
+
+/** Serialize scalar values whose GraphQL wire type is stricter than the control value. */
+function serializeActionArgValues(
+  args: readonly ActionArg[],
+  values: ArgValues,
+): ArgValues {
+  const serialized = { ...values };
+  for (const arg of args) {
+    if (
+      (arg.argKind === undefined || arg.argKind === "scalar") &&
+      (arg.kind === "datetime" || arg.widget === "datetime")
+    ) {
+      serialized[arg.name] = mutationDialogValueCodecs.datetime(values[arg.name]);
+    }
+  }
+  return serialized;
+}
 
 /** Seed each arg: a relation list prefills from context; scalars/relations empty. */
 function argDefaultValues(

@@ -13,6 +13,7 @@ import { FormGrid } from "../../ui/form-layout";
 import { SectionEyebrow } from "../../ui/section-eyebrow";
 import { Spinner } from "../../ui/spinner";
 import { Tabs } from "../../ui/tabs";
+import { renderGlyph } from "../../chrome/Glyph";
 import { textRoleVariants } from "../../ui/text";
 import { cn } from "../../lib/cn";
 import { relationValueId } from "../../widgets/types";
@@ -232,7 +233,9 @@ export function FormViewOverview({
     }
     const stacked = list.filter((section) => section.label == null);
     const tabbedSections = list.filter(
-      (section) => section.label != null && section.fields.length > 0,
+      (section) =>
+        section.label != null
+        && (section.fields.length > 0 || section.render !== undefined),
     );
     return (
       <>
@@ -356,7 +359,7 @@ function FormSection({
   section: FormSectionModel;
   renderField: (field: FieldDescriptor) => React.ReactNode;
 }): React.ReactElement | null {
-  if (section.fields.length === 0) return null;
+  if (section.fields.length === 0 && section.render === undefined) return null;
   return (
     <section className="grid gap-3">
       {section.label ? (
@@ -370,13 +373,16 @@ function FormSection({
           {section.label}
         </SectionEyebrow>
       ) : null}
-      <FormGrid
-        columns={section.columns === 1 ? "one" : "two"}
-        density="comfortable"
-        className="gap-x-8 gap-y-4 pb-2"
-      >
-        {section.fields.map((field) => renderField(field))}
-      </FormGrid>
+      {section.fields.length > 0 ? (
+        <FormGrid
+          columns={section.columns === 1 ? "one" : "two"}
+          density="comfortable"
+          className="gap-x-8 gap-y-4 pb-2"
+        >
+          {section.fields.map((field) => renderField(field))}
+        </FormGrid>
+      ) : null}
+      {section.render?.()}
     </section>
   );
 }
@@ -396,8 +402,15 @@ function FormSectionTabs({
     <Tabs value={value} onValueChange={setActive} variant="card">
       <Tabs.List>
         {sections.map((section) => (
-          <Tabs.Tab key={section.key} value={section.key}>
+          <Tabs.Tab
+            key={section.key}
+            value={section.key}
+            icon={renderGlyph(section.icon)}
+          >
             {section.label}
+            {section.badge != null ? (
+              <Tabs.Count>{section.badge}</Tabs.Count>
+            ) : null}
           </Tabs.Tab>
         ))}
       </Tabs.List>

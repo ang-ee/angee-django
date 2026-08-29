@@ -1,4 +1,5 @@
 import {
+  Action,
   Column,
   Facet,
   Field,
@@ -8,6 +9,7 @@ import {
   ListView,
   ResourceList,
   useEnumOptions,
+  useRecordActionMutation,
   useRouteHref,
   type RecordPanelContext,
   type RecordTabDescriptor,
@@ -29,6 +31,22 @@ export function ProjectsPage(): React.ReactElement {
   const statusOptions = useEnumOptions(PROJECT_MODEL, "status");
   const startResolutionOptions = useEnumOptions(PROJECT_MODEL, "start_date_resolution");
   const targetResolutionOptions = useEnumOptions(PROJECT_MODEL, "target_date_resolution");
+  const [pauseProject] = useRecordActionMutation("pause_project", {
+    invalidateModels: [PROJECT_MODEL],
+    settle: true,
+  });
+  const [resumeProject] = useRecordActionMutation("resume_project", {
+    invalidateModels: [PROJECT_MODEL],
+    settle: true,
+  });
+  const [completeProject] = useRecordActionMutation("complete_project", {
+    invalidateModels: [PROJECT_MODEL],
+    settle: true,
+  });
+  const [dropProject] = useRecordActionMutation("drop_project", {
+    invalidateModels: [PROJECT_MODEL],
+    settle: true,
+  });
   const recordTabs = React.useMemo<readonly RecordTabDescriptor[]>(
     () => [
       {
@@ -79,9 +97,47 @@ export function ProjectsPage(): React.ReactElement {
           <Field name="converted_from" readOnly />
         </Group>
         <Field name="body" widget="markdown.editor" body />
+        <Action
+          id="pause"
+          label={t("project.action.pause")}
+          icon="archive"
+          run={pauseProject}
+          visibleWhen={(record) => projectStatus(record) === "open"}
+        />
+        <Action
+          id="resume"
+          label={t("project.action.resume")}
+          icon="activity"
+          run={resumeProject}
+          visibleWhen={(record) => projectStatus(record) === "paused"}
+        />
+        <Action
+          id="complete"
+          label={t("project.action.complete")}
+          icon="check"
+          run={completeProject}
+          visibleWhen={isActiveProject}
+        />
+        <Action
+          id="drop"
+          label={t("project.action.drop")}
+          icon="circle-x"
+          danger
+          run={dropProject}
+          visibleWhen={isActiveProject}
+        />
       </Form>
     </ResourceList>
   );
+}
+
+function isActiveProject(record: { status?: unknown }): boolean {
+  const status = projectStatus(record);
+  return status === "open" || status === "paused";
+}
+
+function projectStatus(record: { status?: unknown }): string {
+  return String(record.status ?? "").trim().toLowerCase();
 }
 
 function ProjectTasksTab({ recordId }: RecordPanelContext): React.ReactElement {

@@ -204,6 +204,32 @@ function renderDialog(action: ActionDescriptor): void {
 }
 
 describe("ActionFormDialog", () => {
+  test("serializes datetime args with the picked local UTC offset", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Snoozed." });
+    renderDialog({
+      id: "snooze",
+      label: "Snooze",
+      args: [
+        {
+          name: "until",
+          label: "Until",
+          kind: "datetime",
+          defaultValue: "2026-08-31T00:00",
+        },
+      ],
+      submit,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Snooze" }));
+
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]?.[0]).toEqual({
+      until: expect.stringMatching(
+        /^2026-08-31T00:00:00[+-]\d{2}:\d{2}$/,
+      ),
+    });
+  });
+
   afterEach(() => cleanup());
   beforeEach(() => {
     vi.clearAllMocks();

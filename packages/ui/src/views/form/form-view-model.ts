@@ -4,6 +4,7 @@ import {
   rowPublicId,
   rowValueAtPath,
   type DataResourceSubtitleMetadata,
+  type ModelFieldMetadata,
   type ModelMetadata,
   type Row,
 } from "@angee/metadata";
@@ -30,8 +31,13 @@ export interface LinesSeed {
 export interface FormSectionModel {
   key: string;
   label?: ReactNode;
+  icon?: ReactNode;
+  badge?: ReactNode;
   columns?: number;
   fields: readonly FieldDescriptor[];
+  render?: () => ReactNode;
+  sequence?: number;
+  order?: number;
 }
 
 export interface FormViewFieldLayout {
@@ -45,6 +51,7 @@ export interface FormViewFieldLayout {
 export function formSections(
   fields: readonly FieldDescriptor[],
   groups: readonly GroupDescriptor[],
+  sequences: readonly (number | undefined)[] = [],
 ): readonly FormSectionModel[] {
   if (groups.length === 0) return [{ key: "fields", fields }];
   const groupedNames = new Set<string>();
@@ -57,6 +64,8 @@ export function formSections(
         label: group.label,
         columns: group.columns,
         fields: group.fields,
+        sequence: sequences[index],
+        order: index,
       },
     ];
   });
@@ -158,8 +167,15 @@ export function addFieldSelection(
   paths: Set<string>,
   field: FieldDescriptor,
   relation?: RelationFieldInfo,
+  metadata?: ModelFieldMetadata,
 ): void {
-  if (isRelationIdField(field)) {
+  if (
+    isRelationIdField(field)
+    && (
+      metadata === undefined
+      || (metadata.kind === "relation" && metadata.relationObject === true)
+    )
+  ) {
     paths.add(`${field.name}.id`);
     if (relation && relation.labelField !== "id") {
       paths.add(`${field.name}.${relation.labelField}`);
@@ -264,6 +280,21 @@ export function fieldValidationRules(
   return { validate: (value) => !isEmptyFieldValue(value) || requiredMessage };
 }
 
+export function missingRequiredFieldNames(
+  values: FormValues,
+  fields: readonly FieldDescriptor[],
+  requiredFieldNames: ReadonlySet<string>,
+): readonly string[] {
+  return fields
+    .filter(
+      (field) =>
+        requiredFieldNames.has(field.name)
+        && isFieldVisible(field, values)
+        && isEmptyFieldValue(values[field.name]),
+    )
+    .map((field) => field.name);
+}
+
 export function visibleSections(
   sections: readonly FormSectionModel[],
   values: FormValues,
@@ -281,6 +312,7 @@ export function mutationData(
     dirtyFields: Record<string, unknown>;
     id?: string | null;
     isCreate: boolean;
+    fieldMetadata?: Readonly<Record<string, ModelFieldMetadata>> | null;
     seededFieldNames?: ReadonlySet<string> | null;
     writableFields?: ReadonlySet<string> | null;
   },
@@ -296,8 +328,20 @@ export function mutationData(
     if (field.readOnly && !seededDefault) continue;
     if (!isFieldVisible(field, values)) continue;
     const next = mutationFieldValue(field, values[field.name]);
-    if (isUnselectedOption(field, next)) continue;
-    if (options.isCreate && isEmptyNumericValue(field, next)) continue;
+    if (
+      options.isCreate
+      && isBlankCreateValue(
+        field,
+        options.fieldMetadata?.[field.name],
+        next,
+        {
+          dirty: Boolean(options.dirtyFields[field.name]),
+          seeded: seededDefault,
+        },
+      )
+    ) {
+      continue;
+    }
     if (!options.isCreate && !options.dirtyFields[field.name]) continue;
     data[field.name] = next;
   }
@@ -336,10 +380,6 @@ function isNumericField(field: FieldDescriptor): boolean {
   return id === "integer" || id === "float";
 }
 
-function isEmptyNumericValue(field: FieldDescriptor, value: unknown): boolean {
-  return isNumericField(field) && value == null;
-}
-
 function hasOptionValue(field: FieldDescriptor): boolean {
   return Boolean(
     field.options &&
@@ -351,8 +391,30 @@ function hasOptionValue(field: FieldDescriptor): boolean {
   );
 }
 
-function isUnselectedOption(field: FieldDescriptor, value: unknown): boolean {
-  return value === "" && (hasOptionValue(field) || isRelationIdField(field));
+function isBlankCreateValue(
+  field: FieldDescriptor,
+  metadata: ModelFieldMetadata | undefined,
+  value: unknown,
+  intent: { dirty: boolean; seeded: boolean },
+): boolean {
+  if (value == null) {
+    if (!intent.dirty && !intent.seeded) return true;
+    return !isStringScalar(metadata);
+  }
+  if (value !== "") return false;
+  if (isRelationIdField(field) || metadata?.relationTarget) return true;
+  if (metadata) {
+    return metadata.kind === "enum" || !isStringScalar(metadata);
+  }
+  return (
+    hasOptionValue(field)
+    || isNumericField(field)
+    || isNullableScalarWidget(field)
+  );
+}
+
+function isStringScalar(metadata: ModelFieldMetadata | undefined): boolean {
+  return metadata?.kind === "scalar" && metadata.scalar === "String";
 }
 
 function valuesEqual(left: unknown, right: unknown): boolean {

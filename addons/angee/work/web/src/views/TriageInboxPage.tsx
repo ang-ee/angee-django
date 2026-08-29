@@ -2,6 +2,7 @@ import {
   Column,
   ErrorBanner,
   List,
+  LoadingPanel,
   Page,
   PageBody,
   PageHeader,
@@ -24,8 +25,26 @@ export function TriageInboxPage(): React.ReactElement {
   const routeHref = useRouteHref();
   const queue = useQueueContext(queueId);
   const name = queue.data?.work_queues_by_pk?.name ?? queueId;
-  const triageStageId = queue.data?.work_stages[0]?.id ?? "__missing_triage_stage__";
+  // Never send a placeholder sqid to the server — an unknown id makes the
+  // stage decoder raise. While the queue loads we render a loading panel; a
+  // queue without a triage stage gets the no-match filter (the MyWorkPage
+  // idiom), so the standard empty state renders without a bogus query.
+  const triageStageId = queue.data?.work_stages[0]?.id ?? null;
   const actions = useTriageRowActions<WorkTaskRow>(queueId);
+
+  if (!queue.data && !queue.error) {
+    return (
+      <Page>
+        <PageHeader
+          title={t("triage.title", { queue: name })}
+          description={t("triage.description")}
+        />
+        <PageBody>
+          <LoadingPanel />
+        </PageBody>
+      </Page>
+    );
+  }
 
   return (
     <Page>
@@ -38,18 +57,25 @@ export function TriageInboxPage(): React.ReactElement {
         <List<WorkTaskRow>
           resource={TASK_MODEL}
           scope="local"
-          fields={["queue", "started_triage_at", "triaged_at"]}
-          baseFilter={{
-            queue: { exact: queueId },
-            stage: { exact: triageStageId },
-            started_triage_at: { isNull: false },
-            triaged_at: { isNull: true },
-            snoozed_until: { isNull: true },
-          }}
+          fields={["started_triage_at", "triaged_at"]}
+          baseFilter={
+            triageStageId
+              ? {
+                  queue: { exact: queueId },
+                  stage: { exact: triageStageId },
+                  started_triage_at: { isNull: false },
+                  triaged_at: { isNull: true },
+                  snoozed_until: { isNull: true },
+                }
+              : { id: { inList: [] } }
+          }
           order={{ started_triage_at: "ASC" }}
           rowActions={actions.rowActions}
           rowHref={(row) => routeHref("projects.tasks.record", { id: row.id })}
-          emptyContent={t("triage.empty")}
+          emptyContent={{
+            title: t("triage.empty"),
+            description: t("triage.empty.description"),
+          }}
         >
           <Column field="work_key" header={t("common.key")} />
           <Column field="title" />

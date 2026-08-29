@@ -44,6 +44,7 @@ export interface UseResourceViewSurfaceProps<TRow extends Row = Row> {
   resourceView: ResourceViewContextValue;
   modelMetadata?: ModelMetadata | null;
   groupStack?: readonly ResourceViewGroup[];
+  defaultExpandedGroups?: "all" | "none";
   laneSource?: ResolvedBoardLaneSource | null;
   enabled?: boolean;
   onListStateChange?: (state: ResourceListSnapshot<TRow>) => void;

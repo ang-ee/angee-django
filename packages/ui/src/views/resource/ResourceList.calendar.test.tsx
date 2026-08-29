@@ -108,7 +108,7 @@ describe("ResourceList calendar quick-create", () => {
     });
   });
 
-  test("lane create merges its lane and rank with list-owned defaults", () => {
+  test("lane create merges its lane but omits rank from list-owned defaults", () => {
     const onSelect = vi.fn();
     const baseProps = {
       resource: "pm.Task",
@@ -129,7 +129,6 @@ describe("ResourceList calendar quick-create", () => {
     expect(captured.formDefaults).toEqual({
       workspace: "workspace-1",
       stage: "stage-progress",
-      sort_order: 3072,
     });
   });
 });

@@ -1,0 +1,38 @@
+_meta:
+  model: work.Stage
+rows:
+  - xref: eng_triage
+    fields:
+      queue: work.eng
+      name: Triage
+      tone: warning
+      position: 10
+      category: triage
+  - xref: eng_backlog
+    fields:
+      queue: work.eng
+      name: Backlog
+      tone: neutral
+      position: 20
+      category: backlog
+  - xref: eng_todo
+    fields:
+      queue: work.eng
+      name: Todo
+      tone: brand
+      position: 30
+      category: unstarted
+  - xref: eng_in_progress
+    fields:
+      queue: work.eng
+      name: In progress
+      tone: info
+      position: 40
+      category: started
+  - xref: eng_done
+    fields:
+      queue: work.eng
+      name: Done
+      tone: success
+      position: 50
+      category: completed
