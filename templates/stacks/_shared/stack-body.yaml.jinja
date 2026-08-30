@@ -518,8 +518,8 @@ services:
         && n=0
         && until [ -s runtime/schemas/console.graphql ] && [ -s runtime/schemas/public.graphql ]; do
         n=$$((n+1));
-        [ "$$n" -ge 120 ] && { echo 'runtime GraphQL schemas not ready after 120s' >&2; ls -R runtime >&2 || true; exit 1; };
-        echo "waiting for runtime GraphQL schemas ($$n/120)..."; sleep 1;
+        [ "$$n" -ge 600 ] && { echo 'runtime GraphQL schemas not ready after 600s' >&2; ls -R runtime >&2 || true; exit 1; };
+        echo "waiting for runtime GraphQL schemas ($$n/600)..."; sleep 1;
         done
         && pnpm --dir {{ web_path }} codegen
         && date > caches/js-deps.done
@@ -615,8 +615,8 @@ services:
         && n=0
         && until [ -s project/runtime/schemas/console.graphql ] && [ -s project/runtime/schemas/public.graphql ]; do
         n=$$((n+1));
-        [ "$$n" -ge 120 ] && { echo 'runtime GraphQL schemas not ready after 120s' >&2; ls -R project/runtime >&2 || true; exit 1; };
-        echo "waiting for runtime GraphQL schemas ($$n/120)..."; sleep 1;
+        [ "$$n" -ge 600 ] && { echo 'runtime GraphQL schemas not ready after 600s' >&2; ls -R project/runtime >&2 || true; exit 1; };
+        echo "waiting for runtime GraphQL schemas ($$n/600)..."; sleep 1;
         done
         && cd project/{{ web_path }}
         && pnpm codegen
