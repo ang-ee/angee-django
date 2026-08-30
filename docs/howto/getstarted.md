@@ -244,11 +244,12 @@ sudo usermod -aG docker "$USER" && newgrp docker
 ```
 
 Install the CLI (**v0.10.6+** — older CLIs did not start the HTTPS edge from a
-bare `angee up`), then render and boot:
+bare `angee up`; the installer always ships the latest release, and
+`releases/latest/download/angee-linux-<arch>.tar.gz` is the manual
+alternative), then render and boot:
 
 ```sh
-curl -fsSL https://github.com/ang-ee/angee-operator/releases/latest/download/angee-linux-amd64.tar.gz | tar xz
-sudo install -m755 angee /usr/local/bin/angee
+curl -fsSL https://angee.ai/install.sh | sh
 
 mkdir angee && cd angee
 angee init . -t dev --yes \
