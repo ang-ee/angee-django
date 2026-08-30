@@ -1,5 +1,9 @@
 # Get Started with Angee
 
+> **In a hurry?** Jump straight to the
+> [VPS quickstart](#quickstart-a-dev-vps-end-to-end) — a clean Ubuntu box to a
+> full HTTPS dev stack with a Claude Code agent, in four commands.
+
 This is the front door. Read it once, end to end, and you will know what Angee
 is, what you can build with it, how much exists today, and exactly what to run
 on a fresh machine. Everything here links out to the doc that
