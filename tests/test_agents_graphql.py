@@ -153,6 +153,7 @@ AGENTS_GRAPHQL_MODELS = (
 
 # Imported only now that every agents concrete is registered.
 agents_provisioning = importlib.import_module("angee.agents.provisioning")
+from angee.operator.daemon import OperatorDaemonError
 agents_schema = importlib.import_module("angee.agents.schema")
 iam_schema = importlib.import_module("angee.iam.schema")
 integrate_schema = importlib.import_module("angee.integrate.schema")
@@ -1156,6 +1157,59 @@ def test_provision_agent_records_error_when_plan_resolution_fails(
         assert (str(agent.runtime_status), str(agent.lifecycle)) == ("error", "draft")
         assert (agent.workspace, agent.service) == ("", "")
         assert "credential is unreadable" in agent.last_error
+
+
+def test_reprovision_agent_tolerates_already_destroyed_service(
+    agents_console_tables: None, monkeypatch: Any
+) -> None:
+    """A 404 from the old service's destroy means it is already gone — recreate anyway."""
+
+    admin = _platform_admin("agt-reprov404-admin")
+    agent = _provisionable_agent(
+        admin,
+        "Rebot404",
+        slug="agt-reprov404-tpl",
+        workspace="ws-keep",
+        service="svc-ghost",
+        lifecycle="ready",
+        runtime_status="running",
+    )
+    agent_id = _public_id(agent.sqid)
+
+    calls: list[tuple[Any, ...]] = []
+
+    class _FakeDaemon:
+        @classmethod
+        def from_settings(cls) -> _FakeDaemon:
+            return cls()
+
+        def resolve_template_ref(self, *, name: str, kind: str) -> str:
+            return f"ref:{name}"
+
+        def set_secret(self, name: str, value: str) -> None:
+            calls.append(("secret", name))
+
+        def destroy_service(self, name: str) -> None:
+            calls.append(("destroy_service", name))
+            raise OperatorDaemonError(f'service "{name}" is not declared', status_code=404)
+
+        def create_service(
+            self, *, template: str, workspace: str, inputs: dict[str, str], start: bool = True, name: str = ""
+        ) -> str:
+            calls.append(("create_service", template, workspace))
+            return "svc-new"
+
+        def start_service(self, name: str) -> None:
+            calls.append(("start_service", name))
+
+    monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _FakeDaemon)
+
+    reprovision = "mutation($id: ID!){ reprovision_agent(id: $id){ ok message } }"
+    result = _data(_execute(_schema(), reprovision, {"id": agent_id}, user=admin))["reprovision_agent"]
+
+    assert result == {"ok": True, "message": "Recreated service \u201csvc-new\u201d."}
+    assert ("destroy_service", "svc-ghost") in calls
+    assert ("create_service", "ref:claude-code", "ws-keep") in calls
 
 
 def test_reprovision_agent_recreates_service_over_existing_workspace(

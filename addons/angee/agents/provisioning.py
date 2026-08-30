@@ -22,7 +22,7 @@ from angee.agents.grants import grant_resource_reader_role
 from angee.agents.models import AgentLifecycle
 from angee.graphql.actions import ActionResult, action_target
 from angee.graphql.ids import PublicID
-from angee.operator.daemon import OperatorDaemon, OperatorDaemonNotFound
+from angee.operator.daemon import OperatorDaemon, OperatorDaemonError, OperatorDaemonNotFound
 
 # The inference-credential chains ``_render_plan`` walks: the per-agent override
 # (``inference_credential``, with its ``oauth_client`` for an OAuth refresh) and the
@@ -149,7 +149,13 @@ def reprovision_agent(id: PublicID) -> ActionResult:
             plan = _render_plan(agent)
         _sync_secrets(daemon, plan)
         if service:
-            daemon.destroy_service(service)
+            try:
+                daemon.destroy_service(service)
+            except OperatorDaemonError as error:
+                # A 404 means the entry is already gone (a manifest re-render
+                # can drop operator-declared services); recreate over it.
+                if error.status_code != 404:
+                    raise
             service_destroyed = True
         new_service = _render_service(daemon, plan, workspace)
         if new_service:
