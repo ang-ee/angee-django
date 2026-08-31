@@ -3,6 +3,11 @@
 # ANTHROPIC_MODEL, while opencode expects the selected `provider/model` handle as
 # OPENCODE_MODEL and its ACP model selection. The same Anthropic model therefore keeps
 # sibling rows over the one provider, one per selectable runtime convention.
+# The heavier sibling for the framework-dev agent: same provider, Opus-class model.
+- xref: model_claude_opus
+  provider: agents_integrate_anthropic.provider_anthropic_demo
+  name: claude-opus-4-8
+  display_name: Claude Opus 4.8
 - xref: model_claude_demo
   provider: agents_integrate_anthropic.provider_anthropic_demo
   name: claude-sonnet-4-6
