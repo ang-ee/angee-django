@@ -24,6 +24,7 @@ rows:
     fields:
       name: Demo Agent
       owner: iam.user_admin
+      description: Runnable claude-code demo over the default agent workspace.
       instructions: |
         You are a helpful coding agent working in /workspace. Keep changes small and
         explain what you did.
@@ -70,6 +71,7 @@ rows:
       name: Framework Dev Agent
       owner: iam.user_admin
       is_template: true
+      description: Showcase blueprint for the src-workspace dev combination.
       instructions: |
         You are a framework development agent working across the Angee source slots.
         Keep changes focused, run each repository's checks, and commit only inside the
@@ -93,6 +95,7 @@ rows:
     fields:
       name: Demo Agent (OpenCode)
       owner: iam.user_admin
+      description: Runnable opencode demo over the default agent workspace.
       instructions: |
         You are a helpful coding agent working in /workspace. Keep changes small and
         explain what you did.
