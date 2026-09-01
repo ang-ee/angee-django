@@ -217,8 +217,8 @@ angee init myproject -t dev --input runtime_mode=docker
 
 On a remote host, add a public DNS name and the edge serves the whole UX over
 automatic Let's Encrypt TLS (ports 443/80; the Vite UX at the domain root,
-agent chat at wss://<domain>/<service>/, Playwright MCP at
-https://<domain>/playwright-mcp/mcp):
+agent chat at `wss://<domain>/<service>/`, Playwright MCP at
+`https://<domain>/playwright-mcp/mcp`):
 
 ```sh
 angee init myproject -t dev --input runtime_mode=docker --input ingress_domain=dev.example.com
