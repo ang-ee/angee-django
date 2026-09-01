@@ -240,6 +240,9 @@ export function FormView(props: FormViewProps): React.ReactElement {
               {recordTabList.map((tab) => (
                 <Tabs.Tab key={tab.id} value={tab.id} icon={renderGlyph(tab.icon)}>
                   {tab.label}
+                  {tab.badge != null ? (
+                    <Tabs.Count>{tab.badge}</Tabs.Count>
+                  ) : null}
                 </Tabs.Tab>
               ))}
             </Tabs.List>
@@ -278,7 +281,15 @@ export function FormView(props: FormViewProps): React.ReactElement {
           className={cn(FORM_VIEW_COLUMN_CLASS, "pb-12")}
         >
           <ControlBandProvider host={undefined}>
-            {recordPanelContext ? tab.render(recordPanelContext) : null}
+            {recordPanelContext ? (
+              recordChromeContext ? (
+                <RecordChromeProvider value={recordChromeContext}>
+                  {tab.render(recordPanelContext)}
+                </RecordChromeProvider>
+              ) : (
+                tab.render(recordPanelContext)
+              )
+            ) : null}
           </ControlBandProvider>
         </Tabs.Panel>
       ))}

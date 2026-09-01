@@ -183,6 +183,20 @@ export function GraphView<
   TNodeMeta,
   TEdgeMeta
 >): React.ReactElement {
+  // Consumers pass `layout` as an inline literal; resolve it by value so a
+  // parent re-render with unchanged settings cannot re-run the dagre layout.
+  const {
+    rankdir = DEFAULT_LAYOUT.rankdir,
+    nodesep = DEFAULT_LAYOUT.nodesep,
+    ranksep = DEFAULT_LAYOUT.ranksep,
+    edgesep = DEFAULT_LAYOUT.edgesep,
+    marginx = DEFAULT_LAYOUT.marginx,
+    marginy = DEFAULT_LAYOUT.marginy,
+  } = layout ?? DEFAULT_LAYOUT;
+  const resolvedLayout = React.useMemo(
+    () => ({ rankdir, nodesep, ranksep, edgesep, marginx, marginy }),
+    [rankdir, nodesep, ranksep, edgesep, marginx, marginy],
+  );
   const layoutedGraph = React.useMemo(
     () =>
       layoutGraph({
@@ -191,9 +205,9 @@ export function GraphView<
           toReactFlowEdge(edge, edgeStyles, defaultEdgeStyle),
         ),
         nodeStyles,
-        layout: { ...DEFAULT_LAYOUT, ...layout },
+        layout: resolvedLayout,
       }),
-    [defaultEdgeStyle, edgeStyles, edges, layout, nodeStyles, nodes],
+    [defaultEdgeStyle, edgeStyles, edges, resolvedLayout, nodeStyles, nodes],
   );
   const [renderNodes, setRenderNodes] = React.useState(layoutedGraph.nodes);
   const [renderEdges, setRenderEdges] = React.useState(layoutedGraph.edges);
@@ -201,6 +215,11 @@ export function GraphView<
     setRenderNodes(layoutedGraph.nodes);
     setRenderEdges(layoutedGraph.edges);
   }, [layoutedGraph]);
+  // React Flow re-emits selection state whenever its store adopts replaced
+  // nodes. Consumers set state from these callbacks, so re-emitting an
+  // unchanged selection loops: setState → re-render → store resync → re-emit
+  // ("Maximum update depth exceeded" in StoreUpdater). Emit only on change.
+  const lastSelectionSignature = React.useRef<string | null>(null);
 
   return (
     <div className={cn("min-h-0", className)}>
@@ -248,6 +267,12 @@ export function GraphView<
         onSelectionChange={
           onNodeSelect || onNodesSelect || onEdgeSelect
             ? ({ nodes: selectedNodes, edges: selectedEdges }) => {
+                const signature = JSON.stringify([
+                  selectedNodes.map((node) => node.id),
+                  selectedEdges.map((edge) => edge.id),
+                ]);
+                if (lastSelectionSignature.current === signature) return;
+                lastSelectionSignature.current = signature;
                 onNodeSelect?.(selectedNodes[0]?.data.node ?? null);
                 onNodesSelect?.(selectedNodes.map((node) => node.data.node));
                 onEdgeSelect?.(selectedEdges[0]?.data?.edge ?? null);
@@ -372,6 +397,11 @@ function layoutGraph<
   nodes: RenderNode<TNodeKind, TNodeMeta>[];
   edges: RenderEdge<TEdgeKind, TEdgeMeta>[];
 } {
+  // @dagrejs/dagre is pinned EXACT at 3.0.0: 3.1.0/3.1.1 regress on large
+  // multigraphs with >=3 parallel edges between one node pair (dagre's
+  // intersectRect throws "Not possible to find intersection inside of the
+  // rectangle" — live repro: the platform model graph's created_by/updated_by/
+  // owner edges). Re-test with the platform graph before widening the range.
   const graph = new dagre.graphlib.Graph({ directed: true, multigraph: true });
   graph.setDefaultEdgeLabel(() => ({}));
   graph.setGraph(layout);

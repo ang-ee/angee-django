@@ -41,6 +41,13 @@ RUN apt-get update \
     && corepack enable \
     && rm -f /tmp/uv-installer.sh \
     && rm -rf /var/lib/apt/lists/*
+
+# The interactive Claude Code CLI, so a human can work inside the agent's
+# workspace too: `docker compose exec -it agent-<name> claude`. It inherits the
+# container env (CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY, ANTHROPIC_MODEL)
+# and ~/.claude written by the start script. Unpinned on purpose — a dev tool
+# that follows latest; the image rebuild on service recreate refreshes it.
+RUN npm install -g @anthropic-ai/claude-code
 {%- endif %}
 
 USER node

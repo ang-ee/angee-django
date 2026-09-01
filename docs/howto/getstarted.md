@@ -1,5 +1,9 @@
 # Get Started with Angee
 
+> **In a hurry?** Jump straight to the
+> [VPS quickstart](#quickstart-a-dev-vps-end-to-end) — a clean Ubuntu box to a
+> full HTTPS dev stack with a Claude Code agent, in four commands.
+
 This is the front door. Read it once, end to end, and you will know what Angee
 is, what you can build with it, how much exists today, and exactly what to run
 on a fresh machine. Everything here links out to the doc that
@@ -228,6 +232,72 @@ The stack root must live on the machine whose Docker daemon runs it (bind
 mounts resolve on that filesystem) — ssh in and run `angee` there rather than
 pointing a remote `DOCKER_HOST` at it. With the default `localhost` domain the
 edge stays plain HTTP on `edge_port` and the UX is published directly.
+
+### Quickstart: a dev VPS end to end
+
+The complete recipe, validated on a clean Ubuntu 24.04 VPS — from empty box to
+the web console over HTTPS with a Claude Code agent modifying the framework.
+
+**You need**: a VPS with 6+ CPUs / 8 GB+ RAM / 40 GB+ disk and a public IP; a
+DNS A record for your hostname (say `dev.example.com`) pointing at it; and
+Docker with the compose and buildx plugins, plus git:
+
+```sh
+sudo apt-get update && sudo apt-get install -y docker.io docker-compose-v2 docker-buildx git
+sudo usermod -aG docker "$USER" && newgrp docker
+```
+
+Install the CLI (**v0.10.6+** — older CLIs did not start the HTTPS edge from a
+bare `angee up`; the installer always ships the latest release, and
+`releases/latest/download/angee-linux-<arch>.tar.gz` is the manual
+alternative), then render and boot:
+
+```sh
+curl -fsSL https://angee.ai/install.sh | sh
+
+mkdir angee && cd angee
+angee init . -t dev --yes \
+  --input runtime_mode=docker \
+  --input ingress_domain=dev.example.com \
+  --input addons_profile=full
+angee up
+```
+
+`init` renders from the published template registry in seconds; `angee up`
+pulls the images, cuts the `workspaces/src` framework workspace, starts every
+container (operator and edge included), and runs the first provision —
+migrations, permissions, demo seeds. First boot is **5–10 minutes**; follow it
+with `docker compose logs -f django`. Then open `https://dev.example.com`,
+sign in as `admin` / `admin`, and change that password immediately — this is a
+public host:
+
+```sh
+docker compose exec django python manage.py changepassword admin
+```
+
+`addons_profile=full` composes the whole platform, including the Agents suite.
+To put a Claude Code agent to work on the framework itself:
+
+1. **Connect Anthropic**: Agents → Providers → **Connect** on the Anthropic
+   card (your Claude account, or attach an API-key credential). The provider
+   credential serves every Anthropic-model agent.
+2. **Create the agent**: Agents → **New agent** — a Claude model, runtime
+   **claude-code**, workspace template **src**, service inputs
+   `{"flavor": "dev"}`. The seeded *Framework Dev Agent* under Agents →
+   Templates shows the reference shape.
+3. **Provision** the record: the operator cuts the agent its own src workspace
+   (worktrees on a `workspace/<agent>` branch) and builds its container — a
+   few minutes the first time.
+4. Work with it in the **Chat** on its session page, or hands-on inside the
+   same workspace (the dev flavor ships the interactive CLI):
+
+   ```sh
+   docker compose exec -u node -it agent-<agent-name> claude
+   ```
+
+Commits stay on the agent's workspace branch; publish with
+`angee ws source push`. From here you are modifying Angee itself — the
+workspace slots are the real framework repos.
 
 ### Upgrading a stack rendered before the monorepo
 

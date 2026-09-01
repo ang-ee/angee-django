@@ -56,6 +56,10 @@ _angee:
     workspaces/src/. `angee dev` owns the whole bring-up: caches, the src
     workspace cut, dependency installation, provision/codegen, and boot.
   inputs:
+    operator_image:
+      type: str
+      default: "ghcr.io/ang-ee/angee-operator:latest"
+      help: Operator daemon image for Docker-mode stacks (the daemon runs as a container over the docker socket).
     runtime_mode:
       type: str
       default: process
@@ -95,7 +99,6 @@ _angee:
         include_operator_installer: true
         addons_profile: "${inputs.addons_profile}"
         include_arp: "${inputs.include_arp}"
-        olm_cxxflags: "${inputs.olm_cxxflags}"
         framework_workspace: true
         # The rendered pyproject resolves django-angee editable from the same
         # slot the stack's processes run, so `uv run manage.py` works bare from
@@ -192,10 +195,6 @@ include_arp:
   default: false
   help: Declare the private ang-ee/angee-arp source (arpee's arp.* addons) with its slot, addon dir, and web globs.
 
-olm_cxxflags:
-  type: str
-  default: "-fdelayed-template-parsing"
-  help: CXXFLAGS for python-olm, installed through the Matrix addon's mautrix[encryption] dependency in the generated addons group; empty renders no override — pass empty on GCC/Linux.
 
 django_port:
   type: int
@@ -208,6 +207,11 @@ ui_port:
 storybook_port:
   type: int
   default: 6006
+
+operator_image:
+  type: str
+  default: "ghcr.io/ang-ee/angee-operator:latest"
+  help: Operator daemon image for Docker-mode stacks (the daemon runs as a container over the docker socket).
 
 operator_port:
   type: int

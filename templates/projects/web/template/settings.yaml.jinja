@@ -92,9 +92,10 @@ INSTALLED_APPS:
   - angee.messaging_integrate_whatsapp
   - angee.messaging_integrate_telegram
   - angee.messaging_integrate_signal
-  # The matrix bridge's addon manifest projects mautrix[encryption]/python-olm
-  # into the host pyproject's generated addons dependency group.
-  - angee.messaging_integrate_matrix
+  # The Matrix bridge stays OPT-IN (not in this default roster): its E2EE dep
+  # chain (mautrix[encryption] -> python-olm) builds the EOL libolm C++ source
+  # from sdist. A project that wants Matrix adds
+  # `angee.messaging_integrate_matrix` to its own INSTALLED_APPS.
   - angee.messaging_integrate_slack
   - angee.messaging_integrate_imessage
   - angee.messaging_integrate_meta

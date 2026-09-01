@@ -4,7 +4,6 @@ import {
   Glyph,
   MutationDialog,
   RelativeTime,
-  Tab,
   mutationDialogValueCodecs,
   useAuthoredResourceMutation,
   useEnumOptions,
@@ -81,12 +80,12 @@ export function PortfolioHealthSummary({
   );
 }
 
-/** Project FormView tab contributed by the portfolio addon. */
+/** Project update composer rendered inside the portfolio-owned FormView tab. */
 export function ProjectUpdatesSection(): React.ReactElement {
   return <RecordUpdatesSection action="report_project_update" />;
 }
 
-/** Initiative FormView tab contributed by the portfolio addon. */
+/** Initiative update composer rendered inside the portfolio-owned FormView tab. */
 export function InitiativeUpdatesSection(): React.ReactElement {
   return <RecordUpdatesSection action="report_initiative_update" />;
 }
@@ -99,26 +98,20 @@ function RecordUpdatesSection({
   const t = usePortfolioT();
   const context = useRecordChromeContext();
   return (
-    <Tab
-      id="portfolio-updates"
-      label={t("update.pane.title")}
-      icon={<Glyph decorative name="portfolio-update" />}
-    >
-      <div className="grid gap-4">
-        <div className="grid gap-1">
-          <PortfolioHealthSummary
-            health={context.record?.health}
-            updatedAt={context.record?.health_updated_at}
-          />
-          <p className="text-13 text-fg-muted">{t("update.pane.description")}</p>
-        </div>
-        <PortfolioUpdateComposer
-          action={action}
-          targetId={context.recordId}
-          targetModel={context.resource}
+    <div className="grid gap-4">
+      <div className="grid gap-1">
+        <PortfolioHealthSummary
+          health={context.record?.health}
+          updatedAt={context.record?.health_updated_at}
         />
+        <p className="text-13 text-fg-muted">{t("update.pane.description")}</p>
       </div>
-    </Tab>
+      <PortfolioUpdateComposer
+        action={action}
+        targetId={context.recordId}
+        targetModel={context.resource}
+      />
+    </div>
   );
 }
 

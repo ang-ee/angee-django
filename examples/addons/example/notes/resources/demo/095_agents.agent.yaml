@@ -24,12 +24,39 @@ rows:
     fields:
       name: Demo Agent
       owner: iam.user_admin
+      description: Runnable claude-code demo over the default agent workspace.
       instructions: |
         You are a helpful coding agent working in /workspace. Keep changes small and
         explain what you did.
       model: agents_integrate_anthropic.model_claude_demo
       workspace_template: notes.tpl_agent_default
       runtime_class: claude_code
+      lifecycle: draft
+      runtime_status: stopped
+      workspace: ""
+      service: ""
+      last_error: ""
+      mcp_servers:
+        - agents.mcp_angee
+  # The pre-created framework developer: PROVISIONABLE (unlike the template row below) so
+  # a fresh full-profile stack is one connected credential + one Provision click away from
+  # a Claude Code agent working on the Angee source itself. It cuts its own src workspace
+  # (worktrees on workspace/angee-developer) at provision time.
+  - _xref: agent_angee_developer
+    fields:
+      name: Angee Developer
+      owner: iam.user_admin
+      description: Claude Code framework-dev agent on an Angee src workspace.
+      instructions: |
+        You are the Angee Developer agent working across the Angee framework source
+        slots. Follow each repository's AGENTS.md, keep changes focused, run that
+        repository's checks, and commit only on the workspace branch when explicitly
+        asked.
+      model: agents_integrate_anthropic.model_claude_opus
+      workspace_template: notes.tpl_src_workspace
+      runtime_class: claude_code
+      service_inputs:
+        flavor: dev
       lifecycle: draft
       runtime_status: stopped
       workspace: ""
@@ -44,6 +71,7 @@ rows:
       name: Framework Dev Agent
       owner: iam.user_admin
       is_template: true
+      description: Showcase blueprint for the src-workspace dev combination.
       instructions: |
         You are a framework development agent working across the Angee source slots.
         Keep changes focused, run each repository's checks, and commit only inside the
@@ -67,6 +95,7 @@ rows:
     fields:
       name: Demo Agent (OpenCode)
       owner: iam.user_admin
+      description: Runnable opencode demo over the default agent workspace.
       instructions: |
         You are a helpful coding agent working in /workspace. Keep changes small and
         explain what you did.

@@ -35,8 +35,9 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/.venv \
 # `docker stop` shuts the ASGI server down cleanly. git: the composed stack's
 # addon dependency group pulls the pinned ang-ee/strawberry fork — git is needed
 # both to bake that closure and for the mounted-source `uv sync` at container
-# start. No compiler, no node (Vite is a separate image); the framework's own
-# wheels ship manylinux binaries.
+# start. No compiler, no node here (Vite is a separate image); the framework's
+# own wheels ship manylinux binaries — only the dev-facing `final` target below
+# adds a toolchain, for the composed addon closure's sdist-only deps.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libmagic1 tini ca-certificates git gosu \
     && rm -rf /var/lib/apt/lists/*
@@ -64,6 +65,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # --- final: the lean base + the baked venv (git inherited for the dev uv sync) --
 FROM base AS final
+# The dev image's contract is a mounted-source `uv sync` of the composed host's
+# FULL addon closure at container start — which includes sdist-only deps (the
+# matrix bridge's python-olm builds libolm via cmake). The toolchain therefore
+# belongs to this target alone; the derived `runtime` image builds from `deps`
+# and stays compiler-free.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=deps --chown=angee:angee /opt/.venv /opt/.venv
 USER root
 ENTRYPOINT ["tini", "--", "/usr/local/bin/angee-django-entrypoint"]
@@ -136,7 +145,7 @@ COPY --from=web-src /opt/angee-js ./packages
 # A workspace over the copied packages so `workspace:*` inter-deps resolve;
 # link-workspace-packages so a downstream project's `@angee/*: ^x` range still links
 # the baked package by name; auto-install-peers keeps a single React instance.
-RUN printf 'packages:\n  - "packages/*"\n' > pnpm-workspace.yaml \
+RUN printf 'packages:\n  - "packages/*"\noverrides:\n  "@assistant-ui/react": 0.14.26\n  "@assistant-ui/core": 0.2.20\n  "@assistant-ui/store": 0.2.19\n  "@assistant-ui/tap": 0.9.3\n' > pnpm-workspace.yaml \
  && printf '{"name":"@angee/web-runtime","private":true,"packageManager":"pnpm@11.1.3"}\n' > package.json \
  && printf 'link-workspace-packages=true\nprefer-workspace-packages=true\nauto-install-peers=true\n' > .npmrc \
  && pnpm install
