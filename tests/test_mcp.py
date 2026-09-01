@@ -207,6 +207,105 @@ def test_agent_mcp_m2m_reconciles_server_read_and_tool_use(agents_console_tables
         assert not backend().check_access(subject=subject, action="use", resource=grant_ref).allowed
 
 
+def test_agent_mcp_server_reverse_relation_grants_and_revokes(agents_console_tables: None) -> None:
+    """The reverse ``MCPServer.agents`` manager mirrors the same relation as the forward field."""
+
+    owner = User.objects.create_user(username="mcp-reverse-owner", email="mcp-reverse@example.com")
+    with system_context(reason="test.mcp.rebac.reverse"):
+        server = MCPServer.objects.create(name="reverse-server", url="http://x/mcp/reverse/")
+        agent = Agent.objects.create(name="Reverse Agent", owner=owner)
+        subject = agent.principal_subject()
+        server_ref = to_object_ref(server)
+
+        assert not backend().check_access(subject=subject, action="read", resource=server_ref).allowed
+        server.agents.add(agent)
+        assert backend().check_access(subject=subject, action="read", resource=server_ref).allowed
+        server.agents.remove(agent)
+        assert not backend().check_access(subject=subject, action="read", resource=server_ref).allowed
+
+
+def test_agent_mcp_servers_clear_revokes_every_selection(agents_console_tables: None) -> None:
+    """Clearing ``Agent.mcp_servers`` (forward) revokes every previously granted server."""
+
+    owner = User.objects.create_user(username="mcp-clear-owner", email="mcp-clear@example.com")
+    with system_context(reason="test.mcp.rebac.clear"):
+        first = MCPServer.objects.create(name="clear-first", url="http://x/mcp/clear-first/")
+        second = MCPServer.objects.create(name="clear-second", url="http://x/mcp/clear-second/")
+        agent = Agent.objects.create(name="Clear Agent", owner=owner)
+        subject = agent.principal_subject()
+        first_ref = to_object_ref(first)
+        second_ref = to_object_ref(second)
+
+        agent.mcp_servers.add(first, second)
+        assert backend().check_access(subject=subject, action="read", resource=first_ref).allowed
+        assert backend().check_access(subject=subject, action="read", resource=second_ref).allowed
+
+        agent.mcp_servers.clear()
+        assert not backend().check_access(subject=subject, action="read", resource=first_ref).allowed
+        assert not backend().check_access(subject=subject, action="read", resource=second_ref).allowed
+
+
+def test_agent_mcp_server_reverse_clear_revokes_every_agent(agents_console_tables: None) -> None:
+    """Clearing ``MCPServer.agents`` (reverse) revokes the relation for every selecting agent."""
+
+    owner = User.objects.create_user(username="mcp-reverse-clear-owner", email="mcp-reverse-clear@example.com")
+    with system_context(reason="test.mcp.rebac.reverse_clear"):
+        server = MCPServer.objects.create(name="reverse-clear-server", url="http://x/mcp/reverse-clear/")
+        first = Agent.objects.create(name="Reverse Clear First", owner=owner)
+        second = Agent.objects.create(name="Reverse Clear Second", owner=owner)
+        server_ref = to_object_ref(server)
+        first_subject = first.principal_subject()
+        second_subject = second.principal_subject()
+
+        server.agents.add(first, second)
+        assert backend().check_access(subject=first_subject, action="read", resource=server_ref).allowed
+        assert backend().check_access(subject=second_subject, action="read", resource=server_ref).allowed
+
+        server.agents.clear()
+        assert not backend().check_access(subject=first_subject, action="read", resource=server_ref).allowed
+        assert not backend().check_access(subject=second_subject, action="read", resource=server_ref).allowed
+
+
+def test_agent_mcp_tool_reverse_relation_grants_and_revokes(agents_console_tables: None) -> None:
+    """The reverse ``MCPTool.agents`` manager mirrors the same tool-grant relation."""
+
+    owner = User.objects.create_user(username="mcp-tool-reverse-owner", email="mcp-tool-reverse@example.com")
+    with system_context(reason="test.mcp.rebac.tool_reverse"):
+        server = MCPServer.objects.create(name="tool-reverse-server", url="http://x/mcp/tool-reverse/")
+        tool = MCPTool.objects.create(server=server, name="tool-reverse-tool")
+        agent = Agent.objects.create(name="Tool Reverse Agent", owner=owner)
+        subject = agent.principal_subject()
+        grant_ref = tool_grant_ref(str(server.sqid), tool.name)
+
+        assert not backend().check_access(subject=subject, action="use", resource=grant_ref).allowed
+        tool.agents.add(agent)
+        assert backend().check_access(subject=subject, action="use", resource=grant_ref).allowed
+        tool.agents.remove(agent)
+        assert not backend().check_access(subject=subject, action="use", resource=grant_ref).allowed
+
+
+def test_agent_mcp_tools_clear_revokes_every_selection(agents_console_tables: None) -> None:
+    """Clearing ``Agent.mcp_tools`` revokes every previously granted tool-use relation."""
+
+    owner = User.objects.create_user(username="mcp-tools-clear-owner", email="mcp-tools-clear@example.com")
+    with system_context(reason="test.mcp.rebac.tools_clear"):
+        server = MCPServer.objects.create(name="tools-clear-server", url="http://x/mcp/tools-clear/")
+        first = MCPTool.objects.create(server=server, name="tools-clear-first")
+        second = MCPTool.objects.create(server=server, name="tools-clear-second")
+        agent = Agent.objects.create(name="Tools Clear Agent", owner=owner)
+        subject = agent.principal_subject()
+        first_ref = tool_grant_ref(str(server.sqid), first.name)
+        second_ref = tool_grant_ref(str(server.sqid), second.name)
+
+        agent.mcp_tools.add(first, second)
+        assert backend().check_access(subject=subject, action="use", resource=first_ref).allowed
+        assert backend().check_access(subject=subject, action="use", resource=second_ref).allowed
+
+        agent.mcp_tools.clear()
+        assert not backend().check_access(subject=subject, action="use", resource=first_ref).allowed
+        assert not backend().check_access(subject=subject, action="use", resource=second_ref).allowed
+
+
 def test_requires_user_actor_is_actor_species_not_attribution_user() -> None:
     """Service-user attribution must not turn an agent actor into a user actor."""
 

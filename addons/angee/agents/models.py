@@ -14,11 +14,6 @@ import json
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any, cast
 
-from angee.base.fields import StateField
-from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, role_anchor
-from angee.base.transitions import StateTransitions, save_state, transition
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -33,6 +28,12 @@ from angee.agents.backends import InferenceBackend, InferenceRequest, InferenceR
 from angee.agents.grants import revoke_tool_grant, write_tool_grant
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
+from angee.base.fields import StateField
+from angee.base.impl import ImplClassField, ImplDefaultsMixin
+from angee.base.mixins import AuditMixin, SqidMixin
+from angee.base.models import AngeeManager, AngeeModel, role_anchor
+from angee.base.rebac_m2m import reconcile_m2m_changed_relationships_on_commit
+from angee.base.transitions import StateTransitions, save_state, transition
 
 
 class InferenceModelUse(models.TextChoices):
@@ -520,6 +521,10 @@ class MCPTool(SqidMixin, AuditMixin, AngeeModel):
         """Return the tool's name."""
 
         return self.name
+
+
+_MCP_AGENT_RELATION = "agent"
+"""Non-field relation ``agents/mcp_server#agent`` mirrored from Agent.mcp_servers."""
 
 
 class AgentManager(AngeeManager):
@@ -1128,6 +1133,44 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         model = getattr(self, "model", None)
         return model.credential if model is not None else None
 
+    def grant_mcp_server_relationship(self, server: MCPServer) -> None:
+        """Grant this agent's REBAC ``agent`` relation on one selected MCP server."""
+
+        write_relationships(
+            [
+                RelationshipTuple(
+                    resource=to_object_ref(server),
+                    relation=_MCP_AGENT_RELATION,
+                    subject=self.principal_subject(),
+                )
+            ]
+        )
+
+    def revoke_mcp_server_relationship(self, server: MCPServer) -> None:
+        """Revoke this agent's REBAC ``agent`` relation on one selected MCP server."""
+
+        resource = to_object_ref(server)
+        subject = self.principal_subject()
+        delete_relationships(
+            RelationshipFilter(
+                resource_type=resource.resource_type,
+                resource_id=resource.resource_id,
+                relation=_MCP_AGENT_RELATION,
+                subject_type=subject.subject_type,
+                subject_id=subject.subject_id,
+            )
+        )
+
+    def grant_mcp_tool_relationship(self, tool: MCPTool) -> None:
+        """Grant this agent's direct ``agents/tool_grant#grantee`` relation for one MCP tool."""
+
+        write_tool_grant(str(tool.server.sqid), tool.name, self.principal_subject())
+
+    def revoke_mcp_tool_relationship(self, tool: MCPTool) -> None:
+        """Revoke this agent's direct ``agents/tool_grant#grantee`` relation for one MCP tool."""
+
+        revoke_tool_grant(str(tool.server.sqid), tool.name, self.principal_subject())
+
 
 class AgentSession(SqidMixin, AuditMixin, AngeeModel):
     """Runtime-neutral persisted conversation backed by one workflow run."""
@@ -1342,93 +1385,6 @@ class AgentTurn(SqidMixin, AuditMixin, AngeeModel):
         """Cancel this turn without deleting its audit trail."""
 
 
-_MCP_AGENT_RELATION = "agent"
-
-
-def _write_agent_mcp_relation(resource: models.Model, agent: Agent) -> None:
-    """Grant one selected agent access to one selected MCP resource."""
-
-    write_relationships(
-        [
-            RelationshipTuple(
-                resource=to_object_ref(resource),
-                relation=_MCP_AGENT_RELATION,
-                subject=agent.principal_subject(),
-            )
-        ]
-    )
-
-
-def _delete_agent_mcp_relation(resource: models.Model, agent: Agent) -> None:
-    """Revoke one selected agent's access to one selected MCP resource."""
-
-    resource_ref = to_object_ref(resource)
-    subject = agent.principal_subject()
-    delete_relationships(
-        RelationshipFilter(
-            resource_type=resource_ref.resource_type,
-            resource_id=resource_ref.resource_id,
-            relation=_MCP_AGENT_RELATION,
-            subject_type=subject.subject_type,
-            subject_id=subject.subject_id,
-        )
-    )
-
-
-def _sync_agent_mcp_selection(
-    *,
-    instance: models.Model,
-    action: str,
-    reverse: bool,
-    model: type[models.Model],
-    pk_set: set[Any] | None,
-    field_name: str,
-) -> None:
-    """Mirror one Agent↔MCP M2M edit into the non-field REBAC relation."""
-
-    pairs = _agent_mcp_selection_pairs(
-        instance=instance,
-        action=action,
-        reverse=reverse,
-        model=model,
-        pk_set=pk_set,
-        field_name=field_name,
-    )
-    if not pairs:
-        return
-
-    def reconcile() -> None:
-        for resource, agent in pairs:
-            if action == "post_add":
-                _write_agent_mcp_relation(resource, cast(Agent, agent))
-            else:
-                _delete_agent_mcp_relation(resource, cast(Agent, agent))
-
-    transaction.on_commit(reconcile)
-
-
-def _agent_mcp_selection_pairs(
-    *,
-    instance: models.Model,
-    action: str,
-    reverse: bool,
-    model: type[models.Model],
-    pk_set: set[Any] | None,
-    field_name: str,
-) -> list[tuple[models.Model, Agent]]:
-    """Return the selected MCP resource/agent pairs affected by one M2M signal."""
-
-    if action not in {"post_add", "post_remove", "pre_clear"}:
-        return []
-    if action == "pre_clear":
-        if reverse:
-            return [(instance, cast(Agent, agent)) for agent in getattr(instance, "agents").all()]
-        return [(resource, cast(Agent, instance)) for resource in getattr(instance, field_name).all()]
-    if reverse:
-        return [(instance, cast(Agent, agent)) for agent in model._base_manager.filter(pk__in=pk_set or ())]
-    return [(resource, cast(Agent, instance)) for resource in model._base_manager.filter(pk__in=pk_set or ())]
-
-
 def _sync_agent_mcp_servers(
     sender: type[models.Model],
     instance: models.Model,
@@ -1436,18 +1392,30 @@ def _sync_agent_mcp_servers(
     reverse: bool,
     model: type[models.Model],
     pk_set: set[Any] | None,
+    using: str | None = None,
     **kwargs: Any,
 ) -> None:
     """Mirror Agent.mcp_servers changes into ``agents/mcp_server#agent`` tuples."""
 
     del sender, kwargs
-    _sync_agent_mcp_selection(
+
+    def grant(forward: models.Model, reverse_instance: models.Model) -> None:
+        cast(Agent, forward).grant_mcp_server_relationship(cast(MCPServer, reverse_instance))
+
+    def revoke(forward: models.Model, reverse_instance: models.Model) -> None:
+        cast(Agent, forward).revoke_mcp_server_relationship(cast(MCPServer, reverse_instance))
+
+    reconcile_m2m_changed_relationships_on_commit(
         instance=instance,
         action=action,
         reverse=reverse,
         model=model,
         pk_set=pk_set,
-        field_name="mcp_servers",
+        forward_field_name="mcp_servers",
+        reverse_field_name="agents",
+        grant=grant,
+        revoke=revoke,
+        using=using,
     )
 
 
@@ -1458,31 +1426,31 @@ def _sync_agent_mcp_tools(
     reverse: bool,
     model: type[models.Model],
     pk_set: set[Any] | None,
+    using: str | None = None,
     **kwargs: Any,
 ) -> None:
     """Mirror Agent.mcp_tools changes into ``agents/tool_grant#grantee`` tuples."""
 
     del sender, kwargs
-    pairs = _agent_mcp_selection_pairs(
+
+    def grant(forward: models.Model, reverse_instance: models.Model) -> None:
+        cast(Agent, forward).grant_mcp_tool_relationship(cast(MCPTool, reverse_instance))
+
+    def revoke(forward: models.Model, reverse_instance: models.Model) -> None:
+        cast(Agent, forward).revoke_mcp_tool_relationship(cast(MCPTool, reverse_instance))
+
+    reconcile_m2m_changed_relationships_on_commit(
         instance=instance,
         action=action,
         reverse=reverse,
         model=model,
         pk_set=pk_set,
-        field_name="mcp_tools",
+        forward_field_name="mcp_tools",
+        reverse_field_name="agents",
+        grant=grant,
+        revoke=revoke,
+        using=using,
     )
-    if not pairs:
-        return
-
-    def reconcile() -> None:
-        for tool, agent in pairs:
-            server_sqid = str(cast(MCPTool, tool).server.sqid)
-            if action == "post_add":
-                write_tool_grant(server_sqid, str(tool.name), agent.principal_subject())
-            else:
-                revoke_tool_grant(server_sqid, str(tool.name), agent.principal_subject())
-
-    transaction.on_commit(reconcile)
 
 
 def _deactivate_agent_service_user(
