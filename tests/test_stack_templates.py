@@ -243,6 +243,11 @@ def _render_for_loops(text: str, variables: dict[str, str]) -> str:
 
 
 def _eval_condition(condition: str, variables: dict[str, str]) -> bool:
+    condition = condition.strip()
+    # pongo2 `and`: every conjunct must be truthy. Split before the == check so a
+    # conjunct can itself be an equality test.
+    if " and " in condition:
+        return all(_eval_condition(part, variables) for part in condition.split(" and "))
     left, eq, right = condition.partition("==")
     if not eq:
         # Bare-flag condition (`{% if uv_project %}`): pongo2 truthiness — a
@@ -302,6 +307,8 @@ def _render_dev_stack(
     addons_profile: str = "base",
     include_arp: bool = False,
     work_state_source: str = "",
+    work_state_repo: str = "",
+    work_state_ref: str = "main",
     celery_queues: str = "",
     enable_ollama: bool = False,
     ollama_port: str = "11434",
@@ -344,6 +351,8 @@ def _render_dev_stack(
         "ui_port": "5173",
         "web_path": "web",
         "work_state_source": work_state_source,
+        "work_state_repo": work_state_repo,
+        "work_state_ref": work_state_ref,
     }
     return _render_stack_manifest(DEV_TEMPLATE, variables)
 
@@ -908,8 +917,38 @@ def test_dev_stack_declares_the_framework_sources_and_the_src_workspace() -> Non
     assert arp["sources"]["angee-arp"]["repo"] == "https://github.com/ang-ee/angee-arp.git"
     assert arp["sources"]["angee-arp"]["cache_path"] == "sources/angee-arp"
 
-    wired = _render_dev_stack(work_state_source="work-angee")
+    # work_state_source names the .work slot's source; work_state_repo declares it.
+    # Both set: the git source is rendered (location template-owned) AND bound.
+    wired = _render_dev_stack(
+        work_state_source="work-angee",
+        work_state_repo="git@github.com:ang-ee/work-angee.git",
+    )
     assert wired["workspaces"]["src"]["inputs"] == {"work_state_source": "work-angee"}
+    assert wired["sources"]["work-angee"] == {
+        "kind": "git",
+        "repo": "git@github.com:ang-ee/work-angee.git",
+        "default_ref": "main",
+        "cache_path": "sources/work/work-angee",
+    }
+
+    # work_state_ref overrides the source's default_ref.
+    pinned = _render_dev_stack(
+        work_state_source="work-angee",
+        work_state_repo="git@github.com:ang-ee/work-angee.git",
+        work_state_ref="trunk",
+    )
+    assert pinned["sources"]["work-angee"]["default_ref"] == "trunk"
+
+    # Name only (repo left empty): the workspace binds the name, but the template
+    # declares no source — the operator resolves it from a hand-declared source.
+    name_only = _render_dev_stack(work_state_source="work-angee")
+    assert name_only["workspaces"]["src"]["inputs"] == {"work_state_source": "work-angee"}
+    assert "work-angee" not in name_only["sources"]
+
+    # Repo only (no name): nothing to key the source on, so no work-state wiring.
+    repo_only = _render_dev_stack(work_state_repo="git@github.com:ang-ee/work-angee.git")
+    assert "inputs" not in repo_only["workspaces"]["src"]
+    assert set(repo_only["sources"]) == {"app", "framework", "angee"}
 
     # The local docker instance keeps its own source story (framework checkout at
     # sources/angee) — no framework git-source block, no workspace cut.
@@ -1098,6 +1137,8 @@ def test_dev_stack_chains_the_project_host_with_the_framework_slot() -> None:
     assert manifest["addons_profile"]["choices"] == ["base", "full"]
     assert manifest["addons_profile"]["default"] == "base"
     assert manifest["work_state_source"]["default"] == ""
+    assert manifest["work_state_repo"]["default"] == ""
+    assert manifest["work_state_ref"]["default"] == "main"
 
     defaults = {
         "runtime_mode": "process",
