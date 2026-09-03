@@ -169,6 +169,16 @@ sources:
     default_ref: main
     cache_path: sources/angee-arp
 {% endif %}
+{% if work_state_source and work_state_repo %}
+  # The private work-state repo (plans, notes, memory, handovers) the src workspace
+  # binds at `.work/`. Declared only when both the name and the repo location are set;
+  # a clean-machine stack leaves both empty and renders no work-state source.
+  {{ work_state_source }}:
+    kind: git
+    repo: {{ work_state_repo }}
+    default_ref: {{ work_state_ref }}
+    cache_path: sources/work/{{ work_state_source }}
+{% endif %}
 {% endif %}
 
 {% if stack_flavor == "framework" %}

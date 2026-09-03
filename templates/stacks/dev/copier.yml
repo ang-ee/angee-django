@@ -179,12 +179,28 @@ addons_profile:
 
 # Stack source name for the src workspace's private work-state slot. Empty (the
 # default) renders no work-state wiring — a clean-machine stack must not depend
-# on a private repository. Framework maintainers set this to their work-state
-# source (and declare that source on the stack) to get `.work/` in the workspace.
+# on a private repository. Framework maintainers set this together with
+# work_state_repo: the pair declares the git source AND binds it at `.work/`.
 work_state_source:
   type: str
   default: ""
   help: Stack source name for the src workspace's private work-state slot; empty = no work-state.
+
+# Location of the private work-state repo backing the `.work/` slot. The source is
+# declared only when BOTH work_state_source (the name) and work_state_repo (this
+# location) are set; either one empty leaves the stack with no work-state source.
+# This is what makes the work-state source template-owned — supply it at init with
+# `--input work_state_repo=git@github.com:you/your-work.git` instead of hand-editing
+# angee.yaml's sources block after render.
+work_state_repo:
+  type: str
+  default: ""
+  help: Git repo URL for the work-state source named by work_state_source; empty = declare no work-state source.
+
+work_state_ref:
+  type: str
+  default: main
+  help: Mainline ref for the work-state source clone.
 
 # Opt-in: arpee, the ARP product (a clean-room Odoo port as arp.* consumer
 # addons). Declares the PRIVATE ang-ee/angee-arp repo as a source with its
