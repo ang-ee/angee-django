@@ -105,7 +105,9 @@ function ListViewBody<TRow extends Row = Row>({
   // effect settle after a single dispatch.
   const laneSource = useValueStable(laneSourceInput);
   const rowActionSurface = useRowActionsSurface(rowActions);
-  const resolvedEmptyContent = emptyContent ?? t("list.empty");
+  const resolvedEmptyContent =
+    emptyContent ??
+    t(resourceView.state.hasFilter() ? "list.emptyFiltered" : "list.empty");
   // The Calendar kind is offered only where the page declares occurrence sources;
   // the switcher's options derive from that (list + board always).
   const calendarAvailable = (calendar?.sources.length ?? 0) > 0;

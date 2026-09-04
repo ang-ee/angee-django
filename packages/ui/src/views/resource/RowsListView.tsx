@@ -163,7 +163,9 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
     groupStack: effectiveGroupStack,
   });
   const interactive = Boolean(onRowClick || rowHref);
-  const resolvedEmptyContent = emptyContent ?? t("list.empty");
+  const resolvedEmptyContent =
+    emptyContent ??
+    t(resourceView.state.hasFilter() ? "list.emptyFiltered" : "list.empty");
   const toolbar = useResourceToolbarProps({
     actions: toolbarActions,
     viewSwitcher: gallery ? (
