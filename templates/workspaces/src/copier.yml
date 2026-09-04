@@ -35,7 +35,7 @@ _angee:
     work_state_source:
       type: str
       default: ""
-      help: Stack source name for the private work-state slot; empty renders a slot the operator skips (a clean-machine stack has no private work-state source).
+      help: Stack source name for the private work-state slot; empty renders a slot the operator skips (a clean-machine stack has no private work-state source). A stack's workspace_defaults for this template supplies it without --input.
   sources:
     angee:
       source: angee
