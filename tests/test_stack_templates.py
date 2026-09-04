@@ -924,6 +924,11 @@ def test_dev_stack_declares_the_framework_sources_and_the_src_workspace() -> Non
         work_state_repo="git@github.com:ang-ee/work-angee.git",
     )
     assert wired["workspaces"]["src"]["inputs"] == {"work_state_source": "work-angee"}
+    # ...and every OTHER src-template workspace inherits the binding through the
+    # stack's workspace_defaults, so `ws create --template src` needs no --input.
+    assert wired["workspace_defaults"] == {
+        "workspaces/src": {"inputs": {"work_state_source": "work-angee"}}
+    }
     assert wired["sources"]["work-angee"] == {
         "kind": "git",
         "repo": "git@github.com:ang-ee/work-angee.git",
@@ -943,11 +948,15 @@ def test_dev_stack_declares_the_framework_sources_and_the_src_workspace() -> Non
     # declares no source — the operator resolves it from a hand-declared source.
     name_only = _render_dev_stack(work_state_source="work-angee")
     assert name_only["workspaces"]["src"]["inputs"] == {"work_state_source": "work-angee"}
+    assert name_only["workspace_defaults"] == {
+        "workspaces/src": {"inputs": {"work_state_source": "work-angee"}}
+    }
     assert "work-angee" not in name_only["sources"]
 
     # Repo only (no name): nothing to key the source on, so no work-state wiring.
     repo_only = _render_dev_stack(work_state_repo="git@github.com:ang-ee/work-angee.git")
     assert "inputs" not in repo_only["workspaces"]["src"]
+    assert "workspace_defaults" not in repo_only
     assert set(repo_only["sources"]) == {"app", "framework", "angee"}
 
     # The local docker instance keeps its own source story (framework checkout at
@@ -955,6 +964,7 @@ def test_dev_stack_declares_the_framework_sources_and_the_src_workspace() -> Non
     local = _render_local_stack()
     assert set(local["sources"]) == {"app", "framework"}
     assert "workspaces" not in local
+    assert "workspace_defaults" not in local
 
 
 def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:

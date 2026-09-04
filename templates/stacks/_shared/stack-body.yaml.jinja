@@ -182,6 +182,17 @@ sources:
 {% endif %}
 
 {% if stack_flavor == "framework" %}
+{% if work_state_source %}
+# Stack-level input defaults for every workspace cut from the src template: any
+# `angee ws create --template src <name>` binds the private work-state slot at
+# `.work/` without repeating `--input work_state_source=...` (an explicit input
+# still wins; `--input work_state_source=` opts out). A clean-machine stack
+# leaves work_state_source empty and renders no defaults block.
+workspace_defaults:
+  workspaces/src:
+    inputs:
+      work_state_source: {{ work_state_source }}
+{% endif %}
 # The conventional all-source workspace: one consolidated framework worktree
 # under workspaces/src/angee plus optional external-addon worktrees. `angee dev`
 # cuts it from the declared sources on bring-up; the host's pyproject, addon dirs,
