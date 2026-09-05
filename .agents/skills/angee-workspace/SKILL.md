@@ -110,6 +110,12 @@ angee --root "$angee_root" ws create <name> --template src --input base_ref=<par
   --input work_state_source=$work_state_source
 ```
 
+A stack rendered with `work_state_source` already carries it under
+`workspace_defaults` for the src template, so the flag there only overrides the
+stack default (pass `--input work_state_source=` to opt out). Check the
+effective inputs without rendering: `angee --root "$angee_root" ws preflight
+--template src`.
+
 Choose `<parent-ref>` in this order:
 
 1. An explicit argument from the user.

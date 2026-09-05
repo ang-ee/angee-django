@@ -24,7 +24,7 @@ FROM node:22-slim
 
 COPY start-claude-code-acp.sh /usr/local/bin/start-claude-code-acp
 
-RUN npm install -g @agentclientprotocol/claude-agent-acp@0.52.0 stdio-to-ws \\
+RUN npm install -g @agentclientprotocol/claude-agent-acp@0.74.0 stdio-to-ws \\
     && chmod +x /usr/local/bin/start-claude-code-acp \\
     && mkdir -p /workspace /home/node/.claude \\
     && chown -R node:node /workspace /home/node/.claude

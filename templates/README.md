@@ -30,6 +30,9 @@ that includes it, and `{% if runtime_mode == "process" | "docker" %}` branches c
 only where the two modes differ. Both chain `projects/web` to scaffold the host and
 collapse the first-run lifecycle into one `manage.py angee provision` command.
 
+Docker-mode stack manifests require angee-operator v0.12.0 or later because they
+declare service readiness with the strict manifest loader's `ready` field.
+
 - **`stacks/dev`** (`runtime_mode: process`) — the framework-dev stack, run on
   process-compose. It declares the consolidated framework plus optional external
   git `sources:` and the `src` workspace; `angee dev` materializes their clone
