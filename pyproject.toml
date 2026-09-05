@@ -123,7 +123,7 @@ addons = [
     "ruamel.yaml>=0.18",
     "slack-sdk>=3.43.0",
     "strawberry-django-aggregates>=0.11.0",
-    "strawberry-django-hasura>=0.8.1",
+    "strawberry-django-hasura>=0.9.0",
     "strawberry-graphql @ git+https://github.com/ang-ee/strawberry.git@e4fa3198f704d81b3ca96b6dcac75420c5fee516",
     "strawberry-graphql-django>=0.86.7",
     "tablib>=3",
