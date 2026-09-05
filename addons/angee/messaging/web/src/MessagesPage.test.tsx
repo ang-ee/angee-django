@@ -62,7 +62,8 @@ describe("MessagesPage", () => {
       expect.arrayContaining([
         "title",
         "sender_name",
-        "thread.title.text",
+        "thread_title",
+        "channel_vendor_name",
         "status",
         "sent_at",
       ]),
@@ -70,12 +71,18 @@ describe("MessagesPage", () => {
     expect(columnFields).not.toContain("sender.value");
   });
 
-  test("renders the same server-owned sender scalar used by ordering", () => {
+  test("renders the same server-owned relation scalars used by ordering", () => {
     render(<MessagesPage />);
 
-    const sender = pageMocks.columns.find((column) => column.header === "messages.sender");
-    expect(sender?.field).toBe("sender_name");
-    expect(sender?.render).toBeUndefined();
+    for (const [header, field] of [
+      ["messages.sender", "sender_name"],
+      ["messages.thread", "thread_title"],
+      ["messages.channelType", "channel_vendor_name"],
+    ]) {
+      const column = pageMocks.columns.find((column) => column.header === header);
+      expect(column?.field).toBe(field);
+      expect(column?.render).toBeUndefined();
+    }
     expect(pageMocks.listProps?.fields).toBeUndefined();
   });
 });

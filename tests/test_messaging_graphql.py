@@ -143,8 +143,8 @@ def test_console_resource_metadata_declares_message_surface() -> None:
         "id",
         "title",
         "sender_name",
-        "thread__title__text",
-        "channel__vendor__display_name",
+        "thread_title",
+        "channel_vendor_name",
         "status",
     )
     assert metadata.aggregate_fields == ("id",)
@@ -224,9 +224,10 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     assert status_field["filterable"] is True
     assert status_field["groupable"] is True
     assert status_field["updatable"] is True
-    sender_name_field = {field["name"]: field for field in message["fields"]}["sender_name"]
-    assert sender_name_field["sortable"] is True
-    assert sender_name_field["filterable"] is False
+    for name in ("sender_name", "thread_title", "channel_vendor_name"):
+        field = {field["name"]: field for field in message["fields"]}[name]
+        assert field["sortable"] is True
+        assert field["filterable"] is False
 
 
 def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> None:

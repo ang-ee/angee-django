@@ -442,6 +442,24 @@ class MessageType(AngeeNode):
 
         return cast(Any, self).sender_name()
 
+    @strawberry_django.field(
+        only=["thread_id"],
+        annotate={"_thread_title": lambda info: Message.objects.thread_title_expression()},
+    )
+    def thread_title(self) -> str:
+        """Return the actor-visible thread title used by inbox ordering."""
+
+        return cast(Any, self).thread_title()
+
+    @strawberry_django.field(
+        only=["channel_id"],
+        annotate={"_channel_vendor_name": lambda info: Message.objects.channel_vendor_name_expression()},
+    )
+    def channel_vendor_name(self) -> str:
+        """Return the actor-visible channel vendor used by inbox ordering."""
+
+        return cast(Any, self).channel_vendor_name()
+
     parent: "MessageType | None"
     subtype: MessageSubtypeType | None
     thread: "ThreadType | None"
@@ -1742,15 +1760,21 @@ def _message_inbox_queryset(info: strawberry.Info) -> Any:
     # The title annotation serves list rows in SQL; Message.title() prefers it,
     # so a title column on the grid costs no per-row probe.
     queryset = Message.objects.inbox().with_title_text()
+    order_fields: set[str] = set()
     for field in info.selected_fields:
         if not isinstance(field, SelectedField) or field.name != info.field_name:
             continue
         order_by = field.arguments.get("order_by") or ()
         # Strawberry resolves variables; GraphQL also accepts one input object
-        # as a list literal. Only explicit sender ordering needs its scoped alias.
+        # as a list literal. Only explicit ordering needs its scoped alias.
         orders = (order_by,) if isinstance(order_by, Mapping) else order_by
-        if any(order.get("sender_name") is not None for order in orders):
-            return queryset.with_sender_name()
+        order_fields.update(key for order in orders for key, value in order.items() if value is not None)
+    if "sender_name" in order_fields:
+        queryset = queryset.with_sender_name()
+    if "thread_title" in order_fields:
+        queryset = queryset.with_thread_title()
+    if "channel_vendor_name" in order_fields:
+        queryset = queryset.with_channel_vendor_name()
     return queryset
 
 
@@ -1878,11 +1902,16 @@ _MESSAGE_RESOURCE = hasura_model_resource(
         "id",
         "title",
         "sender_name",
-        "thread__title__text",
-        "channel__vendor__display_name",
+        "thread_title",
+        "channel_vendor_name",
         "status",
     ],
-    sortable_aliases={"title": "_title_text", "sender_name": "_sender_name"},
+    sortable_aliases={
+        "title": "_title_text",
+        "sender_name": "_sender_name",
+        "thread_title": "_thread_title",
+        "channel_vendor_name": "_channel_vendor_name",
+    },
     aggregatable=["id"],
     groupable=[
         "thread",

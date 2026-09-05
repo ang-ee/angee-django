@@ -7,12 +7,12 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from rebac import actor_context, system_context
+from rebac import actor_context, current_actor, system_context
 
 from angee.messaging.managers import MessageQuerySet
-from tests.conftest import execute_schema, result_data
-from tests.test_messaging import Fragment, Handle, Message, Part, Party
-from tests.test_messaging_graphql import _schema, messaging_graphql_tables  # noqa: F401
+from tests.conftest import Vendor, execute_schema, make_integration, result_data
+from tests.test_messaging import Fragment, Handle, Message, Part, Party, Thread
+from tests.test_messaging_graphql import _platform_admin, _schema, messaging_graphql_tables  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("messaging_graphql_tables")
 
@@ -25,8 +25,17 @@ def test_unused_sender_order_does_not_prepare_identity_scopes() -> None:
         message = Message.objects.create(created_by=owner)
     schema = _schema()
     counts = []
-    with patch.object(MessageQuerySet, "sender_name_expression", side_effect=AssertionError("Unused sender scope")):
-        for argument in ("", "(order_by: null)", "(order_by: [])", "(order_by: [{sender_name: null}])"):
+    with (
+        patch.object(MessageQuerySet, "sender_name_expression", side_effect=AssertionError("Unused sender scope")),
+        patch.object(MessageQuerySet, "thread_title_expression", side_effect=AssertionError("Unused thread scope")),
+        patch.object(
+            MessageQuerySet, "channel_vendor_name_expression", side_effect=AssertionError("Unused channel scope"),
+        ),
+    ):
+        for argument in (
+            "", "(order_by: null)", "(order_by: [])",
+            "(order_by: [{sender_name: null, thread_title: null, channel_vendor_name: null}])",
+        ):
             with CaptureQueriesContext(connection) as captured:
                 rows = result_data(execute_schema(schema, f"{{ messages{argument} {{ id }} }}", user=owner))["messages"]
             assert rows == [{"id": str(message.sqid)}]
@@ -106,6 +115,13 @@ def test_sender_projection_matches_visible_identity_and_regates_elevated_parents
         # A materialized parent without optimizer annotations uses the same
         # Handle owner, including the denied sender and missing-sender cases.
         assert {str(row.sqid): row.sender_name() for row in Message._base_manager.filter(sqid__in=expected)} == expected
+    # Native queryset materialization pins its actor on each model, even after
+    # leaving GraphQL's ambient context. The fallback must preserve that owner.
+    assert current_actor() is None
+    assert {
+        str(row.sqid): row.sender_name()
+        for row in Message.objects.with_actor(owner).filter(sqid__in=expected)
+    } == expected
 
 
 def test_sender_sorted_pages_use_the_selected_scalar_with_bounded_sql() -> None:
@@ -176,3 +192,93 @@ def test_title_sort_uses_the_existing_title_part_projection() -> None:
         "messages"
     ]
     assert rows == [{"id": public_id, "title": title} for title, public_id in sorted(expected)]
+
+
+def test_related_sort_values_ignore_denied_labels_and_regate_elevated_parents() -> None:
+    """Unreadable related labels cannot affect visible values or page order."""
+
+    owner = get_user_model().objects.create_user(username="related-sort-owner")
+    other = get_user_model().objects.create_user(username="related-sort-other")
+    with system_context(reason="test.messaging.related_sort.seed"):
+        visible = Thread.objects.create(created_by=owner, title=Fragment.objects.upsert(text="Visible thread"))
+        hidden = Thread.objects.create(created_by=other, title=Fragment.objects.upsert(text="Alpha secret"))
+        channel = make_integration("related-sort-channel", owner=owner)
+        other_channel = make_integration("related-sort-other-channel", owner=other)
+        rows = [
+            Message.objects.create(created_by=owner, thread=visible, channel=channel),
+            Message.objects.create(created_by=owner, thread=hidden, channel=other_channel),
+            Message.objects.create(created_by=owner),
+        ]
+    schema = _schema()
+    query = """{
+      messages(order_by: [{thread_title: asc}, {channel_vendor_name: desc}]) {
+        id thread_title channel_vendor_name
+      }
+    }"""
+    # Vendor catalogue reads require platform admin. A visible Integration is
+    # insufficient on its own, and the other Integration is independently denied.
+    expected = [
+        {"id": str(rows[1].sqid), "thread_title": "", "channel_vendor_name": ""},
+        {"id": str(rows[2].sqid), "thread_title": "", "channel_vendor_name": ""},
+        {"id": str(rows[0].sqid), "thread_title": "Visible thread", "channel_vendor_name": ""},
+    ]
+    assert result_data(execute_schema(schema, query, user=owner))["messages"] == expected
+    with system_context(reason="test.messaging.related_sort.hidden_change"):
+        hidden.title = Fragment.objects.upsert(text="Zulu secret")
+        hidden.save(update_fields=["title"])
+        Vendor.objects.filter(pk__in=[channel.vendor_id, other_channel.vendor_id]).update(display_name="Changed secret")
+    assert result_data(execute_schema(schema, query, user=owner))["messages"] == expected
+    with actor_context(owner), system_context(reason="test.messaging.related_sort.elevated_parent"):
+        materialized = Message._base_manager.filter(pk__in=[row.pk for row in rows]).order_by("pk")
+        assert [(row.thread_title(), row.channel_vendor_name()) for row in materialized] == [
+            ("Visible thread", ""), ("", ""), ("", ""),
+        ]
+    for old_axis in ("thread__title__text", "channel__vendor__display_name"):
+        result = execute_schema(schema, "{ messages(order_by: [{" + old_axis + ": asc}]) { id } }", user=owner)
+        assert result.errors and "not defined by type 'messages_order_by'" in result.errors[0].message
+
+
+def test_related_selected_sort_values_have_bounded_sql_and_native_ties() -> None:
+    """Visible Thread/Integration/Vendor projections stay in the row query."""
+
+    owner = _platform_admin("related-sort-admin")
+    expected = []
+    with system_context(reason="test.messaging.related_sort.cost_seed"):
+        for index in range(25):
+            title = f"Thread {index % 3}"
+            vendor_name = f"Vendor {index % 4}"
+            thread = Thread.objects.create(created_by=owner, title=Fragment.objects.upsert(text=title))
+            channel = make_integration(f"related-sort-cost-{index}", owner=owner)
+            Vendor.objects.filter(pk=channel.vendor_id).update(display_name=vendor_name)
+            message = Message.objects.create(created_by=owner, thread=thread, channel=channel)
+            expected.append((title, vendor_name, message.pk, str(message.sqid)))
+    expected.sort()
+    schema = _schema()
+    query = """query RelatedPage($limit: Int!, $offset: Int!) {
+      messages(limit: $limit, offset: $offset,
+        order_by: [{thread_title: asc}, {channel_vendor_name: asc}, {sender_name: asc}, {title: asc}]) {
+        id thread_title channel_vendor_name sender_name title
+      }
+    }"""
+    counts = []
+    for size in (1, 25):
+        with CaptureQueriesContext(connection) as captured:
+            rows = result_data(execute_schema(schema, query, {"limit": size, "offset": 0}, user=owner))["messages"]
+        counts.append(len(captured))
+        assert rows == [
+            {"id": public_id, "thread_title": title, "channel_vendor_name": vendor_name, "sender_name": "", "title": ""}
+            for title, vendor_name, _, public_id in expected[:size]
+        ]
+    print(f"Related ordered projection SQL at 1/25 rows: {counts}")
+    assert counts[0] == counts[1], f"Related labels must add no per-row reads: {counts}"
+    paged = []
+    for offset in range(0, 25, 7):
+        paged.extend(result_data(execute_schema(schema, query, {"limit": 7, "offset": offset}, user=owner))["messages"])
+    assert [row["id"] for row in paged] == [public_id for _, _, _, public_id in expected]
+    descending = query.replace("thread_title: asc", "thread_title: desc").replace(
+        "channel_vendor_name: asc", "channel_vendor_name: desc",
+    )
+    rows = result_data(execute_schema(schema, descending, {"limit": 25, "offset": 0}, user=owner))["messages"]
+    assert [(row["thread_title"], row["channel_vendor_name"]) for row in rows] == sorted(
+        ((title, vendor_name) for title, vendor_name, _, _ in expected), reverse=True,
+    )
