@@ -1868,6 +1868,74 @@ class MessageQuerySet(AngeeQuerySet[Any]):
             ),
         )
 
+    def sender_name_expression(self) -> models.Expression:
+        """Correlate the actor-readable sender identity without multiplying rows."""
+
+        handle_model = apps.get_model("parties", "Handle")
+        actor = self.actor() or current_actor()
+        handles = handle_model.objects.with_actor(actor) if actor is not None else handle_model.objects.all()
+        sender_name = handles.with_sender_name().filter(pk=models.OuterRef("sender_id")).values("_sender_name")[:1]
+        return Coalesce(models.Subquery(sender_name), models.Value(""), output_field=models.TextField())
+
+    def with_sender_name(self) -> MessageQuerySet:
+        """Prepare the actor-visible sender alias for explicit inbox ordering."""
+
+        return self.alias(_sender_name=self.sender_name_expression())
+
+    def thread_title_expression(self) -> models.Expression:
+        """Guard the to-one fragment title with native readable-thread membership."""
+
+        thread_model = apps.get_model("messaging", "Thread")
+        actor = self.actor() or current_actor()
+        threads = thread_model.objects.with_actor(actor).scoped() if actor is not None else thread_model.objects.none()
+        return Coalesce(
+            models.Case(
+                models.When(thread_id__in=threads.values("pk"), then=models.F("thread__title__text")),
+                default=models.Value(""),
+                output_field=models.TextField(),
+            ),
+            models.Value(""),
+            output_field=models.TextField(),
+        )
+
+    def with_thread_title(self) -> MessageQuerySet:
+        """Prepare the actor-visible thread title for explicit inbox ordering."""
+
+        return self.alias(_thread_title=self.thread_title_expression())
+
+    def channel_vendor_name_expression(self) -> models.Expression:
+        """Guard the to-one vendor label with readable Integration and Vendor sets."""
+
+        integration_model = apps.get_model("integrate", "Integration")
+        vendor_model = apps.get_model("integrate", "Vendor")
+        actor = self.actor() or current_actor()
+        integrations = (
+            integration_model.objects.with_actor(actor).scoped()
+            if actor is not None
+            else integration_model.objects.none()
+        )
+        vendors = vendor_model.objects.with_actor(actor).scoped() if actor is not None else vendor_model.objects.none()
+        return Coalesce(
+            models.Case(
+                models.When(
+                    models.Q(
+                        channel_id__in=integrations.values("pk"),
+                        channel__vendor_id__in=vendors.values("pk"),
+                    ),
+                    then=models.F("channel__vendor__display_name"),
+                ),
+                default=models.Value(""),
+                output_field=models.TextField(),
+            ),
+            models.Value(""),
+            output_field=models.TextField(),
+        )
+
+    def with_channel_vendor_name(self) -> MessageQuerySet:
+        """Prepare the actor-visible channel vendor for explicit inbox ordering."""
+
+        return self.alias(_channel_vendor_name=self.channel_vendor_name_expression())
+
     def with_external_ids(self, external_ids: tuple[str, ...] | list[str]) -> MessageQuerySet:
         """Filter to exact external ids through the ``MD5(external_id)`` identity index.
 

@@ -136,6 +136,8 @@ export interface GroupedResourceViewSurface<TRow extends Row = Row>
   footerAggregate: AggregateBucket | null;
   /** Set a server-grouped sub-group/leaf scope's page. */
   setScopePage: (key: string, page: number) => void;
+  /** Change a group's native page size and reset it to the first page. */
+  setScopePageSize: (key: string, pageSize: number) => void;
   /** The windowed server-grouped render stream. */
   groupedItems: readonly GroupedListItem<TRow>[];
   /** Server `_groups` bucket expansion keys. */

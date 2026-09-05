@@ -1,7 +1,10 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render as rtlRender } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement, ReactNode } from "react";
 
 import type { CalendarViewSpec } from "./resource-view-types";
 import type { FormViewProps } from "../form/FormView";
@@ -67,7 +70,13 @@ beforeEach(() => {
   captured.onCreateInLane = undefined;
   captured.formDefaults = undefined;
 });
-afterEach(cleanup);
+const clients: QueryClient[] = [];
+afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
+function render(element: ReactElement) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  clients.push(client);
+  return rtlRender(element, { wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
+}
 
 describe("ResourceList calendar quick-create", () => {
   test("range-select seeds the create form defaults through the routed-create seam", () => {

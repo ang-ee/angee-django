@@ -3,7 +3,6 @@ import { type ReactElement } from "react";
 import { Field, FormView, Group } from "@angee/ui";
 
 import { useStorageT } from "../i18n";
-import type { StorageFile } from "../data/documents";
 
 /** The Django model label backing the file record form. */
 const FILE_MODEL = "storage.File";
@@ -12,7 +11,9 @@ const FILE_MODEL = "storage.File";
 const SUBTITLE_FIELDS = ["created_at", "updated_at"] as const;
 
 export interface FileDetailProps {
-  file: StorageFile;
+  /** Route identity starts the native form read independently of the preview. */
+  id: string;
+  filename?: string;
   /** A write landed — refetch the browser's shared file set. */
   onChanged: () => void;
   /** Render the detail fields for a narrow side pane. */
@@ -27,7 +28,8 @@ export interface FileDetailProps {
  * metadata form the page publishes into the chatter's details tab.
  */
 export function FileDetail({
-  file,
+  id,
+  filename,
   onChanged,
   compact = false,
 }: FileDetailProps): ReactElement {
@@ -36,12 +38,12 @@ export function FileDetail({
   return (
     <FormView
       resource={FILE_MODEL}
-      id={file.id}
+      id={id}
       returning={[...SUBTITLE_FIELDS]}
       submitLabel={t("file.rename")}
       onSaved={onChanged}
     >
-      <Field name="title" widget="text" title placeholder={file.filename} />
+      <Field name="title" widget="text" title placeholder={filename} />
       <Group label={t("file.details")} columns={compact ? 1 : 2}>
         <Field name="filename" label={t("file.filename")} readOnly />
         <Field name="created_by_label" label={t("file.owner")} widget="userRef" readOnly />

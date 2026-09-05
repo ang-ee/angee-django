@@ -23,9 +23,11 @@ export interface PagerState {
 }
 
 export interface PagerProps extends PagerState {
+  disabled?: boolean;
   onPageChange?: (page: number) => void;
   onPageSizeChange?: (pageSize: number) => void;
   pageSizeOptions?: readonly number[];
+  maxPageSize?: number;
   subject?: string;
   unit?: string;
   labelElement?: "button" | "span";
@@ -86,9 +88,11 @@ export function Pager({
   total,
   hasPrev,
   hasNext,
+  disabled = false,
   onPageChange,
   onPageSizeChange,
   pageSizeOptions = DEFAULT_PAGE_SIZE_OPTIONS,
+  maxPageSize,
   subject,
   unit,
   labelElement = "button",
@@ -114,9 +118,11 @@ export function Pager({
   const label = labelElement === "button" && onPageSizeChange
     ? (
       <PageSizePicker
+        disabled={disabled}
         pageLabel={pageLabel}
         pageSize={pageSize}
         pageSizeOptions={pageSizeOptions}
+        maxPageSize={maxPageSize}
         subject={resolvedSubject}
         labelClassName={labelClassName}
         customPageSize={customPageSize}
@@ -128,6 +134,7 @@ export function Pager({
       ? (
         <button
           type="button"
+          disabled={disabled}
           className={pagerVariants({ label: "button", className: labelClassName })}
           aria-label={t("pager.pageOf", { subject: resolvedSubject, pageLabel })}
         >
@@ -148,7 +155,7 @@ export function Pager({
         variant="ghost"
         size="iconSm"
         aria-label={previousLabel ?? t("pager.prev")}
-        disabled={!canPrev}
+        disabled={disabled || !canPrev}
         onClick={() => onPageChange?.(Math.max(1, page - 1))}
       >
         <Glyph name="chevron-left" />
@@ -158,7 +165,7 @@ export function Pager({
         variant="ghost"
         size="iconSm"
         aria-label={nextLabel ?? t("pager.next")}
-        disabled={!canNext}
+        disabled={disabled || !canNext}
         onClick={() => onPageChange?.(page + 1)}
       >
         <Glyph name="chevron-right" />
@@ -168,18 +175,22 @@ export function Pager({
 }
 
 function PageSizePicker({
+  disabled,
   pageLabel,
   pageSize,
   pageSizeOptions,
+  maxPageSize,
   subject,
   labelClassName,
   customPageSize,
   onCustomPageSizeChange,
   onPageSizeChange,
 }: {
+  disabled: boolean;
   pageLabel: string;
   pageSize: number;
   pageSizeOptions: readonly number[];
+  maxPageSize: number | undefined;
   subject: string;
   labelClassName?: string;
   customPageSize: number | null;
@@ -192,15 +203,17 @@ function PageSizePicker({
       if (typeof value !== "number" || !Number.isFinite(value) || value < 1) {
         return;
       }
-      onPageSizeChange(Math.floor(value));
+      if (disabled) return;
+      onPageSizeChange(Math.min(maxPageSize ?? value, Math.floor(value)));
       onCustomPageSizeChange(null);
     },
-    [onCustomPageSizeChange, onPageSizeChange],
+    [disabled, maxPageSize, onCustomPageSizeChange, onPageSizeChange],
   );
 
   return (
     <PopoverRoot>
       <PopoverTrigger
+        disabled={disabled}
         className={pagerVariants({ label: "button", className: labelClassName })}
         aria-label={t("pager.pageOf", { subject, pageLabel })}
       >
@@ -210,12 +223,13 @@ function PageSizePicker({
         <PopoverPositioner sideOffset={6} align="end">
           <PopoverContent className="w-56 p-3">
             <p className="mb-2 px-1 text-13 font-semibold text-fg">
-              {t("pager.rowsPerPage")}
+              {t("pager.pageSize")}
             </p>
             <div className="grid grid-cols-3 gap-1">
-              {pageSizeOptions.map((value) => (
+              {pageSizeOptions.filter((value) => maxPageSize === undefined || value <= maxPageSize).map((value) => (
                 <button
                   key={value}
+                  disabled={disabled}
                   type="button"
                   className={cn(
                     "h-7 rounded-6 px-2 text-13 tabular-nums outline-none transition-colors focus-visible:focus-ring",
@@ -238,18 +252,19 @@ function PageSizePicker({
             >
               <NumberField
                 min={1}
+                max={maxPageSize}
                 value={customPageSize}
                 size="sm"
                 align="start"
                 showStepper={false}
                 className="min-w-0 flex-1"
                 inputProps={{
-                  "aria-label": t("pager.customRowsPerPage"),
+                  "aria-label": t("pager.customPageSize"),
                   placeholder: "42",
                 }}
                 onValueChange={onCustomPageSizeChange}
               />
-              <Button type="submit" size="sm" variant="secondary">
+              <Button type="submit" size="sm" variant="secondary" disabled={disabled}>
                 {t("pager.apply")}
               </Button>
             </form>

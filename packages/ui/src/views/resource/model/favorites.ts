@@ -86,7 +86,7 @@ export function favoriteFromResourceView(
   label: string,
   existing: readonly ResourceViewFavorite[] = [],
 ): ResourceViewFavorite {
-  const sort = state.sorting[0];
+  const sort = state.sorting?.[0];
   return {
     id: nextResourceViewFavoriteId(label, existing),
     label,

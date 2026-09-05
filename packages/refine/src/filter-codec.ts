@@ -81,8 +81,10 @@ export function hasuraOrderByFromAngeeOrder(
 
 export function crudFiltersFromFilterRecord(
   filter: unknown,
+  options?: { strict?: boolean },
 ): CrudFilters | undefined {
-  const filters = filtersFromRecord(filter);
+  const unsupported = options?.strict ? rejectUnsupportedFilter : warnUnsupportedFilter;
+  const filters = filtersFromRecord(filter, unsupported);
   return filters.length > 0 ? filters : undefined;
 }
 
@@ -113,12 +115,15 @@ function fieldTreeToFields(tree: FieldTree): Fields {
   );
 }
 
-function filtersFromRecord(filter: unknown): CrudFilters {
-  if (!isRecord(filter)) return [];
+function filtersFromRecord(filter: unknown, unsupported: (message: string) => void = warnUnsupportedFilter): CrudFilters {
+  if (!isRecord(filter)) {
+    if (filter !== undefined && filter !== null && unsupported === rejectUnsupportedFilter) unsupported("Angee filters require an object.");
+    return [];
+  }
   const filters: CrudFilters = [];
   for (const [field, lookup] of Object.entries(filter)) {
     if (isAndKey(field) || isOrKey(field)) {
-      const children = filtersFromBranch(lookup);
+      const children = filtersFromBranch(lookup, unsupported);
       if (children.length > 0) {
         filters.push({
           operator: isOrKey(field) ? "or" : "and",
@@ -128,19 +133,19 @@ function filtersFromRecord(filter: unknown): CrudFilters {
       continue;
     }
     if (isNotKey(field)) {
-      warnUnsupportedFilter(
+      unsupported(
         "The refine/Hasura list provider does not support Angee NOT filters yet.",
       );
       continue;
     }
-    filters.push(...filtersForLookup(field, lookup));
+    filters.push(...filtersForLookup(field, lookup, unsupported));
   }
   return filters;
 }
 
-function filtersFromBranch(branch: unknown): CrudFilters {
+function filtersFromBranch(branch: unknown, unsupported: (message: string) => void): CrudFilters {
   const items = Array.isArray(branch) ? branch : [branch];
-  return items.flatMap(filtersFromRecord);
+  return items.flatMap((item) => filtersFromRecord(item, unsupported));
 }
 
 function hasuraWhereFromCrudFilterList(filters: CrudFilters): Record<string, unknown> {
@@ -179,7 +184,7 @@ function hasuraWhereFromCrudBranches(
   return Object.keys(where).length > 0 ? [where] : [];
 }
 
-function filtersForLookup(field: string, lookup: unknown): CrudFilters {
+function filtersForLookup(field: string, lookup: unknown, unsupported: (message: string) => void): CrudFilters {
   if (!isRecord(lookup) || Array.isArray(lookup)) {
     return [{ field, operator: "eq", value: lookup }];
   }
@@ -187,7 +192,7 @@ function filtersForLookup(field: string, lookup: unknown): CrudFilters {
   const filters: CrudFilters = [];
   for (const [operator, value] of Object.entries(lookup)) {
     if (isUnsupportedRefineLookupOperator(operator)) {
-      warnUnsupportedFilter(unsupportedFilter({ field, operator }).message);
+      unsupported(unsupportedFilter({ field, operator }).message);
       continue;
     }
     const refineOperator = lookupOperator(operator);
@@ -200,10 +205,10 @@ function filtersForLookup(field: string, lookup: unknown): CrudFilters {
       continue;
     }
     if (isRecord(value)) {
-      filters.push(...filtersForLookup(`${field}.${operator}`, value));
+      filters.push(...filtersForLookup(`${field}.${operator}`, value, unsupported));
       continue;
     }
-    warnUnsupportedFilter(unsupportedFilter({ field, operator }).message);
+    unsupported(unsupportedFilter({ field, operator }).message);
   }
   return filters;
 }
@@ -381,6 +386,10 @@ function endsWithPattern(value: unknown): string {
 
 function escapeLikePatternValue(value: unknown): string {
   return String(value).replace(/[\\%_]/g, "\\$&");
+}
+
+function rejectUnsupportedFilter(message: string): never {
+  throw new Error(message);
 }
 
 function warnUnsupportedFilter(message: string): void {

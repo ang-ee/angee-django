@@ -5,6 +5,7 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
 import { favoriteFromResourceView } from "./model/favorites";
 import { useResourceViewQueryFacts } from "./surface/table-state";
+import { initialResourceSorting } from "./resource-view-codecs";
 import type { ResourceViewInitialState } from "./resource-view-model";
 import { afterEach, describe, expect, test } from "vitest";
 
@@ -71,6 +72,21 @@ describe("resource-view model", () => {
 
   test("omits default search values", () => {
     expect(resourceViewStateToSearch(createResourceViewState())).toEqual({});
+  });
+
+  test("preserves native declaration sorting, secondary fields, and explicit clears", () => {
+    const initial = { sorting: initialResourceSorting(null, { updated_at: "DESC", id: "ASC" }) };
+    const state = createResourceViewState(initial);
+    expect(state.sorting).toEqual([{ id: "updated_at", desc: true }, { id: "id", desc: false }]);
+    expect(resourceViewStateToSearch(state, initial)).toEqual({});
+    expect(resourceViewSearchToState({}, initial).sorting).toEqual(state.sorting);
+    const primaryOnly = { ...state, sorting: [{ id: "updated_at", desc: true }] };
+    expect(resourceViewStateToSearch(primaryOnly, initial)).toEqual({ sort: "updated_at:desc" });
+    expect(resourceViewSearchToState({ sort: "updated_at:desc" }, initial).sorting).toEqual(primaryOnly.sorting);
+    expect(resourceViewSearchToState({ sort: "" }, initial).sorting).toEqual([]);
+    expect(resourceViewStateToSearch({ ...state, sorting: [] }, initial)).toEqual({ sort: "" });
+    expect(resourceViewStateToSearch(createResourceViewState({ sorting: [] }))).toEqual({ sort: "" });
+    expect(createResourceViewState({ ...initial, sort: null }).sorting).toEqual([]);
   });
 
   test("serializes relative to page-owned default view and page size", () => {
@@ -351,8 +367,8 @@ describe("resource-view model", () => {
     expect(result.current.state.rowSelection).toEqual({});
     act(() => result.current.setFilter({ title: { iContains: "beta" } }));
     expect(result.current.state.filter).toEqual({ title: { iContains: "beta" } });
-    act(() => result.current.setPageSize(500));
-    expect(result.current.state.pagination).toEqual({ pageIndex: 0, pageSize: 100 });
+    act(() => result.current.setPageSize(200));
+    expect(result.current.state.pagination).toEqual({ pageIndex: 0, pageSize: 200 });
   });
 
   test("updates selection natively and retains it across page changes", () => {
@@ -471,6 +487,25 @@ describe("resource-view model", () => {
       columns: [], resourceView: useResourceView(), modelMetadata: null,
     }), { wrapper: viewWrapper({ sort: { field: "updatedAt", dir: "desc" } }) });
     expect(result.current.sortOrder).toEqual({ updatedAt: "DESC" });
+  });
+
+  test("local native sorting inherits a late declaration until a user explicitly clears it", () => {
+    const { result, rerender } = renderHook(({ order }) => {
+      const view = useResourceView();
+      return { view, ...useResourceViewQueryFacts({ columns: [], resourceView: view, modelMetadata: null, order }) };
+    }, {
+      initialProps: { order: undefined as { updated_at: "DESC" } | undefined },
+      wrapper: viewWrapper(),
+    });
+    expect(result.current.sortOrder).toBeUndefined();
+    rerender({ order: { updated_at: "DESC" } });
+    expect(result.current.sortOrder).toEqual({ updated_at: "DESC" });
+    act(() => result.current.view.setSorting([]));
+    expect(result.current.sortOrder).toEqual({});
+    rerender({ order: undefined });
+    rerender({ order: { updated_at: "DESC" } });
+    expect(result.current.view.state.sorting).toEqual([]);
+    expect(result.current.sortOrder).toEqual({});
   });
 });
 

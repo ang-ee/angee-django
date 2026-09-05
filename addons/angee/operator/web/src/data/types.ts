@@ -8,6 +8,7 @@
 import type { DocumentData, DocumentVariables } from "@angee/refine";
 
 import type {
+  OperatorTemplateDescriptorFields,
   SNAPSHOT_QUERY,
   STACK_SNAPSHOT_SUBSCRIPTION,
 } from "./documents.daemon";
@@ -19,8 +20,6 @@ export type {
   WorkspaceSourceStatus,
   WorkspaceRef,
   WorkspaceStatus,
-  TemplateDescriptor,
-  TemplateInputDescriptor,
   SecretRef,
   StackStatus,
   GitOpsTopology,
@@ -37,12 +36,15 @@ import type {
   JobState,
   SourceState,
   WorkspaceRef,
-  TemplateDescriptor,
   SecretRef,
   StackStatus,
   GitOpsTopology,
   MutationResult,
 } from "@angee/gql/operator/types";
+
+/** Template panes consume the authored fragment, not every daemon SDL field. */
+export type TemplateDescriptor = DocumentData<typeof OperatorTemplateDescriptorFields>;
+export type TemplateInputDescriptor = TemplateDescriptor["inputs"][number];
 
 export interface OperatorConnectionInfo {
   endpoint: string;

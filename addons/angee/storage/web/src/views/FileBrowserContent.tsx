@@ -5,7 +5,6 @@ import {
   Badge,
   Button,
   Column,
-  ControlBandProvider,
   Glyph,
   List,
   SectionEyebrow,
@@ -34,17 +33,13 @@ export interface FileBrowserContentProps {
   baseFilter: ResourceFilter<"storage.File">;
   defaultGroup: ListProps<StorageFileRow>["defaultGroup"];
   /** Detail route for a clicked row — the list renders each row as a link. */
-  rowHref: (row: StorageFileRow) => string;
+  rowHref: ListProps<StorageFileRow>["rowHref"];
   /** Bulk actions rendered in the selection bar when files are selected. */
   bulkActions: (selectedIds: ReadonlySet<string>, clear: () => void) => ReactNode;
   onListStateChange: (state: ResourceListSnapshot<StorageFileRow>) => void;
-  /** Loaded leaf scope replayed while the file preview replaces the visible list. */
-  navigationScope?: ListProps<StorageFileRow>["navigationScope"];
   uploads: StorageUpload;
   uploadTarget: UploadTarget;
   canUpload: boolean;
-  /** Keep the server list alive behind a preview without publishing its toolbar. */
-  hidden?: boolean;
 }
 
 const FILE_LIST_FIELDS = [
@@ -69,11 +64,9 @@ export function FileBrowserContent({
   rowHref,
   bulkActions,
   onListStateChange,
-  navigationScope,
   uploads,
   uploadTarget,
   canUpload,
-  hidden = false,
 }: FileBrowserContentProps): ReactElement {
   const t = useStorageT();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -87,10 +80,7 @@ export function FileBrowserContent({
     <List<StorageFileRow>
       resource="storage.File"
       baseFilter={baseFilter}
-      defaultGroup={navigationScope ? null : defaultGroup}
-      order={{ updated_at: "DESC" }}
-      pageSize={50}
-      {...(navigationScope ? { navigationScope } : {})}
+      defaultGroup={defaultGroup}
       fields={FILE_LIST_FIELDS}
       rowHref={rowHref}
       bulkActions={bulkActions}
@@ -99,7 +89,7 @@ export function FileBrowserContent({
       onListStateChange={onListStateChange}
       emptyContent={canUpload ? t("list.emptyUpload") : t("list.empty")}
       toolbarActions={
-        !hidden && canUpload ? (
+        canUpload ? (
           <Button
             type="button"
             size="sm"
@@ -175,16 +165,6 @@ export function FileBrowserContent({
       />
     </List>
   );
-
-  if (hidden) {
-    return (
-      <ControlBandProvider host={undefined}>
-        <div hidden aria-hidden="true">
-          {list}
-        </div>
-      </ControlBandProvider>
-    );
-  }
 
   return (
     <UploadDropTarget

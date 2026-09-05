@@ -1,5 +1,5 @@
 import * as React from "react";
-import { crudFiltersFromFilterRecord, hasuraWhereFromCrudFilters, useAngeeAggregate } from "@angee/refine";
+import { MAX_PAGE_SIZE, crudFiltersFromFilterRecord, hasuraWhereFromCrudFilters, useAngeeAggregate } from "@angee/refine";
 import { useModelMetadata } from "@angee/metadata";
 import type { ModelFieldMetadata, Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
@@ -20,6 +20,7 @@ import { useBulkDelete } from "../useBulkDelete";
 import { requireDataResource, useAggregateOperation } from "../resource-operations";
 import { useResourceToolbarProps } from "../resource-toolbar-props";
 import { useResourceViewToolbarInputs } from "../resource-view-toolbar-inputs";
+import { PAGE_SIZE_OPTIONS } from "../page-size";
 interface ListViewContentProps<TRow extends Row> {
   surface: ResourceViewSurface<TRow> | GroupedResourceViewSurface<TRow>;
   resource: string;
@@ -165,6 +166,8 @@ export function ListViewContent<TRow extends Row = Row>({
     groupingEnabled: !boardGroupingPinned,
     pagerSubject: groupedListMode ? t("pager.groups") : undefined,
     pagerTotalUnit: groupedListMode ? "groups" : undefined,
+    pagerPageSizeOptions: clientRowModel ? undefined : PAGE_SIZE_OPTIONS,
+    pagerMaxPageSize: clientRowModel ? undefined : MAX_PAGE_SIZE,
   });
 
   return (
@@ -222,6 +225,7 @@ export function ListViewContent<TRow extends Row = Row>({
           expandedKeys={surface.expandedKeys}
           toggleGroup={surface.toggleGroup}
           setScopePage={surface.setScopePage}
+          setScopePageSize={surface.setScopePageSize}
           selectedIds={surface.selectedIds}
           interactive={interactive}
           rowHref={rowHref}
@@ -243,7 +247,7 @@ export function ListViewContent<TRow extends Row = Row>({
           interactive={interactive}
           fetching={surface.list.fetching}
           emptyContent={emptyContent}
-          rowHref={rowHref}
+          rowHref={rowHref ? (row) => rowHref(row, surface.listState.navigationScope) : undefined}
           onRowClick={onRowClick}
           cardActions={
             cardActions || renderRowActions ? boardCardActions : undefined
@@ -276,7 +280,7 @@ export function ListViewContent<TRow extends Row = Row>({
           resourceView={resourceView}
           groupStack={effectiveGroupStack}
           interactive={interactive}
-          rowHref={rowHref}
+          rowHref={rowHref ? (row) => rowHref(row, surface.listState.navigationScope) : undefined}
           renderRowActions={renderRowActions}
           onRowClick={onRowClick}
           emptyContent={emptyContent}
@@ -299,7 +303,7 @@ export function ListViewContent<TRow extends Row = Row>({
           resourceView={resourceView}
           groupStack={effectiveGroupStack}
           interactive={interactive}
-          rowHref={rowHref}
+          rowHref={rowHref ? (row) => rowHref(row, surface.listState.navigationScope) : undefined}
           renderRowActions={renderRowActions}
           onRowClick={onRowClick}
           emptyContent={emptyContent}

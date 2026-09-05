@@ -6,8 +6,41 @@ import {
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
 import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
 
+import { useModelMetadata, type DataResourceMetadata } from "@angee/metadata";
+
 import {
-  Button, buttonVariants, ControlBand, EmptyState, formatSize, Glyph, LoadingPanel, PreviewPane, RecordPager, ScopedExplorerPane, SelectionBarAction, SurfaceHeader, TreeView, useBreadcrumbLeafLabel, useChatterContent, useConfirm, useLatestRef, useListRecordNavigation, useRouteHref, useRouteRecordId, type ChatterTab, type FieldDescriptor, type PreviewFile, type ScopedExplorerController } from "@angee/ui";
+  Button,
+  buttonVariants,
+  ControlBand,
+  EmptyState,
+  ErrorBanner,
+  formatSize,
+  Glyph,
+  LoadingPanel,
+  parseRecordNavigationScope,
+  PreviewPane,
+  recordNavigationHref,
+  recordNavigationSearch,
+  RecordPager,
+  ResourceViewProvider,
+  ScopedExplorerPane,
+  SelectionBarAction,
+  SurfaceHeader,
+  TreeView,
+  useBreadcrumbLeafLabel,
+  useBreadcrumbCollectionLink,
+  useChatterContent,
+  useConfirm,
+  useLatestRef,
+  useListRecordNavigation,
+  useRouteHref,
+  useRouteRecordId,
+  type ChatterTab,
+  type FieldDescriptor,
+  type ListViewNavigationScope,
+  type PreviewFile,
+  type ScopedExplorerController,
+} from "@angee/ui";
 
 import {
   StorageBackends,
@@ -46,6 +79,10 @@ const FILE_MODEL = "storage.File";
 const FOLDER_MODEL = "storage.Folder";
 const FOLDER_MODELS = [FOLDER_MODEL] as const;
 const ALL_FILES_DEFAULT_GROUP = { field: "folder" } as const;
+const FILE_LIST_INITIAL_STATE = {
+  pageSize: 50,
+  sorting: [{ id: "updated_at", desc: true }],
+};
 // A single parent's children (and the drive's top level) come back in one
 // request, capped here. The Tree is not virtualized, so rendering far more than
 // this under one parent would be the real cost; the cap keeps each per-parent
@@ -104,6 +141,11 @@ export function StoragePage(): ReactElement {
   // The navigator scope (All files / Trash / a folder) lives in the URL beside
   // the `group` view param, so it is deep-linkable and back/forward works.
   const search = useSearch({ strict: false }) as Readonly<Record<string, unknown>>;
+  const fileResource = useModelMetadata(FILE_MODEL)?.resource;
+  const navigationScope = useMemo(
+    () => parseRecordNavigationScope(search, fileResource),
+    [search, fileResource],
+  );
   const folderScope = useMemo(() => folderScopeFromSearch(search), [search]);
   // Write the scope to the address bar (and close any open preview by landing on
   // the list route), preserving every other param — `group` above all.
@@ -116,16 +158,22 @@ export function StoragePage(): ReactElement {
         // writing `undefined`, keeping the address bar clean and every other
         // param intact — the same typed updater shape as openFileRoute/closeDetail.
         search: (current: Record<string, unknown>) => {
-          const next = { ...current };
+          const next = recordNavigationSearch(current, fileResource, null);
           if (folder === undefined) delete next[FOLDER_SCOPE_PARAM];
           else next[FOLDER_SCOPE_PARAM] = folder;
           return next;
         },
       });
     },
-    [filesHref, navigate],
+    [filesHref, navigate, fileResource],
   );
   const openFileId = useRouteRecordId() ?? null;
+  const searchStr = useRouterState({ select: (state) => state.location.searchStr });
+  useBreadcrumbCollectionLink(
+    filesHref,
+    openFileId === null ? null
+      : recordNavigationHref(routeHref("storage.files", {}, searchStr), fileResource, null),
+  );
   const openFileQuery = useAuthoredQuery(
     StorageFileById,
     { id: openFileId ?? "" },
@@ -218,21 +266,23 @@ export function StoragePage(): ReactElement {
   const closeDetail = useCallback(() => {
     void navigate({
       to: filesHref,
-      search: (current: Record<string, unknown>) => current,
+      search: (current: Record<string, unknown>) =>
+        recordNavigationSearch(current, fileResource, null),
     });
-  }, [filesHref, navigate]);
+  }, [filesHref, navigate, fileResource]);
 
   useBreadcrumbLeafLabel(openFile ? openFile.title || openFile.filename : null);
   const openFileRoute = useCallback(
-    (id: string) => {
+    (id: string, scope?: ListViewNavigationScope) => {
       // Keep the folder/group scope in the URL across the preview round-trip so
       // closing the file returns to the same folder.
       void navigate({
         to: routeHref("storage.file", { id }),
-        search: (current: Record<string, unknown>) => current,
+        search: (current: Record<string, unknown>) =>
+          recordNavigationSearch(current, fileResource, scope ?? null),
       });
     },
-    [navigate, routeHref],
+    [navigate, routeHref, fileResource],
   );
   const getTreeRows = useCallback(
     (rootId: string) =>
@@ -321,7 +371,7 @@ export function StoragePage(): ReactElement {
         hasChildren="hasChildren"
         loading="loading"
         onExpand={handleExpandFolder}
-        selectedId={openFile?.id ?? (controller.selectedId ?? ALL_SCOPE)}
+        selectedId={openFileId ?? (controller.selectedId ?? ALL_SCOPE)}
         onSelect={(row) => {
           if (row.kind === "file") {
             openFileRoute(row.id);
@@ -339,7 +389,7 @@ export function StoragePage(): ReactElement {
         className="min-h-0 flex-1 overflow-auto"
       />
     ),
-    [handleExpandFolder, handleFileDrop, openFile, openFileRoute],
+    [handleExpandFolder, handleFileDrop, openFileId, openFileRoute],
   );
   const renderNavigatorFooter = useCallback(
     (controller: StorageExplorerController) => {
@@ -398,7 +448,7 @@ export function StoragePage(): ReactElement {
   // chatter; nothing published renders the default chatter tabs.
   const detailsTab = useMemo<readonly ChatterTab[]>(
     () =>
-      openFile
+      openFileId
         ? [
             {
               id: "details",
@@ -406,7 +456,8 @@ export function StoragePage(): ReactElement {
               icon: "info",
               children: (
                 <FileDetail
-                  file={openFile}
+                  id={openFileId}
+                  filename={openFile?.filename}
                   onChanged={openFileQuery.refetch}
                   compact
                 />
@@ -414,7 +465,7 @@ export function StoragePage(): ReactElement {
             },
           ]
         : [],
-    [openFile, openFileQuery.refetch, t],
+    [openFileId, openFile?.filename, openFileQuery.refetch, t],
   );
   const chatter = useMemo(() => ({ tabs: detailsTab }), [detailsTab]);
   useChatterContent(chatter);
@@ -464,16 +515,21 @@ export function StoragePage(): ReactElement {
       }
     >
       {(controller) => (
-        <StorageExplorerContent
-          controller={controller}
-          openFileId={openFileId}
-          openFile={openFile}
-          openFileFetching={openFileQuery.isFetching}
-          uploads={uploads}
-          fileActions={fileActions}
-          closeDetail={closeDetail}
-          onOpenFile={openFileRoute}
-        />
+        <ResourceViewProvider resource={FILE_MODEL} initialState={FILE_LIST_INITIAL_STATE}>
+          <StorageExplorerContent
+            controller={controller}
+            openFileId={openFileId}
+            openFile={openFile}
+            openFileFetching={openFileQuery.isFetching}
+            openFileError={openFileQuery.error}
+            fileResource={fileResource}
+            navigationScope={navigationScope}
+            uploads={uploads}
+            fileActions={fileActions}
+            closeDetail={closeDetail}
+            onOpenFile={openFileRoute}
+          />
+        </ResourceViewProvider>
       )}
     </ScopedExplorerPane>
   );
@@ -484,6 +540,9 @@ function StorageExplorerContent({
   openFileId,
   openFile,
   openFileFetching,
+  openFileError,
+  fileResource,
+  navigationScope,
   uploads,
   fileActions,
   closeDetail,
@@ -493,10 +552,13 @@ function StorageExplorerContent({
   openFileId: string | null;
   openFile: StorageFile | null;
   openFileFetching: boolean;
+  openFileError: Error | null;
+  fileResource: DataResourceMetadata | undefined;
+  navigationScope: ListViewNavigationScope | null;
   uploads: ReturnType<typeof useStorageUpload>;
   fileActions: ReturnType<typeof useFileActions>;
   closeDetail: () => void;
-  onOpenFile: (id: string) => void;
+  onOpenFile: (id: string, scope?: ListViewNavigationScope) => void;
 }): ReactElement {
   const t = useStorageT();
   const routeHref = useRouteHref();
@@ -524,10 +586,11 @@ function StorageExplorerContent({
   const defaultGroup =
     effectiveScope === ALL_SCOPE ? ALL_FILES_DEFAULT_GROUP : null;
   const {
-    navigationScope,
     navigation: fileNavigation,
     onListStateChange,
   } = useListRecordNavigation<StorageFileRow>({
+    resource: FILE_MODEL,
+    navigationScope,
     recordId: openFileId,
     onSelect: onOpenFile,
   });
@@ -537,9 +600,13 @@ function StorageExplorerContent({
     select: (state) => state.location.searchStr,
   });
   const rowHref = useCallback(
-    (row: StorageFileRow) =>
-      routeHref("storage.file", { id: row.id }, searchStr),
-    [routeHref, searchStr],
+    (row: StorageFileRow, scope?: ListViewNavigationScope) =>
+      recordNavigationHref(
+        routeHref("storage.file", { id: row.id }, searchStr),
+        fileResource,
+        scope ?? navigationScope,
+      ),
+    [routeHref, searchStr, fileResource, navigationScope],
   );
   // The selection bar's bulk verbs: Restore in the Trash scope, else Trash.
   const renderBulkActions = useCallback(
@@ -581,9 +648,9 @@ function StorageExplorerContent({
 
   return (
     <>
-      {openFile ? (
+      {openFileId ? (
         <ControlBand>
-          {!openFile.is_trashed && openFile.url !== "" ? (
+          {openFile && !openFile.is_trashed && openFile.url !== "" ? (
             <a
               className={buttonVariants({ variant: "secondary", size: "sm" })}
               href={openFile.url}
@@ -593,7 +660,7 @@ function StorageExplorerContent({
               {t("file.download")}
             </a>
           ) : null}
-          {openFile.is_trashed ? (
+          {openFile?.is_trashed ? (
             <Button
               type="button"
               size="sm"
@@ -610,9 +677,10 @@ function StorageExplorerContent({
               size="sm"
               variant="ghost"
               loading={fileActions.busy}
-              onClick={() =>
-                void fileActions.trash(openFile.id).then(closeDetail)
-              }
+              disabled={!openFile}
+              onClick={() => {
+                if (openFile) void fileActions.trash(openFile.id).then(closeDetail);
+              }}
             >
               <Glyph name="trash" />
               {t("file.trash")}
@@ -626,18 +694,11 @@ function StorageExplorerContent({
         </ControlBand>
       ) : null}
       {openFileId ? (
-        openFile ? (
-          <FilePreviewFrame file={openFile} />
-        ) : openFileFetching ? (
-          <LoadingPanel message={t("loadingFile")} />
-        ) : (
-          <EmptyState
-            fill
-            icon="file"
-            title={t("file.notFoundTitle")}
-            description={t("file.notFoundDescription")}
-          />
-        )
+        <FilePreviewFrame
+          file={openFile}
+          fetching={openFileFetching}
+          error={openFileError}
+        />
       ) : (
         <FileBrowserContent
           baseFilter={baseFilter}
@@ -650,25 +711,19 @@ function StorageExplorerContent({
           canUpload={canUpload}
         />
       )}
-      {openFileId && navigationScope ? (
-        <FileBrowserContent
-          hidden
-          baseFilter={baseFilter}
-          defaultGroup={defaultGroup}
-          rowHref={rowHref}
-          bulkActions={renderBulkActions}
-          onListStateChange={onListStateChange}
-          navigationScope={navigationScope}
-          uploads={uploads}
-          uploadTarget={uploadTarget}
-          canUpload={canUpload}
-        />
-      ) : null}
     </>
   );
 }
 
-function FilePreviewFrame({ file }: { file: StorageFile }): ReactElement {
+function FilePreviewFrame({
+  file,
+  fetching,
+  error,
+}: {
+  file: StorageFile | null;
+  fetching: boolean;
+  error: Error | null;
+}): ReactElement {
   const t = useStorageT();
   // The file's verbs (download, trash/restore) live in the shell control band,
   // beside the preview; this frame just titles and renders the content.
@@ -677,18 +732,37 @@ function FilePreviewFrame({ file }: { file: StorageFile }): ReactElement {
       <SurfaceHeader
         density="compact"
         headingLevel={2}
-        icon={file.mime_type?.icon_key || "file"}
-        title={file.title || file.filename}
-        subtitle={t("file.subtitle", {
-          type:
-            file.mime_type?.label ||
-            file.mime_type?.mime_type ||
-            t("file.unknownType"),
-          size: formatSize(file.size_bytes),
-        })}
+        icon={file?.mime_type?.icon_key || "file"}
+        title={file
+          ? file.title || file.filename
+          : fetching
+            ? t("loadingFile")
+            : error ? t("preview.loadError") : t("file.notFoundTitle")}
+        subtitle={file
+          ? t("file.subtitle", {
+              type:
+                file.mime_type?.label ||
+                file.mime_type?.mime_type ||
+                t("file.unknownType"),
+              size: formatSize(file.size_bytes),
+            })
+          : undefined}
       />
       <div className="min-h-0 flex-1 overflow-hidden p-3">
-        <FilePreview file={file} />
+        {file ? (
+          <FilePreview file={file} />
+        ) : fetching ? (
+          <LoadingPanel message={t("loadingFile")} />
+        ) : error ? (
+          <ErrorBanner title={t("preview.loadError")} description={error.message} />
+        ) : (
+          <EmptyState
+            fill
+            icon="file"
+            title={t("file.notFoundTitle")}
+            description={t("file.notFoundDescription")}
+          />
+        )}
       </div>
     </div>
   );

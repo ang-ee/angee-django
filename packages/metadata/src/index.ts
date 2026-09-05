@@ -88,6 +88,7 @@ export {
   filterFieldType,
   isDateField,
   isScalarIdRelation,
+  resourceOrderFieldForPath,
   isToOneRelationField,
   supportsChoiceFacet,
   type ChoiceFacetSupport,

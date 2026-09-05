@@ -1,6 +1,6 @@
 import * as React from "react";
 import { type Column as TableColumn, type ColumnDef } from "@tanstack/react-table";
-import type { ModelMetadata, Row } from "@angee/metadata";
+import { resourceOrderFieldForPath, type ModelMetadata, type Row } from "@angee/metadata";
 import { Glyph } from "../../../chrome/Glyph";
 import { useUiT } from "../../../i18n";
 import { useResolvedWidget } from "../../../widgets";
@@ -58,7 +58,7 @@ function displayColumns<TRow extends Row>(
         options.metadata ?? null,
       );
     },
-    enableSorting: column.sortable !== false,
+    enableSorting: column.sortable !== false && resourceOrderFieldForPath(column.field, options.metadata?.resource) !== null,
     sortDescFirst: false,
     header: ({ column: tableColumn }) => {
       const label = column.header ?? column.field;
@@ -129,7 +129,7 @@ function SortHeader<TRow extends Row>({
   children: React.ReactNode;
 }): React.ReactElement {
   const t = useUiT();
-  if (column.sortable === false) return <>{children}</>;
+  if (!tableColumn.getCanSort()) return <>{children}</>;
   const sort = tableColumn.getIsSorted();
   const active = Boolean(sort);
   const iconName = !active

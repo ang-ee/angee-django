@@ -1,3 +1,5 @@
+import { testDataResource } from "./testing";
+import { resourceOrderFieldForPath } from "./fields";
 import { describe, expect, test } from "vitest";
 
 import {
@@ -110,3 +112,16 @@ function modelMetadata({
     },
   };
 }
+
+
+test("server order fields map display paths only to declared wire keys", () => {
+  const resource = testDataResource("messaging.Message", { orderFields: ["sent_at", "thread__title__text", "oauth_client__is_enabled"] });
+  expect(resourceOrderFieldForPath("sent_at", resource)).toBe("sent_at");
+  expect(resourceOrderFieldForPath("sentAt", resource)).toBe("sent_at");
+  expect(resourceOrderFieldForPath("thread.title.text", resource)).toBe("thread__title__text");
+  expect(resourceOrderFieldForPath("oauthClient_IsEnabled", resource)).toBe("oauth_client__is_enabled");
+  expect(resourceOrderFieldForPath("sender.party.display_name", resource)).toBeNull();
+  expect(resourceOrderFieldForPath("thread.title.unknown", resource)).toBeNull();
+  expect(resourceOrderFieldForPath("title", { ...resource, rowModel: "client" })).toBe("title");
+  expect(resourceOrderFieldForPath("title", undefined)).toBe("title");
+});

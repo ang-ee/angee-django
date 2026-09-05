@@ -457,6 +457,32 @@ describe("ConsoleLayout", () => {
     expect(statusHost?.textContent).toContain("Ready");
   });
 
+  test("keeps the page band mounted when a chatter details form changes", async () => {
+    const { container } = renderInRouter(
+      <ConsoleLayout>
+        <ChatterFormBandPublisher />
+      </ConsoleLayout>,
+    );
+    const mainAction = await screen.findByRole("button", { name: "Main file action" });
+    const host = container.querySelector(".area-control");
+    expect(host?.contains(mainAction)).toBe(true);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "File details" }));
+    const saveA = await screen.findByRole("button", { name: "Save file a" });
+    expect(host?.contains(saveA)).toBe(false);
+    expect(host?.contains(mainAction)).toBe(true);
+    expect(screen.getByRole("button", { name: "Main file action" })).toBe(mainAction);
+
+    fireEvent.click(screen.getByRole("button", { name: "Next file" }));
+    await screen.findByRole("button", { name: "Save file b" });
+    expect(host?.contains(mainAction)).toBe(true);
+    expect(screen.getByRole("button", { name: "Main file action" })).toBe(mainAction);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Comments" }));
+    expect(host?.contains(mainAction)).toBe(true);
+    expect(screen.getByRole("button", { name: "Main file action" })).toBe(mainAction);
+  });
+
   test("toggles the document theme from the user menu", async () => {
     renderInRouter(
       <ConsoleLayout>
@@ -532,6 +558,24 @@ function ChatterPublisher(): null {
   const content = useMemo(() => ({ tabs }), [tabs]);
   useChatterContent(content);
   return null;
+}
+
+function ChatterFormBandPublisher(): ReactNode {
+  const [record, setRecord] = useState("a");
+  const content = useMemo(() => ({
+    tabs: [{
+      id: "details",
+      label: "File details",
+      children: (
+        <section aria-label="File details form">
+          <ControlBand><button type="button">Save file {record}</button></ControlBand>
+          <button type="button" onClick={() => setRecord("b")}>Next file</button>
+        </section>
+      ),
+    }],
+  }), [record]);
+  useChatterContent(content);
+  return <ControlBand><button type="button">Main file action</button></ControlBand>;
 }
 
 function TestPrimaryPanePublisher() {

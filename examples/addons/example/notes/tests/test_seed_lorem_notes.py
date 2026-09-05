@@ -7,11 +7,23 @@ from datetime import datetime, timezone
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.test import TransactionTestCase
+from django.core.management.base import CommandError
+from django.test import SimpleTestCase, TransactionTestCase
 from rebac import system_context
+
+from angee.compose.dependencies import AddonDependencyGroup
 
 Note = apps.get_model("notes", "Note")
 User = get_user_model()
+
+
+class SeedLoremNotesDependencyTests(SimpleTestCase):
+    """The composed host installs the dependency needed to import this command."""
+
+    def test_notes_projects_faker_into_runtime_dependencies(self) -> None:
+        group = AddonDependencyGroup.from_app_configs((apps.get_app_config("notes"),), project_dir=None)
+
+        self.assertIn("faker>=30.0", group.compile())
 
 
 class SeedLoremNotesTests(TransactionTestCase):
@@ -60,9 +72,7 @@ class SeedLoremNotesTests(TransactionTestCase):
 
         self.assertEqual(len(notes), 5)
         self.assertTrue(any(note.word_count > 0 for note in notes))
-        self.assertTrue(
-            all(note.word_count == Note.count_words(note.body) for note in notes)
-        )
+        self.assertTrue(all(note.word_count == Note.count_words(note.body) for note in notes))
 
     def test_owner_isolation(self) -> None:
         self._seed(count=30, owner="alice", fresh=True)
@@ -81,7 +91,16 @@ class SeedLoremNotesTests(TransactionTestCase):
         self.assertEqual(first, second)
 
     def test_unknown_owner_fails_fast(self) -> None:
-        from django.core.management.base import CommandError
-
         with self.assertRaises(CommandError):
             self._seed(count=1, owner="nobody")
+
+    def test_nonpositive_batch_fails_before_fresh_deletes(self) -> None:
+        with system_context(reason="test-seed-validation"):
+            before = set(Note.objects.values_list("pk", flat=True))
+
+        for batch in (0, -1):
+            with self.subTest(batch=batch):
+                with self.assertRaisesMessage(CommandError, "--batch must be positive"):
+                    self._seed(count=0, batch=batch, fresh=True)
+                with system_context(reason="test-seed-validation"):
+                    self.assertEqual(set(Note.objects.values_list("pk", flat=True)), before)

@@ -1,5 +1,6 @@
 import * as React from "react";
 import { rowPublicId, type Row } from "@angee/metadata";
+import { ControlBandProvider } from "../../../layouts/ControlBand";
 import { cn } from "../../../lib/cn";
 import { Dialog, DialogBackdrop, DialogPortal, DialogRoot } from "../../../ui/dialog";
 import { DeletePreviewDialog } from "../../tree/DeletePreviewDialog";
@@ -15,7 +16,7 @@ import { composeNodes } from "./child-dsl";
 import { formElementRenderProps, listElementRenderProps, mergeCreateDefaults, requiredColumns } from "./declarations";
 import { REFINE_CREATE_ID } from "./public";
 import type { ResourceListDeclarations, ResourceListProps, ResourceRecordController } from "./public";
-import { EMPTY_ACTIONS, EMPTY_RECORD_ID_SET, ListStateProbe, RecordHeaderActions } from "./record-chrome";
+import { EMPTY_ACTIONS, EMPTY_RECORD_ID_SET, RecordHeaderActions } from "./record-chrome";
 interface ResourceListBodyProps<TRow extends Row = Row>
   extends ResourceListProps<TRow> {
   declarations: ResourceListDeclarations<TRow>;
@@ -115,11 +116,13 @@ export function ResourceListBody<TRow extends Row = Row>({
   const open = hasRecordSurface && (resolvedCreating || resolvedRecordId != null);
   const editId = resolvedCreating ? null : resolvedRecordId ?? null;
   const {
-    listState,
-    navigationScope: recordNavigationScope,
+    selectRecord,
+    retainLocalList,
     navigation: recordNavigation,
     onListStateChange: handleListStateChange,
   } = useListRecordNavigation<TRow>({
+    resource,
+    navigationScope: recordController.navigationScope,
     recordId:
       open && !resolvedCreating ? resolvedRecordId : null,
     ...(handleSelectRecord ? { onSelect: handleSelectRecord } : {}),
@@ -178,9 +181,9 @@ export function ResourceListBody<TRow extends Row = Row>({
   const handleRowClick = React.useCallback(
     (row: TRow) => {
       const id = rowPublicId(row);
-      if (id !== null) handleSelectRecord?.(id);
+      if (id !== null) selectRecord(id);
     },
-    [handleSelectRecord],
+    [selectRecord],
   );
 
   const recordDeleteIds = React.useMemo<ReadonlySet<string>>(
@@ -244,17 +247,6 @@ export function ResourceListBody<TRow extends Row = Row>({
       onRowClick={hasRecordSurface && handleSelectRecord ? handleRowClick : undefined}
     />
   );
-  const listStateOnly = open && listState ? (
-    <ListStateProbe<TRow>
-      list={ResolvedListComponent}
-      resource={resource}
-      columns={resolvedColumns}
-      listRenderProps={listRenderProps}
-      navigationScope={recordNavigationScope}
-      onListStateChange={handleListStateChange}
-    />
-  ) : null;
-
   const recordForm = open ? (
     <FormView
       resource={resource}
@@ -299,17 +291,19 @@ export function ResourceListBody<TRow extends Row = Row>({
 
   return (
     <div className={cn("min-h-full min-w-0", className)}>
+      <ControlBandProvider inherit={!open} host={undefined}>
+        <div hidden={open} aria-hidden={open || undefined}>
+          {!open || retainLocalList ? list : null}
+        </div>
+      </ControlBandProvider>
       {open ? (
         <>
-          {listStateOnly}
           <div className="overflow-hidden rounded-6 border border-border bg-sheet">
             {recordForm}
           </div>
           {recordDeleteDialog}
         </>
-      ) : (
-        list
-      )}
+      ) : null}
     </div>
   );
 }

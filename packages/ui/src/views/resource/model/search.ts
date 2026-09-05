@@ -1,11 +1,12 @@
 import { format } from "date-fns";
-import { clampPageSize, stableSerialize } from "@angee/refine";
+import { stableSerialize } from "@angee/refine";
 import { dedupeBy } from "../../../lib/dedupe";
 import { CALENDAR_ANCHOR_FORMAT, defaultResourceViewPageSize, CALENDAR_VIEW_MODES, RESOURCE_VIEW_GROUP_GRANULARITIES, RESOURCE_VIEW_KINDS } from "./capabilities";
 import type { CalendarViewMode, ResourceViewGroupGranularity, ResourceViewKind } from "./capabilities";
 import { Filter, resourceViewFilterFromUnknown } from "./filter";
 import type { ResourceViewFilter, ResourceViewGroup, ResourceViewInitialState, ResourceViewSort } from "./filter";
 import { createResourceViewState, type ResourceViewState } from "./state";
+import { normalisePageSize } from "../page-size";
 const RESOURCE_VIEW_SEARCH_SHAPE = {
   page: undefined as number | undefined,
   pageSize: undefined as number | undefined,
@@ -33,11 +34,9 @@ export function resourceViewStateToSearch(
   const base = createResourceViewState(initial);
   if (state.pagination.pageIndex !== base.pagination.pageIndex) search.page = state.pagination.pageIndex + 1;
   if (state.pagination.pageSize !== defaultResourceViewPageSize(initial)) search.pageSize = state.pagination.pageSize;
-  const sort = state.sorting[0];
-  const defaultSort = base.sorting[0];
+  const sort = state.sorting?.[0];
   const sortValue = sort ? `${sort.id}:${sort.desc ? "desc" : "asc"}` : "";
-  const baseSortValue = defaultSort ? `${defaultSort.id}:${defaultSort.desc ? "desc" : "asc"}` : "";
-  if (sortValue !== baseSortValue) search.sort = sortValue;
+  if (stableSerialize(state.sorting) !== stableSerialize(base.sorting)) search.sort = sortValue;
   const filterValue = stableSerialize(state.filter);
   if (Filter.from(state.filter).hasEntries()) {
     if (filterValue !== stableSerialize(base.filter)) search.filter = JSON.stringify(state.filter);
@@ -79,7 +78,7 @@ export function resourceViewSearchToState(
     ...base,
     pagination: {
       pageIndex: page === null ? base.pagination.pageIndex : Math.max(0, Math.floor(page) - 1),
-      pageSize: clampPageSize(parseSearchInteger(search.pageSize) ?? base.pagination.pageSize),
+      pageSize: normalisePageSize(parseSearchInteger(search.pageSize) ?? base.pagination.pageSize),
     },
     sorting: isClearedSearchValue(search.sort) ? [] : sort ? [{ id: sort.field, desc: sort.dir === "desc" }] : base.sorting,
     filter: isClearedSearchValue(search.filter) ? {} : parseSearchFilter(search.filter) ?? base.filter,

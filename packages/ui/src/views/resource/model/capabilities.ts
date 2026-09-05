@@ -1,5 +1,5 @@
-import { ANGEE_FILTER_LOOKUP_OPERATORS, clampPageSize, type AngeeFilterLookupOperator } from "@angee/refine";
-import { DEFAULT_PAGE_SIZE } from "../page-size";
+import { ANGEE_FILTER_LOOKUP_OPERATORS, type AngeeFilterLookupOperator } from "@angee/refine";
+import { DEFAULT_PAGE_SIZE, normalisePageSize } from "../page-size";
 import type { ResourceViewInitialState } from "./filter";
 export const RESOURCE_VIEW_KINDS = ["list", "board", "calendar"] as const;
 
@@ -115,5 +115,5 @@ export function isLookupOperator(value: string): value is ResourceViewLookupOper
 }
 
 export function defaultResourceViewPageSize(initial: ResourceViewInitialState): number {
-  return clampPageSize(initial.pageSize ?? DEFAULT_RESOURCE_VIEW_PAGE_SIZE);
+  return normalisePageSize(initial.pageSize ?? DEFAULT_RESOURCE_VIEW_PAGE_SIZE);
 }

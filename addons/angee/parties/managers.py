@@ -21,16 +21,16 @@ from dataclasses import dataclass
 from itertools import combinations
 from typing import TYPE_CHECKING, Any, Self, cast
 
-from angee.base.mixins import HierarchyQuerySet
-from angee.base.models import AngeeManager, AngeeQuerySet
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, Value
-from django.db.models.functions import Coalesce
+from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
+from django.db.models.functions import Coalesce, NullIf
 from phonenumbers import PhoneNumberMatcher
 from rebac import PermissionDenied, current_actor, system_context
 
+from angee.base.mixins import HierarchyQuerySet
+from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.parties.mixins import LinkSource
 
@@ -88,6 +88,35 @@ class CircleManager(AngeeManager.from_queryset(CircleQuerySet)):  # type: ignore
 
 class HandleQuerySet(AngeeQuerySet):
     """Handle read scopes over the Angee base."""
+
+    def with_sender_name(self) -> Self:
+        """Select each readable handle's confirmed, readable party/envelope name.
+
+        Explicit actor scopes keep elevated parents from exposing directory
+        identities. Empty strings follow the same fallback as absent values.
+        """
+
+        actor = self.actor() or current_actor()
+        party_model = apps.get_model("parties", "Party")
+        parties = party_model.objects.with_actor(actor).scoped() if actor is not None else party_model.objects.none()
+        handles = self.with_actor(actor).scoped() if actor is not None else self.none()
+        party_name = parties.filter(pk=OuterRef("party_id")).values("display_name")[:1]
+        return handles.annotate(
+            _sender_name=Coalesce(
+                NullIf(
+                    Case(
+                        When(party_link_confirmed=True, then=Subquery(party_name)),
+                        default=Value(None),
+                        output_field=TextField(),
+                    ),
+                    Value(""),
+                ),
+                NullIf("display_name", Value("")),
+                "value",
+                Value(""),
+                output_field=TextField(),
+            ),
+        )
 
     def owned_by(self, user: Any) -> Self:
         """Return the handles this user controls — the ``owner`` column, no joins."""

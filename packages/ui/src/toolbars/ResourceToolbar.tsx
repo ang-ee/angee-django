@@ -75,6 +75,8 @@ export interface ResourceToolbarProps {
   onGroupStackChange?: (groups: readonly ResourceViewGroup[]) => void;
   onPageChange?: (page: number) => void;
   onPageSizeChange?: (pageSize: number) => void;
+  pagerPageSizeOptions?: readonly number[];
+  pagerMaxPageSize?: number;
   onViewChange?: (view: ResourceViewKind) => void;
   onCustomFilterAdd?: (filter: ResourceToolbarCustomFilter) => void;
   onCustomFilterRemove?: (id: string) => void;
@@ -199,6 +201,8 @@ export function ResourceToolbar({
   onGroupStackChange,
   onPageChange,
   onPageSizeChange,
+  pagerPageSizeOptions,
+  pagerMaxPageSize,
   onViewChange,
   onCustomFilterAdd,
   onCustomFilterRemove,
@@ -269,6 +273,8 @@ export function ResourceToolbar({
           {...pager}
           subject={pagerSubject}
           unit={pagerTotalUnit}
+          pageSizeOptions={pagerPageSizeOptions}
+          maxPageSize={pagerMaxPageSize}
           onPageChange={onPageChange}
           onPageSizeChange={onPageSizeChange}
         />

@@ -81,6 +81,8 @@ class Command(BaseCommand):
             raise CommandError("--end must be after --start")
         if count < 0:
             raise CommandError("--count must not be negative")
+        if batch <= 0:
+            raise CommandError("--batch must be positive")
 
         note_model = apps.get_model("notes", "Note")
         user_model = get_user_model()
