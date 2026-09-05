@@ -12,6 +12,7 @@ import {
   lineDiffConfig,
   lineToInput,
   recordLinesToRows,
+  sameObservedLines,
 } from "./editable-lines";
 
 function field(
@@ -47,6 +48,42 @@ const LINES: DataResourceLinesMetadata = {
 };
 
 const config = lineDiffConfig(LINES);
+
+describe("sameObservedLines", () => {
+  const observedConfig = lineDiffConfig({ ...LINES, fields: [
+    ...(LINES.fields ?? []),
+    field("kind", "enum"),
+    field("tags", "list", { relationModelLabel: "products.Tag" }),
+  ] });
+  const rows: Row[] = [
+    { id: "ln_a", product: { id: "p1", label: "Old label" }, label: "A", quantity: 1, kind: "GOODS", tags: [{ id: "t1", label: "Old tag" }], position: 10 },
+    { id: "ln_b", product: "p2", label: "B", quantity: 2, kind: "SERVICE", tags: [], position: 20 },
+  ];
+
+  test("compares stored positions while sharing relation/enum normalization with write diffs", () => {
+    const current = [
+      { ...rows[0], product: { id: "p1", label: "New label" }, kind: "goods", tags: ["t1", "t1"] },
+      { ...rows[1], product: { id: "p2" }, kind: "service" },
+    ];
+    expect(sameObservedLines(rows, current, observedConfig)).toBe(true);
+    expect(diffLines(rows, current, observedConfig).hasChanges).toBe(true);
+    expect(diffLines(rows, current, observedConfig).payload.map((row) => row.position)).toEqual([0, 1]);
+  });
+
+  test("compares identities and order even without a position column", () => {
+    const unorderedConfig = { ...observedConfig, positionField: null };
+    expect(sameObservedLines(rows, rows, unorderedConfig)).toBe(true);
+    expect(sameObservedLines(rows, [rows[1]!, rows[0]!], unorderedConfig)).toBe(false);
+    expect(sameObservedLines(rows, [{ ...rows[0], id: "ln_c" }, rows[1]!], unorderedConfig)).toBe(false);
+    expect(sameObservedLines(rows, rows.slice(0, 1), unorderedConfig)).toBe(false);
+  });
+
+  test("retains conflict detection for real relation, enum, cell and position changes", () => {
+    for (const patch of [{ product: "p9" }, { tags: ["t2"] }, { kind: "service" }, { quantity: 3 }, { position: 0 }]) {
+      expect(sameObservedLines(rows, [{ ...rows[0], ...patch }, rows[1]!], observedConfig)).toBe(false);
+    }
+  });
+});
 
 describe("lineDiffConfig", () => {
   test("derives id, position, editable columns, and relation columns", () => {

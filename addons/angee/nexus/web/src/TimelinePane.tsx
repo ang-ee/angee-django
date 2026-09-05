@@ -20,7 +20,7 @@ import { useNexusT } from "./i18n";
 const PAGE_SIZE = 30;
 
 type TimelinePayload = NonNullable<
-  DocumentType<typeof NexusTimeline>["party_timeline"]
+  DocumentType<typeof NexusTimeline>["party_message_feed"]
 >;
 type TimelineMessage = TimelinePayload["messages"][number];
 type TimelineDirection = NonNullable<TimelineMessage["direction"]>;
@@ -56,7 +56,7 @@ export function TimelinePane(props: TimelinePaneProps): React.ReactElement {
       partyId: scopeId,
       circleId: scopeId,
       circle,
-      before: null,
+      beforeCursor: null,
       limit: PAGE_SIZE,
       search: "",
     }),
@@ -68,26 +68,22 @@ export function TimelinePane(props: TimelinePaneProps): React.ReactElement {
     {
       models: ["messaging.Message", "parties.PartyHandle", "parties.CircleMember"],
       getRows: (data) =>
-        (circle ? data.circle_timeline : data.party_timeline)?.messages ?? [],
+        (circle ? data.circle_message_feed : data.party_message_feed)?.messages ?? [],
       getRowId: (row) => row.id,
-      getPageParam: (pageRows) => {
-        const oldest = pageRows.length >= PAGE_SIZE ? pageRows.at(-1) : undefined;
-        return oldest ? { before: oldest.id } : undefined;
+      getPageParam: (_rows, data) => {
+        const page = circle ? data.circle_message_feed : data.party_message_feed;
+        return page?.has_older && page.older_cursor
+          ? { beforeCursor: page.older_cursor }
+          : undefined;
       },
     },
   );
 
-  const rows = React.useMemo(
-    () =>
-      [...timeline.rows].sort((a, b) =>
-        orderAt(a) < orderAt(b) ? 1 : orderAt(a) > orderAt(b) ? -1 : b.id.localeCompare(a.id),
-      ),
-    [timeline.rows],
-  );
+  const rows = timeline.rows;
   const firstPage = timeline.data?.pages[0];
-  const total = (circle ? firstPage?.circle_timeline : firstPage?.party_timeline)?.count
+  const total = (circle ? firstPage?.circle_message_feed : firstPage?.party_message_feed)?.count
     ?? rows.length;
-  const exhausted = !timeline.hasNextPage || rows.length >= total;
+  const exhausted = !timeline.hasNextPage;
 
   if (timeline.isFetching && rows.length === 0) return <LoadingPanel />;
   if (timeline.error && rows.length === 0) {

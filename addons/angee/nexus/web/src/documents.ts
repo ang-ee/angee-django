@@ -9,17 +9,19 @@ export const NexusTimeline = graphql(`
     $partyId: ID!
     $circleId: ID!
     $circle: Boolean!
-    $before: ID
+    $beforeCursor: String
     $limit: Int!
     $search: String!
   ) {
-    party_timeline(
+    party_message_feed(
       party_id: $partyId
-      before: $before
+      before_cursor: $beforeCursor
       limit: $limit
       search: $search
     ) @skip(if: $circle) {
       count
+      older_cursor
+      has_older
       messages {
         id
         preview
@@ -44,13 +46,15 @@ export const NexusTimeline = graphql(`
         }
       }
     }
-    circle_timeline(
+    circle_message_feed(
       circle_id: $circleId
-      before: $before
+      before_cursor: $beforeCursor
       limit: $limit
       search: $search
     ) @include(if: $circle) {
       count
+      older_cursor
+      has_older
       messages {
         id
         preview

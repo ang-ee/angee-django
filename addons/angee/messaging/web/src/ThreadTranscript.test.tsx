@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   queryCalls: [] as Array<Record<string, unknown>>,
   fetchOlder: vi.fn(),
   useAuthoredInfiniteQuery: vi.fn(),
+  pageParam: undefined as ((rows: unknown[], data: unknown) => unknown) | undefined,
 }));
 
 vi.mock("@angee/ui", async (importOriginal) => {
@@ -75,11 +76,12 @@ beforeEach(() => {
   mocks.fetchOlder.mockReset();
   mocks.useAuthoredInfiniteQuery.mockReset();
   mocks.useAuthoredInfiniteQuery.mockImplementation(
-    (_document: unknown, variables: Record<string, unknown>) => {
+    (_document: unknown, variables: Record<string, unknown>, options: { getPageParam: (rows: unknown[], data: unknown) => unknown }) => {
+      mocks.pageParam = options.getPageParam;
       mocks.queryCalls.push(variables);
       return {
         rows: mocks.transcriptRows,
-        data: { pages: [{ messages_aggregate: { aggregate: { count: mocks.total } } }], pageParams: [null] },
+        data: { pages: [{ thread_message_feed: { count: mocks.total } }], pageParams: [null] },
         isFetching: false,
         isFetchingNextPage: false,
         error: null,
@@ -166,7 +168,7 @@ describe("ThreadTranscript", () => {
     expect(screen.getByRole("button", { name: "👍 reaction, 2" })).toBeTruthy();
   });
 
-  test("offers Load older only while loaded rows trail the total", () => {
+  test("offers Load older using the server continuation", () => {
     mocks.transcriptRows = [message()];
     mocks.total = 120;
     mocks.hasMore = true;
@@ -176,10 +178,33 @@ describe("ThreadTranscript", () => {
     expect(mocks.queryCalls.at(-1)).toMatchObject({
       threadId: "thr_1",
       limit: 50,
-      head: true,
+      beforeCursor: null,
     });
     fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
     expect(mocks.fetchOlder).toHaveBeenCalledTimes(1);
+  });
+
+  test("uses the opaque server cursor for tied and null-time rows", () => {
+    const rows = [message({ sent_at: null }), message({ id: "z" })];
+    mocks.transcriptRows = rows;
+    render(<ThreadTranscript threadId="thr_1" />);
+    expect(mocks.pageParam?.(rows, { thread_message_feed: {
+      messages: rows, has_older: true, older_cursor: "signed-position",
+    } })).toEqual({ beforeCursor: "signed-position" });
+    expect(mocks.pageParam?.(rows, { thread_message_feed: {
+      messages: rows, has_older: false, older_cursor: "signed-position",
+    } })).toBeUndefined();
+  });
+
+  test("renders server tie order oldest-to-newest without sorting public IDs", () => {
+    mocks.transcriptRows = [
+      message({ id: "a", parts: [{ role: "BODY", fragment: { text: "Newest" }, file: null }] as never }),
+      message({ id: "z", parts: [{ role: "BODY", fragment: { text: "Oldest" }, file: null }] as never }),
+    ];
+    render(<ThreadTranscript threadId="thr_1" />);
+    const items = screen.getAllByRole("listitem");
+    expect(items[0]?.textContent).toContain("Oldest");
+    expect(items[1]?.textContent).toContain("Newest");
   });
 
   test("shows the empty state when the thread has no messages", () => {

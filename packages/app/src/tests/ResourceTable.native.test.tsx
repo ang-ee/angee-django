@@ -8,6 +8,7 @@ import { ModelMetadataProvider, schemaFieldMetadataFromDataResources, type Model
 import { testDataResource } from "@angee/metadata/testing";
 import { ToastProvider } from "@angee/ui/feedback/index";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "@angee/ui/views/resource-view-context";
+import { resourceViewFavoritesFromJson, todayCalendarAnchor, type ResourceViewInitialState } from "@angee/ui/views/resource-view-model";
 import { useResourceViewSurface, type ResourceViewSurface } from "@angee/ui/views/resource-view-surface";
 import { afterEach, expect, test, vi } from "vitest";
 import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
@@ -19,7 +20,7 @@ const columns = [{ field: "title", sortable: true }];
 const clients: QueryClient[] = [];
 afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
 
-async function fixture({ total = 45, initialPath = "/?page=2&pageSize=20&keep=external" }: { total?: number; initialPath?: string } = {}) {
+async function fixture({ total = 45, initialPath = "/?page=2&pageSize=20&keep=external", initialState = {} }: { total?: number; initialPath?: string; initialState?: ResourceViewInitialState } = {}) {
   const calls: GetListParams[] = [];
   const provider = {
     getApiUrl: () => "test://resource",
@@ -41,7 +42,7 @@ async function fixture({ total = 45, initialPath = "/?page=2&pageSize=20&keep=ex
   const rootRoute = createRootRoute({ component: () => (
     <Refine dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
       <ModelMetadataProvider metadata={metadata}><ToastProvider>
-        <ResourceViewProvider initialState={{ pageSize: 20 }}><Probe /></ResourceViewProvider>
+        <ResourceViewProvider initialState={{ pageSize: 20, ...initialState }}><Probe /></ResourceViewProvider>
       </ToastProvider></ModelMetadataProvider>
     </Refine>
   ) });
@@ -88,4 +89,51 @@ test("unknown totals retain disabled next/last controls despite native unknown p
   expect(f.surface().list.hasNext).toBe(false);
   await act(async () => f.surface().list.lastPage());
   expect(f.view().state.pagination.pageIndex).toBe(0);
+});
+
+test("native Router preserves page-one and favorite clears with a later initial page", async () => {
+  const f = await fixture({
+    initialPath: "/?keep=external",
+    initialState: { page: 3, sort: { field: "title", dir: "asc" }, filter: { title: { iContains: "alpha" } } },
+  });
+  expect(f.view().state.pagination.pageIndex).toBe(2);
+  await act(async () => f.surface().table.firstPage());
+  await waitFor(() => expect(f.calls.at(-1)?.pagination?.currentPage).toBe(1));
+  expect(f.view().state.pagination.pageIndex).toBe(0);
+  expect(f.router.state.location.search).toEqual({ page: "1", keep: "external" });
+
+  await act(async () => f.surface().table.setPageIndex(2));
+  expect(f.view().state.pagination.pageIndex).toBe(2);
+  expect(f.router.state.location.search).toEqual({ keep: "external" });
+
+  const [favorite] = resourceViewFavoritesFromJson(JSON.stringify([
+    { id: "favorite:all", label: "All notes", pageSize: 20 },
+  ]));
+  await act(async () => f.view().applyFavorite(favorite!));
+  expect(f.router.state.location.search).toEqual({ page: "1", sort: "", filter: "", keep: "external" });
+  expect(f.view().state).toMatchObject({ pagination: { pageIndex: 0 }, sorting: [], filter: {} });
+  await waitFor(() => expect(f.calls.at(-1)).toMatchObject({ pagination: { currentPage: 1 }, filters: [], sorters: [] }));
+  expect(f.history.length).toBe(1);
+});
+
+test("native Router preserves calendar resets relative to page-owned defaults", async () => {
+  const f = await fixture({
+    initialPath: "/?keep=external",
+    initialState: { page: 3, view: "calendar", mode: "week", anchor: "2000-01-01" },
+  });
+  const today = todayCalendarAnchor();
+  await act(async () => f.view().setMode("month"));
+  await act(async () => f.view().setAnchor(today));
+  expect(f.view().state).toMatchObject({ mode: "month", anchor: today, pagination: { pageIndex: 2 } });
+  expect(f.router.state.location.search).toEqual({ mode: "month", anchor: today, keep: "external" });
+
+  await act(async () => f.view().applyFavorite({ id: "favorite:calendar", label: "Calendar", pageSize: 20, view: "calendar" }));
+  expect(f.view().state).toMatchObject({ mode: "month", anchor: today, pagination: { pageIndex: 0 } });
+  expect(f.router.state.location.search).toEqual({ page: "1", mode: "month", anchor: today, keep: "external" });
+
+  await act(async () => f.view().setMode("week"));
+  await act(async () => f.view().setAnchor("2000-01-01"));
+  expect(f.view().state).toMatchObject({ mode: "week", anchor: "2000-01-01" });
+  expect(f.router.state.location.search).toEqual({ page: "1", keep: "external" });
+  expect(f.history.length).toBe(1);
 });

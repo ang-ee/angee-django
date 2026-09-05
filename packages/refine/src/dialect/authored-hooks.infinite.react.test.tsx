@@ -18,6 +18,7 @@ interface ProbeRow {
 
 interface ProbeData extends Record<string, unknown> {
   messages: ProbeRow[];
+  olderCursor?: string;
 }
 
 interface ProbeVariables extends Record<string, unknown> {
@@ -161,6 +162,29 @@ describe("useAuthoredInfiniteQuery", () => {
     });
   });
 
+  test("uses domain continuation even when an advancing page repeats moved rows", async () => {
+    providerMock.pages = new Map([
+      ["", { messages: [{ id: "1", text: "first" }], olderCursor: "position-a" }],
+      ["position-a", { messages: [{ id: "1", text: "moved" }], olderCursor: "position-b" }],
+      ["position-b", { messages: [{ id: "2", text: "older" }] }],
+    ]);
+    const { result } = renderHook(() => useAuthoredInfiniteQuery(
+      DOCUMENT, { scope: "alpha", limit: PAGE_SIZE, before: null }, {
+        getRows: (data) => data.messages,
+        getRowId: (row) => row.id,
+        getPageParam: (_rows, page) => page.olderCursor ? { before: page.olderCursor } : undefined,
+      },
+    ), { wrapper: Providers });
+    await waitFor(() => expect(result.current.hasNextPage).toBe(true));
+    await act(async () => { await result.current.fetchNextPage(); });
+    await waitFor(() => expect(result.current.rows[0]?.text).toBe("moved"));
+    expect(result.current.hasNextPage).toBe(true);
+    await act(async () => { await result.current.fetchNextPage(); });
+    await waitFor(() => expect(result.current.rows.map((row) => row.text)).toEqual(["moved", "older"]));
+    expect(result.current.hasNextPage).toBe(false);
+    expect(providerMock.calls.map((call) => call.before)).toEqual([null, "position-a", "position-b"]);
+  });
+
   test("keeps rows that slide out of the refetched head page", async () => {
     const client = createQueryClient();
     const { result } = renderHook(
@@ -211,8 +235,8 @@ describe("useAuthoredInfiniteQuery", () => {
     });
 
     await waitFor(() => {
-      expect(new Set(result.current.rows.map((row) => row.id))).toEqual(
-        new Set(["new-a", "new-b", "1", "2", "3"]),
+      expect(result.current.rows.map((row) => row.id)).toEqual(
+        ["new-a", "new-b", "1", "2", "3"],
       );
     });
     expect(providerMock.calls).toEqual([
@@ -222,6 +246,20 @@ describe("useAuthoredInfiniteQuery", () => {
     expect(result.current.rows.find((row) => row.id === "1")?.text).toBe("old head tail after slide");
     expect(result.current.rows.find((row) => row.id === "2")?.text).toBe("middle after slide");
     expect(result.current.rows.find((row) => row.id === "3")?.text).toBe("old");
+  });
+
+  test("keeps displaced history in its last server order through successive moving heads", async () => {
+    const client = createQueryClient();
+    const { result } = renderHook(() => useAuthoredInfiniteQuery(
+      DOCUMENT, { scope: "alpha", limit: PAGE_SIZE, before: null }, infiniteOptions(),
+    ), { wrapper: ({ children }) => <Providers client={client}>{children}</Providers> });
+    await waitFor(() => expect(result.current.rows.map((row) => row.id)).toEqual(["1", "2"]));
+    for (const ids of [["3", "1"], ["4", "3"], ["6", "5"]]) {
+      providerMock.pages.set("", { messages: ids.map((id) => ({ id, text: id })) });
+      await act(async () => { await client.invalidateQueries(); });
+      await waitFor(() => expect(result.current.rows[0]?.id).toBe(ids[0]));
+    }
+    expect(result.current.rows.map((row) => row.id)).toEqual(["6", "5", "4", "3", "1", "2"]);
   });
 
   test("refetches every held infinite page on invalidation", async () => {

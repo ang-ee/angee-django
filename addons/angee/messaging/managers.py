@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from django.apps import apps
 from django.contrib.postgres.search import SearchQuery, SearchVector
+from django.core import signing
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, connection, models, transaction
 from django.db.models.functions import MD5, Coalesce, Greatest
@@ -1932,6 +1933,83 @@ class MessageQuerySet(AngeeQuerySet[Any]):
             self.filter(pk__in=models.Subquery(visible_message_ids)),
         )
 
+    def feed_page(
+        self,
+        *,
+        scope: tuple[str, str],
+        search: str = "",
+        before_cursor: str | None = None,
+        after_cursor: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Page a currently authorized message scope in newest-first tuple order.
+
+        The caller resolves the readable root and supplies its stable kind/public
+        id as ``scope``. Signed cursors bind that root, normalized search, native
+        actor and order version; they carry a position, never authorization. The
+        timestamp/PK tuple survives removal or changes to the original anchor.
+        ``after_cursor`` returns the nearest newer page, still newest-first.
+        """
+
+        if before_cursor is not None and after_cursor is not None:
+            raise ValueError("Supply either before_cursor or after_cursor, not both.")
+        limit = max(1, min(int(limit), 200))
+        search = " ".join(strip_null_bytes(search or "").split())
+        actor = self.actor() or current_actor()
+        namespace = json.dumps([self.db, self.model._meta.label_lower, scope, search, str(actor)])
+        fingerprint = hashlib.sha256(namespace.encode()).hexdigest()
+        signer = signing.Signer(salt=f"angee.messaging.feed.v1.{fingerprint}")
+        cursor = before_cursor if before_cursor is not None else after_cursor
+        anchor = self._feed_cursor_position(cursor, signer) if cursor is not None else None
+        queryset = self.scoped().annotate(_order_at=_MESSAGE_ORDER_ANNOTATION)
+        for term in search.split():
+            queryset = queryset.searching(term)
+        queryset = queryset.distinct()
+        count = queryset.count()
+        window = queryset
+        if anchor is not None:
+            window = window.filter(_message_before(anchor) if before_cursor is not None else _message_after(anchor))
+        ascending = after_cursor is not None
+        order = ("_order_at", "pk") if ascending else ("-_order_at", "-pk")
+        messages = list(window.order_by(*order)[:limit])
+        if ascending:
+            messages.reverse()
+        if not messages:
+            return {
+                "messages": [],
+                "count": count,
+                "older_cursor": None,
+                "newer_cursor": None,
+                "has_older": False,
+                "has_newer": False,
+            }
+        newest = _message_chronological_key(messages[0])
+        oldest = _message_chronological_key(messages[-1])
+        return {
+            "messages": messages,
+            "count": count,
+            "older_cursor": signer.sign_object([oldest[0].isoformat(), str(oldest[1])]),
+            "newer_cursor": signer.sign_object([newest[0].isoformat(), str(newest[1])]),
+            "has_older": queryset.filter(_message_before(oldest)).exists(),
+            "has_newer": queryset.filter(_message_after(newest)).exists(),
+        }
+
+    def _feed_cursor_position(self, cursor: str, signer: signing.Signer) -> tuple[datetime, Any]:
+        """Verify the native signed tuple without consulting its original row."""
+
+        try:
+            value = signer.unsign_object(cursor)
+            match value:
+                case [str(at), str(pk)]:
+                    timestamp = datetime.fromisoformat(at)
+                    if timezone.is_naive(timestamp):
+                        raise ValueError("Cursor timestamp must be timezone-aware.")
+                    return timestamp, self.model._meta.pk.to_python(pk)
+                case _:
+                    raise ValueError("Cursor must carry a timestamp and primary key.")
+        except (signing.BadSignature, ValueError, TypeError) as error:
+            raise ValueError("Invalid message feed cursor for this scope.") from error
+
 
 class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: ignore[misc]
     """Owns the message ingest write path (idempotent, null-safe, F()-counted)."""
@@ -1999,60 +2077,6 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         """Resolve a public message id to its ``(order_at, pk)`` cursor in the window."""
 
         return queryset.filter(**self.model.public_id_lookup(str(value))).values_list("_order_at", "pk").first()
-
-    def timeline_for_parties(
-        self,
-        parties: Any,
-        *,
-        search: str = "",
-        limit: int = 50,
-        before: Any | None = None,
-    ) -> tuple[list[Any], int]:
-        """Return one newest-first page exchanged with any of ``parties``.
-
-        The party-timeline read: inbox messages (record chatter stays behind its
-        record gate) whose participants resolve to the supplied Party collection. Unlike
-        :meth:`for_record` this stays ACTOR-scoped — there is no record-level gate
-        in front of it, so per-row REBAC is the authorization — and therefore adds
-        no ``select_related`` over guarded relations (the GraphQL read path resolves
-        them the same way it does for the ``messages`` resource). Cursors on the
-        same ``(sent_at, pk)`` key as every other feed; returns the page
-        chronological ascending plus the total count.
-        """
-
-        limit = max(1, min(int(limit or 50), 200))
-        queryset = self.all().scoped().inbox().involving_parties(parties).annotate(_order_at=_MESSAGE_ORDER_ANNOTATION)
-        search = strip_null_bytes(search or "").strip()
-        for term in (item for item in _WS_RE.split(search) if item):
-            queryset = queryset.searching(term)
-        queryset = queryset.distinct()
-        count = int(queryset.count())
-        descending = ("-_order_at", "-pk")
-        if before not in (None, ""):
-            anchor = self._record_message_anchor(queryset, before)
-            if anchor is None:
-                return [], count
-            page = list(queryset.filter(_message_before(anchor)).order_by(*descending)[:limit])
-        else:
-            page = list(queryset.order_by(*descending)[:limit])
-        return sorted(page, key=_message_chronological_key), count
-
-    def timeline_for_party(
-        self,
-        party: Any,
-        *,
-        search: str = "",
-        limit: int = 50,
-        before: Any | None = None,
-    ) -> tuple[list[Any], int]:
-        """Return one party's timeline through the plural collection owner."""
-
-        return self.timeline_for_parties(
-            (party,),
-            search=search,
-            limit=limit,
-            before=before,
-        )
 
     def post_to_thread(
         self,

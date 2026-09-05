@@ -135,7 +135,8 @@ export function routeSearchString(
 
   const params = new URLSearchParams();
   for (const [name, value] of Object.entries(search)) {
-    if (value != null && value !== "") params.set(name, String(value));
+    // An explicit empty value clears seeded search defaults; absence restores them.
+    if (value != null) params.set(name, String(value));
   }
   return params.toString();
 }

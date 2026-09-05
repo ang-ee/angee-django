@@ -36,7 +36,7 @@ export class NotesPage extends PageObject {
   }
   /** A collapsed group-header disclosure in a grouped list. */
   get groupHeaders(): Locator {
-    return this.page.locator('tbody tr [aria-expanded]');
+    return this.page.locator('tbody tr button[aria-expanded]');
   }
   /** Group-header rows, including the visible bucket label and aggregate cells. */
   get groupHeaderRows(): Locator {
@@ -46,7 +46,7 @@ export class NotesPage extends PageObject {
   groupHeader(label: string): Locator {
     return this.page
       .locator("tbody tr", { hasText: label })
-      .locator("[aria-expanded]")
+      .locator("button[aria-expanded]")
       .first();
   }
   /** Expand a group by label and wait for its lazily-fetched records. */
@@ -77,10 +77,11 @@ export class NotesPage extends PageObject {
   get rows(): Locator {
     return this.page.locator("tbody tr");
   }
-  /** Record rows only — they carry role="link"; grouped lists also render
-   *  non-navigable group-header rows, which this excludes. */
+  /** Record rows contain a native record link; group headers do not. */
   get recordRows(): Locator {
-    return this.page.locator("tbody tr[role=link]");
+    return this.page.locator("tbody tr").filter({
+      has: this.page.getByRole("link", { name: /^Open / }),
+    });
   }
 
   /** Navigate to /notes and wait past the "Loading workspace…" bootstrap until
@@ -124,9 +125,15 @@ export class NotesPage extends PageObject {
       await this.groupHeaders.first().click();
       await this.recordRows.first().waitFor({ state: "visible", timeout: 10000 });
     }
-    await this.recordRows.first().click();
+    await this.recordRows.first().getByRole("link", { name: /^Open / }).click();
     await this.page.waitForURL(/\/notes\/.+/, { timeout: 10000 });
     await this.page.locator(".cm-content").first().waitFor({ timeout: 15000 });
+  }
+
+  /** Open a specific record through the same public detail route as its link. */
+  async openNote(id: string): Promise<void> {
+    await this.page.goto(`/notes/${encodeURIComponent(id)}`);
+    await expect(this.titleInput).toBeVisible();
   }
 
   // --- record form (dirty-save) ---

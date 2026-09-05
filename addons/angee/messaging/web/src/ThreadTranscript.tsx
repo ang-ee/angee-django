@@ -16,60 +16,15 @@ import {
 } from "./documents";
 
 const MESSAGE_MODELS = ["messaging.Message", "messaging.Reaction"] as const;
-// Newest-first head window size; "Load older" fetches keyset pages strictly
-// before the oldest loaded row's (sent_at, created_at) cursor — constant work
-// per fetch however deep the history, never a re-fetched growing window.
+// Messaging owns newest-first ordering and opaque cursor continuation.
 const PAGE_SIZE = 50;
-// Estimated bubble height before measurement; the virtualizer remeasures each row.
 const ESTIMATED_ROW_HEIGHT = 96;
-// Placeholder cursor for the older field while the first page skips it.
-const EPOCH = "1970-01-01T00:00:00Z";
 
 type ThreadTranscriptData = DocumentData<typeof ThreadTranscriptDocument>;
 type ThreadTranscriptVariables = DocumentVariables<typeof ThreadTranscriptDocument>;
-type TranscriptPageVariables =
-  Pick<ThreadTranscriptVariables, "head" | "beforeSentAt" | "beforeCreatedAt">;
-
-/** Newest-first feed order mirroring the server page order (`sent_at desc,
- *  created_at desc`): Postgres puts NULLs first on a bare DESC, so a row
- *  without a send time sorts to the newest end here too. The id tiebreak is
- *  client-only (ids are opaque sqids) and matters just for stable rendering of
- *  exact timestamp ties. ISO-8601 strings in one timezone compare as strings. */
-function compareNewestFirst(a: ThreadTranscriptRow, b: ThreadTranscriptRow): number {
-  const aNull = a.sent_at == null;
-  const bNull = b.sent_at == null;
-  if (aNull !== bNull) return aNull ? -1 : 1;
-  const aKey = a.sent_at ?? a.created_at;
-  const bKey = b.sent_at ?? b.created_at;
-  if (aKey !== bKey) return aKey < bKey ? 1 : -1;
-  if (a.created_at !== b.created_at) return a.created_at < b.created_at ? 1 : -1;
-  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
-}
 
 function transcriptRows(data: ThreadTranscriptData): readonly ThreadTranscriptRow[] {
-  return data.head_messages ?? data.older_messages ?? [];
-}
-
-function transcriptPageVariables(
-  rows: readonly ThreadTranscriptRow[],
-): TranscriptPageVariables | undefined {
-  // "Load older" keyset page: before the oldest loaded row's (sent_at,
-  // created_at) cursor, boundary-INCLUSIVE on created_at. Rows tying the anchor
-  // refetch and the shared id-keyed infinite read dedupes the overlap, so a tie
-  // at the page cut cannot be skipped (ids are opaque sqids, so they cannot be
-  // the third cursor key server-side).
-  if (rows.length < PAGE_SIZE) return undefined;
-  for (let index = rows.length - 1; index >= 0; index -= 1) {
-    const row = rows[index];
-    if (row?.sent_at) {
-      return {
-        head: false,
-        beforeSentAt: row.sent_at,
-        beforeCreatedAt: row.created_at,
-      };
-    }
-  }
-  return undefined;
+  return data.thread_message_feed.messages;
 }
 
 type MessagingT = ReturnType<typeof useMessagingT>;
@@ -117,9 +72,7 @@ function TranscriptBody({
     () => ({
       threadId,
       limit: PAGE_SIZE,
-      head: true,
-      beforeSentAt: EPOCH,
-      beforeCreatedAt: EPOCH,
+      beforeCursor: null,
     }),
     [threadId],
   );
@@ -128,16 +81,20 @@ function TranscriptBody({
     models: MESSAGE_MODELS,
     getRows: transcriptRows,
     getRowId: (row) => row.id,
-    getPageParam: transcriptPageVariables,
+    getPageParam: (_rows, data) => {
+      const page = data.thread_message_feed;
+      return page.has_older && page.older_cursor
+        ? { beforeCursor: page.older_cursor }
+        : undefined;
+    },
   });
 
   // Render oldest-to-newest so the latest turn sits at the bottom.
   const messages = React.useMemo(
-    () => [...transcript.rows].sort(compareNewestFirst).reverse(),
+    () => [...transcript.rows].reverse(),
     [transcript.rows],
   );
-  const total = transcript.data?.pages[0]?.messages_aggregate?.aggregate?.count ?? messages.length;
-  const hasOlder = transcript.hasNextPage && messages.length < total;
+  const hasOlder = transcript.hasNextPage;
   const conversation = order === "conversation";
 
   const scrollRef = React.useRef<HTMLDivElement>(null);

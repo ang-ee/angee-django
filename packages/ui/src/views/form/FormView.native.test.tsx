@@ -41,20 +41,20 @@ async function fixture(options: { id?: string | null; submit?: FormSubmit; mount
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   let surface!: FormViewSaveSurface;
   const id = options.id === undefined ? "note-1" : options.id;
-  function Probe({ recordId, mountedFields }: { recordId: string | null; mountedFields: readonly string[] }) {
+  function Probe({ recordId, mountedFields, viewFields }: { recordId: string | null; mountedFields: readonly string[]; viewFields: readonly FieldDescriptor[] }) {
     surface = useFormViewSave({
       resource: "notes.Note", id: recordId, isCreate: recordId === null,
-      dataResource: resource, modelMetadata: model, formFields: fields, fieldByName, refineFields,
+      dataResource: resource, modelMetadata: model, formFields: viewFields, fieldByName, refineFields,
       submit: options.submit, onSaved, t: (key) => key,
     });
     return <>{mountedFields.map((name) => <Controller key={name} name={name} control={surface.form.control} render={({ field }) => (
       <input aria-label={name} value={String(field.value ?? "")} onChange={field.onChange} />
     )} />)}</>;
   }
-  function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"] }: { recordId?: string | null; mountedFields?: readonly string[] }) {
+  function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = fields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[] }) {
     return <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
       <RouterContextProvider router={router}><ModalsHost><ToastProvider>
-        <Probe key={recordId ?? "create"} recordId={recordId} mountedFields={mountedFields} />
+        <Probe key={recordId ?? "create"} recordId={recordId} mountedFields={mountedFields} viewFields={viewFields} />
       </ToastProvider></ModalsHost></RouterContextProvider>
     </Refine>;
   }
@@ -189,4 +189,125 @@ test("a partial response changing another selected field preserves omitted submi
   await waitFor(() => expect(f.surface().form.getValues("body")).toBe("Normalized body"));
   expect(f.surface().form.getValues("title")).toBe("Accepted title");
   await act(async () => resolve({ data: { id: "note-1", title: "Accepted title", body: "Normalized body" } }));
+});
+
+test("a delayed custom save preserves later edits and rebases only the accepted submission", async () => {
+  let resolve!: (value: Row) => void;
+  const submit = vi.fn(() => new Promise<Row>((done) => { resolve = done; }));
+  const f = await fixture({ submit });
+  edit("title", "Submitted title");
+  let saving!: Promise<void>;
+  act(() => { saving = f.surface().submitForm(); });
+  await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+  edit("title", "Later title");
+  edit("body", "Later body");
+  const accepted = { id: "note-1", title: "Normalized title", body: "Original body", deadline: "" };
+  f.setRecord(accepted);
+  await act(async () => { resolve(accepted); await saving; });
+  expect(f.surface().form.getValues()).toMatchObject({ title: "Later title", body: "Later body" });
+  expect(f.surface().form.formState.defaultValues).toMatchObject({ title: accepted.title, body: accepted.body });
+  expect(f.surface().form.formState.dirtyFields).toMatchObject({ title: true, body: true });
+  expect(f.surface().formIsDirty).toBe(true);
+  expect(f.onSaved).toHaveBeenCalledWith(accepted);
+  act(() => f.surface().discardChanges());
+  expect(f.surface().form.getValues()).toMatchObject({ title: "Normalized title", body: "Original body" });
+  expect(f.surface().formIsDirty).toBe(false);
+});
+
+test("native Refine write acceptance keeps later edits available to the next save", async () => {
+  const f = await fixture();
+  let resolve!: (value: { data: Row }) => void;
+  f.update.mockImplementationOnce(() => new Promise<{ data: Row }>((done) => { resolve = done; }));
+  edit("title", "Submitted title");
+  let saving!: Promise<void>;
+  act(() => { saving = f.surface().submitForm(); });
+  await waitFor(() => expect(f.update).toHaveBeenCalledTimes(1));
+  edit("title", "Later title");
+  const accepted = { id: "note-1", title: "Submitted title", body: "Original body", deadline: "" };
+  f.setRecord(accepted);
+  await act(async () => { resolve({ data: accepted }); await saving; });
+  expect(f.surface().form.getValues("title")).toBe("Later title");
+  expect(f.surface().formIsDirty).toBe(true);
+  await act(async () => f.surface().submitForm());
+  expect(f.update).toHaveBeenLastCalledWith(expect.objectContaining({ variables: { title: "Later title" } }));
+  expect(f.surface().formIsDirty).toBe(false);
+});
+
+test("a change back to the old value during save stays dirty against the accepted submission", async () => {
+  let resolve!: (value: Row) => void;
+  const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }) });
+  edit("title", "Submitted title");
+  let saving!: Promise<void>;
+  act(() => { saving = f.surface().submitForm(); });
+  await waitFor(() => expect(f.surface().pending).toBe(true));
+  edit("title", "First");
+  const accepted = { id: "note-1", title: "Submitted title", body: "Original body", deadline: "" };
+  f.setRecord(accepted);
+  await act(async () => { resolve(accepted); await saving; });
+  expect(f.surface().form.getValues("title")).toBe("First");
+  expect(f.surface().form.getFieldState("title").isDirty).toBe(true);
+});
+
+test.each(["failure", "no row"])("later edits survive a delayed %s without advancing defaults", async (outcome) => {
+  let resolve!: (value: Row | null) => void;
+  let reject!: (reason: Error) => void;
+  const f = await fixture({ submit: () => new Promise<Row | null>((done, fail) => { resolve = done; reject = fail; }) });
+  edit("title", "Submitted title");
+  let saving!: Promise<void>;
+  act(() => { saving = f.surface().submitForm(); });
+  await waitFor(() => expect(f.surface().pending).toBe(true));
+  edit("title", "Later title");
+  await act(async () => {
+    if (outcome === "failure") reject(new Error("Temporary failure")); else resolve(null);
+    await saving;
+  });
+  expect(f.surface().form.getValues("title")).toBe("Later title");
+  expect(f.surface().form.formState.defaultValues?.title).toBe("First");
+  expect(f.surface().formIsDirty).toBe(true);
+  expect(f.onSaved).not.toHaveBeenCalled();
+});
+
+test("a delayed toolbar patch preserves a dirty draft while adopting clean response fields", async () => {
+  let resolve!: (value: Row) => void;
+  const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }) });
+  edit("title", "Draft title");
+  let saving!: Promise<Row | null>;
+  act(() => { saving = f.surface().applyPatch({ body: "Patched body" }); });
+  await waitFor(() => expect(f.surface().pending).toBe(true));
+  edit("title", "Later draft");
+  const accepted = { id: "note-1", title: "First", body: "Patched body", deadline: "" };
+  f.setRecord(accepted);
+  await act(async () => { resolve(accepted); await saving; });
+  expect(f.surface().form.getValues()).toMatchObject({ title: "Later draft", body: "Patched body" });
+  expect(f.surface().formIsDirty).toBe(true);
+});
+
+test("recreated field descriptors read the accepted native cache and retain later edits", async () => {
+  const f = await fixture();
+  edit("title", "Saved title");
+  await act(async () => f.surface().submitForm());
+  f.rerender({ viewFields: fields.map((field) => ({ ...field })) });
+  expect(f.surface().form.getValues("title")).toBe("Saved title");
+  expect(f.surface().formIsDirty).toBe(false);
+  edit("title", "Later title");
+  await waitFor(() => expect(f.surface().formIsDirty).toBe(true));
+  f.rerender({ viewFields: fields.map((field) => ({ ...field })) });
+  expect(f.surface().form.getValues("title")).toBe("Later title");
+  expect(f.surface().formIsDirty).toBe(true);
+});
+
+test("a later edit equal to the canonical accepted value becomes clean", async () => {
+  let resolve!: (value: Row) => void;
+  const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }) });
+  edit("title", "  Normalized title  ");
+  let saving!: Promise<void>;
+  act(() => { saving = f.surface().submitForm(); });
+  await waitFor(() => expect(f.surface().pending).toBe(true));
+  edit("title", "Normalized title");
+  const accepted = { id: "note-1", title: "Normalized title", body: "Original body", deadline: "" };
+  f.setRecord(accepted);
+  await act(async () => { resolve(accepted); await saving; });
+  expect(f.surface().form.getValues("title")).toBe("Normalized title");
+  expect(f.surface().form.getFieldState("title").isDirty).toBe(false);
+  expect(f.surface().formIsDirty).toBe(false);
 });

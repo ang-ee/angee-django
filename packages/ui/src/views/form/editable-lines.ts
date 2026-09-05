@@ -144,6 +144,19 @@ export function diffLines(
   };
 }
 
+/** Compare observed rows without rewriting their stored positions for a write. */
+export function sameObservedLines(
+  baseline: readonly Row[],
+  current: readonly Row[],
+  config: LineDiffConfig,
+): boolean {
+  return baseline.length === current.length && baseline.every((base, index) => {
+    const row = current[index]!;
+    return rowId(base, config) === rowId(row, config)
+      && sameLine(base, row, config.positionField ? row[config.positionField] : undefined, config);
+  });
+}
+
 /**
  * Normalize a record's loaded lines into field-array rows: keep the public id, the
  * editable child columns, and a `position` (from the stored value, else row order).
@@ -194,7 +207,7 @@ function rowFromLine(line: Row, index: number, config: LineDiffConfig): Row {
 function sameLine(
   base: Row,
   current: Row,
-  index: number,
+  position: unknown,
   config: LineDiffConfig,
 ): boolean {
   for (const name of config.fieldNames) {
@@ -207,8 +220,7 @@ function sameLine(
     }
   }
   if (config.positionField) {
-    const basePosition = base[config.positionField];
-    if (typeof basePosition !== "number" || basePosition !== index) return false;
+    if (base[config.positionField] !== position) return false;
   }
   return true;
 }

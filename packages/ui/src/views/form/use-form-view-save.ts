@@ -22,7 +22,7 @@ import {
   type HttpError,
 } from "@refinedev/core";
 import { useForm, type UseFormReturn } from "react-hook-form";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { replaceEqualDeep, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import type { UiTranslate } from "../../i18n";
 import { slugify } from "../../widgets";
@@ -31,6 +31,7 @@ import {
   diffLines,
   lineDiffConfig,
   recordLinesToRows,
+  sameObservedLines,
   type LineDiff,
 } from "./editable-lines";
 import {
@@ -241,8 +242,6 @@ export function useFormViewSave({
   );
   const form = useForm<FormValues>({
     defaultValues: emptyValues,
-    values,
-    resetOptions: { keepDirtyValues: true, keepDirty: true },
     shouldUnregister: false,
     resolver: (formValues) => {
       const missing = missingRequiredFieldNames(formValues, formFields, requiredFieldNames);
@@ -251,7 +250,32 @@ export function useFormViewSave({
       } : { values: formValues, errors: {} };
     },
   });
-  const { reset, clearErrors, setError, setValue } = form;
+  const { reset, resetDefaultValues, clearErrors, setError, setValue } = form;
+  const { dirtyFields } = form.formState;
+  const syncRecordValues = React.useCallback((next: FormValues, lineBaseline?: unknown) => {
+    // RHF merges dirty paths by index. A full-list line mutation is atomic, so
+    // never let remote row ordering supply cells to a dirty local row array.
+    const keepLines = linesActive && linesField !== null && form.getFieldState(linesField).isDirty;
+    const baseline = keepLines ? {
+      ...next,
+      [linesField]: lineBaseline ?? form.formState.defaultValues?.[linesField],
+    } : next;
+    // Metadata projections may be referentially new with the same wire values.
+    // Compare against RHF's defaults, not a second stored baseline.
+    if (replaceEqualDeep(form.formState.defaultValues, baseline) === form.formState.defaultValues) return;
+    if (keepLines) {
+      // Update clean scalar controls without publishing a field-array reset.
+      for (const [name, value] of Object.entries(next)) {
+        if (name !== linesField && !form.getFieldState(name).isDirty) setValue(name, value);
+      }
+    } else {
+      reset(next, { keepDirtyValues: true, keepDirty: true, keepFieldsRef: true });
+    }
+    resetDefaultValues(baseline, { keepIsValid: true });
+  }, [form, linesActive, linesField, reset, resetDefaultValues, setValue]);
+  const lineDraftDirty = Boolean(linesActive && linesField && dirtyFields[linesField]);
+  // Replay a held remote array when the user undoes the last local line edit.
+  React.useEffect(() => { syncRecordValues(values); }, [lineDraftDirty, syncRecordValues, values]);
   const serverFieldErrors = React.useMemo(() => serverErrorsFromForm(form.formState.errors), [form.formState.errors]);
   const saveError = form.formState.errors.root?.server?.message ?? null;
   const clearServerFieldError = React.useCallback((name: string) => clearErrors(name), [clearErrors]);
@@ -316,6 +340,7 @@ export function useFormViewSave({
     (saved: Row, options: {
       submitted?: FormValues;
       submittedFields?: readonly string[];
+      createdLines?: boolean;
       notify?: boolean;
       refetchPartial?: boolean;
     } = {}): void => {
@@ -331,14 +356,23 @@ export function useFormViewSave({
       )?.data ?? acceptedPatch;
       if (!mounted.current) return;
       const savedValues = recordToValues(accepted, formFields, linesSeed(rowsFromRecord(accepted)));
-      reset(savedValues, { keepDirtyValues: false, keepDirty: false });
-      formIsDirtyRef.current = false;
+      // Advancing only the submitted defaults makes RHF identify edits made
+      // during the request without a second dirty-value comparison engine.
+      resetDefaultValues({ ...form.formState.defaultValues, ...submitted }, { keepIsValid: true });
+      syncRecordValues(savedValues, linesField
+        ? options.createdLines ? submitted[linesField] : savedValues[linesField]
+        : undefined);
+      formIsDirtyRef.current = formFields.some((field) => form.getFieldState(field.name).isDirty)
+        || Boolean(linesField && form.getFieldState(linesField).isDirty);
       if (isCreate) manualSlugFieldsRef.current.clear();
       if (options.notify) onSaved?.(accepted);
       // Fetch canonical server values when the response omitted any selected field.
-      if (options.refetchPartial !== false && !isCreate && formFields.some((field) => !Object.hasOwn(saved, field.name))) reload();
+      if (options.refetchPartial !== false && !isCreate && (
+        formFields.some((field) => !Object.hasOwn(saved, field.name))
+        || (linesActive && linesField !== null && !Object.hasOwn(saved, linesField))
+      )) reload();
     },
-    [detailKey, formFields, isCreate, linesSeed, onSaved, queryClient, record, reload, reset, rowsFromRecord],
+    [detailKey, form, formFields, isCreate, linesActive, linesField, linesSeed, onSaved, queryClient, record, reload, resetDefaultValues, rowsFromRecord, syncRecordValues],
   );
   const submitValues = React.useCallback(
     async (value: FormValues) => {
@@ -351,7 +385,7 @@ export function useFormViewSave({
         throw new Error(`Resource metadata for "${resource}" is not available.`);
       }
       const data = mutationData(value, formFields, {
-        dirtyFields: form.formState.dirtyFields as Record<string, unknown>,
+        dirtyFields: dirtyFields as Record<string, unknown>,
         fieldMetadata: modelMetadata?.fields,
         isCreate,
         seededFieldNames: createSeedNames,
@@ -365,12 +399,26 @@ export function useFormViewSave({
               linesConfig,
             )
           : null;
+      if (linesDiff?.hasChanges && linesConfig && linesField) {
+        const baseline = baselineLineRows(form.formState.defaultValues ?? {}, linesField, seedLineRows);
+        const latest = queryClient.getQueryData<GetOneResponse<RowRecord>>(detailKey)?.data ?? record;
+        // Full-list writes implicitly delete omitted IDs. Refuse a stale draft
+        // instead of deleting remote additions or resubmitting newly saved rows
+        // whose generated IDs cannot be matched to a concurrently edited draft.
+        if (baseline.some((row) => row[linesConfig.idField] == null)
+          || !sameObservedLines(baseline, rowsFromRecord(latest) ?? [], linesConfig)) {
+          setError(linesField, { type: "conflict", message: t("form.linesChanged") });
+          setError("root.server", { type: "conflict", message: t("form.linesChanged") });
+          return;
+        }
+      }
       submittingRef.current = true;
       try {
         const saved = await runSubmit(data, linesDiff);
         if (saved) commitSavedRecord(saved, {
           submitted: value,
           submittedFields: [...Object.keys(data), ...(linesDiff?.hasChanges && linesField ? [linesField] : [])],
+          createdLines: Boolean(linesDiff?.created.length),
           notify: true,
         });
       } catch (error) {
@@ -409,7 +457,12 @@ export function useFormViewSave({
       seedLineRows,
       t,
       writableFieldNames,
-      form.formState.dirtyFields,
+      form,
+      dirtyFields,
+      queryClient,
+      detailKey,
+      rowsFromRecord,
+      record,
     ],
   );
   const submitForm = form.handleSubmit(submitValues);
@@ -469,9 +522,9 @@ export function useFormViewSave({
     [recordUnavailable],
   );
   const discardChanges = React.useCallback(() => {
-    reset(undefined, { keepDirtyValues: false, keepDirty: false });
+    reset(isCreate ? undefined : values, { keepDirtyValues: false, keepDirty: false });
     formIsDirtyRef.current = false;
-  }, [reset]);
+  }, [isCreate, reset, values]);
 
   return {
     form,

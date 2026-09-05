@@ -18,6 +18,7 @@ import {
   resourceViewKindCapabilities,
   resourceViewSearchToState,
   resourceViewStateToSearch,
+  todayCalendarAnchor,
 } from "./resource-view-model";
 
 describe("resource-view model", () => {
@@ -87,6 +88,17 @@ describe("resource-view model", () => {
     expect(resourceViewStateToSearch(resized, defaults)).toEqual({
       pageSize: 50,
     });
+  });
+
+  test("round-trips page one relative to a later initial page", () => {
+    const initial = { page: 3 };
+    const cleared = createResourceViewState({ page: 1 });
+    const search = resourceViewStateToSearch(cleared, initial);
+
+    expect(search).toEqual({ page: 1 });
+    expect(resourceViewSearchToState(search, initial).pagination.pageIndex).toBe(0);
+    expect(resourceViewStateToSearch(createResourceViewState(initial), initial)).toEqual({});
+    expect(resourceViewSearchToState({}, initial).pagination.pageIndex).toBe(2);
   });
 
   test("round-trips cleared seeded filter, group, and sort through search", () => {
@@ -430,6 +442,18 @@ describe("resource-view model", () => {
     const listSearch = resourceViewStateToSearch(listState);
     expect("mode" in listSearch).toBe(false);
     expect("anchor" in listSearch).toBe(false);
+  });
+
+  test("round-trips month and today relative to custom calendar defaults", () => {
+    const initial = { view: "calendar" as const, mode: "week" as const, anchor: "2000-01-01" };
+    const today = todayCalendarAnchor();
+    const cleared = createResourceViewState({ view: "calendar", mode: "month", anchor: today });
+    const search = resourceViewStateToSearch(cleared, initial);
+
+    expect(search).toEqual({ mode: "month", anchor: today });
+    expect(resourceViewSearchToState(search, initial)).toMatchObject({ mode: "month", anchor: today });
+    expect(resourceViewStateToSearch(createResourceViewState(initial), initial)).toEqual({});
+    expect(resourceViewSearchToState({}, initial)).toMatchObject({ mode: "week", anchor: "2000-01-01" });
   });
 
   test("updates mode and anchor without disturbing list scope", () => {

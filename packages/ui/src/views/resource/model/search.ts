@@ -1,7 +1,7 @@
 import { format } from "date-fns";
 import { clampPageSize, stableSerialize } from "@angee/refine";
 import { dedupeBy } from "../../../lib/dedupe";
-import { CALENDAR_ANCHOR_FORMAT, DEFAULT_CALENDAR_VIEW_MODE, defaultResourceViewPageSize, CALENDAR_VIEW_MODES, RESOURCE_VIEW_GROUP_GRANULARITIES, RESOURCE_VIEW_KINDS } from "./capabilities";
+import { CALENDAR_ANCHOR_FORMAT, defaultResourceViewPageSize, CALENDAR_VIEW_MODES, RESOURCE_VIEW_GROUP_GRANULARITIES, RESOURCE_VIEW_KINDS } from "./capabilities";
 import type { CalendarViewMode, ResourceViewGroupGranularity, ResourceViewKind } from "./capabilities";
 import { Filter, resourceViewFilterFromUnknown } from "./filter";
 import type { ResourceViewFilter, ResourceViewGroup, ResourceViewInitialState, ResourceViewSort } from "./filter";
@@ -31,7 +31,7 @@ export function resourceViewStateToSearch(
 ): ResourceViewSearch {
   const search: ResourceViewSearch = {};
   const base = createResourceViewState(initial);
-  if (state.pagination.pageIndex !== 0) search.page = state.pagination.pageIndex + 1;
+  if (state.pagination.pageIndex !== base.pagination.pageIndex) search.page = state.pagination.pageIndex + 1;
   if (state.pagination.pageSize !== defaultResourceViewPageSize(initial)) search.pageSize = state.pagination.pageSize;
   const sort = state.sorting[0];
   const defaultSort = base.sorting[0];
@@ -53,8 +53,8 @@ export function resourceViewStateToSearch(
   }
   if (state.view !== (initial.view ?? "list")) search.view = state.view;
   if (state.view === "calendar") {
-    if (state.mode !== DEFAULT_CALENDAR_VIEW_MODE) search.mode = state.mode;
-    if (state.anchor !== todayCalendarAnchor()) search.anchor = state.anchor;
+    if (state.mode !== base.mode) search.mode = state.mode;
+    if (state.anchor !== base.anchor) search.anchor = state.anchor;
   }
   return search;
 }

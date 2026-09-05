@@ -17,8 +17,12 @@ existing disabled-next/last behavior.
 
 React Hook Form owns form values, dirty/touched/error state and validation
 execution. Refine core owns resource reads/writes. Same-record refreshes keep
-dirty values and dirty status; successful full saves explicitly reset the clean
-baseline. Identity changes remount the owning form. Partial/no-row responses,
+dirty values. Successful saves advance the submitted defaults through RHF
+`resetDefaultValues`, preserving edits made while the request was pending. Dirty
+line arrays remain intact during refresh; a full-list save refuses a detected
+server conflict and Discard reloads the canonical lines. Generated IDs for new
+lines cannot be inferred across concurrent local edits, so those drafts use the
+same explicit conflict boundary. Identity changes remount the owning form. Partial/no-row responses,
 manual slug intent, field permissions, nested errors and atomic line diffs keep
 their domain contracts. Custom submissions use native Query mutations so a query
 refresh cannot clear their pending status. `@refinedev/react-table` and
@@ -61,6 +65,24 @@ with Valibot schemas, and wire types are inferred from those schemas. Permitted
 extension keys and optional sections remain supported; this does not broaden the
 supported JSON Schema language.
 
+## Message feed cursors
+
+Messaging's `MessageQuerySet.feed_page` owns newest-first order by coalesced
+send/create time and database PK. Django-signed cursors bind the current actor,
+root scope, search and order version. Each request reapplies current REBAC scope;
+the cursor does not grant access or require its original row still to exist.
+
+Use `thread_message_feed`, `party_message_feed` or `circle_message_feed`. Pass
+`older_cursor` back as `before_cursor`, or `newer_cursor` as `after_cursor`. Both
+directions return newest-first messages, with `has_older`/`has_newer`; page sizes
+are bounded to 200. Clients use those flags and render server order. A row moving
+between requests can repeat, so row overlap alone is not an exhaustion signal.
+
+These fields replace the development `party_timeline`/`circle_timeline` roots
+and their public-message-ID anchors. Record-attached chatter retains its separate
+record-gated paging contract. The cursor change does not resolve the retention
+gate below.
+
 ## History retention gate
 
 The generic infinite-history archive remains intentionally visible in source.
@@ -68,16 +90,17 @@ Deleting it would drop loaded history as the head moves. Moving it to another
 module or flattening current pages would not solve that problem.
 
 The current stream suppresses events once read permission is lost; bulk changes
-can be muted and reconnect has no sequence checkpoint. Transcript timestamp
-cursors have no database-PK tie-breaker, and timeline cursors depend on a live
-anchor row. These protocols cannot establish authoritative retained history or
-safe removal after deletion/revocation.
+can be muted and reconnect has no sequence checkpoint. Current server pages lead
+the temporary history projection, followed by displaced retained rows. Those rows
+are not authoritatively revalidated, so safe removal after deletion/revocation
+remains unresolved.
 
-The next slice needs domain-owned stable signed tuple cursors plus bounded
-current-scope revalidation (for example batches of at most 200 retained IDs),
-returning complete survivors and absent IDs. Refresh costs O(H) for H retained
-rows. Immediate revocation additionally needs an authorization/scope epoch or an
-explicit polling policy. A prototype must prove moving-head retention, edits,
-deletions, access changes, cursor ties/deleted anchors, scope switches and bounds
-before the archive can be deleted and native InfiniteData becomes the sole
-retained-history cache. This protocol work is not claimed complete here.
+Messaging now owns stable signed tuple cursors. Removing the archive also needs
+complete fixed-window reads, bounded current-scope revalidation returning survivors
+and absent IDs, and server ordering metadata for rows that move between windows.
+Native Query lifecycle tests prove retention under those proposed contracts; the
+real server APIs, authorization-query cost and consumer integration remain open.
+Refresh costs O(H) for H retained rows. Immediate revocation additionally needs an
+authorization/scope epoch or an explicit polling policy. Error and reconnect
+behavior must be defined before native InfiniteData becomes the sole retained
+history cache. This protocol work is not claimed complete here.

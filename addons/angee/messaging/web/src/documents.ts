@@ -218,45 +218,21 @@ export const TranscriptMessageFields = graphql(`
 
 export const ThreadTranscriptDocument = graphql(`
   query MessagingThreadTranscript(
-    $threadId: String!
+    $threadId: ID!
     $limit: Int!
-    $head: Boolean!
-    $beforeSentAt: DateTime!
-    $beforeCreatedAt: DateTime!
+    $beforeCursor: String
   ) {
-    head_messages: messages(
-      where: { thread: { _eq: $threadId } }
-      order_by: [{ sent_at: desc }, { created_at: desc }]
+    thread_message_feed(
+      thread_id: $threadId
+      before_cursor: $beforeCursor
       limit: $limit
-    ) @include(if: $head) {
-      ...TranscriptMessageFields
-    }
-    messages_aggregate(where: { thread: { _eq: $threadId } }) @include(if: $head) {
-      aggregate {
-        count
+    ) {
+      count
+      older_cursor
+      has_older
+      messages {
+        ...TranscriptMessageFields
       }
-    }
-    older_messages: messages(
-      where: {
-        _and: [
-          { thread: { _eq: $threadId } }
-          {
-            _or: [
-              { sent_at: { _lt: $beforeSentAt } }
-              {
-                _and: [
-                  { sent_at: { _eq: $beforeSentAt } }
-                  { created_at: { _lte: $beforeCreatedAt } }
-                ]
-              }
-            ]
-          }
-        ]
-      }
-      order_by: [{ sent_at: desc }, { created_at: desc }]
-      limit: $limit
-    ) @skip(if: $head) {
-      ...TranscriptMessageFields
     }
   }
 `);
@@ -786,7 +762,7 @@ export const RecordActivityThreadDocument = graphql(`
 `);
 
 export type ThreadTranscriptRow =
-  NonNullable<DocumentType<typeof ThreadTranscriptDocument>["head_messages"]>[number];
+  DocumentType<typeof ThreadTranscriptDocument>["thread_message_feed"]["messages"][number];
 
 export type RecordThreadPayload = DocumentType<typeof RecordThreadDocument>["record_thread"];
 export type RecordActivityThreadPayload =

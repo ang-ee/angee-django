@@ -30,6 +30,7 @@ import {
   TEST_SCHEMAS,
 } from "./testing";
 import {
+  createResourceViewState,
   resourceViewSearchToState,
   resourceViewStateToSearch,
   mergeResourceViewSearch,
@@ -74,6 +75,7 @@ describe("createApp search codec", () => {
       view: "board",
       group: "status:year",
       sort: "title:asc",
+      empty: "",
     });
     expect(query).not.toContain("%22board%22");
   });
@@ -101,6 +103,26 @@ describe("createApp search codec", () => {
     expect(parsed.page).toBeUndefined();
     expect(query).toContain("tab=archive");
     expect(query).not.toContain("%22");
+  });
+
+  test("round-trips explicit clears of seeded resource state and foreign empty search", () => {
+    const initial = {
+      page: 3,
+      sort: { field: "title", dir: "asc" as const },
+      filter: { title: { iContains: "alpha" } },
+      groupStack: [{ field: "status" }, { field: "owner" }],
+    };
+    const cleared = createResourceViewState({ page: 1 });
+    const query = stringifyFlatSearch(mergeResourceViewSearch(
+      { keep: "external", empty: "" },
+      resourceViewStateToSearch(cleared, initial),
+    ));
+    const parsed = parseFlatSearch(query);
+
+    expect(parsed).toEqual({ keep: "external", empty: "", page: "1", sort: "", filter: "", group: "", then: "" });
+    expect(resourceViewSearchToState(parsed, initial)).toMatchObject({
+      pagination: { pageIndex: 0 }, sorting: [], filter: {}, group: null, groupStack: [],
+    });
   });
 });
 

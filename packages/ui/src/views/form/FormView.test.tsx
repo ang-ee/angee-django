@@ -2035,7 +2035,12 @@ describe("FormView", () => {
             resource="notes.Note"
             id="note-1"
             fields={viewFields}
-            onSaved={() => setSaveVersion((current) => current + 1)}
+            onSaved={(row) => {
+              // This fixture mocks useOne outside Query; reflect the accepted
+              // cache record before recreating the field projection.
+              sdkMocks.record = row;
+              setSaveVersion((current) => current + 1);
+            }}
           />
         </>
       );

@@ -191,11 +191,9 @@ export function useAuthoredInfiniteQuery<
   };
   const configured = authoredInfiniteQueryOptions<TDocument, TPageVariables>(
     client, dataProvider, dataProviderName, document, stable as AuthoredVariables<TDocument>,
-    (lastPage, allPages) => {
-      const { getRows, getRowId, getPageParam } = callbacksRef.current;
-      const rows = getRows(lastPage);
-      if (!rows.length || lastPageOnlyRepeatsPreviousRows(allPages, getRows, getRowId)) return undefined;
-      return getPageParam(rows, lastPage);
+    (lastPage) => {
+      const { getRows, getPageParam } = callbacksRef.current;
+      return getPageParam(getRows(lastPage), lastPage);
     },
     models,
   );
@@ -417,32 +415,22 @@ function accumulateAuthoredInfiniteRows<TRow, TData>(
   getRowId: (row: TRow) => string,
 ): readonly TRow[] {
   let changed = false;
+  const pageIds = new Set<string>();
   for (const page of pages) {
     for (const row of getRows(page)) {
       const id = getRowId(row);
+      pageIds.add(id);
       if (archive.byId.get(id) !== row) {
         archive.byId.set(id, row);
         changed = true;
       }
     }
   }
-  if (changed) archive.rows = [...archive.byId.values()];
-  return archive.rows;
-}
-
-function lastPageOnlyRepeatsPreviousRows<TRow, TData>(
-  pages: readonly TData[],
-  getRows: (data: TData) => readonly TRow[],
-  getRowId: (row: TRow) => string,
-): boolean {
-  if (pages.length < 2) return false;
-  const previousIds = new Set<string>();
-  for (const page of pages.slice(0, -1)) {
-    for (const row of getRows(page)) previousIds.add(getRowId(row));
+  // Page order belongs to the server. Retain only displaced history behind the
+  // current pages; insertion order would place a refreshed head after old rows.
+  const orderedIds = [...pageIds, ...archive.rows.map(getRowId).filter((id) => !pageIds.has(id))];
+  if (changed || orderedIds.some((id, index) => getRowId(archive.rows[index]!) !== id)) {
+    archive.rows = orderedIds.map((id) => archive.byId.get(id)!);
   }
-  const lastPage = pages.at(-1);
-  if (lastPage === undefined) return false;
-  const lastRows = getRows(lastPage);
-  return lastRows.length > 0 &&
-    lastRows.every((row) => previousIds.has(getRowId(row)));
+  return archive.rows;
 }
