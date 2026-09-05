@@ -164,3 +164,7 @@ jobs:
       - name: Pytest against the composed stack
         working-directory: stack/workspaces/src/angee
         run: uv run pytest -q ${{ inputs.pytest-extra-args }}
+      - name: Pytest the bridge source contracts
+        if: ${{ inputs.addons-profile == 'full' }}
+        working-directory: stack/workspaces/src/angee-messaging-bridges
+        run: uv run pytest -q ${{ inputs.pytest-extra-args }}
