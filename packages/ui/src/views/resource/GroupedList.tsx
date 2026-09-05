@@ -369,6 +369,25 @@ function GroupedHeaderRow<TRow extends Row>({
   t,
 }: GroupedHeaderRowProps<TRow>): React.ReactElement {
   const { bucket, bucketKey, depth, label, count, expandable, expanded } = item;
+  // Keep aggregate cells numeric; chrome belongs in the last ordinary column
+  // (or the existing action column), not in a measure's accessible value.
+  const ordinaryColumns = visibleColumns.filter((column) => !measuresByColumn.has(column.id));
+  const labelColumn = ordinaryColumns[0]?.id;
+  const pagerColumn = ordinaryColumns.at(-1)?.id;
+  const labelContent = (
+    <span className="inline-flex min-w-0 max-w-full items-center gap-2">
+      <span className="min-w-0 truncate">{label}</span>
+      <CountBadge value={count} />
+      {!expandable ? (
+        <span className={cn(textRoleVariants({ role: "meta" }), "font-normal")}>
+          {unavailableLabel}
+        </span>
+      ) : null}
+    </span>
+  );
+  const pager = item.pager ? (
+    <GroupedHeaderPager pager={item.pager} label={label} onPageChange={onPageChange} t={t} />
+  ) : null;
   const toggle = (): void => {
     if (expandable) onToggle(bucketKey);
   };
@@ -389,30 +408,34 @@ function GroupedHeaderRow<TRow extends Row>({
       }}
     >
       <TableCell className="h-9 w-8 bg-sheet-2 p-0">
-        <button
-          type="button"
-          className={cn(
-            "flex min-h-9 w-full items-center justify-center px-2 text-left text-13 outline-none",
-            "focus-visible:focus-ring",
-            expandable
-              ? "text-fg hover:bg-inset"
-              : "cursor-not-allowed text-fg-muted",
-          )}
-          aria-label={label}
-          aria-expanded={expandable ? expanded : false}
-          aria-disabled={!expandable}
-          onClick={(event) => {
-            event.stopPropagation();
-            toggle();
-          }}
-        >
-          <Glyph
-            name={expanded && expandable ? "chevron-down" : "chevron-right"}
-            className="size-3.5 shrink-0 text-fg-muted"
-          />
-        </button>
+        <div className="flex min-h-9 items-center gap-2">
+          <button
+            type="button"
+            className={cn(
+              "flex min-h-9 w-8 shrink-0 items-center justify-center px-2 text-left text-13 outline-none",
+              "focus-visible:focus-ring",
+              expandable
+                ? "text-fg hover:bg-inset"
+                : "cursor-not-allowed text-fg-muted",
+            )}
+            aria-label={label}
+            aria-expanded={expandable ? expanded : false}
+            aria-disabled={!expandable}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggle();
+            }}
+          >
+            <Glyph
+              name={expanded && expandable ? "chevron-down" : "chevron-right"}
+              className="size-3.5 shrink-0 text-fg-muted"
+            />
+          </button>
+          {!labelColumn ? labelContent : null}
+          {!trailingColumn && !pagerColumn ? pager : null}
+        </div>
       </TableCell>
-      {visibleColumns.map((column, index) => {
+      {visibleColumns.map((column) => {
         const measure = measuresByColumn.get(column.id);
         const value = measure ? measureValue(bucket, measure) : undefined;
         const formatted = measure && value != null ? formatMeasure(value, measure) : "";
@@ -422,9 +445,9 @@ function GroupedHeaderRow<TRow extends Row>({
             className={cn(
               "h-9 bg-sheet-2 text-13",
               ALIGN_CLASS[alignOf(column.columnDef)],
-              index === 0 ? "font-semibold" : "",
+              column.id === labelColumn ? "font-semibold" : "",
             )}
-            style={index === 0 ? depthIndentStyle(depth) : undefined}
+            style={column.id === labelColumn ? depthIndentStyle(depth) : undefined}
             aria-label={
               measure
                 ? `${label} ${measure.label}${formatted ? `: ${formatted}` : ""}`
@@ -433,32 +456,16 @@ function GroupedHeaderRow<TRow extends Row>({
           >
             <div className="flex min-w-0 items-center gap-3">
               <div className="min-w-0 flex-1">
-                {measure ? (
-                  formatted
-                ) : index === 0 ? (
-                  <span className="inline-flex min-w-0 max-w-full items-center gap-2">
-                    <span className="min-w-0 truncate">{label}</span>
-                    <CountBadge value={count} />
-                    {!expandable ? (
-                      <span className={cn(textRoleVariants({ role: "meta" }), "font-normal")}>
-                        {unavailableLabel}
-                      </span>
-                    ) : null}
-                  </span>
-                ) : null}
+                {measure ? formatted : column.id === labelColumn ? labelContent : null}
               </div>
-              {!trailingColumn && index === visibleColumns.length - 1 && item.pager ? (
-                <GroupedHeaderPager pager={item.pager} label={label} onPageChange={onPageChange} t={t} />
-              ) : null}
+              {!trailingColumn && column.id === pagerColumn ? pager : null}
             </div>
           </TableCell>
         );
       })}
       {trailingColumn ? (
         <TableCell className="h-9 bg-sheet-2">
-          {item.pager ? (
-            <GroupedHeaderPager pager={item.pager} label={label} onPageChange={onPageChange} t={t} />
-          ) : null}
+          {pager}
         </TableCell>
       ) : null}
     </TableRow>

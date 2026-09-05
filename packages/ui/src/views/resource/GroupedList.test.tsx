@@ -10,26 +10,28 @@ import { afterEach, expect, test, vi } from "vitest";
 import { GroupedListBody } from "./GroupedList";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
 import { estimateGroupedItemSize, type GroupedListItem } from "./resource-view-list-body";
+import type { ColumnDescriptor } from "../page";
 
 afterEach(cleanup);
 
-const tableColumns = [{ id: "title", accessorKey: "title", header: "Title" }];
-const columns = [{ field: "title", label: "Title" }];
+const defaultColumns: readonly ColumnDescriptor<Row>[] = [{ field: "title", header: "Title" }];
 
-function Harness({ pending = false, actions = false, onPageChange, onToggle }: {
+function Harness({ pending = false, actions = false, columns = defaultColumns, onPageChange, onToggle }: {
   pending?: boolean;
   actions?: boolean;
+  columns?: readonly ColumnDescriptor<Row>[];
   onPageChange: (key: string, page: number) => void;
   onToggle: (key: string) => void;
 }): React.ReactElement {
   const resourceView = useResourceView();
+  const tableColumns = columns.map((column) => ({ id: column.field, accessorKey: column.field, header: column.field }));
   const table = useReactTable<Row>({ data: [], columns: tableColumns, getCoreRowModel: getCoreRowModel() });
   const tableScrollRef = React.useRef<HTMLDivElement>(null);
   const listItems: GroupedListItem<Row>[] = [
     {
       kind: "groupHeader", bucketKey: "january", depth: 0, label: "January",
       count: 45, expandable: true, expanded: true,
-      bucket: { key: { month: "January" }, count: 45 },
+      bucket: { key: { month: "January" }, count: 45, sum: { amount: 30 } },
       pager: { pageKey: "january", page: 2, pageSize: 20, total: 45, unit: "records", pending },
     },
     { kind: "status", itemKey: "body", depth: 0, message: "Group body", tone: "muted" },
@@ -41,7 +43,7 @@ function Harness({ pending = false, actions = false, onPageChange, onToggle }: {
   });
   return (
     <GroupedListBody
-      columns={columns} table={table} tableColumns={tableColumns} visibleColumnCount={1}
+      columns={columns} table={table} tableColumns={tableColumns} visibleColumnCount={columns.length}
       resourceView={resourceView} listItems={listItems} tableScrollRef={tableScrollRef}
       rowVirtualizer={rowVirtualizer} footerAggregate={null} expandedKeys={new Set(["january"])}
       toggleGroup={onToggle} setScopePage={onPageChange} selectedIds={new Set()} interactive
@@ -71,6 +73,26 @@ test.each([false, true])("group pager shares the header and does not toggle expa
   expect(onPageChange).toHaveBeenLastCalledWith("january", 1);
   fireEvent.click(screen.getByRole("button", { name: "January" }));
   expect(onToggle).toHaveBeenCalledWith("january");
+});
+
+test.each(["last", "first", "only"] as const)("metric cells stay numeric with the measure %s", (position) => {
+  const measure: ColumnDescriptor<Row> = { field: "amount", header: "Amount", aggregate: "sum" };
+  const columns = position === "last" ? [...defaultColumns, measure]
+    : position === "first" ? [measure, ...defaultColumns] : [measure];
+  render(
+    <ResourceViewProvider scope="local">
+      <Harness columns={columns} onPageChange={vi.fn()} onToggle={vi.fn()} />
+    </ResourceViewProvider>,
+  );
+  expect(screen.getByRole("cell", { name: "January Amount: 30" }).textContent).toBe("30");
+  const label = screen.getByText("January");
+  const nav = screen.getByRole("navigation", { name: "January records" });
+  expect(label.closest("tr")).toBe(nav.closest("tr"));
+  if (position === "only") {
+    const toggle = screen.getByRole("button", { name: "January" });
+    expect(toggle.parentElement).toBe(nav.parentElement);
+    expect(toggle.parentElement?.className).toContain("flex");
+  }
 });
 
 test("pending leaf reads keep the header pager mounted and disable its controls", () => {
