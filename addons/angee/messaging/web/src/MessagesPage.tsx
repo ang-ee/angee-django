@@ -15,8 +15,6 @@ import {
   type StringIdRow,
 } from "@angee/ui";
 
-import { senderDisplayName, type SenderIdentity } from "@angee/parties";
-
 import { useMessagingT } from "./i18n";
 
 const MODEL = "messaging.Message";
@@ -32,16 +30,6 @@ const DEFAULT_GROUPS = { list: { field: "channel.display_name" } } as const;
 const PART_GROUPS = { list: { field: "role" } } as const;
 
 type PartRow = StringIdRow;
-type MessageRow = StringIdRow & {
-  sender?: SenderIdentity | null;
-};
-
-const MESSAGE_FIELDS = ["sender.party_link_confirmed", "sender.display_name", "sender.value"] as const;
-
-function messageSenderName(row: MessageRow): string {
-  return senderDisplayName(row.sender);
-}
-
 // The nested selection the part columns render from: the part's structural
 // facts plus its fragment's identity (kind, hash) and connectivity counts —
 // how many parts and messages share that exact text.
@@ -166,17 +154,15 @@ export function MessagesPage(): React.ReactElement {
   const recordTabs = React.useMemo(() => messageRecordTabs(t), [t]);
   return (
     <ResourceList resource={MODEL} placement="inline" routed hideCreate recordTabs={recordTabs}>
-      <List<MessageRow>
+      <List
         resource={MODEL}
-        fields={MESSAGE_FIELDS}
         defaultGroups={DEFAULT_GROUPS}
       >
         <Facet field="channel" label={t("messages.channel")} labelField="display_name" />
         <Column field="title" header={t("messages.title")} />
-        <Column<MessageRow>
-          field="sender.party.display_name"
+        <Column
+          field="sender_name"
           header={t("messages.sender")}
-          render={messageSenderName}
         />
         <Column field="thread.title.text" header={t("messages.thread")} />
         {/* The channel FK targets the Integration parent (a Channel or a posts

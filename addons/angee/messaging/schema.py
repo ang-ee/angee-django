@@ -8,6 +8,7 @@ through their message/thread owners.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
 from typing import Annotated, Any, cast
 
@@ -21,6 +22,7 @@ from django.db.models.deletion import ProtectedError, RestrictedError
 from django.views.decorators.debug import sensitive_variables
 from rebac import PermissionDenied
 from strawberry import auto
+from strawberry.types.nodes import SelectedField
 
 from angee.base.identity import instance_from_public_id
 from angee.data.metadata import DataResourceEnumValueMetadata, DataResourceFieldMetadata
@@ -430,6 +432,16 @@ class MessageType(AngeeNode):
     sent_at: auto
     received_at: auto
     sender: HandleType | None
+
+    @strawberry_django.field(
+        only=["sender_id"],
+        annotate={"_sender_name": lambda info: Message.objects.sender_name_expression()},
+    )
+    def sender_name(self) -> str:
+        """Return the actor-visible sender name used by inbox ordering."""
+
+        return cast(Any, self).sender_name()
+
     parent: "MessageType | None"
     subtype: MessageSubtypeType | None
     thread: "ThreadType | None"
@@ -1727,10 +1739,19 @@ def _message_inbox_queryset(info: strawberry.Info) -> Any:
     by-pk lookup.
     """
 
-    del info
     # The title annotation serves list rows in SQL; Message.title() prefers it,
     # so a title column on the grid costs no per-row probe.
-    return Message.objects.inbox().with_title_text()
+    queryset = Message.objects.inbox().with_title_text()
+    for field in info.selected_fields:
+        if not isinstance(field, SelectedField) or field.name != info.field_name:
+            continue
+        order_by = field.arguments.get("order_by") or ()
+        # Strawberry resolves variables; GraphQL also accepts one input object
+        # as a list literal. Only explicit sender ordering needs its scoped alias.
+        orders = (order_by,) if isinstance(order_by, Mapping) else order_by
+        if any(order.get("sender_name") is not None for order in orders):
+            return queryset.with_sender_name()
+    return queryset
 
 
 def _part_inbox_queryset(info: strawberry.Info) -> Any:
@@ -1850,7 +1871,18 @@ _MESSAGE_RESOURCE = hasura_model_resource(
         # The transcript's keyset "load older" cursors on (sent_at, created_at).
         "created_at",
     ],
-    sortable=["sent_at", "received_at", "created_at"],
+    sortable=[
+        "sent_at",
+        "received_at",
+        "created_at",
+        "id",
+        "title",
+        "sender_name",
+        "thread__title__text",
+        "channel__vendor__display_name",
+        "status",
+    ],
+    sortable_aliases={"title": "_title_text", "sender_name": "_sender_name"},
     aggregatable=["id"],
     groupable=[
         "thread",

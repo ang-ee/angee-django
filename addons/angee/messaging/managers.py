@@ -1868,6 +1868,20 @@ class MessageQuerySet(AngeeQuerySet[Any]):
             ),
         )
 
+    def sender_name_expression(self) -> models.Expression:
+        """Correlate the actor-readable sender identity without multiplying rows."""
+
+        handle_model = apps.get_model("parties", "Handle")
+        actor = self.actor() or current_actor()
+        handles = handle_model.objects.with_actor(actor) if actor is not None else handle_model.objects.all()
+        sender_name = handles.with_sender_name().filter(pk=models.OuterRef("sender_id")).values("_sender_name")[:1]
+        return Coalesce(models.Subquery(sender_name), models.Value(""), output_field=models.TextField())
+
+    def with_sender_name(self) -> MessageQuerySet:
+        """Prepare the actor-visible sender alias for explicit inbox ordering."""
+
+        return self.alias(_sender_name=self.sender_name_expression())
+
     def with_external_ids(self, external_ids: tuple[str, ...] | list[str]) -> MessageQuerySet:
         """Filter to exact external ids through the ``MD5(external_id)`` identity index.
 

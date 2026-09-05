@@ -61,7 +61,7 @@ describe("MessagesPage", () => {
     expect(columnFields).toEqual(
       expect.arrayContaining([
         "title",
-        "sender.party.display_name",
+        "sender_name",
         "thread.title.text",
         "status",
         "sent_at",
@@ -70,34 +70,12 @@ describe("MessagesPage", () => {
     expect(columnFields).not.toContain("sender.value");
   });
 
-  test("keeps the envelope name for an unconfirmed 1.0 email-match auto-link", () => {
+  test("renders the same server-owned sender scalar used by ordering", () => {
     render(<MessagesPage />);
 
     const sender = pageMocks.columns.find((column) => column.header === "messages.sender");
-    expect(sender?.render?.({
-      sender: {
-        party: { display_name: "Ada Curated" },
-        party_link_confirmed: false,
-        display_name: "Ada Envelope",
-        value: "ada@example.com",
-      },
-    } as never)).toBe("Ada Envelope");
-    expect(pageMocks.listProps?.fields).toEqual(
-      expect.arrayContaining(["sender.party_link_confirmed", "sender.display_name", "sender.value"]),
-    );
-  });
-
-  test("prefers the curated party name after the resolving link is confirmed", () => {
-    render(<MessagesPage />);
-
-    const sender = pageMocks.columns.find((column) => column.header === "messages.sender");
-    expect(sender?.render?.({
-      sender: {
-        party: { display_name: "Ada Curated" },
-        party_link_confirmed: true,
-        display_name: "Ada Envelope",
-        value: "ada@example.com",
-      },
-    } as never)).toBe("Ada Curated");
+    expect(sender?.field).toBe("sender_name");
+    expect(sender?.render).toBeUndefined();
+    expect(pageMocks.listProps?.fields).toBeUndefined();
   });
 });

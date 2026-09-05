@@ -2052,6 +2052,23 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         target = attachment.target
         return target if isinstance(target, ThreadedModelMixin) else None
 
+    def sender_name(self) -> str:
+        """Return the actor-visible sender label, using its selected SQL value."""
+
+        annotated = getattr(self, "_sender_name", None)
+        if annotated is not None:
+            return str(annotated)
+        if self.sender_id is None or current_actor() is None:
+            return ""
+        handle_model = apps.get_model("parties", "Handle")
+        return (
+            handle_model.objects.with_sender_name()
+            .filter(pk=self.sender_id)
+            .values_list("_sender_name", flat=True)
+            .first()
+            or ""
+        )
+
     def title(self) -> str:
         """Return this message's title text — its ``TITLE`` part's fragment, or ``""``.
 

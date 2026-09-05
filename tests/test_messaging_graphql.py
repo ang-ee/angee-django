@@ -136,7 +136,17 @@ def test_console_resource_metadata_declares_message_surface() -> None:
         # The transcript's keyset "load older" cursors on (sent_at, created_at).
         "created_at",
     )
-    assert metadata.order_fields == ("sent_at", "received_at", "created_at")
+    assert metadata.order_fields == (
+        "sent_at",
+        "received_at",
+        "created_at",
+        "id",
+        "title",
+        "sender_name",
+        "thread__title__text",
+        "channel__vendor__display_name",
+        "status",
+    )
     assert metadata.aggregate_fields == ("id",)
     assert metadata.group_by_fields == (
         "thread",
@@ -214,6 +224,9 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     assert status_field["filterable"] is True
     assert status_field["groupable"] is True
     assert status_field["updatable"] is True
+    sender_name_field = {field["name"]: field for field in message["fields"]}["sender_name"]
+    assert sender_name_field["sortable"] is True
+    assert sender_name_field["filterable"] is False
 
 
 def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> None:
