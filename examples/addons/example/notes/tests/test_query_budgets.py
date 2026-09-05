@@ -108,3 +108,18 @@ class NotesQueryBudgetTests(TransactionTestCase):
                 )
             )
         self.assertEqual(counts, [2, 2])
+
+        # This composed host provisions the whole relation graph, so it can
+        # exercise the real User deletion collector and native SET_NULL behavior.
+        with system_context(reason="notes former editor deletion fixture"):
+            editors[0].delete()
+        response = self.client.post(
+            "/graphql/public/",
+            data=json.dumps({"query": query, "variables": {"limit": 1}}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"data": {"notes": [{"created_by_label": owner.username, "updated_by_label": None}]}},
+        )
