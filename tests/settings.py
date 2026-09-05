@@ -8,6 +8,8 @@ from pathlib import Path
 import environ
 from django.apps import AppConfig
 
+from angee.iam.autoconfig import SETTINGS as IAM_SETTINGS
+
 
 class BareComposeConfig(AppConfig):
     """Register the core composer without emitting a generated runtime."""
@@ -113,6 +115,8 @@ else:
     }
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "iam.User"
+# Bare tests skip addon autoconfig; reuse IAM's native REBAC policy binding.
+REBAC_UNIVERSAL_ADMIN_ROLE = IAM_SETTINGS["REBAC_UNIVERSAL_ADMIN_ROLE"]
 USE_TZ = True
 ANGEE_RUNTIME_MODULE = "tests.runtime"
 ANGEE_ADDON_DIRS = (Path(__file__).resolve().parent.parent / "addons",)
