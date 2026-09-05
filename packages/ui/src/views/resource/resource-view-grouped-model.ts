@@ -16,13 +16,13 @@ import {
 import {
   bucketFilterForGroup,
   bucketValueLabels,
-  groupFieldLabel,
   groupLabelDimension,
   hasuraGroupDimension,
   hasuraGroupOrderForDimensions,
   resourceViewGroupToAggregateDimension,
   type GroupByDimension,
   type GroupedListItem,
+  type GroupedListPager,
   type GroupedRecordNav,
   type GroupMeasure,
 } from "./resource-view-list-body";
@@ -100,11 +100,10 @@ export function buildGroupedRenderModel<TRow extends Row>(
     bucketKey: string,
     cumulativeFilter: ResourceViewFilter,
     bucket: AggregateBucket,
-    label: string,
     depth: number,
-  ): void => {
+  ): GroupedListPager => {
     const pageCount = Math.max(1, Math.ceil(bucket.count / GROUPED_LEAF_PAGE_SIZE));
-    const currentPage = Math.min(pageByScope[bucketKey] ?? 1, pageCount);
+    const currentPage = Math.min(normaliseScopePage(pageByScope[bucketKey] ?? 1), pageCount);
     leafScopes.push({
       key: bucketKey,
       filter: cumulativeFilter,
@@ -151,24 +150,20 @@ export function buildGroupedRenderModel<TRow extends Row>(
         items.push({ kind: "record", itemKey: `${bucketKey}:${row.id}`, row, nav });
       }
     }
-    if (leaf && !leaf.error && !leaf.fetching && bucket.count > 0) {
-      items.push({
-        kind: "pager",
-        pageKey: bucketKey,
-        depth,
-        label,
-        page: currentPage,
-        pageSize: GROUPED_LEAF_PAGE_SIZE,
-        total: bucket.count,
-        unit: "records",
-      });
-    }
+    return {
+      pageKey: bucketKey,
+      page: currentPage,
+      pageSize: GROUPED_LEAF_PAGE_SIZE,
+      total: bucket.count,
+      unit: "records",
+      pending: !leaf || leaf.fetching || Boolean(leaf.error),
+    };
   };
 
   const walkLevel = (
     depth: number,
     parentFilter: ResourceViewFilter | undefined,
-  ): void => {
+  ): GroupedListPager | undefined => {
     const axisGroup = groupStack[depth];
     if (!axisGroup) return;
     const dimension = resourceViewGroupToAggregateDimension(axisGroup, modelMetadata);
@@ -198,6 +193,16 @@ export function buildGroupedRenderModel<TRow extends Row>(
     groupScopes.push({ key: levelScopeKey, query });
     const result = groupByResults.get(levelScopeKey);
     if (depth === 0) rootResult = result;
+    const pager: GroupedListPager = {
+      pageKey: levelScopeKey,
+      page: result && !result.error
+        ? Math.min(storedPage, Math.max(1, Math.ceil(result.totalCount / pageSize)))
+        : storedPage,
+      pageSize,
+      total: result?.error ? undefined : result?.totalCount,
+      unit: "groups",
+      pending: !result || result.fetching || Boolean(result.error),
+    };
 
     if (!result || result.error || result.buckets.length === 0) {
       if (depth > 0) {
@@ -226,10 +231,9 @@ export function buildGroupedRenderModel<TRow extends Row>(
           });
         }
       }
-      return;
+      return pager;
     }
 
-    const levelTotal = result.totalCount;
     const isLeafLevel = depth === groupStack.length - 1;
     for (const bucket of result.buckets) {
       const bucketFilter = bucketFilterForGroup(bucket, axisGroup, modelMetadata);
@@ -248,7 +252,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
         t,
         emptyRelationLabel,
       );
-      items.push({
+      const header: Extract<GroupedListItem<TRow>, { kind: "groupHeader" }> = {
         kind: "groupHeader",
         bucketKey,
         depth,
@@ -257,25 +261,15 @@ export function buildGroupedRenderModel<TRow extends Row>(
         expandable,
         expanded,
         bucket,
-      });
+      };
+      items.push(header);
       if (!expanded || bucketFilter === undefined) continue;
       const cumulativeFilter = Filter.combine(parentFilter ?? {}, bucketFilter);
-      if (isLeafLevel) emitLeaf(bucketKey, cumulativeFilter, bucket, label, depth);
-      else walkLevel(depth + 1, cumulativeFilter);
+      header.pager = isLeafLevel
+        ? emitLeaf(bucketKey, cumulativeFilter, bucket, depth)
+        : walkLevel(depth + 1, cumulativeFilter);
     }
-    if (depth > 0 && levelTotal > 0) {
-      const pageCount = Math.max(1, Math.ceil(levelTotal / pageSize));
-      items.push({
-        kind: "pager",
-        pageKey: levelScopeKey,
-        depth,
-        label: groupFieldLabel(axisGroup.field),
-        page: Math.min(storedPage, pageCount),
-        pageSize,
-        total: levelTotal,
-        unit: "groups",
-      });
-    }
+    return pager;
   };
 
   walkLevel(0, baseFilter);

@@ -182,6 +182,23 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     document: groupOperation.document,
     enabled: rowGroupStack.length > 0,
   });
+  // A filter/live update can remove the last nested page. Persist the corrected
+  // scope page so the next native query fetches that page, including when the
+  // out-of-range response has no buckets to render.
+  React.useEffect(() => {
+    setPageByScope((current) => {
+      let next = current;
+      for (const [key, result] of groupByResults) {
+        const page = current[key];
+        if (page === undefined || result.fetching || result.error) continue;
+        const lastPage = Math.max(1, Math.ceil(result.totalCount / statePageSize));
+        if (page <= lastPage) continue;
+        if (next === current) next = { ...current };
+        next[key] = lastPage;
+      }
+      return next;
+    });
+  }, [groupByResults, statePageSize]);
   const scopeModel = React.useMemo(
     () =>
       buildGroupedRenderModel<TRow>(
