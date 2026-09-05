@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from enum import Enum
+from functools import partial
 from typing import Annotated, Any, cast
 
 import strawberry
@@ -30,12 +31,12 @@ from angee.graphql.ids import (
     require_public_id,
     to_public_id,
 )
-from angee.graphql.node import AngeeNode
+from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
-from angee.iam.audit import AuthoredRefMixin
-from angee.iam.identity import user_display_label, user_public_id
+from angee.iam.audit import AuthoredRefMixin, user_label_prefetch
+from angee.iam.identity import user_display_label, user_label, user_public_id
 from angee.iam.permissions import request_from_info
 from angee.knowledge.models import (
     AmbiguousMatchError,
@@ -57,6 +58,9 @@ RecordBinding = apps.get_model("knowledge", "RecordBinding")
 class VaultType(AngeeNode):
     """GraphQL projection of a vault."""
 
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name, only=["name"], description=NODE_DISPLAY_NAME_DESCRIPTION
+    )
     name: auto
     description: auto
     icon: auto
@@ -70,10 +74,13 @@ class VaultType(AngeeNode):
 
         return optional_public_id(user_public_id(cast(Any, self).owner_id))
 
-    @strawberry_django.field(only=["owner_id"])
+    @strawberry_django.field(only=["owner_id"], prefetch_related=[partial(user_label_prefetch, "owner")])
     def owner_label(self, info: strawberry.Info) -> str | None:
         """Return the owner's display label — no user object exposed."""
 
+        if hasattr(self, "_iam_owner_label_source"):
+            user = cast(Any, self)._iam_owner_label_source
+            return user_label(user) if user is not None else None
         return user_display_label(cast(Any, self).owner_id, request=request_from_info(info))
 
 
@@ -136,6 +143,9 @@ class BacklinkType:
 class PageType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a page."""
 
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name, only=["title"], description=NODE_DISPLAY_NAME_DESCRIPTION
+    )
     title: auto
     kind: auto
     icon: auto

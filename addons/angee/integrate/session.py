@@ -105,6 +105,10 @@ class LiveSession:
                 if not self._drain_once():
                     break
                 if not connection.is_alive():
+                    # Stop may arrive after the handled event's last desire check.
+                    if self.stop_event.is_set():
+                        self._still_wanted()
+                        break
                     raise ConnectionError(f"{self.live_impl.label} connection ended unexpectedly.")
         finally:
             self._stopping.set()

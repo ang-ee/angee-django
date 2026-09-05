@@ -6,12 +6,13 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
-from angee.data.metadata import DataResourceEnumValueMetadata, DataResourceFieldMetadata
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.db import models
 from strawberry import auto
 from strawberry.scalars import JSON
 
+from angee.data.metadata import DataResourceEnumValueMetadata, DataResourceFieldMetadata
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
@@ -20,7 +21,7 @@ from angee.graphql.data import (
     public_pk_decoder,
 )
 from angee.graphql.ids import PublicID, optional_public_id, require_public_id
-from angee.graphql.node import AngeeNode
+from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
@@ -78,7 +79,7 @@ _PROJECT_EXTENSION_PUBLIC_ID_FIELDS = tuple(
 
 
 def _extension_declared_fields(
-    model: type,
+    model: type[models.Model],
     readable_fields: tuple[str, ...],
     *,
     filterable_fields: tuple[str, ...],
@@ -261,6 +262,11 @@ class MilestoneType(AuthoredRefMixin, AngeeNode):
 class TaskType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of one human action."""
 
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name,
+        only=["title"],
+        description=NODE_DISPLAY_NAME_DESCRIPTION,
+    )
     title: auto
     note: auto
     status: auto
@@ -303,6 +309,11 @@ class TaskType(AuthoredRefMixin, AngeeNode):
 class ConsoleTaskType(AuthoredRefMixin, AngeeNode):
     """Console task projection with label-bearing user relations."""
 
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name,
+        only=["title"],
+        description=NODE_DISPLAY_NAME_DESCRIPTION,
+    )
     title: auto
     note: auto
     status: auto

@@ -3,7 +3,8 @@
 Run this file directly so Django constructs the real generated models without
 sharing pytest's hand-built source-addon models or global app registry. Only the
 temporary runtime directory is written; this host uses an in-memory database and
-never runs migrations or loads resource rows.
+never runs live migrations or loads resource fixtures. Native addon tests can
+create their own disposable SQLite test database through Django's test runner.
 """
 
 from __future__ import annotations
@@ -133,7 +134,8 @@ def model_snapshot() -> dict[str, Any]:
                     for parent, field in model._meta.parents.items()
                 },
                 "history": getattr(getattr(model, "history", None), "model", None)._meta.label_lower
-                if hasattr(getattr(model, "history", None), "model") else None,
+                if hasattr(getattr(model, "history", None), "model")
+                else None,
                 "revision": reversion.is_registered(model),
                 "checks": [{"id": issue.id, "message": str(issue)} for issue in model.check()],
             }
@@ -147,10 +149,24 @@ def main() -> None:
     parser.add_argument("--source-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--runtime-dir", type=Path, required=True)
     parser.add_argument("--addon-dir", type=Path, action="append", default=[])
-    parser.add_argument("--action", choices=("resources", "snapshot", "state"), default="resources")
+    parser.add_argument("--action", choices=("resources", "snapshot", "state", "tests"), default="resources")
+    parser.add_argument("--test-label", action="append", default=[])
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     boot(args.source_root.resolve(), args.runtime_dir.resolve(), [path.resolve() for path in args.addon_dir])
+    if args.action == "tests":
+        from django.apps import apps
+        from django.conf import settings
+        from django.test.runner import DiscoverRunner
+
+        assert args.test_label, "Native tests require explicit test labels"
+        assert settings.DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3"
+        assert settings.DATABASES["default"]["NAME"] == ":memory:"
+        settings.ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER = True
+        settings.MIGRATION_MODULES = {config.label: None for config in apps.get_app_configs()}
+        failures = DiscoverRunner(verbosity=1, interactive=False).run_tests(args.test_label)
+        args.output.write_text(json.dumps({"failures": failures}) + "\n")
+        raise SystemExit(bool(failures))
     if args.action == "state":
         from django.apps import apps
         from django.db.migrations.state import ProjectState
@@ -165,7 +181,8 @@ def main() -> None:
             "from django.db.migrations.state import ModelState, ProjectState\n"
             + "\n".join(sorted(imports))
             + "\nSTATE = ProjectState({key: ModelState(key[0], *values) for key, values in ("
-            + serialized + ").items()})\n"
+            + serialized
+            + ").items()})\n"
         )
         return
     result = resource_values() if args.action == "resources" else model_snapshot()
