@@ -1,8 +1,6 @@
-"""Draft native regressions for actor-scoped related grouping axes.
+"""Native regressions for actor-scoped related grouping axes.
 
-Promote this file to ``angee/tests/`` after the framework consumes the
-published aggregate/Hasura expression seam. It intentionally exercises only
-the public ``hasura_model_resource`` contract.
+These tests exercise only the public ``hasura_model_resource`` contract.
 """
 
 from __future__ import annotations
