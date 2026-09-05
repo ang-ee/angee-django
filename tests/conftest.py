@@ -655,7 +655,6 @@ class Feed(AbstractFeed, Integration):
         """Django model options for the canonical test feed."""
 
         abstract = False
-        managed = False
         app_label = "posts"
         db_table = "test_posts_feed"
         rebac_resource_type = "posts/feed"
@@ -669,7 +668,6 @@ class FeedFollow(AbstractFeedFollow):
         """Django model options for the canonical test feed follow."""
 
         abstract = False
-        managed = False
         app_label = "posts"
         db_table = "test_posts_feed_follow"
         rebac_resource_type = "posts/feed_follow"
@@ -683,7 +681,6 @@ class PostMetrics(AbstractPostMetrics):
         """Django model options for the canonical test post metrics."""
 
         abstract = False
-        managed = False
         app_label = "posts"
         db_table = "test_posts_post_metrics"
         rebac_resource_type = "posts/post_metrics"
@@ -697,7 +694,6 @@ class Quota(AbstractQuota):
         """Django model options for the canonical test quota."""
 
         abstract = False
-        managed = False
         app_label = "posts"
         db_table = "test_posts_quota"
         rebac_resource_type = "posts/quota"
