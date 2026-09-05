@@ -27,6 +27,7 @@ import { cn } from "../../lib/cn";
 import type { DndPayload } from "../../lib/dnd";
 import { CountBadge } from "../../ui/badge";
 import { Pager } from "../../ui/pager";
+import { PAGE_SIZE_OPTIONS } from "./page-size";
 import {
   Table,
   TableBody,
@@ -85,6 +86,7 @@ export interface GroupedListBodyProps<TRow extends Row> {
   expandedKeys: ReadonlySet<string>;
   toggleGroup: (key: string) => void;
   setScopePage: (key: string, page: number) => void;
+  setScopePageSize: (key: string, pageSize: number) => void;
   selectedIds: ReadonlySet<string>;
   interactive: boolean;
   rowHref?: (row: TRow, scope?: ListViewNavigationScope) => string;
@@ -111,6 +113,7 @@ export function GroupedListBody<TRow extends Row>({
   footerAggregate,
   toggleGroup,
   setScopePage,
+  setScopePageSize,
   interactive,
   rowHref,
   renderRowActions,
@@ -228,6 +231,7 @@ export function GroupedListBody<TRow extends Row>({
                       onRecordOpen={handleRecordOpen}
                       onToggleGroup={toggleGroup}
                       onPageChange={setScopePage}
+                      onPageSizeChange={setScopePageSize}
                       loadingLabel={t("list.loading")}
                       t={t}
                     />
@@ -283,6 +287,7 @@ interface GroupedItemRowProps<TRow extends Row> {
   onRecordOpen: (row: TRow) => void;
   onToggleGroup: (key: string) => void;
   onPageChange: (key: string, page: number) => void;
+  onPageSizeChange: (key: string, pageSize: number) => void;
   loadingLabel: React.ReactNode;
   t: UiTranslate;
 }
@@ -302,6 +307,7 @@ function GroupedItemRow<TRow extends Row>({
   onRecordOpen,
   onToggleGroup,
   onPageChange,
+  onPageSizeChange,
   loadingLabel,
   t,
 }: GroupedItemRowProps<TRow>): React.ReactElement {
@@ -316,6 +322,7 @@ function GroupedItemRow<TRow extends Row>({
           trailingColumn={renderRowActions !== undefined}
           unavailableLabel={t("list.itemsUnavailable")}
           onPageChange={onPageChange}
+          onPageSizeChange={onPageSizeChange}
           t={t}
         />
       );
@@ -355,6 +362,7 @@ interface GroupedHeaderRowProps<TRow extends Row> {
   trailingColumn: boolean;
   unavailableLabel: string;
   onPageChange: (key: string, page: number) => void;
+  onPageSizeChange: (key: string, pageSize: number) => void;
   t: UiTranslate;
 }
 
@@ -366,6 +374,7 @@ function GroupedHeaderRow<TRow extends Row>({
   trailingColumn,
   unavailableLabel,
   onPageChange,
+  onPageSizeChange,
   t,
 }: GroupedHeaderRowProps<TRow>): React.ReactElement {
   const { bucket, bucketKey, depth, label, count, expandable, expanded } = item;
@@ -386,7 +395,7 @@ function GroupedHeaderRow<TRow extends Row>({
     </span>
   );
   const pager = item.pager ? (
-    <GroupedHeaderPager pager={item.pager} label={label} onPageChange={onPageChange} t={t} />
+    <GroupedHeaderPager pager={item.pager} label={label} onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} t={t} />
   ) : null;
   const toggle = (): void => {
     if (expandable) onToggle(bucketKey);
@@ -476,11 +485,13 @@ function GroupedHeaderPager({
   pager,
   label,
   onPageChange,
+  onPageSizeChange,
   t,
 }: {
   pager: GroupedListPager;
   label: string;
   onPageChange: (key: string, page: number) => void;
+  onPageSizeChange: (key: string, pageSize: number) => void;
   t: UiTranslate;
 }): React.ReactElement {
   const { pageKey, page, pageSize, total, unit, pending } = pager;
@@ -503,7 +514,10 @@ function GroupedHeaderPager({
         hasNext={!pending && total !== undefined && page * pageSize < total}
         onPageChange={(next) => onPageChange(pageKey, next)}
         unit={unit === "groups" ? "groups" : undefined}
-        labelElement="span"
+        subject={navLabel}
+        disabled={pending}
+        pageSizeOptions={PAGE_SIZE_OPTIONS}
+        onPageSizeChange={(size) => onPageSizeChange(pageKey, size)}
         previousLabel={t("pager.previousSubject", { subject: navLabel })}
         nextLabel={t("pager.nextSubject", { subject: navLabel })}
         formatNumber={formatPagerNumber}

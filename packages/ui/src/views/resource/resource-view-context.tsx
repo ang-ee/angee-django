@@ -10,7 +10,7 @@ import {
 } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { functionalUpdate, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState } from "@tanstack/react-table";
-import { clampPageSize } from "@angee/refine";
+import { clampPageSize, stableSerialize } from "@angee/refine";
 import { normaliseGroupStack } from "./model/search";
 
 import {
@@ -28,8 +28,39 @@ import {
 } from "./resource-view-model";
 import { useResourceViewFavorites } from "./resource-view-favorites";
 
+/** Group interaction state outlives a temporarily unmounted server list. */
+export interface ResourceViewGroupExpansion {
+  axisKey: string;
+  collapsedKeys: ReadonlySet<string>;
+  explicitExpandedKeys: ReadonlySet<string>;
+  defaultExpandedKeys: ReadonlySet<string>;
+}
+
+type GroupPagination = Record<string, PaginationState>;
+interface ResourceViewGroups {
+  query: string;
+  order: string;
+  paginationByScope: GroupPagination;
+  expansion: ResourceViewGroupExpansion | null;
+}
+const EMPTY_GROUP_PAGINATION: GroupPagination = {};
+function groupsForQuery(current: ResourceViewGroups, query: string, order: string): ResourceViewGroups {
+  if (current.query !== query) return { query, order, paginationByScope: EMPTY_GROUP_PAGINATION, expansion: null };
+  // Sorting changes each bucket's record window, not the grouping tree itself.
+  return current.order === order ? current : {
+    ...current,
+    order,
+    paginationByScope: Object.fromEntries(Object.entries(current.paginationByScope).map(([key, pagination]) =>
+      [key, { ...pagination, pageIndex: 0 }])),
+  };
+}
+
 export interface ResourceViewContextValue {
   state: ResourceViewState;
+  paginationByScope: GroupPagination;
+  setPaginationByScope: OnChangeFn<GroupPagination>;
+  groupExpansion: ResourceViewGroupExpansion | null;
+  setGroupExpansion: OnChangeFn<ResourceViewGroupExpansion | null>;
   setPage: (page: number) => void;
   setPageSize: (pageSize: number) => void;
   setPagination: OnChangeFn<PaginationState>;
@@ -189,6 +220,30 @@ function useResourceViewContextValue({
   state: ResourceViewState;
 }): ResourceViewContextValue {
   const { savedFavorites, saveFavorite } = useResourceViewFavorites(resource, state);
+  // Query facts belong to ResourceView; an external Router change must discard
+  // old group interaction state before any newly mounted surface starts reads.
+  const groupQuery = stableSerialize([resource, state.filter, state.groupStack]);
+  const groupOrder = stableSerialize(state.sorting);
+  const [groups, setGroups] = useState<ResourceViewGroups>(() => ({
+    query: groupQuery, order: groupOrder, paginationByScope: EMPTY_GROUP_PAGINATION, expansion: null,
+  }));
+  const activeGroups = groupsForQuery(groups, groupQuery, groupOrder);
+  const setPaginationByScope = useCallback<OnChangeFn<GroupPagination>>((updater) => {
+    setGroups((current) => {
+      const base = groupsForQuery(current, groupQuery, groupOrder);
+      const paginationByScope = functionalUpdate(updater, base.paginationByScope);
+      return base === current && paginationByScope === base.paginationByScope
+        ? current : { ...base, paginationByScope };
+    });
+  }, [groupQuery, groupOrder]);
+  const setGroupExpansion = useCallback<OnChangeFn<ResourceViewGroupExpansion | null>>((updater) => {
+    setGroups((current) => {
+      const base = groupsForQuery(current, groupQuery, groupOrder);
+      const expansion = functionalUpdate(updater, base.expansion);
+      return base === current && expansion === base.expansion
+        ? current : { ...base, expansion };
+    });
+  }, [groupQuery, groupOrder]);
   const clearSelectedIds = useCallback(() => setRowSelection({}), [setRowSelection]);
   const resetScope = useCallback<OnChangeFn<ResourceViewState>>((updater) => {
     clearSelectedIds();
@@ -213,7 +268,7 @@ function useResourceViewContextValue({
     });
   }, [clearSelectedIds, state.pagination, updateState]);
   const setSorting = useCallback<OnChangeFn<SortingState>>((updater) => {
-    resetScope((current) => ({ ...current, sorting: functionalUpdate(updater, current.sorting) }));
+    resetScope((current) => ({ ...current, sorting: functionalUpdate(updater, current.sorting ?? []) }));
   }, [resetScope]);
   const setGroupStack = useCallback((groups: readonly ResourceViewGroup[]) => {
     const groupStack = normaliseGroupStack(groups);
@@ -221,6 +276,10 @@ function useResourceViewContextValue({
   }, [resetScope]);
   return useMemo(() => ({
     state,
+    paginationByScope: activeGroups.paginationByScope,
+    setPaginationByScope,
+    groupExpansion: activeGroups.expansion,
+    setGroupExpansion,
     savedFavorites,
     saveFavorite,
     setPagination,
@@ -238,9 +297,9 @@ function useResourceViewContextValue({
     setAnchor: (anchor: string) => updateState((current) => ({ ...current, anchor })),
     applyFavorite: (favorite: ResourceViewFavorite) => resetScope((current) => ({
       ...current,
-      ...createResourceViewState({ ...favorite, mode: current.mode, anchor: current.anchor }),
+      ...createResourceViewState({ ...favorite, sort: favorite.sort ?? null, mode: current.mode, anchor: current.anchor }),
     })),
-  }), [state, savedFavorites, saveFavorite, setPagination, setSorting, setRowSelection, resetScope, setGroupStack, clearSelectedIds, updateState]);
+  }), [state, activeGroups.paginationByScope, activeGroups.expansion, setPaginationByScope, setGroupExpansion, savedFavorites, saveFavorite, setPagination, setSorting, setRowSelection, resetScope, setGroupStack, clearSelectedIds, updateState]);
 }
 
 export function useResourceView(): ResourceViewContextValue {

@@ -1,4 +1,5 @@
-import type { ModelFieldMetadata, ModelMetadata } from "./artifact";
+import { isClientRowModel, type DataResourceMetadata, type ModelFieldMetadata, type ModelMetadata } from "./artifact";
+import { resourceFieldPathToSnake } from "./naming";
 
 /**
  * A to-one relation the node projects as a bare `ID` scalar rather than a nested
@@ -129,4 +130,21 @@ export function isDateField(
       (field.scalar === "DateTime" || field.scalar === "Date");
   }
   return looksLikeDateField(fieldName);
+}
+
+/**
+ * Resolve a displayed field path to an explicitly declared server order field.
+ * Hasura order inputs use flat Django paths; nested display accessors stay dotted
+ * in Table and map only when metadata declares that exact path. Local rows have
+ * no server order-input restriction. Absent resource metadata preserves authored
+ * local table behavior rather than inventing a schema capability.
+ */
+export function resourceOrderFieldForPath(
+  path: string,
+  resource: DataResourceMetadata | null | undefined,
+): string | null {
+  if (!resource || isClientRowModel(resource)) return path;
+  if (resource.orderFields.includes(path)) return path;
+  const normalized = resourceFieldPathToSnake(path.replaceAll(".", "__"));
+  return resource.orderFields.find((field) => resourceFieldPathToSnake(field) === normalized) ?? null;
 }

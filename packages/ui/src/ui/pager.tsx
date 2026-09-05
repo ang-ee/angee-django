@@ -23,6 +23,7 @@ export interface PagerState {
 }
 
 export interface PagerProps extends PagerState {
+  disabled?: boolean;
   onPageChange?: (page: number) => void;
   onPageSizeChange?: (pageSize: number) => void;
   pageSizeOptions?: readonly number[];
@@ -86,6 +87,7 @@ export function Pager({
   total,
   hasPrev,
   hasNext,
+  disabled = false,
   onPageChange,
   onPageSizeChange,
   pageSizeOptions = DEFAULT_PAGE_SIZE_OPTIONS,
@@ -114,6 +116,7 @@ export function Pager({
   const label = labelElement === "button" && onPageSizeChange
     ? (
       <PageSizePicker
+        disabled={disabled}
         pageLabel={pageLabel}
         pageSize={pageSize}
         pageSizeOptions={pageSizeOptions}
@@ -128,6 +131,7 @@ export function Pager({
       ? (
         <button
           type="button"
+          disabled={disabled}
           className={pagerVariants({ label: "button", className: labelClassName })}
           aria-label={t("pager.pageOf", { subject: resolvedSubject, pageLabel })}
         >
@@ -148,7 +152,7 @@ export function Pager({
         variant="ghost"
         size="iconSm"
         aria-label={previousLabel ?? t("pager.prev")}
-        disabled={!canPrev}
+        disabled={disabled || !canPrev}
         onClick={() => onPageChange?.(Math.max(1, page - 1))}
       >
         <Glyph name="chevron-left" />
@@ -158,7 +162,7 @@ export function Pager({
         variant="ghost"
         size="iconSm"
         aria-label={nextLabel ?? t("pager.next")}
-        disabled={!canNext}
+        disabled={disabled || !canNext}
         onClick={() => onPageChange?.(page + 1)}
       >
         <Glyph name="chevron-right" />
@@ -168,6 +172,7 @@ export function Pager({
 }
 
 function PageSizePicker({
+  disabled,
   pageLabel,
   pageSize,
   pageSizeOptions,
@@ -177,6 +182,7 @@ function PageSizePicker({
   onCustomPageSizeChange,
   onPageSizeChange,
 }: {
+  disabled: boolean;
   pageLabel: string;
   pageSize: number;
   pageSizeOptions: readonly number[];
@@ -192,15 +198,17 @@ function PageSizePicker({
       if (typeof value !== "number" || !Number.isFinite(value) || value < 1) {
         return;
       }
+      if (disabled) return;
       onPageSizeChange(Math.floor(value));
       onCustomPageSizeChange(null);
     },
-    [onCustomPageSizeChange, onPageSizeChange],
+    [disabled, onCustomPageSizeChange, onPageSizeChange],
   );
 
   return (
     <PopoverRoot>
       <PopoverTrigger
+        disabled={disabled}
         className={pagerVariants({ label: "button", className: labelClassName })}
         aria-label={t("pager.pageOf", { subject, pageLabel })}
       >
@@ -216,6 +224,7 @@ function PageSizePicker({
               {pageSizeOptions.map((value) => (
                 <button
                   key={value}
+                  disabled={disabled}
                   type="button"
                   className={cn(
                     "h-7 rounded-6 px-2 text-13 tabular-nums outline-none transition-colors focus-visible:focus-ring",
@@ -249,7 +258,7 @@ function PageSizePicker({
                 }}
                 onValueChange={onCustomPageSizeChange}
               />
-              <Button type="submit" size="sm" variant="secondary">
+              <Button type="submit" size="sm" variant="secondary" disabled={disabled}>
                 {t("pager.apply")}
               </Button>
             </form>

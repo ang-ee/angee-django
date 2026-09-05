@@ -1,4 +1,5 @@
 import { recordValue, stableSerialize } from "@angee/refine";
+import type { SortingState } from "@tanstack/react-table";
 import { RESOURCE_VIEW_LOOKUP_OPERATORS, RESOURCE_VIEW_RELATION_LOOKUP_OPERATORS } from "./capabilities";
 import type { CalendarViewMode, ResourceViewFacetLookupOperator, ResourceViewGroupGranularity, ResourceViewKind, ResourceViewOrderDirection, ResourceViewSortDirection } from "./capabilities";
 export type ResourceViewFilterPrimitive = string | number | boolean | null;
@@ -39,6 +40,8 @@ export interface ResourceViewInitialState {
   page?: number;
   pageSize?: number;
   sort?: ResourceViewSort | null;
+  /** Native declaration order, including secondary fields; `sort` overrides it. */
+  sorting?: SortingState;
   filter?: ResourceViewFilter;
   group?: ResourceViewGroup | null;
   groupStack?: readonly ResourceViewGroup[];
@@ -197,8 +200,11 @@ export class Filter {
 
   withTextTerm(value: string, field = DEFAULT_TEXT_FILTER_FIELD): ResourceViewFilter {
     const next = { ...this.value };
+    const lookup = { ...this.lookup(field) };
     const trimmed = value.trim();
-    if (trimmed) next[field] = { iContains: trimmed };
+    if (trimmed) lookup.iContains = trimmed;
+    else delete lookup.iContains;
+    if (Object.keys(lookup).length > 0) next[field] = lookup;
     else delete next[field];
     return next;
   }

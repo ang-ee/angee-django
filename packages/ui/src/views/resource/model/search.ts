@@ -33,11 +33,9 @@ export function resourceViewStateToSearch(
   const base = createResourceViewState(initial);
   if (state.pagination.pageIndex !== base.pagination.pageIndex) search.page = state.pagination.pageIndex + 1;
   if (state.pagination.pageSize !== defaultResourceViewPageSize(initial)) search.pageSize = state.pagination.pageSize;
-  const sort = state.sorting[0];
-  const defaultSort = base.sorting[0];
+  const sort = state.sorting?.[0];
   const sortValue = sort ? `${sort.id}:${sort.desc ? "desc" : "asc"}` : "";
-  const baseSortValue = defaultSort ? `${defaultSort.id}:${defaultSort.desc ? "desc" : "asc"}` : "";
-  if (sortValue !== baseSortValue) search.sort = sortValue;
+  if (stableSerialize(state.sorting) !== stableSerialize(base.sorting)) search.sort = sortValue;
   const filterValue = stableSerialize(state.filter);
   if (Filter.from(state.filter).hasEntries()) {
     if (filterValue !== stableSerialize(base.filter)) search.filter = JSON.stringify(state.filter);

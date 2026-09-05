@@ -20,6 +20,7 @@ export {
   type UseListRecordNavigationOptions,
   type UseListRecordNavigationResult,
 } from "./resource/use-list-record-navigation";
+export { parseRecordNavigationScope, recordNavigationSearch, recordNavigationHref } from "./resource/record-navigation-context";
 export { RowsListView, type RowsListViewProps } from "./resource/RowsListView";
 export {
   defineRowAction,

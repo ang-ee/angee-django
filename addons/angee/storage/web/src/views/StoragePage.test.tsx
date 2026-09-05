@@ -1,7 +1,11 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, fireEvent, render, screen, } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { Refine, type DataProvider, type GetListParams } from "@refinedev/core";
+import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
+import { parseRecordNavigationScope, type ListViewNavigationScope } from "@angee/ui";
 import { createRouteHref } from "@angee/ui/runtime";
 import {
   ChatterTabsTestHost,
@@ -225,12 +229,11 @@ vi.mock("./FileBrowserContent", async () => {
   const React = await import("react");
   return {
   FileBrowserContent: ({
-    baseFilter, defaultGroup, hidden, onListStateChange, rowHref, uploadTarget, canUpload, }: {
-    baseFilter: Record<string, { exact: unknown }>;
+    baseFilter, defaultGroup, onListStateChange, rowHref, uploadTarget, canUpload, }: {
+    baseFilter: Record<string, { exact: string | boolean }>;
     defaultGroup: { field: string } | null;
-    hidden?: boolean;
     onListStateChange: (state: Record<string, unknown>) => void;
-    rowHref?: (row: { id: string }) => string;
+    rowHref?: (row: { id: string }, scope?: ListViewNavigationScope) => string;
     uploadTarget: { driveId: string; folderId: string | null };
     canUpload: boolean;
   }) => {
@@ -264,9 +267,8 @@ vi.mock("./FileBrowserContent", async () => {
     return (
     <section
       data-testid="file-list"
-      data-hidden={String(Boolean(hidden))}
       data-row-ids={rows.map((row) => row.id).join(", ")}
-      data-row-hrefs={rows.map((row) => rowHref?.(row) ?? "").join(", ")}
+      data-row-hrefs={rows.map((row) => rowHref?.(row, { filter: baseFilter, order: { updated_at: "DESC" }, page: 1, pageSize: 50 }) ?? "").join(", ")}
       data-group={defaultGroup?.field ?? ""}
       data-filter={JSON.stringify(baseFilter)}
       data-upload-drive={uploadTarget.driveId}
@@ -281,8 +283,8 @@ vi.mock("./FileBrowserContent", async () => {
 vi.mock("./FileDetail", () => ({
   // The detail is now the file's metadata form only — published into the
   // chatter's `details` tab. The pager + lifecycle verbs moved to the control band.
-  FileDetail: ({ file }: { file: { id: string } }) => (
-    <section data-testid="file-detail" data-file-id={file.id} />
+  FileDetail: ({ id }: { id: string }) => (
+    <section data-testid="file-detail" data-file-id={id} />
   ), }));
 
 vi.mock("./NewFolderControl", () => ({
@@ -303,14 +305,40 @@ import {
 import storage from "../index";
 import { StoragePage } from "./StoragePage";
 
+const fileResource = testDataResource("storage.File");
+const metadata = schemaFieldMetadataFromDataResources([fileResource]);
+const provider = {
+  getApiUrl: () => "test://files",
+  getList: async ({ filters = [], pagination }: GetListParams) => {
+    const rows = storageData.files.filter((row) => filters.every((filter) =>
+      "field" in filter && filter.operator === "eq"
+        ? row[filter.field as keyof typeof row] === filter.value
+        : true,
+    )).sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+    const size = pagination?.pageSize ?? 50;
+    const start = ((pagination?.currentPage ?? 1) - 1) * size;
+    return { data: rows.slice(start, start + size), total: rows.length };
+  },
+  getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
+} as DataProvider;
 function pageTree() {
   return (
-    <ShellPageTestProviders>
-      <StoragePage />
-      <PrimaryPaneTestHost />
-      <ChatterTabsTestHost />
-    </ShellPageTestProviders>
+    <Refine resources={[...refineResourcesFromDataResources([fileResource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 } } } } }}>
+      <ModelMetadataProvider metadata={metadata}>
+        <ShellPageTestProviders>
+          <StoragePage />
+          <PrimaryPaneTestHost />
+          <ChatterTabsTestHost />
+        </ShellPageTestProviders>
+      </ModelMetadataProvider>
+    </Refine>
   );
+}
+
+function openListFile(id: string): void {
+  const href = fileListAttribute("data-row-hrefs")!.split(", ").find((href) => href.startsWith(`/storage/${id}?`))!;
+  routerState.setSearch(Object.fromEntries(new URL(href, "https://test.local").searchParams));
+  routerMocks.params = { id };
 }
 
 let storageData = makeStorageData();
@@ -401,12 +429,13 @@ describe("StoragePage explorer wiring", () => {
     expect(sdkMocks.folderDrives.at(-1)).toBe("drive-b");
   });
 
-  test("detail navigation follows the List snapshot", () => {
+  test("detail navigation follows the List scope without mounting a hidden list", async () => {
     const view = render(pageTree());
-    routerMocks.params = { id: "file-a" };
+    act(() => openListFile("file-a"));
     view.rerender(pageTree());
 
-    expect(pagerText()).toBe("1 / 2");
+    await waitFor(() => expect(pagerText()).toBe("1 / 2"));
+    expect(screen.queryByTestId("file-list")).toBeNull();
     expect(pagerPrev().disabled).toBe(true);
     expect(pagerNext().disabled).toBe(false);
 
@@ -418,12 +447,12 @@ describe("StoragePage explorer wiring", () => {
     });
   });
 
-  test("detail navigation steps back and stops at the snapshot edge", () => {
+  test("detail navigation steps back and stops at the snapshot edge", async () => {
     const view = render(pageTree());
-    routerMocks.params = { id: "file-a-folder" };
+    act(() => openListFile("file-a-folder"));
     view.rerender(pageTree());
 
-    expect(pagerText()).toBe("2 / 2");
+    await waitFor(() => expect(pagerText()).toBe("2 / 2"));
     // The last file in the scope has no next step.
     expect(pagerNext().disabled).toBe(true);
 
@@ -503,9 +532,13 @@ describe("StoragePage explorer wiring", () => {
       is_trashed: { exact: false },
       folder: { exact: "folder-a" },
     });
-    expect(fileListAttribute("data-row-hrefs")).toBe(
-      "/storage/file-a-folder?folder=folder-a",
-    );
+    const link = new URL(fileListAttribute("data-row-hrefs")!, "https://test.local");
+    expect(link.pathname).toBe("/storage/file-a-folder");
+    expect(link.searchParams.get("folder")).toBe("folder-a");
+    expect(parseRecordNavigationScope(Object.fromEntries(link.searchParams), fileResource)).toEqual({
+      filter: { drive: { exact: "drive-a" }, is_trashed: { exact: false }, folder: { exact: "folder-a" } },
+      order: { updated_at: "DESC" }, page: 1, pageSize: 50,
+    });
     expect(routerMocks.routeHref).toHaveBeenCalledWith(
       "storage.file",
       { id: "file-a-folder" },
@@ -794,7 +827,7 @@ function queryResult(
 ) {
   return {
     data,
-    fetching: false,
+    isFetching: false,
     error: null,
     refetch: sdkMocks.refetch[name],
   };

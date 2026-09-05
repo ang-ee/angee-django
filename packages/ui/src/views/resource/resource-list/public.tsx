@@ -1,5 +1,5 @@
 import * as React from "react";
-import { type Row } from "@angee/metadata";
+import { useModelMetadata, type Row } from "@angee/metadata";
 import { ControlBandProvider } from "../../../layouts/ControlBand";
 import { type ListColumn, type ListViewProps } from "../ListView";
 import { FormView, type FormField, type FormViewProps } from "../../form/FormView";
@@ -7,7 +7,9 @@ import type { ListComponent, ListProps } from "../List";
 import type { FormProps } from "../../form/Form";
 import { RoutedRecordController } from "../resource-routing";
 import { ResourceViewProvider, useResourceViewMaybe } from "../resource-view-context";
+import { initialResourceSorting } from "../resource-view-codecs";
 import { type ResourceViewDefaultGroups, type ResourceViewGroup, type ResourceViewKind } from "../resource-view-model";
+import type { ListViewNavigationScope } from "../resource-view-surface";
 import type { BoardLaneSource } from "../resource-view-types";
 import type { Occurrence } from "../../calendar/CalendarView";
 import type { AnyCalendarWindowSource } from "../../calendar/use-calendar-window";
@@ -126,7 +128,7 @@ export interface ResourceListProps<TRow extends Row = Row> {
   /** Tabs rendered for a saved record beside the form's "Overview" tab (not on
    * create) — e.g. provisioning and chat panels. See `FormView.recordTabs`. */
   recordTabs?: FormViewProps["recordTabs"];
-  rowHref?: (row: TRow) => string;
+  rowHref?: (row: TRow, scope?: ListViewNavigationScope) => string;
   /** Native cross-pane drag payload forwarded to supported record-row renderers. */
   draggableRow?: ListViewProps<TRow>["draggableRow"];
   /** Controls rendered in the list toolbar's leading slot (e.g. a connect button),
@@ -163,9 +165,10 @@ export interface ResourceFormDeclaration {
 export interface ResourceRecordController<TRow extends Row = Row> {
   recordId?: string | null;
   creating?: boolean;
-  onSelect?: (id: string | null) => void;
+  navigationScope?: ListViewNavigationScope | null;
+  onSelect?: (id: string | null, scope?: ListViewNavigationScope) => void;
   onClose?: () => void;
-  rowHref?: (row: TRow) => string;
+  rowHref?: (row: TRow, scope?: ListViewNavigationScope) => string;
 }
 
 /** The refine list action surface, with optional inline/drawer record UX. */
@@ -191,15 +194,18 @@ export function ResourceList<TRow extends Row = Row>({
   const initialPageSize = declarations.list?.props.pageSize ?? pageSize;
   const initialDefaultView = declarations.list?.props.defaultView ?? defaultView;
   const resourceView = useResourceViewMaybe();
+  const modelMetadata = useModelMetadata(props.resource);
+  const initialOrder = declarations.list?.props.order ?? props.order;
   const initialState = React.useMemo(
     () => ({
       pageSize: initialPageSize,
       view: initialDefaultView,
+      sorting: initialResourceSorting(modelMetadata, initialOrder),
     }),
-    [initialDefaultView, initialPageSize],
+    [initialDefaultView, initialPageSize, initialOrder, modelMetadata],
   );
   const content = props.routed ? (
-    <RoutedRecordController<TRow> newRecordId={REFINE_CREATE_ID}>
+    <RoutedRecordController<TRow> resource={props.resource} newRecordId={REFINE_CREATE_ID}>
       {(recordController) => (
         <ResourceListBody
           {...props}
@@ -313,7 +319,7 @@ function controlledRecordController<TRow extends Row>(
   return {
     recordId: props.recordId,
     creating: props.creating,
-    onSelect: props.onSelect,
+    onSelect: props.onSelect ? (id) => props.onSelect?.(id) : undefined,
     onClose: props.onClose,
     rowHref: props.rowHref,
   };

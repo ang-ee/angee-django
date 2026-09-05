@@ -48,6 +48,8 @@ import { parseFlatSearch,
   stringifyFlatSearch } from "../create-app";
 import { ResourceList,
   DrawerResourceList } from "@angee/ui/views/ResourceList";
+import { ResourceViewProvider } from "@angee/ui/views/resource-view-context";
+import { RowsListView } from "@angee/ui/views/RowsListView";
 import { Form } from "@angee/ui/views/Form";
 import type { FormField } from "@angee/ui/views/FormView";
 import {
@@ -240,6 +242,8 @@ vi.mock("@refinedev/core", async (importOriginal) => {
         result: { data: rows, total: active ? matchingRows.length : undefined },
         query: {
           isFetching: sdkMocks.fetching,
+          isSuccess: active,
+          isError: false,
           error: null,
           refetch: vi.fn(),
         },
@@ -1431,7 +1435,7 @@ describe("ResourceList", () => {
     expect(screen.getByText("Status")).toBeTruthy();
   });
 
-  test("uses resource metadata default sort as the list order fallback", async () => {
+  test("initializes the full metadata sort order, including its secondary field", async () => {
     render(
       <TestUrlState>
         <ResourceList
@@ -1446,6 +1450,7 @@ describe("ResourceList", () => {
     await waitFor(() =>
       expect(lastActiveListCall()?.order).toEqual({
         updatedAt: "DESC",
+        title: "ASC",
       }),
     );
   });
@@ -1601,7 +1606,30 @@ describe("ResourceList", () => {
     expect(
       screen.queryByRole("navigation", { name: "Record navigation" }),
     ).toBeNull();
-    expect(sdkMocks.listCalls).toHaveLength(0);
+    expect(sdkMocks.listCalls.filter((call) => call.enabled !== false)).toHaveLength(0);
+  });
+
+  test("inline local rows keep one native Table owner through record page edges", async () => {
+    let mounts = 0;
+    const selected = vi.fn();
+    const LocalList: ListComponent<Row> = ({ columns: localColumns, onListStateChange, onRowClick }) => {
+      useEffect(() => { mounts += 1; }, []);
+      return <RowsListView rows={sdkMocks.rows} columns={localColumns} onListStateChange={onListStateChange} onRowClick={onRowClick} />;
+    };
+    function Harness(): ReactElement {
+      const [recordId, setRecordId] = useState<string | null>(null);
+      return <ResourceList resource="notes.Note" columns={columns} formFields={formFields} recordId={recordId} onSelect={(id) => { selected(id); setRecordId(id); }} list={LocalList} pageSize={1} placement="inline" />;
+    }
+    render(<TestUrlState><ResourceViewProvider scope="local" initialState={{ pageSize: 1, sort: null }}><Harness /></ResourceViewProvider></TestUrlState>);
+    fireEvent.click(await screen.findByRole("button", { name: "Open First" }));
+    const pager = await screen.findByRole("navigation", { name: "Record navigation" });
+    expect(pager.textContent?.replace(/\s+/g, " ")).toContain("1 / 4");
+    expect(screen.queryByRole("button", { name: "Open First" })).toBeNull();
+    fireEvent.click(within(pager).getByRole("button", { name: "Next record" }));
+    await waitFor(() => expect(screen.getByRole("navigation", { name: "Record navigation" }).textContent?.replace(/\s+/g, " ")).toContain("2 / 4"));
+    expect(selected).toHaveBeenLastCalledWith("note-2");
+    expect(mounts).toBe(1);
+    expect(sdkMocks.listCalls.filter((call) => call.enabled !== false)).toHaveLength(0);
   });
 
   test("keeps record navigation during a live list refetch", async () => {
@@ -2160,6 +2188,39 @@ describe("ResourceList", () => {
       ).toContain("1 / 2"),
     );
     expect(await screen.findByDisplayValue("First")).toBeTruthy();
+  });
+
+  test("navigates inside Notes-style declared monthly defaults without replaying grouped controls", async () => {
+    const onSelect = vi.fn();
+    const previousDate = sdkMocks.rows[1]!.updatedAt;
+    sdkMocks.rows[1]!.updatedAt = "2026-01-04T10:00:00.000Z";
+    function Harness(): ReactElement {
+      const [recordId, setRecordId] = useState<string | null>(null);
+      return <ResourceList resource="notes.Note" formFields={formFields} recordId={recordId} onSelect={(id) => { onSelect(id); setRecordId(id); }}>
+        <List pageSize={2} order={{ updatedAt: "DESC" }} defaultGroups={{ list: { field: "updatedAt", granularity: "month" }, board: { field: "status" } }}>
+          <Column field="title" header="Title" />
+          <Column field="updatedAt" header="Updated" />
+        </List>
+      </ResourceList>;
+    }
+    try {
+      render(<TestUrlState><Harness /></TestUrlState>);
+      await screen.findByRole("button", { name: /Groups/ });
+      await nextTask();
+      fireEvent.click(await screen.findByRole("button", { name: "Open Second" }));
+      expect(onSelect).toHaveBeenCalledWith("note-2");
+      const pager = await screen.findByRole("navigation", { name: "Record navigation" });
+      expect(pager.textContent?.replace(/\s+/g, " ")).toContain("2 / 2");
+      expect(screen.queryByRole("button", { name: "Filter and group", hidden: true })).toBeNull();
+      const request = sdkMocks.listCalls.findLast((call) => call.enabled !== false);
+      expect(JSON.stringify(request?.filter)).toContain("2026-01-01");
+      expect(JSON.stringify(request?.filter)).toContain("2026-02-01");
+      fireEvent.click(within(pager).getByRole("button", { name: "Previous record" }));
+      await waitFor(() => expect(screen.getByRole("navigation", { name: "Record navigation" }).textContent?.replace(/\s+/g, " ")).toContain("1 / 2"));
+      expect(await screen.findByDisplayValue("First")).toBeTruthy();
+    } finally {
+      sdkMocks.rows[1]!.updatedAt = previousDate;
+    }
   });
 
   test("renders grouped list aggregate measures and a grand total footer", async () => {

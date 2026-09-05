@@ -139,10 +139,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   onRowClick?: (row: TRow) => void;
   /** Called whenever the loaded list state changes. */
   onListStateChange?: (state: ResourceListSnapshot<TRow>) => void;
-  /** Replay a prior list snapshot while its record surface is open. */
-  navigationScope?: ListViewNavigationScope;
   /** Optional href for a row, used when rows should render as links. */
-  rowHref?: (row: TRow) => string;
+  rowHref?: (row: TRow, scope?: ListViewNavigationScope) => string;
   /** Authored and page-owned verbs rendered in the shared trailing action column. */
   rowActions?: readonly RowActionDeclaration<TRow>[];
   /** Native cross-pane drag payload for each record row, including grouped rows. */

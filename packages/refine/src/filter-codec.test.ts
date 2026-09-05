@@ -207,3 +207,15 @@ describe("refine/Hasura filter codec", () => {
     });
   });
 });
+
+test("strict portable filters reject the entire unsupported expression while ordinary callers retain warnings", () => {
+  const filter = { AND: [{ title: { iContains: "wanted" } }, { NOT: { status: { exact: "hidden" } } }] };
+  expect(() => crudFiltersFromFilterRecord(filter, { strict: true })).toThrow("NOT");
+  expect(() => crudFiltersFromFilterRecord({ title: { unknown: "ignored" } }, { strict: true })).toThrow();
+  expect(() => crudFiltersFromFilterRecord({ AND: ["ignored"] }, { strict: true })).toThrow();
+  expect(crudFiltersFromFilterRecord({ author: { name: { exact: "Alice" } } }, { strict: true })).toEqual([{ field: "author.name", operator: "eq", value: "Alice" }]);
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  expect(crudFiltersFromFilterRecord(filter)).toEqual([{ operator: "and", value: [{ field: "title", operator: "contains", value: "wanted" }] }]);
+  expect(warning).toHaveBeenCalled();
+  warning.mockRestore();
+});

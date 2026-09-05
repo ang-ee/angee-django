@@ -52,7 +52,7 @@ function params(overrides: Partial<GroupedRenderParams> = {}): GroupedRenderPara
     groupStack: [{ field: "status" }, { field: "owner" }],
     baseFilter: undefined,
     expandedKeys: new Set(),
-    pageByScope: {},
+    paginationByScope: {},
     rootPage: 1,
     pageSize: 2,
     queryMeasures: [],
@@ -143,7 +143,7 @@ describe("buildGroupedRenderModel", () => {
       EMPTY_ROWS,
       params({
         expandedKeys: new Set([bucketKey]),
-        pageByScope: { [childKey]: 9 },
+        paginationByScope: { [childKey]: { pageIndex: 8, pageSize: 2 } },
       }),
     );
 
@@ -170,7 +170,7 @@ describe("buildGroupedRenderModel", () => {
     const expanded = buildGroupedRenderModel<Row>(results, EMPTY_LEAVES, EMPTY_ROWS, {
       ...leafParams,
       expandedKeys: new Set([header.bucketKey]),
-      pageByScope: { [header.bucketKey]: 9 },
+      paginationByScope: { [header.bucketKey]: { pageIndex: 8, pageSize: 20 } },
     });
     expect(expanded.items.map((item) => item.kind)).toEqual(["groupHeader", "skeleton"]);
     expect(expanded.items.find((item) => item.kind === "groupHeader")?.pager).toEqual({
@@ -194,7 +194,7 @@ describe("buildGroupedRenderModel", () => {
     const model = buildGroupedRenderModel<Row>(
       new Map([[rootKey, rootResult], [childKey, result([], { totalCount: 5 })]]),
       EMPTY_LEAVES, EMPTY_ROWS,
-      { ...expandedParams, pageByScope: { [childKey]: 9 } },
+      { ...expandedParams, paginationByScope: { [childKey]: { pageIndex: 8, pageSize: 2 } } },
     );
     expect(model.items.find((item) => item.kind === "groupHeader")?.pager).toMatchObject({
       pageKey: childKey, page: 3, total: 5, pending: false,
@@ -274,4 +274,40 @@ describe("buildGroupedRenderModel", () => {
       }
     },
   );
+});
+
+
+test("subgroup page sizes keep stable scope identity and feed the native request", () => {
+  const { rootKey, rootResult, bucketKey } = rootFixture();
+  const expanded = params({ expandedKeys: new Set([bucketKey]) });
+  const results = new Map([[rootKey, rootResult]]);
+  const before = buildGroupedRenderModel<Row>(results, EMPTY_LEAVES, EMPTY_ROWS, expanded);
+  const childKey = before.groupScopes[1]!.key;
+  const after = buildGroupedRenderModel<Row>(results, EMPTY_LEAVES, EMPTY_ROWS, {
+    ...expanded,
+    paginationByScope: { [childKey]: { pageIndex: 0, pageSize: 50 } },
+  });
+  expect(after.groupScopes[0]).toEqual(before.groupScopes[0]);
+  expect(after.groupScopes[1]).toMatchObject({ key: childKey, query: { page: 1, pageSize: 50 } });
+  expect(after.items.find((item) => item.kind === "groupHeader")?.pager).toMatchObject({
+    pageKey: childKey, page: 1, pageSize: 50, unit: "groups",
+  });
+});
+
+test("leaf page size is shared by its query and header pager", () => {
+  const leafParams = params({ groupStack: [{ field: "status" }] });
+  const initial = buildGroupedRenderModel<Row>(new Map(), EMPTY_LEAVES, EMPTY_ROWS, leafParams);
+  const rootKey = initial.groupScopes[0]!.key;
+  const results = new Map([[rootKey, result([{ key: { status: "ACTIVE" }, count: 145 }])]]);
+  const collapsed = buildGroupedRenderModel<Row>(results, EMPTY_LEAVES, EMPTY_ROWS, leafParams);
+  const header = collapsed.items.find((item) => item.kind === "groupHeader")!;
+  const expanded = buildGroupedRenderModel<Row>(results, EMPTY_LEAVES, EMPTY_ROWS, {
+    ...leafParams,
+    expandedKeys: new Set([header.bucketKey]),
+    paginationByScope: { [header.bucketKey]: { pageIndex: 1, pageSize: 50 } },
+  });
+  expect(expanded.leafScopes[0]).toMatchObject({ key: header.bucketKey, page: 2, pageSize: 50 });
+  expect(expanded.items.find((item) => item.kind === "groupHeader")?.pager).toMatchObject({
+    pageKey: header.bucketKey, page: 2, pageSize: 50, unit: "records",
+  });
 });

@@ -1,52 +1,10 @@
 import * as React from "react";
-import { type Row } from "@angee/metadata";
 import { Glyph } from "../../../chrome/Glyph";
 import { ResourceViewSwitcher } from "../../../toolbars";
-import { ControlBandProvider } from "../../../layouts/ControlBand";
-import { type ListColumn, type ListViewProps, type ResourceListSnapshot } from "../ListView";
-import type { ListComponent } from "../List";
-import { type ListViewNavigationScope } from "../resource-view-surface";
 import { type ResourceViewKind } from "../resource-view-model";
 import { type ActionDescriptor } from "../../page";
 import { RecordPager, type RecordNavigation } from "../RecordPager";
 import type { RecordSmartButtonDescriptor } from "./public";
-export function ListStateProbe<TRow extends Row>({
-  list: ListComponent,
-  resource,
-  columns,
-  listRenderProps,
-  navigationScope,
-  onListStateChange,
-}: {
-  list: ListComponent<TRow>;
-  resource: string;
-  columns: readonly ListColumn<TRow>[];
-  listRenderProps: Partial<ListViewProps<TRow>>;
-  navigationScope: ListViewNavigationScope | null;
-  onListStateChange: (state: ResourceListSnapshot<TRow>) => void;
-}): React.ReactElement {
-  const content = (
-    <ListComponent
-      resource={resource}
-      columns={columns}
-      {...listRenderProps}
-      {...(navigationScope ? { navigationScope } : {})}
-      onListStateChange={onListStateChange}
-    />
-  );
-  return (
-    // The probe exists only to keep the list's state callbacks alive off-screen;
-    // clearing the band host keeps its ControlBand from portaling OUT of this
-    // hidden subtree into the page chrome (a portal ignores a hidden ancestor),
-    // which stacked a phantom filter/group bar above every open record.
-    <ControlBandProvider host={undefined}>
-      <div hidden aria-hidden="true">
-        {content}
-      </div>
-    </ControlBandProvider>
-  );
-}
-
 export const EMPTY_RECORD_ID_SET: ReadonlySet<string> = new Set();
 export const EMPTY_ACTIONS: readonly ActionDescriptor[] = [];
 

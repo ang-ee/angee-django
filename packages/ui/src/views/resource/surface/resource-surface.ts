@@ -1,13 +1,12 @@
 import * as React from "react";
-import { refineResourceName, type Row } from "@angee/metadata";
-import { useList, type HttpError } from "@refinedev/core";
+import { type Row } from "@angee/metadata";
 import { useReactTable, getCoreRowModel, getExpandedRowModel, getGroupedRowModel, type ColumnDef, type ExpandedState } from "@tanstack/react-table";
-import { crudFiltersFromFilterRecord, refineFieldsFromPaths, refineSortersFromAngeeOrder } from "@angee/refine";
+import { useResourceListQuery } from "./resource-list-query";
 import { useBoardLaneState } from "../resource-view-board-lanes";
 import { modelRowId } from "../resource-view-codecs";
 import { useResourceViewPresentationSurfaceFromTable } from "./presentation";
 import { listResultFromTable, useResourceRowsSnapshot, useResourceViewQueryFacts, useResourceViewTableState } from "./table-state";
-import type { ResourceViewSurface, RowRecord, UseResourceViewSurfaceProps } from "./types";
+import type { ResourceViewSurface, UseResourceViewSurfaceProps } from "./types";
 export function useResourceViewSurface<TRow extends Row = Row>({
   columns,
   fields,
@@ -32,18 +31,6 @@ export function useResourceViewSurface<TRow extends Row = Row>({
   const rowGroupStack = groupStack ?? resourceView.state.groupStack;
   const [expanded, setExpanded] = React.useState<ExpandedState>({});
   const dataResource = modelMetadata?.resource ?? null;
-  const refineFilters = React.useMemo(
-    () => crudFiltersFromFilterRecord(mergedFilter) ?? [],
-    [mergedFilter],
-  );
-  const refineSorters = React.useMemo(
-    () => refineSortersFromAngeeOrder(sortOrder) ?? [],
-    [sortOrder],
-  );
-  const listMeta = React.useMemo(
-    () => ({ fields: refineFieldsFromPaths(requestedFields) }),
-    [requestedFields],
-  );
   const tableState = useResourceViewTableState({
     columns,
     resourceView,
@@ -64,22 +51,26 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     handleSortingChange,
     handleRowSelectionChange,
   } = tableState;
-  const resourceName = dataResource ? refineResourceName(dataResource) : "__angee_disabled__";
   const active = enabled && Boolean(dataResource);
-  const listQuery = useList<RowRecord, HttpError, RowRecord>({
-    resource: resourceName,
-    dataProviderName: dataResource?.schemaName,
-    pagination: {
-      mode: "server",
-      currentPage: paginationState.pageIndex + 1,
-      pageSize: paginationState.pageSize,
+  const listQuery = useResourceListQuery({
+    resource: dataResource,
+    scope: {
+      filter: mergedFilter, order: sortOrder,
+      page: paginationState.pageIndex + 1, pageSize: paginationState.pageSize,
     },
-    sorters: refineSorters,
-    filters: refineFilters,
-    meta: listMeta,
-    queryOptions: { enabled: active },
+    fields: requestedFields,
+    enabled: active,
   });
   const rows = listQuery.result.data as TRow[];
+  const total = listQuery.result.total;
+  React.useEffect(() => {
+    if (!active || !listQuery.query.isSuccess || listQuery.query.isFetching
+      || listQuery.query.isPlaceholderData || total === undefined) return;
+    const lastPage = Math.max(1, Math.ceil(total / paginationState.pageSize));
+    if (paginationState.pageIndex >= lastPage) resourceView.setPage(lastPage);
+  }, [active, listQuery.query.isSuccess, listQuery.query.isFetching,
+    listQuery.query.isPlaceholderData, total, paginationState.pageIndex,
+    paginationState.pageSize, resourceView.setPage]);
   const table = useReactTable<TRow>({
     data: rows,
     columns: tableColumns as ColumnDef<TRow>[],

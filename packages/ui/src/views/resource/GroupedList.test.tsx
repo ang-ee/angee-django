@@ -16,11 +16,13 @@ afterEach(cleanup);
 
 const defaultColumns: readonly ColumnDescriptor<Row>[] = [{ field: "title", header: "Title" }];
 
-function Harness({ pending = false, actions = false, columns = defaultColumns, onPageChange, onToggle }: {
+function Harness({ pending = false, actions = false, columns = defaultColumns, onPageChange, onPageSizeChange = () => undefined, onToggle, unit = "records" }: {
   pending?: boolean;
   actions?: boolean;
   columns?: readonly ColumnDescriptor<Row>[];
   onPageChange: (key: string, page: number) => void;
+  onPageSizeChange?: (key: string, pageSize: number) => void;
+  unit?: "records" | "groups";
   onToggle: (key: string) => void;
 }): React.ReactElement {
   const resourceView = useResourceView();
@@ -32,7 +34,7 @@ function Harness({ pending = false, actions = false, columns = defaultColumns, o
       kind: "groupHeader", bucketKey: "january", depth: 0, label: "January",
       count: 45, expandable: true, expanded: true,
       bucket: { key: { month: "January" }, count: 45, sum: { amount: 30 } },
-      pager: { pageKey: "january", page: 2, pageSize: 20, total: 45, unit: "records", pending },
+      pager: { pageKey: "january", page: 2, pageSize: 20, total: 45, unit, pending },
     },
     { kind: "status", itemKey: "body", depth: 0, message: "Group body", tone: "muted" },
   ];
@@ -46,7 +48,7 @@ function Harness({ pending = false, actions = false, columns = defaultColumns, o
       columns={columns} table={table} tableColumns={tableColumns} visibleColumnCount={columns.length}
       resourceView={resourceView} listItems={listItems} tableScrollRef={tableScrollRef}
       rowVirtualizer={rowVirtualizer} footerAggregate={null} expandedKeys={new Set(["january"])}
-      toggleGroup={onToggle} setScopePage={onPageChange} selectedIds={new Set()} interactive
+      toggleGroup={onToggle} setScopePage={onPageChange} setScopePageSize={onPageSizeChange} selectedIds={new Set()} interactive
       renderRowActions={actions ? () => null : undefined} emptyContent="Empty" fetching={false} error={null}
     />
   );
@@ -111,4 +113,20 @@ test("pending leaf reads keep the header pager mounted and disable its controls"
     fireEvent.click(button);
   }
   expect(props.onPageChange).not.toHaveBeenCalled();
+});
+
+
+test.each(["records", "groups"] as const)("%s header reuses the native page-size picker without collapsing", async (unit) => {
+  const onPageSizeChange = vi.fn();
+  const onToggle = vi.fn();
+  render(
+    <ResourceViewProvider scope="local">
+      <Harness unit={unit} onPageChange={vi.fn()} onPageSizeChange={onPageSizeChange} onToggle={onToggle} />
+    </ResourceViewProvider>,
+  );
+  const nav = screen.getByRole("navigation", { name: `January ${unit}` });
+  fireEvent.click(within(nav).getByRole("button", { name: new RegExp(`January ${unit}.*21-40`) }));
+  fireEvent.click(await screen.findByRole("button", { name: "50" }));
+  expect(onPageSizeChange).toHaveBeenCalledWith("january", 50);
+  expect(onToggle).not.toHaveBeenCalled();
 });

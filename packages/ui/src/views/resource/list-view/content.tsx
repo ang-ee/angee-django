@@ -222,6 +222,7 @@ export function ListViewContent<TRow extends Row = Row>({
           expandedKeys={surface.expandedKeys}
           toggleGroup={surface.toggleGroup}
           setScopePage={surface.setScopePage}
+          setScopePageSize={surface.setScopePageSize}
           selectedIds={surface.selectedIds}
           interactive={interactive}
           rowHref={rowHref}
@@ -243,7 +244,7 @@ export function ListViewContent<TRow extends Row = Row>({
           interactive={interactive}
           fetching={surface.list.fetching}
           emptyContent={emptyContent}
-          rowHref={rowHref}
+          rowHref={rowHref ? (row) => rowHref(row, surface.listState.navigationScope) : undefined}
           onRowClick={onRowClick}
           cardActions={
             cardActions || renderRowActions ? boardCardActions : undefined
@@ -276,7 +277,7 @@ export function ListViewContent<TRow extends Row = Row>({
           resourceView={resourceView}
           groupStack={effectiveGroupStack}
           interactive={interactive}
-          rowHref={rowHref}
+          rowHref={rowHref ? (row) => rowHref(row, surface.listState.navigationScope) : undefined}
           renderRowActions={renderRowActions}
           onRowClick={onRowClick}
           emptyContent={emptyContent}
@@ -299,7 +300,7 @@ export function ListViewContent<TRow extends Row = Row>({
           resourceView={resourceView}
           groupStack={effectiveGroupStack}
           interactive={interactive}
-          rowHref={rowHref}
+          rowHref={rowHref ? (row) => rowHref(row, surface.listState.navigationScope) : undefined}
           renderRowActions={renderRowActions}
           onRowClick={onRowClick}
           emptyContent={emptyContent}
