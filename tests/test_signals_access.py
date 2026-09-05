@@ -14,10 +14,6 @@ from typing import Any
 import pytest
 import strawberry
 import strawberry_django
-from angee.addons import AddonContract
-from angee.base.mixins import AuditMixin, TimestampMixin
-from angee.base.serialization import json_safe
-from angee.base.sync import sync_ingestion_context
 from django.apps import AppConfig
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
@@ -29,6 +25,9 @@ from rebac import actor_context, anonymous_actor
 from strawberry import auto
 from strawberry_django.fields.types import field_type_map
 
+from angee.base.mixins import AuditMixin, TimestampMixin
+from angee.base.serialization import json_safe
+from angee.base.sync import sync_ingestion_context
 from angee.graphql import access, publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
@@ -453,7 +452,7 @@ def test_alias_imported_changes_declaration_connects_publisher(
     module = importlib.import_module(module_name)
     addon = AppConfig(module_name, module)
     addon.path = str(package_dir)
-    addon._addon_contract = AddonContract(name=module_name, schemas="schema.schemas")
+    (package_dir / "addon.toml").write_text(f'[addon]\nname = "{module_name}"\n')
     schemas = GraphQLSchemas((addon,))
     publishing.disconnect_publishers(AliasPublished)
     try:

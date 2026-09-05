@@ -27,9 +27,6 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin, HierarchyMixin, SqidMixin
-from angee.base.models import AngeeModel
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -46,6 +43,9 @@ from rebac import (
 )
 from rebac.types import RelationshipFilter
 
+from angee.base.fields import StateField
+from angee.base.mixins import AuditMixin, HierarchyMixin, SqidMixin
+from angee.base.models import AngeeModel
 from angee.parties.mixins import ScoredLinkMixin
 from angee.spaces.managers import GroupManager, MembershipManager
 
@@ -390,7 +390,7 @@ def _thread_resource_type() -> str:
     return str(resource_type)
 
 
-class ThreadSpace(AngeeModel):
+class ThreadSpace(models.Model):
     """Group audience contributed onto ``messaging.Thread`` as a same-row field."""
 
     extends = "messaging.Thread"

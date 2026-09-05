@@ -9,68 +9,77 @@ configured addon roots, independent of which are enabled.
 from __future__ import annotations
 
 import pytest
-from angee.addons import (
-    AddonContract,
-    AddonMigration,
-    AvailableAddon,
-    _read_addon_contract,
-    available_addons,
-)
 from django.core.exceptions import ImproperlyConfigured
+from hatch_angee import AddonManifest
+
+from angee.addons import AvailableAddon, addon_manifest, available_addons
+from angee.compose.appgraph import AppGraph
+from angee.compose.dependencies import AddonDependencyGroup
+from tests.conftest import make_addon
 
 
-def test_addon_contract_parses_ordered_runtime_migrations(tmp_path) -> None:
+def test_manifest_binding_reuses_native_parse_and_refreshes_a_new_graph(tmp_path, monkeypatch) -> None:
+    """Graph, capabilities and dependency projection share one unchanged parser result."""
+
+    import angee.addons as addon_module
+
+    config = make_addon(name="example.demo", path=tmp_path)
+    original = addon_module.parse_manifest
+    parsed = []
+
+    def parse(marker):
+        manifest = original(marker)
+        parsed.append(manifest)
+        return manifest
+
+    monkeypatch.setattr(addon_module, "parse_manifest", parse)
+    assert AppGraph().resolve((config,)) == (config,)
+    manifest = addon_manifest(config)
+    assert isinstance(manifest, AddonManifest)
+    assert AddonDependencyGroup.from_app_configs((config,), project_dir=None).manifests == (manifest,)
+    assert len(parsed) == 1
+    assert manifest is parsed[0]
+    (tmp_path / "addon.toml").write_text('[addon]\nname = "example.demo"\ndescription = "updated"\n')
+    AppGraph().resolve((config,))
+    assert addon_manifest(config).description == "updated"
+    assert len(parsed) == 2
+    assert addon_manifest(config) is parsed[1]
+
+
+def test_manifest_binding_validates_native_identity(tmp_path) -> None:
+    config = make_addon(name="example.demo", path=tmp_path)
+    config.name = "example.other"
+    with pytest.raises(ImproperlyConfigured, match="disagrees with AppConfig.name"):
+        addon_manifest(config)
+
+
+def test_manifest_does_not_predict_or_import_capability_exports(tmp_path) -> None:
+    config = make_addon(name="example.demo", path=tmp_path)
+    (tmp_path / "schema.py").write_text('raise AssertionError("early import")\n')
+    (tmp_path / "mcp_tools.py").write_text('raise AssertionError("early import")\n')
+    manifest = addon_manifest(config)
+    assert manifest.schemas is None
+    assert manifest.mcp == {}
+    assert manifest.web == {}
+
+
+def test_new_graph_observes_previously_missing_manifest(tmp_path) -> None:
+    config = make_addon(name="example.demo", path=tmp_path)
     marker = tmp_path / "addon.toml"
-    marker.write_text(
-        """\
-[addon]
-name = "example.demo"
+    marker.unlink()
+    assert addon_manifest(config) is None
+    marker.write_text('[addon]\nname = "example.demo"\n')
+    AppGraph().resolve((config,))
+    assert addon_manifest(config).name == "example.demo"
 
-[[migrations]]
-name = "rename_owner"
-app_label = "demo"
-module = "runtime_migrations.rename_owner"
 
-[[migrations]]
-name = "backfill_owner"
-app_label = "demo"
-module = "example.demo.runtime_migrations.backfill_owner"
-""",
-        encoding="utf-8",
+def test_manifest_parser_retains_ordered_native_migration_entries(tmp_path) -> None:
+    entries = (
+        {"name": "rename_owner", "app_label": "demo", "module": "runtime_migrations.rename_owner"},
+        {"name": "backfill_owner", "app_label": "demo", "module": "runtime_migrations.backfill_owner"},
     )
-
-    contract = _read_addon_contract(str(marker))
-
-    assert contract is not None
-    assert contract.migrations == (
-        AddonMigration("rename_owner", "demo", "runtime_migrations.rename_owner"),
-        AddonMigration(
-            "backfill_owner",
-            "demo",
-            "example.demo.runtime_migrations.backfill_owner",
-        ),
-    )
-
-
-@pytest.mark.parametrize(
-    "body, message",
-    [
-        ("[migrations]\nname = 'bad'\n", "migrations must be an array of tables"),
-        ("[[migrations]]\nname = 'bad'\n", "requires string app_label"),
-        (
-            "[[migrations]]\nname = 3\napp_label = 'demo'\nmodule = 'm.x'\n",
-            "requires string name",
-        ),
-    ],
-)
-def test_addon_contract_rejects_invalid_runtime_migration_entries(
-    tmp_path, body: str, message: str
-) -> None:
-    marker = tmp_path / "addon.toml"
-    marker.write_text(f'[addon]\nname = "example.demo"\n\n{body}', encoding="utf-8")
-
-    with pytest.raises(ImproperlyConfigured, match=message):
-        _read_addon_contract(str(marker))
+    config = make_addon(name="example.demo", path=tmp_path, migrations=entries)
+    assert addon_manifest(config).migrations == entries
 
 
 def test_available_addons_excludes_core_and_enumerates_folder_addons(settings) -> None:
@@ -98,24 +107,19 @@ def test_available_addons_includes_local_addon_dirs(tmp_path) -> None:
     assert available["example.demo"].anchor == str(addon)
 
 
-def test_available_addons_reads_local_manifest_through_contract_owner(tmp_path, monkeypatch) -> None:
-    """Local catalog discovery reuses the cached manifest reader."""
+def test_available_addons_reads_local_manifest_through_upstream_discovery(tmp_path, monkeypatch) -> None:
+    """Catalog discovery delegates source ordering and parsing to hatch-angee."""
 
     addon = tmp_path / "example" / "contract"
-    addon.mkdir(parents=True)
-    marker = addon / "addon.toml"
-    marker.write_text("not valid toml", encoding="utf-8")
-    seen: list[str] = []
+    seen = []
 
-    def fake_read_addon_contract(path: str) -> AddonContract:
-        seen.append(path)
-        return AddonContract(name="example.contract")
+    def discover(roots):
+        seen.append(tuple(roots))
+        return [(addon, AddonManifest(name="example.contract"))]
 
-    monkeypatch.setattr("angee.addons._read_addon_contract", fake_read_addon_contract)
-
+    monkeypatch.setattr("angee.addons.discover", discover)
     available = available_addons([tmp_path])
-
-    assert seen == [str(marker)]
+    assert seen == [(tmp_path,)]
     assert available["example.contract"].source == "local"
     assert available["example.contract"].anchor == str(addon)
 
@@ -129,10 +133,22 @@ def test_registry_facts_full_row_for_enabled_and_zeroed_for_available(db) -> Non
 
     facts = AddonManager._registry_facts()
     row_keys = {
-        "label", "namespace", "description", "keywords", "category",
-        "kind", "source", "state", "forced", "pending",
-        "model_count", "field_count", "resource_count",
-        "depends_on", "depended_by", "model_labels",
+        "label",
+        "namespace",
+        "description",
+        "keywords",
+        "category",
+        "kind",
+        "source",
+        "state",
+        "forced",
+        "pending",
+        "model_count",
+        "field_count",
+        "resource_count",
+        "depends_on",
+        "depended_by",
+        "model_labels",
     }
 
     enabled = facts["angee.iam"]  # in the test INSTALLED_APPS
@@ -187,9 +203,19 @@ def test_registry_facts_flags_a_queued_uninstall_for_a_composed_root(db, monkeyp
     from angee.platform.models import AddonManager
 
     root = composed.AddonRollup(
-        name="example.demo", label="demo", namespace="example", kind="consumer",
-        forced=False, model_count=0, field_count=0, resource_count=0,
-        depends_on=[], model_labels=[], description="", keywords=[], category="Example",
+        name="example.demo",
+        label="demo",
+        namespace="example",
+        kind="consumer",
+        forced=False,
+        model_count=0,
+        field_count=0,
+        resource_count=0,
+        depends_on=[],
+        model_labels=[],
+        description="",
+        keywords=[],
+        category="Example",
     )
     monkeypatch.setattr(platform_models, "available_addons", lambda dirs=(): {})
     monkeypatch.setattr(platform_models.composed, "addon_rollups", lambda: [root])
@@ -203,3 +229,13 @@ def test_registry_facts_flags_a_queued_uninstall_for_a_composed_root(db, monkeyp
     dependency = replace(root, name="example.dep", kind="required")
     monkeypatch.setattr(platform_models.composed, "addon_rollups", lambda: [dependency])
     assert AddonManager._registry_facts(desired=frozenset())["example.dep"]["pending"] is False
+
+
+def test_failed_refresh_cannot_leave_a_previous_manifest_available(tmp_path) -> None:
+    config = make_addon(name="example.demo", path=tmp_path)
+    assert addon_manifest(config).name == "example.demo"
+    (tmp_path / "addon.toml").write_text("invalid toml", encoding="utf-8")
+    with pytest.raises(ImproperlyConfigured):
+        AppGraph().resolve((config,))
+    with pytest.raises(ImproperlyConfigured):
+        addon_manifest(config)

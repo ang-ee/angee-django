@@ -15,6 +15,7 @@ from django.db import connection, transaction
 from rebac import system_context, to_object_ref, to_subject_ref
 from rebac.models import active_relationship_model
 
+from angee.base.models import AngeeModel
 from angee.integrate.events import EventKind
 from angee.integrate.http import HttpResponse
 from angee.integrate.models import Bridge
@@ -29,7 +30,7 @@ from tests.conftest import (
 )
 
 
-class DispatchBridge(Bridge):
+class DispatchBridge(Bridge, AngeeModel):
     """Concrete bridge fixture used only for inbound dispatch tests."""
 
     class Meta(Bridge.Meta):
@@ -155,8 +156,8 @@ def test_runtime_marker_is_per_class() -> None:
             abstract = True
             app_label = "tests"
 
-    assert Bridge.is_runtime_model() is False
-    assert RuntimeBridge.is_runtime_model() is True
+    assert Bridge.__dict__.get("runtime", False) is False
+    assert RuntimeBridge.__dict__["runtime"] is True
 
 
 @pytest.mark.django_db(transaction=True)

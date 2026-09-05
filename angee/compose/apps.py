@@ -33,5 +33,6 @@ class ComposeConfig(AppConfig):
         from angee.compose.runtime import Runtime
 
         runtime = Runtime.from_django()
+        runtime.configure_migration_modules()
         runtime.emit_if_stale()
         runtime.import_generated_models()

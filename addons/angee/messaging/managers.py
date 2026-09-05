@@ -113,8 +113,8 @@ class ChannelManager(IntegrationManager):
     """Channel factory + delete owner, bound as ``Channel.objects``.
 
     A Channel is a multi-table-inheritance child of the concrete ``Integration``, so
-    the composer emits this manager as the concrete child's ``objects`` (see
-    ``Channel.angee_model_attributes``); it extends ``IntegrationManager`` and adds the
+    its abstract source declares this manager for Django to inherit. It extends
+    ``IntegrationManager`` and adds the
     channel-specific verbs: ``create_disconnected`` (vendor connect services) and the
     purge owner (:meth:`purge`/:meth:`inventory`) that deletes everything a channel
     ingested and forecasts the same scope for the delete-confirmation preview — one

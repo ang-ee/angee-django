@@ -16,12 +16,6 @@ from datetime import date
 from decimal import Decimal
 from typing import Any, ClassVar, Self, cast
 
-from angee.base.actors import actor_user_id
-from angee.base.fields import FractionalRankField, StateField
-from angee.base.mixins import AuditMixin
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeModel
-from angee.base.scoping import bind_actor
-from angee.base.transitions import StateTransitions, save_state, transition
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ValidationError
@@ -42,6 +36,12 @@ from rebac.actors import to_subject_ref
 from rebac.models import active_relationship_model
 from rebac.types import RelationshipFilter, SubjectRef
 
+from angee.base.actors import actor_user_id
+from angee.base.fields import FractionalRankField, StateField
+from angee.base.mixins import AuditMixin
+from angee.base.models import AngeeDataModel, AngeeManager
+from angee.base.scoping import bind_actor
+from angee.base.transitions import StateTransitions, save_state, transition
 from angee.messaging.models import ThreadedModelMixin
 from angee.money.fields import MoneyField
 
@@ -1625,7 +1625,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
             raise ValidationError("A submitted proposal cannot carry a decision receipt.")
 
 
-class TaskProposalContainment(AngeeModel):
+class TaskProposalContainment(models.Model):
     """Same-row save participant keeping unpublished proposal work private."""
 
     extends = "projects.Task"

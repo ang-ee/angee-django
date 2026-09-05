@@ -1,7 +1,7 @@
 """Web runtime manifest projected from the composed addon graph.
 
 The composer's *web* projector. It is deliberately offline and pure: it reads
-static ``AppConfig`` declarations and renders two files under ``runtime/web/`` —
+native addon manifests bound to ``AppConfig`` and renders two files under ``runtime/web/`` —
 ``manifest.json`` (the package graph + codegen contributions) and
 ``tailwind.sources.css`` (the Tailwind ``@source`` include). It holds **no**
 GraphQL-schema knowledge: which schemas exist, whether each is live, and the
@@ -16,94 +16,25 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections.abc import Iterable
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
 from pathlib import Path
+from typing import Any
 
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 
-from angee.addons import addon_contract
+from angee.addons import addon_manifest
 from angee.fs import GENERATED_SENTINEL
 
 CORE_WEB_PACKAGES: tuple[str, ...] = ("@angee/app", "@angee/ui")
-"""Rendered framework packages every host must scan and compose against.
-
-Scan and compose is all this drives: the Tailwind ``@source`` list and the
-codegen document roots. A package that renders nothing and declares no documents
-belongs to the host's ``package.json``, not here — listing it would contribute an
-empty scan and an empty document root.
-"""
+"""Framework packages whose rendered sources and documents every host consumes."""
 
 WEB_PACKAGE_RE = re.compile(r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
-
 DEFAULT_WEB_ROOT = "../../web"
-"""Path from ``runtime/web/`` to the host web package when both are project siblings."""
-
-
-@dataclass(frozen=True)
-class WebPackage:
-    """Web package projected into a composed web runtime manifest."""
-
-    package: str
-    source_root: str = "src"
-    root: str | None = None
-    app: str | None = None
-    label: str | None = None
-
-    def manifest_entry(self) -> dict[str, str]:
-        """Return the JSON-safe manifest entry for this package."""
-
-        entry = {
-            "package": self.package,
-            "sourceRoot": self.source_root,
-        }
-        if self.root is not None:
-            entry["root"] = self.root
-        if self.app is not None:
-            entry["app"] = self.app
-        if self.label is not None:
-            entry["label"] = self.label
-        return entry
-
-
-@dataclass(frozen=True)
-class WebCodegen:
-    """An external GraphQL codegen pass an addon contributes to the manifest.
-
-    The Django ``console``/``public`` schemas are emitted into
-    ``runtime/schemas/`` (owned by :class:`~angee.graphql.sdl.GraphQLSdl`) and
-    discovered by the CLI there. A schema owned elsewhere — the operator daemon —
-    keeps its committed SDL in its own addon package; this entry records the
-    package, the package-relative SDL path, and the document file so the CLI
-    reads the SDL straight from ``node_modules`` and generates
-    ``runtime/gql/<schema>/`` with the entry's config. The composer only collects
-    and orders the declaration; it neither runs the daemon nor mixes external SDL
-    into the Django-owned schema directory.
-    """
-
-    schema: str
-    package: str
-    sdl: str
-    documents: str
-    app: str
-    types: bool = False
-
-    def manifest_entry(self) -> dict[str, object]:
-        """Return the JSON-safe manifest entry for this codegen pass."""
-
-        return {
-            "schema": self.schema,
-            "package": self.package,
-            "sdl": self.sdl,
-            "documents": self.documents,
-            "app": self.app,
-            "types": self.types,
-        }
 
 
 class WebRuntime:
-    """Render the ``runtime/web`` manifest + Tailwind sources from AppConfigs."""
+    """Project native addon manifests into the web transport document and CSS."""
 
     def __init__(
         self,
@@ -112,17 +43,52 @@ class WebRuntime:
         runtime_dir: Path | None = None,
         web_root: str = DEFAULT_WEB_ROOT,
     ) -> None:
-        """Create a web projector over ``addons`` rooted at ``web_root``."""
-
-        self.addons = tuple(addons)
         self.runtime_dir = runtime_dir
         self.web_root = web_root
-        self.core_packages = tuple(WebPackage(package) for package in CORE_WEB_PACKAGES)
-        self.addon_packages = self._addon_packages()
-        self.codegen_entries = self._codegen_entries()
+        core_packages = [{"package": name, "sourceRoot": "src"} for name in CORE_WEB_PACKAGES]
+        addon_packages: list[dict[str, str]] = []
+        codegen_entries: list[dict[str, Any]] = []
+        packages_seen: dict[str, str] = {}
+        schemas_seen: dict[str, str] = {}
+        for addon in addons:
+            manifest = addon_manifest(addon)
+            if manifest is None:
+                continue
+            package = self._package_name(addon, manifest.web)
+            if package is not None:
+                if package in packages_seen:
+                    raise ImproperlyConfigured(
+                        f"Duplicate [web].package {package!r}: {packages_seen[package]} and {addon.name}"
+                    )
+                packages_seen[package] = addon.name
+                entry = {"package": package, "sourceRoot": "src", "app": addon.name, "label": addon.label}
+                if self.runtime_dir is not None:
+                    package_root = Path(addon.path).resolve() / "web"
+                    entry["root"] = Path(os.path.relpath(package_root, self.runtime_dir.resolve() / "web")).as_posix()
+                addon_packages.append(entry)
+            if "codegen" in manifest.web:
+                codegen = self._codegen_entry(addon, manifest.web["codegen"], package)
+                schema = codegen["schema"]
+                if schema in schemas_seen:
+                    raise ImproperlyConfigured(
+                        f"Duplicate [web].codegen.schema {schema!r}: {schemas_seen[schema]} and {addon.name}"
+                    )
+                schemas_seen[schema] = addon.name
+                codegen_entries.append(codegen)
+        self.manifest: dict[str, Any] = {
+            "schema": 1,
+            "corePackages": core_packages,
+            "addonPackages": addon_packages,
+            "codegen": codegen_entries,
+            "documentRoots": [
+                {"kind": "package", "package": entry["package"], "path": f"node_modules/{entry['package']}/src"}
+                for entry in (*core_packages, *addon_packages)
+            ]
+            + [{"kind": "host", "path": "src"}],
+        }
 
     def render_sources(self) -> dict[Path, str]:
-        """Return generated ``runtime/web`` files keyed by relative path."""
+        """Return generated web files keyed by runtime-relative path."""
 
         return {
             Path("web/manifest.json"): self.manifest_json(),
@@ -130,133 +96,67 @@ class WebRuntime:
         }
 
     def manifest_json(self) -> str:
-        """Return the deterministic web runtime manifest."""
+        """Return the deterministic codegen transport document."""
 
-        return (
-            json.dumps(
-                {
-                    "schema": 1,
-                    "corePackages": [package.manifest_entry() for package in self.core_packages],
-                    "addonPackages": [package.manifest_entry() for package in self.addon_packages],
-                    "codegen": [entry.manifest_entry() for entry in self.codegen_entries],
-                    "documentRoots": self._document_roots(),
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n"
-        )
+        return json.dumps(self.manifest, indent=2, sort_keys=True) + "\n"
 
     def tailwind_sources_css(self) -> str:
         """Return the Tailwind source include consumed by host CSS."""
 
-        lines = [
-            f"/* {GENERATED_SENTINEL} */",
-            "",
-            *(
-                f'@source "{self._web_package_source(package)}";'
-                for package in (*self.core_packages, *self.addon_packages)
-            ),
-            f'@source "{self.web_root}/src";',
-            "",
-        ]
-        return "\n".join(lines)
+        packages = (*self.manifest["corePackages"], *self.manifest["addonPackages"])
+        return "\n".join(
+            [
+                f"/* {GENERATED_SENTINEL} */",
+                "",
+                *(f'@source "{self.web_root}/node_modules/{entry["package"]}/src";' for entry in packages),
+                f'@source "{self.web_root}/src";',
+                "",
+            ]
+        )
 
-    def _addon_packages(self) -> tuple[WebPackage, ...]:
-        """Return addon web packages in composed app order."""
+    @staticmethod
+    def _package_name(addon: AppConfig, web: Mapping[str, Any]) -> str | None:
+        """Use an explicit package declaration before conventional package.json."""
 
-        packages: list[WebPackage] = []
-        seen: dict[str, AppConfig] = {}
-        for addon in self.addons:
-            contract = addon_contract(addon)
-            raw_package = contract.web if contract is not None else None
-            if raw_package is None:
-                continue
-            if not isinstance(raw_package, str) or not WEB_PACKAGE_RE.match(raw_package):
-                raise ImproperlyConfigured(
-                    f"{addon.name} addon.toml [web].package must be a valid npm package name"
-                )
-            previous = seen.setdefault(raw_package, addon)
-            if previous is not addon:
-                raise ImproperlyConfigured(
-                    f"Duplicate [web].package {raw_package!r}: {previous.name} and {addon.name}"
-                )
-            packages.append(
-                WebPackage(
-                    raw_package,
-                    root=self._addon_web_root(addon),
-                    app=addon.name,
-                    label=addon.label,
-                )
+        if "package" in web:
+            package = web["package"]
+        else:
+            package_json = Path(addon.path) / "web" / "package.json"
+            if not package_json.is_file():
+                return None
+            try:
+                document = json.loads(package_json.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as error:
+                raise ImproperlyConfigured(f"{addon.name}: cannot read {package_json}") from error
+            package = document.get("name") if isinstance(document, Mapping) else None
+        if not isinstance(package, str) or not WEB_PACKAGE_RE.fullmatch(package):
+            raise ImproperlyConfigured(f"{addon.name} addon.toml [web].package must be a valid npm package name")
+        return package
+
+    @staticmethod
+    def _codegen_entry(addon: AppConfig, raw: object, package: str | None) -> dict[str, Any]:
+        """Validate the external schema declaration at its transport owner."""
+
+        if not isinstance(raw, Mapping) or not {"schema", "sdl", "documents"} <= raw.keys():
+            raise ImproperlyConfigured(
+                f"{addon.name} addon.toml [web].codegen must declare 'schema', 'sdl', and 'documents'"
             )
-        return tuple(packages)
-
-    def _addon_web_root(self, addon: AppConfig) -> str | None:
-        """Return the addon's web root relative to the generated manifest."""
-
-        if self.runtime_dir is None:
-            return None
-        addon_path = getattr(addon, "path", None)
-        if not isinstance(addon_path, str) or not addon_path:
-            return None
-        manifest_dir = self.runtime_dir.resolve() / "web"
-        package_root = Path(addon_path).resolve() / "web"
-        return Path(os.path.relpath(package_root, manifest_dir)).as_posix()
-
-    def _codegen_entries(self) -> tuple[WebCodegen, ...]:
-        """Return external codegen contributions in composed app order."""
-
-        entries: list[WebCodegen] = []
-        seen: dict[str, AppConfig] = {}
-        for addon in self.addons:
-            contract = addon_contract(addon)
-            if contract is None or contract.web_codegen is None:
-                continue
-            raw = contract.web_codegen
-            if not isinstance(raw, dict) or not {"schema", "sdl", "documents"} <= set(raw):
-                raise ImproperlyConfigured(
-                    f"{addon.name} addon.toml [web].codegen must declare 'schema', 'sdl', and 'documents'"
-                )
-            schema = raw["schema"]
-            if not isinstance(schema, str) or not schema.isidentifier():
-                raise ImproperlyConfigured(
-                    f"{addon.name} [web].codegen.schema must be a model-safe name"
-                )
-            package = contract.web
-            if not isinstance(package, str):
-                raise ImproperlyConfigured(
-                    f"{addon.name} [web].codegen requires [web].package"
-                )
-            previous = seen.setdefault(schema, addon)
-            if previous is not addon:
-                raise ImproperlyConfigured(
-                    f"Duplicate [web].codegen.schema {schema!r}: {previous.name} and {addon.name}"
-                )
-            entries.append(
-                WebCodegen(
-                    schema=schema,
-                    package=package,
-                    sdl=str(raw["sdl"]),
-                    documents=str(raw["documents"]),
-                    app=addon.name,
-                    types=bool(raw.get("types", False)),
-                )
-            )
-        return tuple(entries)
-
-    def _document_roots(self) -> list[dict[str, str]]:
-        """Return document roots consumed by the framework codegen CLI."""
-
-        return [
-            {
-                "kind": "package",
-                "package": package.package,
-                "path": f"node_modules/{package.package}/{package.source_root}",
-            }
-            for package in (*self.core_packages, *self.addon_packages)
-        ] + [{"kind": "host", "path": "src"}]
-
-    def _web_package_source(self, package: WebPackage) -> str:
-        """Return a Tailwind source path from ``runtime/web``."""
-
-        return f"{self.web_root}/node_modules/{package.package}/{package.source_root}"
+        schema = raw["schema"]
+        if not isinstance(schema, str) or not schema.isidentifier():
+            raise ImproperlyConfigured(f"{addon.name} [web].codegen.schema must be a model-safe name")
+        if package is None:
+            raise ImproperlyConfigured(f"{addon.name} [web].codegen requires [web].package")
+        for key in ("sdl", "documents"):
+            if not isinstance(raw[key], str) or not raw[key]:
+                raise ImproperlyConfigured(f"{addon.name} [web].codegen.{key} must be a non-empty string")
+        types = raw.get("types", False)
+        if not isinstance(types, bool):
+            raise ImproperlyConfigured(f"{addon.name} [web].codegen.types must be a boolean")
+        return {
+            "schema": schema,
+            "package": package,
+            "sdl": raw["sdl"],
+            "documents": raw["documents"],
+            "app": addon.name,
+            "types": types,
+        }

@@ -39,19 +39,21 @@ revision in ``@rebac_extended_by`` for provenance. The base package does **not**
 bump its own ``@rebac_schema_revision`` for an additive extension — the
 contribution is owned, and revisioned, by the contributing addon.
 
-Dormant by construction: with no ``permissions.extends.zed`` anywhere, every
-entry point returns empty / no-op and nothing is emitted or repointed.
+With no extension fragments, merging emits nothing. Phase-2 binding still
+connects manifest-declared permission files to the upstream AppConfig seam.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from django.apps import AppConfig
+from django.core.exceptions import ImproperlyConfigured
 from rebac.schema import Definition, Schema, parse_zed, resolve_schema_path, validate_schema
 from rebac.schema import render_zed as render_schema
 
+from angee.addons import addon_manifest
 from angee.fs import GENERATED_SENTINEL
 
 __all__ = [
@@ -94,6 +96,35 @@ def _schema_path(app_config: AppConfig, filename: str) -> Path | None:
     return path if path.exists() else None
 
 
+def declared_schema_path(app_config: AppConfig) -> Path | None:
+    """Resolve authored input independently of previously bound effective output."""
+
+    manifest = addon_manifest(app_config)
+    if manifest is None:
+        # Native Django apps have no addon manifest. Capture their upstream
+        # declaration before a derived merged path is assigned to the same seam.
+        if (
+            "_angee_rebac_schema_effective" not in app_config.__dict__
+            or getattr(app_config, "rebac_schema", None) != app_config._angee_rebac_schema_effective
+        ):
+            app_config._angee_rebac_schema_source = resolve_schema_path(app_config)
+        return app_config._angee_rebac_schema_source
+
+    path = Path(app_config.path) / (manifest.permissions or "permissions.zed")
+    configured = getattr(app_config, "rebac_schema", None)
+    bound = app_config.__dict__.get("_angee_rebac_schema_effective")
+    if configured is not None and configured != bound:
+        configured_path = Path(app_config.path) / configured
+        if configured_path.resolve() != path.resolve():
+            raise ImproperlyConfigured(
+                f"{app_config.name}: declare permissions in addon.toml; "
+                "AppConfig.rebac_schema conflicts with the manifest"
+            )
+    if manifest.permissions is not None and not path.is_file():
+        raise ImproperlyConfigured(f"{app_config.name}: declared permissions file does not exist: {path}")
+    return path if path.is_file() else None
+
+
 def _parse(path: Path, package: str) -> Schema:
     """Parse one zed file, wrapping any failure with its owning package."""
 
@@ -116,13 +147,7 @@ def _base_index(
     bases: dict[str, Schema] = {}
     owner_of: dict[str, str] = {}
     for app_config in app_configs:
-        # Repointing is composition output; later passes still merge the
-        # authored input captured on this AppConfig before its first repoint.
-        path = (
-            app_config._angee_rebac_schema_source
-            if hasattr(app_config, "_angee_rebac_schema_source")
-            else resolve_schema_path(app_config)
-        )
+        path = declared_schema_path(app_config)
         if path is None:
             continue
         package = app_config.name
@@ -167,6 +192,8 @@ def merged_schemas(app_configs: Iterable[AppConfig]) -> dict[str, Schema]:
     """
 
     app_configs = list(app_configs)
+    for app_config in app_configs:
+        declared_schema_path(app_config)
     fragments = _extension_fragments(app_configs)
     if not fragments:
         return {}
@@ -298,24 +325,27 @@ def extension_source_map(app_configs: Iterable[AppConfig]) -> dict[Path, str]:
     }
 
 
-def apply_schema_paths(app_configs: Iterable[AppConfig], runtime_dir: Path) -> None:
-    """Repoint each extended package's ``rebac_schema`` at its merged zed.
+def apply_schema_paths(
+    app_configs: Iterable[AppConfig],
+    runtime_dir: Path,
+    *,
+    sources: Mapping[Path, str],
+) -> None:
+    """Bind upstream paths after emission, using the already-rendered source map.
 
-    ``rebac sync`` / ``rebac check`` / ``reconcile_permissions`` resolve a
-    package's schema as ``Path(app_config.path) / app_config.rebac_schema``; an
-    absolute value wins (``Path('/a') / '/b' == Path('/b')``), so pointing at the
-    emitted merged file makes every reader see the superset. No-op when dormant.
+    Addon manifests supply declarations; ``rebac_schema`` is derived integration
+    consumed by django-zed-rebac. Ordinary Django apps keep their native schema
+    declaration. Binding never parses or merges an extension a second time.
     """
 
-    app_configs = list(app_configs)
-    extended = merged_schemas(app_configs)
-    if not extended:
-        return
-    by_name = {app_config.name: app_config for app_config in app_configs}
-    for package in extended:
-        app_config = by_name.get(package)
-        if app_config is None:
+    for app_config in app_configs:
+        source = declared_schema_path(app_config)
+        merged = merged_schema_relpath(app_config.name)
+        if merged in sources:
+            effective = str((runtime_dir / merged).resolve())
+        elif addon_manifest(app_config) is not None or "_angee_rebac_schema_effective" in app_config.__dict__:
+            effective = str(source.resolve()) if source is not None else None
+        else:
             continue
-        if not hasattr(app_config, "_angee_rebac_schema_source"):
-            app_config._angee_rebac_schema_source = resolve_schema_path(app_config)
-        app_config.rebac_schema = str((runtime_dir / merged_schema_relpath(package)).resolve())
+        app_config.rebac_schema = effective
+        app_config._angee_rebac_schema_effective = effective

@@ -11,16 +11,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from angee.base.fields import FractionalRankField, StateField
-from angee.base.mixins import AuditMixin, HierarchyMixin
-from angee.base.models import (
-    AngeeDataModel,
-    AngeeManager,
-    AngeeModel,
-    role_anchor,
-)
-from angee.base.refs import RecordRefMixin, canonical_record_target
-from angee.base.scoping import bind_actor
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -36,6 +26,17 @@ from rebac import (
     to_object_ref,
     write_relationships,
 )
+
+from angee.base.fields import FractionalRankField, StateField
+from angee.base.mixins import AuditMixin, HierarchyMixin
+from angee.base.models import (
+    AngeeDataModel,
+    AngeeManager,
+    role_anchor,
+)
+from angee.base.refs import RecordRefMixin, canonical_record_target
+from angee.base.scoping import bind_actor
+from angee.resources.mixins import ResourceLoadMixin
 
 _EVERYONE = SubjectRef.of("auth/user", "*")
 """The wildcard subject used by the workspace-visible portfolio posture."""
@@ -319,7 +320,7 @@ class Initiative(WorkspaceVisibleMixin, HierarchyMixin, AuditMixin, AngeeDataMod
         return self.name
 
 
-class InitiativeProject(WorkspaceVisibleMixin, AuditMixin, AngeeDataModel):
+class InitiativeProject(ResourceLoadMixin, WorkspaceVisibleMixin, AuditMixin, AngeeDataModel):
     """An ordered Project placement on an ancestry-safe Initiative tree."""
 
     runtime = True
@@ -399,11 +400,16 @@ class InitiativeProject(WorkspaceVisibleMixin, AuditMixin, AngeeDataModel):
         source: str,
         publish: bool = False,
     ) -> None:
+        """Apply demo provisioning, then continue the resource hook chain."""
+
+        if tier == "demo":
+            cls._seed_demo_reports(instances)
+        super().after_resource_load(instances, tier=tier, source=source, publish=publish)
+
+    @classmethod
+    def _seed_demo_reports(cls, instances: Iterable[Any]) -> None:
         """Seed one idempotent report for each side of demo placements."""
 
-        del cls, source, publish
-        if tier != "demo":
-            return
         update_model = apps.get_model("portfolio", "Update")
         for placement in sorted(instances, key=lambda instance: instance.pk or 0):
             targets = (
@@ -623,7 +629,7 @@ class Release(WorkspaceVisibleMixin, AuditMixin, AngeeDataModel):
         return f"{self.product_id}:{self.name}"
 
 
-class ProjectPortfolio(AngeeModel):
+class ProjectPortfolio(models.Model):
     """Same-row portfolio placement folded into ``projects.Project``.
 
     Placement (``product``, ``priority``, and ``sort_order``) is deliberately
@@ -691,7 +697,7 @@ class ProjectPortfolio(AngeeModel):
         return product_model.objects.from_project(self)
 
 
-class TaskPortfolio(AngeeModel):
+class TaskPortfolio(models.Model):
     """Same-row release attribution folded into ``projects.Task``."""
 
     extends = "projects.Task"

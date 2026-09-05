@@ -8,14 +8,13 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, cast
 
-from angee.base.fields import StateField
-from angee.base.impl import ImplClassField
-from angee.base.models import AngeeManager
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import DataError, models
 from rebac import system_context
 
+from angee.base.fields import StateField
+from angee.base.impl import ImplClassField
 from angee.integrate.models import Bridge
 from angee.integrate.sync import current_bridge_progress
 from angee.storage import exceptions
@@ -71,12 +70,11 @@ class Mount(Bridge):
         editable=False,
     )
 
-    objects = AngeeManager()
-
     class Meta:
         """Django model options for the Mount integration child."""
 
         abstract = True
+        ordering = ("-updated_at",)
         rebac_resource_type = "storage_integrate/mount"
         rebac_id_attr = "sqid"
 

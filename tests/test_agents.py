@@ -65,7 +65,7 @@ class Skill(AbstractSkill):
         rebac_id_attr = "sqid"
 
 
-class InferenceProvider(Integration, AbstractInferenceProvider):
+class InferenceProvider(AbstractInferenceProvider, Integration):
     """Concrete inference provider (capability over an integration) used by tests."""
 
     class Meta(AbstractInferenceProvider.Meta):

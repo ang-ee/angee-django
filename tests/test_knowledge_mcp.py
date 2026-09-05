@@ -16,7 +16,6 @@ import importlib
 from typing import Any
 
 import pytest
-from angee.addons import addon_contract, resolve_addon_reference
 from django.apps import apps
 from fastmcp import FastMCP
 
@@ -158,13 +157,8 @@ def test_page_backlinks_projects_only_backlinks(knowledge_discovery: None) -> No
 
 
 def test_appconfig_wires_the_registrar() -> None:
-    """The knowledge manifest declares ``mcp_tools`` and it resolves to ``register``.
+    """The MCP owner loads knowledge's conventional registrar from its native config."""
 
-    Proves the discovery seam (``mcp/server.py`` reads ``contract.mcp_tools``) finds the
-    knowledge registrar without building the whole server.
-    """
+    from angee.mcp.server import tool_registrar
 
-    app_config = apps.get_app_config("knowledge")
-    mcp_tools = addon_contract(app_config).mcp_tools
-    assert mcp_tools == "mcp_tools.register"
-    assert resolve_addon_reference(app_config, mcp_tools, attr="mcp_tools") is knowledge_mcp_tools.register
+    assert tool_registrar(apps.get_app_config("knowledge")) is knowledge_mcp_tools.register

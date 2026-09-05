@@ -25,10 +25,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, ClassVar, cast
 
-from angee.base.fields import SqidField, StateField
-from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, HierarchyMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -42,8 +38,12 @@ from phonenumbers import (
     parse,
 )
 from rebac import PermissionDenied, system_context
-from rebac.managers import RebacManager
+from rebac.mixins import RebacModelBase
 
+from angee.base.fields import SqidField, StateField
+from angee.base.impl import ImplClassField
+from angee.base.mixins import AuditMixin, HierarchyMixin, SqidMixin
+from angee.base.models import AngeeManager, AngeeModel
 from angee.integrate.models import Bridge
 from angee.parties.backends import DirectoryBackend
 from angee.parties.managers import (
@@ -284,7 +284,7 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
         return cast(Party, terminal)
 
 
-class Person(AngeeModel):
+class Person(models.Model, metaclass=RebacModelBase):
     """A human party — carries name parts and an optional platform-user link."""
 
     runtime = True
@@ -310,6 +310,7 @@ class Person(AngeeModel):
         """Django model options for the person child model."""
 
         abstract = True
+        ordering = ("-updated_at", "display_name", "sqid")
         rebac_resource_type = "parties/person"
         rebac_id_attr = "sqid"
 
@@ -376,7 +377,7 @@ class MergeVeto(SqidMixin, AuditMixin, AngeeModel):
         super().save(*args, **kwargs)
 
 
-class Organization(AngeeModel):
+class Organization(models.Model, metaclass=RebacModelBase):
     """An organisation party — carries its legal name and primary domain."""
 
     runtime = True
@@ -385,12 +386,11 @@ class Organization(AngeeModel):
     legal_name = models.TextField(blank=True, default="")
     domain = models.CharField(max_length=255, blank=True, default="", db_index=True)
 
-    objects = AngeeManager()
-
     class Meta:
         """Django model options for the organization child model."""
 
         abstract = True
+        ordering = ("-updated_at", "display_name", "sqid")
         rebac_resource_type = "parties/organization"
         rebac_id_attr = "sqid"
 
@@ -1108,12 +1108,11 @@ class Directory(Bridge):
     )
     """Registry key for the directory backend bound to this directory."""
 
-    objects = RebacManager()
-
     class Meta:
         """Django model options for the directory child model."""
 
         abstract = True
+        ordering = ("-updated_at",)
         rebac_resource_type = "parties/directory"
         rebac_id_attr = "sqid"
 

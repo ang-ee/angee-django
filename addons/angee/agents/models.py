@@ -25,6 +25,7 @@ from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
 from rebac import RelationshipTuple, SubjectRef, system_context, to_object_ref
+from rebac.mixins import RebacModelBase
 from rebac.relationships import delete_relationships, write_relationships
 from rebac.types import RelationshipFilter
 
@@ -149,7 +150,7 @@ class TurnStatus(models.TextChoices):
     CANCELED = "canceled", "Canceled"
 
 
-class InferenceProvider(ImplDefaultsMixin, AngeeModel):
+class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
     """An LLM provider account, materialized as an integration child row.
 
     It draws its API credential from its inherited integration credential and
@@ -173,8 +174,6 @@ class InferenceProvider(ImplDefaultsMixin, AngeeModel):
     """Base endpoint for OpenAI-compatible providers; blank uses the backend default."""
     config = models.JSONField(default=dict, blank=True)
     """Provider-scoped settings used by inference implementations."""
-
-    objects = AngeeManager()
 
     class Meta:
         """Django model options for the inference provider child model."""

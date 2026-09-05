@@ -12,9 +12,9 @@ from django.db import models, transaction
 from django.db.models import F, Value
 from django.db.models.functions import Replace
 from rebac import current_actor
+from simple_history.models import HistoricalRecords
 
 from angee.base.actors import actor_user_id
-from angee.base.emission import ModelClassAttribute, ModelDecorator
 from angee.base.fields import SqidField
 from angee.base.indexes import PatternOpsIndex
 from angee.base.scoping import system_queryset
@@ -198,71 +198,48 @@ class ArchiveQuerySet(models.QuerySet[_ArchiveModelT]):
         return cast(Self, self.filter(**{ARCHIVE_FLAG_FIELD: False}))
 
 
+class ModelHistory(HistoricalRecords):
+    """Native history adapted to abstract sources and generated module names.
+
+    Tracking belongs to an abstract source/donor that includes HistoryMixin.
+    Inheriting only a concrete tracked parent does not create a second history
+    table for its MTI child. All copying, signals and history behavior stay with
+    django-simple-history.
+    """
+
+    def finalize(self, sender: type[models.Model], **kwargs: Any) -> None:
+        if not any(
+            issubclass(base, self.cls) and base._meta.abstract
+            for base in sender.__bases__
+            if isinstance(base, type) and issubclass(base, models.Model) and base is not models.Model
+        ):
+            return
+        super().finalize(sender, **kwargs)
+
+    def get_meta_options(self, model: type[models.Model]) -> dict[str, Any]:
+        options = super().get_meta_options(model)
+        options["app_label"] = model._meta.app_label
+        return options
+
+    def fields_included(self, model: type[models.Model]) -> list[models.Field]:
+        return [
+            field
+            for field in super().fields_included(model)
+            if field.concrete or field.is_relation or field.auto_created
+        ]
+
+
 class HistoryMixin(models.Model):
-    """Mark a model as tracked by django-simple-history."""
+    """Track concrete models through django-simple-history's inherited descriptor."""
 
-    @classmethod
-    def angee_model_attributes(
-        cls,
-        *,
-        app_label: str,
-        model_class: type[models.Model],
-        extension_bases: tuple[type[models.Model], ...],
-    ) -> tuple[ModelClassAttribute, ...]:
-        """Return the simple-history class attribute for a concrete model."""
-
-        kwargs: list[tuple[str, Any]] = [("app", app_label)]
-        excluded = cls.angee_history_excluded_fields((*extension_bases, model_class))
-        if excluded:
-            kwargs.append(("excluded_fields", excluded))
-        return (
-            ModelClassAttribute(
-                name="history",
-                import_path="simple_history.models.HistoricalRecords",
-                kwargs=tuple(kwargs),
-            ),
-        )
-
-    @staticmethod
-    def angee_history_excluded_fields(
-        model_bases: tuple[type[models.Model], ...],
-    ) -> list[str]:
-        """Return source fields simple-history cannot mirror."""
-
-        excluded: set[str] = set()
-        for model_base in model_bases:
-            meta = model_base._meta
-            own_fields = (
-                *meta.local_fields,
-                *meta.private_fields,
-                *meta.local_many_to_many,
-            )
-            excluded.update(
-                field.name
-                for field in own_fields
-                if getattr(field, "concrete", True) is False
-                and not field.is_relation
-                and not getattr(field, "auto_created", False)
-            )
-        return sorted(excluded)
+    history = ModelHistory(inherit=True)
 
     class Meta:
-        """Django model options for history-only abstract inheritance."""
-
         abstract = True
 
 
 class RevisionMixin(models.Model):
     """Mark a model as tracked by django-reversion snapshots."""
-
-    angee_model_decorators: ClassVar[tuple[ModelDecorator, ...]] = (
-        ModelDecorator(
-            import_path="reversion.register",
-            kwargs_from_model=(("fields", "revisioned_fields"),),
-            enabled_by_model_attr="revisioned_fields",
-        ),
-    )
-    """Composer decorators applied to emitted concrete revision models."""
 
     revisioned_fields: ClassVar[tuple[str, ...]] = ()
     """Model field names registered with django-reversion."""
@@ -578,12 +555,7 @@ class HierarchyMixin(models.Model):
     def _hierarchy_committed_parent_id(self) -> Any:
         """Return this row's committed ``parent_id`` from the database."""
 
-        return (
-            system_queryset(type(self))
-            .filter(pk=self.pk)
-            .values_list("parent_id", flat=True)
-            .first()
-        )
+        return system_queryset(type(self)).filter(pk=self.pk).values_list("parent_id", flat=True).first()
 
     def _hierarchy_parent(self) -> HierarchyMixin | None:
         """Return the parent instance (cached when assigned), or ``None`` for a root."""

@@ -10,7 +10,7 @@ from angee.integrate.registry import bridge_models, check_source_kind_contracts,
 from tests.conftest import Integration, Source, Template
 
 
-class ConcreteBridge(Integration, Bridge):
+class ConcreteBridge(Bridge, Integration):
     """Concrete bridge used only to inspect inherited field declarations."""
 
     class Meta(Bridge.Meta):

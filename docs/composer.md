@@ -6,12 +6,12 @@ project: final settings, a single ordered app registry, generated concrete ORM
 models, stable URL/ASGI entrypoints, and lifecycle inputs for GraphQL,
 resources, permissions, MCP, and other addons.
 
-The important constraint is that Angee stays Django-shaped. A project declares
-root addons with `INSTALLED_APPS`; addons are plain Django apps with extra
-`AppConfig` declarations for the lifecycle seams they participate in; HTTP and
-WebSocket routes use Django-style conventional modules. Settings are ready
-before Django app loading, and generated models are imported during Django app
-loading.
+A project declares root apps with `INSTALLED_APPS`. An addon is a plain Django
+app whose `addon.toml` owns its identity, metadata, dependencies, Python
+requirements, and explicit capability declarations. Django owns AppConfig
+selection, labels, paths, model registration and `ready()`. Fields and executable
+behavior remain in Python. Conventional modules provide defaults; explicit
+manifest declarations take precedence.
 
 This page maps the flow and ownership boundaries. Current API details, default
 lists, validation rules, and exact declaration shapes live in the owning modules,
@@ -25,30 +25,37 @@ Composition has three phases.
    module finds the project root, loads project settings, applies Angee defaults,
    resolves the addon graph, and mutates the namespace Django is importing.
 2. **App loading** - Django populates the resolved `INSTALLED_APPS`.
-   `ComposeConfig.import_models()` heals the generated runtime in place when the
-   rendered source drifts, then imports the concrete model modules so Django
-   registers them under the source addon labels.
+   In population phase 2, `ComposeConfig.import_models()` discovers abstract
+   sources, binds migration modules, repairs generated sources, binds effective
+   permission paths, and imports the concrete models under the source app labels.
+   Native `ready()` hooks run afterward, once the model registry is complete.
 3. **Serving and lifecycle commands** - stable framework entrypoints such as
    `angee.urls`, `angee.asgi`, `schema`, `resources`, and `rebac sync` read the
    finished Django app registry. Each lifecycle consumes only the app
    declarations or conventional modules it owns.
 
-Settings composition never imports source models. Runtime emission never decides
-settings. Normal Django startup heals the runtime in place and never prunes
-orphaned labels; destructive reset/prune is reserved for the explicit `angee
-build` path.
+Settings composition never imports source models or permission runtime code.
+The phase-2 hook binds derived migration and permission paths explicitly; source
+rendering does not choose project settings. Normal startup repairs files without
+pruning. Explicit build and clean retain the guarded cleanup policy described
+below.
 
 ## Owner Map
 
 | Concern | Owner |
 |---|---|
-| Project-root discovery, YAML settings load, bootstrap environment | [`angee.compose.settings`](../angee/compose/settings.py) |
+| Project-root discovery and project settings/bootstrap environment | [`ProjectContract`](../angee/compose/project.py), called by [`angee.compose.settings`](../angee/compose/settings.py) |
+| Bounded django-yamlconf loading and provenance | [`angee.compose.yamlconf`](../angee/compose/yamlconf.py) |
 | Overridable framework defaults and ordered always-on core apps | [`angee.compose.defaults`](../angee/compose/defaults.py) |
 | Reserved composed settings and final settings mutation | [`Composer`](../angee/compose/composer.py) |
 | Root/dependency graph, app aliases, root annotations | [`AppGraph`](../angee/compose/appgraph.py) |
 | Addon settings fragments and declared `ANGEE_*` env overlays | [`AutoConfig`](../angee/compose/autoconfig.py) |
-| Addon opt-in and shared dotted-reference resolution | [`angee.addons`](../angee/addons.py) |
-| Runtime rendering, drift checks, emission, cleanup, model extension order | [`Runtime`](../angee/compose/runtime.py) |
+| Addon declarations and parsing | `addon.toml` and hatch-angee's native `AddonManifest`; [`angee.addons`](../angee/addons.py) binds the result to a native config |
+| Abstract-source discovery, donor order, parent relationships and collisions | [`ModelComposition`](../angee/compose/model_composition.py) |
+| Concrete class source text | [`angee.compose.rendering`](../angee/compose/rendering.py) |
+| Artifact assembly and explicit build/check/cleanup orchestration | [`Runtime`](../angee/compose/runtime.py) |
+| Atomic writes, drift and guarded filesystem cleanup | [`GeneratedTree`](../angee/fs.py) |
+| Addon migration materialization and dependency projection | [`RuntimeMigrations`](../angee/compose/migrations.py), [`AddonDependencyGroup`](../angee/compose/dependencies.py) |
 | Runtime import during Django app population | [`ComposeConfig.import_models()`](../angee/compose/apps.py) |
 | HTTP route aggregation | [`angee.urls`](../angee/urls.py) |
 | WebSocket routes, HTTP sub-app mounts, mount lifespans | [`angee.asgi`](../angee/asgi.py) |
@@ -60,11 +67,11 @@ This document should point there, not repeat the contract.
 
 ## Settings Bootstrap
 
-`angee.compose.settings` is the settings module Django imports. It owns the boot
-sequence: find the project root, load or synthesize the project settings module,
-apply `django-yamlconf`, reject implicit ancestor settings files, evaluate Angee
-defaults (including the ordered core app prefix), make configured addon roots
-importable, and call `Composer`.
+Django imports `angee.compose.settings`, which delegates to `ProjectContract`.
+That owner finds the project root, loads or synthesizes its settings module,
+applies the bounded django-yamlconf adapter, evaluates Angee defaults, makes
+configured addon roots importable, and calls `Composer`. The same loader serves
+the import-free dependency bootstrap without constructing Django app configs.
 
 Project settings may override framework defaults before composition. Settings
 that are products of composition are reserved and are assigned by `Composer`; an
@@ -81,11 +88,13 @@ roots importable. It is not a second addon list: project roots are the configure
 set through `AppGraph`, writes the resolved `AppConfig` objects back to
 `INSTALLED_APPS`, and sets the stable framework entrypoints.
 
-`AppGraph` delegates app creation to Django's `AppConfig.create()`, expands each
-app's declared dependencies, and annotates the resulting configs with graph facts
-that other runtime readers cannot re-derive safely from outside. Dependency
-names are app declarations; aliasing, duplicate handling, and cycle validation
-belong to `AppGraph`.
+`AppGraph` delegates app creation to Django's `AppConfig.create()` and expands
+addon dependencies from the native manifest. `addon_manifest()` validates that
+manifest identity agrees with `AppConfig.name`; capability readers share that
+upstream parser result during the composition. AppConfig has no independently
+configurable copy of these declarations. Graph annotations record derived root
+and required-app facts. Aliasing, duplicate handling and cycle validation belong
+to `AppGraph`.
 
 Django accepts `AppConfig` instances in `INSTALLED_APPS`, so app loading uses the
 same config objects the composer already resolved instead of resolving strings a
@@ -116,27 +125,46 @@ real addon needs item-level ordering later, that belongs in `AutoConfig`, not in
 The generated runtime is output, not source. It exists because Django concrete
 model classes must live in importable modules with migration packages.
 
-`Runtime.from_django()` reads the installed app registry and runtime settings,
-then `Runtime` discovers abstract source models, applies extension bases, renders
-the concrete runtime source map, writes or checks that map, redirects migration
-modules for emitted labels, and imports generated model modules. Source-model
-declarations such as runtime models, extension targets, composition labels, and
-extension bases are owned by the base model classes they live on.
+`Runtime.from_django()` explicitly discovers the installed sources through
+`ModelComposition`; it does not bind settings or write output. A `Runtime`
+instance coordinates that composition with the existing web, permissions,
+dependency, migration and filesystem owners. Each write or drift operation renders
+one source map and passes it to `GeneratedTree`.
 
-`extends` has two runtime shapes:
+Source selection uses ordinary abstract Django models and their own `runtime` /
+`extends` declarations. The compiler, rather than methods on AngeeModel, owns
+interpretation of those two markers:
 
-- `extends = "app.Model"` with `runtime = False` contributes a same-row abstract
-  extension base that the composer folds into the target runtime model.
-- `extends = "app.Model"` with `runtime = True` emits a materialized Django
-  multi-table-inheritance child whose generated concrete class inherits the
-  target's generated runtime model and the child source model.
+- Own `runtime = True` without a target materializes a root model.
+- Own `extends = "app.Model"` without own `runtime = True` contributes a same-row
+  donor. The donor class itself participates in inheritance, including its fields,
+  properties, methods and shared mixins.
+- Both markers materialize a Django multi-table-inheritance child.
 
-The composer owns only the generated Python runtime source map and explicit
-materialization of addon-owned manual migrations. Django owns the resulting
-runtime graph, `makemigrations`, execution, rollback, routing, and recording.
-GraphQL SDL under `runtime/schemas/` and TypeScript codegen output under
-`runtime/gql/` are owned by their GraphQL and frontend codegen lifecycles, so
-composer runtime drift checks ignore them.
+Donors and child sources are narrow abstract classes containing only their
+contributed fields and behavior. Shared parent columns come from the concrete
+parent. The renderer emits donors, then the source, then its concrete parent;
+Django owns field construction, manager selection and Python method resolution.
+Source Meta owns explicit model options, with the existing additive donor
+constraint seam. See `ModelComposition` for validation and ordering rules,
+including rejection of model-parent cycles and mutually importing generated app
+modules.
+
+Tracking and batch behavior stay with their owners. `HistoryMixin` uses a native
+simple-history descriptor adapted for generated module labels and virtual fields;
+a concrete parent's tracking alone does not opt its MTI child into another
+history table. Revision sources use django-reversion registration on completed
+concrete classes. Resource participants inherit the resources-owned
+[`ResourceLoadMixin`](../addons/angee/resources/mixins.py) and delegate through
+`super()`. The renderer has no generic decorator/attribute language or resource
+hook aggregator.
+
+The composer emits package/model files, static web projections and effective
+permission extensions, and explicitly materializes addon-owned migrations.
+Django owns the resulting model and migration graphs, `makemigrations`, execution,
+rollback, routing and recording. GraphQL SDL and frontend codegen have separate
+owners, so composer drift checks ignore their outputs. Explicit reset/cleanup
+still clears those outputs while preserving migration subtrees.
 
 ### Addon-owned runtime migrations
 
@@ -194,44 +222,54 @@ standalone bootstrap reuses `ProjectContract`'s bounded django-yamlconf loader
 and the same `AddonDependencyGroup` compile/write core as the normal build path;
 it never creates an `AppConfig` or touches Django's app registry.
 
-`ComposeConfig.import_models()` is the Django app-loading hook. In app-populate
-phase 2 it calls `emit_if_stale()` and then imports generated models:
+Import-free bootstrap expects canonical addon module names in project roots and
+manifest dependencies. An arbitrary external AppConfig class path cannot identify
+its addon without importing Python; such roots require their dependencies to be
+installed before normal Django composition.
+
+`ComposeConfig.import_models()` is the Django app-loading hook. In population
+phase 2 it discovers sources, calls `configure_migration_modules()`, repairs output
+with `emit_if_stale()`, and imports generated models. Final transition metadata is
+validated against those concrete classes.
 
 - `emit_if_stale()` is write-only and idempotent. It repairs missing or stale
   generated sources file by file before import, and it never resets, cleans, or
   materializes addon migrations.
-- Orphaned runtime labels left by a removed addon are pruned only by explicit
-  `angee build`, which calls the destructive emitter behind the generated
-  sentinel guard.
-- `angee clean` deletes generated runtime sources only from the configured
-  runtime directory, only after verifying Angee's generated sentinel, and it
-  preserves migrations.
+- When explicit build needs a reset, it verifies the generated sentinel and
+  configured root before clearing output. This removes orphaned labels and other
+  generated files, including SDL/codegen, while preserving every migration subtree.
+- `angee clean` uses the same guarded cleanup without discovering or rendering
+  sources in its handler. Django setup still precedes management-command dispatch,
+  so normal boot repair also precedes `angee clean` and `angee build --check`.
 
 ## Addon Declarations
 
-An Angee addon is a Django app marked by a co-located `addon.toml`. It does not
-subclass an Angee base config, and it needs an `apps.py` only to run a Python seam
-(`ready()` / `import_models()`); the declarative contract lives in the manifest, and
-each lifecycle reads only the declaration it owns.
+An Angee addon is a Django app marked by a co-located `addon.toml`. No Angee base
+config is required. `apps.py` is optional; use it for native config customization
+or lifecycle hooks such as `ready()`. The declarative addon contract stays in the
+manifest, and each capability reads the section it owns.
 
 Routes are conventional: `angee.urls` looks for `urls.py`, and `angee.asgi`
 looks for `asgi.py`, but only on apps that are Angee addons (they carry a manifest)
 per `angee.addons.is_angee_addon()`. That keeps third-party apps that happen to ship
 route modules from leaking into the composed root router.
 
-Other lifecycles remain `addon.toml` facts — declared explicitly, or inferred from
-the addon's files when conventional (see the addon-contract guideline). GraphQL
-schema declarations are owned by `angee.graphql`; web declarations are owned by the
-addon's `addon.toml` (`[web].package` names its rendered package — inferred from
-`web/package.json` — and `[web].codegen` declares an external GraphQL codegen pass,
-e.g. the operator daemon). The composer is a pure
-projector here: it renders `runtime/web/manifest.json` (package graph + codegen
-entries) and `runtime/web/tailwind.sources.css` from those static declarations,
-holding no schema-name or schema-shape knowledge — the `angee-web-codegen` CLI
-owns generating `runtime/gql/<schema>` and the composed `runtime/web/app.ts` from
-the SDL on disk. MCP tool declarations are owned by `angee.mcp`; resource and
-permission declarations are owned by their base addons. Shared dotted references
-use `angee.addons.resolve_addon_reference()` so declaration parsing has one owner.
+Each capability owner reads the relevant native manifest section and loads its
+implementation when the required Django phase is ready. GraphQL owns schema
+objects, MCP owns registrar callables, resources owns resource declarations, and
+migration composition owns migration entries. Missing optional conventional
+exports mean no contribution; a broken module or missing explicit reference is an
+error. Discovery does not inspect Python ASTs to predict runtime exports.
+
+`WebRuntime` reads `[web]` declarations, falling back to `web/package.json` for the
+conventional package. It renders `runtime/web/manifest.json` and Tailwind sources
+without importing GraphQL schemas. The frontend codegen owner consumes that
+manifest and SDL to produce `runtime/gql/` and `runtime/web/app.ts`.
+
+The durable boundary is: declare addon facts in `addon.toml`, derive integration
+from the unchanged hatch-angee manifest, and keep implementation with its owner.
+Shared import utilities in `angee.addons` handle references and optional modules;
+they do not maintain a second contract or infer capability values.
 
 ## Serving
 
@@ -272,22 +310,23 @@ ANGEE_DATA_DIR: "{BASE_DIR}/../../.angee/data"
 ```
 
 The project does not declare the framework URL or ASGI entrypoints; those are
-composer-owned. `Runtime` owns `MIGRATION_MODULES` for emitted runtime labels and
-preserves unrelated project entries.
+composer-owned. The phase-2 integration binds `MIGRATION_MODULES` for emitted
+labels and preserves unrelated project entries. Conflicting paths, including an
+explicit `None` disabling migrations for an emitted label, fail clearly.
 
 ## Invariants
 
 - `INSTALLED_APPS` is the project root addon contract.
 - There is one resolved Django app set and one boot path.
-- Settings are final before Django app loading starts.
+- Project settings are composed before app loading; phase 2 binds derived migration and permission paths.
 - Settings composition does not import source models.
-- Runtime emission does not decide settings.
+- Rendering produces artifacts; explicit lifecycle operations bind derived integration paths.
 - Normal startup heals the runtime in place but never resets or prunes it.
 - Composer drift checks cover composer-owned runtime sources only.
 - Apps read `django.conf.settings`; process environment is normalized during
   settings composition.
-- Routes are discovered by conventional `urls.py` / `asgi.py`; other lifecycle
-  declarations remain explicit AppConfig facts.
+- `addon.toml` owns addon declarations; native AppConfig owns Django identity and lifecycle.
+- Capability conventions are defaults, with explicit manifest declarations taking precedence.
 - Generated `runtime/` is output; edit addon source, not emitted files.
 - Runtime cleanup may delete only the configured generated runtime directory,
   only after verifying Angee's generated sentinel, and must preserve migrations.
