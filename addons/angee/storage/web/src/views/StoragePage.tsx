@@ -28,6 +28,7 @@ import {
   SurfaceHeader,
   TreeView,
   useBreadcrumbLeafLabel,
+  useBreadcrumbCollectionLink,
   useChatterContent,
   useConfirm,
   useLatestRef,
@@ -167,6 +168,12 @@ export function StoragePage(): ReactElement {
     [filesHref, navigate, fileResource],
   );
   const openFileId = useRouteRecordId() ?? null;
+  const searchStr = useRouterState({ select: (state) => state.location.searchStr });
+  useBreadcrumbCollectionLink(
+    filesHref,
+    openFileId === null ? null
+      : recordNavigationHref(routeHref("storage.files", {}, searchStr), fileResource, null),
+  );
   const openFileQuery = useAuthoredQuery(
     StorageFileById,
     { id: openFileId ?? "" },

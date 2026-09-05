@@ -8,6 +8,7 @@ import { Filter, type ResourceListOrder, type ResourceViewFilter, type ResourceV
 import { buildColumns, withGroupingOnlyColumnsHidden } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
+import { normalisePageSize } from "../page-size";
 import { defaultResourceOrder, groupingStateFromResourceGroups, requestedFieldPaths } from "../resource-view-codecs";
 import type { ListViewNavigationScope, ResourceFilterInput, ResourceListResult, ResourceListSnapshot, ResourceRowsSnapshotSource, UseResourceRowsSnapshotOptions } from "./types";
 export function useResourceRowsSnapshot<TRow extends Row = Row>(
@@ -162,12 +163,14 @@ export function useResourceViewTableState<TRow extends Row>({
   modelMetadata,
   groupStack,
   sortOrder,
+  maxPageSize,
 }: {
   columns: readonly ColumnDescriptor<TRow>[];
   resourceView: ResourceViewContextValue;
   modelMetadata: ModelMetadata | null | undefined;
   groupStack: readonly ResourceViewGroup[];
   sortOrder?: ResourceListOrder;
+  maxPageSize?: number;
 }): {
   tableColumns: readonly ColumnDef<TRow>[];
   columnVisibility: VisibilityState;
@@ -192,7 +195,19 @@ export function useResourceViewTableState<TRow extends Row>({
     () => withGroupingOnlyColumnsHidden(tableColumns, columnVisibility),
     [tableColumns, columnVisibility],
   );
-  const pagination = resourceView.state.pagination;
+  const statePagination = resourceView.state.pagination;
+  const boundedPageSize = maxPageSize === undefined
+    ? statePagination.pageSize
+    : Math.min(maxPageSize, statePagination.pageSize);
+  const pagination = React.useMemo(
+    () => boundedPageSize === statePagination.pageSize
+      ? statePagination
+      : { ...statePagination, pageSize: boundedPageSize },
+    [boundedPageSize, statePagination],
+  );
+  React.useEffect(() => {
+    if (pagination !== statePagination) resourceView.setPagination(pagination);
+  }, [pagination, resourceView.setPagination, statePagination]);
   const sorting = React.useMemo<SortingState>(() => {
     const state = resourceView.state.sorting ?? (refineSortersFromAngeeOrder(sortOrder) ?? []).map(({ field, order }) => ({ id: field, desc: order === "desc" }));
     return state.map((sort) => {
@@ -204,7 +219,17 @@ export function useResourceViewTableState<TRow extends Row>({
   }, [columns, modelMetadata, resourceView.state.sorting, sortOrder]);
   const grouping = React.useMemo(() => groupingStateFromResourceGroups(groupStack), [groupStack]);
   const rowSelection = resourceView.state.rowSelection;
-  const handlePaginationChange = resourceView.setPagination;
+  const handlePaginationChange = React.useCallback<OnChangeFn<PaginationState>>(
+    (updater) => {
+      const next = functionalUpdate(updater, pagination);
+      const pageSize = normalisePageSize(next.pageSize);
+      resourceView.setPagination({
+        ...next,
+        pageSize: maxPageSize === undefined ? pageSize : Math.min(maxPageSize, pageSize),
+      });
+    },
+    [maxPageSize, pagination, resourceView.setPagination],
+  );
   const handleRowSelectionChange = resourceView.setRowSelection;
   const handleSortingChange = React.useCallback<OnChangeFn<SortingState>>(
     (updater) => resourceView.setSorting(functionalUpdate(updater, sorting)),

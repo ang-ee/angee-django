@@ -1,5 +1,6 @@
 import * as React from "react";
 import { type Row } from "@angee/metadata";
+import { MAX_PAGE_SIZE } from "@angee/refine";
 import { useReactTable, getCoreRowModel, getExpandedRowModel, getGroupedRowModel, type ColumnDef, type ExpandedState } from "@tanstack/react-table";
 import { useResourceListQuery } from "./resource-list-query";
 import { useBoardLaneState } from "../resource-view-board-lanes";
@@ -37,6 +38,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     modelMetadata,
     groupStack: rowGroupStack,
     sortOrder,
+    maxPageSize: MAX_PAGE_SIZE,
   });
   const {
     tableColumns,

@@ -1,11 +1,12 @@
 import { format } from "date-fns";
-import { clampPageSize, stableSerialize } from "@angee/refine";
+import { stableSerialize } from "@angee/refine";
 import { dedupeBy } from "../../../lib/dedupe";
 import { CALENDAR_ANCHOR_FORMAT, defaultResourceViewPageSize, CALENDAR_VIEW_MODES, RESOURCE_VIEW_GROUP_GRANULARITIES, RESOURCE_VIEW_KINDS } from "./capabilities";
 import type { CalendarViewMode, ResourceViewGroupGranularity, ResourceViewKind } from "./capabilities";
 import { Filter, resourceViewFilterFromUnknown } from "./filter";
 import type { ResourceViewFilter, ResourceViewGroup, ResourceViewInitialState, ResourceViewSort } from "./filter";
 import { createResourceViewState, type ResourceViewState } from "./state";
+import { normalisePageSize } from "../page-size";
 const RESOURCE_VIEW_SEARCH_SHAPE = {
   page: undefined as number | undefined,
   pageSize: undefined as number | undefined,
@@ -77,7 +78,7 @@ export function resourceViewSearchToState(
     ...base,
     pagination: {
       pageIndex: page === null ? base.pagination.pageIndex : Math.max(0, Math.floor(page) - 1),
-      pageSize: clampPageSize(parseSearchInteger(search.pageSize) ?? base.pagination.pageSize),
+      pageSize: normalisePageSize(parseSearchInteger(search.pageSize) ?? base.pagination.pageSize),
     },
     sorting: isClearedSearchValue(search.sort) ? [] : sort ? [{ id: sort.field, desc: sort.dir === "desc" }] : base.sorting,
     filter: isClearedSearchValue(search.filter) ? {} : parseSearchFilter(search.filter) ?? base.filter,

@@ -8,6 +8,7 @@ import {
   type AnyRouteMatch,
 } from "@tanstack/react-router";
 import { rowPublicId, useModelMetadata, type Row } from "@angee/metadata";
+import { useBreadcrumbCollectionLink } from "../../chrome/Breadcrumb";
 import { routeParameterName } from "../../runtime";
 
 import { parseRecordNavigationScope, recordNavigationHref, recordNavigationSearch } from "./record-navigation-context";
@@ -62,6 +63,11 @@ export function RoutedRecordController<TRow extends Row = Row>({
   const searchSuffix = useRouterState({
     select: (state) => searchSuffixFromHref(state.location.href),
   });
+  useBreadcrumbCollectionLink(
+    basePath,
+    recordId === undefined ? null
+      : recordNavigationHref(appendSearch(basePath, searchSuffix), dataResource, null),
+  );
   const onSelect = React.useCallback(
     (id: string | null, scope?: ListViewNavigationScope) => {
       React.startTransition(() => {
