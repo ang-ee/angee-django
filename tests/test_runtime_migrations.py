@@ -8,13 +8,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from angee.addons import AddonContract, AddonMigration
-from angee.base.fields import StateField
-from angee.compose.migrations import RuntimeMigrations
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, migrations, models
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.state import ModelState, ProjectState
+
+from angee.base.fields import StateField
+from angee.compose.migrations import RuntimeMigrations
+from tests.conftest import make_addon, write_addon_manifest
 
 
 def _write_module(path: Path, text: str = "") -> None:
@@ -91,23 +92,14 @@ class Migration(migrations.Migration):
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setitem(settings.MIGRATION_MODULES, "resources", f"{runtime_module}.resources.migrations")
     importlib.invalidate_caches()
-    addon = SimpleNamespace(
+    addon = make_addon(
         name="example.demo",
-        _addon_contract=AddonContract(
-            name="example.demo",
-            migrations=(
-                AddonMigration(
-                    "rename_legacy",
-                    "resources",
-                    "runtime_migrations.rename_legacy",
-                ),
-            ),
-        ),
+        path=source_root,
+        migrations=({"name": "rename_legacy", "app_label": "resources", "module": "runtime_migrations.rename_legacy"},),
     )
     materializer = RuntimeMigrations(
         (addon,),
         runtime_dir=runtime_dir,
-        runtime_module=runtime_module,
         labels=("resources",),
     )
     return materializer, addon, source_path, runtime_dir, source_root
@@ -171,11 +163,11 @@ class Migration(migrations.Migration):
     ]
 """,
     )
-    addon._addon_contract = AddonContract(
-        name="example.demo",
+    write_addon_manifest(
+        addon,
         migrations=(
-            AddonMigration("rename_legacy", "resources", "runtime_migrations.rename_legacy"),
-            AddonMigration("add_marker", "resources", "runtime_migrations.add_marker"),
+            dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),
+            dict(name="add_marker", app_label="resources", module="runtime_migrations.add_marker"),
         ),
     )
     importlib.invalidate_caches()
@@ -209,7 +201,7 @@ class Migration(migrations.Migration):
         ),
         encoding="utf-8",
     )
-    monkeypatch.setitem(settings.MIGRATION_MODULES, "iam", f"{materializer.runtime_module}.iam.migrations")
+    monkeypatch.setitem(settings.MIGRATION_MODULES, "iam", f"{runtime_dir.name}.iam.migrations")
     importlib.invalidate_caches()
 
     materializer.materialize()
@@ -270,18 +262,18 @@ def test_changed_materialized_body_fails_instead_of_becoming_history(runtime_mig
     "declaration, message",
     [
         (
-            AddonMigration("Bad-Name", "resources", "runtime_migrations.rename_legacy"),
+            dict(name="Bad-Name", app_label="resources", module="runtime_migrations.rename_legacy"),
             "migration name must be a lower-case Python identifier",
         ),
         (
-            AddonMigration("rename_legacy", "unknown", "runtime_migrations.rename_legacy"),
+            dict(name="rename_legacy", app_label="unknown", module="runtime_migrations.rename_legacy"),
             "unknown runtime migration target 'unknown'",
         ),
     ],
 )
 def test_rejects_invalid_declarations(runtime_migration_probe, declaration, message: str) -> None:
     materializer, addon, _, _, _ = runtime_migration_probe
-    addon._addon_contract = AddonContract(name="example.demo", migrations=(declaration,))
+    write_addon_manifest(addon, migrations=(declaration,))
 
     with pytest.raises(RuntimeError, match=message):
         materializer.materialize()
@@ -289,11 +281,8 @@ def test_rejects_invalid_declarations(runtime_migration_probe, declaration, mess
 
 def test_rejects_duplicate_declared_origins(runtime_migration_probe) -> None:
     materializer, addon, _, _, _ = runtime_migration_probe
-    declaration = AddonMigration("rename_legacy", "resources", "runtime_migrations.rename_legacy")
-    addon._addon_contract = AddonContract(
-        name="example.demo",
-        migrations=(declaration, declaration),
-    )
+    declaration = dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy")
+    write_addon_manifest(addon, migrations=(declaration, declaration))
 
     with pytest.raises(RuntimeError, match="duplicate addon runtime migration origin example.demo:rename_legacy"):
         materializer.materialize()
@@ -409,11 +398,11 @@ class Migration(migrations.Migration):
     operations = []
 """,
     )
-    addon._addon_contract = AddonContract(
-        name="example.demo",
+    write_addon_manifest(
+        addon,
         migrations=(
-            AddonMigration("rename_legacy", "resources", "runtime_migrations.rename_legacy"),
-            AddonMigration("broken", "resources", "runtime_migrations.broken"),
+            dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),
+            dict(name="broken", app_label="resources", module="runtime_migrations.broken"),
         ),
     )
     importlib.invalidate_caches()
@@ -958,9 +947,7 @@ def test_spaces_thread_groups_migration_backfills_existing_fk_rows() -> None:
                 group_field.attname,
             )
         ) == [(retained.pk, group.pk)]
-        assert no_group.pk not in set(
-            through_model._base_manager.values_list(thread_field.attname, flat=True)
-        )
+        assert no_group.pk not in set(through_model._base_manager.values_list(thread_field.attname, flat=True))
     finally:
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(LegacyThread)
@@ -1089,9 +1076,8 @@ def test_parties_source_migration_is_not_discovered_as_an_app_migration() -> Non
 
 def test_rejects_source_in_djangos_conventional_migrations_package(runtime_migration_probe) -> None:
     materializer, addon, _, _, _ = runtime_migration_probe
-    addon._addon_contract = AddonContract(
-        name="example.demo",
-        migrations=(AddonMigration("rename_legacy", "resources", "migrations.rename_legacy"),),
+    write_addon_manifest(
+        addon, migrations=(dict(name="rename_legacy", app_label="resources", module="migrations.rename_legacy"),)
     )
 
     with pytest.raises(RuntimeError, match="must live outside Django's conventional migrations package"):
@@ -1141,11 +1127,11 @@ class Migration(migrations.Migration):
     ]
 """.rstrip("\n"),
     )
-    addon._addon_contract = AddonContract(
-        name="example.demo",
+    write_addon_manifest(
+        addon,
         migrations=(
-            AddonMigration("rename_legacy", "resources", "runtime_migrations.rename_legacy"),
-            AddonMigration("add_marker", "resources", "runtime_migrations.add_marker"),
+            dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),
+            dict(name="add_marker", app_label="resources", module="runtime_migrations.add_marker"),
         ),
     )
     importlib.invalidate_caches()
@@ -1158,9 +1144,9 @@ class Migration(migrations.Migration):
 
 def test_materialized_origin_uses_app_config_name(runtime_migration_probe) -> None:
     materializer, addon, _, _, _ = runtime_migration_probe
-    addon._addon_contract = AddonContract(
-        name="stale.manifest.name",
-        migrations=(AddonMigration("rename_legacy", "resources", "runtime_migrations.rename_legacy"),),
+    write_addon_manifest(
+        addon,
+        migrations=(dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),),
     )
 
     (output,) = materializer.materialize()
@@ -1181,3 +1167,33 @@ def test_rejects_malformed_dependency_with_origin(runtime_migration_probe) -> No
         match="example.demo:rename_legacy: invalid Django migration dependency 3",
     ):
         materializer.materialize()
+
+
+@pytest.mark.parametrize(
+    "declaration, message",
+    [
+        ({"name": "bad"}, "requires string app_label"),
+        ({"name": 3, "app_label": "resources", "module": "runtime_migrations.rename_legacy"}, "requires string name"),
+    ],
+)
+def test_migration_owner_validates_native_manifest_fields(runtime_migration_probe, declaration, message) -> None:
+    materializer, addon, _, _, _ = runtime_migration_probe
+    write_addon_manifest(addon, migrations=[declaration])
+    with pytest.raises(RuntimeError, match=message):
+        materializer.plan()
+
+
+@pytest.mark.parametrize("node", ["ab", ("resources", "0001_legacy", "extra"), ("resources",)])
+def test_run_before_rejects_non_pair_nodes(node) -> None:
+    with pytest.raises(RuntimeError, match="invalid Django run_before node"):
+        RuntimeMigrations._resolve_run_before(None, [node], current_app="resources", origin="example:probe")
+
+
+def test_validated_plan_render_uses_the_hashed_source_snapshot(runtime_migration_probe) -> None:
+    materializer, _, source_path, _, _ = runtime_migration_probe
+    (plan,) = materializer.plan()
+    expected = source_path.read_text(encoding="utf-8")
+    source_path.write_text("changed after planning\n", encoding="utf-8")
+    rendered = materializer._render(plan)
+    assert rendered.startswith(expected)
+    assert not rendered.startswith("changed after planning")

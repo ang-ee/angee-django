@@ -14,13 +14,6 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from typing import Any, ClassVar, cast
 
-from angee.base.actors import actor_user_id
-from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeModel
-from angee.base.refs import canonical_record_target
-from angee.base.stages import Stage as StagePrimitive
-from angee.base.stages import StagedModelMixin
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
@@ -39,9 +32,18 @@ from rebac import (
     write_relationships,
 )
 from rebac.actors import is_sudo as ambient_is_sudo
+from rebac.mixins import RebacModelBase
 from rebac.types import RelationshipFilter
 
+from angee.base.actors import actor_user_id
+from angee.base.fields import StateField
+from angee.base.mixins import AuditMixin
+from angee.base.models import AngeeDataModel, AngeeManager
+from angee.base.refs import canonical_record_target
+from angee.base.stages import Stage as StagePrimitive
+from angee.base.stages import StagedModelMixin
 from angee.parties.mixins import LinkSource
+from angee.resources.mixins import ResourceLoadMixin
 from angee.spaces.managers import GroupManager
 from angee.work.merge import run_task_merge_contributors
 
@@ -156,12 +158,11 @@ class QueueManager(GroupManager):
             membership.save(update_fields=(*desired, "updated_at"))
 
 
-class Queue(AngeeModel):
+class Queue(models.Model, metaclass=RebacModelBase):
     """An ongoing operational context, materialized as a ``spaces.Group`` child."""
 
     runtime = True
     extends = "spaces.Group"
-    child_overrides_parent = True
 
     class EstimateScale(models.TextChoices):
         """Estimation vocabulary configured per queue."""
@@ -673,7 +674,7 @@ fires a nested partial refresh whose reload re-enters ``__init__`` with the
 """
 
 
-class TaskWork(StagedModelMixin, AngeeModel):
+class TaskWork(StagedModelMixin):
     """Same-row work contribution folded into ``projects.Task``."""
 
     extends = "projects.Task"
@@ -1425,7 +1426,7 @@ class TaskWork(StagedModelMixin, AngeeModel):
             return getattr(super(), name)(*args)
 
 
-class UserWork(AngeeModel):
+class UserWork(ResourceLoadMixin):
     """Provision personal queues after IAM user resources load."""
 
     extends = "iam.User"
@@ -1447,7 +1448,8 @@ class UserWork(AngeeModel):
     ) -> None:
         """Ensure every loaded user has exactly one personal queue."""
 
-        del cls, tier, source, publish
         queue_model = apps.get_model("work", "Queue")
         for user in sorted(instances, key=lambda instance: instance.pk or 0):
             queue_model.objects.provision_personal(user)
+
+        super().after_resource_load(instances, tier=tier, source=source, publish=publish)

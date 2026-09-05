@@ -3,18 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
-from django.apps import apps
+from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, connection, models
 from import_export.results import Result, RowResult
 from rebac import system_context
 
-from angee.addons import AddonContract
+from angee.addons import addon_manifest
 from angee.base.models import CATALOGUE_TIERS, AngeeModel
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
@@ -28,23 +27,7 @@ from angee.resources.widgets import (
     resolve_ledger_xref,
     resolve_xref,
 )
-
-
-@dataclass(slots=True)
-class Addon:
-    """Small addon stand-in exposing normalized resource declarations."""
-
-    name: str
-    """Full dotted addon name."""
-
-    label: str
-    """Django app label."""
-
-    path: str
-    """Filesystem root for local resource files."""
-
-    _addon_contract: AddonContract
-    """In-memory addon contract used by the resources manifest owner."""
+from tests.conftest import make_addon
 
 
 def addon(
@@ -53,18 +36,13 @@ def addon(
     name: str = "tests.resource_addon",
     label: str = "resource_addon",
     manifest: Mapping[str, tuple[Mapping[str, Any], ...]] | None = None,
-) -> Addon:
+) -> AppConfig:
     """Return a resource addon rooted at ``tmp_path``."""
 
-    return Addon(
-        name=name,
-        label=label,
-        path=str(tmp_path),
-        _addon_contract=AddonContract(
-            name=name,
-            resources=manifest or {"master": (), "install": (), "demo": ()},
-        ),
-    )
+    config = make_addon(name=name, label=label, path=tmp_path, resources=dict(manifest or {}))
+    addon_manifest(config)
+    return config
+
 
 
 def entry(
@@ -72,7 +50,7 @@ def entry(
     declaration: dict[str, Any],
     *,
     tier: str = "master",
-    owner: Addon | None = None,
+    owner: AppConfig | None = None,
 ) -> ResourceEntry:
     """Return a resource entry for one declaration mapping."""
 
@@ -2218,7 +2196,7 @@ def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
             schema_editor.delete_model(MtiGrantLedger)
 
 
-def _write_resource_files(tmp_path: Path) -> Addon:
+def _write_resource_files(tmp_path: Path) -> AppConfig:
     """Write a small resource set and return its declaring addon."""
 
     resource_dir = tmp_path / "resources"

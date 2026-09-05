@@ -10,8 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from angee.base.mixins import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
-from angee.data.field_classification import is_archive_field
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
@@ -24,6 +22,8 @@ from rebac.actors import to_subject_ref
 from rebac.errors import PermissionDenied
 from rebac.roles import grant
 
+from angee.base.mixins import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
+from angee.data.field_classification import is_archive_field
 from angee.graphql.data.resource_fields import model_resource_fields
 from angee.storage import exceptions
 from angee.storage.models import FileManager, UploadState
@@ -61,7 +61,7 @@ def test_file_source_model_owns_the_upload_protocol() -> None:
     from angee.storage.models import File as AbstractFile
 
     assert AbstractFile._meta.abstract is True
-    assert AbstractFile.is_runtime_model() is True
+    assert AbstractFile.__dict__["runtime"] is True
     assert isinstance(File.objects, FileManager)
     assert hasattr(File.objects, "draft")
     assert all(hasattr(AbstractFile, verb) for verb in ("receive_bytes", "finalize", "issue_upload_token"))

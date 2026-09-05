@@ -28,7 +28,6 @@ from rebac.roles import grant
 
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.messaging.managers import ChannelManager
 from angee.messaging.models import Channel as AbstractChannel
 from angee.parties.mixins import LinkSource
 from tests import test_messaging as messaging_models
@@ -56,10 +55,8 @@ from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
 _ChannelMeta = getattr(AbstractChannel, "Meta", object)
 
 
-class Channel(Integration, AbstractChannel):
+class Channel(AbstractChannel, Integration):
     """Concrete message channel used to import the messaging schema."""
-
-    objects = ChannelManager()
 
     class Meta(_ChannelMeta):
         abstract = False

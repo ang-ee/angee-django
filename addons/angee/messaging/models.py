@@ -52,7 +52,10 @@ from rebac import (
 )
 
 from angee.base.actors import actor_user_id
+<<<<<<< HEAD
 from angee.base.emission import ModelClassAttribute
+=======
+>>>>>>> workspace/django-native-composition
 from angee.base.fields import SqidField, StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
@@ -893,24 +896,6 @@ class Channel(Bridge):
 
     objects = ChannelManager()
 
-    @classmethod
-    def angee_model_attributes(
-        cls,
-        *,
-        app_label: str,
-        model_class: type[models.Model],
-        extension_bases: tuple[type[models.Model], ...],
-    ) -> tuple[ModelClassAttribute, ...]:
-        """Emit the channel manager on the parent-first concrete child."""
-
-        del cls, app_label, model_class, extension_bases
-        return (
-            ModelClassAttribute(
-                name="objects",
-                import_path="angee.messaging.managers.ChannelManager",
-            ),
-        )
-
     class Meta:
         """Django model options for the channel child model."""
 
@@ -1183,14 +1168,10 @@ class Channel(Bridge):
             row.save(update_fields=["cursor", "updated_at"])
 
 
-class _ChannelWebformContribution(models.Model):
-    """Public-form configuration and message mapping folded onto Channel.
+class ChannelWebform(models.Model):
+    """Same-row public-form configuration and message mapping for ``messaging.Channel``."""
 
-    The contribution mirrors intake's narrow same-row donor shape: no second
-    table and no duplicate ``AngeeModel`` timestamps ahead of Channel's concrete
-    Integration parent.  Persisted form facts and their interpretation therefore
-    stay on the row that owns them.
-    """
+    extends = "messaging.Channel"
 
     hasura_readable_fields = (
         "slug",
@@ -1313,17 +1294,6 @@ class _ChannelWebformContribution(models.Model):
                 }
             },
         )
-
-
-class ChannelWebform(_ChannelWebformContribution, AngeeModel):
-    """Same-row public-webform donor for ``messaging.Channel``."""
-
-    extends = "messaging.Channel"
-
-    class Meta:
-        """Abstract donor discovered by the composer; runtime remains false."""
-
-        abstract = True
 
 
 class Thread(SqidMixin, AuditMixin, AngeeModel):

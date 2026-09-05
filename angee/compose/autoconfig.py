@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import importlib
-import logging
 import os
-from collections.abc import Iterator, Mapping, MutableMapping
-from contextlib import contextmanager
+from collections.abc import Mapping, MutableMapping
 from types import ModuleType
 from typing import Any
 
@@ -15,49 +13,13 @@ from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import module_has_submodule
 
-YAMLCONF_ATTRIBUTES = "_YAMLCONF_ATTRIBUTES"
-YAMLCONF_INTERNAL_SOURCE = "**INTERNAL**"
-YAMLCONF_ENVIRONMENT_SOURCE = "**ENVIRONMENT**"
-
-
-class _YamlconfErrorHandler(logging.Handler):
-    """Turn yamlconf logged errors into composition failures."""
-
-    def emit(self, record: logging.LogRecord) -> None:
-        """Raise for every yamlconf error record."""
-
-        raise ImproperlyConfigured(record.getMessage())
-
-
-@contextmanager
-def fail_on_yamlconf_errors() -> Iterator[None]:
-    """Raise ``ImproperlyConfigured`` when django-yamlconf logs an error."""
-
-    logger = logging.getLogger("django_yamlconf")
-    handler = _YamlconfErrorHandler(level=logging.ERROR)
-    logger.addHandler(handler)
-    try:
-        yield
-    finally:
-        logger.removeHandler(handler)
-
-
-def setting_name(attribute_name: str) -> str:
-    """Return the top-level Django setting name for one yamlconf attribute."""
-
-    return attribute_name.split(":", maxsplit=1)[0].split(".", maxsplit=1)[0]
-
-
-def is_setting_name(name: str) -> bool:
-    """Return whether ``name`` is a top-level Django setting (public, all-caps).
-
-    The one owner of the rule that decides which namespace entries the composer
-    treats as Django settings. The ``YAMLCONF_ATTRIBUTES`` provenance sentinel
-    is exported alongside settings but is not itself a setting name, so callers
-    that carry it forward OR it in explicitly.
-    """
-
-    return not name.startswith("_") and name.isupper()
+from angee.compose.yamlconf import (
+    YAMLCONF_ATTRIBUTES,
+    YAMLCONF_ENVIRONMENT_SOURCE,
+    fail_on_yamlconf_errors,
+    is_setting_name,
+    setting_name,
+)
 
 
 class AutoConfig:
@@ -68,6 +30,9 @@ class AutoConfig:
 
         self.namespace = namespace
         self.reserved_settings = reserved_settings
+        self.settings_module = ModuleType("angee.compose.effective_settings")
+        self.settings_module.__dict__.update(namespace)
+        self.settings_module.__dict__.setdefault(YAMLCONF_ATTRIBUTES, {})
 
     def update_app(self, app_config: AppConfig) -> None:
         """Apply one app config's optional autoconfig module."""
@@ -98,11 +63,7 @@ class AutoConfig:
         if not attributes and not env_attributes:
             return
 
-        settings_module = ModuleType("angee.compose.effective_settings")
-        for key, value in self.namespace.items():
-            setattr(settings_module, key, value)
-        if not hasattr(settings_module, YAMLCONF_ATTRIBUTES):
-            setattr(settings_module, YAMLCONF_ATTRIBUTES, {})
+        settings_module = self.settings_module
 
         with fail_on_yamlconf_errors():
             if attributes:

@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Iterator
-from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
-from angee.addons import AddonContract, addon_contract
+from django.apps import AppConfig
 from rebac import system_context
 
+from angee.addons import addon_manifest
 from angee.graphql.schema import GraphQLSchemas
 from angee.resources.models import Resource
 from angee.workflows import models as workflow_models
+from tests.conftest import write_addon_manifest
 from tests.workflows import WORKFLOW_DEFINITION_MODELS, Trigger, Workflow, workflow_table_setup
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -28,16 +31,6 @@ class WorkflowResourceLedger(Resource):
         abstract = False
         app_label = "resources"
         db_table = "test_workflows_resource_ledger"
-
-
-@dataclass(slots=True)
-class Addon:
-    """Small addon stand-in exposing the example workflow resources."""
-
-    name: str
-    label: str
-    path: str
-    _addon_contract: AddonContract | None = None
 
 
 @pytest.fixture()
@@ -60,11 +53,12 @@ def workflow_resource_tables(transactional_db: Any, monkeypatch: pytest.MonkeyPa
 
 def test_demo_workflow_resources_publish_lineage_and_leave_trigger_disabled(
     workflow_resource_tables: None,
+    tmp_path: Path,
 ) -> None:
     """The example workflow resource loads, publishes once, and leaves automation disabled."""
 
     del workflow_resource_tables
-    owner = _notes_workflow_addon()
+    owner = _notes_workflow_addon(tmp_path)
 
     result = WorkflowResourceLedger.objects.load_addons(
         (owner,),
@@ -118,7 +112,7 @@ def test_workflows_parties_resource_backfills_key_across_existing_lineage(
         (resources / filename).write_text(content)
 
     owner = _workflows_parties_addon(target)
-    contract = addon_contract(owner)
+    contract = addon_manifest(owner)
     assert contract is not None
     assert contract.resources["install"][0]["adopt"] == "key"
     first = WorkflowResourceLedger.objects.load_addons(
@@ -151,7 +145,7 @@ def test_workflows_parties_resource_backfills_key_across_existing_lineage(
         assert Workflow.objects.filter(published_from=draft).count() == 1
 
 
-def _notes_workflow_addon() -> Addon:
+def _notes_workflow_addon(tmp_path: Path) -> AppConfig:
     path = _REPO_ROOT / "examples/addons/example/notes"
     resources = {
         "master": (),
@@ -172,17 +166,16 @@ def _notes_workflow_addon() -> Addon:
             },
         ),
     }
-    return Addon(
-        name="example.notes",
-        label="notes",
-        path=str(path),
-        _addon_contract=AddonContract(name="example.notes", resources=resources),
-    )
+    target = tmp_path / "notes"
+    shutil.copytree(path / "resources", target / "resources")
+    module = ModuleType("example.notes")
+    module.__file__ = str(target / "__init__.py")
+    config = AppConfig(module.__name__, module)
+    write_addon_manifest(config, resources=resources)
+    return config
 
 
-def _workflows_parties_addon(path: Path) -> Addon:
-    return Addon(
-        name="angee.workflows_parties",
-        label="workflows_parties",
-        path=str(path),
-    )
+def _workflows_parties_addon(path: Path) -> AppConfig:
+    module = ModuleType("angee.workflows_parties")
+    module.__file__ = str(path / "__init__.py")
+    return AppConfig(module.__name__, module)

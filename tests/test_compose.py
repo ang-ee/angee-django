@@ -4,50 +4,30 @@ from __future__ import annotations
 
 import json
 import sys
-from dataclasses import is_dataclass
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any, ClassVar, cast
+from typing import Any, cast
 
-import angee.compose as compose_package
-import angee.compose.rendering as rendering_module
-import angee.compose.runtime as runtime_module
 import pytest
-from angee.base.emission import ModelClassAttribute, ModelDecorator
-from angee.base.fields import StateField
-from angee.base.mixins import HistoryMixin, RevisionMixin
-from angee.base.models import AngeeManager, AngeeModel, role_anchor
-from angee.base.transitions import StateTransitions, save_state, transition
-from angee.compose.appgraph import AppGraph
-from angee.compose.apps import ComposeConfig
-from angee.compose.dependencies import AddonDependencyGroupResult
-from angee.compose.management.commands.angee import Command
-from angee.compose.runtime import Runtime
-from angee.compose.web import WebRuntime
 from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management.base import CommandError
 from django.db import OperationalError, models
 
-from tests.conftest import make_contract
-
-
-@pytest.fixture
-def stub_contracts(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Resolve a test ``_addon_contract`` through the compose readers.
-
-    The web and appgraph projectors read ``addon_contract`` at module scope. The
-    stubs in these tests are bare app configs with no ``addon.toml`` on disk, so a
-    test attaches an in-memory contract as ``_addon_contract`` and this points the
-    readers at it — keeping the injection on the test side, out of the production
-    reader (which has the manifest as its sole source).
-    """
-
-    def fake(app_config: Any) -> Any:
-        return getattr(app_config, "_addon_contract", None)
-
-    monkeypatch.setattr("angee.compose.web.addon_contract", fake)
-    monkeypatch.setattr("angee.compose.appgraph.addon_contract", fake)
+import angee.compose as compose_package
+import angee.compose.runtime as runtime_module
+from angee.addons import addon_manifest
+from angee.base.mixins import HistoryMixin, RevisionMixin
+from angee.base.models import AngeeModel, role_anchor
+from angee.compose.appgraph import AppGraph
+from angee.compose.apps import ComposeConfig
+from angee.compose.dependencies import AddonDependencyGroupResult
+from angee.compose.management.commands.angee import Command
+from angee.compose.model_composition import ModelComposition
+from angee.compose.rendering import render_models
+from angee.compose.runtime import Runtime
+from angee.compose.web import WebRuntime
+from tests.conftest import make_addon
 
 
 class DecoratedRevisionThing(RevisionMixin, AngeeModel):
@@ -121,7 +101,7 @@ class SecondRenderPlanMetaThing(AngeeModel):
 def runtime_for(tmp_path: Path) -> Runtime:
     """Return a runtime that emits the installed resource addon."""
 
-    return Runtime(
+    return Runtime.discover(
         (apps.get_app_config("resources"),),
         runtime_dir=tmp_path / "runtime",
     )
@@ -178,18 +158,11 @@ def test_runtime_renders_resource_sources(tmp_path: Path) -> None:
     assert '@source "../../web/node_modules/@angee/resources/src";' in sources[Path("web/tailwind.sources.css")]
 
 
-def test_runtime_model_render_plan_is_named() -> None:
-    """The runtime model render plan is a named owner, not an anonymous tuple."""
-
-    assert is_dataclass(rendering_module.RuntimeModelRenderPlan)
-
-
 def test_runtime_model_render_plan_keeps_model_owned_meta(tmp_path: Path) -> None:
     """Each named render plan carries the Meta facts for its own model."""
 
-    source = Runtime((), runtime_dir=tmp_path / "runtime")._models_source(
-        "tests",
-        (FirstRenderPlanMetaThing, SecondRenderPlanMetaThing),
+    source = render_models(
+        ModelComposition({"tests": (FirstRenderPlanMetaThing, SecondRenderPlanMetaThing)}, {}), "tests"
     )
 
     first_source = source[
@@ -202,20 +175,12 @@ def test_runtime_model_render_plan_keeps_model_owned_meta(tmp_path: Path) -> Non
 
 def test_runtime_honors_explicit_label_when_module_terminal_differs(
     tmp_path: Path,
-    stub_contracts: None,
 ) -> None:
     """A source module ending in ``base`` may emit under its explicit app label."""
 
-    del stub_contracts
-
     def temp_config(name: str, label: str, module: ModuleType, *, depends_on: tuple[str, ...] = ()) -> AppConfig:
-        config_cls = type(
-            f"{label.title()}Config",
-            (AppConfig,),
-            {"name": name, "label": label, "path": str(tmp_path)},
-        )
-        config = config_cls(name, module)
-        config._addon_contract = make_contract(depends_on=depends_on)
+        config = make_addon(name=name, label=label, path=tmp_path / label, depends_on=depends_on)
+        config.module = module
         return config
 
     beta_module = ModuleType("tests.project_base")
@@ -228,22 +193,22 @@ def test_runtime_honors_explicit_label_when_module_terminal_differs(
     ordered = AppGraph().resolve((alpha, beta))
     assert [config.label for config in ordered[:2]] == ["beta", "alpha"]
 
-    runtime = Runtime((beta,), runtime_dir=tmp_path / "runtime")
+    runtime = Runtime.discover((beta,), runtime_dir=tmp_path / "runtime")
     sources = runtime.render_sources()
 
-    assert set(runtime.sources_by_label) == {"beta"}
+    assert set(runtime.composition.sources_by_label) == {"beta"}
     assert Path("beta/models.py") in sources
     assert Path("project_base/models.py") not in sources
     assert "app_label = 'beta'" in sources[Path("beta/models.py")]
-    assert "beta.projectthing" in runtime.source_models_by_composition_label
+    assert "beta.projectthing" in runtime.composition.models_by_label
 
 
-def test_web_runtime_projects_addon_web_packages_in_composed_order(stub_contracts: None) -> None:
+def test_web_runtime_projects_addon_web_packages_in_composed_order() -> None:
     """Addon web package declarations feed one generated web manifest."""
 
-    first = SimpleNamespace(name="tests.first", label="first", _addon_contract=make_contract(web="@demo/first"))
+    first = make_addon(name="tests.first", web={"package": "@demo/first"})
     backend_only = SimpleNamespace(name="tests.backend", label="backend")
-    second = SimpleNamespace(name="tests.second", label="second", _addon_contract=make_contract(web="@demo/second"))
+    second = make_addon(name="tests.second", web={"package": "@demo/second"})
 
     manifest = WebRuntime((first, backend_only, second)).manifest_json()
 
@@ -256,20 +221,12 @@ def test_web_runtime_projects_addon_web_packages_in_composed_order(stub_contract
 
 def test_web_runtime_projects_addon_web_root_relative_to_runtime(
     tmp_path: Path,
-    stub_contracts: None,
 ) -> None:
     """An addon's resolved Django path becomes a relocatable manifest web root."""
 
-    addon = SimpleNamespace(
-        name="tests.addon",
-        label="addon",
-        path=str(tmp_path / "addon"),
-        _addon_contract=make_contract(web="@demo/addon"),
-    )
+    addon = make_addon(name="tests.addon", path=tmp_path / "addon", web={"package": "@demo/addon"})
 
-    manifest = json.loads(
-        WebRuntime((addon,), runtime_dir=tmp_path / "runtime").manifest_json()
-    )
+    manifest = json.loads(WebRuntime((addon,), runtime_dir=tmp_path / "runtime").manifest_json())
 
     assert manifest["addonPackages"] == [
         {
@@ -282,21 +239,20 @@ def test_web_runtime_projects_addon_web_root_relative_to_runtime(
     ]
 
 
-def test_web_runtime_projects_external_codegen_entries(stub_contracts: None) -> None:
+def test_web_runtime_projects_external_codegen_entries() -> None:
     """An addon's web_codegen declaration projects into the manifest."""
 
-    daemon = SimpleNamespace(
+    daemon = make_addon(
         name="tests.daemon",
-        label="daemon",
-        _addon_contract=make_contract(
-            web="@demo/daemon",
-            web_codegen={
+        web={
+            "package": "@demo/daemon",
+            "codegen": {
                 "schema": "operator",
                 "sdl": "schema/operator.graphql",
                 "documents": "documents.daemon.ts",
                 "types": True,
             },
-        ),
+        },
     )
 
     manifest = WebRuntime((daemon,)).manifest_json()
@@ -308,33 +264,34 @@ def test_web_runtime_projects_external_codegen_entries(stub_contracts: None) -> 
     assert '"app": "tests.daemon"' in manifest
 
 
-def test_web_runtime_rejects_codegen_without_web_package(stub_contracts: None) -> None:
+def test_web_runtime_rejects_codegen_without_web_package() -> None:
     """An external codegen entry requires its addon to ship a web package."""
 
-    daemon = SimpleNamespace(
+    daemon = make_addon(
         name="tests.daemon",
-        label="daemon",
-        _addon_contract=make_contract(web_codegen={"schema": "operator", "sdl": "s.graphql", "documents": "d.ts"}),
+        web={
+            "codegen": {"schema": "operator", "sdl": "s.graphql", "documents": "d.ts"},
+        },
     )
 
     with pytest.raises(ImproperlyConfigured, match=r"requires \[web\]\.package"):
         WebRuntime((daemon,))
 
 
-def test_web_runtime_rejects_duplicate_addon_web_packages(stub_contracts: None) -> None:
+def test_web_runtime_rejects_duplicate_addon_web_packages() -> None:
     """Two addons cannot claim the same web package identity."""
 
-    first = SimpleNamespace(name="tests.first", label="first", _addon_contract=make_contract(web="@demo/shared"))
-    second = SimpleNamespace(name="tests.second", label="second", _addon_contract=make_contract(web="@demo/shared"))
+    first = make_addon(name="tests.first", web={"package": "@demo/shared"})
+    second = make_addon(name="tests.second", web={"package": "@demo/shared"})
 
     with pytest.raises(ImproperlyConfigured, match=r"Duplicate \[web\]\.package"):
         WebRuntime((first, second))
 
 
-def test_web_runtime_rejects_invalid_package_names(stub_contracts: None) -> None:
+def test_web_runtime_rejects_invalid_package_names() -> None:
     """The web package contract fails before a broken manifest is emitted."""
 
-    broken = SimpleNamespace(name="tests.broken", label="broken", _addon_contract=make_contract(web="../broken"))
+    broken = make_addon(name="tests.broken", web={"package": "../broken"})
 
     with pytest.raises(ImproperlyConfigured, match="valid npm package name"):
         WebRuntime((broken,))
@@ -346,9 +303,7 @@ def test_runtime_configures_migrations_for_runtime_labels(tmp_path: Path, settin
     runtime = runtime_for(tmp_path)
     settings.MIGRATION_MODULES = {"custom": "custom.migrations"}
 
-    returned = runtime.configure_migration_modules()
-
-    assert returned is runtime
+    runtime.configure_migration_modules()
     assert settings.MIGRATION_MODULES["custom"] == "custom.migrations"
     assert settings.MIGRATION_MODULES["resources"] == "runtime.resources.migrations"
 
@@ -367,7 +322,7 @@ def test_runtime_renders_iam_user_sources(tmp_path: Path) -> None:
     """The IAM addon emits a concrete user that inherits Django-owned Meta options."""
 
     iam_config = apps.get_app_config("iam")
-    runtime = Runtime(
+    runtime = Runtime.discover(
         (apps.get_app_config("resources"), iam_config),
         runtime_dir=tmp_path / "runtime",
     )
@@ -407,7 +362,7 @@ def test_role_anchor_emits_the_hand_rolled_runtime_source(tmp_path: Path) -> Non
     probe = role_anchor("tests/role", name="ProbeRole", module=module.__name__)
     setattr(module, "ProbeRole", probe)
 
-    source = Runtime((), runtime_dir=tmp_path / "runtime")._models_source("tests", (probe,))
+    source = render_models(ModelComposition({"tests": (probe,)}, {}), "tests")
 
     assert "from tests.role_anchor_probe import ProbeRole as AbstractProbeRole" in source
     assert "_ProbeRoleMeta = getattr(AbstractProbeRole, 'Meta', object)" in source
@@ -433,7 +388,7 @@ def test_role_anchor_wrapper_miscapture_fails_at_emission(tmp_path: Path) -> Non
         # mis-capture a wrapper would produce).
         stray = role_anchor("tests/role", name="StrayRole", module=module.__name__)
         with pytest.raises(ImproperlyConfigured, match="does not bind"):
-            Runtime((), runtime_dir=tmp_path / "runtime")._models_source("tests", (stray,))
+            render_models(ModelComposition({"tests": (stray,)}, {}), "tests")
     finally:
         del sys.modules[module.__name__]
 
@@ -459,145 +414,6 @@ def test_django_reads_inherited_meta_defaults() -> None:
     assert MetaInheritanceRuntime._meta.original_attrs["swappable"] == "COMPOSE_META_INHERITANCE_MODEL"
 
 
-def test_runtime_renders_model_decorators_from_mixins(tmp_path: Path) -> None:
-    """Mixin-declared decorators are emitted on concrete runtime models."""
-
-    app_config = SimpleNamespace(
-        label="tests",
-        name=__name__,
-        module=sys.modules[__name__],
-        models_module=sys.modules[__name__],
-    )
-    runtime = Runtime((app_config,), runtime_dir=tmp_path / "runtime")
-
-    source = runtime.render_sources()[Path("tests/models.py")]
-
-    assert "import reversion" in source
-    assert "@reversion.register(fields=('body',))" in source
-    assert source.index("@reversion.register") < source.index("class DecoratedRevisionThing")
-
-
-def test_runtime_renders_model_attributes_from_mixins(tmp_path: Path) -> None:
-    """Mixin-declared class attributes are emitted on concrete runtime models."""
-
-    app_config = SimpleNamespace(
-        label="tests",
-        name=__name__,
-        module=sys.modules[__name__],
-        models_module=sys.modules[__name__],
-    )
-
-    source = Runtime((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("tests/models.py")]
-
-    assert "import simple_history.models" in source
-    assert "history = simple_history.models.HistoricalRecords(app='tests')" in source
-    assert source.index("history = simple_history") < source.index("class Meta(_DecoratedHistoryThingMeta)")
-
-
-def test_runtime_walks_declared_emission_seams_for_history_and_revision(tmp_path: Path) -> None:
-    """History and revision mixins both ride declared emission seams."""
-
-    module = ModuleType("tests.declared_emission.models")
-    DeclaredEmissionThing = type(
-        "DeclaredEmissionThing",
-        (HistoryMixin, RevisionMixin, AngeeModel),
-        {
-            "__module__": module.__name__,
-            "runtime": True,
-            "revisioned_fields": ("body",),
-            "body": models.TextField(),
-            "Meta": type("Meta", (), {"abstract": True, "app_label": "declared"}),
-        },
-    )
-    module.DeclaredEmissionThing = DeclaredEmissionThing
-    app_config = SimpleNamespace(
-        label="declared",
-        name="tests.declared_emission",
-        module=ModuleType("tests.declared_emission"),
-        models_module=module,
-    )
-
-    source = Runtime((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("declared/models.py")]
-
-    assert (
-        source.index("@reversion.register")
-        < source.index("class DeclaredEmissionThing")
-        < source.index("history = simple_history")
-        < source.index("class Meta(_DeclaredEmissionThingMeta)")
-    )
-
-
-def test_runtime_walks_synthetic_declared_emission_seams(tmp_path: Path) -> None:
-    """Unknown mixins emit through the same declared attribute/decorator seams."""
-
-    class SyntheticEmissionMixin(models.Model):
-        angee_model_decorators = (
-            ModelDecorator(
-                import_path="tests.synthetic_emission_decorators.marker_decorator",
-                args=("decorated",),
-            ),
-        )
-
-        @classmethod
-        def angee_model_attributes(
-            cls,
-            *,
-            app_label: str,
-            model_class: type[models.Model],
-            extension_bases: tuple[type[models.Model], ...],
-        ) -> tuple[ModelClassAttribute, ...]:
-            return (
-                ModelClassAttribute(
-                    name="synthetic_marker",
-                    import_path="tests.synthetic_emission_attributes.MarkerAttribute",
-                    args=(model_class.__name__,),
-                    kwargs=(("app_label", app_label), ("extension_count", len(extension_bases))),
-                ),
-            )
-
-        class Meta:
-            abstract = True
-            app_label = "tests"
-
-    module = ModuleType("tests.synthetic_emission.models")
-    SyntheticEmissionThing = type(
-        "SyntheticEmissionThing",
-        (SyntheticEmissionMixin, AngeeModel),
-        {
-            "__module__": module.__name__,
-            "runtime": True,
-            "Meta": type("Meta", (), {"abstract": True, "app_label": "synthetic"}),
-        },
-    )
-    module.SyntheticEmissionThing = SyntheticEmissionThing
-    app_config = SimpleNamespace(
-        label="synthetic",
-        name="tests.synthetic_emission",
-        module=ModuleType("tests.synthetic_emission"),
-        models_module=module,
-    )
-
-    source = Runtime((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("synthetic/models.py")]
-
-    attribute_import = "import tests.synthetic_emission_attributes"
-    decorator_import = "import tests.synthetic_emission_decorators"
-    decorator = "@tests.synthetic_emission_decorators.marker_decorator('decorated')"
-    class_header = "class SyntheticEmissionThing(AbstractSyntheticEmissionThing):"
-    attribute = (
-        "synthetic_marker = tests.synthetic_emission_attributes.MarkerAttribute("
-        "'SyntheticEmissionThing', app_label='synthetic', extension_count=0)"
-    )
-
-    assert attribute_import in source
-    assert decorator_import in source
-    assert source.index(decorator_import) < source.index(decorator) < source.index(class_header)
-    assert (
-        source.index(attribute_import)
-        < source.index(attribute)
-        < source.index("class Meta(_SyntheticEmissionThingMeta)")
-    )
-
-
 def test_runtime_emits_only_models_marked_runtime(tmp_path: Path) -> None:
     """Only abstract source models declaring ``runtime = True`` are emitted."""
 
@@ -608,7 +424,7 @@ def test_runtime_emits_only_models_marked_runtime(tmp_path: Path) -> None:
         models_module=sys.modules[__name__],
     )
 
-    source = Runtime((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("tests/models.py")]
+    source = Runtime.discover((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("tests/models.py")]
 
     assert "class DecoratedRevisionThing" in source
     assert "class SkippedRuntimeThing" not in source
@@ -632,7 +448,7 @@ def test_runtime_carries_catalogue_markers_on_emitted_concrete_model(tmp_path: P
     )
     CatalogueChild = type(
         "CatalogueChild",
-        (AngeeModel,),
+        (models.Model,),
         {
             "__module__": module.__name__,
             "runtime": True,
@@ -650,20 +466,22 @@ def test_runtime_carries_catalogue_markers_on_emitted_concrete_model(tmp_path: P
         models_module=module,
     )
 
-    source = Runtime((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("catalogue/models.py")]
+    source = Runtime.discover((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[
+        Path("catalogue/models.py")
+    ]
     parent_body = source[source.index("class CatalogueThing") : source.index("class CatalogueChild")]
     child_body = source[source.index("class CatalogueChild") :]
 
     assert "catalogue = True" in parent_body
-    assert 'catalogue_tier = "install"' in parent_body
+    assert "catalogue_tier = 'install'" in parent_body
     assert "catalogue = True" not in child_body
     assert "catalogue_tier" not in child_body
 
 
-def test_runtime_renders_materialized_child_extension(tmp_path: Path) -> None:
+def test_runtime_renders_materialized_child_extension(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``extends`` + ``runtime = True`` emits a concrete MTI child model."""
 
-    class RuntimeChild(AngeeModel):
+    class RuntimeChild(models.Model):
         runtime = True
         extends = "tests.DecoratedRevisionThing"
         child_value = models.CharField(max_length=16)
@@ -672,6 +490,7 @@ def test_runtime_renders_materialized_child_extension(tmp_path: Path) -> None:
             abstract = True
             app_label = "tests"
 
+    monkeypatch.setattr(sys.modules[__name__], "RuntimeChild", RuntimeChild, raising=False)
     app_config = SimpleNamespace(
         label="tests",
         name=__name__,
@@ -682,11 +501,11 @@ def test_runtime_renders_materialized_child_extension(tmp_path: Path) -> None:
         ),
     )
 
-    source = Runtime((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("tests/models.py")]
+    source = Runtime.discover((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("tests/models.py")]
 
     assert "from runtime.tests.models import DecoratedRevisionThing" not in source
     assert "class DecoratedRevisionThing(AbstractDecoratedRevisionThing):" in source
-    assert "class RuntimeChild(DecoratedRevisionThing, AbstractRuntimeChild):" in source
+    assert "class RuntimeChild(AbstractRuntimeChild, DecoratedRevisionThing):" in source
 
 
 def test_runtime_renders_materialized_child_extension_across_apps(tmp_path: Path) -> None:
@@ -706,7 +525,7 @@ def test_runtime_renders_materialized_child_extension_across_apps(tmp_path: Path
     )
     RuntimeChild = type(
         "RuntimeChild",
-        (AngeeModel,),
+        (models.Model,),
         {
             "__module__": child_module.__name__,
             "runtime": True,
@@ -718,7 +537,7 @@ def test_runtime_renders_materialized_child_extension_across_apps(tmp_path: Path
     target_module.TargetRuntime = TargetRuntime
     child_module.RuntimeChild = RuntimeChild
 
-    runtime = Runtime(
+    runtime = Runtime.discover(
         (
             SimpleNamespace(
                 label="target",
@@ -739,207 +558,10 @@ def test_runtime_renders_materialized_child_extension_across_apps(tmp_path: Path
     sources = runtime.render_sources()
     child_source = sources[Path("child/models.py")]
 
-    assert "from runtime.target.models import TargetRuntime as TargetRuntime" in child_source
+    assert "from runtime.target.models import TargetRuntime as RuntimeChildParent" in child_source
     assert "from tests.child.models import RuntimeChild as AbstractRuntimeChild" in child_source
-    assert "class RuntimeChild(TargetRuntime, AbstractRuntimeChild):" in child_source
+    assert "class RuntimeChild(AbstractRuntimeChild, RuntimeChildParent):" in child_source
     assert "class TargetRuntime(AbstractTargetRuntime):" in sources[Path("target/models.py")]
-
-
-class _ProbeParentManager(AngeeManager):  # type: ignore[misc]
-    """Distinct manager standing in for a materialized parent's default manager."""
-
-
-class _ProbeMixinManager(AngeeManager):  # type: ignore[misc]
-    """Distinct manager a source-side mixin would inject under a child-first flip."""
-
-
-def test_runtime_child_override_flips_base_order(tmp_path: Path) -> None:
-    """``child_overrides_parent`` emits the abstract source before the concrete parent (F-e)."""
-
-    class OverrideChild(AngeeModel):
-        runtime = True
-        extends = "tests.DecoratedRevisionThing"
-        child_overrides_parent = True
-        child_value = models.CharField(max_length=16)
-
-        class Meta:
-            abstract = True
-            app_label = "tests"
-
-    app_config = SimpleNamespace(
-        label="tests",
-        name=__name__,
-        module=sys.modules[__name__],
-        models_module=SimpleNamespace(
-            DecoratedRevisionThing=DecoratedRevisionThing,
-            OverrideChild=OverrideChild,
-        ),
-    )
-
-    source = Runtime((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("tests/models.py")]
-
-    assert "class DecoratedRevisionThing(AbstractDecoratedRevisionThing):" in source
-    # Flipped: source before parent (vs the parent-first status quo).
-    assert "class OverrideChild(AbstractOverrideChild, DecoratedRevisionThing):" in source
-    assert "class OverrideChild(DecoratedRevisionThing, AbstractOverrideChild):" not in source
-    # The flip re-declares the parent-shared framework fields as None so the child
-    # inherits the parent's columns instead of duplicating them.
-    child_body = source[source.index("class OverrideChild") :]
-    assert "created_at = None" in child_body
-    assert "updated_at = None" in child_body
-
-
-def test_runtime_parties_children_stay_parent_first(tmp_path: Path) -> None:
-    """Guard (a): parties children never opt in — parent-first order is byte-preserved (F-e)."""
-
-    runtime = Runtime(
-        tuple(apps.get_app_config(label) for label in ("resources", "iam", "integrate", "storage", "parties")),
-        runtime_dir=tmp_path / "runtime",
-    )
-
-    source = runtime.render_sources()[Path("parties/models.py")]
-
-    assert "class Person(Party, AbstractPerson):" in source
-    assert "class Organization(Party, AbstractOrganization):" in source
-    assert "AbstractPerson, Party" not in source
-    assert "AbstractOrganization, Party" not in source
-    # No opt-in → no field-removal shadows anywhere in the parties runtime.
-    assert "created_at = None" not in source
-
-
-def test_runtime_child_override_rejects_silent_manager_swap(tmp_path: Path) -> None:
-    """Guard (b): a flip that would swap the default manager without an explicit one fails (F-e)."""
-
-    class ParentWithManager(AngeeModel):
-        runtime = True
-        objects = _ProbeParentManager()
-
-        class Meta:
-            abstract = True
-            app_label = "tests"
-
-    class ManagerMixin(AngeeModel):
-        objects = _ProbeMixinManager()
-
-        class Meta:
-            abstract = True
-            app_label = "tests"
-
-    class SwapChild(ManagerMixin):
-        runtime = True
-        extends = "tests.ParentWithManager"
-        child_overrides_parent = True
-
-        class Meta:
-            abstract = True
-            app_label = "tests"
-
-    app_config = SimpleNamespace(
-        label="tests",
-        name=__name__,
-        module=sys.modules[__name__],
-        models_module=SimpleNamespace(ParentWithManager=ParentWithManager, SwapChild=SwapChild),
-    )
-
-    with pytest.raises(ImproperlyConfigured, match="default manager"):
-        Runtime((app_config,), runtime_dir=tmp_path / "runtime")
-
-
-def test_runtime_child_override_allows_explicit_own_manager(tmp_path: Path) -> None:
-    """Guard (b): the same swap is allowed when the child declares its own manager (F-e)."""
-
-    class ParentWithManager(AngeeModel):
-        runtime = True
-        objects = _ProbeParentManager()
-
-        class Meta:
-            abstract = True
-            app_label = "tests"
-
-    class ExplicitChild(AngeeModel):
-        runtime = True
-        extends = "tests.ParentWithManager"
-        child_overrides_parent = True
-        objects = _ProbeMixinManager()
-
-        class Meta:
-            abstract = True
-            app_label = "tests"
-
-    app_config = SimpleNamespace(
-        label="tests",
-        name=__name__,
-        module=sys.modules[__name__],
-        models_module=SimpleNamespace(ParentWithManager=ParentWithManager, ExplicitChild=ExplicitChild),
-    )
-
-    source = Runtime((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("tests/models.py")]
-
-    assert "class ExplicitChild(AbstractExplicitChild, ParentWithManager):" in source
-
-
-def test_runtime_child_override_rejects_non_child_optin(tmp_path: Path) -> None:
-    """The opt-in is meaningless off a materialized child, so the composer rejects it (F-e)."""
-
-    class NotAChild(AngeeModel):
-        runtime = True
-        child_overrides_parent = True
-
-        class Meta:
-            abstract = True
-            app_label = "tests"
-
-    app_config = SimpleNamespace(
-        label="tests",
-        name=__name__,
-        module=sys.modules[__name__],
-        models_module=SimpleNamespace(NotAChild=NotAChild),
-    )
-
-    with pytest.raises(ImproperlyConfigured, match="not a materialized child"):
-        Runtime((app_config,), runtime_dir=tmp_path / "runtime")
-
-
-def test_runtime_child_override_revalidates_transition_metadata(tmp_path: Path) -> None:
-    """Guard (c): an opting child's inherited transition metadata re-validates on the flip (F-e)."""
-
-    class Lifecycle(models.TextChoices):
-        DRAFT = "draft", "Draft"
-        DONE = "done", "Done"
-
-    class TxnParent(AngeeModel):
-        runtime = True
-        status = StateField(choices_enum=Lifecycle, default=Lifecycle.DRAFT)
-        status_transitions = StateTransitions(status, {Lifecycle.DRAFT: [Lifecycle.DONE]})
-
-        class Meta:
-            abstract = True
-            app_label = "tests"
-
-        @transition(status, source=Lifecycle.DRAFT, target=Lifecycle.DONE, on_success=save_state)
-        def finish(self) -> None:
-            """Move draft to done."""
-
-    class TxnChild(AngeeModel):
-        runtime = True
-        extends = "tests.TxnParent"
-        child_overrides_parent = True
-        note = models.CharField(max_length=16, blank=True, default="")
-
-        class Meta:
-            abstract = True
-            app_label = "tests"
-
-    app_config = SimpleNamespace(
-        label="tests",
-        name=__name__,
-        module=sys.modules[__name__],
-        models_module=SimpleNamespace(TxnParent=TxnParent, TxnChild=TxnChild),
-    )
-
-    source = Runtime((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("tests/models.py")]
-
-    assert "class TxnChild(AbstractTxnChild, TxnParent):" in source
 
 
 def test_runtime_rejects_mismatched_runtime_model_label(tmp_path: Path) -> None:
@@ -960,10 +582,10 @@ def test_runtime_rejects_mismatched_runtime_model_label(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ImproperlyConfigured, match="expected 'owner'"):
-        Runtime((app_config,), runtime_dir=tmp_path / "runtime")
+        Runtime.discover((app_config,), runtime_dir=tmp_path / "runtime")
 
 
-def test_runtime_rejects_mismatched_extension_model_label(tmp_path: Path) -> None:
+def test_runtime_rejects_mismatched_extension_model_label(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Extension source models must also belong to their contributing app config."""
 
     class LabelTarget(AngeeModel):
@@ -980,6 +602,7 @@ def test_runtime_rejects_mismatched_extension_model_label(tmp_path: Path) -> Non
             abstract = True
             app_label = "wrong"
 
+    monkeypatch.setattr(sys.modules[__name__], "LabelTarget", LabelTarget, raising=False)
     target_config = SimpleNamespace(
         label="target",
         name=__name__,
@@ -994,7 +617,7 @@ def test_runtime_rejects_mismatched_extension_model_label(tmp_path: Path) -> Non
     )
 
     with pytest.raises(ImproperlyConfigured, match="expected 'extension'"):
-        Runtime((target_config, extension_config), runtime_dir=tmp_path / "runtime")
+        Runtime.discover((target_config, extension_config), runtime_dir=tmp_path / "runtime")
 
 
 def test_runtime_boot_repairs_drift_without_pruning_but_emit_prunes(tmp_path: Path) -> None:
@@ -1094,7 +717,7 @@ def test_runtime_extensions_follow_app_graph_order_not_class_names(tmp_path: Pat
     preferred_module.ZPreferredExtension = ZPreferredExtension
     fallback_module.AFallbackExtension = AFallbackExtension
 
-    runtime = Runtime(
+    runtime = Runtime.discover(
         (
             SimpleNamespace(
                 label="target",
@@ -1123,454 +746,6 @@ def test_runtime_extensions_follow_app_graph_order_not_class_names(tmp_path: Pat
     assert "from tests.preferred.models import ZPreferredExtension as TargetRuntimeExtension1" in source
     assert "from tests.fallback.models import AFallbackExtension as TargetRuntimeExtension2" in source
     assert "class TargetRuntime(TargetRuntimeExtension1, TargetRuntimeExtension2, AbstractTargetRuntime):" in source
-
-
-def test_runtime_composes_bodyful_donor_before_its_contributed_bases(tmp_path: Path) -> None:
-    """A donor with its own body and abstract bases keeps donor-first MRO precedence."""
-
-    def base_display(self: object) -> str:
-        del self
-        return "base"
-
-    def donor_display(self: object) -> str:
-        del self
-        return "donor"
-
-    target_module = ModuleType("tests.bodytarget.models")
-    base_module = ModuleType("tests.bodybase.models")
-    donor_module = ModuleType("tests.bodydonor.models")
-    BodyTarget = _source_model(target_module, "BodyTarget", "bodytarget", runtime=True)
-    BodyBase = type(
-        "BodyBase",
-        (AngeeModel,),
-        {
-            "__module__": base_module.__name__,
-            "display": property(base_display),
-            "Meta": type("Meta", (), {"abstract": True, "app_label": "bodybase"}),
-        },
-    )
-    BodyDonor = type(
-        "BodyDonor",
-        (BodyBase,),
-        {
-            "__module__": donor_module.__name__,
-            "__annotations__": {
-                "class_marker": ClassVar[str],
-                "hasura_readable_fields": ClassVar[tuple[str, ...]],
-            },
-            "extends": "bodytarget.BodyTarget",
-            "display": property(donor_display),
-            "class_marker": "donor",
-            "hasura_readable_fields": ("donor_field",),
-            "Meta": type("Meta", (), {"abstract": True, "app_label": "bodydonor"}),
-        },
-    )
-    base_module.BodyBase = BodyBase
-    donor_module.BodyDonor = BodyDonor
-
-    extension_bases = BodyDonor.get_extension_bases()
-    EmittedBodyTarget = type(
-        "EmittedBodyTarget",
-        (*extension_bases, BodyTarget),
-        {
-            "__module__": target_module.__name__,
-            "Meta": type("Meta", (), {"abstract": False, "app_label": "bodytarget"}),
-        },
-    )
-
-    assert extension_bases == (BodyDonor, BodyBase)
-    assert EmittedBodyTarget().display == "donor"
-    assert EmittedBodyTarget.class_marker == "donor"
-    assert EmittedBodyTarget.hasura_readable_fields == ("donor_field",)
-
-    runtime = Runtime(
-        (
-            _addon_config("bodytarget", target_module),
-            _addon_config("bodydonor", donor_module),
-        ),
-        runtime_dir=tmp_path / "runtime",
-    )
-
-    source = runtime.render_sources()[Path("bodytarget/models.py")]
-
-    assert "from tests.bodydonor.models import BodyDonor as BodyTargetExtension1" in source
-    assert "from tests.bodybase.models import BodyBase as BodyTargetExtension2" in source
-    assert "class BodyTarget(BodyTargetExtension1, BodyTargetExtension2, AbstractBodyTarget):" in source
-
-
-def test_runtime_keeps_bodyless_base_composer_donor_unchanged(tmp_path: Path) -> None:
-    """A same-row donor with only structural plumbing still contributes only its bases."""
-
-    target_module = ModuleType("tests.bodylesstarget.models")
-    base_module = ModuleType("tests.bodylessbase.models")
-    donor_module = ModuleType("tests.bodylessdonor.models")
-    _source_model(target_module, "BodylessTarget", "bodylesstarget", runtime=True)
-    BodylessBase = type(
-        "BodylessBase",
-        (AngeeModel,),
-        {
-            "__module__": base_module.__name__,
-            "Meta": type("Meta", (), {"abstract": True, "app_label": "bodylessbase"}),
-        },
-    )
-    BodylessDonor = type(
-        "BodylessDonor",
-        (BodylessBase,),
-        {
-            "__module__": donor_module.__name__,
-            "extends": "bodylesstarget.BodylessTarget",
-            "Meta": type("Meta", (), {"abstract": True, "app_label": "bodylessdonor"}),
-        },
-    )
-    base_module.BodylessBase = BodylessBase
-    donor_module.BodylessDonor = BodylessDonor
-
-    assert BodylessDonor.get_extension_bases() == (BodylessBase,)
-
-    runtime = Runtime(
-        (
-            _addon_config("bodylesstarget", target_module),
-            _addon_config("bodylessdonor", donor_module),
-        ),
-        runtime_dir=tmp_path / "runtime",
-    )
-
-    source = runtime.render_sources()[Path("bodylesstarget/models.py")]
-
-    assert "from tests.bodylessbase.models import BodylessBase as BodylessTargetExtension1" in source
-    assert "BodylessDonor as BodylessTargetExtension" not in source
-    assert "class BodylessTarget(BodylessTargetExtension1, AbstractBodylessTarget):" in source
-
-
-def test_bodyful_extension_donor_must_be_abstract() -> None:
-    """A donor shape that cannot be composed fails before runtime source emission."""
-
-    module = ModuleType("tests.concretedonor.models")
-    ConcreteBase = type(
-        "ConcreteBase",
-        (AngeeModel,),
-        {
-            "__module__": module.__name__,
-            "Meta": type("Meta", (), {"abstract": True, "app_label": "concretedonor"}),
-        },
-    )
-    ConcreteDonor = type(
-        "ConcreteDonor",
-        (ConcreteBase,),
-        {
-            "__module__": module.__name__,
-            "extends": "target.TargetRuntime",
-            "marker": "body",
-            "Meta": type("Meta", (), {"abstract": False, "app_label": "concretedonor"}),
-        },
-    )
-
-    with pytest.raises(
-        ImproperlyConfigured,
-        match="tests.concretedonor.models.ConcreteDonor.*not abstract",
-    ):
-        ConcreteDonor.get_extension_bases()
-
-
-def test_runtime_aggregates_multiple_after_resource_load_donors(tmp_path: Path) -> None:
-    """Two donors defining ``after_resource_load`` emit one ordered aggregator (F-c)."""
-
-    def first_hook(cls: type, instances: object, **kwargs: object) -> None:
-        del cls, instances, kwargs
-
-    def second_hook(cls: type, instances: object, **kwargs: object) -> None:
-        del cls, instances, kwargs
-
-    target_module = ModuleType("tests.mergetarget.models")
-    first_module = ModuleType("tests.mergefirst.models")
-    second_module = ModuleType("tests.mergesecond.models")
-    _source_model(target_module, "MergeTarget", "mergetarget", runtime=True)
-    _source_model(
-        first_module,
-        "MergeFirstDonor",
-        "mergefirst",
-        extends="mergetarget.MergeTarget",
-        after_resource_load=classmethod(first_hook),
-    )
-    _source_model(
-        second_module,
-        "MergeSecondDonor",
-        "mergesecond",
-        extends="mergetarget.MergeTarget",
-        after_resource_load=classmethod(second_hook),
-    )
-
-    runtime = Runtime(
-        (
-            _addon_config("mergetarget", target_module),
-            _addon_config("mergefirst", first_module),
-            _addon_config("mergesecond", second_module),
-        ),
-        runtime_dir=tmp_path / "runtime",
-    )
-
-    source = runtime.render_sources()[Path("mergetarget/models.py")]
-
-    assert "def after_resource_load(cls, *args: object, **kwargs: object) -> None:" in source
-    first_call = "MergeTargetExtension1.after_resource_load.__func__(cls, *args, **kwargs)"
-    second_call = "MergeTargetExtension2.after_resource_load.__func__(cls, *args, **kwargs)"
-    # Dependency order = the emitted base-tuple order (app-graph order): donor one before donor two.
-    assert source.index(first_call) < source.index(second_call)
-    # The aggregator is a class member, not free-floating.
-    assert source.index("class MergeTarget(") < source.index(first_call) < source.index("class Meta(")
-
-
-def test_runtime_keeps_single_after_resource_load_donor_native(tmp_path: Path) -> None:
-    """A single donor resolves natively — the composer emits no aggregator (F-c)."""
-
-    def only_hook(cls: type, instances: object, **kwargs: object) -> None:
-        del cls, instances, kwargs
-
-    target_module = ModuleType("tests.solotarget.models")
-    donor_module = ModuleType("tests.solodonor.models")
-    _source_model(target_module, "SoloTarget", "solotarget", runtime=True)
-    _source_model(
-        donor_module,
-        "SoloDonor",
-        "solodonor",
-        extends="solotarget.SoloTarget",
-        after_resource_load=classmethod(only_hook),
-    )
-
-    runtime = Runtime(
-        (
-            _addon_config("solotarget", target_module),
-            _addon_config("solodonor", donor_module),
-        ),
-        runtime_dir=tmp_path / "runtime",
-    )
-
-    source = runtime.render_sources()[Path("solotarget/models.py")]
-
-    assert "def after_resource_load(" not in source
-
-
-def test_runtime_dedupes_shared_after_resource_load_function(tmp_path: Path) -> None:
-    """Two donors inheriting the same hook function collapse to native dispatch (F-c)."""
-
-    def shared_hook(cls: type, instances: object, **kwargs: object) -> None:
-        del cls, instances, kwargs
-
-    target_module = ModuleType("tests.dedupetarget.models")
-    first_module = ModuleType("tests.dedupefirst.models")
-    second_module = ModuleType("tests.dedupesecond.models")
-    _source_model(target_module, "DedupeTarget", "dedupetarget", runtime=True)
-    _source_model(
-        first_module,
-        "DedupeFirstDonor",
-        "dedupefirst",
-        extends="dedupetarget.DedupeTarget",
-        after_resource_load=classmethod(shared_hook),
-    )
-    _source_model(
-        second_module,
-        "DedupeSecondDonor",
-        "dedupesecond",
-        extends="dedupetarget.DedupeTarget",
-        after_resource_load=classmethod(shared_hook),
-    )
-
-    runtime = Runtime(
-        (
-            _addon_config("dedupetarget", target_module),
-            _addon_config("dedupefirst", first_module),
-            _addon_config("dedupesecond", second_module),
-        ),
-        runtime_dir=tmp_path / "runtime",
-    )
-
-    source = runtime.render_sources()[Path("dedupetarget/models.py")]
-
-    assert "def after_resource_load(" not in source
-
-
-def test_runtime_child_aggregates_parent_donor_and_own_hook(tmp_path: Path) -> None:
-    """A materialized child runs a parent-side donor's hook and its own, each once.
-
-    Regression for the parent modelled via its abstract source alone: the parent's
-    hook lives on a donor, not the source, so the old code dropped it and the child
-    silently lost either the parent's hook or its own. The fix models the parent as
-    its whole composed set (the concrete parent's own ``after_resource_load``), so
-    the child aggregates the parent (which runs the donor's hook) then its own.
-    """
-
-    def parent_donor_hook(cls: type, instances: object, **kwargs: object) -> None:
-        del cls, instances, kwargs
-
-    def child_hook(cls: type, instances: object, **kwargs: object) -> None:
-        del cls, instances, kwargs
-
-    parent_module = ModuleType("tests.hookparent.models")
-    donor_module = ModuleType("tests.hookdonor.models")
-    child_module = ModuleType("tests.hookchild.models")
-    _source_model(parent_module, "HookParent", "hookparent", runtime=True)
-    _source_model(
-        donor_module,
-        "HookParentDonor",
-        "hookdonor",
-        extends="hookparent.HookParent",
-        after_resource_load=classmethod(parent_donor_hook),
-    )
-    _source_model(
-        child_module,
-        "HookChild",
-        "hookchild",
-        runtime=True,
-        extends="hookparent.HookParent",
-        after_resource_load=classmethod(child_hook),
-    )
-
-    runtime = Runtime(
-        (
-            _addon_config("hookparent", parent_module),
-            _addon_config("hookdonor", donor_module),
-            _addon_config("hookchild", child_module),
-        ),
-        runtime_dir=tmp_path / "runtime",
-    )
-    sources = runtime.render_sources()
-
-    # The parent runs its single donor natively — no parent aggregator emitted.
-    assert "def after_resource_load(" not in sources[Path("hookparent/models.py")]
-    # The child aggregates the whole parent (its donor's hook) then its own, in order.
-    child_source = sources[Path("hookchild/models.py")]
-    assert "def after_resource_load(cls, *args: object, **kwargs: object) -> None:" in child_source
-    parent_call = "HookParent.after_resource_load.__func__(cls, *args, **kwargs)"
-    child_call = "AbstractHookChild.after_resource_load.__func__(cls, *args, **kwargs)"
-    assert child_source.index(parent_call) < child_source.index(child_call)
-
-
-def test_runtime_child_dedupes_hook_shared_with_a_parent_donor(tmp_path: Path) -> None:
-    """A hook shared by a parent donor and a child donor runs once — via the parent.
-
-    The child dedups its own contributors against the parent's *whole* composed set,
-    so a function the parent already runs (through its donor) is not called again by
-    the child's donor. The child aggregator calls the parent and the child's own
-    hook, but never the child donor's copy of the shared function.
-    """
-
-    def shared_hook(cls: type, instances: object, **kwargs: object) -> None:
-        del cls, instances, kwargs
-
-    def child_hook(cls: type, instances: object, **kwargs: object) -> None:
-        del cls, instances, kwargs
-
-    parent_module = ModuleType("tests.sharedparent.models")
-    parent_donor_module = ModuleType("tests.sharedpdonor.models")
-    child_module = ModuleType("tests.sharedchild.models")
-    child_donor_module = ModuleType("tests.sharedcdonor.models")
-    _source_model(parent_module, "SharedParent", "sharedparent", runtime=True)
-    _source_model(
-        parent_donor_module,
-        "SharedParentDonor",
-        "sharedpdonor",
-        extends="sharedparent.SharedParent",
-        after_resource_load=classmethod(shared_hook),
-    )
-    _source_model(
-        child_module,
-        "SharedChild",
-        "sharedchild",
-        runtime=True,
-        extends="sharedparent.SharedParent",
-        after_resource_load=classmethod(child_hook),
-    )
-    _source_model(
-        child_donor_module,
-        "SharedChildDonor",
-        "sharedcdonor",
-        extends="sharedchild.SharedChild",
-        after_resource_load=classmethod(shared_hook),  # the SAME function the parent donor runs
-    )
-
-    runtime = Runtime(
-        (
-            _addon_config("sharedparent", parent_module),
-            _addon_config("sharedpdonor", parent_donor_module),
-            _addon_config("sharedchild", child_module),
-            _addon_config("sharedcdonor", child_donor_module),
-        ),
-        runtime_dir=tmp_path / "runtime",
-    )
-    child_source = runtime.render_sources()[Path("sharedchild/models.py")]
-
-    assert "def after_resource_load(cls, *args: object, **kwargs: object) -> None:" in child_source
-    assert "SharedParent.after_resource_load.__func__(cls, *args, **kwargs)" in child_source
-    assert "AbstractSharedChild.after_resource_load.__func__(cls, *args, **kwargs)" in child_source
-    # The child donor's own copy of the shared hook is NOT called — it deduped
-    # against the parent's set, so the shared function runs exactly once.
-    assert "SharedChildExtension1.after_resource_load" not in child_source
-
-
-def test_child_override_removed_fields_rejects_divergent_same_name_field(tmp_path: Path) -> None:
-    """A child that redefines an inherited parent-shared field fails the build (finding #2).
-
-    ``_child_override_removed_fields`` shadows a parent-shared inherited field with
-    ``None`` so the child inherits the parent's column. That is only sound when the
-    two are the *same* field; a deliberate same-name override with a different
-    definition would vanish behind the shadow, so the composer rejects it instead of
-    silently dropping the override.
-    """
-
-    narrow = type(
-        "NarrowLabel",
-        (AngeeModel,),
-        {
-            "__module__": "tests.divparent.models",
-            "label": models.CharField(max_length=10),
-            "Meta": type("Meta", (), {"abstract": True, "app_label": "divparent"}),
-        },
-    )
-    wide = type(
-        "WideLabel",
-        (AngeeModel,),
-        {
-            "__module__": "tests.divchild.models",
-            "label": models.CharField(max_length=99),
-            "Meta": type("Meta", (), {"abstract": True, "app_label": "divchild"}),
-        },
-    )
-    parent_module = ModuleType("tests.divparent.models")
-    child_module = ModuleType("tests.divchild.models")
-    DivParent = type(
-        "DivParent",
-        (narrow, AngeeModel),
-        {
-            "__module__": parent_module.__name__,
-            "runtime": True,
-            "Meta": type("Meta", (), {"abstract": True, "app_label": "divparent"}),
-        },
-    )
-    # A materialized child that inherits a *different* ``label`` (max_length 99) than
-    # the parent's (max_length 10) — the deliberate same-name override.
-    DivChild = type(
-        "DivChild",
-        (wide, AngeeModel),
-        {
-            "__module__": child_module.__name__,
-            "runtime": True,
-            "extends": "divparent.DivParent",
-            "Meta": type("Meta", (), {"abstract": True, "app_label": "divchild"}),
-        },
-    )
-    parent_module.DivParent = DivParent
-    child_module.DivChild = DivChild
-
-    runtime = Runtime(
-        (
-            _addon_config("divparent", parent_module),
-            _addon_config("divchild", child_module),
-        ),
-        runtime_dir=tmp_path / "runtime",
-    )
-
-    with pytest.raises(ImproperlyConfigured, match="different column of the same name"):
-        runtime._child_override_removed_fields(cast(type[AngeeModel], DivChild))
 
 
 def test_runtime_clean_requires_generated_sentinel(tmp_path: Path) -> None:
@@ -1647,6 +822,9 @@ def test_compose_config_heals_stale_runtime_then_imports(
     calls: list[str] = []
 
     class FakeRuntime:
+        def configure_migration_modules(self) -> None:
+            calls.append("migration_modules")
+
         def emit_if_stale(self) -> bool:
             calls.append("emit_if_stale")
             return True
@@ -1658,7 +836,7 @@ def test_compose_config_heals_stale_runtime_then_imports(
 
     _compose_config().import_models()
 
-    assert calls == ["emit_if_stale", "import"]
+    assert calls == ["migration_modules", "emit_if_stale", "import"]
 
 
 def test_build_check_reports_command_error_when_runtime_is_stale(
@@ -1695,26 +873,33 @@ def test_build_command_delegates_the_complete_write_lifecycle(
     assert calls == ["build"]
 
 
-def test_runtime_build_emits_stale_sources_before_materializing(tmp_path: Path, monkeypatch) -> None:
+def test_runtime_build_emits_stale_sources_once_before_materializing(tmp_path: Path, monkeypatch) -> None:
     runtime = runtime_for(tmp_path)
     calls: list[str] = []
-    output = runtime.runtime_dir / "resources" / "migrations" / "0001_manual.py"
+    original_render = runtime.render_sources
+
+    def render():
+        calls.append("render")
+        return original_render()
 
     class FakeMigrations:
         def materialize(self) -> tuple[Path, ...]:
+            assert "class Resource" in (runtime.runtime_dir / "resources" / "models.py").read_text()
             calls.append("materialize")
-            return (output,)
+            return ()
 
-    monkeypatch.setattr(runtime, "is_current", lambda: False)
-    monkeypatch.setattr(runtime, "emit", lambda: calls.append("emit"))
+    monkeypatch.setattr(runtime, "render_sources", render)
     monkeypatch.setattr(runtime, "runtime_migrations", lambda: FakeMigrations())
 
     assert runtime.build() is AddonDependencyGroupResult.SKIPPED_NO_PROJECT_DIR
-    assert calls == ["emit", "materialize"]
+    assert calls == ["render", "materialize"]
 
 
-def test_runtime_build_materializes_when_sources_are_current(tmp_path: Path, monkeypatch) -> None:
+def test_runtime_build_materializes_without_rewriting_current_sources(tmp_path: Path, monkeypatch) -> None:
     runtime = runtime_for(tmp_path)
+    runtime.emit()
+    path = runtime.runtime_dir / "resources" / "models.py"
+    modified = path.stat().st_mtime_ns
     calls: list[str] = []
 
     class FakeMigrations:
@@ -1722,12 +907,11 @@ def test_runtime_build_materializes_when_sources_are_current(tmp_path: Path, mon
             calls.append("materialize")
             return ()
 
-    monkeypatch.setattr(runtime, "is_current", lambda: True)
-    monkeypatch.setattr(runtime, "emit", lambda: calls.append("emit"))
     monkeypatch.setattr(runtime, "runtime_migrations", lambda: FakeMigrations())
 
     assert runtime.build() is AddonDependencyGroupResult.SKIPPED_NO_PROJECT_DIR
     assert calls == ["materialize"]
+    assert path.stat().st_mtime_ns == modified
 
 
 def test_runtime_check_validates_migrations_after_source_drift_is_clean(tmp_path: Path, monkeypatch) -> None:
@@ -1974,8 +1158,8 @@ def test_appgraph_annotates_roots_and_dependencies() -> None:
 
     iam = configs["angee.iam"]
     assert iam.angee_addon_root is True
-    assert iam.angee_depends_on == graph.app_dependencies(iam)
-    assert "angee.resources" in iam.angee_depends_on
+    assert "angee.resources" in addon_manifest(iam).depends_on
+    assert not hasattr(iam, "angee_depends_on")
 
     # `resources` is pulled in through iam's closure, not declared — a dependency.
     assert configs["angee.resources"].angee_addon_root is False
@@ -2002,13 +1186,12 @@ def test_appgraph_root_wins_when_also_a_dependency() -> None:
     assert configs["angee.resources"].angee_addon_root is True
 
 
-def test_appgraph_rejects_duplicate_dependencies(stub_contracts: None) -> None:
+def test_appgraph_rejects_duplicate_dependencies() -> None:
     """Repeated dependencies are rejected at their declaring owner."""
 
-    config = AppConfig("tests.duplicate_dependency", sys.modules[__name__])
-    config._addon_contract = make_contract(depends_on=("angee.base", "angee.base"))
+    config = make_addon(name="tests.duplicate_dependency", depends_on=("angee.base", "angee.base"))
 
-    with pytest.raises(ImproperlyConfigured, match="duplicate dependency 'angee.base'"):
+    with pytest.raises(ImproperlyConfigured, match="duplicate dependency"):
         AppGraph().resolve([config])
 
 
@@ -2049,3 +1232,83 @@ def test_project_env_file_is_optional(tmp_path: Path) -> None:
     from angee.compose.project import ProjectContract
 
     ProjectContract({})._read_project_env(tmp_path)
+
+
+def test_runtime_emit_renders_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = runtime_for(tmp_path)
+    original = runtime.render_sources
+    calls = []
+
+    def render():
+        calls.append("render")
+        return original()
+
+    monkeypatch.setattr(runtime, "render_sources", render)
+    runtime.emit()
+    assert calls == ["render"]
+    assert (runtime.runtime_dir / "resources" / "models.py").is_file()
+
+
+def test_runtime_from_django_does_not_bind_migrations_or_write_sources(
+    tmp_path: Path,
+    settings: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings.ANGEE_RUNTIME_DIR = tmp_path / "runtime"
+    settings.MIGRATION_MODULES = {"resources": "authored.migrations"}
+    original = settings.MIGRATION_MODULES
+    configs = (apps.get_app_config("resources"),)
+    monkeypatch.setattr(runtime_module.apps, "get_app_configs", lambda: configs)
+    runtime = Runtime.from_django()
+    assert runtime.labels == ("resources",)
+    assert settings.MIGRATION_MODULES is original
+    assert not runtime.runtime_dir.exists()
+
+
+def test_configured_cleanup_requires_no_discovery_or_rendering(
+    tmp_path: Path,
+    settings: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings.ANGEE_RUNTIME_DIR = tmp_path / "runtime"
+    runtime = runtime_for(tmp_path)
+    runtime.emit()
+    migration = runtime.runtime_dir / "resources" / "migrations" / "0001_saved.py"
+    migration.write_text("# preserved migration\n")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("cleanup must not discover or render source models")
+
+    monkeypatch.setattr(ModelComposition, "discover", forbidden)
+    monkeypatch.setattr(Runtime, "render_sources", forbidden)
+    Runtime.clean_configured()
+    assert migration.read_text() == "# preserved migration\n"
+    assert not (runtime.runtime_dir / "resources" / "models.py").exists()
+    runtime.reset()
+    runtime.clean()
+    assert migration.exists()
+
+
+def test_settings_and_bootstrap_import_without_loading_model_runtime() -> None:
+    import subprocess
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import sys
+from django.conf import settings
+import angee.compose.project
+import angee.compose.bootstrap
+import angee.compose.composer
+assert not settings.configured
+for module in ('angee.compose.runtime', 'angee.base.models', 'rebac.models'):
+    assert module not in sys.modules, module
+""",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

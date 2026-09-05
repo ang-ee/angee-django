@@ -5,11 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
-from angee.base.fields import FractionalRankField, StateField
-from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeModel
-from angee.base.refs import RecordRefMixin, canonical_record_target
-from angee.base.scoping import bind_actor
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
@@ -28,6 +23,11 @@ from rebac import (
     write_relationships,
 )
 
+from angee.base.fields import FractionalRankField, StateField
+from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin
+from angee.base.models import AngeeDataModel, AngeeManager
+from angee.base.refs import RecordRefMixin, canonical_record_target
+from angee.base.scoping import bind_actor
 from angee.messaging.models import ThreadedModelMixin
 from angee.scheduling.fields import RecurrenceField
 
@@ -782,7 +782,7 @@ class Link(AuditMixin, RecordRefMixin, AngeeDataModel):
         return self.title or self.url
 
 
-class ThreadActivityProjects(AngeeModel):
+class ThreadActivityProjects(models.Model):
     """Contribute Activity-to-Task maturation onto messaging.ThreadActivity."""
 
     extends = "messaging.ThreadActivity"

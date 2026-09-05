@@ -1,5 +1,5 @@
 # Angee addon manifest. The declarative contract hatch-angee compiles into
-# the package's [project] + entry points; see angee/addons.py (AddonContract).
+# the package's [project] + entry points; see hatch-angee's native AddonManifest.
 [addon]
 name = "angee.nexus"
 description = "Relationship intelligence — interaction rollups, gravity/fading, and the cross-channel person timeline over parties and messaging"

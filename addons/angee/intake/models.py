@@ -20,16 +20,17 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
-from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeModel
-from angee.base.refs import canonical_record_target
-from angee.base.scoping import bind_actor
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils import timezone
 from rebac import current_actor, system_context
+
+from angee.base.fields import StateField
+from angee.base.mixins import AuditMixin
+from angee.base.models import AngeeDataModel, AngeeManager
+from angee.base.refs import canonical_record_target
+from angee.base.scoping import bind_actor
 
 
 class NeedImportance(models.TextChoices):
@@ -440,14 +441,10 @@ class Need(AuditMixin, AngeeDataModel):
             object.__setattr__(self, "_intake_internal_target", False)
 
 
-class _ChannelIntakeContribution(models.Model):
-    """Field-and-behavior base folded into the materialized Channel child.
+class ChannelIntake(models.Model):
+    """Same-row intake fields and capture behavior for ``messaging.Channel``."""
 
-    Channel is a multi-table child of Integration. Keeping this contribution on
-    a narrow ``models.Model`` base avoids copying AngeeModel's timestamp columns
-    ahead of that concrete parent while preserving the normal extension-donor
-    discovery contract on :class:`ChannelIntake` below.
-    """
+    extends = "messaging.Channel"
 
     class IntakeTrigger(models.TextChoices):
         """Declared capture triggers; only all-messages is implemented in v1."""
@@ -504,18 +501,7 @@ class _ChannelIntakeContribution(models.Model):
         return need_model.objects.capture_from_message(message, queue=self.intake_queue)
 
 
-class ChannelIntake(_ChannelIntakeContribution, AngeeModel):
-    """Same-row intake configuration donor for ``messaging.Channel``."""
-
-    extends = "messaging.Channel"
-
-    class Meta:
-        """Abstract donor discovered by the composer; runtime remains false."""
-
-        abstract = True
-
-
-class TaskIntake(AngeeModel):
+class TaskIntake(models.Model):
     """Same-row task save participant that owns Need.project re-denormalization."""
 
     extends = "projects.Task"
@@ -543,7 +529,7 @@ class TaskIntake(AngeeModel):
                 )
 
 
-class ThreadAttachmentIntake(AngeeModel):
+class ThreadAttachmentIntake(models.Model):
     """Same-row source-thread binding contribution for messaging attachments."""
 
     extends = "messaging.ThreadAttachment"

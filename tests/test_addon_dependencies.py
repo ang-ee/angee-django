@@ -108,7 +108,7 @@ def test_runtime_dependency_check_accepts_fresh_rejects_stale_and_skips_bare_hos
     pyproject = host / "pyproject.toml"
     pyproject.write_text('[project]\nname = "host"\nversion = "0.0.0"\n', encoding="utf-8")
     addon = _app_config(tmp_path / "fake-addon", "example.fake_check", ("alpha>=1",))
-    runtime = Runtime((addon,), runtime_dir=tmp_path / "runtime", project_dir=host)
+    runtime = Runtime.discover((addon,), runtime_dir=tmp_path / "runtime", project_dir=host)
 
     assert runtime.build() is AddonDependencyGroupResult.WRITTEN
     assert runtime.build() is AddonDependencyGroupResult.UNCHANGED
@@ -126,7 +126,7 @@ def test_runtime_build_reports_a_missing_project_directory(tmp_path: Path) -> No
     """Runtime delegates the no-project result instead of making the command infer it."""
 
     addon = _app_config(tmp_path / "fake-addon", "example.fake_no_project", ("alpha>=1",))
-    runtime = Runtime((addon,), runtime_dir=tmp_path / "runtime", project_dir=None)
+    runtime = Runtime.discover((addon,), runtime_dir=tmp_path / "runtime", project_dir=None)
 
     assert runtime.build() is AddonDependencyGroupResult.SKIPPED_NO_PROJECT_DIR
 

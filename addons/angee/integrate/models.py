@@ -48,6 +48,7 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
+from rebac.mixins import RebacModelBase
 from rebac.models import active_relationship_model
 from strawberry_django.descriptors import model_property
 
@@ -1741,7 +1742,7 @@ def _integration_child_models(parent_model: type[Integration]) -> tuple[type[Int
     )
 
 
-class Bridge(AngeeModel):
+class Bridge(models.Model, metaclass=RebacModelBase):
     """Abstract base for child models that synchronize or subscribe to vendor data.
 
     Pure bridge state and behavior. A materialized bridge extends
@@ -2131,12 +2132,11 @@ class VcsBridge(Bridge):
     webhook_secret = EncryptedField(blank=True)
     """Shared secret for verifying inbound push webhooks (per account, not per repo)."""
 
-    objects = AngeeManager()
-
     class Meta:
         """Django model options for the VCS bridge child model."""
 
         abstract = True
+        ordering = ("-updated_at",)
         rebac_resource_type = "integrate/vcs_bridge"
         rebac_id_attr = "sqid"
 

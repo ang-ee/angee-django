@@ -19,8 +19,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeModel
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
@@ -41,6 +39,8 @@ from rebac import (
 )
 from rebac.actors import current_sudo_reason, is_sudo
 
+from angee.base.mixins import AuditMixin, SqidMixin
+from angee.base.models import AngeeModel
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
@@ -112,7 +112,7 @@ _PersonMeta = getattr(AbstractPerson, "Meta", object)
 _AddressMeta = getattr(AbstractAddress, "Meta", object)
 
 
-class Directory(Integration, AbstractDirectory):
+class Directory(AbstractDirectory, Integration):
     """Concrete contacts directory (Integration child) used by messaging tests."""
 
     class Meta(AbstractDirectory.Meta):
@@ -151,7 +151,7 @@ class Party(AbstractParty):
         rebac_id_attr = "sqid"
 
 
-class Organization(Party, AbstractOrganization):
+class Organization(AbstractOrganization, Party):
     """Concrete organization matching the composer inheritance shape."""
 
     class Meta(_OrganizationMeta):
@@ -177,7 +177,7 @@ class Handle(AbstractHandle):
         rebac_id_attr = "sqid"
 
 
-class Person(Party, AbstractPerson):
+class Person(AbstractPerson, Party):
     """Concrete person used when messaging attributes a user-owned handle."""
 
     class Meta(_PersonMeta):
@@ -1307,9 +1307,9 @@ def test_threaded_model_create_autofollows_and_logs_author(messaging_tables: Non
 
 @pytest.mark.django_db(transaction=True)
 def test_materialized_child_transition_yields_one_tracking_note(messaging_tables: None) -> None:
-    """A ``child_overrides_parent`` materialized child tracks a transition save once.
+    """A native materialized child tracks a transition save once.
 
-    The child-first (flipped) MRO places ``ThreadedModelMixin.save`` once in the
+    The child-first MRO places ``ThreadedModelMixin.save`` once in the
     chain, and MTI saves both tables inside that single ``save()`` — so a
     ``StateTransitions`` ``save_state`` edge over a tracked field posts exactly one
     tracking note, never one per MRO level. Pins the arch-review gap in the
