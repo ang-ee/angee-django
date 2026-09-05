@@ -220,6 +220,39 @@ describe("RowsListView filters", () => {
   });
 });
 
+describe("RowsListView empty state", () => {
+  test("shows the unfiltered empty message for an empty collection", async () => {
+    renderInRouter(<RowsListView<Item> rows={[]} columns={columns} />);
+
+    expect(await screen.findByText("No records.")).toBeTruthy();
+  });
+
+  test("shows the filtered empty message when the resource-view filter has no matches", async () => {
+    renderInRouter(
+      <ResourceViewProvider initialState={{ filter: { region: "North" } }}>
+        <RowsListView<Item> rows={[]} columns={columns} />
+      </ResourceViewProvider>,
+    );
+
+    expect(await screen.findByText("No records match your filters.")).toBeTruthy();
+  });
+
+  test("explicit emptyContent wins while filtered", async () => {
+    renderInRouter(
+      <ResourceViewProvider initialState={{ filter: { region: "North" } }}>
+        <RowsListView<Item>
+          rows={[]}
+          columns={columns}
+          emptyContent="Nothing here"
+        />
+      </ResourceViewProvider>,
+    );
+
+    expect(await screen.findByText("Nothing here")).toBeTruthy();
+    expect(screen.queryByText("No records match your filters.")).toBeNull();
+  });
+});
+
 describe("RowsListView selection", () => {
   test("renders caller bulk actions for selected local rows", async () => {
     const action = vi.fn();

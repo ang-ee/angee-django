@@ -13,7 +13,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { BoardViewProps } from "./BoardView";
 import type { ColumnDescriptor } from "../page";
 import { defineRowAction, type RowActionDeclaration } from "./RowActions";
+import { ResourceViewProvider } from "./resource-view-context";
 import type { BoardLaneSource, CardActionContext } from "./resource-view-types";
+import type { ResourceViewFilter } from "./resource-view-model";
 
 type LeadRow = Row & {
   id: string;
@@ -167,6 +169,27 @@ describe("ListView board laneSource", () => {
         },
       ]);
     });
+  });
+
+  test("passes the unfiltered empty message to BoardView", async () => {
+    renderLeadBoard();
+
+    await waitFor(() => expect(harness.boardProps).not.toBeNull());
+    expect(harness.boardProps?.emptyContent).toBe("list.empty");
+  });
+
+  test("passes the filtered empty message to BoardView", async () => {
+    renderLeadBoard({ filter: { name: "Missing" } });
+
+    await waitFor(() => expect(harness.boardProps).not.toBeNull());
+    expect(harness.boardProps?.emptyContent).toBe("list.emptyFiltered");
+  });
+
+  test("passes explicit emptyContent to BoardView while filtered", async () => {
+    renderLeadBoard({ filter: { name: "Missing" }, emptyContent: "Custom empty" });
+
+    await waitFor(() => expect(harness.boardProps).not.toBeNull());
+    expect(harness.boardProps?.emptyContent).toBe("Custom empty");
   });
 
   test("fails fast when laneSource does not resolve a relation", () => {
@@ -441,23 +464,38 @@ function renderLeadBoard(options: {
   withDefaultGroup?: boolean;
   rowActions?: readonly RowActionDeclaration<LeadRow>[];
   cardActions?: (row: LeadRow, context: CardActionContext) => ReactNode;
+  filter?: ResourceViewFilter;
+  emptyContent?: string;
 } = {}) {
   const laneSource = Object.prototype.hasOwnProperty.call(options, "laneSource")
     ? options.laneSource
     : { field: "stage" };
   const metadata = options.metadata ?? leadMetadata();
+  const listView = (
+    <ListView<LeadRow>
+      resource="crm.Lead"
+      columns={options.columns ?? COLUMNS}
+      defaultView="board"
+      defaultGroup={options.withDefaultGroup === false ? undefined : { field: "stage" }}
+      laneSource={laneSource}
+      rowActions={options.rowActions}
+      cardActions={options.cardActions}
+      emptyContent={options.emptyContent}
+      scope={options.filter ? "inherit" : "local"}
+    />
+  );
   return render(
     <ModelMetadataProvider metadata={metadata}>
-      <ListView<LeadRow>
-        resource="crm.Lead"
-        columns={options.columns ?? COLUMNS}
-        defaultView="board"
-        defaultGroup={options.withDefaultGroup === false ? undefined : { field: "stage" }}
-        laneSource={laneSource}
-        rowActions={options.rowActions}
-        cardActions={options.cardActions}
-        scope="local"
-      />
+      {options.filter ? (
+        <ResourceViewProvider
+          scope="local"
+          initialState={{ filter: options.filter, view: "board" }}
+        >
+          {listView}
+        </ResourceViewProvider>
+      ) : (
+        listView
+      )}
     </ModelMetadataProvider>,
   );
 }

@@ -92,6 +92,7 @@ export const enUiMessages: Record<string, string> = {
   "explorer.emptyDescription": "Create a record to start browsing.",
   "list.loading": "Loading…",
   "list.empty": "No records.",
+  "list.emptyFiltered": "No records match your filters.",
   "list.allRecords": "All records",
   "list.emptyValue": "No value",
   "list.emptyRelation": "No {relation}",
