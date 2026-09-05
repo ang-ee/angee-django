@@ -12,7 +12,7 @@ from angee.data.metadata import DataResourceSubtitleMetadata
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
-from angee.graphql.node import AngeeNode
+from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
@@ -25,6 +25,9 @@ Note = apps.get_model("notes", "Note")
 class NoteType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a note."""
 
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name, only=["title"], description=NODE_DISPLAY_NAME_DESCRIPTION
+    )
     title: auto
     body: auto
     status: auto

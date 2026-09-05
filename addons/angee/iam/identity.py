@@ -13,7 +13,7 @@ from typing import Any
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db.models import Q
+from django.db.models import Q, QuerySet
 from django.http import HttpRequest
 from rebac import subject_id_attr, system_context
 
@@ -24,6 +24,14 @@ def user_label(user: Any) -> str:
     """Return any user model's human label from the Django auth contract."""
 
     return str(user.get_full_name() or user.username)
+
+
+def user_label_queryset() -> QuerySet[Any]:
+    """Keep scalar-label source rows narrow and explicitly elevated inside IAM."""
+
+    reason = "iam.identity.user_label"
+    with system_context(reason=reason):
+        return get_user_model().objects.system_context(reason=reason).only("first_name", "last_name", "username")
 
 
 def user_public_id(user_id: Any) -> str | None:
@@ -103,14 +111,13 @@ def user_display_labels(
                 continue
 
     fetched: dict[str, str] = {}
-    with system_context(reason="iam.identity.user_label"):
-        users = user_model.objects.filter(lookup).only("first_name", "last_name", "username") if lookup else []
-        for user in users:
-            label = user_label(user)
-            fetched[str(user.pk)] = label
-            public_id = getattr(user, "sqid", None)
-            if public_id:
-                fetched[str(public_id)] = label
+    users = user_label_queryset().filter(lookup) if lookup else []
+    for user in users:
+        label = user_label(user)
+        fetched[str(user.pk)] = label
+        public_id = getattr(user, "sqid", None)
+        if public_id:
+            fetched[str(public_id)] = label
 
     for user_id in missing:
         fetched_label = fetched.get(str(user_id))
