@@ -17,7 +17,7 @@ from django.apps import AppConfig
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
-from django.db import connection, models
+from django.db import connection, models, transaction
 from django.test import RequestFactory
 from rebac import actor_context, system_context
 
@@ -734,7 +734,9 @@ def _clear_model_tables(test_models: tuple[type[models.Model], ...]) -> None:
     Source-addon tests share concrete unmanaged tables across modules. Keeping the
     schema lets post-migrate hooks see registered models; clearing rows before
     pytest-django flushes the managed tables prevents dangling FKs and uniqueness
-    leaks when a later fixture reuses an already-created table.
+    leaks when a later fixture reuses an already-created table. One transaction
+    lets PostgreSQL check Django's deferred foreign keys after all selected
+    tables are cleared, including tables with cyclic references.
     """
 
     existing_tables = set(connection.introspection.table_names())
@@ -752,7 +754,11 @@ def _clear_model_tables(test_models: tuple[type[models.Model], ...]) -> None:
     if not table_names:
         return
 
-    with connection.constraint_checks_disabled(), connection.cursor() as cursor:
+    with (
+        connection.constraint_checks_disabled(),
+        transaction.atomic(using=connection.alias),
+        connection.cursor() as cursor,
+    ):
         for table_name in reversed(tuple(dict.fromkeys(table_names))):
             cursor.execute(f"DELETE FROM {connection.ops.quote_name(table_name)}")
 

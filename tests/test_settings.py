@@ -118,6 +118,7 @@ def test_resources_root_expands_framework_dependencies(tmp_path: Path) -> None:
     assert compose_at < base_at < resources_at
     assert GRAPHQL_APP not in installed
     assert "angee.iam.apps.IAMConfig" not in installed
+    assert "REBAC_UNIVERSAL_ADMIN_ROLE" not in settings
 
 
 def test_iam_user_is_the_default_auth_model(tmp_path: Path) -> None:
@@ -132,6 +133,36 @@ def test_iam_user_is_the_default_auth_model(tmp_path: Path) -> None:
     assert "angee.resources" in installed
     assert settings["AUTH_USER_MODEL"] == "iam.User"
     assert "angee.iam.apps.IAMConfig" in installed
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({}, "angee/role:admin"),
+        ({"REBAC_UNIVERSAL_ADMIN_ROLE": "example/role:owner"}, "example/role:owner"),
+        ({"REBAC_UNIVERSAL_ADMIN_ROLE": None}, None),
+    ],
+)
+def test_iam_admin_role_default_preserves_project_policy(
+    tmp_path: Path,
+    overrides: dict[str, str | None],
+    expected: str | None,
+) -> None:
+    """IAM supplies its role to native REBAC unless the project chooses another policy."""
+
+    from django.test import override_settings
+    from rebac import app_settings
+
+    settings: dict[str, Any] = {
+        "INSTALLED_APPS": _default_installed_apps(tmp_path, ("angee.iam",)),
+        "ANGEE_RUNTIME_DIR": tmp_path / "runtime",
+        **overrides,
+    }
+    Composer(settings).compose_settings()
+
+    assert settings["REBAC_UNIVERSAL_ADMIN_ROLE"] == expected
+    with override_settings(REBAC_UNIVERSAL_ADMIN_ROLE=settings["REBAC_UNIVERSAL_ADMIN_ROLE"]):
+        assert app_settings.REBAC_UNIVERSAL_ADMIN_ROLE == expected
 
 
 def test_graphql_public_pk_is_sqid(tmp_path: Path) -> None:

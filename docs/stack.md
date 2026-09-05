@@ -16,11 +16,10 @@ Dependency changes must update this file in the same change.
   composed manifests into the host's generated `[dependency-groups].addons` key.
   `uv.lock` pins the resolved Python graph. The `angee.graphql` folder addon's
   manifest owns its Strawberry stack, Pydantic, Channels Redis adapter, and exact
-  Strawberry fork reference. This refactor branch also pins exact reviewed REBAC,
-  Hasura and aggregates feature commits in their owning manifests so composed
-  hosts receive the same code. Replace these review pins with published release
-  floors when the upstream releases exist. Use `uv add` / `uv lock`; do not use `pip install`
-  by hand.
+  Strawberry fork reference. REBAC, Hasura and aggregates use published release
+  floors in their owning manifests and registry artifacts in `uv.lock`. The
+  Strawberry fork remains necessary for native input/object extensions.
+  Use `uv add` / `uv lock`; do not use `pip install` by hand.
 - `package.json` owns JavaScript package scripts and declared dependencies.
   `pnpm-workspace.yaml` owns workspace membership. `pnpm-lock.yaml` pins the
   resolved JavaScript graph. Use `pnpm add` / `pnpm install`; do not use npm or
@@ -36,8 +35,8 @@ Dependency changes must update this file in the same change.
 | Django 6.0+ | ORM, migrations, admin, auth contract, app registry | Abstract bases and build-time composition into runtime apps |
 | strawberry-django | GraphQL types, resolvers, dataloaders, schema printing | Merge addon schema parts into named schemas, `changes` subscription shortcuts, emit SDL, serve per name |
 | django-choices-field | Enum-backed model fields | `StateField` semantic wrapper |
-| strawberry-django-aggregates 0.11 development commit | Aggregation, JSON-path grouping, group key encoders and exact grouped cardinality | Declarative dimensions/measures and public-ID key encoding |
-| strawberry-django-hasura 0.8 development commit | Expose Django models in the Hasura GraphQL dialect (`_bool_exp`/`_aggregate`/`x_by_pk`/`_set`, exact `Decimal` filters, nested to-one filter paths, nested to-many `NestedInsert`), resource-local lookup types, named generated resource members, exact grouped-count roots, plus computed (non-model) sources via a `run_query` `RowSource` | Composes it as the model emitter (`hasura_model_resource`, incl. `lines=` editable-child nested inserts) and the pydantic computed-source emitter (`hasura_pydantic_resource`) |
+| strawberry-django-aggregates >= 0.11.0 | Aggregation, JSON-path grouping, group key encoders and exact grouped cardinality | Declarative dimensions/measures and public-ID key encoding |
+| strawberry-django-hasura >= 0.8.1 | Expose Django models in the Hasura GraphQL dialect (`_bool_exp`/`_aggregate`/`x_by_pk`/`_set`, exact `Decimal` filters, nested to-one filter paths, nested to-many `NestedInsert`), resource-local lookup types, named generated resource members, exact grouped-count roots, plus computed (non-model) sources via a `run_query` `RowSource` | Composes it as the model emitter (`hasura_model_resource`, incl. `lines=` editable-child nested inserts) and the pydantic computed-source emitter (`hasura_pydantic_resource`) |
 | pydantic | Typed model validation/parsing | Row-shape SSOT for computed (non-model) Hasura resources — the node + filter scalars derive from the pydantic model (`hasura_pydantic_resource`) |
 | pydantic-ai-slim >= 2.13 | Native model/message/usage protocols, direct one-shot requests, agent loops and MCP toolsets | `agents` owns catalogue policy and native bindings; vendor addons select their native provider extras and credentialed SDK clients. `agents_runtime_pydantic` adds only the MCP extra and bounded sessions; workflows own durability, journals and approvals |
 | Celery + Redis | Task transport, worker execution, retries, queue routing, and periodic dispatch | hosted by the `angee.jobs` framework app; the host/stack supplies broker topology; task bodies acquire Angee locks and delegate state changes to model/manager owners |
@@ -45,7 +44,7 @@ Dependency changes must update this file in the same change.
 | python-dateutil | RFC-5545 recurrence-rule parsing and expansion (`rrulestr`) | `angee.scheduling` owns recurrence — `RecurrenceField` (a validated RRULE column) + `Recurrence.occurrences(window)`, bounded, timezone-aware expansion in the project `TIME_ZONE` |
 | phonenumbers | Region-aware telephone parsing, validation, matching, and E.164 formatting | `parties.Handle.normalize_value` parses phone/WhatsApp values with `region=None`, so canonical E.164 input requires a leading `+country` code; invalid, impossible, or region-unknown values use the digit-only comparison fallback, and signature evidence mines through the same owner |
 | channels + channels-redis + uvicorn | ASGI/WebSocket transport and serving; Redis-backed channel layer for production fanout | GraphQL subscription mounting; uvicorn serves the composed ASGI app and sends the lifespan that enters the MCP mount's `http_app` lifespan (`angee.asgi`); in-memory channel layer remains dev/test only |
-| django-zed-rebac 0.15 development commit | REBAC engine, Zed introspection/rendering/extension, identity storage attributes and permission-aware queryset projection/combination | Addon schema composition, reserved roles and actor resolution through public REBAC APIs |
+| django-zed-rebac >= 0.15.1 | REBAC engine, Zed introspection/rendering/extension, identity storage attributes and permission-aware queryset projection/combination | Addon schema composition, reserved roles and actor resolution through public REBAC APIs |
 | django-axes | Login failure throttling at Django's `authenticate()`/auth-backend signal seam | IAM composes the app, standalone backend, and middleware so password GraphQL login stays a thin `authenticate(request=...)` caller |
 | django-sqids | Opaque external IDs | `SqidMixin`, `SqidField` (NULL-safe decode on joins), GraphQL boundary scalar |
 | django-simple-history | Shadow history tables and revert | `HistoryMixin` marker (knowledge Vault/Page; messaging edits are in-row `edit_history` + immutable fragments instead) |

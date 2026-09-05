@@ -739,7 +739,7 @@ requires-dist = [
     { name = "django-simple-history", specifier = ">=3.7" },
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
-    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=43be603bc6624c9876e9b4bb04ce30c07a7d2541" },
+    { name = "django-zed-rebac", specifier = ">=0.15.1" },
     { name = "hatch-angee", specifier = ">=0.2.3" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
@@ -756,7 +756,7 @@ addons = [
     { name = "django-anymail", specifier = ">=15.1" },
     { name = "django-axes", specifier = ">=8.0" },
     { name = "django-import-export", specifier = ">=4.3" },
-    { name = "django-zed-rebac", extras = ["strawberry-django"], git = "https://github.com/ang-ee/django-zed-rebac.git?rev=43be603bc6624c9876e9b4bb04ce30c07a7d2541" },
+    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.15.1" },
     { name = "fastmcp", specifier = ">=3.4.2,<4" },
     { name = "httpcore", specifier = ">=1.0,<2" },
     { name = "httpx", specifier = ">=0.28.1,<0.29" },
@@ -778,8 +778,8 @@ addons = [
     { name = "qrcode", extras = ["pil"], specifier = ">=8.2" },
     { name = "ruamel-yaml", specifier = ">=0.18" },
     { name = "slack-sdk", specifier = ">=3.43.0" },
-    { name = "strawberry-django-aggregates", git = "https://github.com/ang-ee/strawberry-django-aggregates.git?rev=587fc099ae1db69c618f9d0d38d6dc1deec63142" },
-    { name = "strawberry-django-hasura", git = "https://github.com/ang-ee/strawberry-django-hasura.git?rev=ac5559f367e575da55db7d2267df271490a3a50b" },
+    { name = "strawberry-django-aggregates", specifier = ">=0.11.0" },
+    { name = "strawberry-django-hasura", specifier = ">=0.8.1" },
     { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?rev=e4fa3198f704d81b3ca96b6dcac75420c5fee516" },
     { name = "strawberry-graphql-django", specifier = ">=0.86.7" },
     { name = "tablib", specifier = ">=3" },
@@ -909,10 +909,14 @@ wheels = [
 
 [[package]]
 name = "django-zed-rebac"
-version = "0.15.0.dev0"
-source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=43be603bc6624c9876e9b4bb04ce30c07a7d2541#43be603bc6624c9876e9b4bb04ce30c07a7d2541" }
+version = "0.15.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5c/0c/1b1a6eace627d1e21d8dce115a4873716f83b6f645302f02e7681161ade2/django_zed_rebac-0.15.1.tar.gz", hash = "sha256:d8af8aa53e966b452fde6c16df53db6cc93bc90090cb14e7efe386f4c1838ecc", size = 251063, upload-time = "2026-09-05T15:15:04.202Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/af/f0/217eb416da5e1422015d09a4e274b26fdd59126f8950816dff7f883825b0/django_zed_rebac-0.15.1-py3-none-any.whl", hash = "sha256:04e32d47dc50324710c351448390a7fc483d60d0f8116f3682ef2164ed22f1e7", size = 185712, upload-time = "2026-09-05T15:15:02.665Z" },
 ]
 
 [package.optional-dependencies]
@@ -2441,23 +2445,31 @@ wheels = [
 
 [[package]]
 name = "strawberry-django-aggregates"
-version = "0.11.0.dev0"
-source = { git = "https://github.com/ang-ee/strawberry-django-aggregates.git?rev=587fc099ae1db69c618f9d0d38d6dc1deec63142#587fc099ae1db69c618f9d0d38d6dc1deec63142" }
+version = "0.11.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
     { name = "strawberry-graphql" },
     { name = "strawberry-graphql-django" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/bd/50/74b661a48af0053120ac4218554f898bb4e66870b5d2e1679f1149248112/strawberry_django_aggregates-0.11.0.tar.gz", hash = "sha256:55f185c0fad5658b0098dd6391593d3ea302b97c9091ba2624e2d7b2fd5c6318", size = 157143, upload-time = "2026-09-05T14:41:41.172Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8d/6c/2c2c090d731259a9424ca5d6b853ef2a203b842948a01d3bd8aab16f688b/strawberry_django_aggregates-0.11.0-py3-none-any.whl", hash = "sha256:265238ed3ddb56f81d24620e5de5b9c1d42add53dab03288cab5d84d303901bb", size = 104199, upload-time = "2026-09-05T14:41:39.874Z" },
+]
 
 [[package]]
 name = "strawberry-django-hasura"
-version = "0.8.0.dev0"
-source = { git = "https://github.com/ang-ee/strawberry-django-hasura.git?rev=ac5559f367e575da55db7d2267df271490a3a50b#ac5559f367e575da55db7d2267df271490a3a50b" }
+version = "0.8.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
     { name = "strawberry-django-aggregates" },
     { name = "strawberry-graphql" },
     { name = "strawberry-graphql-django" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9c/62/4472032d75e333fa97b4efd3a57caec508513f1852b4ac63215a557626dd/strawberry_django_hasura-0.8.1.tar.gz", hash = "sha256:67a15aaa8a67f69cb45c68396574128e9c417db50a30d23e6651469d3b2aadc0", size = 133524, upload-time = "2026-09-05T15:43:25.948Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/96/5c/f9f48ec4eb1ecd8307e230c67722559676f2f0800165ee3f91e22f6e8ae3/strawberry_django_hasura-0.8.1-py3-none-any.whl", hash = "sha256:c4c4bf8683ba5d2d6f220fbc3690f0dd6003797aa5dcad477d780aced47292ae", size = 61578, upload-time = "2026-09-05T15:43:24.634Z" },
 ]
 
 [[package]]

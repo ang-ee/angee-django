@@ -2280,8 +2280,11 @@ describe("FormView", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
     expect(screen.getByLabelText("Title")).toBeTruthy();
-    expect(screen.queryByText("Activity panel")).toBeNull();
-    expect(unmountPanel).toHaveBeenCalledTimes(1);
+    // Base UI unmounts the outgoing panel when its exit transition completes.
+    await waitFor(() => {
+      expect(screen.queryByText("Activity panel")).toBeNull();
+      expect(unmountPanel).toHaveBeenCalledTimes(1);
+    });
   });
 
   test("mounts keepMounted record panels eagerly from the first render", async () => {

@@ -333,10 +333,10 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
         order="things_order_by",
         aggregate="things_aggregate",
         grouped="things_group",
-        group_key="HasuraResourceThingTypeGroupKey",
-        group_by_spec="HasuraResourceThingTypeGroupBySpec",
-        group_order="HasuraResourceThingTypeGroupOrder",
-        having="HasuraResourceThingTypeHaving",
+        group_key="thingsGroupKey",
+        group_by_spec="thingsGroupBySpec",
+        group_order="thingsGroupOrder",
+        having="thingsHaving",
         create_input="things_insert_input",
         update_input="things_set_input",
     )
@@ -587,18 +587,22 @@ def test_hasura_model_resource_groups_json_path_values(transactional_db: Any) ->
             HasuraJsonResourceThing.objects.create(name="three", metadata={"mailbox": "INBOX"})
 
         with system_context(reason="test.aggregate.json_path_group.query"):
+            # Hasura owns resource-local type names; consume the exposed name as
+            # the authored-operation generator does instead of reconstructing it.
+            group_by_type = schema.angee_resources[0].type_names.group_by_spec
+            assert group_by_type is not None
             result = result_data(
                 execute_schema(
                     schema,
                     """
-                    query MailboxGroups($groupBy: [HasuraJsonValuesThingTypeGroupBySpec!]!) {
+                    query MailboxGroups($groupBy: [GROUP_BY_SPEC!]!) {
                       json_value_things_groups_count(group_by: $groupBy)
                       json_value_things_groups(group_by: $groupBy, limit: 10) {
                         key { metadata__mailbox }
                         aggregate { count }
                       }
                     }
-                    """,
+                    """.replace("GROUP_BY_SPEC", group_by_type),
                     {"groupBy": [{"field": "METADATA__MAILBOX"}]},
                 )
             )

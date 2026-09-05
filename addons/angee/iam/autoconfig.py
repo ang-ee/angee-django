@@ -4,6 +4,8 @@ from __future__ import annotations
 
 SETTINGS = {
     "AUTH_USER_MODEL": "iam.User",
+    # IAM owns the platform-admin role used by its schema and bootstrap command.
+    "REBAC_UNIVERSAL_ADMIN_ROLE": "angee/role:admin",
     "MIDDLEWARE:append": [
         "django.contrib.sessions.middleware.SessionMiddleware",
         "django.middleware.csrf.CsrfViewMiddleware",
