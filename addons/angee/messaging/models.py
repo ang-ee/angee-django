@@ -52,10 +52,6 @@ from rebac import (
 )
 
 from angee.base.actors import actor_user_id
-<<<<<<< HEAD
-from angee.base.emission import ModelClassAttribute
-=======
->>>>>>> workspace/django-native-composition
 from angee.base.fields import SqidField, StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
