@@ -2,7 +2,7 @@ import * as React from "react";
 import { type Row } from "@angee/metadata";
 import { getCoreRowModel, useReactTable, type ColumnDef, type Row as TableRowModel } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { clampPageSize, crudFiltersFromFilterRecord, hasuraWhereFromCrudFilters, stableSerialize, useAngeeAggregate, useAngeeGroupByBatch, useAngeeListBatch, type GroupByBatchScope } from "@angee/refine";
+import { MAX_PAGE_SIZE, clampPageSize, crudFiltersFromFilterRecord, hasuraWhereFromCrudFilters, stableSerialize, useAngeeAggregate, useAngeeGroupByBatch, useAngeeListBatch, type GroupByBatchScope } from "@angee/refine";
 import type { ResourceViewGroupExpansion } from "../resource-view-context";
 import { useUiT } from "../../../i18n";
 import { type ResourceListOrder } from "../resource-view-model";
@@ -56,9 +56,6 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     [sortOrder, order],
   );
   const rowGroupStack = groupStack ?? resourceView.state.groupStack;
-  const rootPage = (resourceView.state.pagination.pageIndex + 1);
-  const statePageSize = resourceView.state.pagination.pageSize;
-
   // Shared table state plus per-group/footer measures.
   const tableState = useResourceViewTableState({
     columns,
@@ -66,15 +63,19 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     modelMetadata,
     groupStack: rowGroupStack,
     sortOrder,
+    maxPageSize: MAX_PAGE_SIZE,
   });
   const {
     tableColumns,
     columnVisibility,
     effectiveColumnVisibility,
     setColumnVisibility,
+    pagination: rootPagination,
     sorting,
     handleSortingChange,
   } = tableState;
+  const rootPage = rootPagination.pageIndex + 1;
+  const statePageSize = rootPagination.pageSize;
   const measures = React.useMemo(
     () => groupMeasuresFromColumns(columns),
     [columns],

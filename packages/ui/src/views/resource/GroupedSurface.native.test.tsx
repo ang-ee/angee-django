@@ -135,6 +135,29 @@ test("native subgroup and leaf page sizes, page 2 and expansion survive an actua
   expect(f.surface.groupedItems.some((item) => item.kind === "record" && item.row.original.id === "obsolete")).toBe(false);
 });
 
+test("native grouped root and leaf pagination clamp oversized page sizes", async () => {
+  const f = fixture();
+  await waitFor(() => expect(f.header(0)?.kind === "groupHeader" && f.header(0)?.pager).toBeTruthy());
+
+  act(() => f.view.setPageSize(500));
+  await waitFor(() => expect(f.view.state.pagination.pageSize).toBe(100));
+  expect((f.custom.mock.calls.at(-1)?.[0].meta?.gqlVariables as { limit: number }).limit).toBe(100);
+
+  const root = f.header(0)!;
+  if (root.kind !== "groupHeader") throw new Error("missing root header");
+  act(() => f.surface.setScopePageSize(root.pager!.pageKey, 500));
+  await waitFor(() => expect(f.header(0)?.pager?.pageSize).toBe(100));
+
+  const leaf = f.header(1)!;
+  if (leaf.kind !== "groupHeader") throw new Error("missing leaf header");
+  act(() => f.surface.toggleGroup(leaf.bucketKey));
+  await waitFor(() => expect(f.header(1)?.pager).toBeTruthy());
+  act(() => f.surface.setScopePageSize(leaf.bucketKey, 500));
+  await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].pagination?.pageSize).toBe(100));
+  expect(f.view.paginationByScope[leaf.bucketKey]).toEqual({ pageIndex: 0, pageSize: 100 });
+  expect(f.surface.groupedItems.find((item) => item.kind === "record")?.nav.pageSize).toBe(100);
+});
+
 test("a native grouped header sort updates the leaf query and preserves the parent filter", async () => {
   const f = fixture();
   act(() => f.view.setFilter({ title: { iContains: "kept" } }));

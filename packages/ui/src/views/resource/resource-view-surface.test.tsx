@@ -20,6 +20,7 @@ import { OperationDocumentsProvider, type GroupByBatchScope } from "@angee/refin
 import { ToastProvider } from "../../feedback";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
 import {
+  useClientResourceViewSurface,
   useGroupedResourceViewSurface,
   useResourceViewSurface,
   type ResourceListSnapshot,
@@ -33,6 +34,7 @@ const tableMocks = vi.hoisted(() => ({
   ] as Row[],
   refetch: vi.fn(),
   mutateAsync: vi.fn(),
+  pageSizes: [] as number[],
   subgroupTotal: null as number | null,
   subgroupPages: [] as number[],
 }));
@@ -55,8 +57,11 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   };
   return {
     ...actual,
-    useList: ({ resource, filters }: { resource?: string; filters?: unknown[] }) => {
-      if (resource === "notes") tableMocks.activeFilters.push(filters ?? []);
+    useList: ({ resource, filters, pagination }: { resource?: string; filters?: unknown[]; pagination?: { pageSize?: number } }) => {
+      if (resource === "notes") {
+        tableMocks.activeFilters.push(filters ?? []);
+        if (pagination?.pageSize !== undefined) tableMocks.pageSizes.push(pagination.pageSize);
+      }
       return {
         result: { data: tableMocks.rows, total: tableMocks.rows.length },
         query: { isFetching: false, refetch: tableMocks.refetch },
@@ -139,9 +144,45 @@ afterEach(() => {
   tableMocks.activeFilters = [];
   tableMocks.refetch.mockClear();
   tableMocks.mutateAsync.mockClear();
+  tableMocks.pageSizes = [];
+  tableMocks.rows = [{ id: "note_1", title: "First", status: "active" }];
   tableMocks.subgroupTotal = null;
   tableMocks.subgroupPages = [];
 });
+
+describe("useClientResourceViewSurface", () => {
+  test("client row-model pagination retains page sizes above the server cap", () => {
+    tableMocks.rows = Array.from({ length: 250 }, (_, index) => ({
+      id: `note_${index + 1}`,
+      title: `Note ${index + 1}`,
+      status: "active",
+    }));
+    render(
+      <ToastProvider>
+        <ResourceViewProvider scope="local" initialState={{ pageSize: 200 }}>
+          <ClientSurfaceProbe />
+        </ResourceViewProvider>
+      </ToastProvider>,
+    );
+
+    expect(screen.getByTestId("client-page-size").textContent).toBe("200:200:200");
+  });
+});
+
+function ClientSurfaceProbe(): React.ReactElement {
+  const resourceView = useResourceView();
+  const surface = useClientResourceViewSurface({
+    resource: "notes.Note",
+    columns: NOTE_COLUMNS,
+    resourceView,
+    modelMetadata: CLIENT_NOTE_METADATA,
+  });
+  return (
+    <span data-testid="client-page-size">
+      {resourceView.state.pagination.pageSize}:{surface.list.pageSize}:{surface.rows.length}
+    </span>
+  );
+}
 
 describe("useResourceViewSurface", () => {
   test("row query filters follow cleared resource-view facets after mount", async () => {
@@ -167,21 +208,46 @@ describe("useResourceViewSurface", () => {
       expect(tableMocks.activeFilters.at(-1)).toEqual([]);
     });
   });
+
+  test("server pagination clamps oversized native state before query and navigation", async () => {
+    const onListStateChange = vi.fn();
+    render(
+      <ToastProvider>
+        <ResourceViewProvider scope="local" initialState={{ pageSize: 200 }}>
+          <SurfaceProbe onListStateChange={onListStateChange} />
+        </ResourceViewProvider>
+      </ToastProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("flat-page-size").textContent).toBe("100:100"));
+    expect(tableMocks.pageSizes.at(-1)).toBe(100);
+    expect((onListStateChange.mock.calls.at(-1)?.[0] as ResourceListSnapshot<Row>)
+      .navigationScope?.pageSize).toBe(100);
+
+    fireEvent.click(screen.getByRole("button", { name: "oversize page" }));
+    await waitFor(() => expect(screen.getByTestId("flat-page-size").textContent).toBe("100:100"));
+    expect(tableMocks.pageSizes.at(-1)).toBe(100);
+  });
 });
 
-function SurfaceProbe(): React.ReactElement {
+function SurfaceProbe({ onListStateChange }: {
+  onListStateChange?: (state: ResourceListSnapshot<Row>) => void;
+} = {}): React.ReactElement {
   const resourceView = useResourceView();
-  useResourceViewSurface({
+  const surface = useResourceViewSurface({
     resource: "notes.Note",
     columns: NOTE_COLUMNS,
     resourceView,
     modelMetadata: NOTE_METADATA,
+    onListStateChange,
   });
-  return (
-    <button type="button" onClick={() => resourceView.setFilter({})}>
-      clear filter
-    </button>
-  );
+  return <>
+    <button type="button" onClick={() => resourceView.setFilter({})}>clear filter</button>
+    <button type="button" onClick={() => resourceView.setPageSize(500)}>oversize page</button>
+    <span data-testid="flat-page-size">
+      {resourceView.state.pagination.pageSize}:{surface.list.pageSize}
+    </span>
+  </>;
 }
 
 describe("useGroupedResourceViewSurface", () => {
@@ -363,6 +429,11 @@ const NOTE_METADATA: ModelMetadata = {
   rootFields: { list: "notes" },
   resource: NOTE_RESOURCE,
   recordRepresentation: "title",
+};
+
+const CLIENT_NOTE_METADATA: ModelMetadata = {
+  ...NOTE_METADATA,
+  resource: { ...NOTE_RESOURCE, rowModel: "client" },
 };
 
 function resourceField(

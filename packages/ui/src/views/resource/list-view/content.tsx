@@ -1,5 +1,5 @@
 import * as React from "react";
-import { crudFiltersFromFilterRecord, hasuraWhereFromCrudFilters, useAngeeAggregate } from "@angee/refine";
+import { MAX_PAGE_SIZE, crudFiltersFromFilterRecord, hasuraWhereFromCrudFilters, useAngeeAggregate } from "@angee/refine";
 import { useModelMetadata } from "@angee/metadata";
 import type { ModelFieldMetadata, Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
@@ -20,6 +20,7 @@ import { useBulkDelete } from "../useBulkDelete";
 import { requireDataResource, useAggregateOperation } from "../resource-operations";
 import { useResourceToolbarProps } from "../resource-toolbar-props";
 import { useResourceViewToolbarInputs } from "../resource-view-toolbar-inputs";
+import { PAGE_SIZE_OPTIONS } from "../page-size";
 interface ListViewContentProps<TRow extends Row> {
   surface: ResourceViewSurface<TRow> | GroupedResourceViewSurface<TRow>;
   resource: string;
@@ -165,6 +166,8 @@ export function ListViewContent<TRow extends Row = Row>({
     groupingEnabled: !boardGroupingPinned,
     pagerSubject: groupedListMode ? t("pager.groups") : undefined,
     pagerTotalUnit: groupedListMode ? "groups" : undefined,
+    pagerPageSizeOptions: clientRowModel ? undefined : PAGE_SIZE_OPTIONS,
+    pagerMaxPageSize: clientRowModel ? undefined : MAX_PAGE_SIZE,
   });
 
   return (

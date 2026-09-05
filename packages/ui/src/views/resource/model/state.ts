@@ -1,8 +1,8 @@
 import type { PaginationState, RowSelectionState, SortingState } from "@tanstack/react-table";
-import { clampPageSize } from "@angee/refine";
 import { DEFAULT_CALENDAR_VIEW_MODE, DEFAULT_RESOURCE_VIEW_PAGE_SIZE, type CalendarViewMode, type ResourceViewKind } from "./capabilities";
 import { Filter, type ResourceViewFilter, type ResourceViewGroup, type ResourceViewInitialState } from "./filter";
 import { normaliseGroupStack, todayCalendarAnchor } from "./search";
+import { normalisePageSize } from "../page-size";
 
 /** Native table state plus the Angee view facts carried by router search. */
 export interface ResourceViewState {
@@ -24,7 +24,7 @@ export function createResourceViewState(initial: ResourceViewInitialState = {}):
   return {
     pagination: {
       pageIndex: Math.max(0, Number.isFinite(initial.page) ? Math.floor(initial.page!) - 1 : 0),
-      pageSize: clampPageSize(initial.pageSize ?? DEFAULT_RESOURCE_VIEW_PAGE_SIZE),
+      pageSize: normalisePageSize(initial.pageSize ?? DEFAULT_RESOURCE_VIEW_PAGE_SIZE),
     },
     sorting: initial.sort === undefined
       ? initial.sorting

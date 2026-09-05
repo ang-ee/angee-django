@@ -10,8 +10,9 @@ import {
 } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { functionalUpdate, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState } from "@tanstack/react-table";
-import { clampPageSize, stableSerialize } from "@angee/refine";
+import { stableSerialize } from "@angee/refine";
 import { normaliseGroupStack } from "./model/search";
+import { normalisePageSize } from "./page-size";
 
 import {
   createResourceViewState,
@@ -262,7 +263,7 @@ function useResourceViewContextValue({
         ...(sizeChanged ? { rowSelection: {} } : {}),
         pagination: {
           pageIndex: sizeChanged ? 0 : Math.max(0, Number.isFinite(next.pageIndex) ? Math.floor(next.pageIndex) : 0),
-          pageSize: clampPageSize(next.pageSize),
+          pageSize: normalisePageSize(next.pageSize),
         },
       };
     });

@@ -27,6 +27,7 @@ export interface PagerProps extends PagerState {
   onPageChange?: (page: number) => void;
   onPageSizeChange?: (pageSize: number) => void;
   pageSizeOptions?: readonly number[];
+  maxPageSize?: number;
   subject?: string;
   unit?: string;
   labelElement?: "button" | "span";
@@ -91,6 +92,7 @@ export function Pager({
   onPageChange,
   onPageSizeChange,
   pageSizeOptions = DEFAULT_PAGE_SIZE_OPTIONS,
+  maxPageSize,
   subject,
   unit,
   labelElement = "button",
@@ -120,6 +122,7 @@ export function Pager({
         pageLabel={pageLabel}
         pageSize={pageSize}
         pageSizeOptions={pageSizeOptions}
+        maxPageSize={maxPageSize}
         subject={resolvedSubject}
         labelClassName={labelClassName}
         customPageSize={customPageSize}
@@ -176,6 +179,7 @@ function PageSizePicker({
   pageLabel,
   pageSize,
   pageSizeOptions,
+  maxPageSize,
   subject,
   labelClassName,
   customPageSize,
@@ -186,6 +190,7 @@ function PageSizePicker({
   pageLabel: string;
   pageSize: number;
   pageSizeOptions: readonly number[];
+  maxPageSize: number | undefined;
   subject: string;
   labelClassName?: string;
   customPageSize: number | null;
@@ -199,10 +204,10 @@ function PageSizePicker({
         return;
       }
       if (disabled) return;
-      onPageSizeChange(Math.floor(value));
+      onPageSizeChange(Math.min(maxPageSize ?? value, Math.floor(value)));
       onCustomPageSizeChange(null);
     },
-    [disabled, onCustomPageSizeChange, onPageSizeChange],
+    [disabled, maxPageSize, onCustomPageSizeChange, onPageSizeChange],
   );
 
   return (
@@ -218,10 +223,10 @@ function PageSizePicker({
         <PopoverPositioner sideOffset={6} align="end">
           <PopoverContent className="w-56 p-3">
             <p className="mb-2 px-1 text-13 font-semibold text-fg">
-              {t("pager.rowsPerPage")}
+              {t("pager.pageSize")}
             </p>
             <div className="grid grid-cols-3 gap-1">
-              {pageSizeOptions.map((value) => (
+              {pageSizeOptions.filter((value) => maxPageSize === undefined || value <= maxPageSize).map((value) => (
                 <button
                   key={value}
                   disabled={disabled}
@@ -247,13 +252,14 @@ function PageSizePicker({
             >
               <NumberField
                 min={1}
+                max={maxPageSize}
                 value={customPageSize}
                 size="sm"
                 align="start"
                 showStepper={false}
                 className="min-w-0 flex-1"
                 inputProps={{
-                  "aria-label": t("pager.customRowsPerPage"),
+                  "aria-label": t("pager.customPageSize"),
                   placeholder: "42",
                 }}
                 onValueChange={onCustomPageSizeChange}

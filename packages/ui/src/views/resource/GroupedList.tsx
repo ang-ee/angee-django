@@ -17,6 +17,7 @@ import {
 import { type Virtualizer } from "@tanstack/react-virtual";
 import {
   type AggregateBucket,
+  MAX_PAGE_SIZE,
 } from "@angee/refine";
 import type {
   ModelMetadata,
@@ -517,6 +518,7 @@ function GroupedHeaderPager({
         subject={navLabel}
         disabled={pending}
         pageSizeOptions={PAGE_SIZE_OPTIONS}
+        maxPageSize={MAX_PAGE_SIZE}
         onPageSizeChange={(size) => onPageSizeChange(pageKey, size)}
         previousLabel={t("pager.previousSubject", { subject: navLabel })}
         nextLabel={t("pager.nextSubject", { subject: navLabel })}

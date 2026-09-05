@@ -367,8 +367,8 @@ describe("resource-view model", () => {
     expect(result.current.state.rowSelection).toEqual({});
     act(() => result.current.setFilter({ title: { iContains: "beta" } }));
     expect(result.current.state.filter).toEqual({ title: { iContains: "beta" } });
-    act(() => result.current.setPageSize(500));
-    expect(result.current.state.pagination).toEqual({ pageIndex: 0, pageSize: 100 });
+    act(() => result.current.setPageSize(200));
+    expect(result.current.state.pagination).toEqual({ pageIndex: 0, pageSize: 200 });
   });
 
   test("updates selection natively and retains it across page changes", () => {

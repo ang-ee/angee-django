@@ -126,7 +126,11 @@ test.each(["records", "groups"] as const)("%s header reuses the native page-size
   );
   const nav = screen.getByRole("navigation", { name: `January ${unit}` });
   fireEvent.click(within(nav).getByRole("button", { name: new RegExp(`January ${unit}.*21-40`) }));
-  fireEvent.click(await screen.findByRole("button", { name: "50" }));
-  expect(onPageSizeChange).toHaveBeenCalledWith("january", 50);
+  expect(await screen.findByText("Page size")).toBeTruthy();
+  const customPageSize = screen.getByRole("textbox", { name: "Custom page size" });
+  expect(screen.queryByRole("button", { name: "200" })).toBeNull();
+  fireEvent.change(customPageSize, { target: { value: "500" } });
+  fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+  expect(onPageSizeChange).toHaveBeenCalledWith("january", 100);
   expect(onToggle).not.toHaveBeenCalled();
 });
