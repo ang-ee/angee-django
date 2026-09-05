@@ -58,6 +58,9 @@ RecordBinding = apps.get_model("knowledge", "RecordBinding")
 class VaultType(AngeeNode):
     """GraphQL projection of a vault."""
 
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name, only=["name"], description=NODE_DISPLAY_NAME_DESCRIPTION
+    )
     name: auto
     description: auto
     icon: auto

@@ -16,6 +16,7 @@ from rebac.models import PermissionAuditEvent
 from angee.iam.identity import user_display_labels
 from tests.conftest import (
     Page,
+    Vault,
     addon_schema,
     create_user,
     execute_schema,
@@ -146,15 +147,21 @@ def test_vault_owner_labels_batch_distinct_owners(knowledge_tables: None) -> Non
         ]
     )
     schema = addon_schema(knowledge_schema.schemas, "public")
-    query = "query VaultOwners($limit: Int!) { vaults(limit: $limit) { id owner_label } }"
+    query = "query VaultOwners($limit: Int!) { vaults(limit: $limit) { id display_name owner_label } }"
     counts = []
+    vault_counts = []
+    table = connection.ops.quote_name(Vault._meta.db_table)
+    names = {str(vault.sqid): vault.name for vault in vaults}
     for size in (1, 25):
         with CaptureQueriesContext(connection) as captured:
             rows = result_data(execute_schema(schema, query, {"limit": size}, user=reader))["vaults"]
         assert len(rows) == size
         assert {row["owner_label"] for row in rows} <= {owner.username for owner in owners}
+        assert all(row["display_name"] == names[row["id"]] for row in rows)
         counts.append(len(_label_reads(captured)))
+        vault_counts.append(sum(f"FROM {table}" in item["sql"] for item in captured))
     assert counts == [1, 1]
+    assert vault_counts[0] == vault_counts[1], "Vault labels must not refetch each deferred name"
     with actor_context(reader):
         assert not get_user_model().objects.filter(pk__in=[owner.pk for owner in owners]).exists()
 
