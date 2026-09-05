@@ -53,15 +53,11 @@ from angee.messaging.backends import (
     ParsedThread,
 )
 from angee.messaging.managers import normalize_subject, strip_null_bytes
-from angee.messaging.models import Fragment as AbstractFragment
-from angee.messaging.models import Message as AbstractMessage
 from angee.messaging.models import MessageEdge as AbstractMessageEdge
 from angee.messaging.models import MessageStar as AbstractMessageStar
-from angee.messaging.models import MessageSubtype as AbstractMessageSubtype
 from angee.messaging.models import Part as AbstractPart
 from angee.messaging.models import Participant as AbstractParticipant
 from angee.messaging.models import Reaction as AbstractReaction
-from angee.messaging.models import Thread as AbstractThread
 from angee.messaging.models import ThreadActivity as AbstractThreadActivity
 from angee.messaging.models import ThreadAttachment as AbstractThreadAttachment
 from angee.messaging.models import ThreadedModelMixin
@@ -72,18 +68,12 @@ from angee.parties.mixins import LinkSource
 from angee.parties.models import Address as AbstractAddress
 from angee.parties.models import Circle as AbstractCircle
 from angee.parties.models import CircleMember as AbstractCircleMember
-from angee.parties.models import Directory as AbstractDirectory
-from angee.parties.models import Folder as AbstractContactFolder
-from angee.parties.models import Handle as AbstractHandle
 from angee.parties.models import MergeVeto as AbstractMergeVeto
 from angee.parties.models import Organization as AbstractOrganization
-from angee.parties.models import Party as AbstractParty
 from angee.parties.models import PartyHandle as AbstractPartyHandle
 from angee.parties.models import Person as AbstractPerson
 from angee.parties.models import Relationship as AbstractRelationship
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
-from angee.posts.models import MessagePublic, ThreadPublic
-from angee.spaces.models import ThreadSpace
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild, TrackedRecordParent
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
@@ -91,7 +81,6 @@ from tests.conftest import (
     STORAGE_TEST_MODELS,
     Backend,
     Drive,
-    Integration,
     MimeType,
     PostMetrics,
     _clear_model_tables,
@@ -101,6 +90,7 @@ from tests.conftest import (
 from tests.conftest import (
     File as StorageFile,
 )
+from tests.messaging_models import Directory, Folder, Fragment, Handle, Message, MessageSubtype, Party, Thread
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.spaces_models import Group as SpaceGroup
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent
@@ -110,45 +100,6 @@ _PartyHandleMeta = getattr(AbstractPartyHandle, "Meta", object)
 _OrganizationMeta = getattr(AbstractOrganization, "Meta", object)
 _PersonMeta = getattr(AbstractPerson, "Meta", object)
 _AddressMeta = getattr(AbstractAddress, "Meta", object)
-
-
-class Directory(AbstractDirectory, Integration):
-    """Concrete contacts directory (Integration child) used by messaging tests."""
-
-    class Meta(AbstractDirectory.Meta):
-        """Django model options for the canonical test directory."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_directory"
-        rebac_resource_type = "parties/directory"
-        rebac_id_attr = "sqid"
-
-
-class Folder(AbstractContactFolder):
-    """Concrete parties folder used by messaging tests."""
-
-    class Meta(AbstractContactFolder.Meta):
-        """Django model options for the canonical test contacts folder."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_folder"
-        rebac_resource_type = "parties/folder"
-        rebac_id_attr = "sqid"
-
-
-class Party(AbstractParty):
-    """Concrete party used by messaging tests."""
-
-    class Meta(AbstractParty.Meta):
-        """Django model options for the canonical test party."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_party"
-        rebac_resource_type = "parties/party"
-        rebac_id_attr = "sqid"
 
 
 class Organization(AbstractOrganization, Party):
@@ -161,19 +112,6 @@ class Organization(AbstractOrganization, Party):
         app_label = "parties"
         db_table = "test_parties_organization"
         rebac_resource_type = "parties/organization"
-        rebac_id_attr = "sqid"
-
-
-class Handle(AbstractHandle):
-    """Concrete handle (a message sender/recipient) used by messaging tests."""
-
-    class Meta(AbstractHandle.Meta):
-        """Django model options for the canonical test handle."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_handle"
-        rebac_resource_type = "parties/handle"
         rebac_id_attr = "sqid"
 
 
@@ -281,37 +219,6 @@ class Relationship(AbstractRelationship):
         rebac_id_attr = "sqid"
 
 
-class Fragment(AbstractFragment):
-    """Concrete content-addressed fragment used by messaging tests.
-
-    Unscoped substrate (no REBAC type), like the abstract source model.
-    """
-
-    class Meta(AbstractFragment.Meta):
-        """Django model options for the canonical test fragment."""
-
-        abstract = False
-        app_label = "messaging"
-        db_table = "test_messaging_fragment"
-
-
-class Thread(ThreadSpace, ThreadPublic, AbstractThread):
-    """Concrete thread used by messaging tests.
-
-    Folds spaces' group pointer and posts' public-post payload onto the one table,
-    mirroring the composer output for the installed base addons.
-    """
-
-    class Meta(AbstractThread.Meta):
-        """Django model options for the canonical test thread."""
-
-        abstract = False
-        app_label = "messaging"
-        db_table = "test_messaging_thread"
-        rebac_resource_type = "messaging/thread"
-        rebac_id_attr = "sqid"
-
-
 class ThreadAttachment(AbstractThreadAttachment):
     """Concrete record-thread attachment used by messaging tests."""
 
@@ -348,35 +255,6 @@ class ThreadActivity(AbstractThreadActivity):
         app_label = "messaging"
         db_table = "test_messaging_thread_activity"
         rebac_resource_type = "messaging/thread_activity"
-        rebac_id_attr = "sqid"
-
-
-class MessageSubtype(AbstractMessageSubtype):
-    """Concrete message subtype used by messaging tests."""
-
-    class Meta(AbstractMessageSubtype.Meta):
-        """Django model options for the canonical test message subtype."""
-
-        abstract = False
-        app_label = "messaging"
-        db_table = "test_messaging_message_subtype"
-
-
-class Message(MessagePublic, AbstractMessage):
-    """Concrete message used by messaging tests.
-
-    Folds posts' same-row ``MessagePublic`` extension (``is_original_post``) onto
-    the one table, the way the composer emits ``Message(MessageExtension1,
-    AbstractMessage)`` now that posts is a composed base addon.
-    """
-
-    class Meta(AbstractMessage.Meta):
-        """Django model options for the canonical test message."""
-
-        abstract = False
-        app_label = "messaging"
-        db_table = "test_messaging_message"
-        rebac_resource_type = "messaging/message"
         rebac_id_attr = "sqid"
 
 
@@ -1198,8 +1076,7 @@ def test_activity_agenda_excludes_done_unless_included(messaging_tables: None) -
     with actor_context(assignee):
         default_summaries = [row.summary for row in ThreadActivity.objects.agenda(assignee, window_start, window_end)]
         with_done_summaries = [
-            row.summary
-            for row in ThreadActivity.objects.agenda(assignee, window_start, window_end, include_done=True)
+            row.summary for row in ThreadActivity.objects.agenda(assignee, window_start, window_end, include_done=True)
         ]
 
     assert default_summaries == ["Open task"]
@@ -1582,9 +1459,12 @@ def test_threaded_model_marks_one_message_done(messaging_tables: None) -> None:
     # The other record's receipt is untouched by this thread's done marker.
     assert ThreadFollower.objects.unread_count_for_record(other_ticket, user=watcher) == 1
 
-    with system_context(reason="test threaded model message-done guard"), pytest.raises(
-        ValueError,
-        match="Message does not belong to this record thread",
+    with (
+        system_context(reason="test threaded model message-done guard"),
+        pytest.raises(
+            ValueError,
+            match="Message does not belong to this record thread",
+        ),
     ):
         ticket.message_set_done(other_message, user=watcher)
 
@@ -1796,9 +1676,7 @@ def test_agent_activity_completion_posts_system_message_with_service_user(
     monkeypatch.setattr(Message.objects, "post_to_thread", spy_post_to_thread)
 
     with (
-        override_settings(
-            ANGEE_ACTOR_USER_RESOLVERS={"agents/agent": "angee.agents.actor_resolvers.agent_user_id"}
-        ),
+        override_settings(ANGEE_ACTOR_USER_RESOLVERS={"agents/agent": "angee.agents.actor_resolvers.agent_user_id"}),
         actor_context(agent.principal_subject()),
     ):
         ticket.activity_feedback(activity, feedback="Handled by agent.")
@@ -1906,10 +1784,7 @@ def test_threaded_model_autotracks_configured_field_saves(messaging_tables: None
     assert message.subtype.key == "record_updated"
     assert message.preview == "Title: Initial -> Escalated"
     tracking = list(TrackingValue._base_manager.filter(message=message).order_by("position"))
-    assert [
-        (item.field_name, item.field_label, item.old_display, item.new_display)
-        for item in tracking
-    ] == [
+    assert [(item.field_name, item.field_label, item.old_display, item.new_display) for item in tracking] == [
         ("title", "Title", "Initial", "Escalated"),
         ("status", "Status", "Open", "Closed"),
     ]
@@ -2542,9 +2417,7 @@ def test_shared_title_fragment_mints_no_quote_edges(channel: Any) -> None:
         ],
         channel=channel,
     )
-    title_fragment_ids = set(
-        Part._base_manager.filter(role=Part.PartRole.TITLE).values_list("fragment_id", flat=True)
-    )
+    title_fragment_ids = set(Part._base_manager.filter(role=Part.PartRole.TITLE).values_list("fragment_id", flat=True))
     # The identical subject dedups to one shared title fragment across both messages…
     assert len(title_fragment_ids) == 1
     assert Part._base_manager.filter(role=Part.PartRole.TITLE).count() == 2
@@ -2886,9 +2759,7 @@ def test_post_on_opted_in_host_emits_one_member_gated_thread_changed(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_record_chatter_host_stays_silent_on_a_post(
-    messaging_tables: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_record_chatter_host_stays_silent_on_a_post(messaging_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """A non-opted threaded host streams nothing on a post — F-v isolation intact.
 
     The F-stream default is ``thread_broadcasts_changes = False``, so a record-chatter

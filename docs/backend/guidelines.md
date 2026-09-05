@@ -195,6 +195,12 @@ Rules that follow from the layering:
   library primitives (`strawberry-django`, `hasura_model_resource`, `changes`,
   aggregate builders) instead of reimplementing ORM, permission, or serialization
   behavior.
+- Declare computed GraphQL field dependencies with native Strawberry-Django
+  `only`, `select_related`, and `prefetch_related` hints. This includes inherited
+  `AngeeNode.display_name`: bind its existing resolver on the concrete type with
+  the fields its model's `__str__` actually reads. Test narrow selections at
+  multiple row counts; selecting the underlying field elsewhere can hide a
+  deferred-field N+1.
 - Model-backed `hasura_model_resource(...)` surfaces expose sqid public identity. Use
   `AngeeDataModel`/`SqidMixin` for concrete rows. For third-party Django models
   that Angee exposes but does not own, pass an explicit sqid public identity

@@ -23,7 +23,7 @@ from angee.graphql.ids import (
     require_public_id,
     to_public_id,
 )
-from angee.graphql.node import AngeeNode
+from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin
@@ -118,6 +118,11 @@ class FolderType(AngeeNode):
 class FileType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a file row."""
 
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name,
+        only=["title", "filename"],
+        description=NODE_DISPLAY_NAME_DESCRIPTION,
+    )
     filename: auto
     title: auto
     content_hash: auto

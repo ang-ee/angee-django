@@ -28,7 +28,6 @@ from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClie
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import Credential as AbstractCredential
 from angee.integrate.models import ExternalAccount as AbstractExternalAccount
-from angee.integrate.models import Integration as AbstractIntegration
 from angee.integrate.models import OAuthClient as AbstractOAuthClient
 from angee.integrate.models import Repository as AbstractRepository
 from angee.integrate.models import Source as AbstractSource
@@ -60,6 +59,8 @@ from angee.storage.models import MimeType as AbstractMimeType
 from angee.storage.models import StorageRole as AbstractStorageRole
 from angee.storage_integrate.models import Mount as AbstractMount
 from angee.storage_integrate.models import MountMode
+from tests import messaging_models  # noqa: F401 -- register the managed posts FK targets before database setup
+from tests.integrate_models import Integration
 
 
 class OAuthClient(AbstractOAuthClientOidc, AbstractOAuthClient):
@@ -116,19 +117,6 @@ class Vendor(AbstractVendor):
         app_label = "integrate"
         db_table = "test_integrate_vendor"
         rebac_resource_type = "integrate/vendor"
-        rebac_id_attr = "sqid"
-
-
-class Integration(AbstractIntegration):
-    """Concrete integration used by source-addon tests."""
-
-    class Meta(AbstractIntegration.Meta):
-        """Django model options for the canonical test integration."""
-
-        abstract = False
-        app_label = "integrate"
-        db_table = "test_integrate_integration"
-        rebac_resource_type = "integrate/integration"
         rebac_id_attr = "sqid"
 
 

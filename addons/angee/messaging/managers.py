@@ -494,7 +494,7 @@ class ThreadQuerySet(AngeeQuerySet[Any]):
         owner-scoped generic ``threads`` list, aggregate, or by-pk lookup.
         """
 
-        return cast(ThreadQuerySet, self.filter(attachments__isnull=True))
+        return cast(ThreadQuerySet, self.exclude(attachments__isnull=False))
 
     def for_channel(self, channel: Any) -> ThreadQuerySet:
         """Return the threads that belong to ``channel`` — the purge-scope predicate.
