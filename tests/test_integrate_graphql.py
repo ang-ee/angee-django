@@ -111,18 +111,21 @@ def test_integration_groups_aggregate_runs_with_rebac_scope(
     integration = make_integration("conn-groups")
     vendor_id = str(integration.vendor.sqid)
     console_schema = _schema()
+    resources = {item.model_label: item for item in console_schema.angee_resources}
+    group_by_type = resources["integrate.Integration"].type_names.group_by_spec
+    assert group_by_type is not None
 
     grouped = _data(
         _execute(
             console_schema,
             """
-            query IntegrationGroups($groupBy: [IntegrationTypeGroupBySpec!]!) {
+            query IntegrationGroups($groupBy: [GROUP_BY_SPEC!]!) {
               integrations_groups(group_by: $groupBy, limit: 10) {
                 key { vendor_id vendor__display_name kind impl_class }
                 aggregate { count }
               }
             }
-            """,
+            """.replace("GROUP_BY_SPEC", group_by_type),
             {
                 "groupBy": [
                     {"field": "VENDOR"},

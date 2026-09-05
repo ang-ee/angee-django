@@ -864,18 +864,21 @@ def test_message_channel_group_key_drills_down_with_public_id(
             created_by_id=admin.pk,
         )
     schema = _schema()
+    resources = {item.model_label: item for item in schema.angee_resources}
+    group_by_type = resources["messaging.Message"].type_names.group_by_spec
+    assert group_by_type is not None
 
     grouped = _data(
         execute_schema(
             schema,
             """
-            query MessageChannelGroups($groupBy: [MessageTypeGroupBySpec!]!) {
+            query MessageChannelGroups($groupBy: [GROUP_BY_SPEC!]!) {
               messages_groups(group_by: $groupBy, limit: 10) {
                 key { channel_id channel__display_name }
                 aggregate { count }
               }
             }
-            """,
+            """.replace("GROUP_BY_SPEC", group_by_type),
             {
                 "groupBy": [
                     {"field": "CHANNEL"},

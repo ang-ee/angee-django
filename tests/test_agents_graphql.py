@@ -36,7 +36,7 @@ from angee.agents.models import ToolGrant as AbstractToolGrant
 from angee.agents.models import ToolRole as AbstractToolRole
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate.credentials import CredentialKind
-from angee.operator.daemon import OperatorDaemonNotFound
+from angee.operator.daemon import OperatorDaemonError, OperatorDaemonNotFound
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
@@ -153,7 +153,6 @@ AGENTS_GRAPHQL_MODELS = (
 
 # Imported only now that every agents concrete is registered.
 agents_provisioning = importlib.import_module("angee.agents.provisioning")
-from angee.operator.daemon import OperatorDaemonError
 agents_schema = importlib.import_module("angee.agents.schema")
 iam_schema = importlib.import_module("angee.iam.schema")
 integrate_schema = importlib.import_module("angee.integrate.schema")
@@ -456,13 +455,17 @@ def test_inference_model_groups_aggregate_runs_for_provider_and_capability(
         InferenceModel.objects.create(provider=provider_a, name="claude-embed-4-6", model_use="embedding")
         InferenceModel.objects.create(provider=provider_b, name="manual-model", model_use="chat")
 
+    schema = _schema()
+    resources = {item.model_label: item for item in schema.angee_resources}
+    group_by_type = resources["agents.InferenceModel"].type_names.group_by_spec
+    assert group_by_type is not None
     grouped = _data(
         _execute(
-            _schema(),
+            schema,
             """
             query InferenceModelGroups(
-              $byUse: [InferenceModelTypeGroupBySpec!]!
-              $byProvider: [InferenceModelTypeGroupBySpec!]!
+              $byUse: [GROUP_BY_SPEC!]!
+              $byProvider: [GROUP_BY_SPEC!]!
             ) {
               byUse: inference_models_groups(group_by: $byUse, limit: 10) {
                 key { model_use }
@@ -473,7 +476,7 @@ def test_inference_model_groups_aggregate_runs_for_provider_and_capability(
                 aggregate { count }
               }
             }
-            """,
+            """.replace("GROUP_BY_SPEC", group_by_type),
             {
                 "byUse": [{"field": "MODEL_USE"}],
                 "byProvider": [{"field": "PROVIDER"}, {"field": "PROVIDER__NAME"}],
