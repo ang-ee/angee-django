@@ -33,6 +33,16 @@ on:
         required: false
         type: string
         default: full
+      framework-ref:
+        description: Framework ref used when another repository calls the stack lane.
+        required: false
+        type: string
+        default: main
+      bridges-ref:
+        description: Bridges ref used when another repository calls the stack lane.
+        required: false
+        type: string
+        default: main
       angee-version:
         description: Release tag of the angee CLI the stack lane installs.
         required: false
@@ -90,13 +100,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          repository: ang-ee/angee-django
+          ref: ${{ github.repository == 'ang-ee/angee-django' && github.sha || inputs.framework-ref }}
           path: stack/workspaces/src/angee
       - uses: actions/checkout@v4
         if: ${{ inputs.addons-profile == 'full' }}
         with:
           repository: ang-ee/angee-messaging-bridges
+          ref: ${{ github.repository == 'ang-ee/angee-messaging-bridges' && github.sha || inputs.bridges-ref }}
           path: stack/workspaces/src/angee-messaging-bridges
           token: ${{ secrets.BRIDGES_TOKEN || github.token }}
+      - name: Install the opt-in Matrix bridge's native dependency
+        if: ${{ inputs.addons-profile == 'full' }}
+        run: sudo apt-get update && sudo apt-get install -y libolm-dev
       - name: Install the angee CLI (the public install path)
         run: curl -fsSL https://raw.githubusercontent.com/ang-ee/angee-operator/main/scripts/install.sh | ANGEE_VERSION=${{ inputs.angee-version }} sh
       - uses: astral-sh/setup-uv@v6
@@ -114,7 +130,19 @@ jobs:
           "$GITHUB_WORKSPACE/stack" --force --yes
           --input project_name=ci-stack
           --input addons_profile=${{ inputs.addons-profile }}
-          --input olm_cxxflags=
+      - name: Enable Matrix to check every bridge web fragment
+        if: ${{ inputs.addons-profile == 'full' }}
+        working-directory: stack
+        run: |
+          uv run python - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          path = Path("settings.yaml")
+          settings = yaml.safe_load(path.read_text())
+          settings["INSTALLED_APPS"].append("angee.messaging_integrate_matrix")
+          path.write_text(yaml.safe_dump(settings, sort_keys=False))
+          PY
       - name: Compose the runtime and SDL (no database needed)
         working-directory: stack
         run: |
@@ -135,4 +163,8 @@ jobs:
           pnpm -r test
       - name: Pytest against the composed stack
         working-directory: stack/workspaces/src/angee
+        run: uv run pytest -q ${{ inputs.pytest-extra-args }}
+      - name: Pytest the bridge source contracts
+        if: ${{ inputs.addons-profile == 'full' }}
+        working-directory: stack/workspaces/src/angee-messaging-bridges
         run: uv run pytest -q ${{ inputs.pytest-extra-args }}

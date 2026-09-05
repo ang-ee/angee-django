@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -121,3 +123,40 @@ def test_manifest_bootstrap_matches_resolved_app_config_projection(
         "middle-package>=2",
         "root-package>=3",
     ]
+
+
+def test_fresh_bootstrap_never_imports_addons_or_composition_implementations(tmp_path: Path) -> None:
+    """A fresh host can install addon requirements before any addon is importable."""
+
+    addon = _write_addon(tmp_path / "addons", "example.cold", dependencies=("cold-dependency>=1",))
+    (addon / "__init__.py").write_text('raise AssertionError("addon imported before dependencies")\n')
+    (tmp_path / "settings.yaml").write_text(
+        'INSTALLED_APPS: [example.cold]\nANGEE_ADDON_DIRS: ["{BASE_DIR}/addons"]\n'
+    )
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "cold-host"\nversion = "0.0.0"\n')
+    script = """
+import sys
+from importlib.abc import MetaPathFinder
+class ImportBoundary(MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        forbidden = (
+            "example", "rebac", "angee.compose.composer", "angee.compose.runtime",
+            "angee.compose.permissions", "angee.compose.model_composition", "angee.compose.rendering",
+        )
+        assert not any(fullname == name or fullname.startswith(name + ".") for name in forbidden), fullname
+sys.meta_path.insert(0, ImportBoundary())
+from angee.compose.bootstrap import bootstrap_dependency_group
+from django.apps import apps
+assert bootstrap_dependency_group().value == "written"
+assert not apps.app_configs
+assert not apps.ready
+"""
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("YAMLCONF_")}
+    environment.pop("DJANGO_SETTINGS_MODULE", None)
+    environment[PROJECT_DIR_ENV] = str(tmp_path)
+    environment[PROJECT_SETTINGS_ENV] = "settings"
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=tmp_path, env=environment, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert _read_toml(tmp_path / "pyproject.toml")["dependency-groups"]["addons"] == ["cold-dependency>=1"]

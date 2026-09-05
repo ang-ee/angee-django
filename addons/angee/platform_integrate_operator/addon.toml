@@ -1,5 +1,5 @@
 # Angee addon manifest. The declarative contract hatch-angee compiles into
-# the package's [project] + entry points; see angee/addons.py (AddonContract).
+# the package's [project] + entry points; see hatch-angee's native AddonManifest.
 [addon]
 name = "angee.platform_integrate_operator"
 description = "Install and uninstall addons through the operator — edits settings.yaml and rebuilds the stack"

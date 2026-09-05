@@ -10,10 +10,11 @@ import pytest
 from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
 
-from angee.addons import addon_contract
+from angee.addons import addon_manifest
+from angee.compose.web import WebRuntime
 from angee.graphql.schema import schema_parts_for
 from angee.resources.entries import ResourceEntry, resource_manifest_for
-from tests.conftest import make_contract
+from tests.conftest import make_addon
 
 
 def _module(name: str) -> ModuleType:
@@ -41,7 +42,7 @@ def test_base_config_is_a_plain_core_app() -> None:
     """The model foundation is always installed but has no addon contract."""
 
     base = apps.get_app_config("base")
-    contract = addon_contract(base)
+    contract = addon_manifest(base)
 
     assert base.name == "angee.base"
     assert contract is None
@@ -50,27 +51,24 @@ def test_base_config_is_a_plain_core_app() -> None:
 def test_resource_manifest_normalizes_tiers_and_entries(monkeypatch) -> None:
     """Resource declarations from the manifest normalize in the resource subsystem."""
 
-    config = apps.get_app_config("base")
-    monkeypatch.setattr(
-        "angee.resources.entries.addon_contract",
-        lambda _config: make_contract(
-            resources={
-                "install": (
-                    "resources/users.csv",
-                    {
-                        "path": "resources/notes.yaml",
-                        "depends_on": ["resources/users.csv"],
-                        "adopt": True,
-                    },
-                    {
-                        "path": "resources/comments.yaml",
-                        "depends_on": "resources/notes.yaml",
-                    },
-                ),
-                "demo": {"url": "https://example.test/demo.csv"},
-            }
-        ),
+    config = make_addon(
+        resources={
+            "install": (
+                "resources/users.csv",
+                {
+                    "path": "resources/notes.yaml",
+                    "depends_on": ["resources/users.csv"],
+                    "adopt": True,
+                },
+                {
+                    "path": "resources/comments.yaml",
+                    "depends_on": "resources/notes.yaml",
+                },
+            ),
+            "demo": {"url": "https://example.test/demo.csv"},
+        }
     )
+
     manifest = resource_manifest_for(config)
 
     assert manifest["master"] == ()
@@ -259,7 +257,7 @@ def test_ollama_addon_owns_vendor_and_demo_provider_chain() -> None:
 
     module = import_module("angee.agents_integrate_ollama")
     config = AppConfig("angee.agents_integrate_ollama", module)
-    contract = addon_contract(config)
+    contract = addon_manifest(config)
     manifest = resource_manifest_for(config)
 
     assert contract is not None
@@ -441,12 +439,13 @@ def test_messaging_imap_config_contributes_schema_web_and_vendor_resource() -> N
         "angee.messaging_integrate_imap",
         import_module("angee.messaging_integrate_imap"),
     )
-    contract = addon_contract(config)
+    contract = addon_manifest(config)
     manifest = resource_manifest_for(config)
 
     assert contract is not None
-    assert contract.schemas == "schema.schemas"
-    assert contract.web == "@angee/messaging-integrate-imap"
+    assert contract.schemas is None
+    assert (Path(config.path) / "schema.py").is_file()
+    assert WebRuntime((config,)).manifest["addonPackages"][0]["package"] == "@angee/messaging-integrate-imap"
     assert manifest["master"] == ({"path": "resources/master/010_integrate.vendor.yaml", "adopt": "slug"},)
     rows = _resource_rows(config, "master", "resources/master/010_integrate.vendor.yaml")
     assert rows["imap"]["slug"] == "imap"
@@ -468,11 +467,8 @@ def test_storage_install_resources_adopt_unique_slugs() -> None:
 def test_resource_manifest_rejects_unknown_tiers(monkeypatch) -> None:
     """Only resource tiers owned by the resource subsystem are accepted."""
 
-    config = apps.get_app_config("base")
-    monkeypatch.setattr(
-        "angee.resources.entries.addon_contract",
-        lambda _config: make_contract(resources={"fixture": ("resources/fixture.csv",)}),
-    )
+    config = make_addon(resources={"fixture": ("resources/fixture.csv",)})
+
     with pytest.raises(ImproperlyConfigured, match="Unknown resource tier"):
         resource_manifest_for(config)
 
@@ -519,12 +515,13 @@ def test_get_schema_parts_missing_module_is_empty() -> None:
     assert schema_parts_for(config) == {}
 
 
-def test_addon_contract_is_owned_by_the_manifest() -> None:
+def test_addon_manifest_is_owned_by_the_manifest() -> None:
     """The contract is read from addon.toml; plain Django apps have none."""
 
-    iam = addon_contract(apps.get_app_config("iam"))
+    iam = addon_manifest(apps.get_app_config("iam"))
     assert iam is not None
     assert "angee.graphql" in iam.depends_on
-    assert iam.schemas == "schema.schemas"
-    assert iam.web == "@angee/iam"
-    assert addon_contract(apps.get_app_config("contenttypes")) is None
+    config = apps.get_app_config("iam")
+    assert "public" in schema_parts_for(config)
+    assert WebRuntime((config,)).manifest["addonPackages"][0]["package"] == "@angee/iam"
+    assert addon_manifest(apps.get_app_config("contenttypes")) is None

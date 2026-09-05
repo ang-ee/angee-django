@@ -1,214 +1,54 @@
-"""Plain AppConfig helpers for Angee addon declarations."""
+"""Native manifest binding and import boundaries for Django addon configs."""
 
 from __future__ import annotations
 
-import ast
 import importlib
-import json
-import tomllib
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
-from functools import lru_cache
+from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string, module_has_submodule
+from hatch_angee import AddonManifest, ManifestError, discover, parse_manifest
 
 ADDON_ENTRY_POINT_GROUP = "angee.addons"
+_MANIFEST_CACHE = "_angee_manifest"
 
 
-@dataclass(frozen=True, slots=True)
-class AddonMigration:
-    """One addon-owned Django migration materialized into a runtime app."""
+def addon_manifest(app_config: AppConfig, *, refresh: bool = False) -> AddonManifest | None:
+    """Bind the authoritative manifest to this native config for one composition.
 
-    name: str
-    app_label: str
-    module: str
-
-
-def _parse_migrations(raw: Any, *, marker: Path) -> tuple[AddonMigration, ...]:
-    """Parse ordered ``[[migrations]]`` declarations from one addon manifest."""
-
-    if raw is None:
-        return ()
-    if not isinstance(raw, list):
-        raise ImproperlyConfigured(f"{marker}: migrations must be an array of tables")
-    migrations: list[AddonMigration] = []
-    for index, entry in enumerate(raw):
-        if not isinstance(entry, Mapping):
-            raise ImproperlyConfigured(f"{marker}: migrations[{index}] must be a table")
-        values: dict[str, str] = {}
-        for key in ("name", "app_label", "module"):
-            value = entry.get(key)
-            if not isinstance(value, str) or not value:
-                raise ImproperlyConfigured(f"{marker}: migrations[{index}] requires string {key}")
-            values[key] = value
-        migrations.append(AddonMigration(**values))
-    return tuple(migrations)
-
-
-@dataclass(frozen=True, slots=True)
-class AddonContract:
-    """An addon's declarative contract, read from its co-located ``addon.toml``.
-
-    The manifest reuses pyproject's metadata vocabulary verbatim
-    (``description``/``keywords``/``license``/``readme``/``version``/``authors``/
-    ``urls``) so hatch-angee can compile it straight into the package's
-    ``[project]``. The Angee-owned fields are only what pyproject lacks: the addon
-    ``name`` (import id), the inter-addon ``depends_on`` graph, the freeform
-    ``category``, and the contribution seams — ordered ``migrations`` plus
-    ``schemas``/``permissions`` (simple strings) in ``[addon]``;
-    ``web``/``mcp``/``resources`` as their own sections.
-    The presence of the manifest *is* the addon marker, so an addon needs an
-    ``apps.py`` only when it has a ``python`` seam to run (``ready()``). The
-    contribution seams default to what the directory reveals (``schema.py``,
-    ``permissions.zed``, ``web/package.json``, ``mcp_tools.py``); a manifest entry
-    only overrides that default. ``permissions`` records the ``.zed`` contribution
-    for the catalog — a remote catalog reads the manifest, never the addon's files —
-    while the runtime still discovers the ``.zed`` by convention (adjacent to the
-    addon). Ordered ``[[migrations]]`` tables name addon-owned source modules that
-    explicit runtime builds may materialize into downstream Django migration apps.
+    The stored value is the unchanged upstream parser result, never configurable
+    AppConfig declarations or inferred defaults. AppGraph refreshes the binding at
+    the start of each composition, even when a caller reuses config instances.
+    Other readers share that same object throughout the run. Plain Django apps
+    without an addon marker return None.
     """
 
-    name: str
-    depends_on: tuple[str, ...] = ()
-    migrations: tuple[AddonMigration, ...] = ()
-    schemas: str | None = None
-    permissions: str | None = None
-    web: str | None = None
-    web_codegen: Mapping[str, Any] | None = None
-    mcp_tools: str | None = None
-    resources: Mapping[str, Any] = field(default_factory=dict)
-    # Metadata — pyproject vocabulary, compiled into [project] by hatch-angee.
-    description: str = ""
-    keywords: tuple[str, ...] = ()
-    category: str | None = None
-    license: str | None = None
-    readme: str | None = None
-    version: str | None = None
-    authors: tuple[Mapping[str, Any], ...] = ()
-    urls: Mapping[str, str] = field(default_factory=dict)
-
-
-def _module_defines(module_path: Path, symbol: str) -> bool:
-    """Return whether a module file binds a top-level ``symbol``."""
-
-    try:
-        module = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
-    except SyntaxError as error:
-        raise ImproperlyConfigured(f"{module_path} could not be parsed for addon seam inference") from error
-    return any(_node_binds_symbol(node, symbol) for node in module.body)
-
-
-def _node_binds_symbol(node: ast.stmt, symbol: str) -> bool:
-    """Return whether a top-level AST node binds ``symbol``."""
-
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        return node.name == symbol
-    if isinstance(node, ast.Assign):
-        return any(_target_binds_symbol(target, symbol) for target in node.targets)
-    if isinstance(node, ast.AnnAssign) and node.value is not None:
-        return _target_binds_symbol(node.target, symbol)
-    return False
-
-
-def _target_binds_symbol(target: ast.expr, symbol: str) -> bool:
-    """Return whether an assignment target binds ``symbol``."""
-
-    if isinstance(target, ast.Name):
-        return target.id == symbol
-    if isinstance(target, (ast.Tuple, ast.List)):
-        return any(_target_binds_symbol(element, symbol) for element in target.elts)
-    return False
-
-
-def _infer_contributions(addon_dir: Path) -> dict[str, str]:
-    """Infer the path-derivable contribution seams present in an addon directory.
-
-    The conventional file *is* the declaration — an explicit ``addon.toml`` entry
-    only exists to override it. ``schema.py`` → the GraphQL ``schemas`` bucket,
-    ``permissions.zed`` → the REBAC ``permissions`` contribution,
-    ``web/package.json`` → the web package (its ``name``), and ``mcp_tools.py`` with
-    a top-level ``register`` → the MCP ``tools`` seam. The dependency graph, resource
-    tiers, and metadata are never inferred — order and intent are not path-derivable.
-    """
-
-    inferred: dict[str, str] = {}
-    schema_module = addon_dir / "schema.py"
-    if schema_module.is_file() and _module_defines(schema_module, "schemas"):
-        inferred["schemas"] = "schema.schemas"
-    if (addon_dir / "permissions.zed").is_file():
-        inferred["permissions"] = "permissions.zed"
-    package_json = addon_dir / "web" / "package.json"
-    if package_json.is_file():
-        name = json.loads(package_json.read_text()).get("name")
-        if isinstance(name, str) and name:
-            inferred["web"] = name
-    mcp_module = addon_dir / "mcp_tools.py"
-    if mcp_module.is_file() and _module_defines(mcp_module, "register"):
-        inferred["mcp_tools"] = "mcp_tools.register"
-    return inferred
-
-
-@lru_cache(maxsize=None)
-def _read_addon_contract(marker: str) -> AddonContract | None:
-    """Parse one ``addon.toml`` into its contract (cached per path), or ``None``.
-
-    Contribution seams default to what the addon directory reveals
-    (:func:`_infer_contributions`); an explicit ``addon.toml`` entry overrides the
-    inferred default. The marker path fully determines the directory scanned, so the
-    per-path cache stays correct.
-    """
-
-    path = Path(marker)
-    if not path.is_file():
-        return None
-    data = tomllib.loads(path.read_text())
-    addon = data.get("addon", {})
-    web = data.get("web", {})
-    mcp = data.get("mcp", {})
-    inferred = _infer_contributions(path.parent)
-    raw_depends_on = addon.get("depends_on", ())
-    return AddonContract(
-        name=addon.get("name", ""),
-        depends_on=(raw_depends_on,) if isinstance(raw_depends_on, str) else tuple(raw_depends_on),
-        migrations=_parse_migrations(data.get("migrations"), marker=path),
-        schemas=addon.get("schemas") or inferred.get("schemas"),
-        permissions=addon.get("permissions") or inferred.get("permissions"),
-        web=web.get("package") or inferred.get("web"),
-        web_codegen=web.get("codegen"),
-        mcp_tools=mcp.get("tools") or inferred.get("mcp_tools"),
-        resources=data.get("resources", {}),
-        description=addon.get("description", ""),
-        keywords=tuple(addon.get("keywords", ())),
-        category=addon.get("category"),
-        license=addon.get("license"),
-        readme=addon.get("readme"),
-        version=addon.get("version"),
-        authors=tuple(addon.get("authors", ())),
-        urls=addon.get("urls", {}),
-    )
-
-
-def addon_contract(app_config: AppConfig) -> AddonContract | None:
-    """Return the addon's declared contract.
-
-    An explicit ``_addon_contract`` attribute wins — a code-defined addon (or a
-    test) that carries its contract in memory rather than a file on disk. Otherwise
-    the contract is parsed from the co-located ``addon.toml``. ``None`` for any app
-    with neither (plain Django apps, non-addons).
-    """
-
-    explicit = getattr(app_config, "_addon_contract", None)
-    if explicit is not None:
-        return explicit
-    path = getattr(app_config, "path", None)
-    if path is None:
-        return None
-    return _read_addon_contract(str(Path(path) / "addon.toml"))
+    if refresh:
+        app_config.__dict__.pop(_MANIFEST_CACHE, None)
+    if _MANIFEST_CACHE in app_config.__dict__:
+        return app_config.__dict__[_MANIFEST_CACHE]
+    root = getattr(app_config, "path", None)
+    marker = Path(root) / "addon.toml" if root is not None else None
+    manifest = None
+    if marker is not None and marker.is_file():
+        try:
+            manifest = parse_manifest(marker)
+        except (ManifestError, OSError) as error:
+            raise ImproperlyConfigured(str(error)) from error
+        if manifest.name != app_config.name:
+            raise ImproperlyConfigured(
+                f"{marker}: addon.name {manifest.name!r} disagrees with AppConfig.name {app_config.name!r}"
+            )
+        if len(set(manifest.depends_on)) != len(manifest.depends_on):
+            raise ImproperlyConfigured(f"{manifest.name} declares duplicate dependency in addon.depends_on")
+    app_config.__dict__[_MANIFEST_CACHE] = manifest
+    return manifest
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,27 +83,30 @@ def available_addons(addon_dirs: Iterable[Path | str] = ()) -> dict[str, Availab
         available[entry_point.name] = AvailableAddon(
             name=entry_point.name, source="installed", anchor=entry_point.value
         )
-    for addon_dir in addon_dirs:
-        for marker in sorted(Path(addon_dir).glob("**/addon.toml")):
-            if "node_modules" in marker.parts:
-                continue
-            contract = _read_addon_contract(str(marker))
-            name = contract.name if contract is not None else None
-            if name and name not in available:
-                available[name] = AvailableAddon(name=name, source="local", anchor=str(marker.parent))
+    for addon_dir, manifest in discover(addon_dirs):
+        available.setdefault(
+            manifest.name,
+            AvailableAddon(name=manifest.name, source="local", anchor=str(addon_dir)),
+        )
     return dict(sorted(available.items()))
 
 
 def is_angee_addon(app_config: AppConfig) -> bool:
-    """Return whether ``app_config`` is an Angee addon.
+    """Return whether the native config has a co-located addon manifest."""
 
-    An app is an addon exactly when it carries a contract — a co-located
-    ``addon.toml`` manifest (the on-disk case) or an in-memory ``_addon_contract``
-    (a code-defined addon or a test). The manifest is the marker; no ``apps.py``
-    opt-in flag is needed.
-    """
+    return addon_manifest(app_config) is not None
 
-    return addon_contract(app_config) is not None
+
+def optional_addon_module(app_config: AppConfig, module_name: str) -> ModuleType | None:
+    """Import an optional addon module, preserving errors in a present module."""
+
+    if not is_angee_addon(app_config) or not module_has_submodule(app_config.module, module_name):
+        return None
+    module_path = f"{app_config.name}.{module_name}"
+    try:
+        return importlib.import_module(module_path)
+    except ImportError as error:
+        raise ImproperlyConfigured(f"{module_path} failed to import") from error
 
 
 def resolve_addon_reference(app_config: AppConfig, dotted: str, *, attr: str) -> Any:
@@ -300,20 +143,15 @@ def addon_contribution(
     import error shape, optional callable execution, and iterable validation.
     """
 
-    if not is_angee_addon(app_config):
+    module = optional_addon_module(app_config, module_name)
+    if module is None:
         return []
-    if not module_has_submodule(app_config.module, module_name):
+    module_path = module.__name__
+    if not hasattr(module, attr):
         return []
-    module_path = f"{app_config.name}.{module_name}"
-    try:
-        module = importlib.import_module(module_path)
-    except ImportError as error:
-        raise ImproperlyConfigured(f"{module_path} failed to import") from error
-    contribution = getattr(module, attr, None)
-    if contribution is None:
-        return []
+    contribution = getattr(module, attr)
     value = contribution() if allow_callable and callable(contribution) else contribution
-    if not isinstance(value, Iterable):
+    if not isinstance(value, Iterable) or isinstance(value, str | bytes | Mapping | set | frozenset):
         suffix = "iterable or callable" if allow_callable else "iterable"
         raise ImproperlyConfigured(f"{module_path}.{attr} must be {suffix}")
     return list(value)

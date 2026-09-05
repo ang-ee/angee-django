@@ -12,15 +12,16 @@ from typing import Any, cast
 
 import pytest
 import reversion
-from angee.addons import AddonContract
+import tomlkit
 from django.apps import AppConfig
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
-from django.db import connection, models
+from django.db import connection, models, transaction
 from django.test import RequestFactory
 from rebac import actor_context, system_context
 
+from angee.addons import addon_manifest
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClientOidc
@@ -61,7 +62,7 @@ from angee.storage_integrate.models import Mount as AbstractMount
 from angee.storage_integrate.models import MountMode
 
 
-class OAuthClient(AbstractOAuthClient, AbstractOAuthClientOidc):
+class OAuthClient(AbstractOAuthClientOidc, AbstractOAuthClient):
     """Concrete OAuth client used by source-addon tests.
 
     Composes the OIDC login extension (``OAuthClientOidc``) the way the composer
@@ -175,7 +176,7 @@ class MarkdownPage(AbstractMarkdownPage):
     """Concrete knowledge markdown sidecar used by source-addon tests.
 
     Registered with django-reversion the way the composer registers the
-    emitted runtime model (``RevisionMixin.angee_model_decorators``).
+    completed runtime model.
     """
 
     class Meta(AbstractMarkdownPage.Meta):
@@ -195,7 +196,7 @@ INTEGRATE_TEST_MODELS = (Vendor, Integration)
 """Concrete integration catalogue/integration models created on demand by integrate fixtures."""
 
 
-class VcsBridge(Integration, AbstractVcsBridge):
+class VcsBridge(AbstractVcsBridge, Integration):
     """Concrete VCS bridge used by source-addon tests.
 
     ``angee.integrate.schema`` binds the VCS console types at import time via
@@ -214,7 +215,7 @@ class VcsBridge(Integration, AbstractVcsBridge):
         rebac_id_attr = "sqid"
 
 
-class Mount(Integration, AbstractMount):
+class Mount(AbstractMount, Integration):
     """Concrete storage Mount used by source-addon tests.
 
     Like :class:`VcsBridge`, the concrete child must be registered before the
@@ -458,7 +459,7 @@ class RecordBinding(AbstractRecordBinding):
         rebac_id_attr = "sqid"
 
 
-KNOWLEDGE_TEST_MODELS = (Vault, Page, MarkdownPage, Link, RecordBinding)
+KNOWLEDGE_TEST_MODELS = (Vault, Page, MarkdownPage, Link, RecordBinding, Vault.history.model, Page.history.model)
 """Concrete knowledge models created on demand by knowledge test fixtures."""
 
 
@@ -588,7 +589,7 @@ def make_mount(
     )
 
 
-class Addon(AbstractAddon, AbstractCatalogProvenance):
+class Addon(AbstractCatalogProvenance, AbstractAddon):
     """Concrete platform reflection row used by source-addon tests.
 
     Folds the ``platform_integrate_vcs`` provenance extension (``vcs_source`` /
@@ -642,11 +643,11 @@ PLATFORM_TEST_MODELS = (Addon,)
 """Concrete platform reflection table created on demand by marketplace test fixtures."""
 
 
-class Feed(Integration, AbstractFeed):
+class Feed(AbstractFeed, Integration):
     """Concrete public-content feed used by posts tests.
 
     An ``integrate.Integration`` child + ``Bridge``, folded the way the composer emits
-    ``Feed(Integration, AbstractFeed)``. Lives in conftest (like ``VcsBridge``) because
+    ``Feed(AbstractFeed, Integration)``. Lives in conftest (like ``VcsBridge``) because
     ``angee.posts.schema`` binds its console types at import time via ``apps.get_model``.
     """
 
@@ -733,7 +734,9 @@ def _clear_model_tables(test_models: tuple[type[models.Model], ...]) -> None:
     Source-addon tests share concrete unmanaged tables across modules. Keeping the
     schema lets post-migrate hooks see registered models; clearing rows before
     pytest-django flushes the managed tables prevents dangling FKs and uniqueness
-    leaks when a later fixture reuses an already-created table.
+    leaks when a later fixture reuses an already-created table. One transaction
+    lets PostgreSQL check Django's deferred foreign keys after all selected
+    tables are cleared, including tables with cyclic references.
     """
 
     existing_tables = set(connection.introspection.table_names())
@@ -751,7 +754,11 @@ def _clear_model_tables(test_models: tuple[type[models.Model], ...]) -> None:
     if not table_names:
         return
 
-    with connection.constraint_checks_disabled(), connection.cursor() as cursor:
+    with (
+        connection.constraint_checks_disabled(),
+        transaction.atomic(using=connection.alias),
+        connection.cursor() as cursor,
+    ):
         for table_name in reversed(tuple(dict.fromkeys(table_names))):
             cursor.execute(f"DELETE FROM {connection.ops.quote_name(table_name)}")
 
@@ -794,62 +801,50 @@ def make_addon(
     schemas: dict[str, Any] | None = None,
     depends_on: tuple[str, ...] = (),
     name: str | None = None,
+    label: str | None = None,
+    path: Path | None = None,
+    web: dict[str, Any] | None = None,
+    resources: dict[str, Any] | None = None,
+    migrations: tuple[dict[str, str], ...] = (),
 ) -> AppConfig:
-    """Return a fake AppConfig backed by a real tmp ``addon.toml`` (+ schema module).
-
-    Bridges the old in-memory test idiom to the addon.toml contract: ``schemas`` is
-    exposed through a registered ``<name>.schema`` module that the manifest's
-    ``schemas = "schema.schemas"`` reference resolves to, and ``depends_on`` is written
-    straight into the manifest. So the readers (the manifest is their sole source)
-    see exactly what the test declares.
-    """
+    """Return a native AppConfig backed by a real manifest and optional schema module."""
 
     name = name or f"tests._addon_{next(_TEST_ADDON_SEQ)}"
-    tmp = Path(tempfile.mkdtemp())
+    path = path or Path(tempfile.mkdtemp())
+    path.mkdir(parents=True, exist_ok=True)
     module = ModuleType(name)
-    module.__file__ = str(tmp / "apps.py")
-    setattr(module, "__path__", [str(tmp)])
+    module.__file__ = str(path / "apps.py")
+    module.__path__ = [str(path)]
     sys.modules[name] = module
-
-    body = ["[addon]", f'name = "{name}"']
-    if depends_on:
-        body.append("depends_on = [" + ", ".join(f'"{dep}"' for dep in depends_on) + "]")
+    declaration: dict[str, Any] = {"name": name, "depends_on": depends_on}
     if schemas is not None:
         schema_module = ModuleType(f"{name}.schema")
-        setattr(schema_module, "schemas", schemas)
+        schema_module.schemas = schemas
         sys.modules[f"{name}.schema"] = schema_module
-        body.append('schemas = "schema.schemas"')
-    (tmp / "addon.toml").write_text("\n".join(body) + "\n")
+        declaration["schemas"] = "schema.schemas"
+    document: dict[str, Any] = {"addon": declaration}
+    for section, value in (("web", web), ("resources", resources), ("migrations", migrations)):
+        if value:
+            document[section] = value
+    (path / "addon.toml").write_text(tomlkit.dumps(document), encoding="utf-8")
+    config = AppConfig(name, module)
+    if label is not None:
+        config.label = label
+    return config
 
-    return AppConfig(name, module)
+
+def write_addon_manifest(config: AppConfig, **sections: Any) -> None:
+    """Replace a fixture's authoritative declarations and start a fresh binding."""
+
+    document = {"addon": {"name": config.name}, **sections}
+    (Path(config.path) / "addon.toml").write_text(tomlkit.dumps(document), encoding="utf-8")
+    addon_manifest(config, refresh=True)
 
 
 def SchemaAddon(schemas: dict[str, dict[str, tuple[object, ...]]]) -> AppConfig:  # noqa: N802 - kept for call sites
-    """Build an addon stand-in whose manifest exposes the given GraphQL schemas."""
+    """Build a real-manifest addon exposing the supplied executable schema objects."""
 
     return make_addon(schemas=schemas)
-
-
-def make_contract(**overrides: object) -> AddonContract:
-    """Build an AddonContract for fake addons, defaulting every unset seam to empty.
-
-    Attached to a stub app config as ``_addon_contract`` and surfaced by the
-    test-side contract-reader stub (see ``stub_contracts`` in ``test_compose``), so a
-    fake config with no ``addon.toml`` on disk still resolves a declared contract.
-    """
-
-    fields: dict[str, object] = {
-        "name": "tests.addon",
-        "depends_on": (),
-        "migrations": (),
-        "schemas": None,
-        "web": None,
-        "web_codegen": None,
-        "mcp_tools": None,
-        "resources": {},
-    }
-    fields.update(overrides)
-    return AddonContract(**fields)  # type: ignore[arg-type]
 
 
 def addon_schema(schemas: dict[str, Any], name: str) -> Any:
@@ -946,3 +941,18 @@ def assert_private_hasura_insert_access(
     )[detail_root]
     assert denied is None
     return created, readable, updated
+
+
+@pytest.fixture(autouse=True)
+def restore_composed_permission_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scope generated paths and source annotations with other test monkeypatches."""
+
+    from django.apps import apps
+
+    attributes = ("rebac_schema", "_angee_rebac_schema_source", "_angee_rebac_schema_effective")
+    for config in apps.get_app_configs():
+        for key in attributes:
+            existed = key in config.__dict__
+            monkeypatch.setitem(config.__dict__, key, config.__dict__.get(key))
+            if not existed:
+                del config.__dict__[key]

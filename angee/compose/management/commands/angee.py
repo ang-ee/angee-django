@@ -94,7 +94,7 @@ class Command(BaseCommand):
 
         del options
         try:
-            Runtime.from_django().clean()
+            Runtime.clean_configured()
         except RuntimeError as error:
             raise CommandError(str(error)) from error
         self.stdout.write(self.style.SUCCESS("angee clean: ok"))
@@ -120,10 +120,9 @@ class Command(BaseCommand):
         9. ``bootstrap_admin`` — only when ``--bootstrap-admin``.
 
         Every step after the database wait runs in a fresh interpreter (see
-        :meth:`_run_step`). The composer is emit-only: this process imported the
-        OLD generated runtime at boot, so running makemigrations/migrate in-process
-        would operate on stale models. A fresh child loads the freshly emitted
-        concrete models — the contract documented in AGENTS.md "Run From The Root".
+        :meth:`_run_step`). App population repairs generated models at boot; each subsequent
+        command still needs an independent registry and migration-loader state.
+        A fresh child loads the emitted concrete models — the contract documented in AGENTS.md "Run From The Root".
         """
 
         self._wait_for_database(options["wait_db"])

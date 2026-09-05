@@ -16,12 +16,6 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
 from typing import Any, Self, cast
 
-from angee.base.fields import StateField
-from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AuditMixin
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
-from angee.base.refs import RecordRefMixin
-from angee.base.transitions import StateTransitions, TransitionNotAllowed, save_state, transition
 from croniter import CroniterBadCronError, croniter
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -32,6 +26,13 @@ from django.db import OperationalError, ProgrammingError, models, transaction
 from django.utils import timezone
 from rebac import system_context
 
+from angee.base.fields import StateField
+from angee.base.impl import ImplClassField, ImplDefaultsMixin
+from angee.base.mixins import AuditMixin
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
+from angee.base.refs import RecordRefMixin
+from angee.base.transitions import StateTransitions, TransitionNotAllowed, save_state, transition
+from angee.resources.mixins import ResourceLoadMixin
 from angee.workflows.steps import (
     StepImpl,
     optional_non_negative_int,
@@ -214,7 +215,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
     """Manager owning workflow-run subject lookups."""
 
 
-class Workflow(AuditMixin, AngeeDataModel):
+class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     """Editable workflow lineage head or immutable published workflow version.
 
     A resource-assigned stable key identifies the lineage independently of its
@@ -290,13 +291,14 @@ class Workflow(AuditMixin, AngeeDataModel):
     ) -> None:
         """Reconcile stable keys and publish loaded drafts when requested."""
 
-        del tier, source
         for workflow in sorted(instances, key=lambda instance: instance.pk or 0):
             if workflow.published_from_id is not None:
                 continue
             workflow._propagate_resource_key_backfill()
             if publish and workflow.status == WorkflowStatus.DRAFT:
                 workflow.publish_if_changed()
+
+        super().after_resource_load(instances, tier=tier, source=source, publish=publish)
 
     @transition(status, source=WorkflowStatus.DRAFT, target=WorkflowStatus.PUBLISHED, on_success=_save_workflow_status)
     def mark_published(self) -> None:

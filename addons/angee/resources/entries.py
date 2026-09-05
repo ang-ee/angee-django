@@ -18,7 +18,7 @@ from django.db import models
 from django.db.models.utils import make_model_tuple
 from import_export.results import Result, RowResult
 
-from angee.addons import addon_contract
+from angee.addons import addon_manifest
 from angee.resources import sources
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.tiers import ResourceTier
@@ -95,7 +95,7 @@ STRUCTURED_FORMATS = frozenset({"json", "yaml"})
 def resource_manifest_for(app_config: AppConfig) -> dict[str, tuple[dict[str, Any], ...]]:
     """Return normalized resource declarations keyed by tier for one addon."""
 
-    contract = addon_contract(app_config)
+    contract = addon_manifest(app_config)
     resources = contract.resources if contract is not None else {}
     manifest: dict[str, tuple[dict[str, Any], ...]] = {tier: () for tier in ResourceTier.values}
     for raw_tier, declarations in resources.items():

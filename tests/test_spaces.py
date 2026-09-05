@@ -8,6 +8,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from django.apps import apps
+from django.core.management import call_command
+from django.db import IntegrityError, connection, transaction
+from rebac import PermissionDenied, actor_context, system_context
+from rebac.models import active_relationship_model
+
 from angee.compose.permissions import (
     apply_schema_paths,
     extension_source_map,
@@ -16,12 +22,6 @@ from angee.compose.permissions import (
     render_zed,
 )
 from angee.fs import write_atomic
-from django.apps import apps
-from django.core.management import call_command
-from django.db import IntegrityError, connection, transaction
-from rebac import PermissionDenied, actor_context, system_context
-from rebac.models import active_relationship_model
-
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from tests import test_messaging_graphql
 from tests.conftest import (
@@ -49,13 +49,14 @@ def spaces_tables(transactional_db: Any, tmp_path: Path) -> Iterator[None]:
     del transactional_db
     app_configs = list(apps.get_app_configs())
     runtime_dir = tmp_path / "runtime"
-    for relpath, text in extension_source_map(app_configs).items():
+    source_map = extension_source_map(app_configs)
+    for relpath, text in source_map.items():
         write_atomic(runtime_dir / relpath, text)
 
     messaging = apps.get_app_config("messaging")
     sentinel = object()
     original_schema = getattr(messaging, "rebac_schema", sentinel)
-    apply_schema_paths(app_configs, runtime_dir)
+    apply_schema_paths(app_configs, runtime_dir, sources=source_map)
 
     created_models = _create_missing_tables(SPACES_TEST_MODELS)
     call_command("rebac", "sync", verbosity=0)

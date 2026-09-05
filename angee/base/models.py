@@ -12,7 +12,6 @@ from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import connections, models
 from django.db.models.signals import class_prepared, post_delete
-from django.db.models.utils import make_model_tuple
 from rebac import (
     RebacMixin,
     RelationshipTuple,
@@ -92,29 +91,6 @@ class DirectRecordAccess:
 
     relation: str
     subject: SubjectRef
-
-
-EXTENSION_DONOR_STRUCTURAL_MEMBERS = frozenset(
-    {
-        "__annotations__",
-        "__classcell__",
-        "__dict__",
-        "__doc__",
-        "__firstlineno__",
-        "__module__",
-        "__qualname__",
-        "__static_attributes__",
-        "__weakref__",
-        "DoesNotExist",
-        "Meta",
-        "MultipleObjectsReturned",
-        "_meta",
-        "extends",
-        "id",
-        "objects",
-    }
-)
-"""Class-dict members that do not make a same-row extension donor semantic."""
 
 
 class _PublicIdQuerySetMixin(Generic[_ModelT]):
@@ -237,21 +213,6 @@ class AngeeModel(TimestampMixin, RebacMixin):
     Extensions use ``extends`` instead of this flag.
     """
 
-    child_overrides_parent: bool = False
-    """Whether a materialized child's own methods override its concrete parent's.
-
-    A materialized child (``runtime = True`` + ``extends``) is emitted
-    ``class Child(ConcreteParent, AbstractChild)`` — concrete parent first — so the
-    parent wins the MRO and the child cannot override the parent's methods
-    natively. Declaring ``child_overrides_parent = True`` flips this one child's
-    base order to ``class Child(AbstractChild, ConcreteParent)`` so the child's own
-    methods win. Read non-inherited (like ``runtime``); the default preserves the
-    safe parent-first status quo, so ``parties.Person``/``Organization`` (which
-    declare a different default manager than ``Party``) stay parent-first and
-    byte-for-byte unchanged. The composer enforces the flip's manager/transition
-    guards (see ``angee.compose.runtime``).
-    """
-
     catalogue: bool = False
     """Whether this class declares itself as catalogue/reference data.
 
@@ -292,18 +253,6 @@ class AngeeModel(TimestampMixin, RebacMixin):
             reason=f"{cls._meta.label_lower}.system_queryset"
         )
         return queryset.lock_if_supported(of=lock) if lock is not None else queryset
-
-    @classmethod
-    def is_runtime_model(cls) -> bool:
-        """Return whether this model class declares itself as a runtime model."""
-
-        return bool(cls.__dict__.get("runtime", False))
-
-    @classmethod
-    def overrides_runtime_parent(cls) -> bool:
-        """Return whether this materialized child opts into child-first emission."""
-
-        return bool(cls.__dict__.get("child_overrides_parent", False))
 
     @classmethod
     def is_catalogue_model(cls) -> bool:
@@ -583,69 +532,6 @@ class AngeeModel(TimestampMixin, RebacMixin):
 
         return {}
 
-    @classmethod
-    def get_extension_target(cls) -> str | None:
-        """Return the normalized model label this source model extends."""
-
-        target = cls.extends
-        if target is None:
-            return None
-        if not isinstance(target, str):
-            raise ImproperlyConfigured(f"{cls.__module__}.{cls.__name__}.extends must be a string.")
-        try:
-            app_label, model_name = make_model_tuple(target)
-        except ValueError as error:
-            raise ImproperlyConfigured(
-                f"{cls.__module__}.{cls.__name__}.extends must be an 'app_label.ModelName' reference."
-            ) from error
-        return f"{app_label}.{model_name}"
-
-    @classmethod
-    def get_extension_bases(cls) -> tuple[type[models.Model], ...]:
-        """Return abstract model bases contributed by this extension."""
-
-        if cls.get_extension_target() is None:
-            return ()
-
-        bases = tuple(base for base in cls.__bases__ if _is_contributed_extension_base(base))
-        if bases and cls._has_extension_body():
-            cls._check_bodyful_extension_bases(bases)
-            return (cls, *bases)
-        return bases or (cls,)
-
-    @classmethod
-    def _has_extension_body(cls) -> bool:
-        """Return whether this donor declares semantic members of its own."""
-
-        return any(
-            name not in EXTENSION_DONOR_STRUCTURAL_MEMBERS and not _is_inherited_abstract_field_member(cls, name)
-            for name in cls.__dict__
-        )
-
-    @classmethod
-    def _check_bodyful_extension_bases(cls, bases: tuple[type[models.Model], ...]) -> None:
-        """Raise if this donor cannot be composed ahead of its contributed bases."""
-
-        donor = f"{cls.__module__}.{cls.__name__}"
-        if not cls._meta.abstract:
-            raise ImproperlyConfigured(f"{donor} cannot compose as a same-row extension because it is not abstract.")
-        seen: set[type[models.Model]] = set()
-        for base in bases:
-            if base in seen:
-                raise ImproperlyConfigured(
-                    f"{donor} cannot compose duplicate extension base {base.__module__}.{base.__name__}."
-                )
-            seen.add(base)
-            if not base._meta.abstract:
-                raise ImproperlyConfigured(
-                    f"{donor} cannot compose non-abstract extension base {base.__module__}.{base.__name__}."
-                )
-            if not issubclass(cls, base):
-                raise ImproperlyConfigured(
-                    f"{donor} cannot compose its own body ahead of {base.__module__}.{base.__name__}; "
-                    "the donor must inherit every contributed base."
-                )
-
     @property
     def public_id(self) -> str:
         """Return the stable public identifier for this model instance."""
@@ -737,7 +623,7 @@ def role_anchor(
     adopter's, and emit an import that resolves to the wrong symbol. Call
     ``role_anchor`` directly at module level, or pass ``module=__name__`` when
     indirecting it. The composer verifies the captured module actually binds the
-    anchor at emission (``Runtime._class_import``) and fails loudly on a mis-capture
+    anchor at emission (``angee.compose.rendering``) and fails loudly on a mis-capture
     rather than emitting a broken import.
 
     The ``.zed`` fragment stays **co-located and static** — each adopter ships its
@@ -793,44 +679,3 @@ def _relationship_subject(value: Any) -> SubjectRef:
         pass
     ref = to_object_ref(value)
     return SubjectRef.of(ref.resource_type, ref.resource_id)
-
-
-def _is_contributed_extension_base(value: type) -> bool:
-    """Return whether ``value`` is an abstract model extension base."""
-
-    if not issubclass(value, models.Model):
-        return False
-    if value in {models.Model, TimestampMixin, RebacMixin, AngeeModel, AngeeDataModel}:
-        return False
-    model = cast(type[models.Model], value)
-    meta = model._meta
-    return bool(meta.abstract)
-
-
-def _is_inherited_abstract_field_member(model: type[models.Model], name: str) -> bool:
-    """Return whether ``name`` is Django plumbing copied from an abstract base field."""
-
-    for base in model.__mro__[1:]:
-        if base is models.Model or not issubclass(base, models.Model) or not hasattr(base, "_meta"):
-            continue
-        abstract_base = cast(type[models.Model], base)
-        if abstract_base._meta.abstract and name in _abstract_field_member_names(abstract_base):
-            return True
-    return False
-
-
-def _abstract_field_member_names(model: type[models.Model]) -> frozenset[str]:
-    """Return class-dict names Django contributes for ``model``'s local fields."""
-
-    names: set[str] = set()
-    for field in (*model._meta.local_fields, *model._meta.local_many_to_many):
-        names.add(field.name)
-        attname = getattr(field, "attname", None)
-        if isinstance(attname, str):
-            names.add(attname)
-        if getattr(field, "choices", None):
-            names.add(f"get_{field.name}_display")
-        if isinstance(field, models.DateField) and not field.null:
-            names.add(f"get_next_by_{field.name}")
-            names.add(f"get_previous_by_{field.name}")
-    return frozenset(names)

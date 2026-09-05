@@ -73,7 +73,7 @@ The framework wheel and the GraphQL folder addon have a one-way dependency rule
 that layering tests enforce:
 
 - `angee.base` is the model foundation (models, fields, mixins, managers,
-  querysets, and model emission declarations). It must not import `angee.compose`,
+  querysets, and native tracking mixins). It must not import `angee.compose`,
   `angee.graphql`, or addon packages.
 - `angee.graphql` is the `addons/angee/graphql` folder addon's GraphQL runtime (schema
   assembly, Strawberry helpers, serving, subscriptions, and SDL commands). It
@@ -94,7 +94,7 @@ Rules that follow from the layering:
 
 - **Addon discovery is a Django app-registry concern**, not a build-only
   concern: serving code such as schema building enumerates Django's installed
-  app configs and reads only the declaration attributes it owns. Serving code
+  app configs and consumes the native manifest through the capability owner. Serving code
   never imports `angee.compose` just to list addons.
 - **An Angee addon is a Django app marked by a co-located `addon.toml`.** The
   manifest's presence is the marker (`angee.addons.is_angee_addon`); there is no
@@ -102,7 +102,10 @@ Rules that follow from the layering:
   only to run a Python seam (`ready()` / `import_models()`); otherwise Django's
   auto-created `AppConfig` is enough. The declarative contract — `depends_on` (the
   ordering contract) plus the contribution seams — lives in `addon.toml` and is read
-  through `angee.addons.addon_contract`.
+  once per composition through `angee.addons.addon_manifest`, retaining the native
+  hatch-angee representation. `addon.toml` is authoritative; AppConfig does not
+  maintain independently configurable copies. Where Django requires an identity
+  such as `AppConfig.name`, the binding validates agreement.
 - **The contribution seams default to what the addon directory reveals; an explicit
   manifest entry only overrides that default.** `schema.py` (defining `schemas`) →
   the GraphQL bucket, `permissions.zed` → the REBAC contribution, `web/package.json`
@@ -112,10 +115,10 @@ Rules that follow from the layering:
   manifest only to override the convention (a non-default web package, or
   `[web].codegen`). The dependency graph, resource tiers, and metadata are never
   inferred — order and intent are not path-derivable. Each lifecycle step then reads
-  only the contract it owns: `graphql` reads `contract.schemas`, `resources` reads
+  only the contract it owns: `graphql` reads `manifest.schemas`, `resources` reads
   the `[resources]` tiers, the web projector reads `[web].package` / `[web].codegen`,
-  the MCP server reads `[mcp].tools`, REBAC sync discovers an adjacent
-  `permissions.zed` by convention, stable serving imports conventional `urls.py` /
+  the MCP server reads `[mcp].tools`, the permission owner resolves manifest `permissions` or conventional
+  `permissions.zed` and binds the effective upstream path after emission, stable serving imports conventional `urls.py` /
   `asgi.py`, runtime emission reads model-level `runtime = True`, and settings
   composition reads the addon's optional `autoconfig.py`.
 - **There is a single app set and a single boot.** `DJANGO_SETTINGS_MODULE`
@@ -134,6 +137,23 @@ Rules that follow from the layering:
   continue. `angee build` and `angee clean` may emit stale runtime sources during
   that hook only so Django can finish loading the generated model registry; no
   build/run app-set split exists.
+- **Model composition is native abstract inheritance.** A root source owns its
+  fields and model mixins. A same-row donor or materialized child is a narrow
+  abstract Django model containing only its added fields and behavior; it must
+  not copy the target's fields, timestamps or generic manager. The compiler emits
+  donors, source, then concrete parent in that order. Django owns the resulting
+  MRO, manager selection, field cloning and model registry. Explicit source Meta
+  options preserve intended ordering where a concrete parent sits behind an
+  abstract base. Additive donor constraints are the bounded composer policy;
+  unsupported field collisions and model/app-module inheritance cycles fail
+  before emission. Tracking uses native simple-history and reversion APIs on the
+  final concrete class, with the small history adapter in `angee.base.mixins`
+  handling generated module identity and explicit child opt-in.
+- **Resource load hooks cooperate through ordinary `super()`.** The resources
+  addon owns the fieldless terminal mixin. Each contributor performs its local
+  work, then delegates exactly once, including when its own work is skipped.
+  An exception aborts the chain and the loader's transaction; do not delegate in
+  `finally`. The compiler never scans the MRO to fan out hooks.
 - **The resource ledger is owned by the resource addon.** The composer discovers
   `angee.resources.models.Resource` as a normal addon source model and emits it
   under the `resources` label. `angee.base` must not import `angee.resources`.
@@ -894,17 +914,13 @@ module-level constants. Add docstrings to private helpers when their role is not
 obvious from the function name and signature. Do not maintain a parallel spec, field inventory, or model
 API list for behavior that can live clearly beside the code.
 
-The addon's `addon.toml` is the declarative manifest (its contract owner is
-`angee.addons.AddonContract`); when an addon carries a Python seam, its `AppConfig`
-owns addon-local *interpretation*. Use Django's own facts before adding an Angee
-fact: the addon root is `AppConfig.path`, source models live in `models.py`, and
-GraphQL contributions live in `schema.py`. Put validation, normalization, and path
-resolution for one addon on the object that owns the data — its `AppConfig` (the
-`ready()` / `import_models()` seam is the reason an addon adds an `apps.py`), a
-model/manager, or a runtime build object for composition — not on loose functions;
-keep a function loose only for orchestration no single object owns. Put the manifest
-keys and their exact authoring forms in the `AddonContract` docstring, not in this
-guideline.
+The addon's `addon.toml` owns declaration facts, parsed into hatch-angee's native
+manifest. AppConfig owns Django's identity, registration and lifecycle. Each
+capability owner interprets its own declarations and conventional defaults; it
+never creates a separately configurable manifest mirror. Model/manager behavior
+stays with the native class, and composition lifecycle stays with the compiler.
+Keep the exact authoring forms in owner docstrings and the upstream manifest
+contract, rather than duplicating them in this guideline.
 
 Before decomposing backend code, classify each fact by its Django owner:
 
@@ -912,7 +928,7 @@ Before decomposing backend code, classify each fact by its Django owner:
   `TextChoices`.
 - Row-set behavior lives on managers and querysets.
 - Instance behavior lives on model methods and properties.
-- Addon declaration and path-resolution behavior lives on `AppConfig`.
+- Addon declarations live in `addon.toml`; capability owners resolve their paths from Django `AppConfig.path`.
 - Management commands parse arguments and dispatch to the owning model, manager,
   service, or composer function.
 - Compatibility facades exist only for an explicit compatibility promise.

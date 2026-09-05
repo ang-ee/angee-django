@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from angee.addons import addon_contract, is_angee_addon
 from django.apps import AppConfig, apps
 from django.db.models import Model
+
+from angee.addons import addon_manifest, is_angee_addon
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +94,7 @@ def addon_rollups() -> list[AddonRollup]:
     for config in addons():
         models = data_models(config)
         # The manifest owns the addon's descriptive metadata; read it, never re-derive.
-        contract = addon_contract(config)
+        manifest = addon_manifest(config)
         rollups.append(
             AddonRollup(
                 name=config.name,
@@ -107,11 +108,11 @@ def addon_rollups() -> list[AddonRollup]:
                 model_count=len(models),
                 field_count=sum(len(own_fields(model)) for model in models),
                 resource_count=counts.get(config.name, 0),
-                depends_on=sorted(getattr(config, "angee_depends_on", ())),
+                depends_on=sorted(manifest.depends_on) if manifest else [],
                 model_labels=sorted(model._meta.label_lower for model in models),
-                description=contract.description if contract else "",
-                keywords=list(contract.keywords) if contract else [],
-                category=(contract.category or "") if contract else "",
+                description=manifest.description if manifest else "",
+                keywords=list(manifest.keywords) if manifest else [],
+                category=(manifest.category or "") if manifest else "",
             )
         )
     return rollups

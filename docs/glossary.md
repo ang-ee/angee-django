@@ -26,11 +26,10 @@ and builds on the framework core. Framework addons live under `addons/`.
 **Consumer addon** — an addon written by a product team for a specific project,
 built on top of the framework and base addons.
 
-**Composer** — the build-time tool that turns addon contracts into a runnable
-project: it reads each addon's source models and declarations and emits the
-concrete Django apps, permission schema, and other `runtime/` artifacts.
-Composition happens at build time — nothing is monkey-patched or registered at
-runtime.
+**Composer** — the framework machinery that resolves addon declarations and
+emits concrete model modules, permission extensions and other `runtime/`
+artifacts. It selects class definitions before Django imports and registers them;
+runtime model classes are not monkey-patched. See [The Composer](composer.md).
 
 **Project settings** — the `settings.yaml` and optional Python settings module
 selected by `ANGEE_PROJECT_SETTINGS`. They declare root apps with Django
@@ -55,9 +54,10 @@ stays the project's. The two stack layouts live in the operator's
 default Host; a project *is* the Host's source. The operator is Host-agnostic — to
 it, a project is just a git Source.
 
-**Addon contract** — what an addon declares for the composer to consume (source
-models, native Strawberry GraphQL classes, routes, slots, resources). Contracts
-are the seams between addons.
+**Addon contract** — the addon facts declared in `addon.toml`, parsed by
+hatch-angee and consumed by composition and capability owners. Fields, executable
+behavior and native library objects remain in their Python or web modules;
+manifest references and conventional defaults connect those implementations.
 
 **Seams** — the named extension points and boundaries the framework owns. The
 framework owns the seams; addons own the concerns. Extension is mechanical: named
@@ -65,25 +65,29 @@ hooks, explicit owners, deterministic order, fail-fast on collisions.
 
 ## Backend
 
-**Source model** — an abstract Django model defined in an addon. Source models are
-abstract; the composer emits concrete apps from them. You edit source models, not
-the emitted output.
+**Source model** — an abstract Django model declared in an addon. Its own
+`runtime` and `extends` markers select its composition role; unmarked abstract
+helpers are ordinary reusable bases. Edit the source model, not emitted output.
 
-**Concrete app** — a runtime Django app emitted by the composer from source models.
-Generated output — change the source, not the artifact.
+**Concrete app** — the generated concrete model module and migration package
+for a source Django app. Its models register under the source app's existing
+AppConfig identity. Change the source, not the generated artifact.
 
 **`runtime/`** — the directory of generated backend output (concrete apps,
 GraphQL SDL, codegen stubs, migrations). Output, not source.
 
-**Model extension (same-row)** — an abstract source model with
-`extends = "app.Model"`. The composer emits it as an additional base for the
-target model, adding fields or behavior to the same database row.
+**Model extension (same-row)** — a narrow abstract donor with its own
+`extends = "app.Model"` and no own `runtime = True`. The donor class precedes the
+target source in the generated model's bases, adding fields or behavior to the
+same database row.
 
-**Model extension (materialized child)** — a concrete Django child model that
-specializes a parent model when a row is exactly one concrete kind of that
-parent. It shares the parent identity and materializes kind-specific fields in
-its own table. In conversation, "extend a model" can mean either this child-row
-reading or the same-row `extends` reading above; choose by row semantics.
+**Model extension (materialized child)** — a Django multi-table-inheritance
+child emitted from a narrow abstract source declaring both `runtime = True` and
+`extends = "app.Model"`. It shares the concrete parent's identity and stores
+kind-specific fields in its own table. Its source precedes the concrete parent
+in the generated bases, so child behavior overrides through ordinary Python MRO.
+In conversation, "extend a model" can mean either this child-row reading or the
+same-row `extends` reading above; choose by row semantics.
 
 **GraphQL type extension** — a Strawberry extension contribution that adds fields
 to an existing GraphQL type. It is not a model `extends`; it extends the API

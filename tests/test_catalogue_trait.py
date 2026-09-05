@@ -2,54 +2,33 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
-from angee.addons import AddonContract
-from angee.base.models import AngeeModel
+from django.apps import AppConfig
 from django.db import connection, models
 from django.test.utils import isolate_apps
 
+from angee.addons import addon_manifest
+from angee.base.models import AngeeModel
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.models import Resource
-
-
-@dataclass(slots=True)
-class _Addon:
-    """Small addon stand-in for resource-entry tests."""
-
-    name: str
-    """Full dotted addon name."""
-
-    label: str
-    """Short Django app label."""
-
-    path: str
-    """Filesystem root for local resource files."""
-
-    _addon_contract: AddonContract
-    """In-memory addon contract used by the resources manifest owner."""
+from tests.conftest import make_addon
 
 
 def _addon(
     tmp_path: Path,
     *,
     manifest: dict[str, tuple[dict[str, Any], ...]],
-) -> _Addon:
+) -> AppConfig:
     """Return a resource addon rooted at ``tmp_path``."""
 
-    name = "tests.catalogue_addon"
-    return _Addon(
-        name=name,
-        label="catalogue_addon",
-        path=str(tmp_path),
-        _addon_contract=AddonContract(
-            name=name,
-            resources=manifest,
-        ),
+    config = make_addon(
+        name="tests.catalogue_addon", label="catalogue_addon", path=tmp_path, resources=dict(manifest or {})
     )
+    addon_manifest(config)
+    return config
 
 
 def test_catalogue_marker_and_tier_are_declared_per_class() -> None:

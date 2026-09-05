@@ -5,11 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from angee.base.models import AngeeModel
 from django.db import models
 
 
-class OAuthClientOidc(AngeeModel):
+class OAuthClientOidc(models.Model):
     """OpenID Connect login extension for ``integrate.OAuthClient``.
 
     The composer folds these fields into the single OAuth client table when the

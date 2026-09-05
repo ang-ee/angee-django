@@ -29,14 +29,6 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Any, ClassVar, cast
 
-from angee.base.actors import actor_user_id
-from angee.base.emission import ModelClassAttribute
-from angee.base.fields import SqidField, StateField
-from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeModel
-from angee.base.refs import RecordRefMixin
-from angee.jobs.autoconfig import SETTINGS as _JOB_SETTINGS
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -58,8 +50,15 @@ from rebac import (
     to_subject_ref,
 )
 
+from angee.base.actors import actor_user_id
+from angee.base.fields import SqidField, StateField
+from angee.base.impl import ImplClassField
+from angee.base.mixins import AuditMixin, SqidMixin
+from angee.base.models import AngeeModel
+from angee.base.refs import RecordRefMixin
 from angee.integrate.models import Bridge
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
+from angee.jobs.autoconfig import SETTINGS as _JOB_SETTINGS
 from angee.messaging.backends import ChannelBackend
 from angee.messaging.managers import (
     ChannelManager,
@@ -892,24 +891,6 @@ class Channel(Bridge):
 
     objects = ChannelManager()
 
-    @classmethod
-    def angee_model_attributes(
-        cls,
-        *,
-        app_label: str,
-        model_class: type[models.Model],
-        extension_bases: tuple[type[models.Model], ...],
-    ) -> tuple[ModelClassAttribute, ...]:
-        """Emit the channel manager on the parent-first concrete child."""
-
-        del cls, app_label, model_class, extension_bases
-        return (
-            ModelClassAttribute(
-                name="objects",
-                import_path="angee.messaging.managers.ChannelManager",
-            ),
-        )
-
     class Meta:
         """Django model options for the channel child model."""
 
@@ -1182,14 +1163,10 @@ class Channel(Bridge):
             row.save(update_fields=["cursor", "updated_at"])
 
 
-class _ChannelWebformContribution(models.Model):
-    """Public-form configuration and message mapping folded onto Channel.
+class ChannelWebform(models.Model):
+    """Same-row public-form configuration and message mapping for ``messaging.Channel``."""
 
-    The contribution mirrors intake's narrow same-row donor shape: no second
-    table and no duplicate ``AngeeModel`` timestamps ahead of Channel's concrete
-    Integration parent.  Persisted form facts and their interpretation therefore
-    stay on the row that owns them.
-    """
+    extends = "messaging.Channel"
 
     hasura_readable_fields = (
         "slug",
@@ -1314,17 +1291,6 @@ class _ChannelWebformContribution(models.Model):
                 }
             },
         )
-
-
-class ChannelWebform(_ChannelWebformContribution, AngeeModel):
-    """Same-row public-webform donor for ``messaging.Channel``."""
-
-    extends = "messaging.Channel"
-
-    class Meta:
-        """Abstract donor discovered by the composer; runtime remains false."""
-
-        abstract = True
 
 
 class Thread(SqidMixin, AuditMixin, AngeeModel):

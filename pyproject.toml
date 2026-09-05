@@ -42,7 +42,7 @@ dependencies = [
   "django-reversion>=5.1",
   "django-simple-history>=3.7",
   "django-sqids>=0.1",
-  "django-zed-rebac @ git+https://github.com/ang-ee/django-zed-rebac.git@43be603bc6624c9876e9b4bb04ce30c07a7d2541",
+  "django-zed-rebac>=0.15.1",
   # <6.1: Django 6.1 adds fetch_mode to Model.from_db and django-zed-rebac's
   # override does not accept it yet; lift the cap when rebac supports 6.1.
   "django>=6.0,<6.1",
@@ -100,7 +100,7 @@ addons = [
     "django-anymail>=15.1",
     "django-axes>=8.0",
     "django-import-export>=4.3",
-    "django-zed-rebac[strawberry-django] @ git+https://github.com/ang-ee/django-zed-rebac.git@43be603bc6624c9876e9b4bb04ce30c07a7d2541",
+    "django-zed-rebac[strawberry-django]>=0.15.1",
     "fastmcp>=3.4.2,<4",
     "httpcore>=1.0,<2",
     "httpx>=0.28.1,<0.29",
@@ -122,8 +122,8 @@ addons = [
     "qrcode[pil]>=8.2",
     "ruamel.yaml>=0.18",
     "slack-sdk>=3.43.0",
-    "strawberry-django-aggregates @ git+https://github.com/ang-ee/strawberry-django-aggregates.git@587fc099ae1db69c618f9d0d38d6dc1deec63142",
-    "strawberry-django-hasura @ git+https://github.com/ang-ee/strawberry-django-hasura.git@ac5559f367e575da55db7d2267df271490a3a50b",
+    "strawberry-django-aggregates>=0.11.0",
+    "strawberry-django-hasura>=0.8.1",
     "strawberry-graphql @ git+https://github.com/ang-ee/strawberry.git@e4fa3198f704d81b3ca96b6dcac75420c5fee516",
     "strawberry-graphql-django>=0.86.7",
     "tablib>=3",
@@ -137,10 +137,6 @@ default-groups = ["dev", "addons"]
 # `.angee/caches/uv` wherever uv runs (slots, worktrees, the stack root under
 # --project). The rendered stack host pins its own stack-owned cache; every
 # other invocation uses uv's default per-user cache.
-
-[tool.hatch.metadata]
-# Branch review builds pin native upstream work by immutable Git revision.
-allow-direct-references = true
 
 [tool.hatch-angee]
 # This repository publishes the framework core only. Folder addons remain

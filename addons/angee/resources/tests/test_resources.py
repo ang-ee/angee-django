@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
-from django.apps import apps
+from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, connection, models
 from import_export.results import Result, RowResult
 from rebac import system_context
+from rebac.errors import MissingActorError
 
-from angee.addons import AddonContract
+from angee.addons import addon_manifest
 from angee.base.models import CATALOGUE_TIERS, AngeeModel
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
@@ -28,23 +28,7 @@ from angee.resources.widgets import (
     resolve_ledger_xref,
     resolve_xref,
 )
-
-
-@dataclass(slots=True)
-class Addon:
-    """Small addon stand-in exposing normalized resource declarations."""
-
-    name: str
-    """Full dotted addon name."""
-
-    label: str
-    """Django app label."""
-
-    path: str
-    """Filesystem root for local resource files."""
-
-    _addon_contract: AddonContract
-    """In-memory addon contract used by the resources manifest owner."""
+from tests.conftest import make_addon
 
 
 def addon(
@@ -53,18 +37,12 @@ def addon(
     name: str = "tests.resource_addon",
     label: str = "resource_addon",
     manifest: Mapping[str, tuple[Mapping[str, Any], ...]] | None = None,
-) -> Addon:
+) -> AppConfig:
     """Return a resource addon rooted at ``tmp_path``."""
 
-    return Addon(
-        name=name,
-        label=label,
-        path=str(tmp_path),
-        _addon_contract=AddonContract(
-            name=name,
-            resources=manifest or {"master": (), "install": (), "demo": ()},
-        ),
-    )
+    config = make_addon(name=name, label=label, path=tmp_path, resources=dict(manifest or {}))
+    addon_manifest(config)
+    return config
 
 
 def entry(
@@ -72,7 +50,7 @@ def entry(
     declaration: dict[str, Any],
     *,
     tier: str = "master",
-    owner: Addon | None = None,
+    owner: AppConfig | None = None,
 ) -> ResourceEntry:
     """Return a resource entry for one declaration mapping."""
 
@@ -1093,7 +1071,10 @@ def test_resource_adoption_is_opt_in(tmp_path: Path) -> None:
         for model in models_to_create:
             schema_editor.create_model(model)
     try:
-        AdoptUser.objects.create(username="alice")
+        with system_context(reason="resource adoption fixture"):
+            AdoptUser.objects.create(username="alice")
+        with pytest.raises(MissingActorError):
+            AdoptUser.objects.count()
         with pytest.raises((IntegrityError, ResourceLoadError)):
             AdoptLedger.objects.load_addons(
                 (no_adopt,),
@@ -1111,6 +1092,8 @@ def test_resource_adoption_is_opt_in(tmp_path: Path) -> None:
         with system_context(reason="resource adoption assertions"):
             assert AdoptUser.objects.count() == 1
         assert AdoptLedger.objects.get(xref="existing").target_id
+        with pytest.raises(MissingActorError):
+            AdoptUser.objects.count()
     finally:
         with connection.schema_editor() as schema_editor:
             for model in reversed(models_to_create):
@@ -1168,10 +1151,11 @@ def test_resource_adoption_uses_explicit_unique_field(
         for model in models_to_create:
             schema_editor.create_model(model)
     try:
-        ExplicitAdoptUser.objects.create(
-            username="alice",
-            email="alice@example.test",
-        )
+        with system_context(reason="explicit adoption fixture"):
+            ExplicitAdoptUser.objects.create(
+                username="alice",
+                email="alice@example.test",
+            )
 
         result = ExplicitAdoptLedger.objects.load_addons(
             (owner,),
@@ -1238,7 +1222,8 @@ def test_resource_adoption_repairs_stale_ledger_target(tmp_path: Path) -> None:
         for model in models_to_create:
             schema_editor.create_model(model)
     try:
-        existing = StaleLedgerUser.objects.create(username="admin", label="Existing")
+        with system_context(reason="stale-ledger adoption fixture"):
+            existing = StaleLedgerUser.objects.create(username="admin", label="Existing")
         StaleLedger.objects.create(
             source_addon=owner.name,
             source_path="resources/010_base.staleledgeruser.csv",
@@ -1427,7 +1412,8 @@ def test_resource_adoption_accepts_composite_unique_fields(tmp_path: Path) -> No
         for model in models_to_create:
             schema_editor.create_model(model)
     try:
-        existing = CompositeClient.objects.create(slug="anthropic", environment="prod", label="Existing")
+        with system_context(reason="composite adoption fixture"):
+            existing = CompositeClient.objects.create(slug="anthropic", environment="prod", label="Existing")
 
         result = CompositeLedger.objects.load_addons(
             (owner,),
@@ -1531,12 +1517,13 @@ def test_resource_adoption_accepts_a_single_conditional_unique_field(tmp_path: P
         for model in models_to_create:
             schema_editor.create_model(model)
     try:
-        head = ConditionalKeyRow.objects.create(key="stable-key", label="Existing head")
-        version = ConditionalKeyRow.objects.create(
-            key="stable-key",
-            label="Published version",
-            lineage_head=head,
-        )
+        with system_context(reason="conditional-key adoption fixture"):
+            head = ConditionalKeyRow.objects.create(key="stable-key", label="Existing head")
+            version = ConditionalKeyRow.objects.create(
+                key="stable-key",
+                label="Published version",
+                lineage_head=head,
+            )
 
         result = ConditionalKeyLedger.objects.load_addons(
             (owner,),
@@ -1615,12 +1602,13 @@ def test_resource_adoption_rejects_ambiguous_conditional_key_matches(tmp_path: P
     try:
         with connection.schema_editor() as schema_editor:
             schema_editor.remove_constraint(AmbiguousConditionalKeyRow, constraint)
-        AmbiguousConditionalKeyRow.objects.bulk_create(
-            (
-                AmbiguousConditionalKeyRow(key="stable-key", is_head=True),
-                AmbiguousConditionalKeyRow(key="stable-key", is_head=True),
+        with system_context(reason="ambiguous conditional-key adoption fixture"):
+            AmbiguousConditionalKeyRow.objects.bulk_create(
+                (
+                    AmbiguousConditionalKeyRow(key="stable-key", is_head=True),
+                    AmbiguousConditionalKeyRow(key="stable-key", is_head=True),
+                )
             )
-        )
 
         with pytest.raises(ImproperlyConfigured, match="adopt field 'key' matched multiple rows"):
             AmbiguousConditionalKeyLedger.objects.load_addons(
@@ -1778,8 +1766,9 @@ def test_resource_adoption_accepts_conditional_composite_unique_fields(tmp_path:
         for model in models_to_create:
             schema_editor.create_model(model)
     try:
-        user = ConditionalOwner.objects.create(username="admin")
-        existing = ConditionalCredential.objects.create(user=user, name="api-key", label="Existing")
+        with system_context(reason="conditional adoption fixture"):
+            user = ConditionalOwner.objects.create(username="admin")
+            existing = ConditionalCredential.objects.create(user=user, name="api-key", label="Existing")
 
         result = ConditionalLedger.objects.load_addons(
             (owner,),
@@ -1863,10 +1852,11 @@ def test_resource_adoption_rejects_ambiguous_unique_fields(
         for model in models_to_create:
             schema_editor.create_model(model)
     try:
-        AmbiguousAdoptUser.objects.create(
-            username="alice",
-            email="alice@example.test",
-        )
+        with system_context(reason="ambiguous adoption fixture"):
+            AmbiguousAdoptUser.objects.create(
+                username="alice",
+                email="alice@example.test",
+            )
 
         with pytest.raises(ImproperlyConfigured, match="multiple unique"):
             AmbiguousAdoptLedger.objects.load_addons(
@@ -2218,7 +2208,7 @@ def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
             schema_editor.delete_model(MtiGrantLedger)
 
 
-def _write_resource_files(tmp_path: Path) -> Addon:
+def _write_resource_files(tmp_path: Path) -> AppConfig:
     """Write a small resource set and return its declaring addon."""
 
     resource_dir = tmp_path / "resources"
