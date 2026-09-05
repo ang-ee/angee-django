@@ -103,7 +103,7 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
       />
     );
   }
-  if (threadQuery.fetching && threadQuery.data === undefined) {
+  if (threadQuery.isFetching && threadQuery.data === undefined) {
     return <LoadingPanel message={t("activity.loading")} />;
   }
   if (threadQuery.error || threadPayload?.error_code === "BAD_RECORD") {

@@ -81,7 +81,7 @@ export function RepositoryPicker({
       />
       <RepoCandidateList
         candidates={candidates}
-        fetching={searchQuery.fetching}
+        fetching={searchQuery.isFetching}
         searching={searchEnabled}
         hasBridge={vcsBridgeId !== ""}
         busyName={busyName}

@@ -79,7 +79,7 @@ export function ActivityAgendaList({
       rows={rows}
       columns={columns}
       scope="local"
-      fetching={agenda.fetching}
+      fetching={agenda.isFetching}
       error={agenda.error}
       emptyContent={t("agenda.empty")}
     />

@@ -88,7 +88,7 @@ class SpacesMembershipMutation:
         """Add or confirm one party in a writable group at the selected role."""
 
         group = authorized_action_target(info, Group, group_id, "write")
-        party = Party.objects.all().apply_ambient_scope().from_public_id(str(party_id))
+        party = Party.objects.all().scoped().from_public_id(str(party_id))
         if party is None:
             raise ValueError("party not found")
         membership = Membership.objects.add_confirmed(

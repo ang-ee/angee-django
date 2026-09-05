@@ -77,7 +77,7 @@ export function AgentChatterPane({
     { models: ["agents.Agent", "agents.AgentSession"] },
   );
   const session = sessionQuery.data?.resolve_session_for_view ?? null;
-  const loading = sessionQuery.fetching && sessionQuery.data === undefined;
+  const loading = sessionQuery.isFetching && sessionQuery.data === undefined;
 
   // The effective selection is DERIVED, not effect-mirrored: only the user's explicit pick is
   // state, and until they pick one the selection follows the server-resolved DEFAULT agent.

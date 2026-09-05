@@ -7,32 +7,19 @@ built-in manual backend has no client and leaves the catalogue hand-curated.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import Any, ClassVar
 
+from asgiref.sync import async_to_sync
+from pydantic_ai.direct import model_request
+from pydantic_ai.messages import ModelMessage, ModelResponse
+from pydantic_ai.models import Model, ModelRequestParameters
+from pydantic_ai.settings import ModelSettings
+
 from angee.base.impl import ImplBase
-
 from angee.integrate.connect import enabled_oauth_client_from_hint
-
-
-class ChatAPI(StrEnum):
-    """The chat protocol an inference backend speaks to its vendor.
-
-    A vendor-neutral fact each backend *declares*, so a consumer that must pick a
-    protocol adapter reads the declaration instead of switching on vendor identity.
-    That is what lets an OpenAI-compatible backend (Ollama, a local router, a
-    hosted gateway) inherit the right adapter from its base class without the
-    consumer growing a branch per vendor.
-
-    It is deliberately coarser than a vendor: many vendors speak ``OPENAI_CHAT``.
-    A new protocol adds a member here and one builder in the consuming runtime;
-    a new vendor on an existing protocol adds neither.
-    """
-
-    ANTHROPIC_MESSAGES = "anthropic_messages"
-    OPENAI_CHAT = "openai_chat"
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,29 +60,6 @@ class InferenceModelSpec:
         return defaults
 
 
-@dataclass(frozen=True, slots=True)
-class InferenceRequest:
-    """Provider-neutral request for one non-streaming chat completion."""
-
-    model: str
-    messages: Sequence[Mapping[str, Any]]
-    system: str = ""
-    max_tokens: int = 1024
-    temperature: float | None = None
-    tools: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
-    options: Mapping[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True, slots=True)
-class InferenceResponse:
-    """Provider-neutral response returned by a backend chat call."""
-
-    text: str
-    content: list[dict[str, Any]] = field(default_factory=list)
-    usage: dict[str, Any] = field(default_factory=dict)
-    raw: dict[str, Any] = field(default_factory=dict)
-
-
 class InferenceBackend(ImplBase):
     """The strategy one inference provider resolves to.
 
@@ -106,12 +70,6 @@ class InferenceBackend(ImplBase):
     category = "inference"
     label = "Inference"
     icon = "sparkles"
-    # The chat protocol this backend speaks, for consumers that must bind a protocol
-    # adapter to it (the in-process pydantic-ai runtime is the one today). Empty means
-    # the backend offers no in-process adapter — the built-in manual backend has no
-    # client at all. Subclasses inherit it, so an OpenAI-compatible vendor declares
-    # nothing here.
-    chat_api: ClassVar[str] = ""
     # Vendor-neutral: a base backend never pins a product OAuth client. Provider
     # connect is available only when a vendor backend addon sets this slug.
     oauth_client: ClassVar[str] = ""
@@ -147,29 +105,43 @@ class InferenceBackend(ImplBase):
             vendor_slug=vendor_slug,
         )
 
-    def system_preamble(self, credential: Any | None = None) -> str:
-        """Return the vendor-required system-prompt opening for ``credential``.
-
-        Most (vendor × credential-kind) pairs need none. Anthropic's OAuth
-        (Personal Plans) edge refuses requests whose system prompt does not
-        open with the Claude Code identity line; that backend overrides this.
-        Callers prepend a non-empty preamble ahead of their own instructions.
-        ``credential`` defaults to the bound provider's.
-        """
-
-        del credential
-        return ""
-
     def list_models(self) -> Sequence[InferenceModelSpec]:
         """Return the provider's advertised models for catalogue upsert."""
 
         raise NotImplementedError("InferenceBackend subclasses must implement list_models().")
 
-    def chat(self, request: InferenceRequest) -> InferenceResponse:
-        """Send one non-streaming chat request through this provider."""
+    def model(self, handle: str, *, credential: Any | None = None) -> AbstractAsyncContextManager[Model]:
+        """Bind a native model for one invocation, closing owned clients on exit.
 
-        del request
-        raise NotImplementedError("InferenceBackend subclasses must implement chat().")
+        Resolve credentials synchronously before entering the returned context;
+        Django credential refresh must not run inside the model's async loop.
+        """
+
+        raise NotImplementedError(f"{self.label} does not support in-process inference.")
+
+    def chat(
+        self,
+        handle: str,
+        messages: Sequence[ModelMessage],
+        *,
+        model_settings: ModelSettings | None = None,
+        model_request_parameters: ModelRequestParameters | None = None,
+        credential: Any | None = None,
+    ) -> ModelResponse:
+        """Make one native request; tools are declared but never executed here."""
+
+        binding = self.model(handle, credential=credential)
+
+        async def request() -> ModelResponse:
+            async with binding as model:
+                return await model_request(
+                    model,
+                    messages,
+                    model_settings=model_settings,
+                    model_request_parameters=model_request_parameters,
+                )
+
+        return async_to_sync(request)()
 
 
 class ManualInferenceBackend(InferenceBackend):

@@ -27,7 +27,6 @@ import { relationSelectedOption } from "../relation/relation-options";
 import {
   fieldAriaLabel,
   fieldErrorMessages,
-  fieldValidationRules,
   gridFieldClass,
   recordRepresentationValue,
   titleText,
@@ -80,8 +79,6 @@ export function FormViewRecordHeader({
     loading,
     subtitleParts,
     statusField,
-    requiredFieldNames,
-    requiredMessage,
     fieldReadOnly,
     clearServerFieldError,
     afterFieldChange,
@@ -94,11 +91,6 @@ export function FormViewRecordHeader({
             <Controller
               control={form.control}
               name={titleField.name}
-              rules={fieldValidationRules(
-                titleField,
-                requiredFieldNames,
-                requiredMessage,
-              )}
               render={({ field: controller }) =>
                 fieldReadOnly(titleField) ? (
                   <h1 className={TITLE_TEXT_CLASS}>
@@ -143,11 +135,6 @@ export function FormViewRecordHeader({
             <Controller
               control={form.control}
               name={statusField.name}
-              rules={fieldValidationRules(
-                statusField,
-                requiredFieldNames,
-                requiredMessage,
-              )}
               render={({ field: controller }) => (
                 <FieldDescriptorControl
                   field={statusField}
@@ -185,9 +172,6 @@ export function FormViewOverview({
     formReadOnly,
     lineRowErrors,
     bodyField,
-    requiredFieldNames,
-    requiredMessage,
-    serverFieldErrors,
     clearServerFieldError,
     afterFieldChange,
     fieldReadOnly,
@@ -205,7 +189,6 @@ export function FormViewOverview({
         key={field.name}
         control={form.control}
         name={field.name}
-        rules={fieldValidationRules(field, requiredFieldNames, requiredMessage)}
         render={({ field: controller, fieldState }) => (
           <BoundFieldRow
             field={field}
@@ -214,7 +197,6 @@ export function FormViewOverview({
             value={controller.value}
             readOnly={fieldReadOnly(field)}
             errors={fieldState.error ? [fieldState.error] : []}
-            serverMessages={serverFieldErrors[field.name]}
             onChange={(next) => {
               clearServerFieldError(field.name);
               controller.onChange(next);
@@ -290,18 +272,12 @@ export function FormViewOverview({
           <Controller
             control={form.control}
             name={bodyField.name}
-            rules={fieldValidationRules(
-              bodyField,
-              requiredFieldNames,
-              requiredMessage,
-            )}
             render={({ field: controller, fieldState }) => (
               <BodyFieldControl
                 field={bodyField}
                 value={controller.value}
                 readOnly={fieldReadOnly(bodyField)}
                 errors={fieldState.error ? [fieldState.error] : []}
-                serverMessages={serverFieldErrors[bodyField.name]}
                 onChange={(next) => {
                   clearServerFieldError(bodyField.name);
                   controller.onChange(next);

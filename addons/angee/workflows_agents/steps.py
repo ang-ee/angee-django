@@ -14,16 +14,21 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from django.apps import apps
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import transaction
 from django.template import Context, Engine
 from django.utils import timezone
+from pydantic_ai.messages import ModelRequest, ModelRequestPart, ModelResponse, SystemPromptPart, UserPromptPart
+from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.settings import ModelSettings
+from pydantic_ai.tools import ToolDefinition
+from pydantic_ai.usage import RequestUsage
+from pydantic_core import to_jsonable_python
 from rebac import actor_context, system_context, to_subject_ref
 
-from angee.agents.backends import InferenceRequest, InferenceResponse
 from angee.agents.models import SessionStatus, TurnStatus
 from angee.agents.runners import TurnOutcome
 from angee.workflows.models import RunStatus, StepRunStatus, Verdict
@@ -102,14 +107,26 @@ class AgentStepImpl(StepImpl):
 
         del now
         config = dict(step_run.step.config)
-        request: InferenceRequest | None = None
+        request: dict[str, Any] | None = None
         try:
             prompt = _render_prompt(str(config["prompt_template"]), step_run)
             target = _resolve_target(config)
             request = _request_for(config, target=target, prompt=prompt)
-            response = target.provider.backend.chat(request)
+            parts: list[ModelRequestPart] = [UserPromptPart(prompt)]
+            if target.system:
+                parts.insert(0, SystemPromptPart(target.system))
+            response = target.model.chat(
+                [ModelRequest(parts=parts)],
+                model_settings=_model_settings(request),
+                model_request_parameters=ModelRequestParameters(function_tools=_tool_definitions(request["tools"])),
+                credential=target.agent.inference_credential_for_runtime() if target.agent is not None else None,
+            )
             with system_context(reason="workflows_agents.agent_step.budget"), transaction.atomic():
-                step_run.run.debit_budget(_usage_delta(response.usage))
+                step_run.run.debit_budget(
+                    _usage_delta(
+                        response.usage, legacy_keys=set(step_run.run.workflow.budget) | set(step_run.run.budget_spent)
+                    )
+                )
             return StepResult.done(
                 output=_bounded_summary(_success_summary(target=target, request=request, response=response)),
                 outcome="completed",
@@ -482,20 +499,69 @@ def _by_public_id(queryset: Any, value: str, *, label: str) -> Any:
     return row
 
 
-def _request_for(config: Mapping[str, Any], *, target: _ResolvedAgentTarget, prompt: str) -> InferenceRequest:
-    """Build the provider-neutral one-shot chat request."""
+def _request_for(config: Mapping[str, Any], *, target: _ResolvedAgentTarget, prompt: str) -> dict[str, Any]:
+    """Keep the existing persisted request journal vocabulary at its boundary."""
 
-    return InferenceRequest(
-        model=str(target.model.name),
-        messages=[{"role": "user", "content": prompt}],
-        system=target.system,
-        max_tokens=_positive_int(config.get("max_tokens", _default_max_tokens(target.model)), name="max_tokens"),
-        temperature=(
-            None if config.get("temperature") in (None, "") else _float(config.get("temperature"), name="temperature")
-        ),
-        tools=tuple(config.get("tools", ()) or ()),
-        options=dict(config.get("options") or {}),
-    )
+    return {
+        "model": str(target.model.name),
+        "messages": [{"role": "user", "content": prompt}],
+        "system": target.system,
+        "max_tokens": _positive_int(config.get("max_tokens", _default_max_tokens(target.model)), name="max_tokens"),
+        "temperature": None
+        if config.get("temperature") in (None, "")
+        else _float(config["temperature"], name="temperature"),
+        "tools": list(config.get("tools") or ()),
+        "options": dict(config.get("options") or {}),
+    }
+
+
+def _model_settings(request: Mapping[str, Any]) -> ModelSettings:
+    """Decode stored SDK options once, protecting the workflow's owned inputs."""
+
+    options = dict(request["options"])
+    extra_body = dict(options.pop("extra_body", {}) or {})
+    reserved = {"model", "messages", "system", "tools", "stream", "max_tokens", "max_completion_tokens", "temperature"}
+    collisions = reserved & (options.keys() | extra_body.keys())
+    if collisions:
+        raise ValueError(f"Request options are owned by the workflow: {', '.join(sorted(collisions))}.")
+    settings: dict[str, Any] = {"max_tokens": request["max_tokens"]}
+    if request["temperature"] is not None:
+        settings["temperature"] = request["temperature"]
+    for key, value in options.items():
+        if key in ModelSettings.__annotations__:
+            settings[key] = value
+        elif key in {"extra_query", "api_key", "auth_token", "base_url"}:
+            raise ValueError(f"Unsupported workflow request option: {key}.")
+        else:
+            extra_body[key] = value
+    if extra_body:
+        settings["extra_body"] = extra_body
+    return cast(ModelSettings, settings)
+
+
+def _tool_definitions(tools: list[Mapping[str, Any]]) -> list[ToolDefinition]:
+    """Read persisted OpenAI/Anthropic function declarations as native tools."""
+
+    result = []
+    for tool in tools:
+        declaration = tool.get("function", tool)
+        if tool.get("type", "function") != "function" or not isinstance(declaration, Mapping):
+            raise ValueError("Agent workflow tools must be function declarations.")
+        name = declaration.get("name")
+        schema = declaration.get(
+            "parameters_json_schema", declaration.get("parameters", declaration.get("input_schema"))
+        )
+        if not isinstance(name, str) or not name or not isinstance(schema, dict):
+            raise ValueError("Agent workflow tools require a name and a JSON object parameter schema.")
+        result.append(
+            ToolDefinition(
+                name=name,
+                parameters_json_schema=schema,
+                description=declaration.get("description"),
+                strict=declaration.get("strict"),
+            )
+        )
+    return result
 
 
 def _default_max_tokens(model: Any) -> int:
@@ -528,40 +594,25 @@ def _float(value: Any, *, name: str) -> float:
         raise ValidationError({"config": f"Agent step {name} must be a number."}) from error
 
 
-def _usage_delta(usage: Mapping[str, Any]) -> dict[str, int]:
-    """Return normalized token usage deltas from provider-neutral backend usage."""
+def _usage_delta(usage: RequestUsage, *, legacy_keys: set[str]) -> dict[str, int]:
+    """Account native usage while honoring already-persisted legacy budget axes."""
 
-    delta: dict[str, int] = {}
-    for key in ("input_tokens", "output_tokens", "prompt_tokens", "completion_tokens"):
-        value = _int_usage(usage.get(key))
-        if value:
+    delta = {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens, "tokens": usage.total_tokens}
+    for key, value in (
+        ("prompt_tokens", usage.input_tokens),
+        ("completion_tokens", usage.output_tokens),
+        ("total_tokens", usage.total_tokens),
+    ):
+        if key in legacy_keys:
             delta[key] = value
-
-    total = _int_usage(usage.get("total_tokens"))
-    if total is None:
-        total = sum(delta.values()) or None
-    if total:
-        delta["tokens"] = total
-    return delta
-
-
-def _int_usage(value: Any) -> int | None:
-    """Return a non-negative integer usage value, ignoring absent/non-numeric facts."""
-
-    if isinstance(value, bool) or value in (None, ""):
-        return None
-    try:
-        parsed = int(value)
-    except TypeError, ValueError:
-        return None
-    return parsed if parsed >= 0 else None
+    return {key: int(value) for key, value in delta.items() if value}
 
 
 def _success_summary(
     *,
     target: _ResolvedAgentTarget,
-    request: InferenceRequest,
-    response: InferenceResponse,
+    request: Mapping[str, Any],
+    response: ModelResponse,
 ) -> dict[str, Any]:
     """Return the structured request/response summary for a completed call."""
 
@@ -571,22 +622,23 @@ def _success_summary(
             "agent": agent_ref,
             "provider": getattr(target.provider, "sqid", ""),
             "model": getattr(target.model, "sqid", ""),
-            "model_name": request.model,
+            "model_name": request["model"],
         },
-        "request": _request_summary(request),
+        "request": dict(request),
         "response": {
-            "text": response.text,
-            "content": response.content,
-            "usage": response.usage,
+            "text": response.text or "",
+            "format_version": 2,
+            "content": to_jsonable_python(response.parts),
+            "usage": to_jsonable_python(response.usage),
         },
     }
 
 
-def _failure_summary(request: InferenceRequest | None, *, error: Exception) -> dict[str, Any]:
+def _failure_summary(request: Mapping[str, Any] | None, *, error: Exception) -> dict[str, Any]:
     """Return a structured failure summary for routing on the ``failed`` outcome."""
 
     return {
-        "request": None if request is None else _request_summary(request),
+        "request": None if request is None else dict(request),
         "error": {
             "type": type(error).__name__,
             "message": str(error),
@@ -614,20 +666,6 @@ def _is_retryable_provider_error(error: Exception) -> bool:
         "try again",
     )
     return any(term in error_type or term in message for term in retryable_terms)
-
-
-def _request_summary(request: InferenceRequest) -> dict[str, Any]:
-    """Return the JSON-safe request facts worth journaling."""
-
-    return {
-        "model": request.model,
-        "messages": list(request.messages),
-        "system": request.system,
-        "max_tokens": request.max_tokens,
-        "temperature": request.temperature,
-        "tools": list(request.tools),
-        "options": dict(request.options),
-    }
 
 
 def _bounded_summary(summary: Mapping[str, Any]) -> dict[str, Any]:

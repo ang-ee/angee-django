@@ -16,7 +16,7 @@ export function NetworkPane({ partyId }: { partyId: string }): React.ReactElemen
   );
   const nodes = graphNodes(query.data?.party_graph.nodes);
   const edges = graphEdges(query.data?.party_graph.edges);
-  if (query.fetching && !query.data) return <LoadingPanel density="inline" />;
+  if (query.isFetching && !query.data) return <LoadingPanel density="inline" />;
   if (nodes.length <= 1) return <InlineEmpty label={t("network.empty")} />;
   return (
     <GraphView

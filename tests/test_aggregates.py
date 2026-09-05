@@ -13,6 +13,12 @@ from typing import Any, NewType, cast
 import pytest
 import strawberry
 import strawberry_django
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
+from django.db import connection, models
+from rebac import system_context
+from strawberry import auto
+from strawberry_django_aggregates.errors import GroupByFieldNotAllowed
+
 from angee.base.models import AngeeDataModel
 from angee.data.metadata import (
     DataAggregateMeasureMetadata,
@@ -23,18 +29,13 @@ from angee.data.metadata import (
     DataResourceSubtitleMetadata,
     DataResourceTypeNames,
 )
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
-from django.db import connection, models
-from rebac import system_context
-from strawberry import auto
-from strawberry_django_aggregates.errors import GroupByFieldNotAllowed
-
 from angee.graphql.data import hasura_model_resource, public_pk_decoder
 from angee.graphql.data import metadata as metadata_module
 from angee.graphql.data.hasura import (
     _hasura_group_dimensions,
     _measure_ops_for_field,
     _relation_filter_decoders,
+    _relation_group_key_encoders,
 )
 from angee.graphql.data.metadata import (
     make_data_resource_metadata,
@@ -415,7 +416,6 @@ def test_hasura_nested_relation_group_dimension_matches_group_key_contract() -> 
         sortable=["child"],
         aggregatable=["id"],
         groupable=["child", "child__parent"],
-        field_id_decode={"child__parent": public_pk_decoder(ResourceParent)},
         get_queryset=lambda info: ResourceGrandchild.objects.all(),
         write_backend=write_backend,
         id_decode=lambda value: value,
@@ -1222,3 +1222,70 @@ def test_nested_relation_group_key_filters_its_bucket_rows(
         )
     )["resource_grandchildren"]
     assert [row["id"] for row in rows] == [str(row.sqid) for row in first_rows]
+
+
+def test_non_pk_relation_group_identity_fails_at_build() -> None:
+    """Natural target columns cannot accidentally be encoded as primary keys."""
+
+    class NamedTarget(models.Model):
+        code = models.CharField(max_length=32, unique=True)
+
+        class Meta:
+            app_label = "tests"
+
+    class NamedSource(models.Model):
+        target = models.ForeignKey(NamedTarget, to_field="code", on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = "tests"
+
+    with pytest.raises(ImproperlyConfigured, match="non-primary identity"):
+        _relation_group_key_encoders(NamedSource, ["target"])
+
+
+def test_interleaved_json_resources_do_not_replace_upstream_builders(monkeypatch: Any) -> None:
+    """Concurrent schema composition keeps each JSON allowlist resource-local."""
+
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from strawberry_django_aggregates import AggregateBuilder
+    from strawberry_django_hasura import resource as hasura_owner
+
+    barrier = Barrier(2)
+    original_build = AggregateBuilder.build
+
+    def interleaved_build(builder: Any) -> Any:
+        barrier.wait(timeout=10)
+        assert hasura_owner.AggregateBuilder is AggregateBuilder
+        return original_build(builder)
+
+    monkeypatch.setattr(AggregateBuilder, "build", interleaved_build)
+
+    def build_resource(name: str, path: str) -> Any:
+        node = strawberry_django.type(HasuraJsonResourceThing, name=name)(
+            type(name, (AngeeNode,), {"__annotations__": {"name": str}})
+        )
+        return hasura_model_resource(
+            node,
+            model=HasuraJsonResourceThing,
+            name=name.lower(),
+            filterable=["id", "name"],
+            sortable=["name"],
+            aggregatable=["id"],
+            groupable=[path],
+            json_paths={path: "str"},
+            insert=False,
+            update=False,
+            delete=False,
+            get_queryset=lambda info: HasuraJsonResourceThing._base_manager.all(),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(build_resource, "MailboxInterleave", "metadata.mailbox")
+        second = pool.submit(build_resource, "RegionInterleave", "metadata.region")
+        mailbox, region = first.result(timeout=15), second.result(timeout=15)
+    assert "metadata__mailbox" in mailbox.group_key_type.__annotations__
+    assert "metadata__region" not in mailbox.group_key_type.__annotations__
+    assert "metadata__region" in region.group_key_type.__annotations__
+    assert "metadata__mailbox" not in region.group_key_type.__annotations__

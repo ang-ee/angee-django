@@ -16,6 +16,7 @@ from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 from anthropic.types import Message, TextBlock, Usage
 from django.core.management import call_command
@@ -23,9 +24,9 @@ from django.db import connection
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionUsage
+from pydantic_ai.messages import ModelRequest, SystemPromptPart, TextPart, UserPromptPart
 from rebac import system_context
 
-from angee.agents.backends import ChatAPI
 from angee.agents.models import InferenceModel as AbstractInferenceModel
 from angee.agents.models import InferenceProvider as AbstractInferenceProvider
 from angee.agents.models import Skill as AbstractSkill
@@ -330,7 +331,7 @@ def test_ollama_backend_keeps_an_explicit_gateway_credential() -> None:
 def test_ollama_backend_inherits_openai_protocol_without_inheriting_identity_defaults() -> None:
     """The compatible subclass inherits the protocol while owning its provider identity."""
 
-    assert OllamaInferenceBackend.chat_api == ChatAPI.OPENAI_CHAT
+    assert OllamaInferenceBackend._build_model is OpenAIInferenceBackend._build_model
     assert OllamaInferenceBackend.effective_defaults() == {
         "name": "Ollama",
         "status": "draft",
@@ -566,65 +567,34 @@ def test_anthropic_backend_refresh_syncs_native_and_broker_models(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_anthropic_model_chat_uses_sdk_messages_and_strips_broker_prefix(
-    agents_tables: None,
-    monkeypatch: Any,
-) -> None:
-    """Direct model chat uses the Anthropic SDK without provisioning an agent."""
-
-    del agents_tables
-    _FakeAnthropicClient.instances.clear()
-    monkeypatch.setattr(AnthropicInferenceBackend, "client_class", _FakeAnthropicClient)
-    provider = _provider(
-        "anthropic-chat",
-        backend_class="anthropic",
-        name="Anthropic",
-        material={"api_key": "api-key"},
-    )
+def test_anthropic_model_chat_uses_native_messages_and_strips_broker_prefix(agents_tables, inference_http):
+    provider = _provider("anthropic-chat", backend_class="anthropic", name="Anthropic", material={"api_key": "api-key"})
     with system_context(reason="test anthropic chat"):
         model = InferenceModel.objects.create(provider=provider, name="anthropic/claude-sonnet-4-6")
-
     response = model.chat(
-        [
-            {"role": "system", "content": "Be brief."},
-            {"role": "user", "content": "Ping"},
-        ],
-        system="Policy",
-        max_tokens=12,
-        temperature=0.2,
-        options={"top_p": 0.9},
+        [ModelRequest(parts=[SystemPromptPart("Policy"), SystemPromptPart("Be brief."), UserPromptPart("Ping")])],
+        model_settings={"max_tokens": 12, "temperature": 0.2, "top_p": 0.9},
     )
-
-    client = _FakeAnthropicClient.instances[-1]
-    assert client.kwargs == {"api_key": "api-key"}
-    assert client.messages.calls == [
-        {
-            "model": "claude-sonnet-4-6",
-            "messages": [{"role": "user", "content": "Ping"}],
-            "max_tokens": 12,
-            "system": "Policy\n\nBe brief.",
-            "temperature": 0.2,
-            "top_p": 0.9,
-        }
-    ]
+    requests, clients = inference_http
+    payload = json.loads(requests[-1].content)
+    assert payload["model"] == "claude-sonnet-4-6"
+    assert payload["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Ping"}]}]
+    assert payload["max_tokens"] == 12
+    assert payload["temperature"] == 0.2
+    assert payload["top_p"] == 0.9
+    assert "Policy" in json.dumps(payload["system"])
+    assert "Be brief." in json.dumps(payload["system"])
     assert response.text == "pong"
-    assert response.content == [{"citations": None, "type": "text", "text": "pong"}]
-    assert response.usage["input_tokens"] == 3
-    assert response.usage["output_tokens"] == 1
-    assert response.usage["service_tier"] is None
-    assert response.raw["id"] == "msg_1"
+    assert response.usage.input_tokens == 3
+    assert response.usage.output_tokens == 1
+    assert response.provider_response_id == "msg_1"
+    assert all(client.is_closed() for client in clients)
 
 
 @pytest.mark.django_db(transaction=True)
-def test_anthropic_backend_uses_auth_token_for_oauth_credentials(
-    agents_tables: None,
-    monkeypatch: Any,
-) -> None:
-    """OAuth Anthropic credentials bind as bearer auth, not API-key auth."""
+def test_anthropic_backend_uses_auth_token_for_oauth_credentials(agents_tables, inference_http):
+    from angee.agents.runtimes import ANTHROPIC_OAUTH_SYSTEM_PREAMBLE
 
-    del agents_tables
-    _FakeAnthropicClient.instances.clear()
-    monkeypatch.setattr(AnthropicInferenceBackend, "client_class", _FakeAnthropicClient)
     provider = _provider(
         "anthropic-oauth-chat",
         kind=CredentialKind.OAUTH,
@@ -634,39 +604,20 @@ def test_anthropic_backend_uses_auth_token_for_oauth_credentials(
     )
     with system_context(reason="test anthropic oauth chat"):
         model = InferenceModel.objects.create(provider=provider, name="claude-sonnet-4-6")
-
-    assert model.chat([{"role": "user", "content": "Ping"}]).text == "pong"
-    assert _FakeAnthropicClient.instances[-1].kwargs == {
-        "auth_token": "oauth-token",
-        "default_headers": {
-            "anthropic-beta": "oauth-2025-04-20,claude-code-20250219",
-            "user-agent": "claude-cli/1.0.130 (external, cli)",
-            "x-app": "cli",
-        },
-    }
+    assert model.chat([ModelRequest(parts=[UserPromptPart("Ping")])]).text == "pong"
+    requests, clients = inference_http
+    assert requests[-1].headers["authorization"] == "Bearer oauth-token"
+    assert "oauth-2025-04-20" in requests[-1].headers["anthropic-beta"]
+    assert json.loads(requests[-1].content)["system"][0] == {"type": "text", "text": ANTHROPIC_OAUTH_SYSTEM_PREAMBLE}
+    assert all(client.is_closed() for client in clients)
 
 
-@pytest.mark.django_db(transaction=True)
-def test_anthropic_chat_rejects_options_that_override_owned_request_fields(
-    agents_tables: None,
-    monkeypatch: Any,
-) -> None:
-    """Provider-specific options cannot replace the selected catalogue model."""
+def test_workflow_options_preserve_native_settings_and_vendor_body_fields():
+    from angee.workflows_agents.steps import _model_settings
 
-    del agents_tables
-    _FakeAnthropicClient.instances.clear()
-    monkeypatch.setattr(AnthropicInferenceBackend, "client_class", _FakeAnthropicClient)
-    provider = _provider(
-        "anthropic-owned-options",
-        backend_class="anthropic",
-        name="Anthropic",
-        material={"api_key": "api-key"},
-    )
-    with system_context(reason="test anthropic options guard"):
-        model = InferenceModel.objects.create(provider=provider, name="claude-sonnet-4-6")
-
-    with pytest.raises(ValueError, match="model"):
-        model.chat([{"role": "user", "content": "Ping"}], options={"model": "other"})
+    assert _model_settings(
+        {"options": {"top_p": 0.9, "metadata": {"user_id": "example"}}, "max_tokens": 12, "temperature": None}
+    ) == {"max_tokens": 12, "top_p": 0.9, "extra_body": {"metadata": {"user_id": "example"}}}
 
 
 @pytest.mark.django_db(transaction=True)
@@ -750,73 +701,34 @@ def test_openai_backend_rejects_oauth_credentials(
         model = InferenceModel.objects.create(provider=provider, name="gpt-4.1")
 
     with pytest.raises(ValueError, match="does not support OAuth"):
-        model.chat([{"role": "user", "content": "Ping"}])
+        model.chat([ModelRequest(parts=[UserPromptPart("Ping")])])
     assert _FakeOpenAIClient.instances == []
 
 
 @pytest.mark.django_db(transaction=True)
-def test_openai_model_chat_uses_sdk_chat_completions_and_strips_broker_prefix(
-    agents_tables: None,
-    monkeypatch: Any,
-) -> None:
-    """Direct model chat uses the OpenAI SDK without provisioning an agent."""
-
-    del agents_tables
-    _FakeOpenAIClient.instances.clear()
-    monkeypatch.setattr(OpenAIInferenceBackend, "client_class", _FakeOpenAIClient)
-    provider = _provider(
-        "openai-chat",
-        backend_class="openai",
-        name="OpenAI",
-        material={"api_key": "api-key"},
-    )
+def test_openai_model_chat_uses_native_messages_and_strips_broker_prefix(agents_tables, inference_http):
+    provider = _provider("openai-chat", backend_class="openai", name="OpenAI", material={"api_key": "api-key"})
     with system_context(reason="test openai chat"):
         model = InferenceModel.objects.create(provider=provider, name="openai/gpt-4.1")
-
     response = model.chat(
-        [{"role": "user", "content": "Ping"}],
-        system="Policy",
-        max_tokens=12,
-        temperature=0.2,
-        options={"top_p": 0.9},
+        [ModelRequest(parts=[SystemPromptPart("Policy"), UserPromptPart("Ping")])],
+        model_settings={"max_tokens": 12, "temperature": 0.2, "top_p": 0.9},
     )
-
-    client = _FakeOpenAIClient.instances[-1]
-    assert client.kwargs == {"api_key": "api-key"}
-    assert client.chat.completions.calls == [
-        {
-            "model": "gpt-4.1",
-            "messages": [
-                {"role": "system", "content": "Policy"},
-                {"role": "user", "content": "Ping"},
-            ],
-            "max_tokens": 12,
-            "temperature": 0.2,
-            "top_p": 0.9,
-        }
-    ]
-    assert response.text == "pong"
-    assert response.content == [{"type": "text", "text": "pong"}]
-    assert response.usage == {
-        "prompt_tokens": 3,
-        "completion_tokens": 1,
-        "total_tokens": 4,
-        "prompt_tokens_details": None,
-        "completion_tokens_details": None,
-    }
-    assert response.raw["id"] == "chatcmpl_1"
+    requests, clients = inference_http
+    payload = json.loads(requests[-1].content)
+    assert payload["model"] == "gpt-4.1"
+    assert payload["messages"] == [{"role": "system", "content": "Policy"}, {"role": "user", "content": "Ping"}]
+    assert payload["max_tokens"] == 12
+    assert "max_completion_tokens" not in payload
+    assert payload["temperature"] == 0.2 and payload["top_p"] == 0.9
+    assert response.text == "pong" and isinstance(response.parts[0], TextPart)
+    assert response.usage.input_tokens == 3 and response.usage.output_tokens == 1
+    assert response.provider_response_id == "chatcmpl_1"
+    assert all(client.is_closed() for client in clients)
 
 
 @pytest.mark.django_db(transaction=True)
-def test_openai_backend_can_configure_max_completion_tokens(
-    agents_tables: None,
-    monkeypatch: Any,
-) -> None:
-    """OpenAI owns the max-token wire field but lets provider config pick the SDK parameter."""
-
-    del agents_tables
-    _FakeOpenAIClient.instances.clear()
-    monkeypatch.setattr(OpenAIInferenceBackend, "client_class", _FakeOpenAIClient)
+def test_openai_backend_can_configure_max_completion_tokens(agents_tables, inference_http):
     provider = _provider(
         "openai-max-completion",
         backend_class="openai",
@@ -826,29 +738,137 @@ def test_openai_backend_can_configure_max_completion_tokens(
     )
     with system_context(reason="test openai max tokens"):
         model = InferenceModel.objects.create(provider=provider, name="gpt-4.1")
+    assert model.chat([ModelRequest(parts=[UserPromptPart("Ping")])], model_settings={"max_tokens": 8}).text == "pong"
+    requests, clients = inference_http
+    payload = json.loads(requests[-1].content)
+    assert payload["max_completion_tokens"] == 8 and "max_tokens" not in payload
+    assert all(client.is_closed() for client in clients)
 
-    assert model.chat([{"role": "user", "content": "Ping"}], max_tokens=8).text == "pong"
-    assert _FakeOpenAIClient.instances[-1].chat.completions.calls[-1]["max_completion_tokens"] == 8
+
+@pytest.mark.parametrize("options", [{"model": "other"}, {"extra_body": {"messages": []}}])
+def test_workflow_options_cannot_replace_owned_request_fields(options):
+    from angee.workflows_agents.steps import _model_settings
+
+    with pytest.raises(ValueError, match="owned"):
+        _model_settings({"options": options, "max_tokens": 12, "temperature": None})
+
+
+@pytest.fixture()
+def inference_http(monkeypatch, request):
+    """Exercise real SDK/native adapters while replacing only HTTP transport."""
+    from django.utils.module_loading import import_string
+
+    scenario = getattr(request, "param", "success")
+    requests = []
+    clients = []
+
+    async def respond(self, request):
+        content = b"".join([chunk async for chunk in request.stream])
+        requests.append(httpx.Request(request.method, request.url, headers=request.headers, content=content))
+        if isinstance(scenario, int):
+            return httpx.Response(
+                scenario, json={"error": {"message": "provider rejected request", "type": "test"}}, request=request
+            )
+        if scenario == "tool":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "call-response",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-4.1",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call-1",
+                                        "type": "function",
+                                        "function": {"name": "lookup", "arguments": '{"key":"value"}'},
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+                },
+                request=request,
+            )
+        response = (
+            _FakeAnthropicMessages(None).create()
+            if request.url.path.endswith("/messages")
+            else _FakeOpenAICompletions(None).create()
+        )
+        return httpx.Response(200, json=response.model_dump(mode="json"), request=request)
+
+    def client_class(path):
+        cls = import_string(path)
+
+        def build(**kwargs):
+            kwargs.setdefault("http_client", httpx.AsyncClient())
+            kwargs.setdefault("base_url", "https://provider.invalid/v1")
+            kwargs["max_retries"] = 0
+            client = cls(**kwargs)
+            clients.append(client)
+            return client
+
+        return build
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", respond)
+    monkeypatch.setattr("angee.agents.sdk_backends.import_string", client_class)
+    return requests, clients
 
 
 @pytest.mark.django_db(transaction=True)
-def test_openai_chat_rejects_options_that_override_owned_request_fields(
-    agents_tables: None,
-    monkeypatch: Any,
-) -> None:
-    """Provider-specific options cannot replace the selected catalogue model."""
+@pytest.mark.parametrize("inference_http", ["tool"], indirect=True)
+def test_direct_native_request_returns_tool_calls_without_executing_a_loop(agents_tables, inference_http):
+    from pydantic_ai.messages import ToolCallPart
+    from pydantic_ai.models import ModelRequestParameters
+    from pydantic_ai.tools import ToolDefinition
 
-    del agents_tables
-    _FakeOpenAIClient.instances.clear()
-    monkeypatch.setattr(OpenAIInferenceBackend, "client_class", _FakeOpenAIClient)
-    provider = _provider(
-        "openai-owned-options",
-        backend_class="openai",
-        name="OpenAI",
-        material={"api_key": "api-key"},
+    provider = _provider("openai-tools", backend_class="openai", material={"api_key": "api-key"})
+    response = provider.chat(
+        model="gpt-4.1",
+        messages=[ModelRequest(parts=[UserPromptPart("Look up a value")])],
+        model_request_parameters=ModelRequestParameters(
+            function_tools=[
+                ToolDefinition(
+                    name="lookup",
+                    parameters_json_schema={
+                        "type": "object",
+                        "properties": {"key": {"type": "string"}},
+                        "required": ["key"],
+                    },
+                )
+            ]
+        ),
     )
-    with system_context(reason="test openai options guard"):
-        model = InferenceModel.objects.create(provider=provider, name="gpt-4.1")
+    requests, clients = inference_http
+    assert len(requests) == 1
+    assert json.loads(requests[0].content)["tools"][0]["function"]["name"] == "lookup"
+    assert isinstance(response.parts[0], ToolCallPart)
+    assert response.parts[0].args_as_dict() == {"key": "value"}
+    assert response.usage.total_tokens == 5
+    assert all(client.is_closed() for client in clients)
 
-    with pytest.raises(ValueError, match="model"):
-        model.chat([{"role": "user", "content": "Ping"}], options={"model": "other"})
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("inference_http,retryable", [(429, True), (400, False)], indirect=["inference_http"])
+def test_native_provider_errors_preserve_retry_classification_and_close_clients(
+    agents_tables, inference_http, retryable
+):
+    from pydantic_ai.exceptions import ModelHTTPError
+
+    from angee.workflows_agents.steps import _is_retryable_provider_error
+
+    provider = _provider("openai-errors", backend_class="openai", material={"api_key": "api-key"})
+    with pytest.raises(ModelHTTPError) as error:
+        provider.chat(model="gpt-4.1", messages=[ModelRequest(parts=[UserPromptPart("Fail")])])
+    requests, clients = inference_http
+    assert len(requests) == 1
+    assert _is_retryable_provider_error(error.value) is retryable
+    assert all(client.is_closed() for client in clients)

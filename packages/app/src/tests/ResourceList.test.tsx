@@ -173,7 +173,6 @@ vi.mock("@angee/ui/runtime", async (importOriginal) => {
 vi.mock("@refinedev/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@refinedev/core")>();
   const mutationResult = (
-    action: "create" | "update",
     mutateAsync: (input: { id?: string | number; values?: Record<string, unknown> }) => Promise<{ data: Row | null }>,
   ) => () => ({
     mutateAsync,
@@ -182,39 +181,6 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   });
   return {
     ...actual,
-    useForm: (options?: {
-      action?: "create" | "edit";
-      id?: string | number;
-      queryOptions?: { enabled?: boolean };
-    }) => {
-      const queryEnabled = options?.queryOptions?.enabled !== false;
-      const record = queryEnabled
-        ? sdkMocks.rows.find((row) => String(row.id) === String(options?.id))
-        : undefined;
-      return {
-        id: options?.id,
-        setId: vi.fn(),
-        query: {
-          data: { data: record },
-          isFetching: false,
-          error: null,
-          refetch: vi.fn(),
-        },
-        mutation: { isPending: false, error: null, status: "idle" },
-        formLoading: false,
-        onFinish: async (values: Record<string, unknown>) => ({
-          data: await sdkMocks.mutate({
-            data: options?.action === "edit"
-              ? ({ ...values, id: options?.id } as Row)
-              : (values as Row),
-          }),
-        }),
-        redirect: vi.fn(),
-        overtime: {},
-        autoSaveProps: { status: "idle", data: undefined, error: null },
-        onFinishAutoSave: vi.fn(),
-      };
-    },
     useOne: (options?: { id?: string | number }) => ({
       result:
         sdkMocks.rows.find((row) => String(row.id) === String(options?.id))
@@ -225,10 +191,10 @@ vi.mock("@refinedev/core", async (importOriginal) => {
         refetch: vi.fn(),
       },
     }),
-    useCreate: mutationResult("create", async ({ values = {} }) => ({
+    useCreate: mutationResult(async ({ values = {} }) => ({
       data: await sdkMocks.mutate({ data: values as Row }),
     })),
-    useUpdate: mutationResult("update", async ({ id, values = {} }) => ({
+    useUpdate: mutationResult(async ({ id, values = {} }) => ({
       data: await sdkMocks.mutate({ data: { ...values, id } as Row }),
     })),
     useCustomMutation: () => ({
@@ -283,63 +249,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   };
 });
 
-vi.mock("@refinedev/react-hook-form", async () => {
-  const hookForm = await import("react-hook-form");
-  return {
-    useForm: (options: {
-      defaultValues?: Record<string, unknown>;
-      refineCoreProps?: {
-        action?: "create" | "edit";
-        id?: string | number;
-        queryOptions?: { enabled?: boolean };
-      };
-    } = {}) => {
-      const form = hookForm.useForm({ defaultValues: options.defaultValues });
-      const queryEnabled =
-        options.refineCoreProps?.queryOptions?.enabled !== false;
-      const record = queryEnabled
-        ? sdkMocks.rows.find(
-            (row) => String(row.id) === String(options.refineCoreProps?.id),
-          )
-        : undefined;
-      const refineCore = {
-        id: options.refineCoreProps?.id,
-        setId: vi.fn(),
-        query: {
-          data: { data: record },
-          isFetching: false,
-          error: null,
-          refetch: vi.fn(),
-        },
-        mutation: { isPending: false, error: null, status: "idle" },
-        formLoading: false,
-        onFinish: async (values: Record<string, unknown>) => ({
-          data: await sdkMocks.mutate({
-            data: options.refineCoreProps?.action === "edit"
-              ? ({ ...values, id: options.refineCoreProps?.id } as Row)
-              : (values as Row),
-          }),
-        }),
-        redirect: vi.fn(),
-        overtime: {},
-        autoSaveProps: { status: "idle", data: undefined, error: null },
-        onFinishAutoSave: vi.fn(),
-      };
-      return {
-        ...form,
-        refineCore,
-        saveButtonProps: {
-          disabled: false,
-          onClick: (event: unknown) => {
-            void form.handleSubmit((values) => refineCore.onFinish(values))(
-              event as never,
-            );
-          },
-        },
-      };
-    },
-  };
-});
+
 
 function angeeOrderFromSorters(
   sorters: Array<{ field: string; order: "asc" | "desc" }> | undefined,
@@ -490,80 +400,7 @@ function refineSnakeToCamel(field: string): string {
     .replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
 }
 
-vi.mock("@refinedev/react-table", async () => {
-  const TanStackTable = await import("@tanstack/react-table");
-  return {
-    useTable: (options: {
-      columns?: unknown[];
-      state?: { pagination?: { pageIndex?: number; pageSize?: number } };
-      getRowId?: (row: Row, index: number) => string;
-      refineCoreProps?: {
-        pagination?: { currentPage?: number; pageSize?: number };
-        sorters?: { initial?: Array<{ field: string; order: "asc" | "desc" }> };
-        filters?: {
-          initial?: RefineFilter[];
-          permanent?: RefineFilter[];
-        };
-        queryOptions?: { enabled?: boolean };
-      };
-      onExpandedChange?: (updater: unknown) => void;
-      onRowSelectionChange?: (updater: unknown) => void;
-    }) => {
-      const props = options.refineCoreProps ?? {};
-      const pageSize =
-        props.pagination?.pageSize ?? options.state?.pagination?.pageSize ?? 50;
-      const requestedPage =
-        props.pagination?.currentPage
-        ?? ((options.state?.pagination?.pageIndex ?? 0) + 1);
-      const active = props.queryOptions?.enabled !== false;
-      const filters = whereFromRefineFilters(
-        props.filters?.permanent ?? props.filters?.initial,
-      );
-      const order = angeeOrderFromSorters(props.sorters?.initial);
-      sdkMocks.listCalls.push({
-        page: requestedPage,
-        pageSize,
-        filter: filters,
-        order,
-        enabled: active,
-      });
-      const matchingRows = active
-        ? refineRowsForWhere(sdkMocks.rows, filters)
-        : [];
-      const pageCount = Math.max(1, Math.ceil(matchingRows.length / pageSize));
-      const page = Math.min(pageCount, Math.max(1, requestedPage));
-      const rows = matchingRows.slice((page - 1) * pageSize, page * pageSize);
-      const reactTable = TanStackTable.useReactTable<Row>({
-        data: rows,
-        columns: options.columns as never[],
-        state: options.state as never,
-        getCoreRowModel: TanStackTable.getCoreRowModel(),
-        // Mirror the surface's row models: grouping/expansion resolve through
-        // TanStack, so the mock must supply the same factories.
-        getGroupedRowModel: TanStackTable.getGroupedRowModel(),
-        getExpandedRowModel: TanStackTable.getExpandedRowModel(),
-        onExpandedChange: options.onExpandedChange as never,
-        onRowSelectionChange: options.onRowSelectionChange as never,
-        getRowId: options.getRowId,
-        autoResetPageIndex: false,
-        autoResetExpanded: false,
-      });
-      return {
-        reactTable,
-        refineCore: {
-          result: { data: rows, total: active ? matchingRows.length : undefined },
-          setFilters: vi.fn(),
-          tableQuery: {
-            isFetching: false,
-            error: null,
-            refetch: vi.fn(),
-          },
-        },
-      };
-    },
-  };
 
-});
 
 vi.mock("@angee/refine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/refine")>();

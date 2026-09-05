@@ -206,7 +206,7 @@ export function StoragePage(): ReactElement {
       const loadingParents = new Set<string>();
       for (const request of activeExpandedFolders) {
         const query = folderChildQueries.get(request.key);
-        if (query?.fetching) loadingParents.add(request.parent);
+        if (query?.isFetching) loadingParents.add(request.parent);
         if (query?.data === undefined) continue;
         resolvedParents.add(request.parent);
         folders.push(...query.data.folders);
@@ -446,7 +446,7 @@ export function StoragePage(): ReactElement {
       onRootChange={handleRootChange}
       renderTree={renderTree}
       renderNavigatorFooter={renderNavigatorFooter}
-      loading={drivesQuery.fetching && drives.length === 0}
+      loading={drivesQuery.isFetching && drives.length === 0}
       loadingContent={<LoadingPanel message={t("loading")} />}
       emptyContent={
         <EmptyState
@@ -468,7 +468,7 @@ export function StoragePage(): ReactElement {
           controller={controller}
           openFileId={openFileId}
           openFile={openFile}
-          openFileFetching={openFileQuery.fetching}
+          openFileFetching={openFileQuery.isFetching}
           uploads={uploads}
           fileActions={fileActions}
           closeDetail={closeDetail}

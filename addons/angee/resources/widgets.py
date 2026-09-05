@@ -5,12 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from angee.base.identity import instance_from_public_id
 from django.apps import apps
 from django.db import models
 from import_export import widgets
-
-from angee.resources.entries import resolve_model
 
 
 class XrefWidgetMixin:
@@ -117,8 +114,7 @@ def resolve_xref(
     if len(matches) > 1:
         raise ValueError(f"ambiguous xref {value!r}")
     ledger = matches[0]
-    model = resolve_model(str(getattr(ledger, "target_model")))
-    target = instance_from_public_id(model, str(getattr(ledger, "target_id")))
+    target = ledger.target_instance()
     if target is None:
         raise ValueError(f"xref {value!r} has no ORM target")
     return target

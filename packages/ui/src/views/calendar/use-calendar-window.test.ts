@@ -33,7 +33,7 @@ vi.mock("@angee/refine", () => ({
     options: unknown,
   ) => {
     authored.calls.push({ variables, options });
-    return { data: authored.data, fetching: false, error: null, refetch: () => {} };
+    return { data: authored.data, isFetching: false, error: null, refetch: () => {} };
   },
 }));
 

@@ -28,7 +28,7 @@ export function useRunningAgents(): {
   running: readonly AgentRosterItem[];
   loading: boolean;
 } {
-  const { data, fetching } = useAuthoredQuery(AgentRoster, undefined, {
+  const { data, isFetching: fetching } = useAuthoredQuery(AgentRoster, undefined, {
     models: ["agents.Agent"],
   });
   const running = React.useMemo(

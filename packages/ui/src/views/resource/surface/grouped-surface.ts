@@ -7,11 +7,11 @@ import { useUiT } from "../../../i18n";
 import { type ResourceListOrder } from "../resource-view-model";
 import { estimateGroupedItemSize, groupFieldLabel, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures } from "../resource-view-list-body";
 import { listBatchTarget, requireDataResource, useAggregateOperation, useGroupOperation } from "../resource-operations";
-import { modelRowId } from "../resource-view-codecs";
+import { modelRowId, idsFromRowSelectionState } from "../resource-view-codecs";
 import { buildGroupedRenderModel, groupedPageWindow, groupScopesEqual, normaliseScopePage, type GroupedRenderParams } from "../resource-view-grouped-model";
 import { useResourceViewTableChrome } from "./presentation";
 import { listResultFromPageState, useResourceRowsSnapshot, useResourceViewQueryFacts, useResourceViewTableState } from "./table-state";
-import { EMPTY_ARRAY, EMPTY_EXPANDED_KEYS, EMPTY_LEAF_RESULTS, EMPTY_SELECTED_IDS } from "./types";
+import { EMPTY_ARRAY, EMPTY_EXPANDED_KEYS, EMPTY_LEAF_RESULTS } from "./types";
 import type { GroupedResourceViewSurface, ResourceListResult, UseResourceViewSurfaceProps } from "./types";
 /**
  * The server-grouped list surface: the one owner of a folded group view's render
@@ -55,8 +55,8 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     [sortOrder, order],
   );
   const rowGroupStack = groupStack ?? resourceView.state.groupStack;
-  const rootPage = resourceView.state.page;
-  const statePageSize = resourceView.state.pageSize;
+  const rootPage = (resourceView.state.pagination.pageIndex + 1);
+  const statePageSize = resourceView.state.pagination.pageSize;
 
   // Shared table state plus per-group/footer measures.
   const tableState = useResourceViewTableState({
@@ -357,7 +357,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     visibleFields,
     toggleVisibleField,
     rowModels,
-    selectedIds: resourceView.state.selectedIds ?? EMPTY_SELECTED_IDS,
+    selectedIds: idsFromRowSelectionState(resourceView.state.rowSelection),
     expandedKeys,
     toggleGroup,
     tableScrollRef,

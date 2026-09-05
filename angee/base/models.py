@@ -24,7 +24,6 @@ from rebac import (
     to_object_ref,
     write_relationships,
 )
-from rebac.actors import is_sudo as ambient_is_sudo
 from rebac.actors import to_subject_ref
 from rebac.errors import MissingActorError, NoActorResolvedError, PermissionDenied
 from rebac.managers import RebacManager, RebacQuerySet
@@ -129,18 +128,12 @@ class _PublicIdQuerySetMixin(Generic[_ModelT]):
         try:
             lookup = cast(Any, self.model).public_id_lookup(value)
             return cast(_ModelT | None, cast(Any, self).filter(**lookup).first())
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
 
 
 class AngeeQuerySet(_PublicIdQuerySetMixin[_ModelT], RebacQuerySet[_ModelT]):
     """QuerySet API shared by Angee source and runtime models."""
-
-    def apply_ambient_scope(self) -> Self:
-        """Eagerly apply REBAC row scope using the queryset or ambient actor."""
-
-        self._apply_scope_in_place()
-        return self
 
     def lock_if_supported(self, *, of: tuple[str, ...] = ("self",)) -> Self:
         """Apply a self-scoped row lock only on database backends that support it."""
@@ -156,31 +149,6 @@ class AngeeQuerySet(_PublicIdQuerySetMixin[_ModelT], RebacQuerySet[_ModelT]):
         """Return one row under a database row lock when the backend supports it."""
 
         return self.lock_if_supported().get(*args, **kwargs)
-
-    def scoped_for_aggregate(self) -> Self:
-        """Return a row-scoped queryset safe for permission-naive aggregation.
-
-        Aggregate compilers run through ``.values()``/``.aggregate()`` shapes
-        whose dict rows field-read redaction cannot touch, so field redaction is
-        disabled and REBAC row scope is applied eagerly. It fails closed: a
-        REBAC-typed model with no actor and no sudo bypass returns an empty
-        queryset rather than leaking every row, independent of
-        ``REBAC_STRICT_MODE``. An explicit sudo — per-queryset ``.sudo()`` or an
-        ambient ``system_context`` — aggregates across all rows, unscoped, by
-        design.
-        """
-
-        queryset = cast(Self, self.on_field_deny("allow"))
-        if queryset.is_sudo() or ambient_is_sudo():
-            return queryset
-        actor = queryset.actor() or current_actor()
-        if actor is None:
-            if model_resource_type(self.model):
-                return cast(Self, queryset.none())
-            return queryset
-        if not model_resource_type(self.model):
-            return queryset
-        return queryset.apply_ambient_scope()
 
 
 class AngeeUnscopedQuerySet(_PublicIdQuerySetMixin[_ModelT], models.QuerySet[_ModelT]):
@@ -509,8 +477,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
         if definition is None:
             return [
                 checks.Error(
-                    f"{cls._meta.label}.rebac_grantable has no compiled zed definition "
-                    f"for {resource_type!r}.",
+                    f"{cls._meta.label}.rebac_grantable has no compiled zed definition for {resource_type!r}.",
                     obj=cls,
                     id="angee.E015",
                 )
@@ -651,8 +618,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
         """Return whether this donor declares semantic members of its own."""
 
         return any(
-            name not in EXTENSION_DONOR_STRUCTURAL_MEMBERS
-            and not _is_inherited_abstract_field_member(cls, name)
+            name not in EXTENSION_DONOR_STRUCTURAL_MEMBERS and not _is_inherited_abstract_field_member(cls, name)
             for name in cls.__dict__
         )
 
@@ -662,9 +628,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
 
         donor = f"{cls.__module__}.{cls.__name__}"
         if not cls._meta.abstract:
-            raise ImproperlyConfigured(
-                f"{donor} cannot compose as a same-row extension because it is not abstract."
-            )
+            raise ImproperlyConfigured(f"{donor} cannot compose as a same-row extension because it is not abstract.")
         seen: set[type[models.Model]] = set()
         for base in bases:
             if base in seen:

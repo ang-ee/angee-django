@@ -11,12 +11,13 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from angee.base.identity import instance_from_public_id, public_id_for
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db.models import Q
 from django.http import HttpRequest
-from rebac import app_settings, system_context
+from rebac import subject_id_attr, system_context
+
+from angee.base.identity import instance_from_public_id, public_id_for
 
 
 def user_label(user: Any) -> str:
@@ -90,7 +91,7 @@ def user_display_labels(
         for user_id in missing:
             try:
                 pk_values.append(pk.to_python(user_id))
-            except (TypeError, ValueError, ValidationError):
+            except TypeError, ValueError, ValidationError:
                 continue
         if pk_values:
             lookup |= Q(**{f"{pk.name}__in": pk_values})
@@ -98,7 +99,7 @@ def user_display_labels(
         for user_id in missing:
             try:
                 lookup |= Q(**public_lookup(str(user_id)))
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 continue
 
     fetched: dict[str, str] = {}
@@ -145,8 +146,8 @@ def user_principal(principal_id: str) -> Any:
 
     user_model = get_user_model()
     lookups: list[dict[str, Any]] = []
-    subject_id_attr = str(getattr(user_model._meta, "rebac_id_attr", None) or app_settings.REBAC_USER_ID_ATTR)
-    lookups.append({subject_id_attr: principal_id})
+    attribute = subject_id_attr(user_model)
+    lookups.append({attribute: principal_id})
     public_lookup = getattr(user_model, "public_id_lookup", None)
     if callable(public_lookup):
         lookups.append(public_lookup(principal_id))

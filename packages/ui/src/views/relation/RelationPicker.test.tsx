@@ -27,7 +27,8 @@ import { testDataResource } from "@angee/metadata/testing";
 import type {
   Row,
 } from "@angee/metadata";
-import { type ReactElement } from "react";
+import { useState, type ReactElement } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
@@ -48,36 +49,6 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@refinedev/core")>();
   return {
     ...actual,
-    useForm: (options?: {
-      action?: "create" | "edit";
-      id?: string | number;
-      queryOptions?: { enabled?: boolean };
-    }) => {
-      const queryEnabled = options?.queryOptions?.enabled !== false;
-      return {
-        id: options?.id,
-        setId: vi.fn(),
-        query: {
-          data: { data: queryEnabled ? sdkMocks.record ?? undefined : undefined },
-          isFetching: false,
-          error: null,
-          refetch: vi.fn(),
-        },
-        mutation: { isPending: false, error: null, status: "idle" },
-        formLoading: false,
-        onFinish: async (values: Record<string, unknown>) => ({
-          data: await sdkMocks.mutate({
-            data: options?.action === "edit"
-              ? ({ ...values, id: options?.id } as Row)
-              : (values as Row),
-          }),
-        }),
-        redirect: vi.fn(),
-        overtime: {},
-        autoSaveProps: { status: "idle", data: undefined, error: null },
-        onFinishAutoSave: vi.fn(),
-      };
-    },
     useOne: () => ({
       result: sdkMocks.record ?? undefined,
       query: { isFetching: false, error: null, refetch: vi.fn() },
@@ -111,60 +82,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   };
 });
 
-vi.mock("@refinedev/react-hook-form", async () => {
-  const hookForm = await import("react-hook-form");
-  return {
-    useForm: (options: {
-      defaultValues?: Record<string, unknown>;
-      refineCoreProps?: {
-        action?: "create" | "edit";
-        id?: string | number;
-        queryOptions?: { enabled?: boolean };
-      };
-    } = {}) => {
-      const form = hookForm.useForm({ defaultValues: options.defaultValues });
-      const queryEnabled =
-        options.refineCoreProps?.queryOptions?.enabled !== false;
-      const refineCore = {
-        id: options.refineCoreProps?.id,
-        setId: vi.fn(),
-        query: {
-          data: {
-            data: queryEnabled ? sdkMocks.record ?? undefined : undefined,
-          },
-          isFetching: false,
-          error: null,
-          refetch: vi.fn(),
-        },
-        mutation: { isPending: false, error: null, status: "idle" },
-        formLoading: false,
-        onFinish: async (values: Record<string, unknown>) => ({
-          data: await sdkMocks.mutate({
-            data: options.refineCoreProps?.action === "edit"
-              ? ({ ...values, id: options.refineCoreProps?.id } as Row)
-              : (values as Row),
-          }),
-        }),
-        redirect: vi.fn(),
-        overtime: {},
-        autoSaveProps: { status: "idle", data: undefined, error: null },
-        onFinishAutoSave: vi.fn(),
-      };
-      return {
-        ...form,
-        refineCore,
-        saveButtonProps: {
-          disabled: false,
-          onClick: (event: unknown) => {
-            void form.handleSubmit((values) => refineCore.onFinish(values))(
-              event as never,
-            );
-          },
-        },
-      };
-    },
-  };
-});
+
 
 const options = [
   { value: "client-1", label: "Acme OAuth" },
@@ -323,6 +241,13 @@ describe("RelationPicker edit affordance", () => {
   });
 });
 
+function QueryOwner({ children }: { children: ReactElement }): ReactElement {
+  const [queryClient] = useState(() => new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+  }));
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+}
+
 function wrap(children: ReactElement): ReactElement {
   const rootRoute = createRootRoute();
   const indexRoute = createRoute({
@@ -335,6 +260,7 @@ function wrap(children: ReactElement): ReactElement {
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   return (
+    <QueryOwner>
     <RouterContextProvider router={router}>
       <ModalsHost>
         <ToastProvider>
@@ -346,6 +272,7 @@ function wrap(children: ReactElement): ReactElement {
         </ToastProvider>
       </ModalsHost>
     </RouterContextProvider>
+    </QueryOwner>
   );
 }
 

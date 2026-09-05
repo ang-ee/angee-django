@@ -229,7 +229,7 @@ export function KnowledgePage(): ReactElement {
       onRootChange={closePage}
       renderTree={renderTree}
       renderNavigatorFooter={renderNavigatorFooter}
-      loading={vaultsQuery.fetching && vaults.length === 0}
+      loading={vaultsQuery.isFetching && vaults.length === 0}
       loadingContent={<LoadingPanel message={t("loading")} />}
       emptyContent={
         <EmptyState
@@ -252,7 +252,7 @@ export function KnowledgePage(): ReactElement {
           pages={pages}
           openPageId={openPageId}
           detail={detail}
-          detailFetching={detailQuery.fetching}
+          detailFetching={detailQuery.isFetching}
           onOpenPage={openPage}
           onTitleSaved={handleTitleSaved}
           onDeletePage={handleDeletePage}

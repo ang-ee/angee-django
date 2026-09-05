@@ -1,4 +1,4 @@
-"""Value objects for declared addon resource files and parsed rows."""
+"""Declared resource sources and native import datasets."""
 
 from __future__ import annotations
 
@@ -6,18 +6,19 @@ import json
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol, TypeAlias
 
 import tablib
 import yaml
-from angee.addons import addon_contract
 from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.utils import make_model_tuple
 from import_export.results import Result, RowResult
 
+from angee.addons import addon_contract
 from angee.resources import sources
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.tiers import ResourceTier
@@ -223,7 +224,7 @@ class ResourceEntry:
     publish: bool = False
     """Whether loaded rows should be published by a target-model resource hook."""
 
-    _rows: tuple[ResourceRow, ...] | None = field(
+    _groups: tuple[ResourceGroup, ...] | None = field(
         default=None,
         init=False,
         repr=False,
@@ -278,23 +279,79 @@ class ResourceEntry:
             self._local_path = sources.get_source(self.source_key).materialize(self)
         return self._local_path
 
-    def read_resource_rows(self) -> tuple[ResourceRow, ...]:
-        """Return parsed and normalized rows from this entry."""
+    def read_groups(self) -> tuple[ResourceGroup, ...]:
+        """Normalize this entry once into native datasets by target model."""
 
-        if self._rows is None:
-            records, file_model = self._read_records()
-            self._check_model_conflict(file_model)
-            fallback_model = self.model or file_model
-            self._rows = tuple(
-                ResourceRow.from_record(
-                    self,
-                    record,
-                    index=index,
-                    fallback_model=fallback_model,
-                )
-                for index, record in enumerate(records, start=1)
-            )
-        return self._rows
+        if self._groups is not None:
+            return self._groups
+        records, file_model = self._read_records()
+        self._check_model_conflict(file_model)
+        if not records:
+            self._groups = ()
+            return self._groups
+        fallback_model = self.model or file_model
+        if isinstance(records, tablib.Dataset):
+            headers = records.headers or []
+            if not {"model", "fields", "_meta"} & set(headers) and len(headers) == len(set(headers)):
+                self._groups = (self._tabular_group(records, fallback_model),)
+                return self._groups
+        groups: dict[tuple[str, str], ResourceGroup] = {}
+        for index, record in enumerate(self._record_mappings(records), start=1):
+            model_label = record.get("model") or fallback_model
+            if not model_label:
+                fallback_model = self.infer_model_label()
+                model_label = fallback_model
+            label = str(model_label)
+            key = self._model_key(label)
+            group = groups.get(key)
+            if group is None:
+                group = ResourceGroup(self, label, tablib.Dataset(headers=["_xref"]), [])
+                groups[key] = group
+            raw_xref = record.get("_xref") or record.get("xref")
+            xref = self._normalized_xref(raw_xref, index)
+            values = self._values_for(record)
+            for name in values:
+                if name not in group.dataset.headers:
+                    group.dataset.append_col([None] * len(group.dataset), header=name)
+            group.dataset.append([xref, *(values.get(name) for name in group.dataset.headers[1:])])
+            group.source_rows.append(index)
+        self._groups = tuple(groups.values())
+        return self._groups
+
+    def _tabular_group(self, dataset: tablib.Dataset, model_label: str | None) -> ResourceGroup:
+        """Keep the parsed rectangular Dataset and normalize its xref column."""
+
+        values = dataset["_xref"] if "_xref" in dataset.headers else [None] * len(dataset)
+        aliases = dataset["xref"] if "xref" in dataset.headers else [None] * len(dataset)
+        xrefs = [
+            self._normalized_xref(value or alias, index)
+            for index, (value, alias) in enumerate(zip(values, aliases, strict=True), start=1)
+        ]
+        for column in ("_xref", "xref"):
+            if column in dataset.headers:
+                del dataset[column]
+        dataset.insert_col(0, xrefs, header="_xref")
+        return ResourceGroup(
+            self,
+            model_label or self.infer_model_label(),
+            dataset,
+            list(range(1, len(dataset) + 1)),
+        )
+
+    def _normalized_xref(self, value: Any, index: int) -> str:
+        """Return the one technical identity column with source diagnostics."""
+
+        if not isinstance(value, str) or not value.strip():
+            raise ResourceLoadError(f"{self.display} row {index}: missing _xref")
+        return value.strip()
+
+    @staticmethod
+    def _record_mappings(records: list[dict[str, Any]] | tablib.Dataset) -> Iterable[Mapping[str, Any]]:
+        """Interpret heterogeneous tabular records only when partitioning needs it."""
+
+        if isinstance(records, tablib.Dataset):
+            return (dict(zip(records.headers, row, strict=True)) for row in records)
+        return records
 
     def read_grant_rows(self) -> tuple[GrantRow, ...]:
         """Return parsed grant rows for a ``kind = "grants"`` entry.
@@ -307,7 +364,10 @@ class ResourceEntry:
         records, file_model = self._read_records()
         if self.model or file_model:
             raise ResourceLoadError(f"{self.display}: a grants entry declares no model")
-        return tuple(GrantRow.from_record(self, record, index=index) for index, record in enumerate(records, start=1))
+        return tuple(
+            GrantRow.from_record(self, record, index=index)
+            for index, record in enumerate(self._record_mappings(records), start=1)
+        )
 
     def infer_model_label(self) -> str:
         """Infer ``app.Model`` from a ``[NNN_]app.model.ext`` filename."""
@@ -324,7 +384,7 @@ class ResourceEntry:
             raise ImproperlyConfigured(f"{self.display} must declare model or use [NNN_]app.model.ext")
         return f"{parts[0]}.{parts[1]}"
 
-    def _read_records(self) -> tuple[list[dict[str, Any]], str | None]:
+    def _read_records(self) -> tuple[list[dict[str, Any]] | tablib.Dataset, str | None]:
         """Return parsed row mappings and any file-declared model."""
 
         path = self.materialize()
@@ -379,29 +439,27 @@ class ResourceEntry:
         if not isinstance(rows, list):
             raise ImproperlyConfigured(f"{self.display}: resource data must be a list of rows")
 
-        records: list[dict[str, Any]] = []
         for index, row in enumerate(rows, start=1):
             if not isinstance(row, Mapping):
                 raise ImproperlyConfigured(f"{self.display} row {index}: row must be a mapping")
-            records.append(dict(row))
-        return records, file_model
+        return rows, file_model
 
     def _read_tabular(
         self,
         path: Path,
         file_format: str,
-    ) -> list[dict[str, Any]]:
-        """Read CSV or TSV rows with tablib."""
+    ) -> tablib.Dataset:
+        """Read CSV or TSV directly into its native import dataset."""
 
         content = path.read_text(encoding=self.encoding)
-        if not content.strip():
-            return []
         dataset = tablib.Dataset()
+        if not content.strip():
+            return dataset
         try:
             dataset.load(content, format=file_format)
         except Exception as error:
             raise ImproperlyConfigured(f"{self.display} could not be parsed as {file_format}") from error
-        return [dict(row) for row in dataset.dict]
+        return dataset
 
     def _check_model_conflict(self, file_model: str | None) -> None:
         """Raise when entry and file metadata declare different models."""
@@ -429,6 +487,25 @@ class ResourceEntry:
             expected = ", ".join(sorted(TEXT_FORMATS))
             raise ImproperlyConfigured(f"{self.display} has unsupported format {suffix!r}; expected one of {expected}")
         return file_format
+
+    @staticmethod
+    def _values_for(payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Return model field values from one resource row payload."""
+
+        if "fields" in payload:
+            fields_value = payload["fields"]
+            if not isinstance(fields_value, Mapping):
+                raise ImproperlyConfigured("resource row fields must map names")
+            # The nested form carries the model label in `_meta`, so `model` under an
+            # explicit `fields:` map is a real field name (e.g. ``agents.Agent.model``);
+            # only the truly-structural row keys are rejected here.
+            reserved = (RESERVED_ROW_KEYS - {"model"}) & set(fields_value)
+            if reserved:
+                raise ImproperlyConfigured(
+                    f"resource row fields cannot contain reserved keys: {', '.join(sorted(reserved))}"
+                )
+            return dict(fields_value)
+        return {key: value for key, value in payload.items() if key not in RESERVED_ROW_KEYS}
 
 
 @dataclass(frozen=True, slots=True)
@@ -518,71 +595,6 @@ class EntryGraph:
 
 
 @dataclass(slots=True)
-class ResourceRow:
-    """One normalized resource row."""
-
-    entry: ResourceEntry
-    """Entry that contributed this row."""
-
-    model_label: str
-    """Django model label targeted by this row."""
-
-    xref: str
-    """Addon-local external row key."""
-
-    values: dict[str, Any]
-    """Model field values to import."""
-
-    @classmethod
-    def from_record(
-        cls,
-        entry: ResourceEntry,
-        record: Mapping[str, Any],
-        *,
-        index: int,
-        fallback_model: str | None = None,
-    ) -> ResourceRow:
-        """Return a normalized row from parsed file data."""
-
-        payload = dict(record)
-        raw_model = payload.get("model") or fallback_model or entry.infer_model_label()
-        raw_xref = payload.get("_xref") or payload.get("xref")
-        if not isinstance(raw_xref, str) or not raw_xref.strip():
-            raise ResourceLoadError(f"{entry.display} row {index}: missing _xref")
-        return cls(
-            entry=entry,
-            model_label=str(raw_model),
-            xref=raw_xref.strip(),
-            values=cls._values_for(payload),
-        )
-
-    @property
-    def dataset_row(self) -> dict[str, Any]:
-        """Return the row as an import-export dataset mapping."""
-
-        return {**self.values, "_xref": self.xref}
-
-    @staticmethod
-    def _values_for(payload: dict[str, Any]) -> dict[str, Any]:
-        """Return model field values from one resource row payload."""
-
-        if "fields" in payload:
-            fields_value = payload["fields"]
-            if not isinstance(fields_value, Mapping):
-                raise ImproperlyConfigured("resource row fields must map names")
-            # The nested form carries the model label in `_meta`, so `model` under an
-            # explicit `fields:` map is a real field name (e.g. ``agents.Agent.model``);
-            # only the truly-structural row keys are rejected here.
-            reserved = (RESERVED_ROW_KEYS - {"model"}) & set(fields_value)
-            if reserved:
-                raise ImproperlyConfigured(
-                    f"resource row fields cannot contain reserved keys: {', '.join(sorted(reserved))}"
-                )
-            return dict(fields_value)
-        return {key: value for key, value in payload.items() if key not in RESERVED_ROW_KEYS}
-
-
-@dataclass(slots=True)
 class GrantRow:
     """One declarative REBAC grant row, in ``resource <- relation <- subject`` direction."""
 
@@ -637,41 +649,20 @@ class GrantGroup:
     """Grant rows the loader materializes into REBAC relationship tuples."""
 
 
-@dataclass(slots=True)
+@dataclass
 class ResourceGroup:
-    """Rows from one entry that target one model."""
+    """One source/model dataset with the source indexes needed for errors."""
 
     entry: ResourceEntry
-    """Resource entry that supplied the rows."""
+    model_label: str
+    dataset: tablib.Dataset
+    source_rows: list[int]
 
-    model: type[models.Model]
-    """Django model imported by this group."""
+    @cached_property
+    def model(self) -> type[models.Model]:
+        """Resolve once at import time; source inspection needs only the label."""
 
-    rows: list[ResourceRow]
-    """Rows loaded into the target model."""
-
-    def to_dataset(self) -> tablib.Dataset:
-        """Return this group as a tablib dataset."""
-
-        headers = self._headers()
-        dataset = tablib.Dataset(headers=headers)
-        for row in self.rows:
-            values = row.dataset_row
-            dataset.append([values.get(header) for header in headers])
-        return dataset
-
-    def _headers(self) -> list[str]:
-        """Return stable dataset headers preserving source row order."""
-
-        seen = {"_xref"}
-        headers = ["_xref"]
-        for row in self.rows:
-            for key in row.values:
-                if key in seen:
-                    continue
-                seen.add(key)
-                headers.append(key)
-        return headers
+        return resolve_model(self.model_label)
 
 
 @dataclass(slots=True)

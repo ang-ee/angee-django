@@ -32,7 +32,7 @@ const SCHEMA = {
 const sdkMocks = vi.hoisted(() => ({
   schema: {
     data: undefined as unknown,
-    fetching: false,
+    isFetching: false,
     error: null as Error | null,
     refetch: vi.fn(),
   },
@@ -45,7 +45,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
     useAuthoredQuery: (document: unknown) =>
       documentName(document) === "IamRebacSchema"
         ? sdkMocks.schema
-        : { data: undefined, fetching: false, error: null, refetch: vi.fn() },
+        : { data: undefined, isFetching: false, error: null, refetch: vi.fn() },
   };
 });
 
@@ -68,7 +68,7 @@ describe("IAM schema page", () => {
   afterEach(() => {
     cleanup();
     sdkMocks.schema.data = undefined;
-    sdkMocks.schema.fetching = false;
+    sdkMocks.schema.isFetching = false;
     sdkMocks.schema.error = null;
     sdkMocks.schema.refetch.mockReset();
   });
@@ -105,7 +105,7 @@ describe("IAM schema page", () => {
   });
 
   test("publishes nothing while the first load is in flight", () => {
-    sdkMocks.schema.fetching = true;
+    sdkMocks.schema.isFetching = true;
     renderPage();
 
     expect(screen.getByText("Loading schema…")).toBeTruthy();

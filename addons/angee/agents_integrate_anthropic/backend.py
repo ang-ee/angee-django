@@ -7,11 +7,12 @@ from collections.abc import Sequence
 from typing import Any
 
 import httpx
+from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.providers.anthropic import AnthropicProvider
 
-from angee.agents.backends import ChatAPI, InferenceModelSpec, InferenceRequest, InferenceResponse
+from angee.agents.backends import InferenceModelSpec
 from angee.agents.runtimes import ANTHROPIC_OAUTH_CLIENT_HEADERS, ANTHROPIC_OAUTH_SYSTEM_PREAMBLE
 from angee.agents.sdk_backends import SDKInferenceBackend
-from angee.integrate.credentials import CredentialKind
 
 
 def oauth_system_blocks(system: Any) -> list[dict[str, Any]]:
@@ -50,7 +51,7 @@ class _OAuthMessagesTransport(httpx.AsyncHTTPTransport):
         if request.method == "POST" and request.url.path.endswith("/messages"):
             try:
                 body = json.loads(request.content.decode("utf-8"))
-            except (ValueError, UnicodeDecodeError):
+            except ValueError, UnicodeDecodeError:
                 body = None
             if isinstance(body, dict):
                 body["system"] = oauth_system_blocks(body.get("system"))
@@ -59,19 +60,9 @@ class _OAuthMessagesTransport(httpx.AsyncHTTPTransport):
                 request.headers["content-length"] = str(len(content))
         return await super().handle_async_request(request)
 
+
 DEFAULT_MODEL_LIMIT = 1000
 DEFAULT_BROKER_NAME = "anthropic"
-_RESERVED_MESSAGE_OPTIONS = frozenset(
-    {
-        "max_tokens",
-        "messages",
-        "model",
-        "stream",
-        "system",
-        "temperature",
-        "tools",
-    }
-)
 
 
 class AnthropicInferenceBackend(SDKInferenceBackend):
@@ -80,7 +71,6 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
     key = "anthropic"
     label = "Anthropic"
     icon = "anthropic"
-    chat_api = ChatAPI.ANTHROPIC_MESSAGES
     oauth_client = "anthropic-personal"
     api_key_env = ("ANTHROPIC_API_KEY",)
     defaults = {
@@ -100,14 +90,6 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
         if "auth_token" in kwargs:
             kwargs["default_headers"] = dict(ANTHROPIC_OAUTH_CLIENT_HEADERS)
         return kwargs
-
-    def system_preamble(self, credential: Any | None = None) -> str:
-        """Return the Claude Code identity line an OAuth token's requests must open with."""
-
-        resolved = credential if credential is not None else getattr(self.provider, "credential", None)
-        if resolved is not None and resolved.kind == CredentialKind.OAUTH:
-            return ANTHROPIC_OAUTH_SYSTEM_PREAMBLE
-        return ""
 
     def _async_client_kwargs(self, *, credential: Any | None = None) -> dict[str, Any]:
         """Add the OAuth block-rewrite transport to async OAuth clients."""
@@ -142,47 +124,7 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
             )
         return specs
 
-    def chat(self, request: InferenceRequest) -> InferenceResponse:
-        """Send one non-streaming Messages API request through Anthropic."""
+    def _build_model(self, handle: str, client: Any) -> AnthropicModel:
+        """Use native Messages conversion with the credential-owned SDK transport."""
 
-        system, messages = self._anthropic_messages(request)
-        params: dict[str, Any] = {
-            **self._message_options(request, reserved=_RESERVED_MESSAGE_OPTIONS, owner="Anthropic"),
-            "model": self._provider_model(request.model),
-            "messages": messages,
-            "max_tokens": request.max_tokens,
-        }
-        if self.system_preamble():
-            params["system"] = oauth_system_blocks(system)
-        elif system:
-            params["system"] = system
-        if request.temperature is not None:
-            params["temperature"] = request.temperature
-        if request.tools:
-            params["tools"] = list(request.tools)
-        message = self.client().messages.create(**params)
-        raw = self._json_object(message)
-        return InferenceResponse(
-            text=self._string_content(getattr(message, "content", [])),
-            content=self._json_list(raw.get("content")),
-            usage=self._json_object(raw.get("usage")),
-            raw=raw,
-        )
-
-    def _anthropic_messages(self, request: InferenceRequest) -> tuple[str, list[dict[str, Any]]]:
-        """Return Anthropic Messages API ``system`` and ``messages`` arguments."""
-
-        system_parts = [request.system.strip()] if request.system.strip() else []
-        messages: list[dict[str, Any]] = []
-        for item in request.messages:
-            role = str(item.get("role") or "").strip()
-            content = item.get("content", "")
-            if role == "system":
-                text = self._string_content(content)
-                if text:
-                    system_parts.append(text)
-                continue
-            if role not in {"user", "assistant"}:
-                raise ValueError(f"Anthropic messages only support user/assistant roles, got {role!r}.")
-            messages.append({"role": role, "content": content})
-        return "\n\n".join(part for part in system_parts if part), messages
+        return AnthropicModel(handle, provider=AnthropicProvider(anthropic_client=client))

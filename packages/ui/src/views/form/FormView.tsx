@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useModelMetadata } from "@angee/metadata";
 
 import { Button } from "../../ui/button";
 import { Tabs } from "../../ui/tabs";
@@ -65,6 +66,12 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
  * the section owners below only bind that view model to shared UI primitives.
  */
 export function FormView(props: FormViewProps): React.ReactElement {
+  const model = useModelMetadata(props.resource);
+  const identity = `${model?.resource?.schemaName ?? "default"}:${model?.resource?.modelLabel ?? props.resource}:${props.id ?? "create"}`;
+  return <FormViewInstance key={identity} {...props} />;
+}
+
+function FormViewInstance(props: FormViewProps): React.ReactElement {
   const {
     resource,
     id,

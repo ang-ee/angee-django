@@ -10,7 +10,6 @@ import { titleCase } from "../../../lib/titleCase";
 import { Badge } from "../../../ui/badge";
 import { Chip } from "../../../ui/chip";
 import { dateFromUnknown } from "../../../widgets/date-format";
-import type { ResourceViewContextValue } from "../resource-view-context";
 import { columnTone } from "../../page";
 import type { ColumnAggregate, ColumnDescriptor, PageColumnAlign } from "../../page";
 import type { GroupMeasure } from "./types";
@@ -60,11 +59,9 @@ export function tableColumnLabel<TRow extends Row>(
 
 export function ariaSortForColumn<TRow extends Row>(
   column: TableColumn<TRow, unknown>,
-  resourceView: ResourceViewContextValue,
 ): React.AriaAttributes["aria-sort"] {
-  const field = columnMeta(column.columnDef).field ?? column.id;
-  if (resourceView.state.sort?.field !== field) return "none";
-  return resourceView.state.sort.dir === "asc" ? "ascending" : "descending";
+  const sort = column.getIsSorted();
+  return sort === "asc" ? "ascending" : sort === "desc" ? "descending" : "none";
 }
 
 export function rowActionLabelForTableColumn<TRow extends Row>(
@@ -248,15 +245,6 @@ export function withGroupingOnlyColumnsHidden<TRow extends Row>(
     next[id] = false;
   }
   return next ?? previous;
-}
-
-export function nextSort(
-  current: ResourceViewContextValue["state"]["sort"],
-  field: string,
-): ResourceViewContextValue["state"]["sort"] {
-  if (current?.field !== field) return { field, dir: "asc" };
-  if (current.dir === "asc") return { field, dir: "desc" };
-  return null;
 }
 
 export function isInteractiveTarget(target: EventTarget): boolean {

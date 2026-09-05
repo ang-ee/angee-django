@@ -211,7 +211,7 @@ function WorkflowCanvas({
     [createEdge, refreshGraph, workflowId],
   );
 
-  if (graphQuery.fetching && !graphQuery.data) {
+  if (graphQuery.isFetching && !graphQuery.data) {
     return <LoadingPanel message={t("canvas.loading")} />;
   }
 

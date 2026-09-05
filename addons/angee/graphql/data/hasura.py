@@ -6,9 +6,29 @@ import dataclasses
 import types as _types
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 import strawberry
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
+from django.db import models, transaction
+from rebac import PermissionDenied, system_context
+from strawberry_django.mutations import resolvers as mutation_resolvers
+from strawberry_django_aggregates import (
+    default_operators_for,
+    group_by_alias,
+)
+from strawberry_django_aggregates.granularity import NumberGranularity, TimeGranularity
+from strawberry_django_hasura import (
+    HasuraResource,
+    NestedInsert,
+    WriteBackend,
+    input_to_dict,
+)
+from strawberry_django_hasura import (
+    hasura_resource as build_hasura_resource,
+)
+
 from angee.base.identity import (
     instance_from_public_id,
     public_data_id_field,
@@ -32,30 +52,6 @@ from angee.data.metadata import (
     DataResourceSubtitleMetadata,
     DataResourceTypeNames,
 )
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
-from django.db import models, transaction
-from rebac import PermissionDenied, system_context
-from strawberry_django.mutations import resolvers as mutation_resolvers
-from strawberry_django_aggregates import (
-    AggregateOp,
-    compute_aggregation,
-    default_operators_for,
-    group_by_alias,
-    shape_aggregate_row,
-)
-from strawberry_django_aggregates.granularity import NumberGranularity, TimeGranularity
-from strawberry_django_hasura import (
-    HasuraResource,
-    NestedInsert,
-    WriteBackend,
-    input_to_dict,
-)
-from strawberry_django_hasura import filtering as hasura_filtering
-from strawberry_django_hasura import grouping as hasura_grouping
-from strawberry_django_hasura import (
-    hasura_resource as build_hasura_resource,
-)
-
 from angee.graphql.access import assert_no_gated_read_fields
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.metadata import (
@@ -68,11 +64,7 @@ from angee.graphql.data.metadata import (
     resource_wire_field_name,
     resource_wire_field_names,
 )
-from angee.graphql.data.resource_bundle import (
-    resource_attr,
-    resource_query_metadata,
-    resource_type_by_name,
-)
+from angee.graphql.data.resource_bundle import resource_query_metadata
 from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.introspection import (
@@ -81,14 +73,10 @@ from angee.graphql.introspection import (
 )
 from angee.graphql.writes import write_queryset
 
-# The stock refine Hasura provider encodes startsWith/endsWith as anchored
-# regexes (`_iregex: "^v"` / `_iregex: "v$"`). The library leaves regex lookups
-# project-supplied (`filtering._LOOKUPS` is the registration seam) and Django
-# owns `__iregex`, so Angee registers the mapping here — one wire contract for
-# rows and aggregates. The case-sensitive family rides `_similar`, which needs
-# LIKE-pattern conversion the seam cannot express; Angee's toolbar does not
-# offer it (see `ANGEE_TEXT_FILTER_LOOKUP_OPERATORS`).
-hasura_filtering._LOOKUPS["iregex"] = ("__iregex", False)
+# The stock Refine provider emits anchored regexes for case-insensitive
+# starts/ends-with. Enable the Django lookup per model resource; computed
+# sources retain the upstream portable operator set.
+_HASURA_FILTER_LOOKUPS = {"iregex": ("__iregex", False)}
 
 
 @dataclass(frozen=True)
@@ -494,6 +482,23 @@ def public_pk_decoder(model: type[models.Model]) -> Callable[[Any], Any]:
     return lambda value: _public_pk(model, value)
 
 
+def _relation_axis_fields(
+    model: type[models.Model],
+    paths: Sequence[str],
+) -> dict[str, Any]:
+    """Resolve declared direct/nested to-one axes for public identity codecs."""
+
+    relations = {}
+    for path in paths:
+        try:
+            field = require_field_for_path(model, path)
+        except FieldPathError:
+            continue
+        if is_to_one_relation(field):
+            relations[path] = field
+    return relations
+
+
 def _relation_filter_decoders(
     model: type[models.Model],
     *,
@@ -514,18 +519,18 @@ def _relation_filter_decoders(
     """
 
     decoders = dict(declared or {})
-    for name in filterable:
+    for name, field in _relation_axis_fields(model, filterable).items():
         if name in decoders:
             continue
-        try:
-            field = model._meta.get_field(name)
-        except FieldDoesNotExist:
-            continue
-        if not isinstance(field, models.Field) or not is_to_one_relation(field):
-            continue
         related = field.related_model
-        if not isinstance(related, type) or public_data_id_field(related) is None:
+        if public_data_id_field(related) is None:
             continue
+        target = getattr(field, "target_field", None)
+        if target is not None and not target.primary_key:
+            raise ImproperlyConfigured(
+                f"{model._meta.label} filter axis {name!r} targets a non-primary "
+                "identity; provide an explicit field_id_decode for that target."
+            )
         decoders[name] = public_pk_decoder(related)
     return decoders or None
 
@@ -553,9 +558,9 @@ def _public_id_field_models(
 def aggregate_queryset(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
     """Return the aggregate-safe variant of a REBAC queryset when available.
 
-    A REBAC-scoped queryset exposes ``scoped_for_aggregate`` to drop row-fanout
-    joins before aggregation; a plain queryset has no such method and is returned
-    unchanged. Resources with a custom aggregate source wrap it through here.
+    REBAC's ``scoped_for_aggregate`` preserves row authorization while disabling
+    model field redaction for projection. A plain queryset is returned unchanged.
+    User-authored joins retain their normal Django aggregate cardinality.
     """
 
     return aggregate_scoped_queryset(queryset)
@@ -655,196 +660,22 @@ def _public_instance(
     return instance
 
 
-def _make_json_groups_field(  # noqa: PLR0913 - mirrors strawberry-django-hasura's groups field.
-    *,
-    builder: Any,
-    built: Any,
-    resource_name: str,
-    filter_type: type,
-    get_queryset: Callable[[strawberry.Info], models.QuerySet[Any]],
-    json_paths: Mapping[str, str],
-    id_decode: Callable[[Any], Any] | None = None,
-    id_column: str = "pk",
-    field_decoders: Mapping[str, Callable[[Any], Any]] | None = None,
-    max_groups: int | None = None,
-) -> tuple[Any, Any, list[type]]:
-    """Return Hasura group row/count fields carrying JSON-path execution."""
-
-    module = hasura_grouping._host_module(resource_name)
-    group_key_type = built.group_key_type
-    aggregate_type = built.aggregate_type
-    group_by_spec = built.group_by_spec
-    having_input = built.having_input
-    group_order_input = built.group_order_input
-    group_type = strawberry.type(
-        type(
-            f"{resource_name}_group",
-            (),
-            {
-                "__module__": module.__name__,
-                "__annotations__": {
-                    "key": group_key_type,
-                    "aggregate": aggregate_type,
-                },
-            },
-        ),
-        name=f"{resource_name}_group",
-    )
-    setattr(module, f"{resource_name}_group", group_type)
-
-    def filtered_queryset(info: strawberry.Info, where: Any) -> models.QuerySet[Any]:
-        qs = get_queryset(info)
-        if where is not None:
-            qs = qs.filter(
-                hasura_filtering.where_to_q(
-                    where,
-                    id_column=id_column,
-                    id_decode=id_decode,
-                    field_decoders=field_decoders,
-                )
-            )
-        return qs
-
-    def resolve_groups(
-        self: Any,
-        info: strawberry.Info,
-        group_by: list[Any],
-        where: Any = None,
-        having: Any = None,
-        order_by: Any = None,
-        limit: int | None = None,
-        offset: int | None = None,
-    ) -> list[Any]:
-        del self
-        qs = filtered_queryset(info, where)
-        spec = builder.translate_group_by(group_by)
-        public_relation_aliases = _public_relation_group_key_aliases(builder.model, spec)
-        requested = hasura_grouping._requested_group_ops(info)
-        having_dict = builder.translate_having(having, requested)
-        order_terms = builder.translate_order_by(order_by, spec, requested)
-        rows = compute_aggregation(
-            qs,
-            group_by=spec,
-            aggregates=requested,
-            having=having_dict,
-            order_by=order_terms,
-            limit=hasura_grouping._capped(limit, max_groups),
-            offset=offset or 0,
-            json_paths=dict(json_paths),
-        )
-        return [
-            group_type(
-                key=builder.shape_group_key(
-                    group_key_type,
-                    _public_relation_group_key_row(row, public_relation_aliases),
-                    spec,
-                ),
-                aggregate=shape_aggregate_row(
-                    aggregate_type,
-                    row,
-                    requested,
-                    json_paths=dict(json_paths),
-                ),
-            )
-            for row in rows
-        ]
-
-    resolve_groups.__annotations__ = {
-        "self": Any,
-        "info": strawberry.Info,
-        "group_by": list[group_by_spec],  # type: ignore[valid-type]
-        "where": filter_type | None,
-        "having": having_input | None,
-        "order_by": list[group_order_input] | None,  # type: ignore[valid-type]
-        "limit": int | None,
-        "offset": int | None,
-        "return": list[group_type],  # type: ignore[valid-type]
-    }
-
-    def resolve_groups_count(
-        self: Any,
-        info: strawberry.Info,
-        group_by: list[Any],
-        where: Any = None,
-        having: Any = None,
-    ) -> int:
-        del self
-        qs = filtered_queryset(info, where)
-        spec = builder.translate_group_by(group_by)
-        requested = [(AggregateOp.COUNT, None)]
-        having_dict = builder.translate_having(having, requested)
-        return int(
-            builder.count_groups(
-                qs,
-                spec,
-                requested,
-                having_dict,
-            )
-        )
-
-    resolve_groups_count.__annotations__ = {
-        "self": Any,
-        "info": strawberry.Info,
-        "group_by": list[group_by_spec],  # type: ignore[valid-type]
-        "where": filter_type | None,
-        "having": having_input | None,
-        "return": int,
-    }
-    return (
-        strawberry.field(
-            resolver=resolve_groups,
-            name=f"{resource_name}_groups",
-        ),
-        strawberry.field(
-            resolver=resolve_groups_count,
-            name=f"{resource_name}_groups_count",
-        ),
-        [
-            group_type,
-            group_key_type,
-            group_by_spec,
-            having_input,
-            group_order_input,
-        ],
-    )
-
-
-def _public_relation_group_key_row(
-    row: dict[str, Any],
-    relation_aliases: Mapping[str, type[models.Model]],
-) -> dict[str, Any]:
-    """Return a key-shaping row whose relation axes use public ids."""
-
-    if not relation_aliases:
-        return row
-    shaped = dict(row)
-    for alias, related_model in relation_aliases.items():
-        value = shaped.get(alias)
-        if value in (None, ""):
-            continue
-        shaped[alias] = public_id_for(related_model, value)
-    return shaped
-
-
-def _public_relation_group_key_aliases(
+def _relation_group_key_encoders(
     model: type[models.Model],
-    spec: list[tuple[str, Any]],
-) -> dict[str, type[models.Model]]:
-    aliases: dict[str, type[models.Model]] = {}
-    for path, granularity in spec:
-        if granularity is not None:
-            continue
-        try:
-            field = require_field_for_path(model, path)
-        except FieldPathError:
-            continue
-        if not is_to_one_relation(field):
-            continue
-        related_model = getattr(field, "related_model", None)
-        if not isinstance(related_model, type) or not issubclass(related_model, models.Model):
-            continue
-        aliases[_group_key_path(field, path)] = related_model
-    return aliases
+    paths: Sequence[str],
+) -> dict[str, Callable[[Any], Any]]:
+    """Bind public identities once; the aggregate owner shapes each key."""
+
+    encoders: dict[str, Callable[[Any], Any]] = {}
+    for path, field in _relation_axis_fields(model, paths).items():
+        target = getattr(field, "target_field", None)
+        if target is not None and not target.primary_key:
+            raise ImproperlyConfigured(
+                f"{model._meta.label} group axis {path!r} targets non-primary "
+                "identity; public group keys require a primary-key relation."
+            )
+        encoders[path] = partial(public_id_for, field.related_model)
+    return encoders
 
 
 def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative builder.
@@ -947,60 +778,31 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         declared=field_id_decode,
     )
     active_json_paths = dict(json_paths or {})
-    aggregate_builder_globals = build_hasura_resource.__globals__
-    original_aggregate_builder = None
-    original_groups_field_builder = aggregate_builder_globals["make_groups_field"]
-    if active_json_paths:
-        # strawberry-django-aggregates supports JSON-path group axes, but the
-        # strawberry-django-hasura facade has not exposed that knob yet. Keep
-        # the adaptation local to resource construction so Angee can advertise
-        # the same typed group surface without forking the upstream builder.
-        original_aggregate_builder = aggregate_builder_globals["AggregateBuilder"]
-        original_groups_field_builder = aggregate_builder_globals["make_groups_field"]
-        json_path_allowlist = dict(active_json_paths)
-
-        class _JsonPathAggregateBuilder(original_aggregate_builder):  # type: ignore[misc, valid-type]
-            def __init__(self, *args: Any, **kwargs: Any) -> None:
-                kwargs.setdefault("json_paths", json_path_allowlist)
-                super().__init__(*args, **kwargs)
-
-        def _make_json_path_groups_field(**kwargs: Any) -> tuple[Any, Any, list[type]]:
-            return _make_json_groups_field(json_paths=json_path_allowlist, **kwargs)
-
-        aggregate_builder_globals["AggregateBuilder"] = _JsonPathAggregateBuilder
-    else:
-
-        def _make_json_path_groups_field(**kwargs: Any) -> tuple[Any, Any, list[type]]:
-            return _make_json_groups_field(json_paths=active_json_paths, **kwargs)
-
-    aggregate_builder_globals["make_groups_field"] = _make_json_path_groups_field
-    try:
-        resource = build_hasura_resource(
-            node,
-            model=model,
-            name=name,
-            filterable=list(filterable),
-            sortable=list(sortable),
-            aggregatable=list(aggregatable),
-            groupable=list(active_groupable) or None,
-            writable=list(writable) if writable is not None else None,
-            insertable=list(insertable) if insertable is not None else None,
-            updatable=list(updatable) if updatable is not None else None,
-            nested=_nested_inserts(lines) if lines is not None else None,
-            insert=insert,
-            update=update,
-            delete=delete,
-            field_id_decode=field_id_decode,
-            get_queryset=read_queryset,
-            get_aggregate_queryset=get_aggregate_queryset or _aggregate_queryset(read_queryset),
-            write_backend=active_write_backend,
-            id_decode=id_decode,
-            id_column=id_column,
-        )
-    finally:
-        aggregate_builder_globals["make_groups_field"] = original_groups_field_builder
-        if original_aggregate_builder is not None:
-            aggregate_builder_globals["AggregateBuilder"] = original_aggregate_builder
+    resource = build_hasura_resource(
+        node,
+        model=model,
+        name=name,
+        filterable=list(filterable),
+        sortable=list(sortable),
+        aggregatable=list(aggregatable),
+        groupable=list(active_groupable) or None,
+        json_paths=active_json_paths,
+        group_key_encoders=_relation_group_key_encoders(model, active_groupable),
+        filter_lookups=_HASURA_FILTER_LOOKUPS,
+        writable=list(writable) if writable is not None else None,
+        insertable=list(insertable) if insertable is not None else None,
+        updatable=list(updatable) if updatable is not None else None,
+        nested=_nested_inserts(lines) if lines is not None else None,
+        insert=insert,
+        update=update,
+        delete=delete,
+        field_id_decode=field_id_decode,
+        get_queryset=read_queryset,
+        get_aggregate_queryset=get_aggregate_queryset or _aggregate_queryset(read_queryset),
+        write_backend=active_write_backend,
+        id_decode=id_decode,
+        id_column=id_column,
+    )
     if lines is not None:
         resource = _attach_lines_save(resource, node=node, lines=lines, write_backend=active_write_backend)
     return attach_hasura_resource_metadata(
@@ -1187,25 +989,15 @@ def attach_hasura_resource_metadata(
 ) -> HasuraResource:
     """Attach Angee resource metadata to a built Hasura resource bundle."""
 
-    roots, type_names, filter_type, order_type = resource_query_metadata(
-        resource,
-        name=name,
-        node_type=node,
-        grouped=bool(groupable),
-    )
-    insert_input_type = resource_attr(
-        resource,
-        "insert_input_type",
-        resource_type_by_name(resource, f"{name}_insert_input") if insert else None,
-    )
-    set_input_type = resource_attr(
-        resource,
-        "set_input_type",
-        resource_type_by_name(resource, f"{name}_set_input") if update else None,
-    )
-    insert_one_root = resource_attr(resource, "insert_one_root", f"insert_{name}_one")
-    update_by_pk_root = resource_attr(resource, "update_by_pk_root", f"update_{name}_by_pk")
-    delete_by_pk_root = resource_attr(resource, "delete_by_pk_root", f"delete_{name}_by_pk")
+    roots, type_names, filter_type, order_type = resource_query_metadata(resource)
+    insert_input_type = resource.insert_input_type
+    set_input_type = resource.set_input_type
+    insert_one_root = resource.insert_one_root
+    update_by_pk_root = resource.update_by_pk_root
+    delete_by_pk_root = resource.delete_by_pk_root
+    insert = "insert" in resource.enabled_operations
+    update = "update" in resource.enabled_operations
+    delete = "delete" in resource.enabled_operations
 
     parent_create_fields = (
         resource_wire_field_names(insert_input_type, exclude=_parent_write_exclude(lines)) if insert else ()
@@ -1248,10 +1040,8 @@ def attach_hasura_resource_metadata(
             subtitle=subtitle,
         ),
     )
-    mutation_capabilities = _mutation_capabilities(
-        insert=insert,
-        update=update,
-        delete=delete,
+    mutation_capabilities = tuple(
+        "create" if operation == "insert" else operation for operation in resource.enabled_operations
     )
     if lines is not None:
         mutation_capabilities = (*mutation_capabilities, "save")
@@ -1388,25 +1178,6 @@ def _has_model_field(model: type[models.Model], name: str) -> bool:
     except FieldDoesNotExist:
         return False
     return True
-
-
-def _mutation_capabilities(
-    *,
-    insert: bool,
-    update: bool,
-    delete: bool,
-) -> tuple[str, ...]:
-    """Return mutation capabilities in the resource metadata order."""
-
-    return tuple(
-        name
-        for name, enabled in (
-            ("create", insert),
-            ("update", update),
-            ("delete", delete),
-        )
-        if enabled
-    )
 
 
 def _hasura_group_dimensions(

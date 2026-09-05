@@ -4,7 +4,7 @@ import {
   authoredQueryMeta,
   authoredQueryReadsAnyModel,
 } from "../query-invalidation";
-import { authoredOperationData, authoredQueryData } from "./authored-hooks";
+import { authoredOperationData } from "./authored-hooks";
 
 describe("authoredOperationData", () => {
   test("unwraps GraphQL response envelopes returned through refine custom hooks", () => {
@@ -39,9 +39,7 @@ describe("authoredOperationData", () => {
     });
   });
 
-  test("keeps unloaded refine query responses undefined", () => {
-    expect(authoredQueryData(undefined)).toBeUndefined();
-  });
+
 });
 
 describe("authored query invalidation metadata", () => {

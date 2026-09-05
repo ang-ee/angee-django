@@ -82,6 +82,7 @@ export function useResourceViewPresentationSurface<TRow extends Row>({
     onPaginationChange: handlePaginationChange,
     onRowSelectionChange: handleRowSelectionChange,
     onSortingChange: handleSortingChange,
+    enableMultiSort: false,
     getCoreRowModel: getCoreRowModel(),
     enableRowSelection: (row) => !row.getIsGrouped(),
     getFilteredRowModel: getFilteredRowModel(),
@@ -101,10 +102,10 @@ export function useResourceViewPresentationSurface<TRow extends Row>({
   });
   const pageCount = table.getPageCount();
   React.useEffect(() => {
-    if (resourceView.state.page > pageCount) {
+    if ((resourceView.state.pagination.pageIndex + 1) > pageCount) {
       resourceView.setPage(Math.max(1, pageCount));
     }
-  }, [pageCount, resourceView.setPage, resourceView.state.page]);
+  }, [pageCount, resourceView.setPage, (resourceView.state.pagination.pageIndex + 1)]);
   return useResourceViewPresentationSurfaceFromTable({
     rows,
     table,

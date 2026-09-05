@@ -22,16 +22,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from angee.addons import available_addons, is_angee_addon
-from angee.base.models import AngeeModel
-from angee.compose.appgraph import AppGraph
-from angee.compose.runtime import Runtime
 from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db.models import Field
 from django.test import override_settings
 
+from angee.addons import available_addons, is_angee_addon
+from angee.base.models import AngeeModel
+from angee.compose.appgraph import AppGraph
+from angee.compose.runtime import Runtime
 from angee.resources.entries import GRANT_KIND, ResourceEntry, resource_manifest_for
 
 ADDON_DIRS = (
@@ -126,13 +126,15 @@ class _FixtureSweep:
     def _check_entry(self, entry: ResourceEntry) -> None:
         """Check every declared value of every row in one resource entry."""
 
-        for row in entry.read_resource_rows():
-            model = self.runtime.source_models_by_composition_label.get(row.model_label.lower())
-            if model is None:
-                self._fail(entry, row.xref, f"targets unknown model {row.model_label!r}")
-                continue
-            for name, value in row.values.items():
-                self._check_value(entry, row.xref, model, name, value)
+        for group in entry.read_groups():
+            model = self.runtime.source_models_by_composition_label.get(group.model_label.lower())
+            for row in group.dataset.dict:
+                xref = row.pop("_xref")
+                if model is None:
+                    self._fail(entry, xref, f"targets unknown model {group.model_label!r}")
+                    continue
+                for name, value in row.items():
+                    self._check_value(entry, xref, model, name, value)
 
     def _check_value(
         self,
@@ -152,6 +154,10 @@ class _FixtureSweep:
         if model_field.is_relation:
             return
         self.checked_values += 1
+        if value is None and model_field.has_default():
+            # Native import-export applies the Django default to an empty
+            # dataset cell, including the nulls rectangular sparse rows carry.
+            value = model_field.get_default()
         try:
             # The coercion `Field.pre_save` runs on every write: a value it
             # rejects fails `manage.py resources load`.

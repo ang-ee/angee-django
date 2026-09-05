@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, ClassVar
 
 from django.utils.module_loading import import_string
+from pydantic_ai.models import Model
 
-from angee.agents.backends import InferenceBackend, InferenceModelSpec, InferenceRequest
+from angee.agents.backends import InferenceBackend, InferenceModelSpec
 from angee.integrate.credentials import CredentialKind
 
 
@@ -30,25 +32,34 @@ class SDKInferenceBackend(InferenceBackend):
         client_class = self.client_class or self._load_client_class()
         return client_class(**self._client_kwargs())
 
-    def async_client(self, *, credential: Any | None = None) -> Any:
-        """Return the vendor's async SDK client with a live credential.
-
-        ``credential`` lets an agent-owned override win over the provider
-        catalogue credential without moving vendor auth rules into a runtime.
-        """
-
+    def _async_client_class(self) -> Any:
         if not self.async_client_class_path:
-            raise RuntimeError(
-                f"{self.label} inference does not declare an async SDK client; "
-                f"install and configure `{self.sdk_package_name}` for in-process agent sessions."
-            )
+            raise RuntimeError(f"{self.label} inference does not declare an async SDK client.")
         try:
-            client_class = import_string(self.async_client_class_path)
+            return import_string(self.async_client_class_path)
         except ImportError as error:
             raise RuntimeError(
                 f"Install the `{self.sdk_package_name}` package to use the {self.label} async client."
             ) from error
-        return client_class(**self._async_client_kwargs(credential=credential))
+
+    def model(self, handle: str, *, credential: Any | None = None) -> AbstractAsyncContextManager[Model]:
+        """Resolve credential policy now; own SDK lifetime in the calling async loop."""
+
+        client_class = self._async_client_class()
+        kwargs = self._async_client_kwargs(credential=credential)
+        handle = self._provider_model(handle)
+
+        @asynccontextmanager
+        async def binding() -> AsyncIterator[Model]:
+            async with client_class(**kwargs) as client:
+                yield self._build_model(handle, client)
+
+        return binding()
+
+    def _build_model(self, handle: str, client: Any) -> Model:
+        """Bind the vendor's native model adapter to the already-owned SDK client."""
+
+        raise NotImplementedError(f"{self.label} does not declare a native model adapter.")
 
     def _async_client_kwargs(self, *, credential: Any | None = None) -> dict[str, Any]:
         """Return async SDK client constructor kwargs; defaults to the sync set.
@@ -92,22 +103,6 @@ class SDKInferenceBackend(InferenceBackend):
             if not key:
                 raise ValueError(f"{self.label} inference does not support OAuth credentials.")
         return {key: secret}
-
-    def _message_options(
-        self,
-        request: InferenceRequest,
-        *,
-        reserved: frozenset[str],
-        owner: str,
-    ) -> dict[str, Any]:
-        """Return provider-specific request kwargs after guarding owned fields."""
-
-        options = dict(request.options)
-        collisions = reserved & options.keys()
-        if collisions:
-            names = ", ".join(sorted(collisions))
-            raise ValueError(f"{owner} request option(s) are owned by the provider: {names}.")
-        return options
 
     def _model_limit(self) -> int:
         """Return the configured model-list page size."""
@@ -211,33 +206,6 @@ class SDKInferenceBackend(InferenceBackend):
             return import_string(self.client_class_path)
         except ImportError as error:
             raise RuntimeError(install_hint) from error
-
-    @staticmethod
-    def _string_content(content: Any) -> str:
-        """Return textual content from a string or content-block list."""
-
-        if isinstance(content, str):
-            return content.strip()
-        if isinstance(content, Sequence) and not isinstance(content, str | bytes):
-            parts: list[str] = []
-            for block in content:
-                if isinstance(block, Mapping):
-                    text = block.get("text") if block.get("type") == "text" else ""
-                else:
-                    text = getattr(block, "text", "") if getattr(block, "type", "") == "text" else ""
-                if text:
-                    parts.append(str(text))
-            return "\n".join(parts).strip()
-        return str(content or "").strip()
-
-    @classmethod
-    def _json_list(cls, value: Any) -> list[dict[str, Any]]:
-        """Return a JSON-safe list of mapping objects."""
-
-        dumped = cls._sdk_json(value)
-        if isinstance(dumped, list):
-            return [item if isinstance(item, dict) else {"value": item} for item in dumped]
-        return []
 
     @classmethod
     def _json_object(cls, value: Any) -> dict[str, Any]:

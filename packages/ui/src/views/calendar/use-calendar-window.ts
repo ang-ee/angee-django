@@ -111,7 +111,7 @@ export function useCalendarWindow<TDocument extends AuthoredDocument>(
   );
   return {
     occurrences,
-    fetching: query.fetching,
+    fetching: query.isFetching,
     error: query.error,
     refetch: query.refetch,
   };

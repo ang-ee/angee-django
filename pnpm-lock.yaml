@@ -528,6 +528,9 @@ importers:
       '@graphql-typed-document-node/core':
         specifier: ^3.2.0
         version: 3.2.0(graphql@16.14.2)
+      '@tanstack/react-query':
+        specifier: ^5.101.1
+        version: 5.101.2(react@19.2.7)
       '@tanstack/react-router':
         specifier: ^1.170.16
         version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -620,6 +623,9 @@ importers:
         specifier: ^2.5.0
         version: 2.9.0(@tanstack/react-router@1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
     devDependencies:
+      '@tanstack/react-query':
+        specifier: ^5.101.1
+        version: 5.101.2(react@19.2.7)
       '@tanstack/react-router':
         specifier: ^1.170.16
         version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1329,12 +1335,6 @@ importers:
         specifier: ^8.0.0
         version: 8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0)
     devDependencies:
-      '@refinedev/react-hook-form':
-        specifier: ^5.0.4
-        version: 5.0.4(@refinedev/core@5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-hook-form@7.81.0(react@19.2.7))(react@19.2.7)
-      '@refinedev/react-table':
-        specifier: ^6.0.1
-        version: 6.0.1(@refinedev/core@5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@tanstack/react-table@8.21.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tanstack/react-query':
         specifier: ^5.101.1
         version: 5.101.2(react@19.2.7)
@@ -1395,6 +1395,9 @@ importers:
       '@refinedev/core':
         specifier: ^5.0.12
         version: 5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      valibot:
+        specifier: ^1.4.2
+        version: 1.4.2(typescript@6.0.3)
     devDependencies:
       '@types/react':
         specifier: ^19.2.17
@@ -1569,12 +1572,6 @@ importers:
       '@refinedev/core':
         specifier: ^5.0.12
         version: 5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@refinedev/react-hook-form':
-        specifier: ^5.0.4
-        version: 5.0.4(@refinedev/core@5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-hook-form@7.81.0(react@19.2.7))(react@19.2.7)
-      '@refinedev/react-table':
-        specifier: ^6.0.1
-        version: 6.0.1(@refinedev/core@5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@tanstack/react-table@8.21.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tanstack/react-table':
         specifier: ^8.21.3
         version: 8.21.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -3639,26 +3636,6 @@ packages:
       gql-query-builder: ^3.5.5
       graphql-request: ^5.2.0
       graphql-ws: ^5.9.1
-
-  '@refinedev/react-hook-form@5.0.4':
-    resolution: {integrity: sha512-JT4Wsr9ovVt0t06TYqUT/VeevfRRTLv6cr3zAsDE2e4IoDnZfG+Rz4YGzSIbn/WxBpveY6oSPd9UfXaOfffvXg==}
-    engines: {node: '>=20'}
-    peerDependencies:
-      '@refinedev/core': ^5.0.0
-      '@types/react': ^18.0.0 || ^19.0.0
-      '@types/react-dom': ^18.0.0 || ^19.0.0
-      react: ^18.0.0 || ^19.0.0
-      react-dom: ^18.0.0 || ^19.0.0
-      react-hook-form: ^7.57.0
-
-  '@refinedev/react-table@6.0.1':
-    resolution: {integrity: sha512-V9dNUFBwzTPEtySMdRvpx0mxdtwKai9thB9suihPcCEWpw8eZSoU9q493Mdxf+bnqiyL7bgwFESRFPaFoPHnkQ==}
-    engines: {node: '>=20'}
-    peerDependencies:
-      '@refinedev/core': ^5.0.0
-      '@tanstack/react-table': ^8.2.6
-      react: ^18.0.0 || ^19.0.0
-      react-dom: ^18.0.0 || ^19.0.0
 
   '@repeaterjs/repeater@3.1.0':
     resolution: {integrity: sha512-TaoVksZRSx2KWYYpyLQtMQXXeS98VsgZImzW65xmiVgbYhXLk+aEsmzPLirqVuE4/XuUapH2iMtxUzaBNDzdSQ==}
@@ -8789,26 +8766,6 @@ snapshots:
       graphql-ws: 6.0.8(graphql@16.14.2)(ws@8.21.0)
       lodash: 4.18.1
       lodash-es: 4.18.1
-
-  '@refinedev/react-hook-form@5.0.4(@refinedev/core@5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-hook-form@7.81.0(react@19.2.7))(react@19.2.7)':
-    dependencies:
-      '@refinedev/core': 5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react': 19.2.17
-      '@types/react-dom': 19.2.3(@types/react@19.2.17)
-      lodash: 4.18.1
-      lodash-es: 4.18.1
-      react: 19.2.7
-      react-dom: 19.2.7(react@19.2.7)
-      react-hook-form: 7.81.0(react@19.2.7)
-
-  '@refinedev/react-table@6.0.1(@refinedev/core@5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@tanstack/react-table@8.21.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
-    dependencies:
-      '@refinedev/core': 5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@tanstack/react-table': 8.21.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      lodash: 4.18.1
-      lodash-es: 4.18.1
-      react: 19.2.7
-      react-dom: 19.2.7(react@19.2.7)
 
   '@repeaterjs/repeater@3.1.0': {}
 

@@ -7,7 +7,7 @@ from typing import Any
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
-from rebac import app_settings, system_context
+from rebac import app_settings, subject_id_attr, system_context
 
 from angee.base.impl import impl_registry
 
@@ -44,15 +44,11 @@ def actor_user_id(actor: Any) -> Any | None:
     user_model = get_user_model()
     pk = user_model._meta.pk
     pk_name = pk.name if pk is not None else "pk"
-    subject_id_attr = str(getattr(user_model._meta, "rebac_id_attr", None) or app_settings.REBAC_USER_ID_ATTR)
-    if subject_id_attr in {"pk", pk_name}:
+    attribute = subject_id_attr(user_model)
+    if attribute in {"pk", pk_name}:
         return actor.subject_id
     with system_context(reason="base.actor_user_id"):
-        return (
-            user_model._base_manager.filter(**{subject_id_attr: actor.subject_id})
-            .values_list(pk_name, flat=True)
-            .first()
-        )
+        return user_model._base_manager.filter(**{attribute: actor.subject_id}).values_list(pk_name, flat=True).first()
 
 
 def _resolved_actor_user_id(subject_type: str, subject_id: str) -> Any | None:

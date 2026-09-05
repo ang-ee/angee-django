@@ -299,7 +299,7 @@ export function renderListRow<TRow extends Row>({
     <RecordRow
       key={row.id}
       row={row}
-      selected={resourceView.state.selectedIds.has(row.id)}
+      selected={Boolean(resourceView.state.rowSelection[row.id])}
       onToggleSelected={resourceView.toggleSelectedId}
       interactive={interactive}
       selectable={selectable}

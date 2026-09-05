@@ -136,8 +136,8 @@ function TranscriptBody({
     () => [...transcript.rows].sort(compareNewestFirst).reverse(),
     [transcript.rows],
   );
-  const total = transcript.pages[0]?.messages_aggregate?.aggregate?.count ?? messages.length;
-  const hasOlder = transcript.hasMore && messages.length < total;
+  const total = transcript.data?.pages[0]?.messages_aggregate?.aggregate?.count ?? messages.length;
+  const hasOlder = transcript.hasNextPage && messages.length < total;
   const conversation = order === "conversation";
 
   const scrollRef = React.useRef<HTMLDivElement>(null);
@@ -189,14 +189,14 @@ function TranscriptBody({
   }, [conversation, threadId, messages.length, totalSize]);
 
   function loadOlder(): void {
-    if (!transcript.hasMore) return;
+    if (!transcript.hasNextPage) return;
     const scroll = scrollRef.current;
     // Capture the pre-prepend distance from the bottom so the anchor effect can restore it.
     if (conversation && scroll !== null) prependAnchorRef.current = scroll.scrollHeight - scroll.scrollTop;
-    transcript.fetchOlder();
+    transcript.fetchNextPage();
   }
 
-  if (transcript.fetching && transcript.rows.length === 0) {
+  if (transcript.isFetching && transcript.rows.length === 0) {
     return <LoadingPanel message={t("transcript.loading")} />;
   }
   if (transcript.error) {
@@ -231,7 +231,7 @@ function TranscriptBody({
             type="button"
             variant="secondary"
             size="sm"
-            disabled={transcript.fetching || transcript.fetchingOlder}
+            disabled={transcript.isFetching || transcript.isFetchingNextPage}
             onClick={loadOlder}
           >
             <Glyph name="chevron-up" />

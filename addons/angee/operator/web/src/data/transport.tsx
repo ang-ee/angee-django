@@ -1,3 +1,5 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { print } from "graphql";
 import { Alert, EmptyState, LoadingPanel, errorMessage } from "@angee/ui";
 import {
   useAuthoredMutation,
@@ -12,10 +14,10 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useState,
   type ReactNode,
 } from "react";
 
+import { updateSnapshotQueries } from "./snapshot-cache";
 import { OPERATOR_PROVIDER } from "./operator-provider";
 import { useOperatorT } from "../i18n";
 import { OperatorConnectionQuery } from "./documents";
@@ -32,6 +34,7 @@ import type {
   OperatorSnapshotQueryData,
   OperatorSnapshotQueryVariables,
   OperatorSnapshotSections,
+  OperatorSnapshotSubscriptionData,
 } from "./types";
 
 const CONSOLE_SCHEMA = "console";
@@ -92,6 +95,7 @@ export function OperatorTransportProvider({
   children,
 }: OperatorTransportProviderProps): ReactNode {
   const t = useOperatorT();
+  const queryClient = useQueryClient();
   const connectionQuery = useAuthoredQuery(OperatorConnectionQuery, undefined, {
     dataProviderName: CONSOLE_SCHEMA,
   });
@@ -106,7 +110,7 @@ export function OperatorTransportProvider({
   }, [connectionQuery.refetch]);
 
   const state = useMemo<ConnectionState>(() => {
-    if (!connectionQuery.data && connectionQuery.fetching) {
+    if (!connectionQuery.data && connectionQuery.isFetching) {
       return { kind: "loading" };
     }
     if (connectionQuery.error) {
@@ -121,7 +125,7 @@ export function OperatorTransportProvider({
         message: errorMessage(error, t("transport.unknownError")),
       };
     }
-  }, [connectionQuery.data, connectionQuery.error, connectionQuery.fetching, t]);
+  }, [connectionQuery.data, connectionQuery.error, connectionQuery.isFetching, t]);
 
   const endpoint = state.kind === "ready" ? state.connection.endpoint : null;
   const token = state.kind === "ready" ? state.connection.token : null;
@@ -148,6 +152,24 @@ export function OperatorTransportProvider({
     () => (endpoint && token ? { endpoint, token } : null),
     [endpoint, token],
   );
+
+  // One subscription for this transport. Native Query entries own every pane's
+  // snapshot; socket pushes are cache writes, and later HTTP completions/refetches
+  // may replace them. The daemon supplies no revision ordering contract.
+  useEffect(() => {
+    if (!daemonClient) return;
+    return daemonClient.subscribe<OperatorSnapshotSubscriptionData>(
+      { query: print(STACK_SNAPSHOT_SUBSCRIPTION) },
+      {
+        next: ({ data }) => {
+          const snapshot = data?.onStackSnapshotChange;
+          if (snapshot) updateSnapshotQueries(queryClient, snapshot);
+        },
+        error: () => undefined,
+        complete: () => undefined,
+      },
+    );
+  }, [daemonClient, queryClient]);
 
   if (state.kind === "loading") {
     return <LoadingPanel message={t("transport.connecting")} />;
@@ -190,7 +212,7 @@ export function useOperatorConnection(): OperatorConnection {
 export interface OperatorSnapshotResult {
   result: { fetching: boolean; error: Error | null };
   snapshot: OperatorSnapshot | null;
-  refetch: () => void;
+  refetch: ReturnType<typeof useAuthoredQuery<typeof SNAPSHOT_QUERY>>["refetch"];
 }
 
 export function useOperatorSnapshot(
@@ -223,33 +245,12 @@ export function useOperatorSnapshot(
     dataProviderName: OPERATOR_PROVIDER,
   });
 
-  // `onStackSnapshotChange` pushes the whole `StackSnapshot` whenever the daemon's
-  // aggregate hash changes; the variable-free document shares one upstream socket
-  // across the 8 panes. The latest push is the live snapshot.
-  const live = useOperatorSubscription(STACK_SNAPSHOT_SUBSCRIPTION);
-
-  // An imperative re-pull of the one-shot query, for an instant local refresh
-  // after a mutation rather than waiting for the daemon's next snapshot push.
-  const refetch = query.refetch;
-
-  // Keep whichever source updated most recently. The live push wins as it
-  // arrives, but an explicit refetch (after a mutation) must be able to supersede
-  // a stale push — a static `live ?? query` would mask refetch forever once any
-  // push landed.
-  const [data, setData] = useState<OperatorSnapshotQueryData | null>(null);
-  useEffect(() => {
-    const pushed = live.data?.onStackSnapshotChange;
-    if (pushed) setData(pushed);
-  }, [live.data]);
-  useEffect(() => {
-    if (query.data) setData(query.data);
-  }, [query.data]);
-  const snapshot = useMemo(() => snapshotFromQueryData(data), [data]);
+  const snapshot = useMemo(() => snapshotFromQueryData(query.data), [query.data]);
 
   return {
-    result: { fetching: query.fetching, error: query.error },
+    result: { fetching: query.isFetching, error: query.error },
     snapshot,
-    refetch,
+    refetch: query.refetch,
   };
 }
 
