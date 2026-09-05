@@ -216,8 +216,7 @@ class StateTransitions:
 
         ``contribute_to_class`` validates only the *declaring* class's own methods
         and installs the guarded descriptor. The composer calls this instead after
-        it reorders a materialized child's bases (``child_overrides_parent``), so
-        the flipped MRO is proven to still satisfy the same class-build checks —
+        final concrete composition, so its MRO must satisfy the same class-build checks —
         every reachable ``@transition`` method still guards a declared or policy
         edge. It validates without mutating ``cls`` (no descriptor install).
 
@@ -226,7 +225,7 @@ class StateTransitions:
         here every reachable spec that matches this declaration's field is checked
         against *this* declaration's graph — including one bound to another
         declaration for the same field. This over-approximation is what gives the
-        flip guard teeth: it rejects a reorder that brings a transition method and
+        composition check teeth: it rejects a reorder that brings a transition method and
         a narrower same-field declaration together, at build time, rather than
         trusting the emitted MRO to dispatch it to a graph that happens to allow
         it. With the usual single declaration per field the two are equivalent (a
@@ -508,18 +507,15 @@ def _verify_uncontended_source(instance: models.Model, field_name: str, source: 
     committed = reader.filter(pk=instance.pk).values_list(field_name, flat=True).first()
     field = cast(StateField, instance._meta.get_field(field_name))
     if _state_key(field, committed) != _state_key(field, source):
-        raise TransitionNotAllowed(
-            _message(field, source, target, "state changed under a concurrent transition")
-        )
+        raise TransitionNotAllowed(_message(field, source, target, "state changed under a concurrent transition"))
 
 
 def revalidate_transition_metadata(cls: type[models.Model]) -> None:
     """Re-validate every ``StateTransitions`` declaration reachable on ``cls``.
 
-    The composer calls this for a materialized child whose base order it flipped
-    (``child_overrides_parent``): each declaration was validated when the class
-    that *declared* it was built, but the reordered MRO must still satisfy the
-    same class-build checks. Raises ``ImproperlyConfigured`` (via the declaration)
+    The composer calls this for each final concrete model: each declaration was
+    validated when its declaring abstract class was built, but the composed MRO
+    must satisfy the same class-build checks. Raises ``ImproperlyConfigured`` (via the declaration)
     when the reorder leaves a transition method guarding an undeclared edge.
     """
 

@@ -23,6 +23,21 @@ const parseRawValues = (values: Readonly<Record<string, unknown>>) => values;
 describe("MutationDialog", () => {
   afterEach(cleanup);
 
+  test("a transport failure permits retry without changing valid dialog values", async () => {
+    const submit = vi.fn().mockRejectedValueOnce(new Error("Try again")).mockResolvedValueOnce({ ok: true });
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Connect" fields={[{ name: "name", label: "Name", required: true }]}
+        initialValues={{ name: "Ada" }} submitLabel="Connect" parseValues={(values) => values} onSubmit={submit} />
+    </AppRuntimeProvider>);
+    const button = () => screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement;
+    await waitFor(() => expect(button().disabled).toBe(false));
+    fireEvent.click(button());
+    await waitFor(() => expect(screen.getByText("Try again")).toBeTruthy());
+    await waitFor(() => expect(button().disabled).toBe(false));
+    fireEvent.click(button());
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
+  });
+
   test("associates descriptor labels and descriptions with widget inputs", () => {
     render(
       <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
@@ -161,6 +176,7 @@ describe("MutationDialog", () => {
     fireEvent.change(screen.getByLabelText("Note"), {
       target: { value: "   " },
     });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Create" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() =>
@@ -231,6 +247,7 @@ describe("MutationDialog", () => {
     fireEvent.change(screen.getByLabelText("Name"), {
       target: { value: "Ada" },
     });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
 
     await waitFor(() =>

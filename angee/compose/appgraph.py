@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 
-from angee.addons import addon_contract
+from angee.addons import addon_manifest
 
 
 class AppGraph:
@@ -23,8 +23,6 @@ class AppGraph:
       closure (``False``). If a declared root is also another root's dependency,
       the root declaration wins. The root/dependency split is the source of an
       addon's "consumer" vs "required" classification.
-    - ``angee_depends_on``: an addon's declared dependency names, normalized
-      through :meth:`app_dependencies`; plain apps carry an empty tuple.
     - ``angee_forced``: whether any other resolved app depends on this one — the
       composer's reading of "cannot be uninstalled" for addons another installed
       addon needs. Transitive: ``A→B→C`` forces both ``B`` and ``C``. A leaf
@@ -36,6 +34,7 @@ class AppGraph:
 
         app_configs_by_name: dict[str, AppConfig] = {}
         aliases: dict[str, str] = {}
+        dependencies_by_name: dict[str, tuple[str, ...]] = {}
         root_names: list[str] = []
         root_name_set: set[str] = set()
         expanded: set[str] = set()
@@ -43,6 +42,8 @@ class AppGraph:
         def register(config: AppConfig) -> AppConfig:
             if config.name in app_configs_by_name:
                 raise ImproperlyConfigured(f"Duplicate Django app {config.name!r}")
+            manifest = addon_manifest(config, refresh=True)
+            dependencies_by_name[config.name] = manifest.depends_on if manifest is not None else ()
             app_configs_by_name[config.name] = config
             for alias in (config.name, config.label):
                 existing = aliases.setdefault(alias, config.name)
@@ -62,7 +63,7 @@ class AppGraph:
             if config.name in expanded:
                 return
             expanded.add(config.name)
-            for dependency in self.app_dependencies(config):
+            for dependency in dependencies_by_name[config.name]:
                 dependency_name = aliases.get(dependency, dependency)
                 dependency_config = app_configs_by_name.get(dependency_name)
                 if dependency_config is None:
@@ -77,7 +78,7 @@ class AppGraph:
                 raise ImproperlyConfigured(f"Cycle in app dependencies at {name}")
             visiting.add(name)
             config = app_configs_by_name[name]
-            for dependency in sorted(self.app_dependencies(config)):
+            for dependency in sorted(dependencies_by_name[config.name]):
                 dependency_name = aliases.get(dependency)
                 if dependency_name is None:
                     raise ImproperlyConfigured(f"{config.name} depends on unknown app {dependency!r}")
@@ -110,24 +111,9 @@ class AppGraph:
 
         depended_upon: set[str] = set()
         for config in ordered:
-            for dependency in self.app_dependencies(config):
+            for dependency in dependencies_by_name[config.name]:
                 depended_upon.add(aliases.get(dependency, dependency))
         for config in ordered:
             config.angee_addon_root = config.name in root_name_set
-            config.angee_depends_on = self.app_dependencies(config)
             config.angee_forced = config.name in depended_upon
         return tuple(ordered)
-
-    def app_dependencies(self, config: AppConfig) -> tuple[str, ...]:
-        """Return an addon's declared app dependencies; plain apps have none."""
-
-        contract = addon_contract(config)
-        dependencies = contract.depends_on if contract is not None else ()
-        if not all(isinstance(item, str) for item in dependencies):
-            raise ImproperlyConfigured("depends_on must be a string or iterable of strings")
-        seen: set[str] = set()
-        for dependency in dependencies:
-            if dependency in seen:
-                raise ImproperlyConfigured(f"{config.name} declares duplicate dependency {dependency!r}")
-            seen.add(dependency)
-        return dependencies

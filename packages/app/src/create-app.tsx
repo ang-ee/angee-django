@@ -287,6 +287,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     schemas,
     authSchema,
     loginPath,
+    queryClient,
   );
   const refineI18nProvider = i18n.provider;
   const refineAccessControlProvider = createAngeeAccessControlProvider(
@@ -493,12 +494,23 @@ function createAuthProviderForSchema(
   schemas: Readonly<Record<string, NormalizedAngeeAppSchemaConfig>>,
   authSchema: string,
   loginPath: string,
+  queryClient: QueryClient,
 ): RefineAuthProvider {
   const schema = schemas[authSchema];
   if (!schema) {
     throw new Error(`No GraphQL schema config for auth schema "${authSchema}".`);
   }
-  return createAngeeAuthProvider({ ...schema, loginPath });
+  return createAngeeAuthProvider({
+    ...schema,
+    loginPath,
+    // Reset observed queries so identity and mounted views see the transition;
+    // clearing their entries would strand observers with the previous data.
+    onAuthChange: () => {
+      queryClient.removeQueries({ predicate: (query) => query.getObserversCount() === 0 });
+      queryClient.getMutationCache().clear();
+      void queryClient.resetQueries();
+    },
+  });
 }
 
 /**

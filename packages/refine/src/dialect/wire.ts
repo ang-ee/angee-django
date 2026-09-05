@@ -47,3 +47,21 @@ export function stringValue(value: unknown): string | null {
   const text = String(value).trim();
   return text === "" ? null : text;
 }
+
+export function authoredOperationData<TData>(payload: unknown): TData | undefined {
+  if (isGraphQLResponseEnvelope(payload)) {
+    return payload.data as TData | undefined;
+  }
+  return payload as TData | undefined;
+}
+
+function isGraphQLResponseEnvelope(
+  payload: unknown,
+): payload is { data?: unknown; errors?: unknown; extensions?: unknown } {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  const keys = Object.keys(payload);
+  return keys.includes("data") &&
+    keys.every((key) => key === "data" || key === "errors" || key === "extensions");
+}

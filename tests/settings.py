@@ -8,6 +8,8 @@ from pathlib import Path
 import environ
 from django.apps import AppConfig
 
+from angee.iam.autoconfig import SETTINGS as IAM_SETTINGS
+
 
 class BareComposeConfig(AppConfig):
     """Register the core composer without emitting a generated runtime."""
@@ -87,12 +89,12 @@ INSTALLED_APPS = [
     "tests.mtidemo",
     "tests.hierdemo",
 ]
-# Checkout-local (NOT a global tempdir) so parallel git worktrees / concurrent test
-# runs on the same machine never share one SQLite file and corrupt each other with
-# "disk I/O error". `.test-db/` is purpose-named, gitignored, and per-checkout.
+# Checkout- and process-local so concurrent pytest runs never share one SQLite
+# file. Threads within a run still share its file-backed database. `.test-db/`
+# is purpose-named and gitignored.
 _TEST_DB_DIR = Path(__file__).resolve().parent.parent / ".test-db"
 _TEST_DB_DIR.mkdir(parents=True, exist_ok=True)
-_TEST_DB_FILE = str(_TEST_DB_DIR / "angee_pytest_db.sqlite3")
+_TEST_DB_FILE = str(_TEST_DB_DIR / f"angee_pytest_{os.getpid()}.sqlite3")
 if database_url := os.environ.get("DATABASE_URL"):
     DATABASES = {"default": environ.Env.db_url_config(database_url)}
 else:
@@ -113,6 +115,8 @@ else:
     }
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "iam.User"
+# Bare tests skip addon autoconfig; reuse IAM's native REBAC policy binding.
+REBAC_UNIVERSAL_ADMIN_ROLE = IAM_SETTINGS["REBAC_UNIVERSAL_ADMIN_ROLE"]
 USE_TZ = True
 ANGEE_RUNTIME_MODULE = "tests.runtime"
 ANGEE_ADDON_DIRS = (Path(__file__).resolve().parent.parent / "addons",)

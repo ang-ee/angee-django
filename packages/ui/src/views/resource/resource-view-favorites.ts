@@ -1,3 +1,4 @@
+import { favoriteFromResourceView } from "./model/favorites";
 import {
   useCallback,
   useMemo,
@@ -104,7 +105,7 @@ export function useResourceViewFavorites(
     (label: string) => {
       const trimmed = label.trim();
       if (!writable || !canonicalModel || !trimmed) return;
-      const favorite = state.toFavorite(trimmed, savedFavorites);
+      const favorite = favoriteFromResourceView(state, trimmed, savedFavorites);
       const migration = legacyImport.current ??= createLegacyFavoritesImport(
         metadata.resources ?? [],
       );

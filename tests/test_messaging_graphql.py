@@ -28,7 +28,6 @@ from rebac.roles import grant
 
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.messaging.managers import ChannelManager
 from angee.messaging.models import Channel as AbstractChannel
 from angee.parties.mixins import LinkSource
 from tests import test_messaging as messaging_models
@@ -56,10 +55,8 @@ from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
 _ChannelMeta = getattr(AbstractChannel, "Meta", object)
 
 
-class Channel(Integration, AbstractChannel):
+class Channel(AbstractChannel, Integration):
     """Concrete message channel used to import the messaging schema."""
-
-    objects = ChannelManager()
 
     class Meta(_ChannelMeta):
         abstract = False
@@ -867,18 +864,21 @@ def test_message_channel_group_key_drills_down_with_public_id(
             created_by_id=admin.pk,
         )
     schema = _schema()
+    resources = {item.model_label: item for item in schema.angee_resources}
+    group_by_type = resources["messaging.Message"].type_names.group_by_spec
+    assert group_by_type is not None
 
     grouped = _data(
         execute_schema(
             schema,
             """
-            query MessageChannelGroups($groupBy: [MessageTypeGroupBySpec!]!) {
+            query MessageChannelGroups($groupBy: [GROUP_BY_SPEC!]!) {
               messages_groups(group_by: $groupBy, limit: 10) {
                 key { channel_id channel__display_name }
                 aggregate { count }
               }
             }
-            """,
+            """.replace("GROUP_BY_SPEC", group_by_type),
             {
                 "groupBy": [
                     {"field": "CHANNEL"},

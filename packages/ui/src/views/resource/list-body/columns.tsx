@@ -1,13 +1,12 @@
 import * as React from "react";
-import { type ColumnDef } from "@tanstack/react-table";
+import { type Column as TableColumn, type ColumnDef } from "@tanstack/react-table";
 import type { ModelMetadata, Row } from "@angee/metadata";
 import { Glyph } from "../../../chrome/Glyph";
 import { useUiT } from "../../../i18n";
 import { useResolvedWidget } from "../../../widgets";
-import type { ResourceViewContextValue } from "../resource-view-context";
-import type { ResourceViewGroup, ResourceViewSort } from "../resource-view-model";
+import type { ResourceViewGroup } from "../resource-view-model";
 import type { ColumnDescriptor } from "../../page";
-import { cellContent, columnLabelText, groupFieldLabel, nextSort, readPath } from "./cell-utils";
+import { cellContent, columnLabelText, groupFieldLabel, readPath } from "./cell-utils";
 import { groupKey } from "./grouping";
 export interface BuildColumnsOptions {
   groupStack?: readonly ResourceViewGroup[];
@@ -16,9 +15,6 @@ export interface BuildColumnsOptions {
 
 export function buildColumns<TRow extends Row>(
   columns: readonly ColumnDescriptor<TRow>[],
-  sortController: Pick<ResourceViewContextValue, "setSort"> & {
-    sort: ResourceViewSort | null;
-  },
   options: BuildColumnsOptions,
 ): ColumnDef<TRow>[] {
   // TanStack grouping requires a column def per grouping id; a group axis that
@@ -43,14 +39,11 @@ export function buildColumns<TRow extends Row>(
         groupingOnly: true,
       },
     }));
-  return [...displayColumns(columns, sortController, options), ...groupOnlyColumns];
+  return [...displayColumns(columns, options), ...groupOnlyColumns];
 }
 
 function displayColumns<TRow extends Row>(
   columns: readonly ColumnDescriptor<TRow>[],
-  sortController: Pick<ResourceViewContextValue, "setSort"> & {
-    sort: ResourceViewSort | null;
-  },
   options: BuildColumnsOptions,
 ): ColumnDef<TRow>[] {
   return columns.map((column) => ({
@@ -65,10 +58,12 @@ function displayColumns<TRow extends Row>(
         options.metadata ?? null,
       );
     },
-    header: () => {
+    enableSorting: column.sortable !== false,
+    sortDescFirst: false,
+    header: ({ column: tableColumn }) => {
       const label = column.header ?? column.field;
       return (
-        <SortHeader column={column} sortController={sortController}>
+        <SortHeader column={column} tableColumn={tableColumn}>
           {column.headerVisuallyHidden ? (
             <span className="sr-only">{label}</span>
           ) : (
@@ -126,28 +121,26 @@ export function ListCellContent<TRow extends Row>({
 
 function SortHeader<TRow extends Row>({
   column,
-  sortController,
+  tableColumn,
   children,
 }: {
   column: ColumnDescriptor<TRow>;
-  sortController: Pick<ResourceViewContextValue, "setSort"> & {
-    sort: ResourceViewSort | null;
-  };
+  tableColumn: TableColumn<TRow>;
   children: React.ReactNode;
 }): React.ReactElement {
   const t = useUiT();
   if (column.sortable === false) return <>{children}</>;
-  const sort = sortController.sort;
-  const active = sort?.field === column.field;
+  const sort = tableColumn.getIsSorted();
+  const active = Boolean(sort);
   const iconName = !active
     ? "arrow-up-down"
-    : sort.dir === "asc"
+    : sort === "asc"
       ? "arrow-up"
       : "arrow-down";
   const label = columnLabelText(column);
   const sortKey = !active
     ? "list.sortNotSorted"
-    : sort.dir === "asc"
+    : sort === "asc"
       ? "list.sortAscending"
       : "list.sortDescending";
   return (
@@ -155,7 +148,7 @@ function SortHeader<TRow extends Row>({
       type="button"
       className="inline-flex min-w-0 items-center gap-1 rounded-6 text-left outline-none hover:text-fg focus-visible:focus-ring"
       aria-label={t(sortKey, { label })}
-      onClick={() => sortController.setSort(nextSort(sort, column.field))}
+      onClick={tableColumn.getToggleSortingHandler()}
     >
       <span className="truncate">{children}</span>
       <Glyph name={iconName} className="size-3 text-fg-subtle" />

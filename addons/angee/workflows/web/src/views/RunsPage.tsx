@@ -149,7 +149,7 @@ function RunTimelinePanel({ runId }: { runId: string }): React.ReactElement {
     [graphQuery.data?.workflow_edges],
   );
 
-  if (runQuery.fetching && !runQuery.data) {
+  if (runQuery.isFetching && !runQuery.data) {
     return <LoadingPanel message={t("runs.loading")} />;
   }
 

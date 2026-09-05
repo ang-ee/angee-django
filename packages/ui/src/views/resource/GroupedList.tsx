@@ -322,7 +322,7 @@ function GroupedItemRow<TRow extends Row>({
       return (
         <RecordRow
           row={item.row}
-          selected={resourceView.state.selectedIds.has(item.row.id)}
+          selected={Boolean(resourceView.state.rowSelection[item.row.id])}
           onToggleSelected={resourceView.toggleSelectedId}
           interactive={interactive}
           rowHref={rowHref}

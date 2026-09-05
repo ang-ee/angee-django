@@ -9,9 +9,6 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 import tablib
-from angee.base.identity import instance_from_public_id, public_id_of
-from angee.base.models import AngeeModel
-from angee.base.serialization import json_safe
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from import_export import fields, resources
@@ -19,7 +16,10 @@ from import_export.instance_loaders import BaseInstanceLoader
 from import_export.results import RowResult
 from import_export.utils import get_related_model
 
-from angee.resources.entries import RESERVED_ROW_KEYS, ResourceEntry
+from angee.base.identity import public_id_of
+from angee.base.models import AngeeModel
+from angee.base.serialization import json_safe
+from angee.resources.entries import ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.widgets import (
     XrefForeignKeyWidget,
@@ -58,9 +58,8 @@ class AngeeResource(resources.ModelResource):
         self.ledger_model = ledger_model
         self.addon_aliases = addon_aliases
         self._existing_ledgers: dict[str, Resource | None] = {}
-        self._adopted_instances: dict[str, models.Model] = {}
+        self._instances: dict[str, models.Model | None] = {}
         self._row_hashes: dict[str, str] = {}
-        self._stale_ledger_xrefs: set[str] = set()
         super().__init__()
         for field in self.fields.values():
             if isinstance(field.widget, XrefWidgetMixin):
@@ -93,16 +92,6 @@ class AngeeResource(resources.ModelResource):
         self._validate_headers(list(dataset.headers or []))
         self._prime_existing_ledgers(dataset)
 
-    def before_import_row(
-        self,
-        row: Mapping[str, Any],
-        **kwargs: Any,
-    ) -> None:
-        """Record the source row hash before widgets clean field values."""
-
-        xref = self._row_xref(row, row_number=kwargs["row_number"])
-        self._row_hashes[xref] = self._row_content_hash(row)
-
     def import_row(
         self,
         row: Mapping[str, Any],
@@ -112,21 +101,22 @@ class AngeeResource(resources.ModelResource):
         """Return a row import result after ledger skip/adoption checks."""
 
         row_number = kwargs["row_number"]
-        xref = self._row_xref(row, row_number=row_number)
+        xref = self._row_xref(row.get("_xref"), row_number=row_number)
         row_hash = self._row_content_hash(row)
         ledger = self._ledger_for_xref(xref)
         self._record_row_state(xref, row_hash, ledger)
+        identity = self._adopt_identity(row)
         instance = self._instance_from_ledger(ledger)
-        if instance is not None and self._ledger_resolution_is_stale(row, instance):
+        if instance is not None and self._ledger_resolution_is_stale(identity, instance):
             # Sqids encode pks, so after a table drop+recreate a surviving
             # ledger sqid resolves to a DIFFERENT, newly created row (pk
             # reuse). The resolved row failed the entry's adopt identity, so
             # the pointer is stale: fall through to adopt-or-create and let
             # ``after_save_instance`` repoint the ledger.
-            self._stale_ledger_xrefs.add(xref)
             instance = None
 
-        adopted = self._adopt_for_row(xref, row, ledger, instance)
+        self._instances[xref] = instance
+        adopted = self._adopt_for_row(xref, row, identity, ledger, instance)
         if adopted is None:
             skip = self._skip_decision(ledger, instance, row_hash)
             if skip is not None:
@@ -145,34 +135,27 @@ class AngeeResource(resources.ModelResource):
     ) -> None:
         """Restore auto-managed source values and upsert the ledger row."""
 
-        xref = self._row_xref(row, row_number=kwargs["row_number"])
+        xref = self._row_xref(row.get("_xref"), row_number=kwargs["row_number"])
         self._restore_auto_fields(instance, row)
         self._upsert_ledger(
             xref=xref,
             instance=instance,
             row_hash=self._row_hashes[xref],
         )
+        self._instances[xref] = instance
 
     def instance_for_xref(self, xref: str) -> models.Model | None:
         """Return an existing or adopted instance for a row xref."""
 
-        if xref in self._adopted_instances:
-            return self._adopted_instances[xref]
-        if xref in self._stale_ledger_xrefs:
-            # A stale pointer must not resurface through the instance loader:
-            # with no adoptable match the row is created fresh, not written
-            # over the wrong row the ledger still names.
-            return None
-        self._ledger_for_xref(xref)
-        ledger = self._existing_ledgers[xref]
-        if ledger is None:
-            return None
-        return self._instance_from_ledger(ledger)
+        if xref not in self._instances:
+            ledger = self._ledger_for_xref(xref)
+            self._instances[xref] = self._instance_from_ledger(ledger)
+        return self._instances[xref]
 
     def _prime_existing_ledgers(self, dataset: tablib.Dataset) -> None:
         """Load existing ledger rows for this import dataset in one query."""
 
-        xrefs = {self._row_xref(row, row_number=index) for index, row in enumerate(dataset.dict, start=1)}
+        xrefs = {self._row_xref(value, row_number=index) for index, value in enumerate(dataset["_xref"], start=1)}
         self._existing_ledgers = {xref: None for xref in xrefs}
         if not xrefs:
             return
@@ -202,6 +185,7 @@ class AngeeResource(resources.ModelResource):
         self,
         xref: str,
         row: Mapping[str, Any],
+        identity: dict[str, Any] | None,
         ledger: Resource | None,
         instance: models.Model | None,
     ) -> models.Model | None:
@@ -209,10 +193,10 @@ class AngeeResource(resources.ModelResource):
 
         if ledger is not None and instance is not None:
             return None
-        adopted = self._adopt_existing_target(row)
+        adopted = self._adopt_existing_target(row, identity)
         if adopted is None:
             return None
-        self._adopted_instances[xref] = adopted
+        self._instances[xref] = adopted
         return adopted
 
     def _skip_decision(
@@ -229,10 +213,9 @@ class AngeeResource(resources.ModelResource):
             return self._skip_result(instance)
         return None
 
-    def _row_xref(self, row: Mapping[str, Any], *, row_number: int) -> str:
+    def _row_xref(self, value: Any, *, row_number: int) -> str:
         """Return the normalized xref for one import row."""
 
-        value = row.get("_xref")
         if not isinstance(value, str) or not value.strip():
             raise ResourceLoadError(f"{self.entry.display} row {row_number}: missing _xref")
         return value.strip()
@@ -240,7 +223,7 @@ class AngeeResource(resources.ModelResource):
     def _row_content_hash(self, row: Mapping[str, Any]) -> str:
         """Return a deterministic hash for model field values in ``row``."""
 
-        payload = {key: value for key, value in sorted(row.items()) if key not in RESERVED_ROW_KEYS}
+        payload = {key: value for key, value in sorted(row.items()) if key != "_xref"}
         body = json.dumps(
             json_safe(payload),
             sort_keys=True,
@@ -312,10 +295,7 @@ class AngeeResource(resources.ModelResource):
 
         if ledger is None or not ledger.target_id:
             return None
-        instance = instance_from_public_id(
-            self._meta.model,
-            str(ledger.target_id),
-        )
+        instance = ledger.target_instance()
         if instance is None:
             return None
         expected = self._meta.model._meta.concrete_model
@@ -328,7 +308,7 @@ class AngeeResource(resources.ModelResource):
 
     def _ledger_resolution_is_stale(
         self,
-        row: Mapping[str, Any],
+        identity: dict[str, Any] | None,
         instance: models.Model,
     ) -> bool:
         """Whether a ledger-resolved live row fails the entry's adopt identity.
@@ -341,8 +321,7 @@ class AngeeResource(resources.ModelResource):
         plus target-model checks still apply).
         """
 
-        identity = self._adopt_identity(row)
-        if identity is None:
+        if identity is None or (self.entry.adopt is True and len(identity) != 1):
             return False
         for field_name, value in identity.items():
             field = self._meta.model._meta.get_field(field_name)
@@ -355,7 +334,7 @@ class AngeeResource(resources.ModelResource):
                 and self.entry.adopt == field_name
                 and current in (None, "")
                 and wanted not in (None, "")
-                and self._single_adoption_condition(field_name) is not None
+                and self._adoption_condition is not None
             ):
                 # A conditional stable key may be introduced after the ledger
                 # already owns the row. Its empty sentinel is unassigned, not a
@@ -366,140 +345,84 @@ class AngeeResource(resources.ModelResource):
                 return True
         return False
 
-    def _adopt_identity(self, row: Mapping[str, Any]) -> dict[str, Any] | None:
-        """Return the adopt-key field values one row declares, or ``None``.
-
-        Mirrors the three adoption shapes ``_adopt_existing_target`` accepts:
-        one named field, a composite tuple, and ``adopt=True`` (the single
-        adoptable unique field carried by the row). ``None`` means the entry
-        declares no adoption or the row omits the key values.
-        """
+    @functools.cached_property
+    def _adoption_fields(self) -> tuple[models.Field[Any, Any], ...]:
+        """Resolve and validate the declaration once for this model import."""
 
         adopt = self.entry.adopt
-        if not adopt:
-            return None
         if isinstance(adopt, str):
-            candidate = self._adoption_candidate(row, adopt)
-            return None if candidate is None else dict([candidate])
+            return (self._unique_adoption_field(adopt),)
         if isinstance(adopt, tuple):
-            return self._composite_adoption_candidate(row, adopt)
-        candidates = [
-            candidate
-            for field in self._meta.model._meta.fields
-            if self._is_adoptable_field(field) and (candidate := self._adoption_candidate(row, field.name)) is not None
-        ]
-        if len(candidates) != 1:
+            return self._unique_adoption_fields(adopt)
+        if adopt:
+            return tuple(field for field in self._meta.model._meta.fields if self._is_adoptable_field(field))
+        return ()
+
+    @functools.cached_property
+    def _adoption_condition(self) -> models.Q | None:
+        """Read the selected model-owned uniqueness condition once."""
+
+        adopt = self.entry.adopt
+        if isinstance(adopt, str):
+            field = self._adoption_fields[0]
+            return None if field.unique else self._unique_field_set_condition((field.name,))
+        if isinstance(adopt, tuple):
+            return self._unique_field_set_condition(adopt)
+        return None
+
+    def _adopt_identity(self, row: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Prepare one row's natural identity once through native field widgets."""
+
+        if not self.entry.adopt:
             return None
-        return dict(candidates)
+        condition = self._adoption_condition
+        if isinstance(self.entry.adopt, str) and condition is not None:
+            if not self._row_matches_condition(row, condition):
+                return None
+        identity: dict[str, Any] = {}
+        for field in self._adoption_fields:
+            resource_field = self.fields.get(field.name)
+            if resource_field is None:
+                raise ImproperlyConfigured(f"{self.entry.display}: adopt field {field.name!r} is not importable")
+            value = resource_field.clean(row) if resource_field.column_name in row else None
+            if value in (None, ""):
+                if self.entry.adopt is True:
+                    continue
+                return None
+            identity[field.name] = value
+        return identity or None
 
     def _adopt_existing_target(
         self,
         row: Mapping[str, Any],
+        identity: dict[str, Any] | None,
     ) -> models.Model | None:
-        """Return an existing unique-field target when adoption is enabled."""
+        """Find the prepared natural identity without repeating row coercion."""
 
-        adopt = self.entry.adopt
-        if not adopt:
+        if identity is None:
             return None
-
-        if isinstance(adopt, str):
-            candidate = self._adoption_candidate(row, adopt)
-            if candidate is None:
+        if self.entry.adopt is True and len(identity) > 1:
+            names = ", ".join(identity)
+            raise ImproperlyConfigured(f"{self.entry.display}: adopt=True matched multiple unique fields: {names}")
+        condition = self._adoption_condition
+        if isinstance(self.entry.adopt, tuple) and condition is not None:
+            if not self._row_matches_condition(row, condition):
                 return None
-            field_name, value = candidate
-            queryset = self._meta.model._default_manager.filter(**{field_name: value})
-            condition = self._single_adoption_condition(field_name)
-            if condition is not None:
-                queryset = queryset.filter(condition)
-            matches = list(queryset[:2])
-            if len(matches) > 1:
-                raise ImproperlyConfigured(
-                    f"{self.entry.display}: adopt field {field_name!r} matched multiple rows"
-                )
-            return matches[0] if matches else None
-        elif isinstance(adopt, tuple):
-            composite = self._composite_adoption_candidate(row, adopt)
-            if composite is None:
-                return None
-            queryset = self._meta.model._default_manager.filter(**composite)
-            condition = self._unique_field_set_condition(adopt)
-            if condition is not None:
-                if not self._row_matches_condition(row, condition):
-                    return None
-                queryset = queryset.filter(condition)
-            matches = list(queryset[:2])
-            if len(matches) != 1:
-                return None
-            return matches[0]
-        else:
-            candidates = []
-            for field in self._meta.model._meta.fields:
-                if not self._is_adoptable_field(field):
-                    continue
-                candidate = self._adoption_candidate(row, field.name)
-                if candidate is not None:
-                    candidates.append(candidate)
-            if len(candidates) > 1:
-                names = ", ".join(name for name, _value in candidates)
-                raise ImproperlyConfigured(f"{self.entry.display}: adopt=True matched multiple unique fields: {names}")
-
-        if not candidates:
-            return None
-        field_name, value = candidates[0]
-        matches = list(self._meta.model._default_manager.filter(**{field_name: value})[:2])
-        if len(matches) != 1:
-            return None
-        return matches[0]
-
-    def _composite_adoption_candidate(
-        self,
-        row: Mapping[str, Any],
-        field_names: tuple[str, ...],
-    ) -> dict[str, Any] | None:
-        """Return row values for one configured composite adoption key."""
-
-        fields = self._unique_adoption_fields(field_names)
-        candidate: dict[str, Any] = {}
-        for field in fields:
-            resource_field = self.fields.get(field.name)
-            if resource_field is None:
-                raise ImproperlyConfigured(f"{self.entry.display}: adopt field {field.name!r} is not importable")
-            if resource_field.column_name not in row:
-                return None
-            value = self._adoption_field_value(resource_field, row)
-            if value in (None, ""):
-                return None
-            candidate[field.name] = value
-        return candidate
-
-    def _adoption_candidate(
-        self,
-        row: Mapping[str, Any],
-        field_name: str,
-    ) -> tuple[str, Any] | None:
-        """Return a row value for one configured adoption field."""
-
-        field = self._unique_adoption_field(field_name)
-        condition = self._single_adoption_condition(field_name)
-        if condition is not None and not self._row_matches_condition(row, condition):
-            return None
-        resource_field = self.fields.get(field.name)
-        if resource_field is None:
-            raise ImproperlyConfigured(f"{self.entry.display}: adopt field {field_name!r} is not importable")
-        if resource_field.column_name not in row:
-            return None
-        value = self._adoption_field_value(resource_field, row)
-        if value in (None, ""):
-            return None
-        return field.name, value
-
-    def _adoption_field_value(self, resource_field: fields.Field, row: Mapping[str, Any]) -> Any:
-        """Return one adoption key value after the field's widget cleans it."""
-
-        return resource_field.clean(row)
+        queryset = self._meta.model._default_manager.filter(**identity)
+        if condition is not None:
+            queryset = queryset.filter(condition)
+        matches = list(queryset[:2])
+        if len(matches) > 1 and isinstance(self.entry.adopt, str):
+            raise ImproperlyConfigured(f"{self.entry.display}: adopt field {self.entry.adopt!r} matched multiple rows")
+        return matches[0] if len(matches) == 1 else None
 
     def _row_matches_condition(self, row: Mapping[str, Any], condition: models.Q) -> bool:
-        """Return whether a resource row satisfies one conditional unique constraint."""
+        """Match the bounded exact/isnull adoption declaration without I/O.
+
+        Django Q.check executes SQL and returns True after DatabaseError.
+        Keep this narrower fail-fast contract until a native strict evaluator
+        exists; expanding its lookup grammar is not an import concern.
+        """
 
         results: list[bool] = []
         for child in condition.children:
@@ -553,7 +476,7 @@ class AngeeResource(resources.ModelResource):
 
         resource_field = self.fields.get(field.name)
         if resource_field is not None and resource_field.column_name in row:
-            return self._adoption_field_value(resource_field, row)
+            return resource_field.clean(row)
         if field.has_default():
             return field.get_default()
         return None
@@ -584,16 +507,6 @@ class AngeeResource(resources.ModelResource):
                     f"{self.entry.display}: adopt field {field_name!r} must be a unique model field"
                 )
         return field
-
-    def _single_adoption_condition(self, field_name: str) -> models.Q | None:
-        """Return the condition that scopes one explicit string adoption field."""
-
-        field = self._unique_adoption_field(field_name)
-        if field.unique:
-            return None
-        found, condition = self._find_unique_field_set_condition((field_name,))
-        assert found and condition is not None
-        return condition
 
     def _unique_adoption_fields(
         self,
@@ -743,7 +656,7 @@ class XrefInstanceLoader(BaseInstanceLoader):
     def get_instance(self, row: Mapping[str, Any]) -> models.Model | None:
         """Return the existing target for one dataset row."""
 
-        xref = self.resource._row_xref(row, row_number=0)
+        xref = self.resource._row_xref(row.get("_xref"), row_number=0)
         return self.resource.instance_for_xref(xref)
 
 

@@ -11,7 +11,7 @@ the one public resolution seam). Mirrors ``agents.InferenceBackend`` / ``storage
 this addon.
 
 Backends return an **actor-scoped** ``Page`` queryset/list: REBAC row scope is
-applied here (``apply_ambient_scope``), so a caller's ambient actor only ever sees
+applied here (``scoped``), so a caller's ambient actor only ever sees
 pages it may read. This module stays free of the markdown text owners — search is
 ORM filtering over the existing ``title``/``body`` columns, not parsing.
 """
@@ -21,9 +21,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from angee.base.impl import ImplBase
 from django.apps import apps
 from django.db.models import Q
+
+from angee.base.impl import ImplBase
 
 
 class RetrievalBackend(ImplBase):
@@ -71,6 +72,6 @@ class LexicalRetrievalBackend(RetrievalBackend):
             page_model._default_manager.filter(vault=self.vault)
             .filter(Q(title__icontains=query) | Q(markdown__body__icontains=query))
             .order_by("title", "sqid")
-            .apply_ambient_scope()
+            .scoped()
         )
         return rows[:first]

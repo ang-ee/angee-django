@@ -11,31 +11,13 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-import django_yamlconf
 import environ
 from django.core.exceptions import ImproperlyConfigured
 
-from angee.compose import autoconfig as _autoconfig
-from angee.compose.composer import Composer
-from angee.paths import resolve_path
+from angee.compose import yamlconf
 from angee.project import PROJECT_SETTINGS_ENV, PROJECT_YAML_NAME, project_dir
 
 DEFAULTS_SETTINGS_MODULE = "angee.compose.defaults"
-YAMLCONF_PREDEFINED_SETTINGS = frozenset(
-    {
-        "CPU_COUNT",
-        "OS_MACHINE",
-        "OS_NODE",
-        "OS_PROCESSOR",
-        "OS_RELEASE",
-        "OS_SYSTEM",
-        "PYTHON",
-        "TOP_DIR",
-        "USER",
-        "VIRTUAL_ENV",
-    }
-)
-
 
 def prepend_import_paths(paths: Iterable[Path]) -> None:
     """Put import paths at the front of ``sys.path`` preserving order."""
@@ -59,6 +41,8 @@ class ProjectContract:
     def compose(self) -> None:
         """Populate ``namespace`` from project settings, defaults, and addon contracts."""
 
+        from angee.compose.composer import Composer
+
         root = self.load()
         prepend_import_paths((*self.namespace.get("ANGEE_ADDON_DIRS", ()), root))
         Composer(self.namespace).compose_settings()
@@ -78,8 +62,8 @@ class ProjectContract:
 
         prepend_import_paths((root,))
         project_settings = self._load_project_settings(root, settings_module)
-        self._load_yaml_settings(project_settings, root)
-        self._reject_unexpected_yamlconf_sources(project_settings, root, settings_module)
+        yamlconf.load_project(project_settings, root)
+        yamlconf.reject_unexpected_sources(project_settings, root, settings_module)
         self._apply_defaults(project_settings, root)
         return root
 
@@ -103,7 +87,7 @@ class ProjectContract:
         """Remove previously composed Django settings from a reloaded module."""
 
         for setting in list(self.namespace):
-            if setting == _autoconfig.YAMLCONF_ATTRIBUTES or _autoconfig.is_setting_name(setting):
+            if setting == yamlconf.YAMLCONF_ATTRIBUTES or yamlconf.is_setting_name(setting):
                 self.namespace.pop(setting, None)
 
     def _load_project_settings(
@@ -148,70 +132,6 @@ class ProjectContract:
             )
         return project_settings
 
-    def _load_yaml_settings(
-        self,
-        project_settings: ModuleType,
-        root: Path,
-    ) -> None:
-        """Apply the project's YAML and environment settings overlay.
-
-        A bounded reproduction of ``django_yamlconf.load``. That entry point
-        walks from the project root up to the filesystem root (``dirtree_find``)
-        collecting every ``settings.yaml`` it finds, so hosting this project
-        inside another Angee instance — whose own ``settings.yaml`` is an
-        ancestor of every nested project — silently loads and *overrides* the
-        project with the host's values. Composing the pipeline from yamlconf's
-        module-level functions bounds the sources to exactly the project's own
-        ``<root>/settings.yaml`` plus the explicit ``YAMLCONF_CONFFILE`` overlay,
-        preserving load order (project file, then ``YAMLCONF_CONFFILE``, then
-        the environment) and the ``BASE_DIR``/``TOP_DIR`` bootstrap.
-        """
-
-        with _autoconfig.fail_on_yamlconf_errors():
-            loader, loader_kwargs = django_yamlconf.get_loader("yaml")
-            if loader is None:
-                return
-            attributes = django_yamlconf.bootstrap_attributes(str(root))
-            project_yaml = root / f"{PROJECT_YAML_NAME}.yaml"
-            if os.access(project_yaml, os.R_OK):
-                django_yamlconf.load_conffile(attributes, project_settings, loader, loader_kwargs, str(project_yaml))
-            if final_conf := os.environ.get("YAMLCONF_CONFFILE"):
-                django_yamlconf.load_conffile(attributes, project_settings, loader, loader_kwargs, final_conf)
-            django_yamlconf.load_envdefs(attributes, project_settings)
-            django_yamlconf.expand_attribute_refs(attributes)
-            django_yamlconf.inject_attr(attributes, project_settings)
-
-    def _reject_unexpected_yamlconf_sources(
-        self,
-        project_settings: ModuleType,
-        root: Path,
-        settings_module: str,
-    ) -> None:
-        """Reject yamlconf's implicit ancestor ``settings.yaml`` cascade."""
-
-        allowed_sources = {
-            _autoconfig.YAMLCONF_INTERNAL_SOURCE,
-            _autoconfig.YAMLCONF_ENVIRONMENT_SOURCE,
-            settings_module,
-        }
-        project_yaml = (root / "settings.yaml").resolve()
-        if project_yaml.exists():
-            allowed_sources.add(str(project_yaml))
-        if final_conf := os.environ.get("YAMLCONF_CONFFILE"):
-            allowed_sources.add(str(resolve_path(final_conf)))
-
-        for attribute in getattr(project_settings, _autoconfig.YAMLCONF_ATTRIBUTES, {}).values():
-            sources = [attribute.get("source"), *(source for _value, source in attribute.get("history", ()))]
-            for source in sources:
-                if source in allowed_sources:
-                    continue
-                try:
-                    source_path = str(resolve_path(str(source)))
-                except ImproperlyConfigured, OSError, TypeError, ValueError:
-                    source_path = str(source)
-                if source_path not in allowed_sources:
-                    raise ImproperlyConfigured(f"Unexpected django-yamlconf source {source!r}")
-
     def _apply_defaults(
         self,
         project_settings: ModuleType,
@@ -222,7 +142,7 @@ class ProjectContract:
         seed = {
             name: value
             for name, value in vars(project_settings).items()
-            if _autoconfig.is_setting_name(name) and name not in YAMLCONF_PREDEFINED_SETTINGS
+            if yamlconf.is_setting_name(name) and name not in yamlconf.YAMLCONF_PREDEFINED_SETTINGS
         }
         seed.setdefault("BASE_DIR", root)
 
@@ -235,11 +155,6 @@ class ProjectContract:
         if "EMAIL_URL" in os.environ:
             for email_setting, email_value in self.env.email_url().items():
                 seed.setdefault(email_setting, email_value)
-        if "ANYMAIL" in os.environ:
-            seed.setdefault("ANYMAIL", self.env.json("ANYMAIL"))
-        for name, value in sorted(os.environ.items()):
-            if name.startswith("ANYMAIL_"):
-                seed.setdefault(name, value)
 
         self.namespace.update(
             {
@@ -249,13 +164,13 @@ class ProjectContract:
                     init_globals=seed,
                     run_name=f"{DEFAULTS_SETTINGS_MODULE}.__effective__",
                 ).items()
-                if (name == _autoconfig.YAMLCONF_ATTRIBUTES or _autoconfig.is_setting_name(name))
-                and name not in YAMLCONF_PREDEFINED_SETTINGS
+                if (name == yamlconf.YAMLCONF_ATTRIBUTES or yamlconf.is_setting_name(name))
+                and name not in yamlconf.YAMLCONF_PREDEFINED_SETTINGS
             }
         )
 
-        if hasattr(project_settings, _autoconfig.YAMLCONF_ATTRIBUTES):
-            self.namespace[_autoconfig.YAMLCONF_ATTRIBUTES] = getattr(
+        if hasattr(project_settings, yamlconf.YAMLCONF_ATTRIBUTES):
+            self.namespace[yamlconf.YAMLCONF_ATTRIBUTES] = getattr(
                 project_settings,
-                _autoconfig.YAMLCONF_ATTRIBUTES,
+                yamlconf.YAMLCONF_ATTRIBUTES,
             )

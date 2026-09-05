@@ -29,18 +29,18 @@ export function NexusOverviewContribution(): React.ReactElement {
     <DashboardView>
       <Metric
         label={t("overview.fading.metric")}
-        value={count(overview?.fading_count, query.fetching)}
+        value={count(overview?.fading_count, query.isFetching)}
         icon="radar"
         tone="warning"
       />
       <Metric
         label={t("overview.due.metric")}
-        value={count(overview?.due_count, query.fetching)}
+        value={count(overview?.due_count, query.isFetching)}
         icon="cadence"
         tone="warning"
       />
       <div className="grid gap-4 xl:grid-cols-2">
-        <RailPanel title={t("overview.fading.title")} count={overview?.fading_count ?? 0} fetching={query.fetching}>
+        <RailPanel title={t("overview.fading.title")} count={overview?.fading_count ?? 0} fetching={query.isFetching}>
           {fading.length > 0 ? (
             <div className="grid gap-2">
               {fading.map((tie) => (
@@ -60,7 +60,7 @@ export function NexusOverviewContribution(): React.ReactElement {
             <InlineEmpty label={t("overview.fading.empty")} />
           )}
         </RailPanel>
-        <RailPanel title={t("overview.due.title")} count={overview?.due_count ?? 0} fetching={query.fetching}>
+        <RailPanel title={t("overview.due.title")} count={overview?.due_count ?? 0} fetching={query.isFetching}>
           {due.length > 0 ? (
             <div className="grid gap-2">
               {due.map((cadence) => (

@@ -274,7 +274,7 @@ export function MergePage(): React.ReactElement {
     if (result?.veto_merge) goBack();
   }, [goBack, left, right, veto]);
 
-  if (comparison.fetching && !left && !right) {
+  if (comparison.isFetching && !left && !right) {
     return (
       <Page>
         <PageHeader title={t("merge.title")} description={t("merge.description")} />

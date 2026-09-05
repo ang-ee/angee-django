@@ -1,5 +1,5 @@
 # Angee addon manifest. The declarative contract hatch-angee compiles into
-# the package's [project] + entry points; see angee/addons.py (AddonContract).
+# the package's [project] + entry points; see hatch-angee's native AddonManifest.
 [addon]
 name = "angee.agents_integrate_openai"
 description = "OpenAI (GPT) inference backend — adds the OpenAI client to the agents catalogue"
@@ -8,6 +8,7 @@ category = "Integration"
 depends_on = ["angee.agents", "angee.integrate"]
 dependencies = [
   "openai>=2.43.0",
+  "pydantic-ai-slim[openai]>=2.13",
 ]
 
 [resources]

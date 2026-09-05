@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import type { AngeeLiveResource } from "./provider";
 
 import {
@@ -49,7 +50,7 @@ describe("Angee Hasura provider defaults", () => {
     });
     const callback = vi.fn();
     const provider = createAngeeChangeLiveProvider(
-      { subscribe } as never,
+      { subscribe, on: vi.fn(() => () => undefined) } as never,
       [resource({ changes: "noteChanged" })],
     );
 
@@ -85,13 +86,13 @@ describe("Angee Hasura provider defaults", () => {
     expect(dispose).toHaveBeenCalledTimes(1);
   });
 
-  test("invalidates authored query metadata for live model changes", () => {
+  test("invalidates authored query metadata for live model changes", async () => {
     const { subscribe, sinks } = recordingClient();
     const invalidateQueries = vi.fn();
     const provider = createAngeeChangeLiveProvider(
-      { subscribe } as never,
+      { subscribe, on: vi.fn(() => () => undefined) } as never,
       [resource({ changes: "decisionChanged", list: "workflow_decisions", model: "workflows.Decision" })],
-      { queryClient: { invalidateQueries } },
+      { queryClient: { invalidateQueries, cancelQueries: vi.fn(async () => undefined) } },
     );
 
     provider.subscribe({
@@ -110,11 +111,11 @@ describe("Angee Hasura provider defaults", () => {
       },
     });
 
-    expect(invalidateQueries).toHaveBeenCalledWith({
+    await vi.waitFor(() => expect(invalidateQueries).toHaveBeenCalledWith({
       predicate: expect.any(Function),
       type: "all",
       refetchType: "active",
-    });
+    }));
     const predicate = invalidateQueries.mock.calls[0]?.[0]?.predicate as
       | ((query: { meta: unknown }) => boolean)
       | undefined;
@@ -125,7 +126,7 @@ describe("Angee Hasura provider defaults", () => {
   test("skips resources without change roots", () => {
     const subscribe = vi.fn();
     const provider = createAngeeChangeLiveProvider(
-      { subscribe } as never,
+      { subscribe, on: vi.fn(() => () => undefined) } as never,
       [resource({ changes: null })],
     );
 
@@ -140,10 +141,78 @@ describe("Angee Hasura provider defaults", () => {
     expect(subscribe).not.toHaveBeenCalled();
   });
 
+  test("revalidates native authored data on socket reconnect and removes its listener with the last consumer", async () => {
+    const client = new QueryClient();
+    let rows = ["survivor", "revoked"];
+    const queryFn = vi.fn(async () => rows);
+    const noteQuery = {
+      queryKey: ["message-feed", "current"],
+      queryFn,
+      meta: { angeeModels: ["notes.Note"] },
+      staleTime: Infinity,
+    };
+    const unrelated = {
+      queryKey: ["unrelated"],
+      queryFn: vi.fn(async () => ["tag"]),
+      meta: { angeeModels: ["notes.Tag"] },
+      staleTime: Infinity,
+    };
+    await client.fetchQuery(noteQuery);
+    await client.fetchQuery(unrelated);
+    await client.fetchQuery({ ...noteQuery, queryKey: ["message-feed", "inactive"] });
+    const observer = new QueryObserver(client, noteQuery);
+    const unsubscribeObserver = observer.subscribe(() => undefined);
+    const listeners = new Set<() => void>();
+    const stopListening = vi.fn();
+    const on = vi.fn((event: string, listener: () => void) => {
+      expect(event).toBe("connected");
+      listeners.add(listener);
+      return () => { listeners.delete(listener); stopListening(); };
+    });
+    const { subscribe } = recordingClient();
+    const provider = createAngeeChangeLiveProvider(
+      { subscribe, on } as never,
+      [resource({ changes: "noteChanged" }), resource({ changes: "tagChanged", list: "tags", model: "notes.Tag" })],
+      { queryClient: client },
+    );
+    const subscription = () => provider.subscribe({
+      channel: "angee/authored/notes.Note", types: ["*"], callback: vi.fn(),
+      params: { models: ["notes.Note"] },
+    });
+    const first = subscription();
+    const second = subscription();
+    try {
+      expect(on).toHaveBeenCalledTimes(1);
+      // The initial connection also closes the gap between HTTP and subscribing.
+      listeners.forEach((connected) => connected());
+      await vi.waitFor(() => expect(queryFn).toHaveBeenCalledTimes(3));
+      rows = ["survivor"];
+      listeners.forEach((connected) => connected());
+      await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["survivor"]));
+      expect(client.getQueryState(["message-feed", "inactive"])?.isInvalidated).toBe(true);
+      expect(unrelated.queryFn).toHaveBeenCalledTimes(1);
+      expect(client.getQueryState(unrelated.queryKey)?.isInvalidated).toBe(false);
+      provider.unsubscribe(first);
+      expect(listeners.size).toBe(1);
+      provider.unsubscribe(second);
+      expect(listeners.size).toBe(0);
+      expect(stopListening).toHaveBeenCalledTimes(1);
+      const next = subscription();
+      expect(on).toHaveBeenCalledTimes(2);
+      provider.unsubscribe(next);
+      expect(listeners.size).toBe(0);
+    } finally {
+      provider.unsubscribe(first);
+      provider.unsubscribe(second);
+      unsubscribeObserver();
+      client.clear();
+    }
+  });
+
   test("shares one upstream subscription across consumers for the same resource", () => {
     const { subscribe, sinks } = recordingClient();
     const provider = createAngeeChangeLiveProvider(
-      { subscribe } as never,
+      { subscribe, on: vi.fn(() => () => undefined) } as never,
       [resource({ changes: "noteChanged" })],
     );
     const first = vi.fn();
@@ -180,7 +249,7 @@ describe("Angee Hasura provider defaults", () => {
   test("reopens the upstream subscription after the last consumer leaves", () => {
     const { subscribe } = recordingClient();
     const provider = createAngeeChangeLiveProvider(
-      { subscribe } as never,
+      { subscribe, on: vi.fn(() => () => undefined) } as never,
       [resource({ changes: "noteChanged" })],
     );
 
@@ -207,7 +276,7 @@ describe("Angee Hasura provider defaults", () => {
     const { subscribe, sinks } = recordingClient();
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const provider = createAngeeChangeLiveProvider(
-      { subscribe } as never,
+      { subscribe, on: vi.fn(() => () => undefined) } as never,
       [resource({ changes: "noteChanged" })],
     );
 
@@ -239,7 +308,7 @@ describe("Angee Hasura provider defaults", () => {
   test("subscribes each authored-query model to its own changes root", () => {
     const { subscribe, sinks } = recordingClient();
     const provider = createAngeeChangeLiveProvider(
-      { subscribe } as never,
+      { subscribe, on: vi.fn(() => () => undefined) } as never,
       [
         resource({ changes: "noteChanged" }),
         resource({ changes: "tagChanged", list: "tags", model: "notes.Tag" }),
@@ -270,7 +339,7 @@ describe("Angee Hasura provider defaults", () => {
   test("joins the shared fan-out — a resource hook and an authored query share one upstream", () => {
     const { subscribe, sinks } = recordingClient();
     const provider = createAngeeChangeLiveProvider(
-      { subscribe } as never,
+      { subscribe, on: vi.fn(() => () => undefined) } as never,
       [resource({ changes: "noteChanged" })],
     );
 
@@ -296,13 +365,13 @@ describe("Angee Hasura provider defaults", () => {
     expect(nthSink(sinks, 0).dispose).toHaveBeenCalledTimes(1);
   });
 
-  test("invalidates authored reads when a change arrives on a model subscription", () => {
+  test("invalidates authored reads when a change arrives on a model subscription", async () => {
     const { subscribe, sinks } = recordingClient();
     const invalidateQueries = vi.fn();
     const provider = createAngeeChangeLiveProvider(
-      { subscribe } as never,
+      { subscribe, on: vi.fn(() => () => undefined) } as never,
       [resource({ changes: "noteChanged" })],
-      { queryClient: { invalidateQueries } },
+      { queryClient: { invalidateQueries, cancelQueries: vi.fn(async () => undefined) } },
     );
 
     provider.subscribe({
@@ -315,11 +384,11 @@ describe("Angee Hasura provider defaults", () => {
       data: { noteChanged: { model: "notes.Note", id: "note_1", action: "update" } },
     });
 
-    expect(invalidateQueries).toHaveBeenCalledWith({
+    await vi.waitFor(() => expect(invalidateQueries).toHaveBeenCalledWith({
       predicate: expect.any(Function),
       type: "all",
       refetchType: "active",
-    });
+    }));
     const predicate = invalidateQueries.mock.calls[0]?.[0]?.predicate as
       | ((query: { meta: unknown }) => boolean)
       | undefined;
@@ -330,7 +399,7 @@ describe("Angee Hasura provider defaults", () => {
   test("ignores authored models with no change root", () => {
     const subscribe = vi.fn();
     const provider = createAngeeChangeLiveProvider(
-      { subscribe } as never,
+      { subscribe, on: vi.fn(() => () => undefined) } as never,
       [resource({ changes: null })],
     );
 
@@ -348,7 +417,7 @@ describe("Angee Hasura provider defaults", () => {
   test("keeps a separate upstream subscription per change root", () => {
     const { subscribe, sinks } = recordingClient();
     const provider = createAngeeChangeLiveProvider(
-      { subscribe } as never,
+      { subscribe, on: vi.fn(() => () => undefined) } as never,
       [
         resource({ changes: "noteChanged" }),
         resource({ changes: "tagChanged", list: "tags", model: "notes.Tag" }),

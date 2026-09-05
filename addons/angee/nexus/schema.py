@@ -6,15 +6,15 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
-from angee.base.actors import actor_user_id, is_user_actor
 from django.apps import apps
 from rebac import current_actor
 from strawberry import auto
 
+from angee.base.actors import actor_user_id, is_user_actor
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.messaging.schema import MessageType
+from angee.messaging.schema import MessageFeedPage, MessageFeedRevalidation
 from angee.parties.schema import PartyType
 
 Tie = apps.get_model("nexus", "Tie")
@@ -92,14 +92,6 @@ class PartyNexusExtension:
 
 
 @strawberry.type
-class PartyTimelinePayload:
-    """One newest-first page of a party collection's cross-channel timeline."""
-
-    messages: list[MessageType]
-    count: int
-
-
-@strawberry.type
 class PartyGraphPayload:
     """A bounded, actor-visible party graph rooted at one party or circle."""
 
@@ -126,10 +118,10 @@ class NexusQuery:
     def party_network(self, party_id: strawberry.ID) -> list[TieType]:
         """Return actor-visible derived edges touching one readable party."""
 
-        party = Party.objects.all().apply_ambient_scope().from_public_id(str(party_id))
+        party = Party.objects.all().scoped().from_public_id(str(party_id))
         if party is None:
             raise ValueError("party not found")
-        edges = Tie.objects.around_party(party).apply_ambient_scope()
+        edges = Tie.objects.around_party(party).scoped()
         return cast("list[TieType]", list(edges))
 
     @strawberry.field
@@ -145,16 +137,8 @@ class NexusQuery:
 
         if (root_id is None) == (circle_id is None):
             raise ValueError("party_graph requires exactly one root_id or circle_id")
-        party = (
-            Party.objects.all().apply_ambient_scope().from_public_id(str(root_id))
-            if root_id is not None
-            else None
-        )
-        circle = (
-            Circle.objects.all().apply_ambient_scope().from_public_id(str(circle_id))
-            if circle_id is not None
-            else None
-        )
+        party = Party.objects.all().scoped().from_public_id(str(root_id)) if root_id is not None else None
+        circle = Circle.objects.all().scoped().from_public_id(str(circle_id)) if circle_id is not None else None
         if root_id is not None and party is None:
             raise ValueError("party not found")
         if circle_id is not None and circle is None:
@@ -205,49 +189,98 @@ class NexusQuery:
         )
 
     @strawberry.field
-    def party_timeline(
+    def party_message_feed(
         self,
-        info: strawberry.Info,
         party_id: strawberry.ID,
         search: str = "",
-        before: strawberry.ID | None = None,
+        before_cursor: str | None = None,
+        after_cursor: str | None = None,
+        through_cursor: str | None = None,
         limit: int = 50,
-    ) -> PartyTimelinePayload:
-        """Delegate one actor-scoped timeline page to messaging's collection owner."""
+    ) -> MessageFeedPage:
+        """Page a readable party's currently authorized inbox messages."""
 
-        party = Party.objects.all().apply_ambient_scope().from_public_id(str(party_id))
+        party = Party.objects.all().scoped().from_public_id(str(party_id))
         if party is None:
             raise ValueError("party not found")
-        messages, count = Message.objects.timeline_for_parties(
-            (party,),
-            search=search,
-            before=str(before) if before is not None else None,
-            limit=limit,
+        return MessageFeedPage(
+            **Message.objects.inbox()
+            .involving_parties((party,))
+            .feed_page(
+                scope=("party", str(party.sqid)),
+                search=search,
+                before_cursor=before_cursor,
+                after_cursor=after_cursor,
+                through_cursor=through_cursor,
+                limit=limit,
+            )
         )
-        return PartyTimelinePayload(messages=cast("list[MessageType]", messages), count=count)
 
     @strawberry.field
-    def circle_timeline(
+    def circle_message_feed(
         self,
-        info: strawberry.Info,
         circle_id: strawberry.ID,
         search: str = "",
-        before: strawberry.ID | None = None,
+        before_cursor: str | None = None,
+        after_cursor: str | None = None,
+        through_cursor: str | None = None,
         limit: int = 50,
-    ) -> PartyTimelinePayload:
-        """Return messages involving members of a readable circle subtree."""
+    ) -> MessageFeedPage:
+        """Page readable circle members' currently authorized inbox messages."""
 
-        circle = Circle.objects.all().apply_ambient_scope().from_public_id(str(circle_id))
+        circle = Circle.objects.all().scoped().from_public_id(str(circle_id))
         if circle is None:
             raise ValueError("circle not found")
-        parties = Party.objects.all().apply_ambient_scope().in_circle(circle)
-        messages, count = Message.objects.timeline_for_parties(
-            parties,
-            search=search,
-            before=str(before) if before is not None else None,
-            limit=limit,
+        parties = Party.objects.all().scoped().in_circle(circle)
+        return MessageFeedPage(
+            **Message.objects.inbox()
+            .involving_parties(parties)
+            .feed_page(
+                scope=("circle", str(circle.sqid)),
+                search=search,
+                before_cursor=before_cursor,
+                after_cursor=after_cursor,
+                through_cursor=through_cursor,
+                limit=limit,
+            )
         )
-        return PartyTimelinePayload(messages=cast("list[MessageType]", messages), count=count)
+
+    @strawberry.field
+    def party_message_feed_revalidate(
+        self,
+        party_id: strawberry.ID,
+        ids: list[strawberry.ID],
+        search: str = "",
+    ) -> MessageFeedRevalidation:
+        """Revalidate loaded messages against this party's current visible edges."""
+
+        party = Party.objects.all().scoped().from_public_id(str(party_id))
+        if party is None:
+            raise ValueError("party not found")
+        return MessageFeedRevalidation(
+            **Message.objects.inbox()
+            .involving_parties((party,))
+            .feed_revalidate([str(value) for value in ids], search=search)
+        )
+
+    @strawberry.field
+    def circle_message_feed_revalidate(
+        self,
+        circle_id: strawberry.ID,
+        ids: list[strawberry.ID],
+        search: str = "",
+    ) -> MessageFeedRevalidation:
+        """Revalidate loaded messages against currently visible circle members."""
+
+        circle = Circle.objects.all().scoped().from_public_id(str(circle_id))
+        if circle is None:
+            raise ValueError("circle not found")
+        parties = Party.objects.all().scoped().in_circle(circle)
+        return MessageFeedRevalidation(
+            **Message.objects.inbox()
+            .involving_parties(parties)
+            .feed_revalidate([str(value) for value in ids], search=search)
+        )
 
 
 _TIE_RESOURCE = hasura_model_resource(
@@ -291,7 +324,6 @@ _NEXUS_SCHEMA_BUCKET = {
     "types": [
         TieType,
         CadenceType,
-        PartyTimelinePayload,
         PartyGraphPayload,
         NexusOverviewPayload,
         *_TIE_RESOURCE.types,

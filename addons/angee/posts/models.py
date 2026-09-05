@@ -26,12 +26,11 @@ from __future__ import annotations
 
 from typing import cast
 
+from django.db import models
+
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
-from django.db import models
-from rebac.managers import RebacManager
-
 from angee.integrate.models import Bridge
 from angee.posts.backends import FeedBackend
 from angee.posts.ingest import land_posts
@@ -78,12 +77,11 @@ class Feed(Bridge):
         related_name="monitored_feeds",
     )
 
-    objects = RebacManager()
-
     class Meta:
         """Django model options for the feed child model."""
 
         abstract = True
+        ordering = ("-updated_at",)
         rebac_resource_type = "posts/feed"
         rebac_id_attr = "sqid"
 
@@ -257,7 +255,7 @@ class Quota(SqidMixin, AuditMixin, AngeeModel):
 # the one table with no collision.
 
 
-class ThreadPublic(AngeeModel):
+class ThreadPublic(models.Model):
     """Public-post payload posts contributes onto ``messaging.Thread`` (same row).
 
     ``subject_url`` links a public thread to its post's canonical URL. It has no
@@ -275,7 +273,7 @@ class ThreadPublic(AngeeModel):
         abstract = True
 
 
-class MessagePublic(AngeeModel):
+class MessagePublic(models.Model):
     """Public-post fields posts contributes onto ``messaging.Message`` (same row).
 
     ``is_original_post`` marks the root post of a public thread (a post with no parent).

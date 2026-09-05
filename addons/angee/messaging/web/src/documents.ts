@@ -157,18 +157,12 @@ export const RecordMessageFields = graphql(`
   }
 `);
 
-// The channel conversation transcript reads the thread's messages straight off
-// the `messages` auto-CRUD resource — a fixed-size page ordered newest-first,
-// keyset-paginated on the `(sent_at, created_at)` cursor: "load older" passes the
-// oldest loaded row's timestamps instead of growing a re-fetched window, so a
-// million-message thread pages in constant work per fetch (the Zulip/Synapse
-// anchor-pagination shape, never OFFSET). `messages_aggregate` reports the thread
-// total on the head page so the view knows when older messages remain without
-// re-counting the thread for every keyset page. Only the fields a `ChatBubble`
-// transcript renders are selected.
+// One projection for the transcript's window reads and authoritative retained-ID
+// revalidation. Messaging owns the total order and opaque fixed-window cursors.
 export const TranscriptMessageFields = graphql(`
   fragment TranscriptMessageFields on MessageType {
     id
+    feed_order_key
     direction
     preview
     message_type
@@ -218,45 +212,36 @@ export const TranscriptMessageFields = graphql(`
 
 export const ThreadTranscriptDocument = graphql(`
   query MessagingThreadTranscript(
-    $threadId: String!
+    $threadId: ID!
     $limit: Int!
-    $head: Boolean!
-    $beforeSentAt: DateTime!
-    $beforeCreatedAt: DateTime!
+    $beforeCursor: String
+    $throughCursor: String
   ) {
-    head_messages: messages(
-      where: { thread: { _eq: $threadId } }
-      order_by: [{ sent_at: desc }, { created_at: desc }]
+    thread_message_feed(
+      thread_id: $threadId
+      before_cursor: $beforeCursor
+      through_cursor: $throughCursor
       limit: $limit
-    ) @include(if: $head) {
-      ...TranscriptMessageFields
-    }
-    messages_aggregate(where: { thread: { _eq: $threadId } }) @include(if: $head) {
-      aggregate {
-        count
+    ) {
+      count
+      older_cursor
+      has_older
+      has_more_in_window
+      has_older_than_through
+      messages {
+        ...TranscriptMessageFields
       }
     }
-    older_messages: messages(
-      where: {
-        _and: [
-          { thread: { _eq: $threadId } }
-          {
-            _or: [
-              { sent_at: { _lt: $beforeSentAt } }
-              {
-                _and: [
-                  { sent_at: { _eq: $beforeSentAt } }
-                  { created_at: { _lte: $beforeCreatedAt } }
-                ]
-              }
-            ]
-          }
-        ]
+  }
+`);
+
+export const ThreadTranscriptRevalidateDocument = graphql(`
+  query MessagingThreadTranscriptRevalidate($threadId: ID!, $ids: [ID!]!) {
+    thread_message_feed_revalidate(thread_id: $threadId, ids: $ids) {
+      messages {
+        ...TranscriptMessageFields
       }
-      order_by: [{ sent_at: desc }, { created_at: desc }]
-      limit: $limit
-    ) @skip(if: $head) {
-      ...TranscriptMessageFields
+      absent_ids
     }
   }
 `);
@@ -786,7 +771,7 @@ export const RecordActivityThreadDocument = graphql(`
 `);
 
 export type ThreadTranscriptRow =
-  NonNullable<DocumentType<typeof ThreadTranscriptDocument>["head_messages"]>[number];
+  DocumentType<typeof ThreadTranscriptDocument>["thread_message_feed"]["messages"][number];
 
 export type RecordThreadPayload = DocumentType<typeof RecordThreadDocument>["record_thread"];
 export type RecordActivityThreadPayload =

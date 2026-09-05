@@ -90,7 +90,7 @@ describe("platform detail surfaces", () => {
       addon: undefined,
       dependedBy: [],
       dependsOn: [],
-      fetching: true,
+      isFetching: true,
       modelLabels: [],
     });
 
@@ -103,7 +103,7 @@ describe("platform detail surfaces", () => {
       addon: undefined,
       dependedBy: [],
       dependsOn: [],
-      fetching: false,
+      isFetching: false,
       modelLabels: [],
     });
     routerMocks.params = { id: "angee.missing" };
@@ -129,7 +129,7 @@ describe("platform detail surfaces", () => {
       },
       dependedBy: ["angee.operator"],
       dependsOn: ["angee.iam"],
-      fetching: false,
+      isFetching: false,
       modelLabels: ["storage.File"],
     });
 
@@ -156,7 +156,7 @@ describe("platform detail surfaces", () => {
   test("ModelDetail keeps metric links navigable", () => {
     platformMocks.usePlatformModel.mockReturnValue({
       dependedBy: ["notes.Attachment"],
-      fetching: false,
+      isFetching: false,
       model: {
         addon_id: "example.notes",
         addon_label: "Notes",

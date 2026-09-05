@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Controller, useForm, useWatch, type Control } from "react-hook-form";
+import { Controller, useWatch, type Control } from "react-hook-form";
 import { rowPublicId, useModelMetadata } from "@angee/metadata";
 
 import { DialogForm } from "../../fragments/DialogForm";
@@ -60,15 +60,8 @@ export function ActionFormDialog({
     () => new Set(args.map((arg) => arg.name)),
     [args],
   );
-  const form = useForm<ArgValues>({
-    // Seeded once at mount — RHF reads defaultValues only then. The caller mounts
-    // the dialog per invocation (RecordActionBar keys it by action id and unmounts
-    // on close), which is what re-seeds the relationList prefill for each open.
-    defaultValues: argDefaultValues(args, context),
-  });
-  // `useActionForm` owns the fire→outcome→bind-errors→toast/close lifecycle; this
-  // dialog owns only the value collection (RHF args) and rendering.
   const actionForm = useActionForm<ArgValues>({
+    defaultValues: argDefaultValues(args, context),
     submit: (collected) => {
       // `run` is reached only when `action.submit` is set (guarded below); the
       // fallback just keeps the return total for the optional descriptor field.
@@ -88,10 +81,11 @@ export function ActionFormDialog({
     clearFieldError: clearServerError,
   } = actionForm;
 
-  const submit = form.handleSubmit(async (collected) => {
-    if (!action.submit) return;
-    await actionForm.run(collected);
-  });
+  const form = actionForm.form;
+  const submit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (action.submit) void actionForm.run(form.getValues());
+  };
 
   const footer = (
     <>

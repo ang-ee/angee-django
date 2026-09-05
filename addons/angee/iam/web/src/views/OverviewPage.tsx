@@ -107,7 +107,7 @@ export function OverviewPage(): ReactElement {
     }
   }
 
-  const loading = overview.fetching;
+  const loading = overview.isFetching;
 
   return (
     <DashboardView className="p-1">
@@ -135,9 +135,9 @@ export function OverviewPage(): ReactElement {
                   <Select
                     value={principal_id}
                     options={principalOptions}
-                    placeholder={usersQuery.fetching ? t("overview.grant.loadingUsers") : t("overview.grant.selectUser")}
+                    placeholder={usersQuery.isFetching ? t("overview.grant.loadingUsers") : t("overview.grant.selectUser")}
                     aria-labelledby={principal_labelId}
-                    disabled={usersQuery.fetching || principalOptions.length === 0}
+                    disabled={usersQuery.isFetching || principalOptions.length === 0}
                     onValueChange={setPrincipalId}
                   />
                   {usersTruncated ? (

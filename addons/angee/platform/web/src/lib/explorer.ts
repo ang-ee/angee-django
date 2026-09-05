@@ -1,8 +1,8 @@
+import type { UseQueryResult } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import {
   useAuthoredQuery,
-  type AuthoredQueryResult,
   type DocumentData,
 } from "@angee/refine";
 import type { GraphViewEdge, GraphViewNode } from "@angee/ui";
@@ -30,8 +30,7 @@ export interface PlatformModelGraphScope {
   model?: string | null;
 }
 
-export interface PlatformExplorerQuery
-  extends AuthoredQueryResult<PlatformExplorerResult> {
+export type PlatformExplorerQuery = UseQueryResult<PlatformExplorerResult> & {
   explorer: PlatformExplorerData | null;
 }
 
@@ -47,20 +46,15 @@ export interface PlatformModelDetail {
   dependedBy: readonly string[];
 }
 
-export interface PlatformAddonDetailResult
-  extends PlatformExplorerQuery,
-    PlatformAddonDetail {
+export type PlatformAddonDetailResult = PlatformExplorerQuery & PlatformAddonDetail & {
   notFound: boolean;
 }
 
-export interface PlatformModelDetailResult
-  extends PlatformExplorerQuery,
-    PlatformModelDetail {
+export type PlatformModelDetailResult = PlatformExplorerQuery & PlatformModelDetail & {
   notFound: boolean;
 }
 
-export interface PlatformModelGraphResult
-  extends AuthoredQueryResult<PlatformExplorerResult> {
+export type PlatformModelGraphResult = UseQueryResult<PlatformExplorerResult> & {
   nodes: readonly GraphViewNode<"model">[];
   edges: readonly GraphViewEdge[];
 }
@@ -138,7 +132,7 @@ export function usePlatformAddon(
     () => selectPlatformAddonDetail(query.data, id),
     [query.data, id],
   );
-  return { ...query, ...detail, notFound: !query.fetching && !detail.addon };
+  return { ...query, ...detail, notFound: !query.isFetching && !detail.addon };
 }
 
 export function usePlatformModel(
@@ -149,7 +143,7 @@ export function usePlatformModel(
     () => selectPlatformModelDetail(query.data, id),
     [query.data, id],
   );
-  return { ...query, ...detail, notFound: !query.fetching && !detail.model };
+  return { ...query, ...detail, notFound: !query.isFetching && !detail.model };
 }
 
 export function usePlatformModelGraph({

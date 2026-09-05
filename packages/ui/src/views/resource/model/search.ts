@@ -1,9 +1,11 @@
 import { format } from "date-fns";
-import { CALENDAR_ANCHOR_FORMAT, CALENDAR_VIEW_MODES, RESOURCE_VIEW_GROUP_GRANULARITIES, RESOURCE_VIEW_KINDS } from "./capabilities";
+import { clampPageSize, stableSerialize } from "@angee/refine";
+import { dedupeBy } from "../../../lib/dedupe";
+import { CALENDAR_ANCHOR_FORMAT, defaultResourceViewPageSize, CALENDAR_VIEW_MODES, RESOURCE_VIEW_GROUP_GRANULARITIES, RESOURCE_VIEW_KINDS } from "./capabilities";
 import type { CalendarViewMode, ResourceViewGroupGranularity, ResourceViewKind } from "./capabilities";
-import { resourceViewFilterFromUnknown } from "./filter";
+import { Filter, resourceViewFilterFromUnknown } from "./filter";
 import type { ResourceViewFilter, ResourceViewGroup, ResourceViewInitialState, ResourceViewSort } from "./filter";
-import { ResourceViewState } from "./state";
+import { createResourceViewState, type ResourceViewState } from "./state";
 const RESOURCE_VIEW_SEARCH_SHAPE = {
   page: undefined as number | undefined,
   pageSize: undefined as number | undefined,
@@ -22,18 +24,80 @@ export const RESOURCE_VIEW_SEARCH_KEYS = Object.keys(
   RESOURCE_VIEW_SEARCH_SHAPE,
 ) as ResourceViewSearchKey[];
 
+/** Encode only persisted view facts, retaining the existing URL vocabulary. */
 export function resourceViewStateToSearch(
   state: ResourceViewState,
   initial: ResourceViewInitialState = {},
 ): ResourceViewSearch {
-  return state.toSearch(initial);
+  const search: ResourceViewSearch = {};
+  const base = createResourceViewState(initial);
+  if (state.pagination.pageIndex !== base.pagination.pageIndex) search.page = state.pagination.pageIndex + 1;
+  if (state.pagination.pageSize !== defaultResourceViewPageSize(initial)) search.pageSize = state.pagination.pageSize;
+  const sort = state.sorting[0];
+  const defaultSort = base.sorting[0];
+  const sortValue = sort ? `${sort.id}:${sort.desc ? "desc" : "asc"}` : "";
+  const baseSortValue = defaultSort ? `${defaultSort.id}:${defaultSort.desc ? "desc" : "asc"}` : "";
+  if (sortValue !== baseSortValue) search.sort = sortValue;
+  const filterValue = stableSerialize(state.filter);
+  if (Filter.from(state.filter).hasEntries()) {
+    if (filterValue !== stableSerialize(base.filter)) search.filter = JSON.stringify(state.filter);
+  } else if (Filter.from(base.filter).hasEntries()) search.filter = "";
+  if (state.groupStack.length > 0) {
+    if (serializeResourceViewGroupStack(state.groupStack) !== serializeResourceViewGroupStack(base.groupStack)) {
+      search.group = serializeResourceViewGroup(state.groupStack[0]!);
+      if (state.groupStack.length > 1) search.then = serializeResourceViewGroupStack(state.groupStack.slice(1));
+    }
+  } else if (base.groupStack.length > 0) {
+    search.group = "";
+    if (base.groupStack.length > 1) search.then = "";
+  }
+  if (state.view !== (initial.view ?? "list")) search.view = state.view;
+  if (state.view === "calendar") {
+    if (state.mode !== base.mode) search.mode = state.mode;
+    if (state.anchor !== base.anchor) search.anchor = state.anchor;
+  }
+  return search;
 }
 
+/** Decode URL syntax into native state, never a second table state model. */
 export function resourceViewSearchToState(
   search: ResourceViewSearch | Record<string, unknown>,
   initial: ResourceViewInitialState = {},
 ): ResourceViewState {
-  return ResourceViewState.fromSearch(search, initial);
+  const base = createResourceViewState(initial);
+  const sort = parseSearchSort(search.sort);
+  const group = parseSearchGroup(search.group);
+  const then = parseSearchGroupStack(search.then);
+  const thenCleared = isClearedSearchValue(search.then);
+  const groupStack = isClearedSearchValue(search.group)
+    ? []
+    : group || then || thenCleared
+      ? normaliseGroupStack([...(group ? [group] : []), ...(thenCleared ? [] : (then ?? []))])
+      : base.groupStack;
+  const page = parseSearchInteger(search.page);
+  return {
+    ...base,
+    pagination: {
+      pageIndex: page === null ? base.pagination.pageIndex : Math.max(0, Math.floor(page) - 1),
+      pageSize: clampPageSize(parseSearchInteger(search.pageSize) ?? base.pagination.pageSize),
+    },
+    sorting: isClearedSearchValue(search.sort) ? [] : sort ? [{ id: sort.field, desc: sort.dir === "desc" }] : base.sorting,
+    filter: isClearedSearchValue(search.filter) ? {} : parseSearchFilter(search.filter) ?? base.filter,
+    group: groupStack[0] ?? null,
+    groupStack,
+    view: parseSearchView(search.view) ?? base.view,
+    mode: parseSearchMode(search.mode) ?? base.mode,
+    anchor: parseSearchAnchor(search.anchor) ?? base.anchor,
+  };
+}
+
+export function normaliseGroupStack(groups: readonly ResourceViewGroup[]): readonly ResourceViewGroup[] {
+  return dedupeBy(groups.map((group) => ({
+    field: group.field,
+    ...(group.aggregateField ? { aggregateField: group.aggregateField } : {}),
+    ...(group.aggregateKey ? { aggregateKey: group.aggregateKey } : {}),
+    ...(group.granularity ? { granularity: group.granularity } : {}),
+  })), serializeResourceViewGroup);
 }
 
 export function mergeResourceViewSearch(
@@ -171,7 +235,7 @@ function parseResourceViewGroupStack(value: string): readonly ResourceViewGroup[
   if (!value) return [];
   const groups = value.split(",").map(parseResourceViewGroup);
   if (groups.some((group) => group === null)) return null;
-  return ResourceViewState.normaliseGroupStack(groups as ResourceViewGroup[]);
+  return normaliseGroupStack(groups as ResourceViewGroup[]);
 }
 
 export function serializeResourceViewGroupStack(

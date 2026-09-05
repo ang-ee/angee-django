@@ -1,7 +1,7 @@
 import * as React from "react";
 import { type DocumentType } from "@angee/gql/console";
 import { senderDisplayName } from "@angee/parties";
-import { useAuthoredInfiniteQuery } from "@angee/refine";
+import { messageFeedRows } from "@angee/messaging";
 import {
   Avatar,
   AvatarFallback,
@@ -16,11 +16,10 @@ import {
 
 import { NexusTimeline } from "./documents";
 import { useNexusT } from "./i18n";
-
-const PAGE_SIZE = 30;
+import { useTimelineMessageFeed } from "./timeline-message-feed";
 
 type TimelinePayload = NonNullable<
-  DocumentType<typeof NexusTimeline>["party_timeline"]
+  DocumentType<typeof NexusTimeline>["party_message_feed"]
 >;
 type TimelineMessage = TimelinePayload["messages"][number];
 type TimelineDirection = NonNullable<TimelineMessage["direction"]>;
@@ -51,46 +50,18 @@ export function TimelinePane(props: TimelinePaneProps): React.ReactElement {
   const partyId = "partyId" in props ? props.partyId : undefined;
   const circle = typeof circleId === "string";
   const scopeId = (circle ? circleId : partyId) ?? "";
-  const variables = React.useMemo(
-    () => ({
-      partyId: scopeId,
-      circleId: scopeId,
-      circle,
-      before: null,
-      limit: PAGE_SIZE,
-      search: "",
-    }),
-    [circle, scopeId],
-  );
-  const timeline = useAuthoredInfiniteQuery(
-    NexusTimeline,
-    variables,
-    {
-      models: ["messaging.Message", "parties.PartyHandle", "parties.CircleMember"],
-      getRows: (data) =>
-        (circle ? data.circle_timeline : data.party_timeline)?.messages ?? [],
-      getRowId: (row) => row.id,
-      getPageParam: (pageRows) => {
-        const oldest = pageRows.length >= PAGE_SIZE ? pageRows.at(-1) : undefined;
-        return oldest ? { before: oldest.id } : undefined;
-      },
-    },
-  );
+  const timeline = useTimelineMessageFeed(scopeId, circle);
+  const rows = React.useMemo(() => messageFeedRows(timeline.data), [timeline.data]);
+  const total = timeline.data?.pages[0]?.count ?? rows.length;
+  const olderButton = timeline.hasNextPage ? (
+    <Button variant="ghost" size="sm" className="self-center" disabled={timeline.isFetching}
+      onClick={() => { void timeline.fetchNextPage({ cancelRefetch: false }); }}>
+      {t("timeline.loadOlder")}
+    </Button>
+  ) : null;
 
-  const rows = React.useMemo(
-    () =>
-      [...timeline.rows].sort((a, b) =>
-        orderAt(a) < orderAt(b) ? 1 : orderAt(a) > orderAt(b) ? -1 : b.id.localeCompare(a.id),
-      ),
-    [timeline.rows],
-  );
-  const firstPage = timeline.pages[0];
-  const total = (circle ? firstPage?.circle_timeline : firstPage?.party_timeline)?.count
-    ?? rows.length;
-  const exhausted = !timeline.hasMore || rows.length >= total;
-
-  if (timeline.fetching && rows.length === 0) return <LoadingPanel />;
-  if (timeline.error && rows.length === 0) {
+  if (timeline.isFetching && rows.length === 0) return <LoadingPanel />;
+  if (timeline.error) {
     return <EmptyState icon="triangle-alert" title={timeline.error.message} />;
   }
   if (rows.length === 0) {
@@ -98,6 +69,7 @@ export function TimelinePane(props: TimelinePaneProps): React.ReactElement {
       <EmptyState
         icon="comments"
         title={t(circle ? "timeline.circleEmpty" : "timeline.empty")}
+        actions={olderButton}
       />
     );
   }
@@ -144,17 +116,7 @@ export function TimelinePane(props: TimelinePaneProps): React.ReactElement {
           );
         })}
       </MessageFeed>
-      {exhausted ? null : (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="self-center"
-          disabled={timeline.fetching}
-          onClick={timeline.fetchOlder}
-        >
-          {t("timeline.loadOlder")}
-        </Button>
-      )}
+      {olderButton}
     </div>
   );
 }

@@ -9,6 +9,32 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — upstream reuse
+
+- REBAC now owns schema introspection/rendering/extensions and scoped queryset
+  projection. Hasura/aggregates own JSON grouping, public-ID key hooks, per-resource
+  regex lookups and named generated resource members; Angee copies/global patches
+  are removed. Exact feature commits are pinned for review; no package release
+  is implied by the development version numbers.
+- In-process inference consumes native Pydantic AI model/messages/responses and
+  usage. `InferenceRequest`, `InferenceResponse`, `ChatAPI`, the runtime provider
+  switch and separate vendor chat serializers are removed. See
+  [inference migration](docs/howto/inference.md) for the new public API, credential
+  lifetime and versioned workflow journal boundary.
+- Imports retain native Tablib datasets through import-export's lifecycle,
+  removing `ResourceRow` and its dataset reconstruction. Xref resolution and
+  adoption coercion happen once through native fields/instance loading. Rows,
+  M2M links, ledger and grants roll back together.
+- Forms and tables use native RHF and TanStack state with Refine core transport;
+  the Refine table and RHF wrappers are removed. Authored reads expose native
+  Query controls and share a provider/document/variables cache; operator snapshots
+  update it directly. Metadata/form parsing uses Valibot-inferred wire types.
+  [Frontend migration notes](docs/frontend/upstream-reuse.md) record changed APIs
+  and preserved URL/favorite contracts.
+- Two deliberate gates remain: the bounded import constraint evaluator cannot
+  be replaced by Django's fail-open `Q.check`; infinite retained history cannot
+  drop its archive until authoritative cursor/revocation reconciliation exists.
+
 ## 0.2.0 — 2026-08-24
 
 - Addon dependency facts are unbundled from the framework wheel: folder-addon

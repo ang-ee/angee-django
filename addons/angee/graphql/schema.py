@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, cast
 
 import strawberry
-from angee.addons import addon_contract, resolve_addon_reference
-from angee.data.metadata import DataResourceMetadata, merge_data_resources, serialize_data_resources
 from django.apps import AppConfig, apps
 from django.core.exceptions import NON_FIELD_ERRORS, ImproperlyConfigured, ValidationError
 from django.db import models
@@ -24,6 +22,8 @@ from strawberry.types.execution import ExecutionContext
 from strawberry.utils.str_converters import to_camel_case
 from strawberry_django_hasura import hasura_config
 
+from angee.addons import addon_manifest, optional_addon_module, resolve_addon_reference
+from angee.data.metadata import DataResourceMetadata, merge_data_resources, serialize_data_resources
 from angee.graphql.data.metadata import (
     data_resource_metadata,
     readable_model_field_names,
@@ -526,11 +526,19 @@ def schema_parts_for(app_config: AppConfig) -> dict[str, SchemaParts]:
 def _raw_schemas(app_config: AppConfig) -> object:
     """Return the raw schema declaration object for one addon, when present."""
 
-    contract = addon_contract(app_config)
-    declaration = contract.schemas if contract is not None else None
-    if declaration is None:
+    manifest = addon_manifest(app_config)
+    if manifest is None:
         return None
-    return resolve_addon_reference(app_config, declaration, attr="schemas")
+    if manifest.schemas is not None:
+        schemas = resolve_addon_reference(app_config, manifest.schemas, attr="schemas")
+    else:
+        module = optional_addon_module(app_config, "schema")
+        if module is None or not hasattr(module, "schemas"):
+            return None
+        schemas = module.schemas
+    if schemas is None:
+        raise ImproperlyConfigured(f"{app_config.name}.schemas must resolve to a mapping")
+    return schemas
 
 
 def _schema_part_values(

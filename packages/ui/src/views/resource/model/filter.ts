@@ -1,7 +1,6 @@
 import { recordValue, stableSerialize } from "@angee/refine";
 import { RESOURCE_VIEW_LOOKUP_OPERATORS, RESOURCE_VIEW_RELATION_LOOKUP_OPERATORS } from "./capabilities";
 import type { CalendarViewMode, ResourceViewFacetLookupOperator, ResourceViewGroupGranularity, ResourceViewKind, ResourceViewOrderDirection, ResourceViewSortDirection } from "./capabilities";
-import type { ResourceViewFavorite } from "./favorites";
 export type ResourceViewFilterPrimitive = string | number | boolean | null;
 export type ResourceViewFilterValue =
   | ResourceViewFilterPrimitive
@@ -50,21 +49,6 @@ export interface ResourceViewInitialState {
   /** Calendar anchor day (`yyyy-MM-dd`); defaults to today. */
   anchor?: string;
 }
-
-export type ResourceViewAction =
-  | { type: "setPage"; page: number }
-  | { type: "setPageSize"; pageSize: number }
-  | { type: "setSort"; sort: ResourceViewSort | null }
-  | { type: "setFilter"; filter: ResourceViewFilter }
-  | { type: "setGroup"; group: ResourceViewGroup | null }
-  | { type: "setGroupStack"; groupStack: readonly ResourceViewGroup[] }
-  | { type: "setSelectedIds"; selectedIds: Iterable<string> }
-  | { type: "toggleSelectedId"; id: string; selected?: boolean }
-  | { type: "clearSelectedIds" }
-  | { type: "setView"; view: ResourceViewKind }
-  | { type: "setMode"; mode: CalendarViewMode }
-  | { type: "setAnchor"; anchor: string }
-  | { type: "applyFavorite"; favorite: ResourceViewFavorite };
 
 export interface FilterFacet {
   field: string;

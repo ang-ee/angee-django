@@ -39,33 +39,21 @@ revision in ``@rebac_extended_by`` for provenance. The base package does **not**
 bump its own ``@rebac_schema_revision`` for an additive extension — the
 contribution is owned, and revisioned, by the contributing addon.
 
-Dormant by construction: with no ``permissions.extends.zed`` anywhere, every
-entry point returns empty / no-op and nothing is emitted or repointed.
+With no extension fragments, merging emits nothing. Phase-2 binding still
+connects manifest-declared permission files to the upstream AppConfig seam.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from django.apps import AppConfig
-from rebac.schema.ast import (
-    AllowedSubject,
-    Caveat,
-    ConstBinding,
-    Definition,
-    FieldBinding,
-    PermArrow,
-    PermBinOp,
-    PermExpr,
-    Permission,
-    PermNil,
-    PermRef,
-    Relation,
-    Schema,
-)
-from rebac.schema.parser import parse_zed, validate_schema
+from django.core.exceptions import ImproperlyConfigured
+from rebac.schema import Definition, Schema, parse_zed, resolve_schema_path, validate_schema
+from rebac.schema import render_zed as render_schema
 
+from angee.addons import addon_manifest
 from angee.fs import GENERATED_SENTINEL
 
 __all__ = [
@@ -81,7 +69,6 @@ __all__ = [
 # sibling of the library-owned ``permissions.zed``. Its presence is the marker;
 # the library never reads it.
 EXTENSION_FILENAME = "permissions.extends.zed"
-BASE_FILENAME = "permissions.zed"
 
 # Merged effective zed lives under this runtime subtree, one file per owning
 # package: ``runtime/permissions/<package>.zed``.
@@ -109,6 +96,35 @@ def _schema_path(app_config: AppConfig, filename: str) -> Path | None:
     return path if path.exists() else None
 
 
+def declared_schema_path(app_config: AppConfig) -> Path | None:
+    """Resolve authored input independently of previously bound effective output."""
+
+    manifest = addon_manifest(app_config)
+    if manifest is None:
+        # Native Django apps have no addon manifest. Capture their upstream
+        # declaration before a derived merged path is assigned to the same seam.
+        if (
+            "_angee_rebac_schema_effective" not in app_config.__dict__
+            or getattr(app_config, "rebac_schema", None) != app_config._angee_rebac_schema_effective
+        ):
+            app_config._angee_rebac_schema_source = resolve_schema_path(app_config)
+        return app_config._angee_rebac_schema_source
+
+    path = Path(app_config.path) / (manifest.permissions or "permissions.zed")
+    configured = getattr(app_config, "rebac_schema", None)
+    bound = app_config.__dict__.get("_angee_rebac_schema_effective")
+    if configured is not None and configured != bound:
+        configured_path = Path(app_config.path) / configured
+        if configured_path.resolve() != path.resolve():
+            raise ImproperlyConfigured(
+                f"{app_config.name}: declare permissions in addon.toml; "
+                "AppConfig.rebac_schema conflicts with the manifest"
+            )
+    if manifest.permissions is not None and not path.is_file():
+        raise ImproperlyConfigured(f"{app_config.name}: declared permissions file does not exist: {path}")
+    return path if path.is_file() else None
+
+
 def _parse(path: Path, package: str) -> Schema:
     """Parse one zed file, wrapping any failure with its owning package."""
 
@@ -131,7 +147,7 @@ def _base_index(
     bases: dict[str, Schema] = {}
     owner_of: dict[str, str] = {}
     for app_config in app_configs:
-        path = _schema_path(app_config, BASE_FILENAME)
+        path = declared_schema_path(app_config)
         if path is None:
             continue
         package = app_config.name
@@ -141,8 +157,7 @@ def _base_index(
             previous = owner_of.get(definition.resource_type)
             if previous is not None:
                 raise SchemaExtensionError(
-                    f"Duplicate definition {definition.resource_type!r} found in "
-                    f"{previous} and {package}"
+                    f"Duplicate definition {definition.resource_type!r} found in {previous} and {package}"
                 )
             owner_of[definition.resource_type] = package
     return bases, owner_of
@@ -177,6 +192,8 @@ def merged_schemas(app_configs: Iterable[AppConfig]) -> dict[str, Schema]:
     """
 
     app_configs = list(app_configs)
+    for app_config in app_configs:
+        declared_schema_path(app_config)
     fragments = _extension_fragments(app_configs)
     if not fragments:
         return {}
@@ -195,10 +212,7 @@ def merged_schemas(app_configs: Iterable[AppConfig]) -> dict[str, Schema]:
                 )
             contributions.setdefault(extension.resource_type, []).append((package, extension))
 
-    fragment_revision = {
-        package: fragment.headers.get("rebac_schema_revision", "0")
-        for package, fragment in fragments
-    }
+    fragment_revision = {package: fragment.headers.get("rebac_schema_revision", "0") for package, fragment in fragments}
 
     merged: dict[str, Schema] = {}
     for resource_type, contributed in contributions.items():
@@ -216,8 +230,7 @@ def merged_schemas(app_configs: Iterable[AppConfig]) -> dict[str, Schema]:
         else:
             _record_provenance(owner_schema, contributed, fragment_revision)
         owner_schema.definitions = [
-            merged_def if d.resource_type == resource_type else d
-            for d in owner_schema.definitions
+            merged_def if d.resource_type == resource_type else d for d in owner_schema.definitions
         ]
 
     for owner, schema in merged.items():
@@ -233,40 +246,16 @@ def _merge_definition(
 ) -> Definition:
     """Merge contributed relations and permission arms into ``base``."""
 
-    relations = list(base.relations)
-    seen_relations = {relation.name for relation in base.relations}
+    merged = base
     for package, extension in contributed:
-        for relation in sorted(extension.relations, key=lambda r: r.name):
-            if relation.name in seen_relations:
-                raise SchemaExtensionError(
-                    f"{package}: relation {base.resource_type}#{relation.name!r} "
-                    "already declared — a contributed relation cannot collide with "
-                    "the base or another contributor"
-                )
-            seen_relations.add(relation.name)
-            relations.append(relation)
-
-    permissions = {permission.name: permission for permission in base.permissions}
-    for package, extension in contributed:
-        for arm in sorted(extension.permissions, key=lambda p: p.name):
-            current = permissions.get(arm.name)
-            if current is None:
-                raise SchemaExtensionError(
-                    f"{package}: permission {base.resource_type}#{arm.name!r} is not "
-                    "declared by the base — an extension unions an arm into an "
-                    "existing permission, it cannot introduce one"
-                )
-            permissions[arm.name] = Permission(
-                name=arm.name,
-                expression=PermBinOp("+", current.expression, arm.expression),
-                raw_text="",
+        try:
+            merged = merged.extend(
+                relations=extension.relations,
+                permission_arms=extension.permissions,
             )
-
-    return Definition(
-        resource_type=base.resource_type,
-        relations=tuple(sorted(relations, key=lambda r: r.name)),
-        permissions=tuple(sorted(permissions.values(), key=lambda p: p.name)),
-    )
+        except ValueError as error:
+            raise SchemaExtensionError(f"{package}: {error}") from error
+    return merged
 
 
 def _clone_schema(schema: Schema) -> Schema:
@@ -305,92 +294,13 @@ def render_zed(package: str, schema: Schema) -> str:
     ``GENERATED_SENTINEL`` marks the file as build output.
     """
 
-    lines = [
-        "// Merged REBAC schema — base permissions.zed plus additive extensions.",
-        f"// {GENERATED_SENTINEL}",
-        f"// @rebac_package: {schema.headers.get('rebac_package', package)}",
-        f"// @rebac_schema_revision: {schema.headers.get('rebac_schema_revision', '0')}",
-    ]
-    extended_by = schema.headers.get("rebac_extended_by")
-    if extended_by:
-        lines.append(f"// @rebac_extended_by: {extended_by}")
-    lines.append("")
-
-    for caveat in sorted(schema.caveats, key=lambda c: c.name):
-        lines.append(_render_caveat(caveat))
-    for definition in sorted(schema.definitions, key=lambda d: d.resource_type):
-        lines.append(_render_definition(definition))
-    return "\n".join(lines) + "\n"
-
-
-def _render_caveat(caveat: Caveat) -> str:
-    params = ", ".join(f"{param.name} {param.type}" for param in caveat.params)
-    return f"caveat {caveat.name}({params}) {{\n{caveat.expression}\n}}\n"
-
-
-def _render_definition(definition: Definition) -> str:
-    relations = sorted(definition.relations, key=lambda r: r.name)
-    permissions = sorted(definition.permissions, key=lambda p: p.name)
-    lines = [f"definition {definition.resource_type} {{"]
-    for relation in relations:
-        lines.append(f"    {_render_relation(relation)}")
-    if relations and permissions:
-        lines.append("")
-    for permission in permissions:
-        lines.append(f"    permission {permission.name} = {_render_expr(permission.expression)}")
-    lines.append("}")
-    return "\n".join(lines) + "\n"
-
-
-def _render_relation(relation: Relation) -> str:
-    subjects = sorted(
-        relation.allowed_subjects,
-        key=lambda s: (s.type, s.id, s.relation, s.wildcard, s.with_caveat),
+    emitted = _clone_schema(schema)
+    emitted.headers.setdefault("rebac_package", package)
+    emitted.headers.setdefault("rebac_schema_revision", "0")
+    return (
+        "// Merged REBAC schema — authored base plus additive extensions.\n"
+        f"// {GENERATED_SENTINEL}\n" + render_schema(emitted)
     )
-    rendered = " | ".join(_render_subject(subject) for subject in subjects)
-    suffix = " with expiration" if relation.with_expiration else ""
-    line = f"relation {relation.name}: {rendered}{suffix}"
-    backing = relation.backing
-    if backing is None:
-        return line
-    if isinstance(backing, ConstBinding):
-        return f"{line} // rebac:const={backing.target_id}"
-    if isinstance(backing, FieldBinding):
-        return f"{line} // rebac:field={backing.attname}"
-    raise SchemaExtensionError(
-        f"{relation.name}: unsupported relation backing kind {backing.kind!r}"
-    )
-
-
-def _render_subject(subject: AllowedSubject) -> str:
-    # Mirrors the library's five subject shapes so the emitted file re-parses
-    # to the same AllowedSubject (specific-id forms are the universal-admin
-    # pattern; dropping `id` would widen a single-role union).
-    if subject.wildcard:
-        base = f"{subject.type}:*"
-    elif subject.id and subject.relation:
-        base = f"{subject.type}:{subject.id}#{subject.relation}"
-    elif subject.id:
-        base = f"{subject.type}:{subject.id}"
-    elif subject.relation:
-        base = f"{subject.type}#{subject.relation}"
-    else:
-        base = subject.type
-    if subject.with_caveat:
-        base += f" with {subject.with_caveat}"
-    return base
-
-
-def _render_expr(expr: PermExpr) -> str:
-    if isinstance(expr, PermNil):
-        return "nil"
-    if isinstance(expr, PermRef):
-        return expr.name
-    if isinstance(expr, PermArrow):
-        return f"{expr.via}->{expr.target}"
-    if isinstance(expr, PermBinOp):
-        return f"({_render_expr(expr.left)} {expr.op} {_render_expr(expr.right)})"
-    raise SchemaExtensionError(f"unknown expression node: {type(expr).__name__}")
 
 
 # ---------- build-time wiring ----------
@@ -415,22 +325,27 @@ def extension_source_map(app_configs: Iterable[AppConfig]) -> dict[Path, str]:
     }
 
 
-def apply_schema_paths(app_configs: Iterable[AppConfig], runtime_dir: Path) -> None:
-    """Repoint each extended package's ``rebac_schema`` at its merged zed.
+def apply_schema_paths(
+    app_configs: Iterable[AppConfig],
+    runtime_dir: Path,
+    *,
+    sources: Mapping[Path, str],
+) -> None:
+    """Bind upstream paths after emission, using the already-rendered source map.
 
-    ``rebac sync`` / ``rebac check`` / ``reconcile_permissions`` resolve a
-    package's schema as ``Path(app_config.path) / app_config.rebac_schema``; an
-    absolute value wins (``Path('/a') / '/b' == Path('/b')``), so pointing at the
-    emitted merged file makes every reader see the superset. No-op when dormant.
+    Addon manifests supply declarations; ``rebac_schema`` is derived integration
+    consumed by django-zed-rebac. Ordinary Django apps keep their native schema
+    declaration. Binding never parses or merges an extension a second time.
     """
 
-    app_configs = list(app_configs)
-    extended = merged_schemas(app_configs)
-    if not extended:
-        return
-    by_name = {app_config.name: app_config for app_config in app_configs}
-    for package in extended:
-        app_config = by_name.get(package)
-        if app_config is None:
+    for app_config in app_configs:
+        source = declared_schema_path(app_config)
+        merged = merged_schema_relpath(app_config.name)
+        if merged in sources:
+            effective = str((runtime_dir / merged).resolve())
+        elif addon_manifest(app_config) is not None or "_angee_rebac_schema_effective" in app_config.__dict__:
+            effective = str(source.resolve()) if source is not None else None
+        else:
             continue
-        app_config.rebac_schema = str((runtime_dir / merged_schema_relpath(package)).resolve())
+        app_config.rebac_schema = effective
+        app_config._angee_rebac_schema_effective = effective

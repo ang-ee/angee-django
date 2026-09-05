@@ -216,3 +216,23 @@ function validationErrorMessage(error: unknown): string {
 }
 
 const EMPTY_FIELD_NAMES: readonly string[] = [];
+
+/** Project RHF server errors into the backend dotted-path display contract. */
+export function serverErrorsFromForm(errors: object): Record<string, readonly string[]> {
+  const result: Record<string, readonly string[]> = {};
+  const visit = (value: unknown, path: string): void => {
+    if (!value || typeof value !== "object") return;
+    if ("type" in value && value.type === "server" && "message" in value && typeof value.message === "string") {
+      if (!path.startsWith("root.")) {
+        const messages = "types" in value && value.types && typeof value.types === "object" && "server" in value.types ? value.types.server : undefined;
+        result[path] = Array.isArray(messages) ? messages.filter((message): message is string => typeof message === "string") : [value.message];
+      }
+      return;
+    }
+    for (const [name, child] of Object.entries(value)) {
+      if (name !== "ref" && name !== "types") visit(child, path ? `${path}.${name}` : name);
+    }
+  };
+  visit(errors, "");
+  return result;
+}

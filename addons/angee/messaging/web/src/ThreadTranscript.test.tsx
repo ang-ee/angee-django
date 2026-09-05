@@ -24,7 +24,9 @@ const mocks = vi.hoisted(() => ({
   hasMore: false,
   queryCalls: [] as Array<Record<string, unknown>>,
   fetchOlder: vi.fn(),
-  useAuthoredInfiniteQuery: vi.fn(),
+  useThreadMessageFeed: vi.fn(),
+  error: null as Error | null,
+  fetching: false,
 }));
 
 vi.mock("@angee/ui", async (importOriginal) => {
@@ -38,16 +40,14 @@ vi.mock("@angee/ui", async (importOriginal) => {
   };
 });
 
-vi.mock("@angee/refine", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@angee/refine")>()),
-  useAuthoredInfiniteQuery: mocks.useAuthoredInfiniteQuery,
-}));
+vi.mock("./thread-message-feed", () => ({ useThreadMessageFeed: mocks.useThreadMessageFeed }));
 
 import { ThreadTranscript } from "./ThreadTranscript";
 
 function message(overrides: Partial<ThreadTranscriptRow> = {}): ThreadTranscriptRow {
   return {
     id: "msg_1",
+    feed_order_key: "v1:0001",
     direction: "INBOUND",
     title: "Re: hello",
     preview: "Hi there",
@@ -73,22 +73,20 @@ beforeEach(() => {
   mocks.hasMore = false;
   mocks.queryCalls = [];
   mocks.fetchOlder.mockReset();
-  mocks.useAuthoredInfiniteQuery.mockReset();
-  mocks.useAuthoredInfiniteQuery.mockImplementation(
-    (_document: unknown, variables: Record<string, unknown>) => {
-      mocks.queryCalls.push(variables);
-      return {
-        rows: mocks.transcriptRows,
-        pages: [{ messages_aggregate: { aggregate: { count: mocks.total } } }],
-        fetching: false,
-        fetchingOlder: false,
-        error: null,
-        hasMore: mocks.hasMore,
-        fetchOlder: mocks.fetchOlder,
-        refetch: vi.fn(),
-      };
-    },
-  );
+  mocks.useThreadMessageFeed.mockReset();
+  mocks.error = null;
+  mocks.fetching = false;
+  mocks.useThreadMessageFeed.mockImplementation((threadId: string) => {
+    mocks.queryCalls.push({ threadId });
+    return {
+      data: { pages: [{ messages: mocks.transcriptRows, count: mocks.total }], pageParams: [null] },
+      isFetching: mocks.fetching,
+      isFetchingNextPage: false,
+      error: mocks.error,
+      hasNextPage: mocks.hasMore,
+      fetchNextPage: mocks.fetchOlder,
+    };
+  });
 });
 
 afterEach(cleanup);
@@ -166,7 +164,7 @@ describe("ThreadTranscript", () => {
     expect(screen.getByRole("button", { name: "👍 reaction, 2" })).toBeTruthy();
   });
 
-  test("offers Load older only while loaded rows trail the total", () => {
+  test("offers Load older using the server continuation", () => {
     mocks.transcriptRows = [message()];
     mocks.total = 120;
     mocks.hasMore = true;
@@ -175,11 +173,43 @@ describe("ThreadTranscript", () => {
 
     expect(mocks.queryCalls.at(-1)).toMatchObject({
       threadId: "thr_1",
-      limit: 50,
-      head: true,
     });
     fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
-    expect(mocks.fetchOlder).toHaveBeenCalledTimes(1);
+    expect(mocks.fetchOlder).toHaveBeenCalledWith({ cancelRefetch: false });
+  });
+
+  test("hides retained messages after a refresh error", () => {
+    mocks.transcriptRows = [message()];
+    mocks.error = new Error("Unreadable thread");
+    render(<ThreadTranscript threadId="thr_1" />);
+    expect(screen.queryByText("Hi there")).toBeNull();
+  });
+
+  test("blocks older loading during an authoritative refresh", () => {
+    mocks.transcriptRows = [message()];
+    mocks.hasMore = true;
+    mocks.fetching = true;
+    render(<ThreadTranscript threadId="thr_1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+    expect(mocks.fetchOlder).not.toHaveBeenCalled();
+  });
+
+  test("keeps older loading available when every retained message disappears", () => {
+    mocks.hasMore = true;
+    render(<ThreadTranscript threadId="thr_1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+    expect(mocks.fetchOlder).toHaveBeenCalledWith({ cancelRefetch: false });
+  });
+
+  test("renders server tie order oldest-to-newest without sorting public IDs", () => {
+    mocks.transcriptRows = [
+      message({ id: "a", feed_order_key: "v1:0002", parts: [{ role: "BODY", fragment: { text: "Newest" }, file: null }] as never }),
+      message({ id: "z", feed_order_key: "v1:0001", parts: [{ role: "BODY", fragment: { text: "Oldest" }, file: null }] as never }),
+    ];
+    render(<ThreadTranscript threadId="thr_1" />);
+    const items = screen.getAllByRole("listitem");
+    expect(items[0]?.textContent).toContain("Oldest");
+    expect(items[1]?.textContent).toContain("Newest");
   });
 
   test("shows the empty state when the thread has no messages", () => {

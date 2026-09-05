@@ -119,7 +119,7 @@ export function GraphPage(): React.ReactElement {
     [navigate],
   );
 
-  if (roots.fetching && options.length === 0) return <LoadingPanel />;
+  if (roots.isFetching && options.length === 0) return <LoadingPanel />;
   if (roots.error) return <EmptyState fill icon="triangle-alert" title={roots.error.message} />;
   if (options.length === 0) {
     return <EmptyState fill icon="users" title={t("graph.empty.title")} description={t("graph.empty.description")} />;
@@ -155,7 +155,7 @@ export function GraphPage(): React.ReactElement {
         }
       />
       <PageBody gutter="none" scroll="hidden">
-        {graph.fetching && !graph.data ? (
+        {graph.isFetching && !graph.data ? (
           <LoadingPanel />
         ) : graph.error ? (
           <div className="p-5"><ErrorBanner description={graph.error.message} /></div>

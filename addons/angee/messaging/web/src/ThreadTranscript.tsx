@@ -1,76 +1,15 @@
 import { senderDisplayName } from "@angee/parties";
-import {
-  useAuthoredInfiniteQuery,
-  type DocumentData,
-  type DocumentVariables,
-} from "@angee/refine";
 import * as React from "react";
 import { Button, ChatBubble, EmptyState, Glyph, LoadingPanel, MessagePartsView, ReactionBar, RelativeTime, SectionEyebrow, cn, reactionsFromGroups, textRoleVariants, type ChatBubbleRole } from "@angee/ui";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { useMessagingT } from "./i18n";
 import { messagingReactionCopy } from "./reaction-copy";
-import {
-  ThreadTranscriptDocument,
-  type ThreadTranscriptRow,
-} from "./documents";
+import type { ThreadTranscriptRow } from "./documents";
+import { messageFeedRows } from "./message-feed";
+import { useThreadMessageFeed } from "./thread-message-feed";
 
-const MESSAGE_MODELS = ["messaging.Message", "messaging.Reaction"] as const;
-// Newest-first head window size; "Load older" fetches keyset pages strictly
-// before the oldest loaded row's (sent_at, created_at) cursor — constant work
-// per fetch however deep the history, never a re-fetched growing window.
-const PAGE_SIZE = 50;
-// Estimated bubble height before measurement; the virtualizer remeasures each row.
 const ESTIMATED_ROW_HEIGHT = 96;
-// Placeholder cursor for the older field while the first page skips it.
-const EPOCH = "1970-01-01T00:00:00Z";
-
-type ThreadTranscriptData = DocumentData<typeof ThreadTranscriptDocument>;
-type ThreadTranscriptVariables = DocumentVariables<typeof ThreadTranscriptDocument>;
-type TranscriptPageVariables =
-  Pick<ThreadTranscriptVariables, "head" | "beforeSentAt" | "beforeCreatedAt">;
-
-/** Newest-first feed order mirroring the server page order (`sent_at desc,
- *  created_at desc`): Postgres puts NULLs first on a bare DESC, so a row
- *  without a send time sorts to the newest end here too. The id tiebreak is
- *  client-only (ids are opaque sqids) and matters just for stable rendering of
- *  exact timestamp ties. ISO-8601 strings in one timezone compare as strings. */
-function compareNewestFirst(a: ThreadTranscriptRow, b: ThreadTranscriptRow): number {
-  const aNull = a.sent_at == null;
-  const bNull = b.sent_at == null;
-  if (aNull !== bNull) return aNull ? -1 : 1;
-  const aKey = a.sent_at ?? a.created_at;
-  const bKey = b.sent_at ?? b.created_at;
-  if (aKey !== bKey) return aKey < bKey ? 1 : -1;
-  if (a.created_at !== b.created_at) return a.created_at < b.created_at ? 1 : -1;
-  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
-}
-
-function transcriptRows(data: ThreadTranscriptData): readonly ThreadTranscriptRow[] {
-  return data.head_messages ?? data.older_messages ?? [];
-}
-
-function transcriptPageVariables(
-  rows: readonly ThreadTranscriptRow[],
-): TranscriptPageVariables | undefined {
-  // "Load older" keyset page: before the oldest loaded row's (sent_at,
-  // created_at) cursor, boundary-INCLUSIVE on created_at. Rows tying the anchor
-  // refetch and the shared id-keyed infinite read dedupes the overlap, so a tie
-  // at the page cut cannot be skipped (ids are opaque sqids, so they cannot be
-  // the third cursor key server-side).
-  if (rows.length < PAGE_SIZE) return undefined;
-  for (let index = rows.length - 1; index >= 0; index -= 1) {
-    const row = rows[index];
-    if (row?.sent_at) {
-      return {
-        head: false,
-        beforeSentAt: row.sent_at,
-        beforeCreatedAt: row.created_at,
-      };
-    }
-  }
-  return undefined;
-}
 
 type MessagingT = ReturnType<typeof useMessagingT>;
 
@@ -113,31 +52,13 @@ function TranscriptBody({
   order = "conversation",
 }: ThreadTranscriptProps): React.ReactElement {
   const t = useMessagingT();
-  const variables = React.useMemo<ThreadTranscriptVariables>(
-    () => ({
-      threadId,
-      limit: PAGE_SIZE,
-      head: true,
-      beforeSentAt: EPOCH,
-      beforeCreatedAt: EPOCH,
-    }),
-    [threadId],
-  );
-  const transcript = useAuthoredInfiniteQuery(ThreadTranscriptDocument, variables, {
-    enabled: Boolean(threadId),
-    models: MESSAGE_MODELS,
-    getRows: transcriptRows,
-    getRowId: (row) => row.id,
-    getPageParam: transcriptPageVariables,
-  });
-
+  const transcript = useThreadMessageFeed(threadId);
   // Render oldest-to-newest so the latest turn sits at the bottom.
   const messages = React.useMemo(
-    () => [...transcript.rows].sort(compareNewestFirst).reverse(),
-    [transcript.rows],
+    () => messageFeedRows(transcript.data).reverse(),
+    [transcript.data],
   );
-  const total = transcript.pages[0]?.messages_aggregate?.aggregate?.count ?? messages.length;
-  const hasOlder = transcript.hasMore && messages.length < total;
+  const hasOlder = transcript.hasNextPage;
   const conversation = order === "conversation";
 
   const scrollRef = React.useRef<HTMLDivElement>(null);
@@ -189,14 +110,21 @@ function TranscriptBody({
   }, [conversation, threadId, messages.length, totalSize]);
 
   function loadOlder(): void {
-    if (!transcript.hasMore) return;
+    if (!transcript.hasNextPage || transcript.isFetching) return;
     const scroll = scrollRef.current;
     // Capture the pre-prepend distance from the bottom so the anchor effect can restore it.
     if (conversation && scroll !== null) prependAnchorRef.current = scroll.scrollHeight - scroll.scrollTop;
-    transcript.fetchOlder();
+    void transcript.fetchNextPage({ cancelRefetch: false });
   }
+  const olderButton = hasOlder ? (
+    <Button type="button" variant="secondary" size="sm"
+      disabled={transcript.isFetching || transcript.isFetchingNextPage} onClick={loadOlder}>
+      <Glyph name="chevron-up" />
+      {t("transcript.loadOlder")}
+    </Button>
+  ) : null;
 
-  if (transcript.fetching && transcript.rows.length === 0) {
+  if (transcript.isFetching && messages.length === 0) {
     return <LoadingPanel message={t("transcript.loading")} />;
   }
   if (transcript.error) {
@@ -216,6 +144,7 @@ function TranscriptBody({
         title={t("transcript.emptyTitle")}
         description={t("transcript.emptyHint")}
         className="min-h-48 p-4"
+        actions={olderButton}
       />
     );
   }
@@ -227,16 +156,7 @@ function TranscriptBody({
           offsets the virtualized list's coordinate space (the scrollMargin bug). */}
       {hasOlder ? (
         <div className="flex justify-center border-b border-border-subtle p-2">
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            disabled={transcript.fetching || transcript.fetchingOlder}
-            onClick={loadOlder}
-          >
-            <Glyph name="chevron-up" />
-            {t("transcript.loadOlder")}
-          </Button>
+          {olderButton}
         </div>
       ) : null}
       <div ref={scrollRef} className="overflow-y-auto" style={{ maxHeight: "calc(100vh - 16rem)" }}>

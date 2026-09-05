@@ -26,8 +26,6 @@ const harness = vi.hoisted(() => ({
   boardProps: null as BoardViewProps<LeadRow> | null,
   tableRows: [] as LeadRow[],
   laneRows: [] as Row[],
-  groupedRows: null as readonly unknown[] | null,
-  tableOptions: [] as unknown[],
   useListOptions: [] as unknown[],
   updateOptions: null as unknown,
   updateCalls: [] as unknown[],
@@ -57,12 +55,13 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@refinedev/core")>();
   return {
     ...actual,
-    useList: (options?: unknown) => {
+    useList: (options?: { resource?: string }) => {
       harness.useListOptions.push(options);
+      const rows = options?.resource === "crmLeads" ? harness.tableRows : harness.laneRows;
       return {
         result: {
-          data: harness.laneRows,
-          total: harness.laneRows.length,
+          data: rows,
+          total: rows.length,
         },
         query: {
           error: null,
@@ -78,29 +77,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   };
 });
 
-vi.mock("@refinedev/react-table", () => ({
-  useTable: (options?: { columns?: readonly unknown[] }) => {
-    harness.tableOptions.push(options);
-    const rows = harness.tableRows.map(tableRow);
-    const groupedRows = harness.groupedRows ?? rows;
-    return {
-      refineCore: {
-        result: {
-          data: harness.tableRows,
-          total: harness.tableRows.length,
-        },
-        filters: [],
-        setFilters: vi.fn(),
-        tableQuery: {
-          error: null,
-          isFetching: false,
-          refetch: harness.refetch,
-        },
-      },
-      reactTable: fakeTable(rows, groupedRows, options?.columns ?? []),
-    };
-  },
-}));
+
 
 vi.mock("./BoardView", () => ({
   BoardView: (props: BoardViewProps<LeadRow>) => {
@@ -136,8 +113,6 @@ beforeEach(() => {
     { id: "stg_qualified", name: "Qualified", code: "QUAL" },
     { id: "stg_proposal", name: "Proposal", code: "PROP" },
   ];
-  harness.groupedRows = null;
-  harness.tableOptions = [];
   harness.useListOptions = [];
   harness.updateOptions = null;
   harness.updateCalls = [];
@@ -211,15 +186,10 @@ describe("ListView board laneSource", () => {
     await waitFor(() => expect(harness.boardProps).not.toBeNull());
 
     expect(lastTableOption()).toMatchObject({
-      refineCoreProps: {
-        meta: {
-          fields: expect.arrayContaining([
-            "id",
-            "name",
-            { customer: ["id", "name"] },
-            { stage: ["id"] },
-          ]),
-        },
+      meta: {
+        fields: expect.arrayContaining([
+          "id", "name", { customer: ["id", "name"] }, { stage: ["id"] },
+        ]),
       },
     });
   });
@@ -275,9 +245,7 @@ describe("ListView board laneSource", () => {
     });
     expect(harness.boardProps?.rankField).toBe("sort_order");
     expect(lastTableOption()).toMatchObject({
-      refineCoreProps: {
-        meta: { fields: expect.arrayContaining(["sort_order"]) },
-      },
+      meta: { fields: expect.arrayContaining(["sort_order"]) },
     });
 
     await act(async () => {
@@ -315,10 +283,7 @@ describe("ListView board laneSource", () => {
   });
 
   test("keeps the derived board lanes when no laneSource is declared", async () => {
-    harness.groupedRows = [
-      groupedTableRow("stage:New", "New", [harness.tableRows[0]!]),
-    ];
-
+    harness.tableRows = [{ id: "led_1", name: "Upgrade", stage: "New" }];
     renderLeadBoard({ laneSource: undefined });
 
     await waitFor(() => {
@@ -524,61 +489,10 @@ function lastUseListOption(): {
     | undefined;
 }
 
-function lastTableOption(): {
-  refineCoreProps?: { meta?: { fields?: unknown } };
-} | undefined {
-  return harness.tableOptions.at(-1) as
-    | { refineCoreProps?: { meta?: { fields?: unknown } } }
-    | undefined;
-}
-
-function tableRow(row: LeadRow) {
-  return {
-    id: row.id,
-    original: row,
-    depth: 0,
-    subRows: [],
-    getIsGrouped: () => false,
-  };
-}
-
-function groupedTableRow(id: string, label: string, rows: readonly LeadRow[]) {
-  return {
-    id,
-    depth: 0,
-    groupingColumnId: "stage",
-    getGroupingValue: () => label,
-    getIsGrouped: () => true,
-    original: rows[0],
-    subRows: rows.map(tableRow),
-  };
-}
-
-function fakeTable(
-  rows: readonly unknown[],
-  groupedRows: readonly unknown[],
-  columns: readonly unknown[],
-) {
-  const leafColumns = columns.map((column) => {
-    const def = column as { id?: string; meta?: unknown };
-    return {
-      id: def.id ?? "column",
-      columnDef: column,
-      getIsVisible: () => true,
-      toggleVisibility: vi.fn(),
-    };
-  });
-  return {
-    options: { columns },
-    getAllLeafColumns: () => leafColumns,
-    getVisibleLeafColumns: () => leafColumns,
-    getRowModel: () => ({ rows }),
-    getGroupedRowModel: () => ({ rows: groupedRows }),
-    getState: () => ({ rowSelection: {} }),
-    getIsAllPageRowsSelected: () => false,
-    getIsSomePageRowsSelected: () => false,
-    toggleAllPageRowsSelected: vi.fn(),
-  };
+function lastTableOption() {
+  return harness.useListOptions.findLast((options) =>
+    (options as { resource?: string }).resource === "crmLeads",
+  );
 }
 
 const COLUMNS = [

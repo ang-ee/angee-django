@@ -98,7 +98,7 @@ function agent(
 }
 
 function queryResult(data: unknown, fetching = false) {
-  return { data, fetching, error: null, refetch: vi.fn() };
+  return { data, isFetching: fetching, error: null, refetch: vi.fn() };
 }
 
 beforeEach(() => {

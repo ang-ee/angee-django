@@ -26,17 +26,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from time import monotonic
 from typing import Any, ClassVar, cast
 
-from angee.base.actors import actor_user_id
-from angee.base.emission import ModelClassAttribute
-from angee.base.fields import SqidField, StateField
-from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeModel
-from angee.base.refs import RecordRefMixin
-from angee.jobs.autoconfig import SETTINGS as _JOB_SETTINGS
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -58,8 +51,15 @@ from rebac import (
     to_subject_ref,
 )
 
+from angee.base.actors import actor_user_id
+from angee.base.fields import SqidField, StateField
+from angee.base.impl import ImplClassField
+from angee.base.mixins import AuditMixin, SqidMixin
+from angee.base.models import AngeeModel
+from angee.base.refs import RecordRefMixin
 from angee.integrate.models import Bridge
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
+from angee.jobs.autoconfig import SETTINGS as _JOB_SETTINGS
 from angee.messaging.backends import ChannelBackend
 from angee.messaging.managers import (
     ChannelManager,
@@ -892,24 +892,6 @@ class Channel(Bridge):
 
     objects = ChannelManager()
 
-    @classmethod
-    def angee_model_attributes(
-        cls,
-        *,
-        app_label: str,
-        model_class: type[models.Model],
-        extension_bases: tuple[type[models.Model], ...],
-    ) -> tuple[ModelClassAttribute, ...]:
-        """Emit the channel manager on the parent-first concrete child."""
-
-        del cls, app_label, model_class, extension_bases
-        return (
-            ModelClassAttribute(
-                name="objects",
-                import_path="angee.messaging.managers.ChannelManager",
-            ),
-        )
-
     class Meta:
         """Django model options for the channel child model."""
 
@@ -1182,14 +1164,10 @@ class Channel(Bridge):
             row.save(update_fields=["cursor", "updated_at"])
 
 
-class _ChannelWebformContribution(models.Model):
-    """Public-form configuration and message mapping folded onto Channel.
+class ChannelWebform(models.Model):
+    """Same-row public-form configuration and message mapping for ``messaging.Channel``."""
 
-    The contribution mirrors intake's narrow same-row donor shape: no second
-    table and no duplicate ``AngeeModel`` timestamps ahead of Channel's concrete
-    Integration parent.  Persisted form facts and their interpretation therefore
-    stay on the row that owns them.
-    """
+    extends = "messaging.Channel"
 
     hasura_readable_fields = (
         "slug",
@@ -1275,9 +1253,7 @@ class _ChannelWebformContribution(models.Model):
         email_field = spec.email_field
         email = str(answers.get(email_field.name) or "").strip() if email_field else ""
         content_answers = (
-            {name: value for name, value in answers.items() if name != email_field.name}
-            if email_field
-            else answers
+            {name: value for name, value in answers.items() if name != email_field.name} if email_field else answers
         )
         stable_id = f"webform:{self.slug}:{submission_id}"
         sender = ParsedHandle(
@@ -1314,17 +1290,6 @@ class _ChannelWebformContribution(models.Model):
                 }
             },
         )
-
-
-class ChannelWebform(_ChannelWebformContribution, AngeeModel):
-    """Same-row public-webform donor for ``messaging.Channel``."""
-
-    extends = "messaging.Channel"
-
-    class Meta:
-        """Abstract donor discovered by the composer; runtime remains false."""
-
-        abstract = True
 
 
 class Thread(SqidMixin, AuditMixin, AngeeModel):
@@ -1622,9 +1587,7 @@ class ThreadFollower(SqidMixin, AuditMixin, AngeeModel):
         explicit = self._explicit_subtype_keys()
         if explicit:
             return models.Q(subtype__key__in=explicit)
-        return models.Q(subtype__isnull=True) | models.Q(
-            subtype__default=True, subtype__internal=False
-        )
+        return models.Q(subtype__isnull=True) | models.Q(subtype__default=True, subtype__internal=False)
 
     def is_subscribed_to(self, subtype: Any) -> bool:
         """The muting rule for one message's ``subtype`` (``None`` when subtype-less) —
@@ -2015,6 +1978,26 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         """
 
         return post_access
+
+    @property
+    def chronological_key(self) -> tuple[datetime, int]:
+        """The feed's complete position: coalesced send/create time, then PK."""
+
+        return self.sent_at or self.created_at, self.pk
+
+    @property
+    def feed_order_key(self) -> str:
+        """Opaque ASCII key whose descending comparison equals chronological order.
+
+        Version 1 encodes UTC microseconds and a biased signed-64-bit integer PK.
+        Consumers compare the complete string; they never decode public IDs or
+        interpret this token as a signed pagination cursor.
+        """
+
+        at, pk = self.chronological_key
+        if timezone.is_naive(at) or not isinstance(pk, int) or not -(2**63) <= pk < 2**63:
+            raise ValueError("Message feed positions require an aware timestamp and signed-64-bit PK.")
+        return f"1:{at.astimezone(UTC).isoformat(timespec='microseconds')}:{pk + 2**63:020d}"
 
     def reaction_groups(self, user: Any = None) -> list[MessageReactionGroup]:
         """Return this message's reactions grouped by content, with ``user``'s state.

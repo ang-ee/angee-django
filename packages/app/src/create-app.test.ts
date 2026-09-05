@@ -1,3 +1,4 @@
+import { parse } from "graphql";
 // @vitest-environment happy-dom
 
 import { createElement, type ReactNode } from "react";
@@ -29,6 +30,7 @@ import {
   TEST_SCHEMAS,
 } from "./testing";
 import {
+  createResourceViewState,
   resourceViewSearchToState,
   resourceViewStateToSearch,
   mergeResourceViewSearch,
@@ -41,7 +43,7 @@ afterEach(() => cleanup());
 type AuthoredQueryDocument = Parameters<typeof useAuthoredQuery>[0];
 
 function typedDocument(source: string): AuthoredQueryDocument {
-  return source as unknown as AuthoredQueryDocument;
+  return parse(source) as AuthoredQueryDocument;
 }
 
 describe("createApp search codec", () => {
@@ -73,6 +75,7 @@ describe("createApp search codec", () => {
       view: "board",
       group: "status:year",
       sort: "title:asc",
+      empty: "",
     });
     expect(query).not.toContain("%22board%22");
   });
@@ -82,10 +85,11 @@ describe("createApp search codec", () => {
       "?tab=archive&page=2&view=board&group=status:year",
     );
     const currentState = resourceViewSearchToState(current);
-    const nextState = currentState.reduce({
-      type: "setSort",
-      sort: { field: "title", dir: "asc" },
-    });
+    const nextState = {
+      ...currentState,
+      pagination: { ...currentState.pagination, pageIndex: 0 },
+      sorting: [{ id: "title", desc: false }],
+    };
 
     const query = stringifyFlatSearch(
       mergeResourceViewSearch(current, resourceViewStateToSearch(nextState)),
@@ -99,6 +103,26 @@ describe("createApp search codec", () => {
     expect(parsed.page).toBeUndefined();
     expect(query).toContain("tab=archive");
     expect(query).not.toContain("%22");
+  });
+
+  test("round-trips explicit clears of seeded resource state and foreign empty search", () => {
+    const initial = {
+      page: 3,
+      sort: { field: "title", dir: "asc" as const },
+      filter: { title: { iContains: "alpha" } },
+      groupStack: [{ field: "status" }, { field: "owner" }],
+    };
+    const cleared = createResourceViewState({ page: 1 });
+    const query = stringifyFlatSearch(mergeResourceViewSearch(
+      { keep: "external", empty: "" },
+      resourceViewStateToSearch(cleared, initial),
+    ));
+    const parsed = parseFlatSearch(query);
+
+    expect(parsed).toEqual({ keep: "external", empty: "", page: "1", sort: "", filter: "", group: "", then: "" });
+    expect(resourceViewSearchToState(parsed, initial)).toMatchObject({
+      pagination: { pageIndex: 0 }, sorting: [], filter: {}, group: null, groupStack: [],
+    });
   });
 });
 

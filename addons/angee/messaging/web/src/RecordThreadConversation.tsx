@@ -308,7 +308,7 @@ export function RecordThreadConversation({
     }
   }, [modelLabel, recordId, markReadMutation, t]);
 
-  if (threadQuery.fetching && threadQuery.data === undefined) {
+  if (threadQuery.isFetching && threadQuery.data === undefined) {
     return <LoadingPanel message={t("chatter.loading")} />;
   }
   // Any failure returns a state surface and NO composer — a `record_thread`
@@ -379,7 +379,7 @@ export function RecordThreadConversation({
         replyToMessage={replyToMessage}
         onClearReply={() => setReplyToMessage(null)}
         recipientOptions={recipientOptions}
-        recipientsLoading={recipientUsersQuery.fetching}
+        recipientsLoading={recipientUsersQuery.isFetching}
         posting={postState.fetching}
         onPost={handlePost}
         onError={setError}

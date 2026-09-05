@@ -8,15 +8,15 @@ from typing import Annotated, Any, cast
 
 import strawberry
 import strawberry_django
-from angee.base.identity import instance_from_public_id
-from angee.base.scoping import write_scoped_queryset
-from angee.data.metadata import DataResourceSubtitleMetadata
 from django.apps import apps
 from django.db.models import F
 from rebac import system_context
 from rebac.resources import model_resource_type
 from strawberry import auto
 
+from angee.base.identity import instance_from_public_id
+from angee.base.scoping import write_scoped_queryset
+from angee.data.metadata import DataResourceSubtitleMetadata
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     hasura_model_resource,
@@ -190,7 +190,7 @@ class PageType(AuthoredRefMixin, AngeeNode):
                 target_page_id=cast(Any, self).pk,
                 is_resolved=True,
             )
-            .apply_ambient_scope()
+            .scoped()
             .annotate(source_title=F("source_page__title"))
             .order_by("source_title", "sqid")
         )
@@ -367,7 +367,7 @@ def _record_for_binding(model_label: str, record_id: PublicID, *, write: bool = 
 
     try:
         model = apps.get_model(str(model_label).strip())
-    except (LookupError, ValueError):
+    except LookupError, ValueError:
         return None
     if model_resource_type(model) is None:
         return None
@@ -399,7 +399,7 @@ class KnowledgeQuery:
         resolves it (gating the actor's read), then delegates to its bound
         :class:`~angee.knowledge.retrieval.RetrievalBackend` (default lexical),
         so a semantic plugin can swap the strategy without editing this resolver.
-        Row scope is the backend's responsibility (``apply_ambient_scope``).
+        Row scope is the backend's responsibility (``scoped``).
 
         ``first`` is clamped here so every backend inherits the bound. The result is
         a materialized list, so a nested ``markdown``/``backlinks``/``vault_label``

@@ -60,6 +60,8 @@ describe("routeHref", () => {
       .toBe("/notes/a?view=board&group=kind");
     expect(routeHref("notes.list", undefined, { model: "notes.Note", page: 2 }))
       .toBe("/notes?model=notes.Note&page=2");
+    expect(routeHref("notes.list", undefined, { filter: "", empty: "", absent: undefined }))
+      .toBe("/notes?filter=&empty=");
   });
 
   test.each(["/files/$", "/files/{-$id}", "/files/prefix{$id}"])(

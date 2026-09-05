@@ -8,7 +8,9 @@ from enum import StrEnum
 from pathlib import Path
 
 from django.apps import AppConfig
-from hatch_angee import AddonManifest, ManifestError, ProjectError, compile_dependencies, parse_manifest, write_block
+from hatch_angee import AddonManifest, ManifestError, ProjectError, compile_dependencies, write_block
+
+from angee.addons import addon_manifest
 
 
 class AddonDependencyGroupResult(StrEnum):
@@ -53,14 +55,7 @@ class AddonDependencyGroup:
     ) -> AddonDependencyGroup:
         """Adapt an already-resolved Django app graph into the projector."""
 
-        try:
-            manifests = tuple(
-                parse_manifest(marker)
-                for addon in addons
-                if (marker := Path(addon.path) / "addon.toml").is_file()
-            )
-        except (ManifestError, OSError) as error:
-            raise RuntimeError(str(error)) from error
+        manifests = tuple(manifest for addon in addons if (manifest := addon_manifest(addon)) is not None)
         return cls(manifests, project_dir=project_dir)
 
     @classmethod

@@ -61,6 +61,7 @@ vi.mock("@tanstack/react-query", () => ({
   hashKey: (value: unknown) => JSON.stringify(value),
   useInfiniteQuery: vi.fn(),
   useQueryClient: () => ({
+    cancelQueries: vi.fn(async () => undefined),
     invalidateQueries: vi.fn(
       async (options: { predicate?: (query: { meta: unknown }) => boolean }) => {
         invalidationMock.queryInvalidations += 1;

@@ -11,7 +11,7 @@ export function ModelDetail(): ReactElement {
   const t = usePlatformT();
   const id = useRouteRecordId();
   const routeHref = useRouteHref();
-  const { model, dependedBy, fetching } = usePlatformModel(id);
+  const { model, dependedBy, isFetching: fetching } = usePlatformModel(id);
   const go = useRouteNavigate();
 
   return (

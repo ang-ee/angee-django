@@ -15,6 +15,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from django.apps import apps
+from django.contrib.auth import get_user_model
+from django.core.management import call_command
+from rebac import RelationshipTuple, to_subject_ref, write_relationships
+from rebac.backends import backend
+from rebac.schema.parser import parse_zed, validate_schema
+from rebac.types import ObjectRef
+
 from angee.compose.permissions import (
     SchemaExtensionError,
     apply_schema_paths,
@@ -24,13 +32,6 @@ from angee.compose.permissions import (
     render_zed,
 )
 from angee.fs import write_atomic
-from django.apps import apps
-from django.contrib.auth import get_user_model
-from django.core.management import call_command
-from rebac import RelationshipTuple, to_subject_ref, write_relationships
-from rebac.backends import backend
-from rebac.schema.parser import parse_zed, validate_schema
-from rebac.types import ObjectRef
 
 User = get_user_model()
 
@@ -211,10 +212,9 @@ def test_render_round_trips_a_real_backed_schema() -> None:
     assert {r.name for r in roundtripped.relations} == {r.name for r in original.relations}
     for relation in original.relations:
         emitted = next(r for r in roundtripped.relations if r.name == relation.name)
-        assert type(emitted.backing) is type(relation.backing)
-        assert {(s.type, s.id, s.relation) for s in emitted.allowed_subjects} == {
-            (s.type, s.id, s.relation) for s in relation.allowed_subjects
-        }
+        assert emitted.backing == relation.backing
+        assert set(emitted.allowed_subjects) == set(relation.allowed_subjects)
+        assert emitted.with_expiration == relation.with_expiration
     assert {p.name for p in roundtripped.permissions} == {p.name for p in original.permissions}
 
 
@@ -276,7 +276,7 @@ def test_contributed_relation_syncs_and_resolves(tmp_path: Path, _restore_scoped
     assert merged_schema_relpath("tests.scopedemo") in source_map
     for relpath, text in source_map.items():
         write_atomic(runtime_dir / relpath, text)
-    apply_schema_paths(app_configs, runtime_dir)
+    apply_schema_paths(app_configs, runtime_dir, sources=source_map)
 
     scopedemo = _restore_scopedemo_schema
     assert scopedemo.rebac_schema == str((runtime_dir / merged_schema_relpath("tests.scopedemo")).resolve())
@@ -295,3 +295,127 @@ def test_contributed_relation_syncs_and_resolves(tmp_path: Path, _restore_scoped
 
     assert backend().check_access(subject=to_subject_ref(reviewer), action="read", resource=doc)
     assert not backend().check_access(subject=to_subject_ref(outsider), action="read", resource=doc)
+
+
+@pytest.mark.parametrize("declaration", [None, "custom.zed", "absolute"])
+def test_custom_base_sources_survive_repeated_composition(tmp_path, declaration):
+    base = _base_addon(tmp_path)
+    if declaration is not None:
+        source = Path(base.path) / "custom.zed"
+        (Path(base.path) / "permissions.zed").rename(source)
+        base.rebac_schema = str(source) if declaration == "absolute" else declaration
+    else:
+        base.rebac_schema = None
+    contrib = _contrib_addon(
+        tmp_path,
+        "definition demo/thing { relation viewer: auth/user permission read = viewer }",
+    )
+    configs = [base, contrib]
+    expected = extension_source_map(configs)
+    runtime = tmp_path / "runtime"
+    # Repointing precedes emission during first composition.
+    apply_schema_paths(configs, runtime, sources=expected)
+    assert extension_source_map(configs) == expected
+    for relative, text in expected.items():
+        output = runtime / relative
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(text)
+    apply_schema_paths(configs, runtime, sources=expected)
+    assert extension_source_map(configs) == expected
+    schema = merged_schemas(configs)["base"]
+    assert len(schema.get_definition("demo/thing").relations) == 2
+
+
+def test_render_retains_authored_metadata_and_directives():
+    schema = parse_zed(
+        "// @rebac_package_version: 4.2\nuse typechecking\ndefinition demo/item { permission read = anonymous }"
+    )
+    output = parse_zed(render_zed("demo", schema))
+    assert output.headers["rebac_package_version"] == "4.2"
+    assert output.directives == schema.directives
+    assert "rebac_package" not in schema.headers
+
+
+def test_effective_source_rewrites_do_not_leave_stale_field_gates(tmp_path, monkeypatch):
+    from angee.base.permissions import effective_rebac_definition
+    from tests.scopedemo.models import Scope
+
+    config = apps.get_app_config(Scope._meta.app_label)
+    path = tmp_path / "effective.zed"
+    monkeypatch.setattr(config, "rebac_schema", str(path), raising=False)
+    path.write_text("definition scopedemo/scope { permission read = anonymous }")
+    first = effective_rebac_definition(Scope)
+    assert [p.name for p in first.permissions] == ["read"]
+    path.write_text("definition scopedemo/scope { permission read = anonymous permission read__name = nil }")
+    second = effective_rebac_definition(Scope)
+    assert [p.name for p in second.permissions] == ["read", "read__name"]
+
+
+def test_manifest_permission_path_wins_over_convention(tmp_path):
+    """The parsed manifest stays authoritative after repeated effective binding."""
+
+    base = _base_addon(tmp_path)
+    custom = Path(base.path) / "authored.zed"
+    custom.write_text(_BASE.replace("demo/thing", "demo/custom"))
+    (Path(base.path) / "addon.toml").write_text('[addon]\nname = "base"\npermissions = "authored.zed"\n')
+    contrib = _contrib_addon(
+        tmp_path,
+        "definition demo/custom { relation viewer: auth/user permission read = viewer }",
+    )
+    configs = [base, contrib]
+    sources = extension_source_map(configs)
+    apply_schema_paths(configs, tmp_path / "runtime", sources=sources)
+    assert extension_source_map(configs) == sources
+    assert "demo/custom" in sources[merged_schema_relpath("base")]
+    assert "demo/thing" not in sources[merged_schema_relpath("base")]
+
+
+def test_manifest_permission_file_is_checked_before_any_fragment(tmp_path):
+    """An explicit missing declaration fails even when no extension is installed."""
+
+    from django.core.exceptions import ImproperlyConfigured
+
+    base = _base_addon(tmp_path)
+    (Path(base.path) / "addon.toml").write_text('[addon]\nname = "base"\npermissions = "missing.zed"\n')
+    with pytest.raises(ImproperlyConfigured, match="declared permissions file does not exist"):
+        extension_source_map([base])
+
+
+def test_permission_binding_does_not_repeat_merge(tmp_path, monkeypatch):
+    """Binding uses the exact rendered map, without parsing source files again."""
+
+    import angee.compose.permissions as permissions
+
+    base = _base_addon(tmp_path)
+    contrib = _contrib_addon(tmp_path, "definition demo/thing { permission read = anonymous }")
+    configs = [base, contrib]
+    sources = extension_source_map(configs)
+    monkeypatch.setattr(permissions, "merged_schemas", lambda _: pytest.fail("binding remerged schemas"))
+    apply_schema_paths(configs, tmp_path / "runtime", sources=sources)
+    assert base.rebac_schema == str((tmp_path / "runtime" / merged_schema_relpath("base")).resolve())
+
+
+def test_native_schema_binding_restores_source_when_extensions_are_removed(tmp_path):
+    """Removing an extension cannot leave a native app pointing at pruned output."""
+
+    base = _base_addon(tmp_path)
+    contrib = _contrib_addon(tmp_path, "definition demo/thing { permission read = anonymous }")
+    configs = [base, contrib]
+    sources = extension_source_map(configs)
+    apply_schema_paths(configs, tmp_path / "runtime", sources=sources)
+    apply_schema_paths([base], tmp_path / "runtime", sources=extension_source_map([base]))
+    assert base.rebac_schema == str((Path(base.path) / "permissions.zed").resolve())
+
+
+def test_native_schema_declaration_can_change_between_compositions(tmp_path):
+    """A plain Django AppConfig retains its upstream declaration authority."""
+
+    base = _base_addon(tmp_path)
+    contrib = _contrib_addon(tmp_path, "definition demo/thing { permission read = anonymous }")
+    sources = extension_source_map([base, contrib])
+    apply_schema_paths([base, contrib], tmp_path / "runtime", sources=sources)
+    replacement = Path(base.path) / "replacement.zed"
+    replacement.write_text(_BASE.replace("demo/thing", "demo/replacement"))
+    base.rebac_schema = "replacement.zed"
+    apply_schema_paths([base], tmp_path / "runtime", sources=extension_source_map([base]))
+    assert base.rebac_schema == str(replacement.resolve())

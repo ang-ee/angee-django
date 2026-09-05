@@ -31,17 +31,18 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
-from angee.base.actors import actor_user_id
-from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.refs import canonical_record_target
 from django.apps import apps
 from django.contrib.postgres.search import SearchQuery, SearchVector
+from django.core import signing
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, connection, models, transaction
 from django.db.models.functions import MD5, Coalesce, Greatest
 from django.utils import timezone
 from rebac import PermissionDenied, current_actor, system_context
 
+from angee.base.actors import actor_user_id
+from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.refs import canonical_record_target
 from angee.graphql.publishing import mute_changes
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.messaging.events import message_ingested
@@ -59,6 +60,7 @@ logger = logging.getLogger(__name__)
 
 _SUBJECT_PREFIX_RE = re.compile(r"^\s*(?:re|fwd|fw|aw|sv|vs|ref|tr|rif)\s*(?:\[\d+\])?\s*:\s*", re.IGNORECASE)
 _WS_RE = re.compile(r"\s+")
+
 
 def strip_null_bytes(value: Any) -> Any:
     """Recursively remove ``\\x00`` from strings inside str/dict/list values.
@@ -112,8 +114,8 @@ class ChannelManager(IntegrationManager):
     """Channel factory + delete owner, bound as ``Channel.objects``.
 
     A Channel is a multi-table-inheritance child of the concrete ``Integration``, so
-    the composer emits this manager as the concrete child's ``objects`` (see
-    ``Channel.angee_model_attributes``); it extends ``IntegrationManager`` and adds the
+    its abstract source declares this manager for Django to inherit. It extends
+    ``IntegrationManager`` and adds the
     channel-specific verbs: ``create_disconnected`` (vendor connect services) and the
     purge owner (:meth:`purge`/:meth:`inventory`) that deletes everything a channel
     ingested and forecasts the same scope for the delete-confirmation preview — one
@@ -208,9 +210,7 @@ def _bounded_message_metadata(value: dict[str, Any]) -> dict[str, Any]:
         separators=(",", ":"),
     ).encode("utf-8")
     if len(encoded) > _MESSAGE_METADATA_MAX_BYTES:
-        raise ValueError(
-            f"message metadata exceeds {_MESSAGE_METADATA_MAX_BYTES} UTF-8 JSON bytes"
-        )
+        raise ValueError(f"message metadata exceeds {_MESSAGE_METADATA_MAX_BYTES} UTF-8 JSON bytes")
     return cast(dict[str, Any], metadata)
 
 
@@ -301,19 +301,7 @@ def _message_search_query(term: str) -> models.Q:
     )
 
 
-def _message_chronological_key(message: Any) -> tuple[Any, Any]:
-    """Return a message's chatter display order: sent time then pk.
-
-    The order key is ``sent_at`` (falling back to ``created_at`` for a message
-    that never carried a send time), then ``pk`` as the deterministic tiebreak —
-    the single source of truth for chronological feed order, so the client renders
-    the server's order verbatim instead of re-sorting.
-    """
-
-    return (message.sent_at or message.created_at, message.pk)
-
-
-# The `_order_at` annotation mirrors `_message_chronological_key`'s sent-time key so
+# The `_order_at` annotation mirrors Message.chronological_key so
 # the window/cursor filter on the exact `(sent_at, pk)` tuple the feed displays by —
 # a backfilled email (older send time, newer pk) cannot skip, duplicate, or misorder
 # at a page boundary. These express the keyset comparison against an `(at, pk)` anchor.
@@ -456,9 +444,7 @@ class FragmentManager(AngeeManager):
                 # prose — vectorise a bounded prefix; the row keeps the full text.
                 searchable: Any = "text"
                 if len(encoded) > _SEARCH_MAX_BYTES:
-                    searchable = models.Value(
-                        encoded[:_SEARCH_MAX_BYTES].decode("utf-8", errors="ignore")
-                    )
+                    searchable = models.Value(encoded[:_SEARCH_MAX_BYTES].decode("utf-8", errors="ignore"))
                 self.model._base_manager.filter(pk=fragment.pk).update(
                     search=SearchVector(searchable, config=_SEARCH_CONFIG)
                 )
@@ -577,9 +563,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
 
         fragment_model = apps.get_model("messaging", "Fragment")
         if thread is not None and thread.external_id:
-            title = (
-                fragment_model.objects.upsert(text=thread.title, owner_id=owner_id) if thread.title else None
-            )
+            title = fragment_model.objects.upsert(text=thread.title, owner_id=owner_id) if thread.title else None
             scope = channel.pk if channel is not None else ""
             named, _created = self.get_or_create_by_external_id(
                 platform=platform,
@@ -638,9 +622,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
                     if existing is not None:
                         return existing
             deterministic_id = f"subj:{normalized}" if normalized else f"msg:{message_external_id}"
-            title = (
-                fragment_model.objects.upsert(text=normalized, owner_id=owner_id) if normalized else None
-            )
+            title = fragment_model.objects.upsert(text=normalized, owner_id=owner_id) if normalized else None
             thread, _created = self.get_or_create_by_external_id(
                 platform=platform,
                 external_id=deterministic_id,
@@ -669,9 +651,9 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         # Identity resolution is system bookkeeping (the callers gate reads at their
         # own surface), so it runs elevated — a REBAC-scoped read that cannot see
         # the existing row would double-create and then dead-end.
-        queryset = _external_id_annotated(
-            self.sudo(reason="messaging.thread.identity").lock_if_supported()
-        ).filter(_external_id_q(external_id), platform=platform)
+        queryset = _external_id_annotated(self.sudo(reason="messaging.thread.identity").lock_if_supported()).filter(
+            _external_id_q(external_id), platform=platform
+        )
         existing = queryset.first()
         if existing is not None:
             return existing, False
@@ -955,11 +937,9 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         """Anchor a fresh follower's receipt at the latest pre-join message."""
 
         message_model = apps.get_model("messaging", "Message")
-        queryset = message_model._base_manager.filter(thread=thread).annotate(
-            _order_at=_MESSAGE_ORDER_ANNOTATION
-        )
+        queryset = message_model._base_manager.filter(thread=thread).annotate(_order_at=_MESSAGE_ORDER_ANNOTATION)
         if history_before is not None:
-            queryset = queryset.filter(_message_before(_message_chronological_key(history_before)))
+            queryset = queryset.filter(_message_before(history_before.chronological_key))
         latest = queryset.order_by("-_order_at", "-pk").first()
         if latest is None:
             return
@@ -999,7 +979,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
             return 0
         if message is not None and message.thread_id != getattr(thread, "pk", thread):
             raise ValueError("Receipt anchor does not belong to this thread.")
-        target_key = _message_chronological_key(target)
+        target_key = target.chronological_key
         with transaction.atomic():
             # Lock only the follower row (`of=("self",)`): the receipt FK is
             # nullable, and Postgres refuses FOR UPDATE on the nullable side of
@@ -1015,7 +995,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
             if follower is None:
                 return 0
             current = follower.last_read_message
-            if current is not None and _message_chronological_key(current) >= target_key:
+            if current is not None and current.chronological_key >= target_key:
                 return 0
             follower.last_read_message = target
             follower.save(update_fields=("last_read_message", "updated_at"))
@@ -1053,7 +1033,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         )
         if follower.last_read_message is None:
             return queryset
-        anchor = _message_chronological_key(follower.last_read_message)
+        anchor = follower.last_read_message.chronological_key
         return queryset.filter(_message_after(anchor))
 
     def unread_count_for_record(
@@ -1111,7 +1091,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
             return False
         if follower.last_read_message is None:
             return True
-        return _message_chronological_key(message) > _message_chronological_key(follower.last_read_message)
+        return message.chronological_key > follower.last_read_message.chronological_key
 
     def unsubscribe(
         self,
@@ -1192,8 +1172,12 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
         # Notification bookkeeping bypasses per-row REBAC: the record-level gate has
         # already authorised the whole chatter read, so scope the reads with sudo
         # and let the chainable predicates own the filters.
-        return self.sudo(reason="messaging.notification.for_record").for_attachment(attachment).filter(
-            user_id=resolved_user_id,
+        return (
+            self.sudo(reason="messaging.notification.for_record")
+            .for_attachment(attachment)
+            .filter(
+                user_id=resolved_user_id,
+            )
         )
 
     def error_count_for_record(
@@ -1324,9 +1308,7 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
                 existing_row.attachment = follower.attachment
                 existing_row.follower = follower
                 existing_row.notification_type = self.model.NotificationType.EMAIL
-                existing_row.save(
-                    update_fields=("thread", "attachment", "follower", "notification_type", "updated_at")
-                )
+                existing_row.save(update_fields=("thread", "attachment", "follower", "notification_type", "updated_at"))
                 continue
             if follower.user_id in queued:
                 continue
@@ -1652,9 +1634,13 @@ def _reaction_handle_for_user(user: Any) -> Any:
     email = strip_null_bytes(getattr(user, "email", "") or "").strip()
     username = strip_null_bytes(user.get_username() if hasattr(user, "get_username") else getattr(user, "username", ""))
     value = email or username or str(user.pk)
-    display_name = strip_null_bytes(
-        user.get_full_name() if hasattr(user, "get_full_name") else "",
-    ).strip() or username or value
+    display_name = (
+        strip_null_bytes(
+            user.get_full_name() if hasattr(user, "get_full_name") else "",
+        ).strip()
+        or username
+        or value
+    )
     return handle_model.objects.claim_own(
         user,
         platform=handle_model.Platform.for_value(value),
@@ -1755,10 +1741,7 @@ class MessageStarManager(AngeeManager):
         user_id = getattr(user, "pk", None)
         if user_id is None:
             return False
-        if (
-            hasattr(message, "_prefetched_objects_cache")
-            and "stars" in message._prefetched_objects_cache
-        ):
+        if hasattr(message, "_prefetched_objects_cache") and "stars" in message._prefetched_objects_cache:
             return any(star.user_id == user_id for star in message.stars.all())
         return self.model._base_manager.filter(message=message, user_id=user_id).exists()
 
@@ -1770,11 +1753,7 @@ class MessageStarManager(AngeeManager):
             raise ValueError("A user is required to star a message.")
         with transaction.atomic():
             message = type(message)._base_manager.select_for_update().get(pk=message.pk)
-            star = (
-                self.model._base_manager.select_for_update()
-                .filter(message=message, user_id=user_id)
-                .first()
-            )
+            star = self.model._base_manager.select_for_update().filter(message=message, user_id=user_id).first()
             next_starred = not bool(star) if starred is None else bool(starred)
             if next_starred and star is None:
                 self.model._base_manager.create(
@@ -1927,12 +1906,7 @@ class MessageQuerySet(AngeeQuerySet[Any]):
 
         handle_model = apps.get_model("parties", "Handle")
         participant_model = apps.get_model("messaging", "Participant")
-        visible_handle_ids = (
-            handle_model.objects.all()
-            .scoped_for_aggregate()
-            .filter(party__in=parties)
-            .values("pk")
-        )
+        visible_handle_ids = handle_model.objects.all().scoped_for_aggregate().filter(party__in=parties).values("pk")
         visible_message_ids = (
             participant_model.objects.all()
             .scoped_for_aggregate()
@@ -1946,6 +1920,122 @@ class MessageQuerySet(AngeeQuerySet[Any]):
             MessageQuerySet,
             self.filter(pk__in=models.Subquery(visible_message_ids)),
         )
+
+    def for_feed(self, search: str = "") -> MessageQuerySet:
+        """Apply current read scope, search and tuple order to an inbox scope."""
+
+        queryset = self.scoped().annotate(_order_at=_MESSAGE_ORDER_ANNOTATION)
+        for term in self._feed_search(search).split():
+            queryset = queryset.searching(term)
+        return cast(MessageQuerySet, queryset.distinct().order_by("-_order_at", "-pk"))
+
+    @staticmethod
+    def _feed_search(search: str) -> str:
+        return " ".join(strip_null_bytes(search or "").split())
+
+    def feed_page(
+        self,
+        *,
+        scope: tuple[str, str],
+        search: str = "",
+        before_cursor: str | None = None,
+        after_cursor: str | None = None,
+        through_cursor: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Read a currently authorized, newest-first fixed or discovery window.
+
+        ``before_cursor`` is an exclusive upper cut; ``through_cursor`` is an
+        inclusive lower cut. Advance the former while keeping the latter fixed.
+        ``after_cursor`` instead reads the nearest newer page, and cannot combine
+        with either bound. Cuts bind actor/root/search and survive anchor changes.
+        Existing older/newer flags describe the whole scope; window exhaustion
+        and history below the fixed lower cut are separate facts, even if empty.
+        """
+
+        if after_cursor is not None and (before_cursor is not None or through_cursor is not None):
+            raise ValueError("after_cursor cannot combine with before_cursor or through_cursor.")
+        limit = max(1, min(int(limit), 200))
+        search = self._feed_search(search)
+        actor = self.actor() or current_actor()
+        namespace = json.dumps([self.db, self.model._meta.label_lower, scope, search, str(actor)])
+        fingerprint = hashlib.sha256(namespace.encode()).hexdigest()
+        signer = signing.Signer(salt=f"angee.messaging.feed.v1.{fingerprint}")
+        cursor = before_cursor if before_cursor is not None else after_cursor
+        anchor = self._feed_cursor_position(cursor, signer) if cursor is not None else None
+        lower = self._feed_cursor_position(through_cursor, signer) if through_cursor is not None else None
+        queryset = self.for_feed(search)
+        count = queryset.count()
+        window = queryset
+        if anchor is not None:
+            window = window.filter(_message_before(anchor) if before_cursor is not None else _message_after(anchor))
+        if lower is not None:
+            window = window.exclude(_message_before(lower))
+        ascending = after_cursor is not None
+        order = ("_order_at", "pk") if ascending else ("-_order_at", "-pk")
+        selected = list(window.order_by(*order)[: limit + 1])
+        has_more = len(selected) > limit
+        messages = selected[:limit]
+        if ascending:
+            messages.reverse()
+        below = queryset.filter(_message_before(lower)).exists() if lower is not None else False
+        if not messages:
+            return {
+                "messages": [],
+                "count": count,
+                "older_cursor": None,
+                "newer_cursor": None,
+                "has_older": False,
+                "has_newer": False,
+                "has_more_in_window": False,
+                "has_older_than_through": below,
+            }
+        newest = messages[0].chronological_key
+        oldest = messages[-1].chronological_key
+        return {
+            "messages": queryset.filter(pk__in=[message.pk for message in messages]),
+            "count": count,
+            "older_cursor": signer.sign_object([oldest[0].isoformat(), str(oldest[1])]),
+            "newer_cursor": signer.sign_object([newest[0].isoformat(), str(newest[1])]),
+            "has_older": queryset.filter(_message_before(oldest)).exists(),
+            "has_newer": queryset.filter(_message_after(newest)).exists(),
+            "has_more_in_window": has_more,
+            "has_older_than_through": below,
+        }
+
+    def feed_revalidate(self, ids: list[str], *, search: str = "") -> dict[str, Any]:
+        """Partition at most 200 submitted IDs into current survivors and absences.
+
+        The caller resolves the same readable root as feed_page. Every survivor
+        passes the same current message, membership and search predicates. Absence
+        does not distinguish deleted, inaccessible and out-of-scope rows.
+        """
+
+        if len(ids) > 200:
+            raise ValueError("Message feed revalidation accepts at most 200 IDs.")
+        unique = list(dict.fromkeys(ids))
+        messages = list(self.for_feed(search).filter(sqid__in=unique)) if unique else []
+        survivors = {str(message.sqid) for message in messages}
+        return {
+            "messages": self.for_feed(search).filter(sqid__in=survivors),
+            "absent_ids": [value for value in unique if value not in survivors],
+        }
+
+    def _feed_cursor_position(self, cursor: str, signer: signing.Signer) -> tuple[datetime, Any]:
+        """Verify the native signed tuple without consulting its original row."""
+
+        try:
+            value = signer.unsign_object(cursor)
+            match value:
+                case [str(at), str(pk)]:
+                    timestamp = datetime.fromisoformat(at)
+                    if timezone.is_naive(timestamp):
+                        raise ValueError("Cursor timestamp must be timezone-aware.")
+                    return timestamp, self.model._meta.pk.to_python(pk)
+                case _:
+                    raise ValueError("Cursor must carry a timestamp and primary key.")
+        except (signing.BadSignature, ValueError, TypeError) as error:
+            raise ValueError("Invalid message feed cursor for this scope.") from error
 
 
 class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: ignore[misc]
@@ -2008,76 +2098,12 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             page = list(queryset.filter(_message_after(anchor)).order_by(*ascending)[:limit])
         else:
             page = list(queryset.order_by(*descending)[:limit])
-        return sorted(page, key=_message_chronological_key), count
+        return sorted(page, key=lambda message: message.chronological_key), count
 
     def _record_message_anchor(self, queryset: Any, value: Any) -> tuple[Any, Any] | None:
         """Resolve a public message id to its ``(order_at, pk)`` cursor in the window."""
 
-        return (
-            queryset.filter(**self.model.public_id_lookup(str(value)))
-            .values_list("_order_at", "pk")
-            .first()
-        )
-
-    def timeline_for_parties(
-        self,
-        parties: Any,
-        *,
-        search: str = "",
-        limit: int = 50,
-        before: Any | None = None,
-    ) -> tuple[list[Any], int]:
-        """Return one newest-first page exchanged with any of ``parties``.
-
-        The party-timeline read: inbox messages (record chatter stays behind its
-        record gate) whose participants resolve to the supplied Party collection. Unlike
-        :meth:`for_record` this stays ACTOR-scoped — there is no record-level gate
-        in front of it, so per-row REBAC is the authorization — and therefore adds
-        no ``select_related`` over guarded relations (the GraphQL read path resolves
-        them the same way it does for the ``messages`` resource). Cursors on the
-        same ``(sent_at, pk)`` key as every other feed; returns the page
-        chronological ascending plus the total count.
-        """
-
-        limit = max(1, min(int(limit or 50), 200))
-        queryset = (
-            self.all()
-            .apply_ambient_scope()
-            .inbox()
-            .involving_parties(parties)
-            .annotate(_order_at=_MESSAGE_ORDER_ANNOTATION)
-        )
-        search = strip_null_bytes(search or "").strip()
-        for term in (item for item in _WS_RE.split(search) if item):
-            queryset = queryset.searching(term)
-        queryset = queryset.distinct()
-        count = int(queryset.count())
-        descending = ("-_order_at", "-pk")
-        if before not in (None, ""):
-            anchor = self._record_message_anchor(queryset, before)
-            if anchor is None:
-                return [], count
-            page = list(queryset.filter(_message_before(anchor)).order_by(*descending)[:limit])
-        else:
-            page = list(queryset.order_by(*descending)[:limit])
-        return sorted(page, key=_message_chronological_key), count
-
-    def timeline_for_party(
-        self,
-        party: Any,
-        *,
-        search: str = "",
-        limit: int = 50,
-        before: Any | None = None,
-    ) -> tuple[list[Any], int]:
-        """Return one party's timeline through the plural collection owner."""
-
-        return self.timeline_for_parties(
-            (party,),
-            search=search,
-            limit=limit,
-            before=before,
-        )
+        return queryset.filter(**self.model.public_id_lookup(str(value))).values_list("_order_at", "pk").first()
 
     def post_to_thread(
         self,
@@ -2547,9 +2573,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         if created:
             try:
                 with transaction.atomic():
-                    message = self.create(
-                        external_id=parsed.external_id, created_by_id=owner_id, **defaults
-                    )
+                    message = self.create(external_id=parsed.external_id, created_by_id=owner_id, **defaults)
             except IntegrityError:
                 # A concurrent ingest of the same provider event landed first;
                 # converge on its row and fall through to the update path.
@@ -2618,9 +2642,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         if not reply_to or reply_to == parsed.external_id:
             return None
         rows = list(
-            _external_id_annotated(self.model._base_manager).filter(
-                _external_id_q(reply_to), platform=parsed.platform
-            )
+            _external_id_annotated(self.model._base_manager).filter(_external_id_q(reply_to), platform=parsed.platform)
         )
         if not rows:
             return None
@@ -2798,10 +2820,7 @@ class PartQuerySet(AngeeQuerySet[Any]):
 
         return cast(
             PartQuerySet,
-            self.filter(
-                models.Q(message__thread__isnull=True)
-                | models.Q(message__thread__attachments__isnull=True)
-            ),
+            self.filter(models.Q(message__thread__isnull=True) | models.Q(message__thread__attachments__isnull=True)),
         )
 
     def attachments(self) -> PartQuerySet:
@@ -2901,9 +2920,7 @@ class MessageEdgeManager(AngeeManager):
         other_ids = {edge.src_id for edge in edges} | {edge.dst_id for edge in edges}
         other_ids.discard(message.pk)
         readable: set[Any] = (
-            set(message_model.objects.filter(pk__in=other_ids).values_list("pk", flat=True))
-            if other_ids
-            else set()
+            set(message_model.objects.filter(pk__in=other_ids).values_list("pk", flat=True)) if other_ids else set()
         )
         readable.add(message.pk)
         return [edge for edge in edges if edge.src_id in readable and edge.dst_id in readable]

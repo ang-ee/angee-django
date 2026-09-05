@@ -20,12 +20,12 @@ keep their defaults (``thread_read_access="read"``, ``thread_activity_access="wr
 
 from __future__ import annotations
 
+from django.db import models
+
 from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.base.transitions import StateTransitions, save_state, transition
-from django.db import models
-
 from angee.messaging.models import ThreadedModelMixin
 
 
@@ -98,7 +98,7 @@ class TrackedRecordParent(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel)
         return self.title
 
 
-class _AbstractTrackedRecordChild(AngeeModel):
+class _AbstractTrackedRecordChild(models.Model):
     """The abstract source a materialized child contributes over the parent."""
 
     note = models.CharField(max_length=64, blank=True, default="")
@@ -111,19 +111,12 @@ class _AbstractTrackedRecordChild(AngeeModel):
 
 
 class TrackedRecordChild(_AbstractTrackedRecordChild, TrackedRecordParent):
-    """A materialized child with the ``child_overrides_parent`` (child-first) MRO.
+    """A narrow abstract child before its concrete threaded parent.
 
-    Emitted exactly as the composer would for ``extends`` +
-    ``child_overrides_parent``: the abstract child source before the concrete parent
-    (so the child's own methods win the MRO), MTI on the parent, and the
-    parent-shared framework columns re-declared ``None`` so the child inherits the
-    parent's columns instead of duplicating them. Pins that a transition ``save``
-    still yields exactly one tracking note through this flipped MRO — the
-    ``ThreadedModelMixin.save`` tracking runs once, not once per MRO level.
+    Native Django MTI inherits the parent's framework columns. A transition save
+    traverses ``ThreadedModelMixin.save`` once and writes both tables, producing
+    one tracking note for the state change.
     """
-
-    created_at = None
-    updated_at = None
 
     class Meta:
         """Django model options for the materialized tracked child."""

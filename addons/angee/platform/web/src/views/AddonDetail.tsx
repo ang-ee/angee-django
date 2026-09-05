@@ -13,7 +13,7 @@ export function AddonDetail(): ReactElement {
   const t = usePlatformT();
   const id = useRouteRecordId();
   const routeHref = useRouteHref();
-  const { addon, dependsOn, dependedBy, modelLabels, fetching } =
+  const { addon, dependsOn, dependedBy, modelLabels, isFetching: fetching } =
     usePlatformAddon(id);
   const go = useRouteNavigate();
 

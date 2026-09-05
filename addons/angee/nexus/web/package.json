@@ -15,9 +15,12 @@
   },
   "dependencies": {
     "@angee/app": "workspace:*",
+    "@angee/messaging": "workspace:*",
     "@angee/parties": "workspace:*",
     "@angee/refine": "workspace:*",
     "@angee/ui": "workspace:*",
+    "@refinedev/core": "^5.0.12",
+    "@tanstack/react-query": "^5.101.2",
     "lucide-react": "^1.21.0"
   },
   "peerDependencies": {

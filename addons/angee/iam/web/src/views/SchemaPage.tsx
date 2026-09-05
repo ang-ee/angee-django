@@ -145,7 +145,7 @@ export function SchemaPage(): ReactElement {
   // own state surface and publishes nothing, so the shell falls back to its own
   // primary/secondary content — mirroring the pre-shell Workbench, which the
   // early returns replaced wholesale.
-  const ready = !query.error && !(query.fetching && resources.length === 0);
+  const ready = !query.error && !(query.isFetching && resources.length === 0);
 
   // Primary (left explorer) pane: the resource-type navigator.
   const explorer = useMemo(
@@ -202,7 +202,7 @@ export function SchemaPage(): ReactElement {
     );
   }
 
-  if (query.fetching && resources.length === 0) {
+  if (query.isFetching && resources.length === 0) {
     return (
       <>
         <PrimaryPanePublisher node={explorer} />

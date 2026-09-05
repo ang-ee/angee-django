@@ -7,13 +7,6 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-from angee.addons import addon_contract
-from angee.data.metadata import (
-    DataResourceFieldMetadata,
-    DataResourceMetadata,
-    DataResourceRoots,
-    DataResourceTypeNames,
-)
 from django.apps import apps
 from django.db import models
 from fastmcp import FastMCP
@@ -32,6 +25,13 @@ from graphql import (
     GraphQLString,
 )
 
+from angee.addons import addon_manifest
+from angee.data.metadata import (
+    DataResourceFieldMetadata,
+    DataResourceMetadata,
+    DataResourceRoots,
+    DataResourceTypeNames,
+)
 from angee.graphql.schema import GraphQLSchemas
 from angee.mcp.graphql import _CompiledTool, register_graphql_tools
 from angee.mcp.resource_tools import (
@@ -246,9 +246,12 @@ def test_resource_registrar_adds_honest_catalogue_and_readers(monkeypatch: pytes
 def test_mcp_manifest_owns_its_resource_tool_registrar() -> None:
     """The generated reader entrypoint is an explicit addon-contract fact."""
 
-    contract = addon_contract(apps.get_app_config("mcp"))
+    contract = addon_manifest(apps.get_app_config("mcp"))
     assert contract is not None
-    assert contract.mcp_tools == "mcp_tools.register"
+    from angee.mcp.mcp_tools import register
+    from angee.mcp.server import tool_registrar
+
+    assert tool_registrar(apps.get_app_config("mcp")) is register
 
 
 def test_resource_without_detail_is_not_advertised(monkeypatch: pytest.MonkeyPatch) -> None:

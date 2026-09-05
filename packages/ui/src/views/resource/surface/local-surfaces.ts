@@ -8,7 +8,7 @@ import { useBoardLaneState } from "../resource-view-board-lanes";
 import { leafTableRows, modelRowId, stringRowId } from "../resource-view-codecs";
 import { useResourceViewPresentationSurface } from "./presentation";
 import { CLIENT_ROW_MODEL_FETCH_CAP } from "./resource-surface";
-import { listResultFromPageState, useResourceRowsSnapshot, useResourceViewQueryFacts } from "./table-state";
+import { listResultFromTable, useResourceRowsSnapshot, useResourceViewQueryFacts } from "./table-state";
 import type { ResourceListResult, ResourceViewSurface, RowRecord, RowsResourceViewSurface, StringIdRow, UseResourceViewSurfaceProps, UseRowsResourceViewSurfaceProps } from "./types";
 /**
  * Surface a **client row-model** resource: fetch the whole set once (up to
@@ -109,14 +109,12 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
   const pageCount = Math.max(1, presentation.table.getPageCount());
   const list = React.useMemo<ResourceListResult>(
     () =>
-      listResultFromPageState({
-        resourceView,
+      listResultFromTable(presentation.table, {
         error,
         fetching,
         refetch,
         rows: pageRows,
         total: filteredTotal,
-        pageCount,
       }),
     [
       error,
@@ -179,11 +177,11 @@ export function useRowsResourceViewSurface<
   const listState = useResourceRowsSnapshot<TRow>({
     rows: pageRows,
     total,
-    page: resourceView.state.page,
-    pageSize: resourceView.state.pageSize,
+    page: (resourceView.state.pagination.pageIndex + 1),
+    pageSize: resourceView.state.pagination.pageSize,
     pageCount,
-    hasNext: resourceView.state.page < pageCount,
-    hasPrev: resourceView.state.page > 1,
+    hasNext: (resourceView.state.pagination.pageIndex + 1) < pageCount,
+    hasPrev: (resourceView.state.pagination.pageIndex + 1) > 1,
     fetching,
     error,
   }, { onListStateChange });

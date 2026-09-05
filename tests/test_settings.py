@@ -10,10 +10,11 @@ from types import ModuleType
 from typing import Any
 
 import pytest
-from angee.compose.composer import Composer
-from angee.project import PROJECT_DIR_ENV, find_project_dir, project_dir
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
+
+from angee.compose.composer import Composer
+from angee.project import PROJECT_DIR_ENV, find_project_dir, project_dir
 
 GRAPHQL_APP = "angee.graphql.apps.GraphQLConfig"
 
@@ -117,6 +118,7 @@ def test_resources_root_expands_framework_dependencies(tmp_path: Path) -> None:
     assert compose_at < base_at < resources_at
     assert GRAPHQL_APP not in installed
     assert "angee.iam.apps.IAMConfig" not in installed
+    assert "REBAC_UNIVERSAL_ADMIN_ROLE" not in settings
 
 
 def test_iam_user_is_the_default_auth_model(tmp_path: Path) -> None:
@@ -131,6 +133,36 @@ def test_iam_user_is_the_default_auth_model(tmp_path: Path) -> None:
     assert "angee.resources" in installed
     assert settings["AUTH_USER_MODEL"] == "iam.User"
     assert "angee.iam.apps.IAMConfig" in installed
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({}, "angee/role:admin"),
+        ({"REBAC_UNIVERSAL_ADMIN_ROLE": "example/role:owner"}, "example/role:owner"),
+        ({"REBAC_UNIVERSAL_ADMIN_ROLE": None}, None),
+    ],
+)
+def test_iam_admin_role_default_preserves_project_policy(
+    tmp_path: Path,
+    overrides: dict[str, str | None],
+    expected: str | None,
+) -> None:
+    """IAM supplies its role to native REBAC unless the project chooses another policy."""
+
+    from django.test import override_settings
+    from rebac import app_settings
+
+    settings: dict[str, Any] = {
+        "INSTALLED_APPS": _default_installed_apps(tmp_path, ("angee.iam",)),
+        "ANGEE_RUNTIME_DIR": tmp_path / "runtime",
+        **overrides,
+    }
+    Composer(settings).compose_settings()
+
+    assert settings["REBAC_UNIVERSAL_ADMIN_ROLE"] == expected
+    with override_settings(REBAC_UNIVERSAL_ADMIN_ROLE=settings["REBAC_UNIVERSAL_ADMIN_ROLE"]):
+        assert app_settings.REBAC_UNIVERSAL_ADMIN_ROLE == expected
 
 
 def test_graphql_public_pk_is_sqid(tmp_path: Path) -> None:
@@ -831,7 +863,7 @@ def test_reject_unexpected_yamlconf_source_fails_fast(tmp_path: Path) -> None:
     sentinel is a bug the composer must refuse.
     """
 
-    from angee.compose.project import ProjectContract
+    from angee.compose.yamlconf import reject_unexpected_sources
 
     project_settings = ModuleType("settings")
     project_settings.__file__ = str(tmp_path / "settings.py")
@@ -842,7 +874,7 @@ def test_reject_unexpected_yamlconf_source_fails_fast(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ImproperlyConfigured, match="Unexpected django-yamlconf source"):
-        ProjectContract({})._reject_unexpected_yamlconf_sources(project_settings, tmp_path, "settings")
+        reject_unexpected_sources(project_settings, tmp_path, "settings")
 
 
 def test_compose_settings_module_uses_project_dir_for_non_manage_entrypoints(
@@ -1263,8 +1295,9 @@ def test_addon_contribution_ignores_plain_django_dependency_urls() -> None:
     """
 
     import django.contrib.auth as auth_module
-    from angee.addons import addon_contribution
     from django.contrib.auth.apps import AuthConfig
+
+    from angee.addons import addon_contribution
 
     auth_config = AuthConfig("django.contrib.auth", auth_module)
 
@@ -1308,7 +1341,7 @@ def test_addon_contribution_ignores_absent_conventional_module(
     assert "alpha_absent.asgi" not in sys.modules
 
 
-def test_addon_contract_infers_only_bound_conventional_symbols(
+def test_capability_owners_ignore_unbound_conventional_annotations(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1325,13 +1358,14 @@ def test_addon_contract_infers_only_bound_conventional_symbols(
     )
     monkeypatch.syspath_prepend(str(tmp_path))
 
-    from angee.addons import addon_contract
+    from angee.addons import addon_manifest
+    from angee.graphql.schema import schema_parts_for
+    from angee.mcp.server import tool_registrar
 
-    contract = addon_contract(_addon_test_config("alpha_annotations"))
-
-    assert contract is not None
-    assert contract.schemas is None
-    assert contract.mcp_tools is None
+    config = _addon_test_config("alpha_annotations")
+    assert addon_manifest(config).schemas is None
+    assert schema_parts_for(config) == {}
+    assert tool_registrar(config) is None
 
 
 def test_addon_contribution_wraps_conventional_module_import_errors(
@@ -1562,3 +1596,59 @@ def test_beat_schedule_file_default_is_omitted_without_a_data_dir(tmp_path: Path
     settings = _compose(tmp_path)
 
     assert "CELERY_BEAT_SCHEDULE_FILENAME" not in settings
+
+
+def test_autoconfig_reuses_native_module_and_preserves_incremental_values(tmp_path, monkeypatch):
+    """Each later addon sees prior defaults and yamlconf tracks both overlays."""
+
+    import django_yamlconf
+
+    from angee.compose.autoconfig import AutoConfig
+
+    _write_addon(tmp_path, "pipeline_first", autoconfig="SETTINGS = {'ITEMS:append': ['first']}\n")
+    _write_addon(
+        tmp_path,
+        "pipeline_second",
+        autoconfig=(
+            "def settings(namespace):\n"
+            "    assert namespace['ITEMS'] == ['project', 'first']\n"
+            "    return {'ITEMS:append': ['second']}\n"
+        ),
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    modules = []
+    native_add = django_yamlconf.add_attributes
+
+    def record(settings_module, attributes, source):
+        modules.append(settings_module)
+        return native_add(settings_module, attributes, source)
+
+    monkeypatch.setattr(django_yamlconf, "add_attributes", record)
+    namespace = {"ITEMS": ["project"]}
+    config = AutoConfig(namespace, reserved_settings=frozenset())
+    config.update_app(AppConfig.create("pipeline_first"))
+    config.update_app(AppConfig.create("pipeline_second"))
+    assert namespace["ITEMS"] == ["project", "first", "second"]
+    assert len(modules) == 2 and modules[0] is modules[1]
+    assert namespace["_YAMLCONF_ATTRIBUTES"]
+
+
+@pytest.mark.parametrize("include_messaging", [False, True])
+def test_mail_provider_environment_belongs_to_messaging(tmp_path, monkeypatch, include_messaging):
+    """Provider defaults are addon-owned; explicit project values still win."""
+
+    monkeypatch.setenv("ANYMAIL", '{"MAILGUN_API_KEY": "environment"}')
+    monkeypatch.setenv("ANYMAIL_MAILGUN_SENDER_DOMAIN", "example.test")
+    namespace = {
+        "INSTALLED_APPS": ("angee.messaging",) if include_messaging else (),
+        "ANGEE_RUNTIME_DIR": tmp_path / "runtime",
+        "EMAIL_BACKEND": "anymail.backends.mailgun.EmailBackend",
+        "ANYMAIL": {"MAILGUN_API_KEY": "project"},
+    }
+    Composer(namespace).compose_settings()
+    assert namespace["ANYMAIL"] == {"MAILGUN_API_KEY": "project"}
+    if include_messaging:
+        assert namespace["ANYMAIL_MAILGUN_SENDER_DOMAIN"] == "example.test"
+        assert namespace["ANGEE_EMAIL_DELIVERY_CONFIGURED"] is True
+    else:
+        assert "ANYMAIL_MAILGUN_SENDER_DOMAIN" not in namespace

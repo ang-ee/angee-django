@@ -7,13 +7,14 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
-from angee.addons import addon_contract
 from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
 
+from angee.addons import addon_manifest
+from angee.compose.web import WebRuntime
 from angee.graphql.schema import schema_parts_for
 from angee.resources.entries import ResourceEntry, resource_manifest_for
-from tests.conftest import make_contract
+from tests.conftest import make_addon
 
 
 def _module(name: str) -> ModuleType:
@@ -30,14 +31,18 @@ def _resource_rows(config: AppConfig, tier: str, path: str) -> dict[str, dict[st
     manifest = resource_manifest_for(config)
     declaration = next(item for item in manifest[tier] if item["path"] == path)
     entry = ResourceEntry.from_declaration(config, tier, declaration)
-    return {row.xref: row.values for row in entry.read_resource_rows()}
+    return {
+        row["_xref"]: {name: value for name, value in row.items() if name != "_xref"}
+        for group in entry.read_groups()
+        for row in group.dataset.dict
+    }
 
 
 def test_base_config_is_a_plain_core_app() -> None:
     """The model foundation is always installed but has no addon contract."""
 
     base = apps.get_app_config("base")
-    contract = addon_contract(base)
+    contract = addon_manifest(base)
 
     assert base.name == "angee.base"
     assert contract is None
@@ -46,27 +51,24 @@ def test_base_config_is_a_plain_core_app() -> None:
 def test_resource_manifest_normalizes_tiers_and_entries(monkeypatch) -> None:
     """Resource declarations from the manifest normalize in the resource subsystem."""
 
-    config = apps.get_app_config("base")
-    monkeypatch.setattr(
-        "angee.resources.entries.addon_contract",
-        lambda _config: make_contract(
-            resources={
-                "install": (
-                    "resources/users.csv",
-                    {
-                        "path": "resources/notes.yaml",
-                        "depends_on": ["resources/users.csv"],
-                        "adopt": True,
-                    },
-                    {
-                        "path": "resources/comments.yaml",
-                        "depends_on": "resources/notes.yaml",
-                    },
-                ),
-                "demo": {"url": "https://example.test/demo.csv"},
-            }
-        ),
+    config = make_addon(
+        resources={
+            "install": (
+                "resources/users.csv",
+                {
+                    "path": "resources/notes.yaml",
+                    "depends_on": ["resources/users.csv"],
+                    "adopt": True,
+                },
+                {
+                    "path": "resources/comments.yaml",
+                    "depends_on": "resources/notes.yaml",
+                },
+            ),
+            "demo": {"url": "https://example.test/demo.csv"},
+        }
     )
+
     manifest = resource_manifest_for(config)
 
     assert manifest["master"] == ()
@@ -96,21 +98,21 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     )
 
     entry = ResourceEntry.from_declaration(config, "install", manifest["install"][0])
-    rows = entry.read_resource_rows()
+    rows = entry.read_groups()[0].dataset.dict
 
     # Anthropic ships two distinct OAuth surfaces on one public client id (Developer
     # Platform vs. personal Claude.ai plans), modelled as two providers. xrefs are
     # namespaced ``oauth_*`` so they don't collide with the vendor catalogue.
-    assert {row.xref for row in rows} == {
+    assert {row["_xref"] for row in rows} == {
         "oauth_anthropic_platform",
         "oauth_anthropic_personal",
         "oauth_gemini",
         "oauth_grok",
     }
-    assert {row.model_label for row in rows} == {"integrate.oauthclient"}
-    assert {row.values["slug"] for row in rows} == {"anthropic-platform", "anthropic-personal", "gemini", "grok"}
-    rows_by_xref = {row.xref: row for row in rows}
-    platform = rows_by_xref["oauth_anthropic_platform"].values
+    assert entry.read_groups()[0].model_label == "integrate.oauthclient"
+    assert {row["slug"] for row in rows} == {"anthropic-platform", "anthropic-personal", "gemini", "grok"}
+    rows_by_xref = {row["_xref"]: row for row in rows}
+    platform = rows_by_xref["oauth_anthropic_platform"]
     assert platform["slug"] == "anthropic-platform"
     assert platform["environment"] == "prod"
     assert platform["client_id"] == "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -123,10 +125,10 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     assert platform["external_id_claim"] == "account.uuid"
     assert platform["email_claim"] == "account.email_address"
     # Connect-only: Anthropic has no OIDC refinement, so no id-token machinery here.
-    assert "is_oidc" not in platform
-    assert "issuer" not in platform
-    assert "client_secret" not in platform
-    personal = rows_by_xref["oauth_anthropic_personal"].values
+    assert platform.get("is_oidc") is None
+    assert platform.get("issuer") is None
+    assert platform.get("client_secret") is None
+    personal = rows_by_xref["oauth_anthropic_personal"]
     assert personal["slug"] == "anthropic-personal"
     assert personal["environment"] == "prod"
     assert personal["client_id"] == "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -141,7 +143,7 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     assert personal["external_id_claim"] == "account.uuid"
     assert personal["email_claim"] == "account.email_address"
     assert "client_secret" not in personal
-    gemini = rows_by_xref["oauth_gemini"].values
+    gemini = rows_by_xref["oauth_gemini"]
     assert gemini["environment"] == "prod"
     assert gemini["client_id"] == "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
     assert gemini["authorize_endpoint"] == "https://accounts.google.com/o/oauth2/v2/auth"
@@ -156,7 +158,7 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     assert gemini["display_name_claim"] == "name"
     assert gemini["avatar_url_claim"] == "picture"
     assert "client_secret" not in gemini
-    grok = rows_by_xref["oauth_grok"].values
+    grok = rows_by_xref["oauth_grok"]
     assert grok["environment"] == "prod"
     assert grok["client_id"] == "b1a00492-073a-47ea-816f-4c329264a828"
     assert grok["authorize_endpoint"] == "https://auth.x.ai/oauth2/authorize"
@@ -221,9 +223,7 @@ def test_anthropic_addon_owns_demo_provider_chain() -> None:
     assert manifest["demo"][2]["adopt"] == ("provider", "name")
     provider_rows = _resource_rows(config, "demo", "resources/demo/030_agents.inferenceprovider.yaml")
     assert provider_rows["provider_anthropic_demo"]["owner"] == "iam.user_admin"
-    assert provider_rows["provider_anthropic_demo"]["credential"] == (
-        "agents_integrate_anthropic.cred_anthropic_demo"
-    )
+    assert provider_rows["provider_anthropic_demo"]["credential"] == ("agents_integrate_anthropic.cred_anthropic_demo")
     assert provider_rows["provider_anthropic_demo"]["backend_class"] == "anthropic"
     model_rows = _resource_rows(config, "demo", "resources/demo/040_agents.inferencemodel.yaml")
     assert model_rows["model_claude_demo"]["provider"] == "agents_integrate_anthropic.provider_anthropic_demo"
@@ -257,7 +257,7 @@ def test_ollama_addon_owns_vendor_and_demo_provider_chain() -> None:
 
     module = import_module("angee.agents_integrate_ollama")
     config = AppConfig("angee.agents_integrate_ollama", module)
-    contract = addon_contract(config)
+    contract = addon_manifest(config)
     manifest = resource_manifest_for(config)
 
     assert contract is not None
@@ -266,9 +266,7 @@ def test_ollama_addon_owns_vendor_and_demo_provider_chain() -> None:
         "angee.agents_integrate_openai",
         "angee.integrate",
     )
-    assert manifest["master"] == (
-        {"path": "resources/master/010_integrate.vendor.yaml", "adopt": "slug"},
-    )
+    assert manifest["master"] == ({"path": "resources/master/010_integrate.vendor.yaml", "adopt": "slug"},)
     assert [item["path"] for item in manifest["demo"]] == [
         "resources/demo/030_agents.inferenceprovider.yaml",
         "resources/demo/040_agents.inferencemodel.yaml",
@@ -388,18 +386,21 @@ def test_iam_integrate_oidc_config_installs_oauth_client_oidc_defaults() -> None
         {"path": "resources/demo/010_integrate.oauthclient.yaml", "adopt": ("slug", "environment")},
     )
 
-    oidc_rows = ResourceEntry.from_declaration(config, "install", manifest["install"][0]).read_resource_rows()
-    assert {row.model_label for row in oidc_rows} == {"integrate.oauthclient"}
-    oidc_by_xref = {row.xref: row for row in oidc_rows}
+    oidc_rows = ResourceEntry.from_declaration(config, "install", manifest["install"][0]).read_groups()[0].dataset.dict
+    assert (
+        ResourceEntry.from_declaration(config, "install", manifest["install"][0]).read_groups()[0].model_label
+        == "integrate.oauthclient"
+    )
+    oidc_by_xref = {row["_xref"]: row for row in oidc_rows}
     assert set(oidc_by_xref) == {"oauth_gemini_oidc", "oauth_grok_oidc"}
-    gemini_oidc = oidc_by_xref["oauth_gemini_oidc"].values
+    gemini_oidc = oidc_by_xref["oauth_gemini_oidc"]
     assert gemini_oidc["slug"] == "gemini"
     assert gemini_oidc["environment"] == "prod"
     assert gemini_oidc["login_enabled"] is True
     assert gemini_oidc["issuer"] == "https://accounts.google.com"
     assert gemini_oidc["jwks_uri"] == "https://www.googleapis.com/oauth2/v3/certs"
     assert gemini_oidc["discovery_url"] == "https://accounts.google.com/.well-known/openid-configuration"
-    grok_oidc = oidc_by_xref["oauth_grok_oidc"].values
+    grok_oidc = oidc_by_xref["oauth_grok_oidc"]
     assert grok_oidc["slug"] == "grok"
     assert grok_oidc["environment"] == "prod"
     assert grok_oidc["login_enabled"] is True
@@ -418,19 +419,17 @@ def test_integrate_config_installs_agentic_vendor_resources() -> None:
     config = apps.get_app_config("integrate")
     manifest = resource_manifest_for(config)
 
-    assert manifest["master"] == (
-        {"path": "resources/master/010_integrate.vendor.yaml", "adopt": "slug"},
-    )
+    assert manifest["master"] == ({"path": "resources/master/010_integrate.vendor.yaml", "adopt": "slug"},)
 
     entry = ResourceEntry.from_declaration(config, "master", manifest["master"][0])
-    rows = entry.read_resource_rows()
-    rows_by_xref = {row.xref: row for row in rows}
+    rows = entry.read_groups()[0].dataset.dict
+    rows_by_xref = {row["_xref"]: row for row in rows}
 
     assert {"anthropic", "gemini", "grok"} <= set(rows_by_xref)
-    assert rows_by_xref["gemini"].values["slug"] == "gemini"
-    assert rows_by_xref["gemini"].values["display_name"] == "Google Gemini"
-    assert rows_by_xref["grok"].values["slug"] == "grok"
-    assert rows_by_xref["grok"].values["website_url"] == "https://x.ai/grok"
+    assert rows_by_xref["gemini"]["slug"] == "gemini"
+    assert rows_by_xref["gemini"]["display_name"] == "Google Gemini"
+    assert rows_by_xref["grok"]["slug"] == "grok"
+    assert rows_by_xref["grok"]["website_url"] == "https://x.ai/grok"
 
 
 def test_messaging_imap_config_contributes_schema_web_and_vendor_resource() -> None:
@@ -440,15 +439,14 @@ def test_messaging_imap_config_contributes_schema_web_and_vendor_resource() -> N
         "angee.messaging_integrate_imap",
         import_module("angee.messaging_integrate_imap"),
     )
-    contract = addon_contract(config)
+    contract = addon_manifest(config)
     manifest = resource_manifest_for(config)
 
     assert contract is not None
-    assert contract.schemas == "schema.schemas"
-    assert contract.web == "@angee/messaging-integrate-imap"
-    assert manifest["master"] == (
-        {"path": "resources/master/010_integrate.vendor.yaml", "adopt": "slug"},
-    )
+    assert contract.schemas is None
+    assert (Path(config.path) / "schema.py").is_file()
+    assert WebRuntime((config,)).manifest["addonPackages"][0]["package"] == "@angee/messaging-integrate-imap"
+    assert manifest["master"] == ({"path": "resources/master/010_integrate.vendor.yaml", "adopt": "slug"},)
     rows = _resource_rows(config, "master", "resources/master/010_integrate.vendor.yaml")
     assert rows["imap"]["slug"] == "imap"
     assert rows["imap"]["display_name"] == "IMAP"
@@ -469,11 +467,8 @@ def test_storage_install_resources_adopt_unique_slugs() -> None:
 def test_resource_manifest_rejects_unknown_tiers(monkeypatch) -> None:
     """Only resource tiers owned by the resource subsystem are accepted."""
 
-    config = apps.get_app_config("base")
-    monkeypatch.setattr(
-        "angee.resources.entries.addon_contract",
-        lambda _config: make_contract(resources={"fixture": ("resources/fixture.csv",)}),
-    )
+    config = make_addon(resources={"fixture": ("resources/fixture.csv",)})
+
     with pytest.raises(ImproperlyConfigured, match="Unknown resource tier"):
         resource_manifest_for(config)
 
@@ -520,12 +515,13 @@ def test_get_schema_parts_missing_module_is_empty() -> None:
     assert schema_parts_for(config) == {}
 
 
-def test_addon_contract_is_owned_by_the_manifest() -> None:
+def test_addon_manifest_is_owned_by_the_manifest() -> None:
     """The contract is read from addon.toml; plain Django apps have none."""
 
-    iam = addon_contract(apps.get_app_config("iam"))
+    iam = addon_manifest(apps.get_app_config("iam"))
     assert iam is not None
     assert "angee.graphql" in iam.depends_on
-    assert iam.schemas == "schema.schemas"
-    assert iam.web == "@angee/iam"
-    assert addon_contract(apps.get_app_config("contenttypes")) is None
+    config = apps.get_app_config("iam")
+    assert "public" in schema_parts_for(config)
+    assert WebRuntime((config,)).manifest["addonPackages"][0]["package"] == "@angee/iam"
+    assert addon_manifest(apps.get_app_config("contenttypes")) is None

@@ -41,7 +41,7 @@ class PageGraphPgvectorExtension:
 
     The projection seam a graph-RAG plugin uses to surface neighbours on the page
     read. The skeleton returns actor-visible sibling pages in the same vault as a
-    structural placeholder — REBAC row scope is applied (``apply_ambient_scope``,
+    structural placeholder — REBAC row scope is applied (``scoped``,
     like ``PageType.backlinks``); a real plugin ranks by embedding distance over
     the column it adds to ``knowledge.Page``.
     """
@@ -54,7 +54,7 @@ class PageGraphPgvectorExtension:
             Page._default_manager.filter(vault_id=cast(Any, self).vault_id)
             .exclude(pk=cast(Any, self).pk)
             .order_by("title", "sqid")
-            .apply_ambient_scope()
+            .scoped()
         )
         return cast("list[PageType]", list(rows[:_RELATED_LIMIT]))
 
@@ -72,7 +72,7 @@ class GraphPgvectorQuery:
         the vault's public :meth:`~angee.knowledge.models.Vault.retrieval_for` seam,
         so the plugin selects its strategy by key without reaching into knowledge's
         model internals. Row scope is the backend's responsibility
-        (``apply_ambient_scope``). The backend is a lexical stub until embeddings exist.
+        (``scoped``). The backend is a lexical stub until embeddings exist.
         """
 
         target = require_instance_for_id(Vault, vault)

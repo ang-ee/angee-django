@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from typing import Any
+
+import environ
 
 SETTINGS = {
     # Channel backends a ``messaging.Channel`` row may select. ``manual`` is the
@@ -30,7 +33,13 @@ SETTINGS = {
 }
 
 
-def settings(namespace: Mapping[str, Any]) -> dict[str, bool]:
-    """Report whether the host explicitly composed an email transport."""
+def settings(namespace: Mapping[str, Any]) -> dict[str, Any]:
+    """Derive mail-provider defaults from the host environment and transport."""
 
-    return {"ANGEE_EMAIL_DELIVERY_CONFIGURED": bool(namespace.get("EMAIL_BACKEND"))}
+    contributed: dict[str, Any] = {
+        "ANGEE_EMAIL_DELIVERY_CONFIGURED": bool(namespace.get("EMAIL_BACKEND")),
+    }
+    if "ANYMAIL" in os.environ:
+        contributed["ANYMAIL"] = environ.Env().json("ANYMAIL")
+    contributed.update({name: value for name, value in sorted(os.environ.items()) if name.startswith("ANYMAIL_")})
+    return contributed

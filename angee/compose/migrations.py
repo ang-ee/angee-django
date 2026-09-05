@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -16,7 +16,7 @@ from django.db.migrations import Migration
 from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.loader import MigrationLoader
 
-from angee.addons import AddonMigration, addon_contract
+from angee.addons import addon_manifest
 from angee.fs import write_atomic
 
 MATERIALIZED_FOOTER = "# ANGEE MATERIALIZED MIGRATION - DO NOT EDIT"
@@ -32,6 +32,7 @@ class RuntimeMigrationPlan:
     app_label: str
     name: str
     source_path: Path
+    source: str
     output_path: Path
     source_sha256: str
     dependencies: tuple[tuple[str, str], ...]
@@ -47,12 +48,10 @@ class RuntimeMigrations:
         addons: Iterable[AppConfig],
         *,
         runtime_dir: Path,
-        runtime_module: str,
         labels: Iterable[str],
     ) -> None:
         self.addons = tuple(addons)
         self.runtime_dir = runtime_dir
-        self.runtime_module = runtime_module
         self.labels = frozenset(labels)
 
     def plan(self) -> tuple[RuntimeMigrationPlan, ...]:
@@ -67,11 +66,8 @@ class RuntimeMigrations:
         declared_origins: set[str] = set()
 
         for addon in self.addons:
-            contract = addon_contract(addon)
-            if contract is None:
-                continue
-            for declaration in contract.migrations:
-                origin = f"{addon.name}:{declaration.name}"
+            for declaration in self._declarations(addon):
+                origin = f"{addon.name}:{declaration['name']}"
                 if origin in declared_origins:
                     raise RuntimeError(f"duplicate addon runtime migration origin {origin}")
                 declared_origins.add(origin)
@@ -81,14 +77,16 @@ class RuntimeMigrations:
                 if migration_class.replaces:
                     raise RuntimeError(f"{origin}: addon runtime migrations cannot replace other migrations")
                 source_path = self._source_path(module, origin)
-                source_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
+                source_bytes = source_path.read_bytes()
+                source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+                source = source_bytes.decode("utf-8")
                 materialized = existing.get(origin)
                 if materialized is not None:
                     node, migration, _ = materialized
-                    if node[0] != declaration.app_label:
+                    if node[0] != declaration["app_label"]:
                         raise RuntimeError(
                             f"{origin}: materialized target {node[0]!r} differs from "
-                            f"declared target {declaration.app_label!r}"
+                            f"declared target {declaration['app_label']!r}"
                         )
                     if getattr(migration, SOURCE_SHA256_ATTR, None) != source_sha256:
                         raise RuntimeError(f"{origin}: source digest changed after materialization")
@@ -105,46 +103,42 @@ class RuntimeMigrations:
                 if not applicable:
                     continue
 
-                if declaration.app_label not in next_numbers:
-                    next_numbers[declaration.app_label] = self._next_number(loader, declaration.app_label)
-                    leaves[declaration.app_label] = self._target_leaf(
+                if declaration["app_label"] not in next_numbers:
+                    next_numbers[declaration["app_label"]] = self._next_number(loader, declaration["app_label"])
+                    leaves[declaration["app_label"]] = self._target_leaf(
                         loader,
-                        declaration.app_label,
+                        declaration["app_label"],
                         origin=origin,
                     )
-                number = next_numbers[declaration.app_label]
-                next_numbers[declaration.app_label] += 1
-                name = f"{number:04d}_{declaration.name}"
-                node = (declaration.app_label, name)
-                target_leaf = leaves[declaration.app_label]
+                number = next_numbers[declaration["app_label"]]
+                next_numbers[declaration["app_label"]] += 1
+                name = f"{number:04d}_{declaration['name']}"
+                node = (declaration["app_label"], name)
+                target_leaf = leaves[declaration["app_label"]]
                 dependencies, latest_dependencies = self._resolve_dependencies(
                     loader,
                     migration_class.dependencies,
-                    current_app=declaration.app_label,
+                    current_app=declaration["app_label"],
                     origin=origin,
                 )
                 if target_leaf is not None and target_leaf not in dependencies:
                     dependencies += (target_leaf,)
-                output_path = (
-                    self.runtime_dir
-                    / declaration.app_label
-                    / "migrations"
-                    / f"{name}.py"
-                )
+                output_path = self.runtime_dir / declaration["app_label"] / "migrations" / f"{name}.py"
                 if output_path.exists():
                     raise RuntimeError(f"{origin}: output migration already exists at {output_path}")
                 plan = RuntimeMigrationPlan(
                     origin=origin,
-                    app_label=declaration.app_label,
+                    app_label=declaration["app_label"],
                     name=name,
                     source_path=source_path,
+                    source=source,
                     output_path=output_path,
                     source_sha256=source_sha256,
                     dependencies=dependencies,
                     latest_dependencies=latest_dependencies,
                     migration_class=migration_class,
                 )
-                migration = migration_class(name, declaration.app_label)
+                migration = migration_class(name, declaration["app_label"])
                 migration.dependencies = list(dependencies)
                 try:
                     loader.graph.add_node(node, migration)
@@ -153,7 +147,7 @@ class RuntimeMigrations:
                     for run_before in self._resolve_run_before(
                         loader,
                         migration.run_before,
-                        current_app=declaration.app_label,
+                        current_app=declaration["app_label"],
                         origin=origin,
                     ):
                         loader.graph.add_dependency(migration, run_before, node)
@@ -165,7 +159,7 @@ class RuntimeMigrations:
                     state = migration.mutate_state(state)
                 except Exception as error:
                     raise RuntimeError(f"{origin}: migration state transition is invalid") from error
-                leaves[declaration.app_label] = node
+                leaves[declaration["app_label"]] = node
                 plans.append(plan)
 
         return tuple(plans)
@@ -193,9 +187,7 @@ class RuntimeMigrations:
     @staticmethod
     def _next_number(loader: MigrationLoader, app_label: str) -> int:
         numbers = [
-            MigrationAutodetector.parse_number(name)
-            for label, name in loader.disk_migrations
-            if label == app_label
+            MigrationAutodetector.parse_number(name) for label, name in loader.disk_migrations if label == app_label
         ]
         return max((number for number in numbers if number is not None), default=0) + 1
 
@@ -229,15 +221,7 @@ class RuntimeMigrations:
         dependencies: list[tuple[str, str]] = []
         latest: list[tuple[tuple[str, str], tuple[str, str]]] = []
         for raw_dependency in raw_dependencies:
-            try:
-                dependency = tuple(raw_dependency)
-            except TypeError as error:
-                raise RuntimeError(
-                    f"{origin}: invalid Django migration dependency {raw_dependency!r}"
-                ) from error
-            if len(dependency) != 2 or not all(isinstance(value, str) for value in dependency):
-                raise RuntimeError(f"{origin}: invalid Django migration dependency {raw_dependency!r}")
-            node = (dependency[0], dependency[1])
+            node = self._dependency_node(raw_dependency, origin=origin, kind="migration dependency")
             if node[1] == "__latest__":
                 resolved = self._target_leaf(loader, node[0], origin=origin, required=True)
                 assert resolved is not None
@@ -252,8 +236,9 @@ class RuntimeMigrations:
                 dependencies.append(checked)
         return tuple(dependencies), tuple(latest)
 
-    @staticmethod
+    @classmethod
     def _resolve_run_before(
+        cls,
         loader: MigrationLoader,
         raw_nodes: Iterable[tuple[str, str]],
         *,
@@ -262,12 +247,7 @@ class RuntimeMigrations:
     ) -> tuple[tuple[str, str], ...]:
         nodes: list[tuple[str, str]] = []
         for raw_node in raw_nodes:
-            try:
-                node = (raw_node[0], raw_node[1])
-            except (IndexError, TypeError) as error:
-                raise RuntimeError(f"{origin}: invalid Django run_before node {raw_node!r}") from error
-            if not all(isinstance(value, str) for value in node):
-                raise RuntimeError(f"{origin}: invalid Django run_before node {raw_node!r}")
+            node = cls._dependency_node(raw_node, origin=origin, kind="run_before node")
             if node[1] == "__latest__":
                 raise RuntimeError(f"{origin}: run_before does not support __latest__")
             try:
@@ -306,22 +286,48 @@ class RuntimeMigrations:
             existing[origin] = (node, migration, path)
         return existing
 
-    def _validate_declaration(self, declaration: AddonMigration, origin: str) -> None:
-        if declaration.app_label not in self.labels:
-            raise RuntimeError(f"{origin}: unknown runtime migration target {declaration.app_label!r}")
-        if not declaration.name.isidentifier() or not declaration.name.islower():
+    @staticmethod
+    def _dependency_node(raw: object, *, origin: str, kind: str) -> tuple[str, str]:
+        """Validate a native Django graph node without truncating extra items."""
+
+        if isinstance(raw, str | bytes | Mapping | set | frozenset):
+            raise RuntimeError(f"{origin}: invalid Django {kind} {raw!r}")
+        try:
+            node = tuple(raw)
+        except TypeError as error:
+            raise RuntimeError(f"{origin}: invalid Django {kind} {raw!r}") from error
+        if len(node) != 2 or not all(isinstance(value, str) for value in node):
+            raise RuntimeError(f"{origin}: invalid Django {kind} {raw!r}")
+        return node[0], node[1]
+
+    @staticmethod
+    def _declarations(addon: AppConfig) -> Iterator[Mapping[str, Any]]:
+        """Validate capability-specific fields on the unchanged manifest entries."""
+
+        manifest = addon_manifest(addon)
+        if manifest is None:
+            return
+        for index, declaration in enumerate(manifest.migrations):
+            for key in ("name", "app_label", "module"):
+                if not isinstance(declaration.get(key), str) or not declaration[key]:
+                    raise RuntimeError(f"{addon.name}: migrations[{index}] requires string {key}")
+            yield declaration
+
+    def _validate_declaration(self, declaration: Mapping[str, Any], origin: str) -> None:
+        if declaration["app_label"] not in self.labels:
+            raise RuntimeError(f"{origin}: unknown runtime migration target {declaration['app_label']!r}")
+        if not declaration["name"].isidentifier() or not declaration["name"].islower():
             raise RuntimeError(f"{origin}: migration name must be a lower-case Python identifier")
 
     @staticmethod
-    def _source_module(addon: AppConfig, declaration: AddonMigration, origin: str) -> ModuleType:
-        module_name = declaration.module
+    def _source_module(addon: AppConfig, declaration: Mapping[str, Any], origin: str) -> ModuleType:
+        module_name = declaration["module"]
         if not module_name.startswith(f"{addon.name}."):
             module_name = f"{addon.name}.{module_name}"
         conventional = f"{addon.name}.migrations"
         if module_name == conventional or module_name.startswith(f"{conventional}."):
             raise RuntimeError(
-                f"{origin}: addon migration source must live outside Django's "
-                "conventional migrations package"
+                f"{origin}: addon migration source must live outside Django's conventional migrations package"
             )
         try:
             return importlib.import_module(module_name)
@@ -344,7 +350,7 @@ class RuntimeMigrations:
 
     @staticmethod
     def _render(plan: RuntimeMigrationPlan) -> str:
-        source = plan.source_path.read_text(encoding="utf-8")
+        source = plan.source
         if not source.endswith("\n"):
             raise RuntimeError(f"{plan.origin}: source migration must end with a newline")
         lines = [source, f"{MATERIALIZED_FOOTER}\n"]
@@ -367,9 +373,7 @@ class RuntimeMigrations:
         for dependency in plan.dependencies:
             if dependency not in source_dependencies:
                 lines.append(
-                    "Migration.dependencies.append("
-                    f"({json.dumps(dependency[0])}, {json.dumps(dependency[1])})"
-                    ")\n"
+                    f"Migration.dependencies.append(({json.dumps(dependency[0])}, {json.dumps(dependency[1])}))\n"
                 )
         lines.extend(
             (

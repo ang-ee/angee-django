@@ -1,4 +1,6 @@
 import { describe, expect, test } from "vitest";
+import { favoriteFromResourceView } from "./model/favorites";
+import { createResourceViewState } from "./resource-view-model";
 
 import {
   RESOURCE_VIEW_FAVORITES_PREFERENCES_KEY,
@@ -45,5 +47,19 @@ describe("readResourceViewFavoritesSlice", () => {
     });
     expect(slice.writable).toBe(true);
     expect(slice.document.models).toEqual({ "notes.Note": [FAVORITE] });
+  });
+
+  test("calendar favorites keep the v1 shape without page, mode, or anchor", () => {
+    const favorite = favoriteFromResourceView(createResourceViewState({
+      page: 3, pageSize: 20, view: "calendar", mode: "week", anchor: "2000-01-01",
+    }), "Calendar");
+    const document = { version: 1, models: { "notes.Note": [favorite] } };
+    const slice = readResourceViewFavoritesSlice({ [KEY]: JSON.parse(JSON.stringify(document)) });
+
+    expect(slice.document).toEqual({
+      version: 1,
+      models: { "notes.Note": [{ id: "favorite:calendar", label: "Calendar", pageSize: 20, view: "calendar" }] },
+    });
+    expect(slice.writable).toBe(true);
   });
 });

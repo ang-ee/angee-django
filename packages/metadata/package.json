@@ -46,7 +46,8 @@
     "build": "rm -rf dist && tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@refinedev/core": "^5.0.12"
+    "@refinedev/core": "^5.0.12",
+    "valibot": "^1.4.2"
   },
   "peerDependencies": {
     "react": "^19.0.0"

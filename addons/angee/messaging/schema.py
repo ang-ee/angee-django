@@ -13,8 +13,6 @@ from typing import Annotated, Any, cast
 
 import strawberry
 import strawberry_django
-from angee.base.identity import instance_from_public_id
-from angee.data.metadata import DataResourceEnumValueMetadata, DataResourceFieldMetadata
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
@@ -24,6 +22,8 @@ from django.views.decorators.debug import sensitive_variables
 from rebac import PermissionDenied
 from strawberry import auto
 
+from angee.base.identity import instance_from_public_id
+from angee.data.metadata import DataResourceEnumValueMetadata, DataResourceFieldMetadata
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
@@ -411,6 +411,12 @@ class RecordMessageReactionGroupType:
 class MessageType(AngeeNode):
     """GraphQL projection of a message."""
 
+    @strawberry_django.field(only=["sent_at", "created_at"])
+    def feed_order_key(self) -> str:
+        """Opaque server key; descending ASCII comparison preserves feed order."""
+
+        return cast(Any, self).feed_order_key
+
     platform: auto
     direction: auto
     status: auto
@@ -432,7 +438,7 @@ class MessageType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry.field
+    @strawberry_django.field(prefetch_related=["parts__fragment", "parts__file__mime_type"])
     def parts(self) -> list[PartType]:
         """Return this message's MIME parts in depth-first reading order."""
 
@@ -463,7 +469,7 @@ class MessageType(AngeeNode):
 
         return cast(list["MessageEdgeType"], MessageEdge.objects.for_message(cast(Any, self)))
 
-    @strawberry.field
+    @strawberry_django.field(prefetch_related=["reactions__handle"])
     def reaction_groups(self, info: strawberry.Info) -> list[MessageReactionGroupType]:
         """Return reactions grouped by content, with current-user state."""
 
@@ -1138,8 +1144,74 @@ class RecordActivityPayload:
 
 
 @strawberry.type
+class MessageFeedPage:
+    """A newest-first, currently authorized message page with stable cursors."""
+
+    messages: list[MessageType]
+    count: int
+    older_cursor: str | None
+    newer_cursor: str | None
+    has_older: bool
+    has_newer: bool
+    has_more_in_window: bool
+    has_older_than_through: bool
+
+
+@strawberry.type
+class MessageFeedRevalidation:
+    """Complete survivor/absent partition under the current feed scope."""
+
+    messages: list[MessageType]
+    absent_ids: list[strawberry.ID]
+
+
+@strawberry.type
 class MessagingQuery:
     """Record- and actor-scoped chatter queries."""
+
+    @strawberry.field
+    def thread_message_feed(
+        self,
+        thread_id: strawberry.ID,
+        search: str = "",
+        before_cursor: str | None = None,
+        after_cursor: str | None = None,
+        through_cursor: str | None = None,
+        limit: int = 50,
+    ) -> MessageFeedPage:
+        """Page an inbox thread through the current actor's message scope."""
+
+        thread = Thread.objects.all().scoped().inbox().from_public_id(str(thread_id))
+        if thread is None:
+            raise ValueError("thread not found")
+        return MessageFeedPage(
+            **Message.objects.inbox()
+            .for_thread(thread)
+            .feed_page(
+                scope=("thread", str(thread.sqid)),
+                search=search,
+                before_cursor=before_cursor,
+                after_cursor=after_cursor,
+                through_cursor=through_cursor,
+                limit=limit,
+            )
+        )
+
+    @strawberry.field
+    def thread_message_feed_revalidate(
+        self,
+        thread_id: strawberry.ID,
+        ids: list[strawberry.ID],
+        search: str = "",
+    ) -> MessageFeedRevalidation:
+        """Revalidate loaded inbox messages through the current readable thread."""
+
+        thread = Thread.objects.all().scoped().inbox().from_public_id(str(thread_id))
+        if thread is None:
+            raise ValueError("thread not found")
+        return MessageFeedRevalidation(
+            **Message.objects.inbox().for_thread(thread).feed_revalidate([str(value) for value in ids], search=search)
+        )
 
     @strawberry.field(name="record_thread")
     def record_thread(self, info: strawberry.Info, input: RecordThreadInput) -> RecordThreadPayload:
@@ -1907,9 +1979,7 @@ _MESSAGING_SCHEMA_BUCKET = {
         RecordActivityPayload,
         *_RESOURCE_TYPES,
     ],
-    "type_extensions": (
-        [] if _CHANNEL_WEBFORM_EXTENSION is None else [_CHANNEL_WEBFORM_EXTENSION]
-    ),
+    "type_extensions": ([] if _CHANNEL_WEBFORM_EXTENSION is None else [_CHANNEL_WEBFORM_EXTENSION]),
 }
 
 

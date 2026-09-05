@@ -1,31 +1,24 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useRef } from "react";
 import {
-  useCustom,
   useCustomMutation,
   useDataProvider,
   useInvalidate,
   useSubscription,
   type BaseRecord,
-  type CustomResponse,
   type HttpError,
 } from "@refinedev/core";
 import {
-  useInfiniteQuery,
+  useQuery,
   useQueries,
   useQueryClient,
-  type InfiniteData,
-  type QueryFunctionContext,
   type UseQueryResult,
 } from "@tanstack/react-query";
 
 import {
-  authoredQueryMeta,
   invalidateAuthoredQueries,
 } from "../query-invalidation";
 import {
-  stableKey,
   useStableArray,
-  useStableVariables,
 } from "../stable-deps";
 import type {
   DocumentData,
@@ -33,7 +26,10 @@ import type {
   TypedDocumentNode,
 } from "../typed-document";
 import { useActiveDataProviderName } from "./data-provider-context";
-import { mutationMeta, queryMeta } from "./wire";
+import { authoredOperationData, mutationMeta } from "./wire";
+import { authoredQueryOptions, useAuthoredErrorPolicy } from "./authored-query-options";
+export { authoredQueryKey, authoredQueryOptions } from "./authored-query-options";
+export { authoredOperationData } from "./wire";
 
 /** Any authored (non-CRUD) GraphQL operation: a generated `TypedDocumentNode`. */
 export type AuthoredDocument = TypedDocumentNode<
@@ -68,16 +64,9 @@ export interface AuthoredQueryOptions extends AuthoredOperationOptions {
   models?: readonly string[];
 }
 
-export interface AuthoredQueryResult<TData> {
-  data: TData | undefined;
-  fetching: boolean;
-  error: Error | null;
-  refetch: () => void;
-}
-
 /** One authored read in a dynamic batch, addressed by a caller-stable key. */
 export interface AuthoredQueryBatchScope<TDocument extends AuthoredDocument> {
-  /** Caller identity for the scope; it must change when the document changes. */
+  /** Result label only; document/provider/variables own query identity. */
   key: string;
   document: TDocument;
   variables?: AuthoredVariables<TDocument>;
@@ -85,185 +74,45 @@ export interface AuthoredQueryBatchScope<TDocument extends AuthoredDocument> {
   models?: readonly string[];
 }
 
-export type AuthoredInfinitePageVariables<
-  TDocument extends AuthoredDocument,
-> = Partial<AuthoredVariables<TDocument>>;
-
-export interface AuthoredInfiniteQueryOptions<
-  TDocument extends AuthoredDocument,
-  TRow,
-  TPageVariables extends AuthoredInfinitePageVariables<TDocument>,
-> extends AuthoredQueryOptions {
-  /** Read the keyset page rows from one authored operation result. */
-  getRows: (data: DocumentData<TDocument>) => readonly TRow[];
-  /** Stable identity for page-level dedupe. */
-  getRowId: (row: TRow) => string;
-  /**
-   * Return cursor variables for the next older page. Returning `undefined`
-   * marks the infinite read exhausted.
-   */
-  getPageParam: (
-    lastPageRows: readonly TRow[],
-    lastPage: DocumentData<TDocument>,
-  ) => TPageVariables | undefined;
-}
-
-export interface AuthoredInfiniteQueryResult<TData, TRow> {
-  rows: readonly TRow[];
-  pages: readonly TData[];
-  fetching: boolean;
-  fetchingOlder: boolean;
-  error: Error | null;
-  hasMore: boolean;
-  fetchOlder: () => void;
-  refetch: () => void;
-}
-
 export function useAuthoredQuery<TDocument extends AuthoredDocument>(
   document: TDocument,
   variables?: AuthoredVariables<TDocument>,
   options: AuthoredQueryOptions = {},
-): AuthoredQueryResult<DocumentData<TDocument>> {
-  const stable = useStableVariables(variables);
-  const enabled = options.enabled ?? true;
+): UseQueryResult<DocumentData<TDocument>, Error> {
+  const activeProvider = useActiveDataProviderName();
+  const provider = options.dataProviderName ?? activeProvider ?? "default";
+  const dataProvider = useDataProvider();
+  const client = useQueryClient();
   const models = useStableArray(options.models ?? []);
-  const activeDataProviderName = useActiveDataProviderName();
-  const dataProviderName = options.dataProviderName ?? activeDataProviderName ?? "default";
-  const meta = useMemo(
-    () => queryMeta(document, stable),
-    [document, stable],
-  );
-  const run = useCustom<BaseRecord, HttpError>({
-    url: "",
-    method: "post",
-    dataProviderName,
-    meta,
-    queryOptions: {
-      enabled,
-      meta: authoredQueryMeta(models),
-    },
+  const configured = authoredQueryOptions(client, dataProvider, provider, document, variables, models);
+  const result = useQuery({
+    ...configured, enabled: options.enabled ?? true,
   });
-  useAuthoredLiveInterest(enabled, models);
-  // Stable identity: callers (e.g. the operator token-refresh interval) put
-  // `refetch` in effect deps, and react-query churns `run.query`'s identity on
-  // every state change — depending on it would tear those effects down.
-  const queryRef = useRef(run.query);
-  queryRef.current = run.query;
-  const refetch = useCallback(() => {
-    void queryRef.current.refetch();
-  }, []);
-  const data = authoredQueryData(run.query.data);
-  return {
-    data: data as DocumentData<TDocument> | undefined,
-    fetching: run.query.isFetching,
-    error: run.query.error as Error | null,
-    refetch,
-  };
+  useAuthoredLiveInterest(options.enabled ?? true, models);
+  useAuthoredErrorPolicy([configured.queryKey]);
+  return result;
 }
 
-/**
- * Run a render-varying set of authored GraphQL reads through one
- * {@link useQueries} hook. Each cache entry is owned by its data provider,
- * document, and variables; the caller's `key` only addresses the returned map.
- * Model interests ride the same `changes()` invalidation seam as
- * {@link useAuthoredQuery}.
- */
+/** Native query results addressed by a domain label; labels never key the cache. */
 export function useAuthoredQueryBatch<TDocument extends AuthoredDocument>(
   scopes: readonly AuthoredQueryBatchScope<TDocument>[],
   options: AuthoredOperationOptions & { enabled?: boolean } = {},
-): ReadonlyMap<
-  string,
-  AuthoredQueryResult<DocumentData<TDocument>>
-> {
-  type Data = DocumentData<TDocument>;
-  type Variables = AuthoredVariables<TDocument>;
-  const enabled = options.enabled ?? true;
-  const activeDataProviderName = useActiveDataProviderName();
-  const dataProviderName =
-    options.dataProviderName ?? activeDataProviderName ?? "default";
+): ReadonlyMap<string, UseQueryResult<DocumentData<TDocument>, Error>> {
+  const activeProvider = useActiveDataProviderName();
+  const provider = options.dataProviderName ?? activeProvider ?? "default";
   const dataProvider = useDataProvider();
-  // The caller key owns document identity; hashing the GraphQL AST here made a
-  // render dependency out of a large immutable declaration. Provider + variables
-  // are the runtime query identity that may vary beneath that declaration.
-  const scopesKey = stableKey(
-    scopes.map((scope) => [scope.key, dataProviderName, scope.variables]),
-  );
-  const modelsKey = stableKey(scopes.map((scope) => scope.models));
-  const requests = useMemo(
-    () =>
-      enabled
-        ? scopes.map((scope) => ({
-            key: scope.key,
-            document: scope.document,
-            variables: (scope.variables ?? {}) as Variables,
-            dataProviderName,
-            models: scope.models ?? [],
-          }))
-        : [],
-    // `scopesKey` structurally stabilizes caller-created variables/model arrays.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [dataProviderName, enabled, modelsKey, scopesKey],
-  );
-  const liveModels = useStableArray(
-    [...new Set(requests.flatMap((request) => request.models))].sort(),
-  );
-  useAuthoredLiveInterest(enabled && requests.length > 0, liveModels);
-  const combine = useCallback(
-    (results: UseQueryResult<Data | undefined, Error>[]) =>
-      results.map((result) => ({
-        data: result.data,
-        fetching: result.isFetching,
-        error: result.error,
-        // QueryObserver owns this stable function; forwarding it directly keeps
-        // each combined entry structurally shareable across unchanged renders.
-        refetch: result.refetch,
-      })),
-    [],
-  );
-  const combined = useQueries({
-    queries: requests.map((request) => ({
-      queryKey: [
-        "angee",
-        "authored",
-        request.dataProviderName,
-        request.document,
-        request.variables,
-      ],
-      queryFn: async () => {
-        const custom = dataProvider(request.dataProviderName).custom;
-        if (!custom) {
-          throw new Error(
-            `Data provider "${request.dataProviderName}" does not support ` +
-              "custom authored queries.",
-          );
-        }
-        const response = await custom<BaseRecord>({
-          url: "",
-          method: "post",
-          meta: queryMeta(request.document, request.variables),
-        });
-        return authoredOperationData<Data>(response.data);
-      },
-      enabled,
-      // A new provider/document/variables key must never render the previous
-      // observer's data while its own request is pending.
-      placeholderData: undefined,
-      meta: authoredQueryMeta(request.models),
-    })),
-    // TanStack structurally shares plain combine results. A Map here would be a
-    // fresh opaque value on every notification, so map only after combination.
-    combine,
+  const client = useQueryClient();
+  const queries = scopes.map((scope) => {
+    const configured = authoredQueryOptions(client, dataProvider, provider, scope.document, scope.variables, scope.models);
+    return {
+      ...configured, enabled: options.enabled ?? true,
+    };
   });
-  return useMemo(
-    () =>
-      new Map(
-        requests.map((request, index) => [
-          request.key,
-          combined[index] as AuthoredQueryResult<Data>,
-        ] as const),
-      ),
-    [combined, requests],
-  );
+  const results = useQueries({ queries });
+  const models = useStableArray([...new Set(scopes.flatMap((scope) => scope.models ?? []))].sort());
+  useAuthoredLiveInterest(options.enabled ?? true, models);
+  useAuthoredErrorPolicy(queries.map((query) => query.queryKey));
+  return new Map(scopes.map((scope, index) => [scope.key, results[index]!]));
 }
 
 /** Invalidate every authored read registered against any supplied model. */
@@ -274,154 +123,6 @@ export function useInvalidateAuthoredModels(): (
   return useCallback((modelLabels: readonly string[]) => {
     void invalidateAuthoredQueries(queryClient, modelLabels);
   }, [queryClient]);
-}
-
-export function useAuthoredInfiniteQuery<
-  TDocument extends AuthoredDocument,
-  TRow,
-  TPageVariables extends AuthoredInfinitePageVariables<TDocument> =
-    AuthoredInfinitePageVariables<TDocument>,
->(
-  document: TDocument,
-  variables: AuthoredVariables<TDocument>,
-  options: AuthoredInfiniteQueryOptions<TDocument, TRow, TPageVariables>,
-): AuthoredInfiniteQueryResult<DocumentData<TDocument>, TRow> {
-  type Data = DocumentData<TDocument>;
-  type Variables = AuthoredVariables<TDocument>;
-  type PageParam = TPageVariables | null;
-  type QueryKey = readonly [
-    "angee",
-    "authored",
-    "infinite",
-    string,
-    TDocument,
-    Variables,
-  ];
-
-  const stable = useStableVariables(variables);
-  const enabled = options.enabled ?? true;
-  const models = useStableArray(options.models ?? []);
-  const activeDataProviderName = useActiveDataProviderName();
-  const dataProviderName = options.dataProviderName ?? activeDataProviderName ?? "default";
-  const dataProvider = useDataProvider();
-  const callbacksRef = useRef<{
-    getRows: (data: Data) => readonly TRow[];
-    getRowId: (row: TRow) => string;
-    getPageParam: (
-      lastPageRows: readonly TRow[],
-      lastPage: Data,
-    ) => TPageVariables | undefined;
-  }>({
-    getRows: options.getRows,
-    getRowId: options.getRowId,
-    getPageParam: options.getPageParam,
-  });
-  callbacksRef.current = {
-    getRows: options.getRows,
-    getRowId: options.getRowId,
-    getPageParam: options.getPageParam,
-  };
-  const queryKey = useMemo<QueryKey>(
-    () => [
-      "angee",
-      "authored",
-      "infinite",
-      dataProviderName,
-      document,
-      stable,
-    ],
-    [dataProviderName, document, stable],
-  );
-  const custom = dataProvider(dataProviderName).custom;
-  const query = useInfiniteQuery<Data, Error, InfiniteData<Data, PageParam>, QueryKey, PageParam>({
-    queryKey,
-    queryFn: async ({
-      pageParam,
-    }: QueryFunctionContext<QueryKey, PageParam>) => {
-      if (!custom) {
-        throw new Error(
-          `Data provider "${dataProviderName}" does not support custom authored queries.`,
-        );
-      }
-      const pageVariables = {
-        ...stable,
-        ...(pageParam ?? {}),
-      } as Variables;
-      const response: CustomResponse<BaseRecord> =
-        await custom<BaseRecord, Record<string, unknown>, Record<string, unknown>>({
-          url: "",
-          method: "post",
-          meta: queryMeta(document, pageVariables),
-        });
-      const data = authoredOperationData<Data>(response.data);
-      if (data === undefined) {
-        throw new Error("Authored infinite query returned no data.");
-      }
-      return data;
-    },
-    initialPageParam: null,
-    getNextPageParam: (lastPage, allPages) => {
-      const { getRows, getRowId, getPageParam } = callbacksRef.current;
-      const lastPageRows = getRows(lastPage);
-      if (lastPageRows.length === 0) return undefined;
-      if (lastPageOnlyRepeatsPreviousRows(allPages, getRows, getRowId)) {
-        return undefined;
-      }
-      return getPageParam(lastPageRows, lastPage) ?? undefined;
-    },
-    placeholderData: () => undefined,
-    enabled,
-    meta: authoredQueryMeta(models),
-  });
-  useAuthoredLiveInterest(enabled, models);
-
-  const archiveRef = useRef<{
-    queryKey: QueryKey | null;
-    byId: Map<string, TRow>;
-    rows: readonly TRow[];
-  }>({
-    queryKey: null,
-    byId: new Map<string, TRow>(),
-    rows: [],
-  });
-  if (archiveRef.current.queryKey !== queryKey) {
-    archiveRef.current = {
-      queryKey,
-      byId: new Map<string, TRow>(),
-      rows: [],
-    };
-  }
-  const rows = useMemo(
-    () => accumulateAuthoredInfiniteRows(
-      archiveRef.current,
-      query.data?.pages ?? [],
-      callbacksRef.current.getRows,
-      callbacksRef.current.getRowId,
-    ),
-    [query.data, queryKey],
-  );
-  const pages = query.data?.pages ?? (EMPTY_AUTHORED_INFINITE_PAGES as readonly Data[]);
-  const queryRef = useRef(query);
-  queryRef.current = query;
-  const fetchOlder = useCallback(() => {
-    const current = queryRef.current;
-    if (!current.hasNextPage || current.isFetchingNextPage) return;
-    void current.fetchNextPage();
-  }, []);
-  const refetch = useCallback(() => {
-    void queryRef.current.refetch();
-  }, []);
-
-  return {
-    rows,
-    pages,
-    fetching: query.isFetching,
-    fetchingOlder: query.isFetchingNextPage,
-    error: query.error,
-    hasMore: query.hasNextPage,
-    fetchOlder,
-    refetch,
-  };
 }
 
 export type AuthoredMutate<TDocument extends AuthoredDocument> = (
@@ -564,31 +265,6 @@ export function errorFromAuthoredEnvelope(
   return new Error(message);
 }
 
-export function authoredOperationData<TData>(payload: unknown): TData | undefined {
-  if (isGraphQLResponseEnvelope(payload)) {
-    return payload.data as TData | undefined;
-  }
-  return payload as TData | undefined;
-}
-
-export function authoredQueryData<TData>(
-  response: { data?: unknown } | undefined,
-): TData | undefined {
-  if (!response) return undefined;
-  return authoredOperationData<TData>(response.data);
-}
-
-function isGraphQLResponseEnvelope(
-  payload: unknown,
-): payload is { data?: unknown; errors?: unknown; extensions?: unknown } {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return false;
-  }
-  const keys = Object.keys(payload);
-  return keys.includes("data") &&
-    keys.every((key) => key === "data" || key === "errors" || key === "extensions");
-}
-
 const EMPTY_INVALIDATIONS: readonly InvalidateParams[] = [];
 
 /** Live invalidation rides the provider's change consumer, so the hook's own event handler is a noop. */
@@ -599,7 +275,7 @@ function authoredLiveChannel(models: readonly string[]): string {
   return `angee/authored/${models.join(",")}`;
 }
 
-function useAuthoredLiveInterest(
+export function useAuthoredLiveInterest(
   enabled: boolean,
   models: readonly string[],
 ): void {
@@ -617,46 +293,4 @@ function useAuthoredLiveInterest(
     enabled: enabled && models.length > 0,
     onLiveEvent: NO_LIVE_EVENT,
   });
-}
-
-function accumulateAuthoredInfiniteRows<TRow, TData>(
-  archive: {
-    byId: Map<string, TRow>;
-    rows: readonly TRow[];
-  },
-  pages: readonly TData[],
-  getRows: (data: TData) => readonly TRow[],
-  getRowId: (row: TRow) => string,
-): readonly TRow[] {
-  let changed = false;
-  for (const page of pages) {
-    for (const row of getRows(page)) {
-      const id = getRowId(row);
-      if (archive.byId.get(id) !== row) {
-        archive.byId.set(id, row);
-        changed = true;
-      }
-    }
-  }
-  if (changed) archive.rows = [...archive.byId.values()];
-  return archive.rows;
-}
-
-const EMPTY_AUTHORED_INFINITE_PAGES: readonly unknown[] = [];
-
-function lastPageOnlyRepeatsPreviousRows<TRow, TData>(
-  pages: readonly TData[],
-  getRows: (data: TData) => readonly TRow[],
-  getRowId: (row: TRow) => string,
-): boolean {
-  if (pages.length < 2) return false;
-  const previousIds = new Set<string>();
-  for (const page of pages.slice(0, -1)) {
-    for (const row of getRows(page)) previousIds.add(getRowId(row));
-  }
-  const lastPage = pages.at(-1);
-  if (lastPage === undefined) return false;
-  const lastRows = getRows(lastPage);
-  return lastRows.length > 0 &&
-    lastRows.every((row) => previousIds.has(getRowId(row)));
 }

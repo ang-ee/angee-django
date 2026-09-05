@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from pathlib import Path
 
 from django.apps import apps
 from django.db import models
 from rebac.resources import model_resource_type
-from rebac.schema.ast import Definition, Schema
+from rebac.schema import Definition, Schema, resolve_schema_path
 from rebac.schema.parser import parse_zed
 
 
@@ -29,15 +28,14 @@ def effective_rebac_definition(model: type[models.Model]) -> Definition | None:
         app_config = apps.get_app_config(model._meta.app_label)
     except LookupError:
         return None
-    schema_setting = getattr(app_config, "rebac_schema", "permissions.zed")
-    schema_path = Path(app_config.path) / schema_setting
-    if not schema_path.is_file():
+    schema_path = resolve_schema_path(app_config)
+    if schema_path is None:
         return None
-    return _parse_schema(schema_path).get_definition(resource_type)
+    return _parse_schema(schema_path.read_text(encoding="utf-8")).get_definition(resource_type)
 
 
-@lru_cache(maxsize=None)
-def _parse_schema(path: Path) -> Schema:
-    """Parse one immutable-for-the-process effective Zed source."""
+@lru_cache(maxsize=128)
+def _parse_schema(source: str) -> Schema:
+    """Cache parsed content, so rewritten effective sources cannot leave stale gates."""
 
-    return parse_zed(path.read_text(encoding="utf-8"))
+    return parse_zed(source)

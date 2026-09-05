@@ -76,6 +76,10 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@refinedev/core")>();
   return {
     ...actual,
+    useList: () => ({
+      result: { data: sdkMocks.rows, total: sdkMocks.rows.length },
+      query: { isFetching: false, error: null, refetch: vi.fn() },
+    }),
     useCustomMutation: () => ({
       mutateAsync: async ({ values }: { values?: { id?: string; confirm?: boolean } }) => ({
         data: { deleteSalePreview: await sdkMocks.mutate(values ?? {}) },
@@ -95,67 +99,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   };
 });
 
-vi.mock("@refinedev/react-table", async () => {
-  const TanStackTable = await import("@tanstack/react-table");
-  return {
-    useTable: (options: {
-      columns?: unknown[];
-      state?: { pagination?: { pageIndex?: number; pageSize?: number } };
-      getRowId?: (row: Row, index: number) => string;
-      refineCoreProps?: {
-        pagination?: { currentPage?: number; pageSize?: number };
-        queryOptions?: { enabled?: boolean };
-      };
-      onColumnVisibilityChange?: (updater: unknown) => void;
-      onRowSelectionChange?: (updater: unknown) => void;
-    }) => {
-      const props = options.refineCoreProps ?? {};
-      const pageSize =
-        props.pagination?.pageSize ?? options.state?.pagination?.pageSize ?? 50;
-      const requestedPage =
-        props.pagination?.currentPage
-        ?? ((options.state?.pagination?.pageIndex ?? 0) + 1);
-      const active = props.queryOptions?.enabled !== false;
-      const pageCount = Math.max(1, Math.ceil(sdkMocks.rows.length / pageSize));
-      const page = Math.min(pageCount, Math.max(1, requestedPage));
-      const rows = active
-        ? sdkMocks.rows.slice((page - 1) * pageSize, page * pageSize)
-        : [];
-      const pagination = {
-        pageIndex: options.state?.pagination?.pageIndex ?? page - 1,
-        pageSize,
-      };
-      const reactTable = TanStackTable.createTable({
-        data: rows,
-        columns: (options.columns ?? []) as never[],
-        getCoreRowModel: TanStackTable.getCoreRowModel(),
-        getRowId: options.getRowId as never,
-        // The caller's controlled state (incl. rowSelection) flows through;
-        // only pagination/pinning are normalized by the mock.
-        state: {
-          ...(options.state ?? {}),
-          columnPinning: { left: [], right: [] },
-          pagination,
-        },
-        onRowSelectionChange: options.onRowSelectionChange as never,
-        onStateChange: () => undefined,
-        renderFallbackValue: null,
-      });
-      return {
-        reactTable,
-        refineCore: {
-          result: { data: rows, total: active ? sdkMocks.rows.length : undefined },
-          setFilters: vi.fn(),
-          tableQuery: {
-            isFetching: false,
-            error: null,
-            refetch: vi.fn(),
-          },
-        },
-      };
-    },
-  };
-});
+
 
 const columns = [
   { field: "title", header: "Title" },

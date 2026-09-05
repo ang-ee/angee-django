@@ -24,11 +24,11 @@ from collections.abc import Callable
 from functools import cache
 from typing import TYPE_CHECKING
 
-from angee.addons import addon_contract, is_angee_addon, resolve_addon_reference
-from django.apps import apps
+from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
 from fastmcp import FastMCP
 
+from angee.addons import addon_manifest, optional_addon_module, resolve_addon_reference
 from angee.mcp.middleware import ActorMiddleware
 from angee.mcp.verifier import RebacTokenVerifier
 
@@ -86,16 +86,22 @@ def _registrars() -> tuple[ToolRegistrar, ...]:
     deterministic.
     """
 
-    registrars: list[ToolRegistrar] = []
-    for app_config in apps.get_app_configs():
-        if not is_angee_addon(app_config):
-            continue
-        contract = addon_contract(app_config)
-        declaration = contract.mcp_tools if contract is not None else None
-        if declaration is None:
-            continue
-        registrar = resolve_addon_reference(app_config, declaration, attr="mcp_tools")
-        if not callable(registrar):
-            raise ImproperlyConfigured(f"{app_config.name}.mcp_tools must reference a callable")
-        registrars.append(registrar)
-    return tuple(registrars)
+    return tuple(registrar for config in apps.get_app_configs() if (registrar := tool_registrar(config)) is not None)
+
+
+def tool_registrar(app_config: AppConfig) -> ToolRegistrar | None:
+    """Load an addon's explicit MCP declaration or its conventional registrar."""
+
+    manifest = addon_manifest(app_config)
+    if manifest is None:
+        return None
+    if "tools" in manifest.mcp:
+        registrar = resolve_addon_reference(app_config, manifest.mcp["tools"], attr="mcp.tools")
+    else:
+        module = optional_addon_module(app_config, "mcp_tools")
+        if module is None or not hasattr(module, "register"):
+            return None
+        registrar = module.register
+    if not callable(registrar):
+        raise ImproperlyConfigured(f"{app_config.name}.mcp.tools must reference a callable")
+    return registrar

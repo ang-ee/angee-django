@@ -30,7 +30,7 @@ from tests.conftest import (
 )
 
 
-class SchedulerBridge(Integration, Bridge):
+class SchedulerBridge(Bridge, Integration):
     """Concrete bridge fixture driven by the integrate scheduler tests."""
 
     class Meta(Bridge.Meta):

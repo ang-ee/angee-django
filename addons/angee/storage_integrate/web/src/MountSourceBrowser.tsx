@@ -121,7 +121,7 @@ export function MountSourceBrowser({
       />
       <LocationList
         entries={result?.entries ?? []}
-        fetching={query.fetching}
+        fetching={query.isFetching}
         readOnly={readOnly}
         onNavigate={navigate}
       />
