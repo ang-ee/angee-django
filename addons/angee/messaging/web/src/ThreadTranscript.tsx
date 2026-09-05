@@ -1,31 +1,15 @@
 import { senderDisplayName } from "@angee/parties";
-import {
-  useAuthoredInfiniteQuery,
-  type DocumentData,
-  type DocumentVariables,
-} from "@angee/refine";
 import * as React from "react";
 import { Button, ChatBubble, EmptyState, Glyph, LoadingPanel, MessagePartsView, ReactionBar, RelativeTime, SectionEyebrow, cn, reactionsFromGroups, textRoleVariants, type ChatBubbleRole } from "@angee/ui";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { useMessagingT } from "./i18n";
 import { messagingReactionCopy } from "./reaction-copy";
-import {
-  ThreadTranscriptDocument,
-  type ThreadTranscriptRow,
-} from "./documents";
+import type { ThreadTranscriptRow } from "./documents";
+import { messageFeedRows } from "./message-feed";
+import { useThreadMessageFeed } from "./thread-message-feed";
 
-const MESSAGE_MODELS = ["messaging.Message", "messaging.Reaction"] as const;
-// Messaging owns newest-first ordering and opaque cursor continuation.
-const PAGE_SIZE = 50;
 const ESTIMATED_ROW_HEIGHT = 96;
-
-type ThreadTranscriptData = DocumentData<typeof ThreadTranscriptDocument>;
-type ThreadTranscriptVariables = DocumentVariables<typeof ThreadTranscriptDocument>;
-
-function transcriptRows(data: ThreadTranscriptData): readonly ThreadTranscriptRow[] {
-  return data.thread_message_feed.messages;
-}
 
 type MessagingT = ReturnType<typeof useMessagingT>;
 
@@ -68,31 +52,11 @@ function TranscriptBody({
   order = "conversation",
 }: ThreadTranscriptProps): React.ReactElement {
   const t = useMessagingT();
-  const variables = React.useMemo<ThreadTranscriptVariables>(
-    () => ({
-      threadId,
-      limit: PAGE_SIZE,
-      beforeCursor: null,
-    }),
-    [threadId],
-  );
-  const transcript = useAuthoredInfiniteQuery(ThreadTranscriptDocument, variables, {
-    enabled: Boolean(threadId),
-    models: MESSAGE_MODELS,
-    getRows: transcriptRows,
-    getRowId: (row) => row.id,
-    getPageParam: (_rows, data) => {
-      const page = data.thread_message_feed;
-      return page.has_older && page.older_cursor
-        ? { beforeCursor: page.older_cursor }
-        : undefined;
-    },
-  });
-
+  const transcript = useThreadMessageFeed(threadId);
   // Render oldest-to-newest so the latest turn sits at the bottom.
   const messages = React.useMemo(
-    () => [...transcript.rows].reverse(),
-    [transcript.rows],
+    () => messageFeedRows(transcript.data).reverse(),
+    [transcript.data],
   );
   const hasOlder = transcript.hasNextPage;
   const conversation = order === "conversation";
@@ -146,14 +110,21 @@ function TranscriptBody({
   }, [conversation, threadId, messages.length, totalSize]);
 
   function loadOlder(): void {
-    if (!transcript.hasNextPage) return;
+    if (!transcript.hasNextPage || transcript.isFetching) return;
     const scroll = scrollRef.current;
     // Capture the pre-prepend distance from the bottom so the anchor effect can restore it.
     if (conversation && scroll !== null) prependAnchorRef.current = scroll.scrollHeight - scroll.scrollTop;
-    transcript.fetchNextPage();
+    void transcript.fetchNextPage({ cancelRefetch: false });
   }
+  const olderButton = hasOlder ? (
+    <Button type="button" variant="secondary" size="sm"
+      disabled={transcript.isFetching || transcript.isFetchingNextPage} onClick={loadOlder}>
+      <Glyph name="chevron-up" />
+      {t("transcript.loadOlder")}
+    </Button>
+  ) : null;
 
-  if (transcript.isFetching && transcript.rows.length === 0) {
+  if (transcript.isFetching && messages.length === 0) {
     return <LoadingPanel message={t("transcript.loading")} />;
   }
   if (transcript.error) {
@@ -173,6 +144,7 @@ function TranscriptBody({
         title={t("transcript.emptyTitle")}
         description={t("transcript.emptyHint")}
         className="min-h-48 p-4"
+        actions={olderButton}
       />
     );
   }
@@ -184,16 +156,7 @@ function TranscriptBody({
           offsets the virtualized list's coordinate space (the scrollMargin bug). */}
       {hasOlder ? (
         <div className="flex justify-center border-b border-border-subtle p-2">
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            disabled={transcript.isFetching || transcript.isFetchingNextPage}
-            onClick={loadOlder}
-          >
-            <Glyph name="chevron-up" />
-            {t("transcript.loadOlder")}
-          </Button>
+          {olderButton}
         </div>
       ) : null}
       <div ref={scrollRef} className="overflow-y-auto" style={{ maxHeight: "calc(100vh - 16rem)" }}>

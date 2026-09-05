@@ -10,7 +10,7 @@ schemas = "sharing.schemas"
 dependencies = [
   "channels>=4.0",
   "channels-redis>=4.2",
-  "django-zed-rebac[strawberry-django] @ git+https://github.com/ang-ee/django-zed-rebac.git@43be603bc6624c9876e9b4bb04ce30c07a7d2541",
+  "django-zed-rebac[strawberry-django] @ git+https://github.com/ang-ee/django-zed-rebac.git@0ecf18a3cb9d187b66fe6aee3b3b5b78954a10f9",
   "pydantic>=2.13",
   "strawberry-django-aggregates @ git+https://github.com/ang-ee/strawberry-django-aggregates.git@587fc099ae1db69c618f9d0d38d6dc1deec63142",
   "strawberry-django-hasura @ git+https://github.com/ang-ee/strawberry-django-hasura.git@ac5559f367e575da55db7d2267df271490a3a50b",

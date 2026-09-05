@@ -42,7 +42,7 @@ dependencies = [
   "django-reversion>=5.1",
   "django-simple-history>=3.7",
   "django-sqids>=0.1",
-  "django-zed-rebac @ git+https://github.com/ang-ee/django-zed-rebac.git@43be603bc6624c9876e9b4bb04ce30c07a7d2541",
+  "django-zed-rebac @ git+https://github.com/ang-ee/django-zed-rebac.git@0ecf18a3cb9d187b66fe6aee3b3b5b78954a10f9",
   # <6.1: Django 6.1 adds fetch_mode to Model.from_db and django-zed-rebac's
   # override does not accept it yet; lift the cap when rebac supports 6.1.
   "django>=6.0,<6.1",
@@ -100,7 +100,7 @@ addons = [
     "django-anymail>=15.1",
     "django-axes>=8.0",
     "django-import-export>=4.3",
-    "django-zed-rebac[strawberry-django] @ git+https://github.com/ang-ee/django-zed-rebac.git@43be603bc6624c9876e9b4bb04ce30c07a7d2541",
+    "django-zed-rebac[strawberry-django] @ git+https://github.com/ang-ee/django-zed-rebac.git@0ecf18a3cb9d187b66fe6aee3b3b5b78954a10f9",
     "fastmcp>=3.4.2,<4",
     "httpcore>=1.0,<2",
     "httpx>=0.28.1,<0.29",

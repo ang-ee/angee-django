@@ -21,6 +21,8 @@
     "@angee/refine": "workspace:*",
     "@angee/storage": "workspace:*",
     "@angee/ui": "workspace:*",
+    "@refinedev/core": "^5.0.12",
+    "@tanstack/react-query": "^5.101.2",
     "@tanstack/react-virtual": "^3.14.3",
     "lucide-react": "^1.21.0",
     "use-debounce": "^10.1.1"

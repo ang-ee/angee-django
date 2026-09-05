@@ -21,7 +21,10 @@ const mutationMock = vi.hoisted(() => ({
 
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-query")>()),
-  useQueryClient: () => ({ invalidateQueries: mutationMock.invalidateQueries }),
+  useQueryClient: () => ({
+    cancelQueries: vi.fn(async () => undefined),
+    invalidateQueries: mutationMock.invalidateQueries,
+  }),
 }));
 
 vi.mock("@refinedev/core", () => ({

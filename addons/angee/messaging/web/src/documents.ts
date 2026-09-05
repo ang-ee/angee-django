@@ -157,18 +157,12 @@ export const RecordMessageFields = graphql(`
   }
 `);
 
-// The channel conversation transcript reads the thread's messages straight off
-// the `messages` auto-CRUD resource — a fixed-size page ordered newest-first,
-// keyset-paginated on the `(sent_at, created_at)` cursor: "load older" passes the
-// oldest loaded row's timestamps instead of growing a re-fetched window, so a
-// million-message thread pages in constant work per fetch (the Zulip/Synapse
-// anchor-pagination shape, never OFFSET). `messages_aggregate` reports the thread
-// total on the head page so the view knows when older messages remain without
-// re-counting the thread for every keyset page. Only the fields a `ChatBubble`
-// transcript renders are selected.
+// One projection for the transcript's window reads and authoritative retained-ID
+// revalidation. Messaging owns the total order and opaque fixed-window cursors.
 export const TranscriptMessageFields = graphql(`
   fragment TranscriptMessageFields on MessageType {
     id
+    feed_order_key
     direction
     preview
     message_type
@@ -221,18 +215,33 @@ export const ThreadTranscriptDocument = graphql(`
     $threadId: ID!
     $limit: Int!
     $beforeCursor: String
+    $throughCursor: String
   ) {
     thread_message_feed(
       thread_id: $threadId
       before_cursor: $beforeCursor
+      through_cursor: $throughCursor
       limit: $limit
     ) {
       count
       older_cursor
       has_older
+      has_more_in_window
+      has_older_than_through
       messages {
         ...TranscriptMessageFields
       }
+    }
+  }
+`);
+
+export const ThreadTranscriptRevalidateDocument = graphql(`
+  query MessagingThreadTranscriptRevalidate($threadId: ID!, $ids: [ID!]!) {
+    thread_message_feed_revalidate(thread_id: $threadId, ids: $ids) {
+      messages {
+        ...TranscriptMessageFields
+      }
+      absent_ids
     }
   }
 `);

@@ -114,9 +114,9 @@ convenience.
 
 Client-side filtering, sorting, grouping, expansion, row selection, and pagination
 compose TanStack Table row models. Angee keeps the thin lookup evaluator that lets
-TanStack apply the URL-owned filter object to in-memory rows. Infinite history
-still retains its documented [archive gate](upstream-reuse.md#history-retention-gate)
-until the domain can reconcile retained rows authoritatively.
+TanStack apply the URL-owned filter object to in-memory rows. Infinite message
+history uses native Query pages with domain-owned
+[window reads and retained-ID revalidation](upstream-reuse.md#history-retention).
 
 ## Rules
 

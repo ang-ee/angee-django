@@ -1,7 +1,7 @@
 import * as React from "react";
 import { type DocumentType } from "@angee/gql/console";
 import { senderDisplayName } from "@angee/parties";
-import { useAuthoredInfiniteQuery } from "@angee/refine";
+import { messageFeedRows } from "@angee/messaging";
 import {
   Avatar,
   AvatarFallback,
@@ -16,8 +16,7 @@ import {
 
 import { NexusTimeline } from "./documents";
 import { useNexusT } from "./i18n";
-
-const PAGE_SIZE = 30;
+import { useTimelineMessageFeed } from "./timeline-message-feed";
 
 type TimelinePayload = NonNullable<
   DocumentType<typeof NexusTimeline>["party_message_feed"]
@@ -51,42 +50,18 @@ export function TimelinePane(props: TimelinePaneProps): React.ReactElement {
   const partyId = "partyId" in props ? props.partyId : undefined;
   const circle = typeof circleId === "string";
   const scopeId = (circle ? circleId : partyId) ?? "";
-  const variables = React.useMemo(
-    () => ({
-      partyId: scopeId,
-      circleId: scopeId,
-      circle,
-      beforeCursor: null,
-      limit: PAGE_SIZE,
-      search: "",
-    }),
-    [circle, scopeId],
-  );
-  const timeline = useAuthoredInfiniteQuery(
-    NexusTimeline,
-    variables,
-    {
-      models: ["messaging.Message", "parties.PartyHandle", "parties.CircleMember"],
-      getRows: (data) =>
-        (circle ? data.circle_message_feed : data.party_message_feed)?.messages ?? [],
-      getRowId: (row) => row.id,
-      getPageParam: (_rows, data) => {
-        const page = circle ? data.circle_message_feed : data.party_message_feed;
-        return page?.has_older && page.older_cursor
-          ? { beforeCursor: page.older_cursor }
-          : undefined;
-      },
-    },
-  );
-
-  const rows = timeline.rows;
-  const firstPage = timeline.data?.pages[0];
-  const total = (circle ? firstPage?.circle_message_feed : firstPage?.party_message_feed)?.count
-    ?? rows.length;
-  const exhausted = !timeline.hasNextPage;
+  const timeline = useTimelineMessageFeed(scopeId, circle);
+  const rows = React.useMemo(() => messageFeedRows(timeline.data), [timeline.data]);
+  const total = timeline.data?.pages[0]?.count ?? rows.length;
+  const olderButton = timeline.hasNextPage ? (
+    <Button variant="ghost" size="sm" className="self-center" disabled={timeline.isFetching}
+      onClick={() => { void timeline.fetchNextPage({ cancelRefetch: false }); }}>
+      {t("timeline.loadOlder")}
+    </Button>
+  ) : null;
 
   if (timeline.isFetching && rows.length === 0) return <LoadingPanel />;
-  if (timeline.error && rows.length === 0) {
+  if (timeline.error) {
     return <EmptyState icon="triangle-alert" title={timeline.error.message} />;
   }
   if (rows.length === 0) {
@@ -94,6 +69,7 @@ export function TimelinePane(props: TimelinePaneProps): React.ReactElement {
       <EmptyState
         icon="comments"
         title={t(circle ? "timeline.circleEmpty" : "timeline.empty")}
+        actions={olderButton}
       />
     );
   }
@@ -140,17 +116,7 @@ export function TimelinePane(props: TimelinePaneProps): React.ReactElement {
           );
         })}
       </MessageFeed>
-      {exhausted ? null : (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="self-center"
-          disabled={timeline.isFetching}
-          onClick={() => { void timeline.fetchNextPage(); }}
-        >
-          {t("timeline.loadOlder")}
-        </Button>
-      )}
+      {olderButton}
     </div>
   );
 }

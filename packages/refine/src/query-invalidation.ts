@@ -1,4 +1,4 @@
-import type { QueryClient } from "@tanstack/react-query";
+import type { Query, QueryClient } from "@tanstack/react-query";
 
 import { recordValue } from "./dialect/wire";
 
@@ -23,12 +23,20 @@ export function authoredQueryReadsAnyModel(
 }
 
 /** Refetch every active authored read registered against one of the moved models. */
-export function invalidateAuthoredQueries(
-  queryClient: QueryClient,
+export async function invalidateAuthoredQueries(
+  queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries">,
   modelLabels: readonly string[],
 ): Promise<void> {
+  const predicate = (query: Query) => authoredQueryReadsAnyModel(query.meta, modelLabels);
+  // Native invalidation joins an initial in-flight request instead of restarting
+  // it. Cancel that snapshot first so an event cannot be lost when it settles.
+  await queryClient.cancelQueries({
+    predicate: (query) => predicate(query)
+      && query.state.data === undefined
+      && query.state.fetchStatus !== "idle",
+  });
   return queryClient.invalidateQueries({
-    predicate: (query) => authoredQueryReadsAnyModel(query.meta, modelLabels),
+    predicate,
     type: "all",
     refetchType: "active",
   });

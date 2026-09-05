@@ -81,7 +81,7 @@ export {
 } from "./dialect/hooks";
 export {
   useAuthoredMutation,
-  useAuthoredInfiniteQuery,
+  useAuthoredLiveInterest,
   useAuthoredQuery,
   useAuthoredQueryBatch,
   useInvalidateAuthoredModels,
@@ -89,10 +89,7 @@ export {
   authoredOperationData,
   authoredQueryKey,
   authoredQueryOptions,
-  authoredInfiniteQueryOptions,
   type AuthoredDocument,
-  type AuthoredInfinitePageVariables,
-  type AuthoredInfiniteQueryOptions,
   type AuthoredMutate,
   type AuthoredMutationEnvelope,
   type AuthoredMutationOptions,
@@ -101,6 +98,11 @@ export {
   type AuthoredQueryBatchScope,
   type AuthoredVariables,
 } from "./dialect/authored-hooks";
+export {
+  requestAuthoredData,
+  sharedAuthoredMeta,
+  useAuthoredErrorPolicy,
+} from "./dialect/authored-query-options";
 export {
   arrayValue,
   countOf,

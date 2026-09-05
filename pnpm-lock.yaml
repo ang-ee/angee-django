@@ -294,6 +294,12 @@ importers:
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../packages/ui
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@tanstack/react-query':
+        specifier: ^5.101.2
+        version: 5.101.2(react@19.2.7)
       '@tanstack/react-virtual':
         specifier: ^3.14.3
         version: 3.14.5(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -457,6 +463,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../packages/app
+      '@angee/messaging':
+        specifier: workspace:*
+        version: link:../../messaging/web
       '@angee/parties':
         specifier: workspace:*
         version: link:../../parties/web
@@ -466,6 +475,12 @@ importers:
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../packages/ui
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@tanstack/react-query':
+        specifier: ^5.101.2
+        version: 5.101.2(react@19.2.7)
       lucide-react:
         specifier: ^1.21.0
         version: 1.24.0(react@19.2.7)

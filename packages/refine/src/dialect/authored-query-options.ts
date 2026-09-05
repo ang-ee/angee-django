@@ -8,11 +8,9 @@ import {
   type BaseRecord,
 } from "@refinedev/core";
 import {
-  infiniteQueryOptions,
   queryOptions,
   useQueryClient,
   type DataTag,
-  type InfiniteData,
   type Query,
   type QueryClient,
   type QueryFunctionContext,
@@ -188,47 +186,4 @@ export function useAuthoredErrorPolicy(keys: readonly QueryKey[]): void {
     cache.getAll().forEach((query) => report(query));
     return unsubscribe;
   }, [client, keySignature]);
-}
-
-/** Infinite data has a distinct native cache shape and namespace. */
-export function authoredInfiniteQueryOptions<
-  TDocument extends AuthoredDocument,
-  TPage extends Partial<AuthoredVariables<TDocument>>,
->(
-  client: QueryClient,
-  dataProvider: DataProviderGetter,
-  dataProviderName: string,
-  document: TDocument,
-  variables: AuthoredVariables<TDocument>,
-  getNextPageParam: (
-    lastPage: DocumentData<TDocument>,
-    pages: DocumentData<TDocument>[],
-  ) => TPage | undefined,
-  models: readonly string[] = [],
-): ReturnType<typeof infiniteQueryOptions<
-  DocumentData<TDocument>, Error, InfiniteData<DocumentData<TDocument>, TPage | null>,
-  QueryKey, TPage | null
->> {
-  type Data = DocumentData<TDocument>;
-  type PageParam = TPage | null;
-  const queryKey = [
-    "angee", "authored", "infinite", dataProviderName,
-    print(document), variables,
-  ] as const;
-  return infiniteQueryOptions<
-    Data, Error, InfiniteData<Data, PageParam>, QueryKey, PageParam
-  >({
-    queryKey,
-    meta: sharedAuthoredMeta(client, queryKey, models),
-    queryFn: (context) => requestAuthoredData<DocumentData<TDocument>>(
-      dataProvider,
-      dataProviderName,
-      document,
-      Object.assign({}, variables, context.pageParam),
-      context,
-    ),
-    initialPageParam: null as TPage | null,
-    getNextPageParam,
-    placeholderData: undefined,
-  });
 }

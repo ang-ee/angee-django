@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useRef } from "react";
 import {
   useCustomMutation,
   useDataProvider,
@@ -9,13 +9,9 @@ import {
 } from "@refinedev/core";
 import {
   useQuery,
-  useInfiniteQuery,
   useQueries,
   useQueryClient,
-  type InfiniteData,
   type UseQueryResult,
-  type UseInfiniteQueryResult,
-  hashKey,
 } from "@tanstack/react-query";
 
 import {
@@ -23,7 +19,6 @@ import {
 } from "../query-invalidation";
 import {
   useStableArray,
-  useStableVariables,
 } from "../stable-deps";
 import type {
   DocumentData,
@@ -32,8 +27,8 @@ import type {
 } from "../typed-document";
 import { useActiveDataProviderName } from "./data-provider-context";
 import { authoredOperationData, mutationMeta } from "./wire";
-import { authoredInfiniteQueryOptions, authoredQueryOptions, useAuthoredErrorPolicy } from "./authored-query-options";
-export { authoredQueryKey, authoredQueryOptions, authoredInfiniteQueryOptions } from "./authored-query-options";
+import { authoredQueryOptions, useAuthoredErrorPolicy } from "./authored-query-options";
+export { authoredQueryKey, authoredQueryOptions } from "./authored-query-options";
 export { authoredOperationData } from "./wire";
 
 /** Any authored (non-CRUD) GraphQL operation: a generated `TypedDocumentNode`. */
@@ -77,29 +72,6 @@ export interface AuthoredQueryBatchScope<TDocument extends AuthoredDocument> {
   variables?: AuthoredVariables<TDocument>;
   /** Canonical model labels whose changes invalidate this read. */
   models?: readonly string[];
-}
-
-export type AuthoredInfinitePageVariables<
-  TDocument extends AuthoredDocument,
-> = Partial<AuthoredVariables<TDocument>>;
-
-export interface AuthoredInfiniteQueryOptions<
-  TDocument extends AuthoredDocument,
-  TRow,
-  TPageVariables extends AuthoredInfinitePageVariables<TDocument>,
-> extends AuthoredQueryOptions {
-  /** Read the keyset page rows from one authored operation result. */
-  getRows: (data: DocumentData<TDocument>) => readonly TRow[];
-  /** Stable identity for page-level dedupe. */
-  getRowId: (row: TRow) => string;
-  /**
-   * Return cursor variables for the next older page. Returning `undefined`
-   * marks the infinite read exhausted.
-   */
-  getPageParam: (
-    lastPageRows: readonly TRow[],
-    lastPage: DocumentData<TDocument>,
-  ) => TPageVariables | undefined;
 }
 
 export function useAuthoredQuery<TDocument extends AuthoredDocument>(
@@ -151,88 +123,6 @@ export function useInvalidateAuthoredModels(): (
   return useCallback((modelLabels: readonly string[]) => {
     void invalidateAuthoredQueries(queryClient, modelLabels);
   }, [queryClient]);
-}
-
-export function useAuthoredInfiniteQuery<
-  TDocument extends AuthoredDocument,
-  TRow,
-  TPageVariables extends AuthoredInfinitePageVariables<TDocument> =
-    AuthoredInfinitePageVariables<TDocument>,
->(
-  document: TDocument,
-  variables: AuthoredVariables<TDocument>,
-  options: AuthoredInfiniteQueryOptions<TDocument, TRow, TPageVariables>,
-): UseInfiniteQueryResult<InfiniteData<DocumentData<TDocument>, TPageVariables | null>, Error> & { rows: readonly TRow[] } {
-  type Data = DocumentData<TDocument>;
-  const client = useQueryClient();
-
-  const stable = useStableVariables(variables);
-  const enabled = options.enabled ?? true;
-  const models = useStableArray(options.models ?? []);
-  const activeDataProviderName = useActiveDataProviderName();
-  const dataProviderName = options.dataProviderName ?? activeDataProviderName ?? "default";
-  const dataProvider = useDataProvider();
-  const callbacksRef = useRef<{
-    getRows: (data: Data) => readonly TRow[];
-    getRowId: (row: TRow) => string;
-    getPageParam: (
-      lastPageRows: readonly TRow[],
-      lastPage: Data,
-    ) => TPageVariables | undefined;
-  }>({
-    getRows: options.getRows,
-    getRowId: options.getRowId,
-    getPageParam: options.getPageParam,
-  });
-  callbacksRef.current = {
-    getRows: options.getRows,
-    getRowId: options.getRowId,
-    getPageParam: options.getPageParam,
-  };
-  const configured = authoredInfiniteQueryOptions<TDocument, TPageVariables>(
-    client, dataProvider, dataProviderName, document, stable as AuthoredVariables<TDocument>,
-    (lastPage) => {
-      const { getRows, getPageParam } = callbacksRef.current;
-      return getPageParam(getRows(lastPage), lastPage);
-    },
-    models,
-  );
-  const queryKey = hashKey(configured.queryKey);
-  const query = useInfiniteQuery({
-    ...configured, enabled,
-  });
-  useAuthoredErrorPolicy([configured.queryKey]);
-  useAuthoredLiveInterest(enabled, models);
-
-  const archiveRef = useRef<{
-    queryKey: string | null;
-    byId: Map<string, TRow>;
-    rows: readonly TRow[];
-  }>({
-    queryKey: null,
-    byId: new Map<string, TRow>(),
-    rows: [],
-  });
-  if (archiveRef.current.queryKey !== queryKey) {
-    archiveRef.current = {
-      queryKey,
-      byId: new Map<string, TRow>(),
-      rows: [],
-    };
-  }
-  const rows = useMemo(
-    () => accumulateAuthoredInfiniteRows(
-      archiveRef.current,
-      query.data?.pages ?? [],
-      callbacksRef.current.getRows,
-      callbacksRef.current.getRowId,
-    ),
-    [query.data, queryKey],
-  );
-  // Temporary retention projection: the domain cursor/revocation protocol cannot
-  // yet prove archive deletion safe (see docs/frontend/upstream-reuse.md).
-  // All lifecycle controls come directly from the native infinite result.
-  return { ...query, rows };
 }
 
 export type AuthoredMutate<TDocument extends AuthoredDocument> = (
@@ -385,7 +275,7 @@ function authoredLiveChannel(models: readonly string[]): string {
   return `angee/authored/${models.join(",")}`;
 }
 
-function useAuthoredLiveInterest(
+export function useAuthoredLiveInterest(
   enabled: boolean,
   models: readonly string[],
 ): void {
@@ -403,34 +293,4 @@ function useAuthoredLiveInterest(
     enabled: enabled && models.length > 0,
     onLiveEvent: NO_LIVE_EVENT,
   });
-}
-
-function accumulateAuthoredInfiniteRows<TRow, TData>(
-  archive: {
-    byId: Map<string, TRow>;
-    rows: readonly TRow[];
-  },
-  pages: readonly TData[],
-  getRows: (data: TData) => readonly TRow[],
-  getRowId: (row: TRow) => string,
-): readonly TRow[] {
-  let changed = false;
-  const pageIds = new Set<string>();
-  for (const page of pages) {
-    for (const row of getRows(page)) {
-      const id = getRowId(row);
-      pageIds.add(id);
-      if (archive.byId.get(id) !== row) {
-        archive.byId.set(id, row);
-        changed = true;
-      }
-    }
-  }
-  // Page order belongs to the server. Retain only displaced history behind the
-  // current pages; insertion order would place a refreshed head after old rows.
-  const orderedIds = [...pageIds, ...archive.rows.map(getRowId).filter((id) => !pageIds.has(id))];
-  if (changed || orderedIds.some((id, index) => getRowId(archive.rows[index]!) !== id)) {
-    archive.rows = orderedIds.map((id) => archive.byId.get(id)!);
-  }
-  return archive.rows;
 }

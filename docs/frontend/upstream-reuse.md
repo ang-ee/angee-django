@@ -31,15 +31,15 @@ refresh cannot clear their pending status. `@refinedev/react-table` and
 Authored singleton and batch reads use the same native queryOptions factory.
 Imperative reads use
 `authoredQueryOptions(queryClient, dataProvider, providerName, document, variables, models)`;
-the infinite options factory also takes the host QueryClient first. This keeps
-client defaults, custom hashing and model interests on the same native entry.
+this keeps client defaults, custom hashing and model interests on the same native entry.
 The key contains provider, printed GraphQL document and variables; a batch label
-only addresses its result map. Infinite options have a separate namespace and
-native InfiniteData. Consumers use `isFetching`, `isFetchingNextPage`,
-`hasNextPage`, `fetchNextPage` and awaitable `refetch`. Infinite pages are at
-`data.pages`; `rows` is temporarily retained as the history projection described
-below. The old AuthoredQueryResult/AuthoredInfiniteQueryResult lifecycle types
-and void command wrappers are removed.
+only addresses its result map. Domain infinite reads compose native
+`useInfiniteQuery` with `requestAuthoredData`, `sharedAuthoredMeta`,
+`useAuthoredErrorPolicy` and `useAuthoredLiveInterest`. The generic
+`useAuthoredInfiniteQuery` and `authoredInfiniteQueryOptions` are removed.
+Messaging's `messageFeedOptions` owns its history protocol; consumers use native
+`isFetching`, `isFetchingNextPage`, `hasNextPage`, `fetchNextPage`, `refetch` and
+`data.pages`. `messageFeedRows` derives presentation without a separate row store.
 
 Each native Query entry retains the union of every canonical model interest
 registered for that operation until garbage collection. Model labels do not fork
@@ -49,6 +49,16 @@ authored hooks, even with multiple observers or data-only consumers. Imperative
 refreshes of those entries use the same policy; standalone imperative reads use
 the host's native QueryCache error policy. The app's existing QueryClient and auth
 policy remain the cache boundary. Published packages declare TanStack Query as a runtime peer.
+
+Successful login/logout removes unobserved queries, resets observed queries and
+clears mutation history through the native QueryClient. Resetting observed
+queries also updates mounted identity and data consumers. Message-feed keys
+include the current actor; an unknown actor disables the request. The shared
+live provider revalidates interested reads on each WebSocket connection because
+the change stream has no replay cursor. Model interests name the actual change
+owners of selected relations. Invalidation cancels a matching pending first read
+before refetching; otherwise native Query could join its older snapshot and lose
+the change. Disabled and inactive entries remain invalidated without refetching.
 
 Query cancellation discards late results. The pinned Hasura provider ignores
 AbortSignal in custom request metadata, so physical HTTP abort is not promised;
@@ -80,27 +90,34 @@ between requests can repeat, so row overlap alone is not an exhaustion signal.
 
 These fields replace the development `party_timeline`/`circle_timeline` roots
 and their public-message-ID anchors. Record-attached chatter retains its separate
-record-gated paging contract. The cursor change does not resolve the retention
-gate below.
+record-gated paging contract.
 
-## History retention gate
+## History retention
 
-The generic infinite-history archive remains intentionally visible in source.
-Deleting it would drop loaded history as the head moves. Moving it to another
-module or flattening current pages would not solve that problem.
+Message history lives only in native InfiniteData; the generic row archive is
+removed. Each native page keeps its original lower cut. On refresh, the domain
+options enumerate that complete window and revalidate every previously retained
+ID through the matching `*_message_feed_revalidate` field. Complete survivors and
+absent IDs form the authoritative result; missing or partial responses reject the
+refresh. Moved messages retain their native-page owner. Their model-owned
+`feed_order_key` supplies a complete ASCII sort key; consumers compare it without
+parsing cursors, timestamps or public IDs.
 
-The current stream suppresses events once read permission is lost; bulk changes
-can be muted and reconnect has no sequence checkpoint. Current server pages lead
-the temporary history projection, followed by displaced retained rows. Those rows
-are not authoritatively revalidated, so safe removal after deletion/revocation
-remains unresolved.
+Fixed windows combine an exclusive `before_cursor` with an inclusive
+`through_cursor`. Advance only the upper cursor while `has_more_in_window` is
+true. `has_older_than_through` describes history below the original lower cut,
+including empty windows; existing `has_older`/`has_newer` retain their whole-scope
+meanings. Empty retained windows still offer older paging when it is available.
 
-Messaging now owns stable signed tuple cursors. Removing the archive also needs
-complete fixed-window reads, bounded current-scope revalidation returning survivors
-and absent IDs, and server ordering metadata for rows that move between windows.
-Native Query lifecycle tests prove retention under those proposed contracts; the
-real server APIs, authorization-query cost and consumer integration remain open.
-Refresh costs O(H) for H retained rows. Immediate revocation additionally needs an
-authorization/scope epoch or an explicit polling policy. Error and reconnect
-behavior must be defined before native InfiniteData becomes the sole retained
-history cache. This protocol work is not claimed complete here.
+Reads and revalidation batches are bounded to 200 rows/IDs. Refresh work grows
+with loaded history and new arrivals; per-page batching and REBAC backend lookup
+cost also matter. Retention has no maxPages cap. Native cancellation discards late
+results and stops subsequent batches; older paging uses `cancelRefetch: false`.
+Failed authoritative reads show an error instead of cached rows. Native GC
+releases the sole cache after it becomes inactive.
+
+Revalidation runs on invalidation and reconnect, with the existing focus/staleness
+defaults. Unannounced permission changes remain cached until a refresh runs.
+Immediate revocation needs a separate epoch or polling policy; stronger
+cross-request consistency needs a server snapshot/revision contract. Neither is
+implied by cursor stability or native Query lifecycle.

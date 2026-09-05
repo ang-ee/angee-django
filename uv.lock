@@ -739,7 +739,7 @@ requires-dist = [
     { name = "django-simple-history", specifier = ">=3.7" },
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
-    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=43be603bc6624c9876e9b4bb04ce30c07a7d2541" },
+    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=0ecf18a3cb9d187b66fe6aee3b3b5b78954a10f9" },
     { name = "hatch-angee", specifier = ">=0.2.3" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
@@ -756,7 +756,7 @@ addons = [
     { name = "django-anymail", specifier = ">=15.1" },
     { name = "django-axes", specifier = ">=8.0" },
     { name = "django-import-export", specifier = ">=4.3" },
-    { name = "django-zed-rebac", extras = ["strawberry-django"], git = "https://github.com/ang-ee/django-zed-rebac.git?rev=43be603bc6624c9876e9b4bb04ce30c07a7d2541" },
+    { name = "django-zed-rebac", extras = ["strawberry-django"], git = "https://github.com/ang-ee/django-zed-rebac.git?rev=0ecf18a3cb9d187b66fe6aee3b3b5b78954a10f9" },
     { name = "fastmcp", specifier = ">=3.4.2,<4" },
     { name = "httpcore", specifier = ">=1.0,<2" },
     { name = "httpx", specifier = ">=0.28.1,<0.29" },
@@ -910,7 +910,7 @@ wheels = [
 [[package]]
 name = "django-zed-rebac"
 version = "0.15.0.dev0"
-source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=43be603bc6624c9876e9b4bb04ce30c07a7d2541#43be603bc6624c9876e9b4bb04ce30c07a7d2541" }
+source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=0ecf18a3cb9d187b66fe6aee3b3b5b78954a10f9#0ecf18a3cb9d187b66fe6aee3b3b5b78954a10f9" }
 dependencies = [
     { name = "django" },
 ]

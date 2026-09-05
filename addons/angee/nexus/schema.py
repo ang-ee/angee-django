@@ -14,7 +14,7 @@ from angee.base.actors import actor_user_id, is_user_actor
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.messaging.schema import MessageFeedPage
+from angee.messaging.schema import MessageFeedPage, MessageFeedRevalidation
 from angee.parties.schema import PartyType
 
 Tie = apps.get_model("nexus", "Tie")
@@ -195,6 +195,7 @@ class NexusQuery:
         search: str = "",
         before_cursor: str | None = None,
         after_cursor: str | None = None,
+        through_cursor: str | None = None,
         limit: int = 50,
     ) -> MessageFeedPage:
         """Page a readable party's currently authorized inbox messages."""
@@ -210,6 +211,7 @@ class NexusQuery:
                 search=search,
                 before_cursor=before_cursor,
                 after_cursor=after_cursor,
+                through_cursor=through_cursor,
                 limit=limit,
             )
         )
@@ -221,6 +223,7 @@ class NexusQuery:
         search: str = "",
         before_cursor: str | None = None,
         after_cursor: str | None = None,
+        through_cursor: str | None = None,
         limit: int = 50,
     ) -> MessageFeedPage:
         """Page readable circle members' currently authorized inbox messages."""
@@ -237,8 +240,46 @@ class NexusQuery:
                 search=search,
                 before_cursor=before_cursor,
                 after_cursor=after_cursor,
+                through_cursor=through_cursor,
                 limit=limit,
             )
+        )
+
+    @strawberry.field
+    def party_message_feed_revalidate(
+        self,
+        party_id: strawberry.ID,
+        ids: list[strawberry.ID],
+        search: str = "",
+    ) -> MessageFeedRevalidation:
+        """Revalidate loaded messages against this party's current visible edges."""
+
+        party = Party.objects.all().scoped().from_public_id(str(party_id))
+        if party is None:
+            raise ValueError("party not found")
+        return MessageFeedRevalidation(
+            **Message.objects.inbox()
+            .involving_parties((party,))
+            .feed_revalidate([str(value) for value in ids], search=search)
+        )
+
+    @strawberry.field
+    def circle_message_feed_revalidate(
+        self,
+        circle_id: strawberry.ID,
+        ids: list[strawberry.ID],
+        search: str = "",
+    ) -> MessageFeedRevalidation:
+        """Revalidate loaded messages against currently visible circle members."""
+
+        circle = Circle.objects.all().scoped().from_public_id(str(circle_id))
+        if circle is None:
+            raise ValueError("circle not found")
+        parties = Party.objects.all().scoped().in_circle(circle)
+        return MessageFeedRevalidation(
+            **Message.objects.inbox()
+            .involving_parties(parties)
+            .feed_revalidate([str(value) for value in ids], search=search)
         )
 
 

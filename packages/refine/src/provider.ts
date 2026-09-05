@@ -20,7 +20,7 @@ import {
   recordValue,
   stringValue,
 } from "./dialect/wire";
-import { authoredQueryReadsAnyModel } from "./query-invalidation";
+import { invalidateAuthoredQueries } from "./query-invalidation";
 
 type FetchFn = typeof globalThis.fetch;
 type GraphQLWsClient = ReturnType<typeof graphqlWS.createClient>;
@@ -142,7 +142,7 @@ interface ChangeSubscription {
   consumers: Set<ChangeConsumer>;
 }
 
-type AuthoredQueryInvalidationClient = Pick<QueryClient, "invalidateQueries">;
+type AuthoredQueryInvalidationClient = Pick<QueryClient, "cancelQueries" | "invalidateQueries">;
 
 export function createAngeeChangeLiveProvider(
   client: GraphQLWsClient,
@@ -157,6 +157,14 @@ export function createAngeeChangeLiveProvider(
   // label) alike — and tear the socket subscription down only when the last
   // consumer leaves.
   const subscriptions = new Map<string, ChangeSubscription>();
+  let stopConnectionListener: () => void = noopSubscription;
+
+  function stopUnusedConnectionListener(): void {
+    if (subscriptions.size === 0) {
+      stopConnectionListener();
+      stopConnectionListener = noopSubscription;
+    }
+  }
 
   // Attach one fan-in consumer to the shared upstream for `changesRoot`, opening
   // the socket subscription on the first consumer; the returned disposer removes
@@ -180,6 +188,16 @@ export function createAngeeChangeLiveProvider(
     };
     entry.consumers.add(consumer);
     if (!subscriptions.has(changesRoot)) {
+      if (subscriptions.size === 0) {
+        // Changes have no replay cursor. Every new socket connection must catch
+        // up native authored reads, including rows retained outside the head.
+        stopConnectionListener = client.on("connected", () => {
+          const models = resources
+            .filter((resource) => subscriptions.has(resource.roots.changes ?? ""))
+            .map((resource) => resource.modelLabel);
+          if (options.queryClient) void invalidateAuthoredQueries(options.queryClient, models);
+        });
+      }
       subscriptions.set(changesRoot, entry);
       entry.dispose = client.subscribe(
         { query: changeSubscriptionDocument(changesRoot) },
@@ -194,6 +212,7 @@ export function createAngeeChangeLiveProvider(
             if (subscriptions.get(changesRoot) === entry) {
               entry.dispose();
               subscriptions.delete(changesRoot);
+              stopUnusedConnectionListener();
             }
           },
           complete: () => undefined,
@@ -205,6 +224,7 @@ export function createAngeeChangeLiveProvider(
       if (entry.consumers.size === 0 && subscriptions.get(changesRoot) === entry) {
         entry.dispose();
         subscriptions.delete(changesRoot);
+        stopUnusedConnectionListener();
       }
     };
   }
@@ -247,11 +267,7 @@ function invalidateAuthoredQueriesForEvent(
 ): void {
   const model = stringValue(recordValue(event.payload)?.model);
   if (!queryClient || !model) return;
-  void queryClient.invalidateQueries({
-    predicate: (query) => authoredQueryReadsAnyModel(query.meta, [model]),
-    type: "all",
-    refetchType: "active",
-  });
+  void invalidateAuthoredQueries(queryClient, [model]);
 }
 
 function hasuraOptions(
