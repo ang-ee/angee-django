@@ -12,7 +12,6 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
-from angee.base.identity import SqidPublicIdentity, instance_from_public_id
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
@@ -36,8 +35,9 @@ from rebac.roles import (
 from strawberry import auto
 from strawberry.scalars import JSON
 
+from angee.base.identity import SqidPublicIdentity, instance_from_public_id
 from angee.graphql.access import ActorSelfChangeReadGate
-from angee.graphql.data import aggregate_queryset, hasura_model_resource, hasura_pydantic_resource
+from angee.graphql.data import hasura_model_resource, hasura_pydantic_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
@@ -436,12 +436,6 @@ def _admin_user_queryset(info: strawberry.Info) -> QuerySet[Any]:
     return cast(QuerySet[Any], User.objects.people())
 
 
-def _admin_user_aggregate_queryset(info: strawberry.Info) -> QuerySet[Any]:
-    """Return the user queryset safe for aggregate and grouped math."""
-
-    return aggregate_queryset(_admin_user_queryset(info))
-
-
 def _admin_group_queryset(info: strawberry.Info) -> QuerySet[Any]:
     """Return the admin-scoped Django auth-group catalogue queryset."""
 
@@ -696,7 +690,6 @@ _USER_RESOURCE = hasura_model_resource(
     groupable=["is_staff", "is_active"],
     writable=["username", "password", "email", "first_name", "last_name", "is_staff", "is_active"],
     get_queryset=_admin_user_queryset,
-    get_aggregate_queryset=_admin_user_aggregate_queryset,
     write_backend=IAMUserWriteBackend(),
     id_column="sqid",
     model_label="iam.User",
@@ -713,7 +706,6 @@ _GROUP_RESOURCE = hasura_model_resource(
     groupable=["name"],
     writable=["name"],
     get_queryset=_admin_group_queryset,
-    get_aggregate_queryset=_admin_group_queryset,
     write_backend=IAMGroupWriteBackend(),
     id_decode=_group_pk_from_public_id,
     id_column="pk",

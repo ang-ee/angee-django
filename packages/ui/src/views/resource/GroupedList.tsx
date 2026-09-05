@@ -19,9 +19,6 @@ import {
   type AggregateBucket,
   MAX_PAGE_SIZE,
 } from "@angee/refine";
-import type {
-  ModelMetadata,
-} from "@angee/metadata";
 import { Glyph } from "../../chrome/Glyph";
 import { useUiT, type UiTranslate } from "../../i18n";
 import { cn } from "../../lib/cn";
@@ -54,8 +51,6 @@ import {
   alignOf,
   estimateGroupedItemSize,
   formatMeasure,
-  groupMeasuresFromColumns,
-  hasuraMeasuresFromGroupMeasures,
   measureValue,
   useVirtualWindow,
   type GroupedListItem,
@@ -64,7 +59,6 @@ import {
   type GroupMeasure,
   type VisibleFieldOption,
 } from "./resource-view-list-body";
-import type { ColumnDescriptor } from "../page";
 import type { ListEmptyContent } from "./resource-view-types";
 
 function formatPagerNumber(value: number): string {
@@ -72,14 +66,13 @@ function formatPagerNumber(value: number): string {
 }
 
 export interface GroupedListBodyProps<TRow extends Row> {
-  columns: readonly ColumnDescriptor<TRow>[];
   table: TableModel<TRow>;
   tableColumns: readonly ColumnDef<TRow>[];
   visibleColumnCount: number;
   visibleFields?: readonly VisibleFieldOption[];
   onVisibleFieldToggle?: (id: string, visible: boolean) => void;
   resourceView: ResourceViewContextValue;
-  modelMetadata?: ModelMetadata | null;
+  measures: readonly GroupMeasure[];
   listItems: readonly GroupedListItem<TRow>[];
   tableScrollRef: React.RefObject<HTMLDivElement | null>;
   rowVirtualizer: Virtualizer<HTMLDivElement, Element>;
@@ -101,13 +94,12 @@ export interface GroupedListBodyProps<TRow extends Row> {
 }
 
 export function GroupedListBody<TRow extends Row>({
-  columns,
   table,
   visibleColumnCount,
   visibleFields = [],
   onVisibleFieldToggle,
   resourceView,
-  modelMetadata = null,
+  measures,
   listItems,
   tableScrollRef,
   rowVirtualizer,
@@ -132,17 +124,9 @@ export function GroupedListBody<TRow extends Row>({
     1,
     visibleColumnCount + 1 + (hasRowActions ? 1 : 0),
   );
-  const measures = React.useMemo(
-    () => groupMeasuresFromColumns(columns),
-    [columns],
-  );
-  const queryMeasures = React.useMemo(
-    () => hasuraMeasuresFromGroupMeasures(measures, modelMetadata),
-    [measures, modelMetadata],
-  );
   const measuresByColumn = React.useMemo(
-    () => new Map(queryMeasures.map((measure) => [measure.columnId, measure])),
-    [queryMeasures],
+    () => new Map(measures.map((measure) => [measure.columnId, measure])),
+    [measures],
   );
   const visibleColumns = table.getVisibleLeafColumns();
   const { paddingTop, paddingBottom, visibleIndexes } = useVirtualWindow(
@@ -247,7 +231,7 @@ export function GroupedListBody<TRow extends Row>({
           {measures.length > 0 && footerAggregate ? (
             <MeasureFooter
               table={table}
-              measures={queryMeasures}
+              measures={measures}
               aggregate={footerAggregate}
               selectable
               labelInSelectionColumn

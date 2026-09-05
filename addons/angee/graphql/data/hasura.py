@@ -1213,7 +1213,10 @@ def _hasura_group_dimension(
             kind="json",
             scalar=_scalar_for_json_group_type(declared_json_type),
             filter=filter_metadata,
-            extractions=_hasura_json_group_extractions(path, declared_json_type, key),
+            extractions=_hasura_group_extractions(
+                path,
+                declared_json_type=declared_json_type,
+            ),
         )
     field = _require_group_field(model, path)
     key = _group_key_path(field, path)
@@ -1232,21 +1235,30 @@ def _hasura_group_dimension(
         kind="relation" if is_relation else "column",
         scalar="ID" if is_relation else _scalar_for_field(field),
         filter=filter_metadata,
-        extractions=_hasura_group_extractions(field, key, filter_metadata),
+        extractions=_hasura_group_extractions(
+            path,
+            field=field,
+            bucket_filter=filter_metadata,
+        ),
     )
 
 
 def _hasura_group_extractions(
-    field: models.Field[Any, Any],
-    key: str,
-    bucket_filter: DataGroupBucketFilterMetadata | None,
+    path: str,
+    *,
+    field: models.Field[Any, Any] | None = None,
+    declared_json_type: str | None = None,
+    bucket_filter: DataGroupBucketFilterMetadata | None = None,
 ) -> tuple[DataGroupExtractionMetadata, ...]:
-    if not isinstance(field, (models.DateField, models.DateTimeField)):
+    if not (
+        isinstance(field, (models.DateField, models.DateTimeField))
+        or declared_json_type in {"date", "datetime"}
+    ):
         return ()
     extractions: list[DataGroupExtractionMetadata] = []
     for granularity in (*TimeGranularity, *NumberGranularity):
-        extraction_key = f"{key}_{granularity.value}"
-        range_key = f"{key}_{granularity.value}_range" if isinstance(granularity, TimeGranularity) else None
+        extraction_key = group_by_alias(path, granularity, field)
+        range_key = f"{extraction_key}_range" if isinstance(granularity, TimeGranularity) else None
         extractions.append(
             DataGroupExtractionMetadata(
                 name=granularity.value,
@@ -1262,30 +1274,6 @@ def _hasura_group_extractions(
                     if range_key is not None
                     else None
                 ),
-            )
-        )
-    return tuple(extractions)
-
-
-def _hasura_json_group_extractions(
-    path: str,
-    declared_type: str,
-    key: str,
-) -> tuple[DataGroupExtractionMetadata, ...]:
-    """Return date/datetime extraction metadata for a JSON-path group axis."""
-
-    if declared_type not in {"date", "datetime"}:
-        return ()
-    extractions: list[DataGroupExtractionMetadata] = []
-    for granularity in (*TimeGranularity, *NumberGranularity):
-        extraction_key = group_by_alias(path, granularity)
-        range_key = f"{extraction_key}_range" if isinstance(granularity, TimeGranularity) else None
-        extractions.append(
-            DataGroupExtractionMetadata(
-                name=granularity.value,
-                input=granularity.name,
-                key=extraction_key,
-                range_key=range_key,
             )
         )
     return tuple(extractions)

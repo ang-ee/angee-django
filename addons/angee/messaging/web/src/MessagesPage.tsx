@@ -22,7 +22,7 @@ const PART_MODEL = "messaging.Part";
 
 // Default the inbox to a by-channel grouping. Hoisted to a stable reference so
 // the list does not re-seed its grouping on every render.
-const DEFAULT_GROUPS = { list: { field: "channel.display_name" } } as const;
+const DEFAULT_GROUPS = { list: { field: "channel" } } as const;
 
 // The structural tab defaults to grouping the part rows by role (title / header /
 // body / quoted / signature); regrouping by fragment.hash through the shared

@@ -16,11 +16,7 @@ import {
 import {
   bucketFilterForGroup,
   bucketValueLabels,
-  groupLabelDimension,
-  hasuraGroupDimension,
-  hasuraGroupOrderForDimensions,
-  resourceViewGroupToAggregateDimension,
-  type GroupByDimension,
+  resourceViewGroupQueryProjection,
   type GroupedListItem,
   type GroupedListPager,
   type GroupedRecordNav,
@@ -168,26 +164,20 @@ export function buildGroupedRenderModel<TRow extends Row>(
   ): GroupedListPager | undefined => {
     const axisGroup = groupStack[depth];
     if (!axisGroup) return;
-    const dimension = resourceViewGroupToAggregateDimension(axisGroup, modelMetadata);
-    const labelDimension = groupLabelDimension(axisGroup, modelMetadata);
-    const dimensions: GroupByDimension[] = labelDimension
-      ? [dimension, labelDimension]
-      : [dimension];
-    const hasuraDimensions = dimensions.map(hasuraGroupDimension);
-    const orderBy = hasuraGroupOrderForDimensions(hasuraDimensions);
+    const projection = resourceViewGroupQueryProjection(axisGroup, modelMetadata);
     const levelWhere = hasuraWhereFromCrudFilters(
       crudFiltersFromFilterRecord(parentFilter),
     );
     const levelScopeKey = stableSerialize({
-      axis: dimension,
+      axis: projection.dimension,
       filter: parentFilter ?? null,
     });
     const pagination = paginationByScope[levelScopeKey];
     const levelPageSize = depth === 0 ? pageSize : pagination?.pageSize ?? pageSize;
     const storedPage = depth === 0 ? rootPage : (pagination?.pageIndex ?? 0) + 1;
     const query: GroupByRequestOptions = {
-      dimensions: hasuraDimensions,
-      ...(orderBy ? { orderBy } : {}),
+      dimensions: projection.dimensions,
+      ...(projection.orderBy ? { orderBy: projection.orderBy } : {}),
       ...(levelWhere !== undefined ? { where: levelWhere } : {}),
       measures: queryMeasures,
       page: storedPage,

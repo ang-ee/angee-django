@@ -11,10 +11,11 @@ import {
   bucketValueLabels,
   groupLabel,
   groupKey,
+  resourceViewGroupQueryProjection,
   resourceViewGroupToAggregateDimension,
   groupLabelDimension,
 } from "./resource-view-list-body";
-import { validResourceViewGroupStack } from "./resource-view-utils";
+import { resolveResourceViewGroup, validResourceViewGroupStack } from "./resource-view-utils";
 
 const TEST_T = (key: string, vars?: Record<string, unknown>): string => {
   if (key === "list.quarter") return `Q${vars?.quarter} ${vars?.year}`;
@@ -160,7 +161,7 @@ const GROUP_METADATA = {
 } as unknown as ModelMetadata;
 
 const PARTY_GROUP = {
-  field: "party.displayName",
+  field: "party.display_name",
   aggregateField: "party",
   aggregateKey: "partyId",
 };
@@ -329,6 +330,50 @@ describe("resourceViewGroupToAggregateDimension", () => {
 });
 
 describe("relation group display label (Odoo (id, display_name))", () => {
+  test("canonical relation groups and legacy label-path URLs share one query projection", () => {
+    const canonical = resolveResourceViewGroup({ field: "party" }, GROUP_METADATA);
+    const legacy = resolveResourceViewGroup(
+      { field: "party.display_name" },
+      GROUP_METADATA,
+    );
+
+    expect(canonical).toEqual({
+      field: "party",
+      aggregateField: "party",
+      aggregateKey: "partyId",
+    });
+    expect(legacy).toEqual(PARTY_GROUP);
+    const expectedProjection = {
+      dimension: { field: "PARTY", key: "partyId" },
+      dimensions: [
+        { input: "PARTY", key: "partyId" },
+        { input: "PARTY__DISPLAY_NAME", key: "party_DisplayName" },
+      ],
+      orderBy: [{ field: "party_DisplayName", direction: "ASC", nulls: "LAST" }],
+      valueKey: "partyId",
+      labelKey: "party_DisplayName",
+    };
+    expect(resourceViewGroupQueryProjection(canonical, GROUP_METADATA)).toEqual(expectedProjection);
+    expect(resourceViewGroupQueryProjection(legacy, GROUP_METADATA)).toEqual(expectedProjection);
+    expect(bucketValueLabels(
+      { key: { partyId: "1", party_DisplayName: "Same" }, count: 1 },
+      [canonical],
+      GROUP_METADATA,
+      "No value",
+      TEST_T,
+    )).toEqual(["Same"]);
+  });
+
+  test("duplicate relation labels preserve distinct identity keys and filters", () => {
+    const first = { key: { partyId: "1", party_DisplayName: "Same" }, count: 1 };
+    const second = { key: { partyId: "2", party_DisplayName: "Same" }, count: 1 };
+
+    expect(bucketValueLabels(first, [PARTY_GROUP], GROUP_METADATA, "No value", TEST_T)).toEqual(["Same"]);
+    expect(bucketValueLabels(second, [PARTY_GROUP], GROUP_METADATA, "No value", TEST_T)).toEqual(["Same"]);
+    expect(bucketFilterForGroup(first, PARTY_GROUP, GROUP_METADATA)).toEqual({ party: { id: "1" } });
+    expect(bucketFilterForGroup(second, PARTY_GROUP, GROUP_METADATA)).toEqual({ party: { id: "2" } });
+  });
+
   test("groupLabelDimension carries the registered label axis", () => {
     expect(groupLabelDimension(PARTY_GROUP, GROUP_METADATA)).toEqual({
       field: "PARTY__DISPLAY_NAME",
@@ -371,6 +416,30 @@ describe("relation group display label (Odoo (id, display_name))", () => {
 });
 
 describe("translated date bucket labels", () => {
+  test("query projection owns extracted date keys and ordering", () => {
+    expect(
+      resourceViewGroupQueryProjection(
+        { field: "createdAt", granularity: "month" },
+        GROUP_METADATA,
+      ),
+    ).toEqual({
+      dimension: {
+        field: "CREATED_AT",
+        key: "createdAtMonth",
+        granularity: "MONTH",
+        rangeKey: "createdAtMonthRange",
+      },
+      dimensions: [{
+        input: "CREATED_AT",
+        key: "createdAtMonth",
+        granularity: "MONTH",
+        rangeKey: "createdAtMonthRange",
+      }],
+      orderBy: [{ field: "createdAtMonth", direction: "ASC", nulls: "LAST" }],
+      valueKey: "createdAtMonth",
+    });
+  });
+
   test("keeps quarter, month, and ISO-week identities locale-independent", () => {
     expect(
       groupKey(

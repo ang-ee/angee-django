@@ -20,7 +20,6 @@ from strawberry import auto
 
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
-    aggregate_queryset,
     hasura_model_resource,
     public_pk_decoder,
 )
@@ -588,7 +587,6 @@ _HANDLE_RESOURCE = hasura_model_resource(
     insertable=["value", "platform", "external_id", "display_name", "label", "is_preferred", "party"],
     updatable=["value", "platform", "display_name", "label", "is_preferred", "party"],
     field_id_decode={"party": public_pk_decoder(Party)},
-    get_aggregate_queryset=lambda info: aggregate_queryset(Handle.objects.filter(party__isnull=False)),
     write_backend=AngeeHasuraWriteBackend(Handle, public_id_fields=("party",)),
 )
 _ADDRESS_RESOURCE = hasura_model_resource(

@@ -6,7 +6,7 @@ import { type Virtualizer } from "@tanstack/react-virtual";
 import { type AggregateBucket, type AngeeListBatchEntry } from "@angee/refine";
 import type { ResourceViewContextValue } from "../resource-view-context";
 import { type ResourceListOrder, type ResourceViewFilter, type ResourceViewGroup } from "../resource-view-model";
-import { type GroupedListItem, type RowGroup, type VisibleFieldOption } from "../resource-view-list-body";
+import { type GroupedListItem, type GroupMeasure, type RowGroup, type VisibleFieldOption } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
 import type { BoardCardPlacement } from "../resource-view-types";
@@ -134,6 +134,8 @@ export interface GroupedResourceViewSurface<TRow extends Row = Row>
   kind: "grouped";
   /** Grand-total measure footer for the grouped result. */
   footerAggregate: AggregateBucket | null;
+  /** Resolved measures shared by grouped queries and the rendered footer. */
+  measures: readonly GroupMeasure[];
   /** Set a server-grouped sub-group/leaf scope's page. */
   setScopePage: (key: string, page: number) => void;
   /** Change a group's native page size and reset it to the first page. */

@@ -9,7 +9,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { GroupedListBody } from "./GroupedList";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
-import { estimateGroupedItemSize, type GroupedListItem } from "./resource-view-list-body";
+import { estimateGroupedItemSize, groupMeasuresFromColumns, type GroupedListItem } from "./resource-view-list-body";
 import type { ColumnDescriptor } from "../page";
 
 afterEach(cleanup);
@@ -45,9 +45,9 @@ function Harness({ pending = false, actions = false, columns = defaultColumns, o
   });
   return (
     <GroupedListBody
-      columns={columns} table={table} tableColumns={tableColumns} visibleColumnCount={columns.length}
+      table={table} tableColumns={tableColumns} visibleColumnCount={columns.length}
       resourceView={resourceView} listItems={listItems} tableScrollRef={tableScrollRef}
-      rowVirtualizer={rowVirtualizer} footerAggregate={null} expandedKeys={new Set(["january"])}
+      rowVirtualizer={rowVirtualizer} footerAggregate={null} measures={groupMeasuresFromColumns(columns)} expandedKeys={new Set(["january"])}
       toggleGroup={onToggle} setScopePage={onPageChange} setScopePageSize={onPageSizeChange} selectedIds={new Set()} interactive
       renderRowActions={actions ? () => null : undefined} emptyContent="Empty" fetching={false} error={null}
     />

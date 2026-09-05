@@ -6,6 +6,6 @@ export { buildColumns, ListCellContent } from "./list-body/columns";
 export type { BuildColumnsOptions } from "./list-body/columns";
 export { RecordRow } from "./list-body/rows";
 export { VirtualPaddingRow, useVirtualWindow } from "./list-body/virtualization";
-export { groupedRowLabel, resourceViewGroupToAggregateDimension, hasuraGroupDimension, hasuraGroupOrderForDimensions, groupLabelDimension, bucketValueLabels, groupKey, groupLabel } from "./list-body/grouping";
+export { groupedRowLabel, resourceViewGroupToAggregateDimension, hasuraGroupDimension, hasuraGroupOrderForDimensions, groupLabelDimension, resourceViewGroupQueryProjection, bucketValueLabels, groupKey, groupLabel } from "./list-body/grouping";
 export { cellContent, tableColumnLabel, ariaSortForColumn, readPath, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, measureValue, formatMeasure, alignOf, isGroupingOnlyColumn, withGroupingOnlyColumnsHidden, groupFieldLabel, enumValueLabel } from "./list-body/cell-utils";
 export { ListLoadingFooter, ListSkeletonRows, ListEmpty } from "./list-body/loading";

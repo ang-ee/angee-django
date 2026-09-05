@@ -128,6 +128,36 @@ export function hasuraGroupOrderForDimensions(
 }
 
 /**
+ * Resolve a resource-view group into the complete server query projection.
+ * Relation groups retain their stable identity dimension while carrying the
+ * optional display-label dimension alongside it.
+ */
+export function resourceViewGroupQueryProjection(
+  group: ResourceViewGroup,
+  metadata: ModelMetadata | null,
+): {
+  dimension: GroupByDimension;
+  dimensions: readonly HasuraGroupDimension[];
+  orderBy?: readonly GroupOrder[];
+  valueKey: string;
+  labelKey?: string;
+} {
+  const dimension = resourceViewGroupToAggregateDimension(group, metadata);
+  const identity = hasuraGroupDimension(dimension);
+  const labelSpec = groupLabelDimension(group, metadata);
+  const label = labelSpec ? hasuraGroupDimension(labelSpec) : null;
+  const dimensions = label ? [identity, label] : [identity];
+  const orderBy = hasuraGroupOrderForDimensions(dimensions);
+  return {
+    dimension,
+    dimensions,
+    ...(orderBy ? { orderBy } : {}),
+    valueKey: identity.key ?? identity.input,
+    ...(label ? { labelKey: label.key ?? label.input } : {}),
+  };
+}
+
+/**
  * The extra group-by dimension that carries a relation group's display label —
  * the same bucket grouped by `<relation>__<label>` so the related record's name
  * rides along with its id (Odoo's `(id, display_name)`). `null` when the model

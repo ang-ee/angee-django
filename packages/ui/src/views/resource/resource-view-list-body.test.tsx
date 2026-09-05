@@ -9,6 +9,7 @@ import {
   buildColumns,
   cellContent,
   groupMeasuresFromColumns,
+  hasuraMeasuresFromGroupMeasures,
   RowActionsHeader,
 } from "./resource-view-list-body";
 
@@ -68,6 +69,26 @@ test("projects count columns into aggregate measures", () => {
       unit: "",
     },
   ]);
+});
+
+test("resolves a column measure once to its server aggregate input", () => {
+  const metadata = {
+    resource: {
+      aggregateMeasures: [{ op: "sum", field: "word_count", input: "WORD_COUNT" }],
+    },
+  } as unknown as ModelMetadata;
+  const measures = groupMeasuresFromColumns([
+    { field: "word_count", header: "Words", aggregate: "sum" },
+  ]);
+
+  expect(hasuraMeasuresFromGroupMeasures(measures, metadata)).toEqual([{
+    op: "sum",
+    field: "WORD_COUNT",
+    input: "WORD_COUNT",
+    columnId: "word_count",
+    label: "Words",
+    unit: "",
+  }]);
 });
 
 test("routes boolean cell copy through the UI translator", () => {
