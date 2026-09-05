@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
+
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
+from django.db import models
+from rebac.resources import model_resource_type
 
 from angee.base.impl import ImplClassField
 from angee.base.refs import canonical_record_model
 from angee.data import metadata as data_contract
 from angee.data.field_classification import is_to_one_relation, model_field_scalar
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
-from django.db import models
-from rebac.resources import model_resource_type
-
 from angee.graphql.access import is_gated_read_axis
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.resource_fields import (
@@ -430,6 +430,7 @@ def relation_group_by_fields(
         related_model = getattr(relation, "related_model", None)
         if not isinstance(related_model, type) or not issubclass(related_model, models.Model):
             continue
+        related_model = cast(type[models.Model], related_model)
         related_surface = resource_relation_surface(node_type, path)
         if related_surface is not None:
             related_fields = resource_fields(
