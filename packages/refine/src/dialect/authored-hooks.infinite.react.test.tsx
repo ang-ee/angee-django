@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { parse } from "graphql";
 import * as React from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -26,7 +27,7 @@ interface ProbeVariables extends Record<string, unknown> {
 }
 
 const PAGE_SIZE = 2;
-const DOCUMENT = {} as TypedDocumentNode<ProbeData, ProbeVariables>;
+const DOCUMENT = parse("query Probe($scope: String!) { messages { id text } }") as TypedDocumentNode<ProbeData, ProbeVariables>;
 
 const providerMock = vi.hoisted(() => ({
   calls: [] as ProbeVariables[],
@@ -120,10 +121,10 @@ describe("useAuthoredInfiniteQuery", () => {
         "middle",
       ]);
     });
-    expect(result.current.hasMore).toBe(true);
+    expect(result.current.hasNextPage).toBe(true);
 
     await act(async () => {
-      result.current.fetchOlder();
+      result.current.fetchNextPage();
     });
     await waitFor(() => {
       expect(result.current.rows.map((row) => row.text)).toEqual([
@@ -132,10 +133,10 @@ describe("useAuthoredInfiniteQuery", () => {
         "old",
       ]);
     });
-    expect(result.current.hasMore).toBe(true);
+    expect(result.current.hasNextPage).toBe(true);
 
     await act(async () => {
-      result.current.fetchOlder();
+      result.current.fetchNextPage();
     });
     await waitFor(() => {
       expect(result.current.rows.map((row) => row.text)).toEqual([
@@ -144,10 +145,10 @@ describe("useAuthoredInfiniteQuery", () => {
         "old fresh",
       ]);
     });
-    expect(result.current.hasMore).toBe(false);
+    expect(result.current.hasNextPage).toBe(false);
 
     await act(async () => {
-      result.current.fetchOlder();
+      result.current.fetchNextPage();
     });
     expect(providerMock.calls).toEqual([
       { scope: "alpha", limit: PAGE_SIZE, before: null },
@@ -177,7 +178,7 @@ describe("useAuthoredInfiniteQuery", () => {
     });
 
     await act(async () => {
-      result.current.fetchOlder();
+      result.current.fetchNextPage();
     });
     await waitFor(() => {
       expect(result.current.rows.map((row) => row.id)).toEqual(["1", "2", "3"]);
@@ -239,7 +240,7 @@ describe("useAuthoredInfiniteQuery", () => {
       expect(result.current.rows.map((row) => row.id)).toEqual(["1", "2"]);
     });
     await act(async () => {
-      result.current.fetchOlder();
+      result.current.fetchNextPage();
     });
     await waitFor(() => {
       expect(result.current.rows.map((row) => row.id)).toEqual(["1", "2", "3"]);

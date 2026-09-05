@@ -15,7 +15,6 @@ import {
 } from "@angee/metadata";
 import type { TypedDocumentNode } from "@angee/refine";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { TableOptions } from "@tanstack/react-table";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
@@ -56,7 +55,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       query: {
         error: null,
         isFetching: harness.fetching,
-        refetch: vi.fn(),
+        refetch: harness.refetch,
       },
     }),
     useCan: () => ({ data: { can: false }, isLoading: false, error: null }),
@@ -84,29 +83,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
   };
 });
 
-vi.mock("@refinedev/react-table", async () => {
-  const { getCoreRowModel, useReactTable } = await import("@tanstack/react-table");
-  return {
-    useTable: (options: Record<string, unknown>) => ({
-      refineCore: {
-        result: { data: harness.rows, total: harness.rows.length },
-        filters: [],
-        setFilters: harness.setFilters,
-        tableQuery: {
-          error: null,
-          isFetching: harness.fetching,
-          refetch: harness.refetch,
-        },
-      },
-      reactTable: useReactTable<TestRow>({
-        ...options,
-        columns: options.columns ?? [],
-        data: harness.rows,
-        getCoreRowModel: getCoreRowModel(),
-      } as TableOptions<TestRow>),
-    }),
-  };
-});
+
 
 vi.mock("./authored-resource-mutation", () => ({
   useAuthoredResourceMutation: () => [

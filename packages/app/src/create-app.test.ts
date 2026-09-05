@@ -1,3 +1,4 @@
+import { parse } from "graphql";
 // @vitest-environment happy-dom
 
 import { createElement, type ReactNode } from "react";
@@ -41,7 +42,7 @@ afterEach(() => cleanup());
 type AuthoredQueryDocument = Parameters<typeof useAuthoredQuery>[0];
 
 function typedDocument(source: string): AuthoredQueryDocument {
-  return source as unknown as AuthoredQueryDocument;
+  return parse(source) as AuthoredQueryDocument;
 }
 
 describe("createApp search codec", () => {
@@ -82,10 +83,11 @@ describe("createApp search codec", () => {
       "?tab=archive&page=2&view=board&group=status:year",
     );
     const currentState = resourceViewSearchToState(current);
-    const nextState = currentState.reduce({
-      type: "setSort",
-      sort: { field: "title", dir: "asc" },
-    });
+    const nextState = {
+      ...currentState,
+      pagination: { ...currentState.pagination, pageIndex: 0 },
+      sorting: [{ id: "title", desc: false }],
+    };
 
     const query = stringifyFlatSearch(
       mergeResourceViewSearch(current, resourceViewStateToSearch(nextState)),

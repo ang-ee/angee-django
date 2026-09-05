@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 from collections.abc import Mapping
-from contextlib import suppress
+from contextlib import AbstractAsyncContextManager, suppress
 from typing import Any
 
 from asgiref.sync import async_to_sync
@@ -13,13 +13,13 @@ from channels.db import database_sync_to_async
 from pydantic_ai import Agent, AgentRunResultEvent, DeferredToolRequests, DeferredToolResults
 from pydantic_ai.capabilities import ToolSearch
 from pydantic_ai.messages import BinaryContent, ModelMessagesTypeAdapter
+from pydantic_ai.models import Model
 from pydantic_ai.usage import UsageLimits
 from pydantic_core import to_jsonable_python
 
 from angee.agents.context import render_view_context
 from angee.agents.runners import SessionHeartbeat, SessionRunner, SessionUpdateSink, TurnOutcome
 from angee.agents_runtime_pydantic.acp import approval_requests, updates_for_event
-from angee.agents_runtime_pydantic.providers import model_for_agent
 from angee.agents_runtime_pydantic.toolsets import toolsets_for_session
 
 _BINARY_CONTENT_OMITTED = "[Binary tool content omitted from persisted history; use a bounded file handle.]"
@@ -43,7 +43,7 @@ class PydanticAISessionRunner(SessionRunner):
         history = ModelMessagesTypeAdapter.validate_python(session.replay_state or [])
         context = render_view_context(dict(session.context or {}))
         instructions = "\n\n".join(part for part in (session.agent.instructions.strip(), context.strip()) if part)
-        inference_model = model_for_agent(session.agent)
+        inference_model = session.agent.inference_model()
         toolsets = toolsets_for_session(session)
         limits = _usage_limits(session.agent)
         deferred = _deferred_tool_results(deferred_results)
@@ -66,59 +66,60 @@ class PydanticAISessionRunner(SessionRunner):
         history: list[Any],
         deferred: DeferredToolResults | None,
         instructions: str,
-        inference_model: Any,
+        inference_model: AbstractAsyncContextManager[Model],
         toolsets: list[Any],
         limits: UsageLimits,
         emit: SessionUpdateSink,
         heartbeat: SessionHeartbeat,
     ) -> TurnOutcome:
-        agent = Agent(
-            model=inference_model,
-            instructions=instructions,
-            toolsets=toolsets,
-            capabilities=[ToolSearch()],
-            output_type=[str, DeferredToolRequests],
-        )
-        result = None
-        heartbeat_task = asyncio.create_task(_heartbeat_loop(heartbeat))
-        try:
-            async with agent.run_stream_events(
-                prompt,
-                message_history=history,
-                deferred_tool_results=deferred,
-                usage_limits=limits,
-            ) as events:
-                async for event in events:
-                    if isinstance(event, AgentRunResultEvent):
-                        result = event.result
-                        continue
-                    for update in updates_for_event(event):
-                        await database_sync_to_async(emit, thread_sensitive=True)(update)
-        finally:
-            heartbeat_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await heartbeat_task
-        if result is None:
-            raise RuntimeError("pydantic-ai completed without an AgentRunResultEvent.")
+        async with inference_model as model:
+            agent = Agent(
+                model=model,
+                instructions=instructions,
+                toolsets=toolsets,
+                capabilities=[ToolSearch()],
+                output_type=[str, DeferredToolRequests],
+            )
+            result = None
+            heartbeat_task = asyncio.create_task(_heartbeat_loop(heartbeat))
+            try:
+                async with agent.run_stream_events(
+                    prompt,
+                    message_history=history,
+                    deferred_tool_results=deferred,
+                    usage_limits=limits,
+                ) as events:
+                    async for event in events:
+                        if isinstance(event, AgentRunResultEvent):
+                            result = event.result
+                            continue
+                        for update in updates_for_event(event):
+                            await database_sync_to_async(emit, thread_sensitive=True)(update)
+            finally:
+                heartbeat_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await heartbeat_task
+            if result is None:
+                raise RuntimeError("pydantic-ai completed without an AgentRunResultEvent.")
 
-        replay_state = to_jsonable_python(_without_binary_content(result.all_messages()))
-        usage = _usage_delta(result.usage)
-        if isinstance(result.output, DeferredToolRequests):
-            requests = approval_requests(result.output)
-            if not requests and result.output.calls:
-                raise ValueError("External deferred tools are not supported by the pydantic runtime.")
+            replay_state = to_jsonable_python(_without_binary_content(result.all_messages()))
+            usage = _usage_delta(result.usage)
+            if isinstance(result.output, DeferredToolRequests):
+                requests = approval_requests(result.output)
+                if not requests and result.output.calls:
+                    raise ValueError("External deferred tools are not supported by the pydantic runtime.")
+                return TurnOutcome(
+                    kind="needs_approval",
+                    usage=usage,
+                    approval_requests=requests,
+                    replay_state=replay_state,
+                )
             return TurnOutcome(
-                kind="needs_approval",
+                kind="completed",
                 usage=usage,
-                approval_requests=requests,
+                text=str(result.output),
                 replay_state=replay_state,
             )
-        return TurnOutcome(
-            kind="completed",
-            usage=usage,
-            text=str(result.output),
-            replay_state=replay_state,
-        )
 
 
 def _deferred_tool_results(results: list[Mapping[str, Any]]) -> DeferredToolResults | None:

@@ -12,7 +12,7 @@ import { useIamT } from "./i18n";
 
 export function OAuthLoginMethods(): ReactNode {
   const t = useIamT();
-  const { data, fetching, error: queryError } =
+  const { data, isFetching: fetching, error: queryError } =
     useAuthoredQuery(IamAvailableConnections);
   const [loginStart] = useAuthoredMutation(IamLoginStart);
   const [startingSqid, setStartingSqid] = useState<string | null>(null);

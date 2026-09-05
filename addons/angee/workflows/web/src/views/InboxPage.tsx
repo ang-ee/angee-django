@@ -83,7 +83,7 @@ export function InboxPage(): React.ReactElement {
     [t],
   );
 
-  if (decisionsQuery.fetching && !decisionsQuery.data) {
+  if (decisionsQuery.isFetching && !decisionsQuery.data) {
     return <LoadingPanel message={t("inbox.loading")} />;
   }
 
@@ -97,7 +97,7 @@ export function InboxPage(): React.ReactElement {
         <RowsListView
           rows={rows}
           columns={columns}
-          fetching={decisionsQuery.fetching}
+          fetching={decisionsQuery.isFetching}
           error={decisionsQuery.error}
           onRowClick={(row) => setSelectedId(row.id)}
           activeRowId={selected?.id ?? null}

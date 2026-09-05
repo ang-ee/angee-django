@@ -14,7 +14,6 @@ import type {
   ModelMetadata,
   Row,
 } from "@angee/metadata";
-import type { ColumnDef } from "@tanstack/react-table";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { OperationDocumentsProvider } from "@angee/refine";
 
@@ -54,10 +53,13 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   };
   return {
     ...actual,
-    useList: () => ({
-      result: { data: [], total: 0 },
-      query: { isFetching: false, refetch: vi.fn() },
-    }),
+    useList: ({ resource, filters }: { resource?: string; filters?: unknown[] }) => {
+      if (resource === "notes") tableMocks.activeFilters.push(filters ?? []);
+      return {
+        result: { data: tableMocks.rows, total: tableMocks.rows.length },
+        query: { isFetching: false, refetch: tableMocks.refetch },
+      };
+    },
     useUpdate: () => ({ mutateAsync: tableMocks.mutateAsync }),
     useDataProvider: () => () => ({
       custom: vi.fn(),
@@ -87,75 +89,7 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
   };
 });
 
-vi.mock("@refinedev/react-table", async () => {
-  const React = await import("react");
-  const {
-    getCoreRowModel,
-    useReactTable,
-  } = await import("@tanstack/react-table");
 
-  return {
-    useTable: (props: {
-      refineCoreProps?: {
-        filters?: {
-          initial?: unknown[];
-          permanent?: unknown[];
-        };
-      };
-      columns: ColumnDef<Row>[];
-      [key: string]: unknown;
-    }) => {
-      const { refineCoreProps, ...tableProps } = props;
-      const initialFilters = [
-        ...(refineCoreProps?.filters?.permanent ?? []),
-        ...(refineCoreProps?.filters?.initial ?? []),
-      ];
-      const [filters, setFilters] = React.useState(initialFilters);
-      const replaceFilters = React.useCallback(
-        (next: unknown[]) => setFilters(next),
-        [],
-      );
-      const permanentFilters = refineCoreProps?.filters?.permanent ?? [];
-      const activeFilters = unionFilters(permanentFilters, filters);
-      tableMocks.activeFilters.push(JSON.parse(JSON.stringify(activeFilters)));
-
-      const table = useReactTable({
-        ...tableProps,
-        columns: props.columns,
-        data: tableMocks.rows,
-        getCoreRowModel: getCoreRowModel(),
-      });
-
-      return {
-        reactTable: table,
-        refineCore: {
-          result: {
-            data: tableMocks.rows,
-            total: tableMocks.rows.length,
-          },
-          tableQuery: {
-            error: null,
-            isFetching: false,
-            refetch: tableMocks.refetch,
-          },
-          filters,
-          setFilters: replaceFilters,
-        },
-      };
-    },
-  };
-
-  function unionFilters(
-    permanentFilters: readonly unknown[],
-    filters: readonly unknown[],
-  ): unknown[] {
-    const byKey = new Map<string, unknown>();
-    for (const filter of [...filters, ...permanentFilters]) {
-      byKey.set(JSON.stringify(filter), filter);
-    }
-    return [...byKey.values()];
-  }
-});
 
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: () => ({

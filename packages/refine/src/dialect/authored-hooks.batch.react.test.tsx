@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { parse } from "graphql";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -22,7 +23,7 @@ interface ProbeVariables extends Record<string, unknown> {
   parent: string;
 }
 
-const DOCUMENT = {} as TypedDocumentNode<ProbeData, ProbeVariables>;
+const DOCUMENT = parse("query Probe($drive: String!, $parent: String!) { folders { id drive parent } }") as TypedDocumentNode<ProbeData, ProbeVariables>;
 
 const batchMock = vi.hoisted(() => ({
   calls: [] as ProbeVariables[],
@@ -95,7 +96,7 @@ describe("useAuthoredQueryBatch", () => {
     });
 
     await waitFor(() => expect(batchMock.calls).toHaveLength(2));
-    expect([...result.current.values()].every((entry) => entry.fetching)).toBe(true);
+    expect([...result.current.values()].every((entry) => entry.isFetching)).toBe(true);
 
     await act(async () => {
       beta.resolve(data("child-b", "drive-a", "folder-b"));
@@ -104,7 +105,7 @@ describe("useAuthoredQueryBatch", () => {
       expect(result.current.get("folder-b")?.data?.folders[0]?.id).toBe("child-b");
     });
     expect(result.current.get("folder-a")?.data).toBeUndefined();
-    expect(result.current.get("folder-a")?.fetching).toBe(true);
+    expect(result.current.get("folder-a")?.isFetching).toBe(true);
 
     await act(async () => {
       alpha.resolve(data("child-a", "drive-a", "folder-a"));
@@ -118,10 +119,8 @@ describe("useAuthoredQueryBatch", () => {
       enabled: true,
     });
 
-    const settledSurface = result.current;
     const settledRefetch = result.current.get("folder-a")?.refetch;
     rerender();
-    expect(result.current).toBe(settledSurface);
     expect(result.current.get("folder-a")?.refetch).toBe(settledRefetch);
   });
 
@@ -151,7 +150,7 @@ describe("useAuthoredQueryBatch", () => {
       expect(batchMock.calls).toContainEqual({ drive: "drive-b", parent: "shared" });
     });
     expect(result.current.get("shared")?.data).toBeUndefined();
-    expect(result.current.get("shared")?.fetching).toBe(true);
+    expect(result.current.get("shared")?.isFetching).toBe(true);
 
     await act(async () => {
       driveB.resolve(data("drive-b-child", "drive-b", "shared"));

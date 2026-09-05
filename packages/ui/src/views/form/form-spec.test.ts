@@ -152,7 +152,7 @@ describe("deserializeFormSpec", () => {
         defaultWidgets,
       ),
     ).toThrowError(
-      "Invalid priority.enum: form-spec select values must be strings.",
+      "Invalid priority.enum.0: form-spec select values must be strings.",
     );
   });
 
@@ -229,5 +229,22 @@ describe("formSpecInitialValues", () => {
       note: "Review carefully",
       rows: [{ target: "chn_1" }],
     });
+  });
+});
+
+
+describe("form-spec runtime boundary", () => {
+  test("validates filters recursively before producing descriptors", () => {
+    expect(() => deserializeFormSpec({ properties: {
+      target: { relation: { resource: "Channel", filters: [{ operator: "and", value: [{ operator: "eq", field: 42, value: "active" }] }] } },
+    } }, defaultWidgets)).toThrow(/target\.relation\.filters\.0\.value\.0\.field/);
+  });
+
+  test("rejects malformed nested rows and executable defaults", () => {
+    expect(() => deserializeFormSpec({ properties: {
+      lines: { type: "array", items: { type: "object", properties: { title: { readOnly: "yes" } } } },
+    } }, defaultWidgets)).toThrow(/lines\.items\.title\.readOnly/);
+    expect(() => deserializeFormSpec({ properties: { title: { defaultValue: () => "unsafe" } } }, defaultWidgets))
+      .toThrow(/title\.defaultValue/);
   });
 });

@@ -38,30 +38,30 @@ export function OverviewPage(): React.ReactElement {
     <DashboardView className="p-1">
       <Metric
         label={t("overview.metric.contacts")}
-        value={metricCount(data?.contacts.aggregate?.count, overview.fetching)}
+        value={metricCount(data?.contacts.aggregate?.count, overview.isFetching)}
         icon="parties"
       />
       <Metric
         label={t("overview.metric.organizations")}
-        value={metricCount(data?.organizations.aggregate?.count, overview.fetching)}
+        value={metricCount(data?.organizations.aggregate?.count, overview.isFetching)}
         icon="organization"
         tone="brand"
       />
       <Metric
         label={t("overview.metric.unresolvedHandles")}
-        value={metricCount(data?.unresolved_handles.aggregate?.count, overview.fetching)}
+        value={metricCount(data?.unresolved_handles.aggregate?.count, overview.isFetching)}
         icon="handle"
         tone="warning"
       />
       <Metric
         label={t("overview.metric.reviewQueue")}
-        value={metricCount(data?.review_queue.aggregate?.count, overview.fetching)}
+        value={metricCount(data?.review_queue.aggregate?.count, overview.isFetching)}
         icon="user-check"
         tone="info"
       />
       <Metric
         label={t("overview.metric.duplicates")}
-        value={duplicateMetric(duplicateCount, overview.fetching)}
+        value={duplicateMetric(duplicateCount, overview.isFetching)}
         icon="users"
         tone="danger"
         detail={duplicateCount !== undefined && duplicateCount > DUPLICATE_COUNT_LIMIT ? t("overview.metric.duplicatesCapped") : undefined}

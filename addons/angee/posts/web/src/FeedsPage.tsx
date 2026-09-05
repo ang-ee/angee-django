@@ -50,7 +50,7 @@ function FeedPostsTab({ recordId }: RecordPanelContext): React.ReactElement {
     enabled: recordId !== "",
     models: FEED_MESSAGE_MODELS,
   });
-  if (query.fetching && !query.data) {
+  if (query.isFetching && !query.data) {
     return <LoadingPanel density="inline" message={t("feed.postsLoading")} />;
   }
   if (query.error) {
@@ -70,7 +70,7 @@ function FeedPostsTab({ recordId }: RecordPanelContext): React.ReactElement {
   return (
     <MessageFeed
       aria-describedby={undefined}
-      busy={query.fetching}
+      busy={query.isFetching}
       label={t("feed.postsLabel")}
       className="rounded-6 border border-border-subtle bg-sheet p-4"
     >

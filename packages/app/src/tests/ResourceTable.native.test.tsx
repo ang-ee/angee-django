@@ -1,0 +1,91 @@
+// @vitest-environment happy-dom
+
+import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { Refine, type DataProvider, type GetListParams } from "@refinedev/core";
+import { QueryClient } from "@tanstack/react-query";
+import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from "@tanstack/react-router";
+import { ModelMetadataProvider, schemaFieldMetadataFromDataResources, type ModelMetadata } from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
+import { ToastProvider } from "@angee/ui/feedback/index";
+import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "@angee/ui/views/resource-view-context";
+import { useResourceViewSurface, type ResourceViewSurface } from "@angee/ui/views/resource-view-surface";
+import { afterEach, expect, test, vi } from "vitest";
+import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
+
+const resource = testDataResource("notes.Note", { orderFields: ["title"], recordRepresentation: "title" });
+const metadata = schemaFieldMetadataFromDataResources([resource]);
+const model: ModelMetadata = { ...metadata.labels!["notes.Note"]!, fields: { id: { name: "id", kind: "scalar" }, title: { name: "title", kind: "scalar" } } };
+const columns = [{ field: "title", sortable: true }];
+const clients: QueryClient[] = [];
+afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
+
+async function fixture({ total = 45, initialPath = "/?page=2&pageSize=20&keep=external" }: { total?: number; initialPath?: string } = {}) {
+  const calls: GetListParams[] = [];
+  const provider = {
+    getApiUrl: () => "test://resource",
+    getList: vi.fn(async (params: GetListParams) => {
+      calls.push(params);
+      return { data: [{ id: `row-${params.pagination?.currentPage}`, title: "Note" }], ...(total >= 0 ? { total } : {}) };
+    }),
+    getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
+  } as DataProvider;
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  clients.push(client);
+  let view!: ResourceViewContextValue;
+  let surface!: ResourceViewSurface;
+  function Probe() {
+    view = useResourceView();
+    surface = useResourceViewSurface({ resource: "notes.Note", columns, resourceView: view, modelMetadata: model });
+    return <output>{surface.rows.length}</output>;
+  }
+  const rootRoute = createRootRoute({ component: () => (
+    <Refine dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
+      <ModelMetadataProvider metadata={metadata}><ToastProvider>
+        <ResourceViewProvider initialState={{ pageSize: 20 }}><Probe /></ResourceViewProvider>
+      </ToastProvider></ModelMetadataProvider>
+    </Refine>
+  ) });
+  const history = createMemoryHistory({ initialEntries: [initialPath] });
+  const router = createRouter({ routeTree: rootRoute, history, parseSearch: parseFlatSearch, stringifySearch: stringifyFlatSearch });
+  render(<RouterProvider router={router} />);
+  await waitFor(() => expect(surface?.rows.length).toBe(1));
+  return { calls, provider, router, history, view: () => view, surface: () => surface };
+}
+
+test("native Table controls Refine requests and Router search without a second table state", async () => {
+  const f = await fixture();
+  expect(f.calls.at(-1)).toMatchObject({ resource: "notes", pagination: { currentPage: 2, pageSize: 20 } });
+  expect(f.surface().table.getState().pagination).toEqual({ pageIndex: 1, pageSize: 20 });
+  expect(f.surface().list.pageCount).toBe(3);
+  act(() => f.surface().table.getRowModel().rows[0]!.toggleSelected(true));
+  await act(async () => { f.surface().table.nextPage(); });
+  await waitFor(() => expect(f.calls.at(-1)?.pagination?.currentPage).toBe(3));
+  expect(f.view().state.rowSelection["row-2"]).toBe(true);
+  expect(f.router.state.location.search).toMatchObject({ page: "3", keep: "external" });
+  expect(f.history.length).toBe(1);
+
+  for (const expected of ["asc", "desc", false] as const) {
+    await act(async () => f.surface().table.getColumn("title")!.toggleSorting());
+    await waitFor(() => expect(f.surface().table.getColumn("title")!.getIsSorted()).toBe(expected));
+    expect(f.view().state.rowSelection).toEqual({});
+    expect(f.view().state.pagination.pageIndex).toBe(0);
+  }
+  await act(async () => f.view().setFilter({ title: { iContains: "alpha" } }));
+  await waitFor(() => expect(f.calls.at(-1)?.filters).toEqual([{ field: "title", operator: "contains", value: "alpha" }]));
+  await act(async () => f.view().setFilter({}));
+  expect(f.view().state.filter).toEqual({});
+  await act(async () => f.surface().list.refetch());
+  await waitFor(() => expect(f.calls.at(-1)?.filters).toEqual([]));
+  await act(async () => f.surface().table.setPageSize(500));
+  await waitFor(() => expect(f.calls.at(-1)?.pagination?.pageSize).toBe(100));
+  expect((f.router.state.location.search as Record<string, unknown>).keep).toBe("external");
+});
+
+test("unknown totals retain disabled next/last controls despite native unknown page count", async () => {
+  const f = await fixture({ total: -1, initialPath: "/" });
+  expect(f.surface().table.getPageCount()).toBe(-1);
+  expect(f.surface().list.pageCount).toBeUndefined();
+  expect(f.surface().list.hasNext).toBe(false);
+  await act(async () => f.surface().list.lastPage());
+  expect(f.view().state.pagination.pageIndex).toBe(0);
+});

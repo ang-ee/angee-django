@@ -1,7 +1,15 @@
-import { describe, expect, test } from "vitest";
+// @vitest-environment happy-dom
+
+import { createElement, type ReactNode } from "react";
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { ResourceViewProvider, useResourceView } from "./resource-view-context";
+import { favoriteFromResourceView } from "./model/favorites";
+import { useResourceViewQueryFacts } from "./surface/table-state";
+import type { ResourceViewInitialState } from "./resource-view-model";
+import { afterEach, describe, expect, test } from "vitest";
 
 import {
-  ResourceViewState,
+  createResourceViewState,
   Filter,
   RESOURCE_VIEW_KINDS,
   RESOURCE_VIEW_KIND_CAPABILITIES,
@@ -14,7 +22,7 @@ import {
 
 describe("resource-view model", () => {
   test("round-trips flat URL search state", () => {
-    const state = ResourceViewState.create({
+    const state = createResourceViewState({
       page: 3,
       pageSize: 20,
       sort: { field: "updatedAt", dir: "desc" },
@@ -43,9 +51,9 @@ describe("resource-view model", () => {
     expect(search.view).toBe("board");
 
     const roundTrip = resourceViewSearchToState(search);
-    expect(roundTrip.page).toBe(3);
-    expect(roundTrip.pageSize).toBe(20);
-    expect(roundTrip.sort).toEqual({ field: "updatedAt", dir: "desc" });
+    expect((roundTrip.pagination.pageIndex + 1)).toBe(3);
+    expect(roundTrip.pagination.pageSize).toBe(20);
+    expect(roundTrip.sorting).toEqual([{ id: "updatedAt", desc: true }]);
     expect(roundTrip.filter).toEqual({ title: { iContains: "alpha" } });
     expect(roundTrip.group).toEqual({
       field: "status",
@@ -56,26 +64,26 @@ describe("resource-view model", () => {
       { field: "updatedAt", granularity: "month" },
       { field: "owner" },
     ]);
-    expect([...roundTrip.selectedIds]).toEqual([]);
+    expect(roundTrip.rowSelection).toEqual({});
     expect(roundTrip.view).toBe("board");
   });
 
   test("omits default search values", () => {
-    expect(resourceViewStateToSearch(ResourceViewState.create())).toEqual({});
+    expect(resourceViewStateToSearch(createResourceViewState())).toEqual({});
   });
 
   test("serializes relative to page-owned default view and page size", () => {
     const defaults = { pageSize: 20, view: "board" as const };
 
-    const defaultState = ResourceViewState.create(defaults);
+    const defaultState = createResourceViewState(defaults);
     expect(resourceViewStateToSearch(defaultState, defaults)).toEqual({});
 
-    const listState = defaultState.reduce({ type: "setView", view: "list" });
+    const listState = createResourceViewState({ ...defaults, view: "list" });
     expect(resourceViewStateToSearch(listState, defaults)).toEqual({
       view: "list",
     });
 
-    const resized = defaultState.reduce({ type: "setPageSize", pageSize: 50 });
+    const resized = createResourceViewState({ ...defaults, pageSize: 50 });
     expect(resourceViewStateToSearch(resized, defaults)).toEqual({
       pageSize: 50,
     });
@@ -87,10 +95,7 @@ describe("resource-view model", () => {
       group: { field: "stage" },
       sort: { field: "createdAt", dir: "desc" as const },
     };
-    const cleared = ResourceViewState.create(initial)
-      .reduce({ type: "setFilter", filter: {} })
-      .reduce({ type: "setGroup", group: null })
-      .reduce({ type: "setSort", sort: null });
+    const cleared = createResourceViewState({ ...initial, filter: {}, groupStack: [], sort: null });
 
     const search = resourceViewStateToSearch(cleared, initial);
 
@@ -103,7 +108,7 @@ describe("resource-view model", () => {
     expect(roundTrip.filter).toEqual({});
     expect(roundTrip.group).toBeNull();
     expect(roundTrip.groupStack).toEqual([]);
-    expect(roundTrip.sort).toBeNull();
+    expect(roundTrip.sorting).toEqual([]);
   });
 
   test("parses Router search strings without JSON-quoting URL values", () => {
@@ -117,14 +122,14 @@ describe("resource-view model", () => {
       view: "board",
     });
 
-    expect(state.page).toBe(2);
-    expect(state.pageSize).toBe(80);
+    expect((state.pagination.pageIndex + 1)).toBe(2);
+    expect(state.pagination.pageSize).toBe(80);
     expect(state.group).toEqual({ field: "status", granularity: "year" });
     expect(state.groupStack).toEqual([
       { field: "status", granularity: "year" },
       { field: "updatedAt", granularity: "month" },
     ]);
-    expect(state.sort).toEqual({ field: "title", dir: "asc" });
+    expect(state.sorting).toEqual([{ id: "title", desc: false }]);
     expect(state.filter).toEqual({ status: { exact: "ACTIVE" } });
     expect(state.view).toBe("board");
   });
@@ -153,18 +158,18 @@ describe("resource-view model", () => {
   });
 
   test("allocates stable favorite ids from labels", () => {
-    const state = ResourceViewState.create();
+    const state = createResourceViewState();
 
-    expect(state.toFavorite("Two per page").id).toBe("favorite:two-per-page");
-    expect(state.toFavorite("Two per page", [
+    expect(favoriteFromResourceView(state, "Two per page").id).toBe("favorite:two-per-page");
+    expect(favoriteFromResourceView(state, "Two per page", [
       { id: "favorite:two-per-page", label: "Two per page" },
       { id: "favorite:two-per-page-2", label: "Two per page" },
     ]).id).toBe("favorite:two-per-page-3");
-    expect(state.toFavorite("   ").id).toBe("favorite:search");
+    expect(favoriteFromResourceView(state, "   ").id).toBe("favorite:search");
   });
 
   test("round-trips groups with explicit aggregate axes", () => {
-    const state = ResourceViewState.create({
+    const state = createResourceViewState({
       groupStack: [
         {
           field: "vendor.displayName",
@@ -328,48 +333,24 @@ describe("resource-view model", () => {
   });
 
   test("resets page and clears selection when query scope changes", () => {
-    const state = ResourceViewState.create({
-      page: 4,
-      pageSize: 20,
-      selectedIds: ["note-1"],
-    });
-
-    const sorted = state.reduce({
-      type: "setSort",
-      sort: { field: "title", dir: "asc" },
-    });
-    expect(sorted.page).toBe(1);
-    expect([...sorted.selectedIds]).toEqual([]);
-
-    const filtered = sorted.reduce({
-      type: "setFilter",
-      filter: { title: { iContains: "beta" } },
-    });
-    expect(filtered.page).toBe(1);
-    expect(filtered.filter).toEqual({ title: { iContains: "beta" } });
-
-    const resized = filtered.reduce({
-      type: "setPageSize",
-      pageSize: 500,
-    });
-    expect(resized.pageSize).toBe(100);
-    expect(resized.page).toBe(1);
+    const { result } = viewHook({ page: 4, pageSize: 20, selectedIds: ["note-1"] });
+    act(() => result.current.setSorting([{ id: "title", desc: false }]));
+    expect(result.current.state.pagination.pageIndex).toBe(0);
+    expect(result.current.state.rowSelection).toEqual({});
+    act(() => result.current.setFilter({ title: { iContains: "beta" } }));
+    expect(result.current.state.filter).toEqual({ title: { iContains: "beta" } });
+    act(() => result.current.setPageSize(500));
+    expect(result.current.state.pagination).toEqual({ pageIndex: 0, pageSize: 100 });
   });
 
-  test("updates selected ids as local row state", () => {
-    const state = ResourceViewState.create();
-
-    const selected = state.reduce({
-      type: "toggleSelectedId",
-      id: "note-1",
-    });
-    expect([...selected.selectedIds]).toEqual(["note-1"]);
-
-    const cleared = selected.reduce({
-      type: "toggleSelectedId",
-      id: "note-1",
-    });
-    expect([...cleared.selectedIds]).toEqual([]);
+  test("updates selection natively and retains it across page changes", () => {
+    const { result } = viewHook();
+    act(() => result.current.toggleSelectedId("note-1"));
+    expect(result.current.state.rowSelection["note-1"]).toBe(true);
+    act(() => result.current.setPage(2));
+    expect(result.current.state.rowSelection["note-1"]).toBe(true);
+    act(() => result.current.toggleSelectedId("note-1"));
+    expect(result.current.state.rowSelection["note-1"]).toBe(false);
   });
 
   test("registers the calendar kind with its applicability", () => {
@@ -407,7 +388,7 @@ describe("resource-view model", () => {
   });
 
   test("round-trips calendar mode + anchor through the family codec", () => {
-    const state = ResourceViewState.create({
+    const state = createResourceViewState({
       view: "calendar",
       mode: "week",
       anchor: "2026-06-15",
@@ -437,11 +418,11 @@ describe("resource-view model", () => {
 
   test("serializes mode/anchor only under the calendar kind", () => {
     // Defaults (month + today) are omitted even under the calendar kind.
-    expect(resourceViewStateToSearch(ResourceViewState.create({ view: "calendar" })))
+    expect(resourceViewStateToSearch(createResourceViewState({ view: "calendar" })))
       .toEqual({ view: "calendar" });
 
     // A list state that happens to hold mode/anchor never serializes them.
-    const listState = ResourceViewState.create({
+    const listState = createResourceViewState({
       view: "list",
       mode: "week",
       anchor: "2026-06-15",
@@ -451,28 +432,31 @@ describe("resource-view model", () => {
     expect("anchor" in listSearch).toBe(false);
   });
 
-  test("reduces setMode and setAnchor without disturbing list scope", () => {
-    const base = ResourceViewState.create({ view: "calendar", page: 3 });
-
-    const day = base.reduce({ type: "setMode", mode: "day" });
-    expect(day.mode).toBe("day");
-    expect(day.page).toBe(3);
-
-    const moved = base.reduce({ type: "setAnchor", anchor: "2026-07-01" });
-    expect(moved.anchor).toBe("2026-07-01");
-    expect(moved.page).toBe(3);
+  test("updates mode and anchor without disturbing list scope", () => {
+    const { result } = viewHook({ view: "calendar", page: 3 });
+    act(() => result.current.setMode("day"));
+    expect(result.current.state.mode).toBe("day");
+    expect(result.current.state.pagination.pageIndex).toBe(2);
+    act(() => result.current.setAnchor("2026-07-01"));
+    expect(result.current.state.anchor).toBe("2026-07-01");
+    expect(result.current.state.pagination.pageIndex).toBe(2);
   });
 
   test("maps view sort onto Hasura resource order", () => {
-    const state = ResourceViewState.create({
-      page: 2,
-      pageSize: 20,
-      sort: { field: "updatedAt", dir: "desc" },
-      filter: { title: { iContains: "alpha" } },
-    });
-
-    expect(state.resourceOrder()).toEqual({
-      updatedAt: "DESC",
-    });
+    const { result } = renderHook(() => useResourceViewQueryFacts({
+      columns: [], resourceView: useResourceView(), modelMetadata: null,
+    }), { wrapper: viewWrapper({ sort: { field: "updatedAt", dir: "desc" } }) });
+    expect(result.current.sortOrder).toEqual({ updatedAt: "DESC" });
   });
 });
+
+
+afterEach(cleanup);
+
+function viewWrapper(initialState: ResourceViewInitialState = {}) {
+  return ({ children }: { children: ReactNode }) => createElement(ResourceViewProvider, { scope: "local", initialState, children });
+}
+
+function viewHook(initialState: ResourceViewInitialState = {}) {
+  return renderHook(useResourceView, { wrapper: viewWrapper(initialState) });
+}

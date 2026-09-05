@@ -7,11 +7,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Self
 
-from angee.base.models import AngeeManager, AngeeQuerySet
 from django.apps import apps
 from django.db import models, transaction
 from django.db.models.functions import Coalesce
 from django.utils import timezone
+
+from angee.base.models import AngeeManager, AngeeQuerySet
 
 
 @dataclass
@@ -103,10 +104,7 @@ class TieQuerySet(AngeeQuerySet[Any]):
 
         if (root is None) == (circle is None):
             raise ValueError("party_graph requires exactly one root_id or circle_id")
-        requested_lenses = {
-            str(lens).strip().lower()
-            for lens in (lenses or ("ego",))
-        }
+        requested_lenses = {str(lens).strip().lower() for lens in (lenses or ("ego",))}
         unknown = requested_lenses - {"ego", "circle", "identity"}
         if unknown:
             raise ValueError(f"unknown party graph lenses: {', '.join(sorted(unknown))}")
@@ -188,27 +186,22 @@ class TieQuerySet(AngeeQuerySet[Any]):
                     "icon": str(circle.icon or ""),
                 },
             }
-            subtree = circle_model.objects.subtree_of(circle).apply_ambient_scope()
+            subtree = circle_model.objects.subtree_of(circle).scoped()
             seed_memberships = list(
-                circle_member_model.objects.filter(circle__in=subtree)
-                .apply_ambient_scope()
-                .order_by("sqid")[: edge_limit + 1]
+                circle_member_model.objects.filter(circle__in=subtree).scoped().order_by("sqid")[: edge_limit + 1]
             )
             if len(seed_memberships) > edge_limit:
                 seed_memberships = seed_memberships[:edge_limit]
                 truncated = True
             seed_party_ids = {membership.party_id for membership in seed_memberships}
             for party in (
-                party_model.objects.canonical()
-                .filter(pk__in=seed_party_ids)
-                .apply_ambient_scope()
-                .order_by("display_name", "sqid")
+                party_model.objects.canonical().filter(pk__in=seed_party_ids).scoped().order_by("display_name", "sqid")
             ):
                 if not add_party(party):
                     break
             frontier = set(parties)
 
-        scoped_ties = self.apply_ambient_scope()
+        scoped_ties = self.scoped()
         for _level in range(bounded_depth):
             if not frontier or len(edges) >= edge_limit:
                 break
@@ -217,28 +210,21 @@ class TieQuerySet(AngeeQuerySet[Any]):
             relationship_candidates: list[Any] = []
             if "ties" in selected_lenses:
                 tie_candidates = list(
-                    scoped_ties.filter(
-                        models.Q(party_a_id__in=frontier)
-                        | models.Q(party_b_id__in=frontier)
-                    )
-                    .order_by("-gravity", "sqid")[: remaining_edges + 1]
+                    scoped_ties.filter(models.Q(party_a_id__in=frontier) | models.Q(party_b_id__in=frontier)).order_by(
+                        "-gravity", "sqid"
+                    )[: remaining_edges + 1]
                 )
             if "relationships" in selected_lenses:
                 relationship_candidates = list(
                     relationship_model.objects.filter(
-                        models.Q(party_id__in=frontier)
-                        | models.Q(other_party_id__in=frontier)
+                        models.Q(party_id__in=frontier) | models.Q(other_party_id__in=frontier)
                     )
-                    .apply_ambient_scope()
+                    .scoped()
                     .order_by("sqid")[: remaining_edges + 1]
                 )
             candidate_party_ids = list(
                 dict.fromkeys(
-                    [
-                        party_id
-                        for tie in tie_candidates
-                        for party_id in (tie.party_a_id, tie.party_b_id)
-                    ]
+                    [party_id for tie in tie_candidates for party_id in (tie.party_a_id, tie.party_b_id)]
                     + [
                         party_id
                         for relationship in relationship_candidates
@@ -251,7 +237,7 @@ class TieQuerySet(AngeeQuerySet[Any]):
                 party.pk: party
                 for party in party_model.objects.canonical()
                 .filter(pk__in=set(candidate_party_ids).difference(parties))
-                .apply_ambient_scope()
+                .scoped()
             }
             next_frontier: set[Any] = set()
             for party_id in candidate_party_ids:
@@ -272,39 +258,35 @@ class TieQuerySet(AngeeQuerySet[Any]):
                 if edge_id in seen_edge_ids:
                     continue
                 seen_edge_ids.add(edge_id)
-                edges.append({
-                    "id": edge_id,
-                    "source": public_id(parties[tie.party_a_id]),
-                    "target": public_id(parties[tie.party_b_id]),
-                    "kind": "tie",
-                    "label": round(float(tie.gravity), 1),
-                    "meta": {
-                        "model": "nexus.Tie",
-                        "record_id": edge_id,
-                        "gravity": float(tie.gravity),
-                        "is_fading": bool(tie.is_fading),
-                        "message_count": int(tie.message_count),
-                        "thread_count": int(tie.thread_count),
-                        "a_to_b_count": int(tie.a_to_b_count),
-                        "b_to_a_count": int(tie.b_to_a_count),
-                        "platforms": list(tie.platforms or []),
-                        "last_interaction_at": (
-                            tie.last_interaction_at.isoformat()
-                            if tie.last_interaction_at is not None
-                            else None
-                        ),
-                    },
-                })
+                edges.append(
+                    {
+                        "id": edge_id,
+                        "source": public_id(parties[tie.party_a_id]),
+                        "target": public_id(parties[tie.party_b_id]),
+                        "kind": "tie",
+                        "label": round(float(tie.gravity), 1),
+                        "meta": {
+                            "model": "nexus.Tie",
+                            "record_id": edge_id,
+                            "gravity": float(tie.gravity),
+                            "is_fading": bool(tie.is_fading),
+                            "message_count": int(tie.message_count),
+                            "thread_count": int(tie.thread_count),
+                            "a_to_b_count": int(tie.a_to_b_count),
+                            "b_to_a_count": int(tie.b_to_a_count),
+                            "platforms": list(tie.platforms or []),
+                            "last_interaction_at": (
+                                tie.last_interaction_at.isoformat() if tie.last_interaction_at is not None else None
+                            ),
+                        },
+                    }
+                )
 
             kind_ids = {
-                relationship.kind_id
-                for relationship in relationship_candidates
-                if relationship.kind_id is not None
+                relationship.kind_id for relationship in relationship_candidates if relationship.kind_id is not None
             }
             relationship_kinds = {
-                kind.pk: kind
-                for kind in relationship_kind_model.objects.filter(pk__in=kind_ids)
-                .apply_ambient_scope()
+                kind.pk: kind for kind in relationship_kind_model.objects.filter(pk__in=kind_ids).scoped()
             }
             for relationship in relationship_candidates:
                 if len(edges) >= edge_limit:
@@ -334,27 +316,29 @@ class TieQuerySet(AngeeQuerySet[Any]):
                     continue
                 kind = relationship_kinds.get(relationship.kind_id)
                 seen_edge_ids.add(edge_id)
-                edges.append({
-                    "id": edge_id,
-                    "source": source_id,
-                    "target": target_id,
-                    "kind": "relationship",
-                    "label": str(relationship.title or (kind.name if kind else "Relationship")),
-                    "meta": {
-                        "model": "parties.Relationship",
-                        "record_id": edge_id,
-                        "kind": str(kind.slug if kind else ""),
-                        "kind_name": str(kind.name if kind else ""),
-                        "kind_inverse_name": str(kind.inverse_name if kind else ""),
-                        "source": str(relationship.source),
-                    },
-                })
+                edges.append(
+                    {
+                        "id": edge_id,
+                        "source": source_id,
+                        "target": target_id,
+                        "kind": "relationship",
+                        "label": str(relationship.title or (kind.name if kind else "Relationship")),
+                        "meta": {
+                            "model": "parties.Relationship",
+                            "record_id": edge_id,
+                            "kind": str(kind.slug if kind else ""),
+                            "kind_name": str(kind.name if kind else ""),
+                            "kind_inverse_name": str(kind.inverse_name if kind else ""),
+                            "source": str(relationship.source),
+                        },
+                    }
+                )
             if len(tie_candidates) > remaining_edges or len(relationship_candidates) > remaining_edges:
                 truncated = True
             frontier = next_frontier
 
         party_ids = set(parties)
-        cadences = cadence_model.objects.filter(party_id__in=party_ids).apply_ambient_scope()
+        cadences = cadence_model.objects.filter(party_id__in=party_ids).scoped()
         for cadence in cadences:
             party = parties.get(cadence.party_id)
             if party is None:
@@ -362,18 +346,12 @@ class TieQuerySet(AngeeQuerySet[Any]):
             nodes[public_id(party)]["meta"]["cadence"] = {
                 "id": public_id(cadence),
                 "cadence_days": int(cadence.cadence_days),
-                "touch_due_at": (
-                    cadence.touch_due_at.isoformat()
-                    if cadence.touch_due_at is not None
-                    else None
-                ),
+                "touch_due_at": (cadence.touch_due_at.isoformat() if cadence.touch_due_at is not None else None),
             }
 
         if "circles" in selected_lenses or circle is not None:
             memberships = seed_memberships or list(
-                circle_member_model.objects.filter(party_id__in=party_ids)
-                .apply_ambient_scope()
-                .order_by("sqid")[: edge_limit + 1]
+                circle_member_model.objects.filter(party_id__in=party_ids).scoped().order_by("sqid")[: edge_limit + 1]
             )
             if len(memberships) > edge_limit:
                 memberships = memberships[:edge_limit]
@@ -381,9 +359,7 @@ class TieQuerySet(AngeeQuerySet[Any]):
             circle_ids = {membership.circle_id for membership in memberships}
             circles = {
                 item.pk: item
-                for item in circle_model.objects.filter(pk__in=circle_ids)
-                .apply_ambient_scope()
-                .order_by("position", "name", "sqid")
+                for item in circle_model.objects.filter(pk__in=circle_ids).scoped().order_by("position", "name", "sqid")
             }
             for item in circles.values():
                 node_id = public_id(item)
@@ -418,19 +394,21 @@ class TieQuerySet(AngeeQuerySet[Any]):
                 if edge_id in seen_edge_ids:
                     continue
                 seen_edge_ids.add(edge_id)
-                edges.append({
-                    "id": edge_id,
-                    "source": source_id,
-                    "target": target_id,
-                    "kind": "membership",
-                    "label": "member",
-                    "meta": {
-                        "model": "parties.CircleMember",
-                        "record_id": edge_id,
-                        "confidence": float(membership.confidence),
-                        "source": str(membership.source),
-                    },
-                })
+                edges.append(
+                    {
+                        "id": edge_id,
+                        "source": source_id,
+                        "target": target_id,
+                        "kind": "membership",
+                        "label": "member",
+                        "meta": {
+                            "model": "parties.CircleMember",
+                            "record_id": edge_id,
+                            "confidence": float(membership.confidence),
+                            "source": str(membership.source),
+                        },
+                    }
+                )
 
         if "identity" in selected_lenses:
             party_handles = list(
@@ -438,7 +416,7 @@ class TieQuerySet(AngeeQuerySet[Any]):
                     party_id__in=party_ids,
                     is_dismissed=False,
                 )
-                .apply_ambient_scope()
+                .scoped()
                 .order_by("-is_confirmed", "-confidence", "sqid")[: edge_limit + 1]
             )
             if len(party_handles) > edge_limit:
@@ -448,7 +426,7 @@ class TieQuerySet(AngeeQuerySet[Any]):
             handles = {
                 handle.pk: handle
                 for handle in handle_model.objects.filter(pk__in=handle_ids)
-                .apply_ambient_scope()
+                .scoped()
                 .order_by("platform", "normalized_value", "sqid")
             }
             for link in party_handles:
@@ -481,21 +459,23 @@ class TieQuerySet(AngeeQuerySet[Any]):
                 if edge_id in seen_edge_ids:
                     continue
                 seen_edge_ids.add(edge_id)
-                edges.append({
-                    "id": edge_id,
-                    "source": public_id(parties[link.party_id]),
-                    "target": node_id,
-                    "kind": "identity",
-                    "meta": {
-                        "model": "parties.PartyHandle",
-                        "record_id": edge_id,
-                        "handle_id": node_id,
-                        "confidence": float(link.confidence),
-                        "source": str(link.source),
-                        "is_confirmed": bool(link.is_confirmed),
-                        "is_resolved": handle.party_id == link.party_id,
-                    },
-                })
+                edges.append(
+                    {
+                        "id": edge_id,
+                        "source": public_id(parties[link.party_id]),
+                        "target": node_id,
+                        "kind": "identity",
+                        "meta": {
+                            "model": "parties.PartyHandle",
+                            "record_id": edge_id,
+                            "handle_id": node_id,
+                            "confidence": float(link.confidence),
+                            "source": str(link.source),
+                            "is_confirmed": bool(link.is_confirmed),
+                            "is_resolved": handle.party_id == link.party_id,
+                        },
+                    }
+                )
 
         return PartyGraph(
             nodes=tuple(nodes.values()),
@@ -514,12 +494,7 @@ class TieQuerySet(AngeeQuerySet[Any]):
         """Return bounded overview facts relative to the viewer's own party."""
 
         bounded = max(1, min(int(peek_limit), 20))
-        fading = (
-            self.around_party(viewer)
-            .filter(is_fading=True)
-            .apply_ambient_scope()
-            .order_by("-gravity", "sqid")
-        )
+        fading = self.around_party(viewer).filter(is_fading=True).scoped().order_by("-gravity", "sqid")
         fading_count = int(fading.count())
         current = now or timezone.now()
         local_day = timezone.localdate(current)
@@ -533,7 +508,7 @@ class TieQuerySet(AngeeQuerySet[Any]):
                 touch_due_at__gte=start,
                 touch_due_at__lt=end,
             )
-            .apply_ambient_scope()
+            .scoped()
             .order_by("touch_due_at", "sqid")
         )
         due_count = int(due.count())
@@ -627,19 +602,23 @@ class TieManager(AngeeManager.from_queryset(TieQuerySet)):  # type: ignore[misc]
         message_model = apps.get_model("messaging", "Message")
         edge_model = apps.get_model("messaging", "MessageEdge")
         interaction_at = Coalesce("message__sent_at", "message__created_at")
-        addressed = participant_model._base_manager.filter(
-            message__isnull=False,
-            role__in=(
-                participant_model.ParticipantRole.TO,
-                participant_model.ParticipantRole.CC,
-            ),
-            handle__party__isnull=False,
-            message__sender__party__isnull=False,
-            message__thread__attachments__isnull=True,
-        ).exclude(
-            message__thread__modality=apps.get_model("messaging", "Thread").Modality.PUBLIC_THREAD,
-        ).exclude(
-            handle__party_id=models.F("message__sender__party_id"),
+        addressed = (
+            participant_model._base_manager.filter(
+                message__isnull=False,
+                role__in=(
+                    participant_model.ParticipantRole.TO,
+                    participant_model.ParticipantRole.CC,
+                ),
+                handle__party__isnull=False,
+                message__sender__party__isnull=False,
+                message__thread__attachments__isnull=True,
+            )
+            .exclude(
+                message__thread__modality=apps.get_model("messaging", "Thread").Modality.PUBLIC_THREAD,
+            )
+            .exclude(
+                handle__party_id=models.F("message__sender__party_id"),
+            )
         )
         if party_ids is not None:
             addressed = addressed.filter(
@@ -655,14 +634,18 @@ class TieManager(AngeeManager.from_queryset(TieQuerySet)):  # type: ignore[misc]
         )
 
         reply_at = Coalesce("sent_at", "created_at")
-        replies = message_model._base_manager.filter(
-            sender__party__isnull=False,
-            parent__sender__party__isnull=False,
-            thread__attachments__isnull=True,
-        ).exclude(
-            thread__modality=apps.get_model("messaging", "Thread").Modality.PUBLIC_THREAD,
-        ).exclude(
-            sender__party_id=models.F("parent__sender__party_id"),
+        replies = (
+            message_model._base_manager.filter(
+                sender__party__isnull=False,
+                parent__sender__party__isnull=False,
+                thread__attachments__isnull=True,
+            )
+            .exclude(
+                thread__modality=apps.get_model("messaging", "Thread").Modality.PUBLIC_THREAD,
+            )
+            .exclude(
+                sender__party_id=models.F("parent__sender__party_id"),
+            )
         )
         if party_ids is not None:
             replies = replies.filter(
@@ -678,15 +661,19 @@ class TieManager(AngeeManager.from_queryset(TieQuerySet)):  # type: ignore[misc]
         )
 
         mention_at = Coalesce("src__sent_at", "src__created_at")
-        mentions = edge_model._base_manager.filter(
-            kind=edge_model.EdgeKind.MENTION,
-            src__sender__party__isnull=False,
-            dst__sender__party__isnull=False,
-            src__thread__attachments__isnull=True,
-        ).exclude(
-            src__thread__modality=apps.get_model("messaging", "Thread").Modality.PUBLIC_THREAD,
-        ).exclude(
-            src__sender__party_id=models.F("dst__sender__party_id"),
+        mentions = (
+            edge_model._base_manager.filter(
+                kind=edge_model.EdgeKind.MENTION,
+                src__sender__party__isnull=False,
+                dst__sender__party__isnull=False,
+                src__thread__attachments__isnull=True,
+            )
+            .exclude(
+                src__thread__modality=apps.get_model("messaging", "Thread").Modality.PUBLIC_THREAD,
+            )
+            .exclude(
+                src__sender__party_id=models.F("dst__sender__party_id"),
+            )
         )
         if party_ids is not None:
             mentions = mentions.filter(

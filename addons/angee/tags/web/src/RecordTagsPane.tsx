@@ -92,7 +92,7 @@ export function RecordTagsPane({
   if (!enabled) {
     return <EmptyState icon="tag" title={t("pane.assigned")} description={t("pane.empty.record")} />;
   }
-  if (assigned.fetching && !assigned.data) {
+  if (assigned.isFetching && !assigned.data) {
     return <LoadingPanel />;
   }
   if (assigned.error) {

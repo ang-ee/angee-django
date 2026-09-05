@@ -2,7 +2,7 @@
 
 import { render, screen } from "@testing-library/react";
 import type { ModelMetadata } from "@angee/metadata";
-import type { ReactNode } from "react";
+import { getCoreRowModel, useReactTable, flexRender } from "@tanstack/react-table";
 import { expect, test, vi } from "vitest";
 
 import {
@@ -26,12 +26,14 @@ test("renders a visually hidden list-column header", () => {
         sortable: false,
       },
     ],
-    { sort: null, setSort: vi.fn() },
     {},
   );
-  const renderHeader = column?.header as (() => ReactNode) | undefined;
-
-  render(<>{renderHeader?.()}</>);
+  function Header() {
+    const table = useReactTable({ data: [], columns: [column!], getCoreRowModel: getCoreRowModel() });
+    const header = table.getHeaderGroups()[0]!.headers[0]!;
+    return <>{flexRender(header.column.columnDef.header, header.getContext())}</>;
+  }
+  render(<Header />);
 
   expect(screen.getByText("Actions").classList.contains("sr-only")).toBe(true);
 });

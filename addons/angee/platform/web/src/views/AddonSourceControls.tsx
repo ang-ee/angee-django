@@ -209,7 +209,7 @@ function ScanSourcesDialog({
           <Dialog.Body>
             <ScanSourceList
               sources={sources}
-              fetching={query.fetching}
+              fetching={query.isFetching}
               scanning={scanning}
               onScan={runScan}
             />

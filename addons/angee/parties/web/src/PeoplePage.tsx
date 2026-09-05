@@ -382,7 +382,7 @@ export function PeoplePage(): React.ReactElement {
           <SectionEyebrow as="h2" spacing="menu">
             {t("people.circles.heading")}
           </SectionEyebrow>
-          {workbench.fetching && circles.length === 0 ? (
+          {workbench.isFetching && circles.length === 0 ? (
             <LoadingPanel message={t("people.circles.loading")} density="inline" />
           ) : (
             <TreeView<CircleTreeRow>
@@ -404,13 +404,13 @@ export function PeoplePage(): React.ReactElement {
         ) : null}
       </div>
     ),
-    [circles, dropPerson, scope, selectCircle, selectSmartView, smartViews, t, workbench.data?.people_workbench.truncated, workbench.fetching],
+    [circles, dropPerson, scope, selectCircle, selectSmartView, smartViews, t, workbench.data?.people_workbench.truncated, workbench.isFetching],
   );
   const filteredIds = workbench.data?.people_workbench.filtered_ids;
   const baseFilter =
     scope.kind === "ALL"
       ? undefined
-      : { id: { inList: workbench.fetching ? [] : (filteredIds ?? []) } };
+      : { id: { inList: workbench.isFetching ? [] : (filteredIds ?? []) } };
   return (
     <>
       <PrimaryPanePublisher node={primaryPane} />

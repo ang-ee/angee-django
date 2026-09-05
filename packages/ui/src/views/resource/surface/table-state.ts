@@ -1,6 +1,6 @@
 import * as React from "react";
 import { type ModelMetadata, type Row } from "@angee/metadata";
-import { functionalUpdate, type ColumnDef, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState, type VisibilityState } from "@tanstack/react-table";
+import { functionalUpdate, type ColumnDef, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState, type Table, type VisibilityState } from "@tanstack/react-table";
 import { refineSortersFromAngeeOrder } from "@angee/refine";
 import { errorFromUnknown } from "../../../data/errors";
 import type { ResourceViewContextValue } from "../resource-view-context";
@@ -8,7 +8,7 @@ import { Filter, type ResourceListOrder, type ResourceViewFilter, type ResourceV
 import { buildColumns, withGroupingOnlyColumnsHidden } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
-import { defaultResourceOrder, groupingStateFromResourceGroups, idsFromRowSelectionState, requestedFieldPaths, rowSelectionStateFromIds, sortingStateFromResourceSort } from "../resource-view-codecs";
+import { defaultResourceOrder, groupingStateFromResourceGroups, requestedFieldPaths } from "../resource-view-codecs";
 import type { ListViewNavigationScope, ResourceFilterInput, ResourceListResult, ResourceListSnapshot, ResourceRowsSnapshotSource, UseResourceRowsSnapshotOptions } from "./types";
 export function useResourceRowsSnapshot<TRow extends Row = Row>(
   list: ResourceRowsSnapshotSource,
@@ -65,8 +65,8 @@ export function listResultFromPageState<TRow extends Row>({
   refetch,
   rows,
   total,
-  page = resourceView.state.page,
-  pageSize = resourceView.state.pageSize,
+  page = (resourceView.state.pagination.pageIndex + 1),
+  pageSize = resourceView.state.pagination.pageSize,
   pageCount = total === undefined
     ? undefined
     : Math.max(1, Math.ceil(total / pageSize)),
@@ -143,11 +143,11 @@ export function useResourceViewQueryFacts<TRow extends Row>({
   );
   const sortOrder = React.useMemo(
     () =>
-      resourceView.state.resourceOrder()
+      (resourceView.state.sorting.length ? Object.fromEntries(resourceView.state.sorting.map(({ id, desc }) => [id, desc ? "DESC" : "ASC"])) : undefined)
       ?? (includeDeclaredOrder
         ? order ?? defaultResourceOrder(modelMetadata)
         : undefined),
-    [includeDeclaredOrder, resourceView.state.sort, modelMetadata, order],
+    [includeDeclaredOrder, resourceView.state.sorting, modelMetadata, order],
   );
   return { requestedFields, mergedFilter, sortOrder };
 }
@@ -180,14 +180,8 @@ export function useResourceViewTableState<TRow extends Row>({
 } {
   const tableColumns = React.useMemo(
     () =>
-      buildColumns(columns, {
-        sort: resourceView.state.sort,
-        setSort: resourceView.setSort,
-      }, {
-        groupStack,
-        metadata: modelMetadata,
-      }),
-    [columns, groupStack, modelMetadata, resourceView.state.sort, resourceView.setSort],
+      buildColumns(columns, { groupStack, metadata: modelMetadata }),
+    [columns, groupStack, modelMetadata],
   );
   const [columnVisibility, setColumnVisibility] =
     React.useState<VisibilityState>({});
@@ -195,55 +189,18 @@ export function useResourceViewTableState<TRow extends Row>({
     () => withGroupingOnlyColumnsHidden(tableColumns, columnVisibility),
     [tableColumns, columnVisibility],
   );
-  const pagination = React.useMemo<PaginationState>(
-    () => ({
-      pageIndex: Math.max(0, resourceView.state.page - 1),
-      pageSize: resourceView.state.pageSize,
-    }),
-    [resourceView.state.page, resourceView.state.pageSize],
-  );
+  const pagination = resourceView.state.pagination;
   const sorting = React.useMemo<SortingState>(() => {
-    if (!sortOrder) return sortingStateFromResourceSort(resourceView.state.sort);
-    return (refineSortersFromAngeeOrder(sortOrder) ?? []).map((sorter) => ({
-      id: sorter.field,
-      desc: sorter.order === "desc",
-    }));
-  }, [resourceView.state.sort, sortOrder]);
-  const grouping = React.useMemo(
-    () => groupingStateFromResourceGroups(groupStack),
-    [groupStack],
-  );
-  const rowSelection = React.useMemo(
-    () => rowSelectionStateFromIds(resourceView.state.selectedIds),
-    [resourceView.state.selectedIds],
-  );
-  const handlePaginationChange = React.useCallback<OnChangeFn<PaginationState>>(
-    (updater) => {
-      const next = functionalUpdate(updater, pagination);
-      if (next.pageSize !== resourceView.state.pageSize) {
-        resourceView.setPageSize(next.pageSize);
-      }
-      const nextPage = next.pageIndex + 1;
-      if (nextPage !== resourceView.state.page) resourceView.setPage(nextPage);
-    },
-    [pagination, resourceView],
-  );
+    if (!sortOrder) return resourceView.state.sorting;
+    return (refineSortersFromAngeeOrder(sortOrder) ?? []).map(({ field, order }) => ({ id: field, desc: order === "desc" }));
+  }, [resourceView.state.sorting, sortOrder]);
+  const grouping = React.useMemo(() => groupingStateFromResourceGroups(groupStack), [groupStack]);
+  const rowSelection = resourceView.state.rowSelection;
+  const handlePaginationChange = resourceView.setPagination;
+  const handleRowSelectionChange = resourceView.setRowSelection;
   const handleSortingChange = React.useCallback<OnChangeFn<SortingState>>(
-    (updater) => {
-      const [next] = functionalUpdate(updater, sorting);
-      resourceView.setSort(
-        next ? { field: next.id, dir: next.desc ? "desc" : "asc" } : null,
-      );
-    },
-    [resourceView, sorting],
-  );
-  const handleRowSelectionChange = React.useCallback<OnChangeFn<RowSelectionState>>(
-    (updater) => {
-      resourceView.setSelectedIds(
-        idsFromRowSelectionState(functionalUpdate(updater, rowSelection)),
-      );
-    },
-    [resourceView, rowSelection],
+    (updater) => resourceView.setSorting(functionalUpdate(updater, sorting)),
+    [resourceView.setSorting, sorting],
   );
 
   return {
@@ -258,5 +215,28 @@ export function useResourceViewTableState<TRow extends Row>({
     handlePaginationChange,
     handleSortingChange,
     handleRowSelectionChange,
+  };
+}
+
+
+/** Presentation projection over the native table/query owners; no paging state. */
+export function listResultFromTable<TRow extends Row>(
+  table: Table<TRow>,
+  { rows, total, fetching, error, refetch }: Pick<ResourceListResult, "rows" | "total" | "fetching" | "refetch"> & { error: unknown },
+): ResourceListResult {
+  const { pageIndex, pageSize } = table.getState().pagination;
+  return {
+    rows, total, fetching, error: errorFromUnknown(error), refetch,
+    page: pageIndex + 1,
+    pageSize,
+    pageInfo: undefined,
+    pageCount: total === undefined ? undefined : Math.max(1, table.getPageCount()),
+    hasNext: total !== undefined && table.getCanNextPage(),
+    hasPrev: table.getCanPreviousPage(),
+    setPage: (page) => table.setPageIndex(page - 1),
+    firstPage: table.firstPage,
+    nextPage: table.nextPage,
+    prevPage: table.previousPage,
+    lastPage: () => { if (total !== undefined) table.lastPage(); },
   };
 }

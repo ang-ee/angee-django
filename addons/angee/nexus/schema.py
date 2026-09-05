@@ -6,11 +6,11 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
-from angee.base.actors import actor_user_id, is_user_actor
 from django.apps import apps
 from rebac import current_actor
 from strawberry import auto
 
+from angee.base.actors import actor_user_id, is_user_actor
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
@@ -126,10 +126,10 @@ class NexusQuery:
     def party_network(self, party_id: strawberry.ID) -> list[TieType]:
         """Return actor-visible derived edges touching one readable party."""
 
-        party = Party.objects.all().apply_ambient_scope().from_public_id(str(party_id))
+        party = Party.objects.all().scoped().from_public_id(str(party_id))
         if party is None:
             raise ValueError("party not found")
-        edges = Tie.objects.around_party(party).apply_ambient_scope()
+        edges = Tie.objects.around_party(party).scoped()
         return cast("list[TieType]", list(edges))
 
     @strawberry.field
@@ -145,16 +145,8 @@ class NexusQuery:
 
         if (root_id is None) == (circle_id is None):
             raise ValueError("party_graph requires exactly one root_id or circle_id")
-        party = (
-            Party.objects.all().apply_ambient_scope().from_public_id(str(root_id))
-            if root_id is not None
-            else None
-        )
-        circle = (
-            Circle.objects.all().apply_ambient_scope().from_public_id(str(circle_id))
-            if circle_id is not None
-            else None
-        )
+        party = Party.objects.all().scoped().from_public_id(str(root_id)) if root_id is not None else None
+        circle = Circle.objects.all().scoped().from_public_id(str(circle_id)) if circle_id is not None else None
         if root_id is not None and party is None:
             raise ValueError("party not found")
         if circle_id is not None and circle is None:
@@ -215,7 +207,7 @@ class NexusQuery:
     ) -> PartyTimelinePayload:
         """Delegate one actor-scoped timeline page to messaging's collection owner."""
 
-        party = Party.objects.all().apply_ambient_scope().from_public_id(str(party_id))
+        party = Party.objects.all().scoped().from_public_id(str(party_id))
         if party is None:
             raise ValueError("party not found")
         messages, count = Message.objects.timeline_for_parties(
@@ -237,10 +229,10 @@ class NexusQuery:
     ) -> PartyTimelinePayload:
         """Return messages involving members of a readable circle subtree."""
 
-        circle = Circle.objects.all().apply_ambient_scope().from_public_id(str(circle_id))
+        circle = Circle.objects.all().scoped().from_public_id(str(circle_id))
         if circle is None:
             raise ValueError("circle not found")
-        parties = Party.objects.all().apply_ambient_scope().in_circle(circle)
+        parties = Party.objects.all().scoped().in_circle(circle)
         messages, count = Message.objects.timeline_for_parties(
             parties,
             search=search,

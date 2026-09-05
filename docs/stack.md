@@ -16,7 +16,10 @@ Dependency changes must update this file in the same change.
   composed manifests into the host's generated `[dependency-groups].addons` key.
   `uv.lock` pins the resolved Python graph. The `angee.graphql` folder addon's
   manifest owns its Strawberry stack, Pydantic, Channels Redis adapter, and exact
-  Strawberry fork reference. Use `uv add` / `uv lock`; do not use `pip install`
+  Strawberry fork reference. This refactor branch also pins exact reviewed REBAC,
+  Hasura and aggregates feature commits in their owning manifests so composed
+  hosts receive the same code. Replace these review pins with published release
+  floors when the upstream releases exist. Use `uv add` / `uv lock`; do not use `pip install`
   by hand.
 - `package.json` owns JavaScript package scripts and declared dependencies.
   `pnpm-workspace.yaml` owns workspace membership. `pnpm-lock.yaml` pins the
@@ -33,23 +36,23 @@ Dependency changes must update this file in the same change.
 | Django 6.0+ | ORM, migrations, admin, auth contract, app registry | Abstract bases and build-time composition into runtime apps |
 | strawberry-django | GraphQL types, resolvers, dataloaders, schema printing | Merge addon schema parts into named schemas, `changes` subscription shortcuts, emit SDL, serve per name |
 | django-choices-field | Enum-backed model fields | `StateField` semantic wrapper |
-| strawberry-django-aggregates >= 0.10 | Aggregation and group-by resolvers, including exact grouped cardinality | Addon-level `AggregateBuilder` wiring (per addon, e.g. notes) |
-| strawberry-django-hasura >= 0.7 | Expose Django models in the Hasura GraphQL dialect (`_bool_exp`/`_aggregate`/`x_by_pk`/`_set`, exact `Decimal` filters, nested to-one filter paths, nested to-many `NestedInsert`), exact grouped-count roots, plus computed (non-model) sources via a `run_query` `RowSource` | Composes it as the model emitter (`hasura_model_resource`, incl. `lines=` editable-child nested inserts) and the pydantic computed-source emitter (`hasura_pydantic_resource`) |
+| strawberry-django-aggregates 0.11 development commit | Aggregation, JSON-path grouping, group key encoders and exact grouped cardinality | Declarative dimensions/measures and public-ID key encoding |
+| strawberry-django-hasura 0.8 development commit | Expose Django models in the Hasura GraphQL dialect (`_bool_exp`/`_aggregate`/`x_by_pk`/`_set`, exact `Decimal` filters, nested to-one filter paths, nested to-many `NestedInsert`), resource-local lookup types, named generated resource members, exact grouped-count roots, plus computed (non-model) sources via a `run_query` `RowSource` | Composes it as the model emitter (`hasura_model_resource`, incl. `lines=` editable-child nested inserts) and the pydantic computed-source emitter (`hasura_pydantic_resource`) |
 | pydantic | Typed model validation/parsing | Row-shape SSOT for computed (non-model) Hasura resources — the node + filter scalars derive from the pydantic model (`hasura_pydantic_resource`) |
-| pydantic-ai-slim[anthropic,openai,mcp] | In-process agent loop, tool calling, replayable message history, and MCP client; `pydantic-graph` is a transitive dependency but is not used by Angee directly | `agents_runtime_pydantic` adapts Angee inference backends and selected MCP rows into one bounded session turn; workflow durability and approval decisions remain owned by `workflows` / `workflows_agents` |
+| pydantic-ai-slim >= 2.13 | Native model/message/usage protocols, direct one-shot requests, agent loops and MCP toolsets | `agents` owns catalogue policy and native bindings; vendor addons select their native provider extras and credentialed SDK clients. `agents_runtime_pydantic` adds only the MCP extra and bounded sessions; workflows own durability, journals and approvals |
 | Celery + Redis | Task transport, worker execution, retries, queue routing, and periodic dispatch | hosted by the `angee.jobs` framework app; the host/stack supplies broker topology; task bodies acquire Angee locks and delegate state changes to model/manager owners |
 | croniter | Cron-expression schedule parsing | schedule triggers compute `next_fire_at` (workflows) |
 | python-dateutil | RFC-5545 recurrence-rule parsing and expansion (`rrulestr`) | `angee.scheduling` owns recurrence — `RecurrenceField` (a validated RRULE column) + `Recurrence.occurrences(window)`, bounded, timezone-aware expansion in the project `TIME_ZONE` |
 | phonenumbers | Region-aware telephone parsing, validation, matching, and E.164 formatting | `parties.Handle.normalize_value` parses phone/WhatsApp values with `region=None`, so canonical E.164 input requires a leading `+country` code; invalid, impossible, or region-unknown values use the digit-only comparison fallback, and signature evidence mines through the same owner |
 | channels + channels-redis + uvicorn | ASGI/WebSocket transport and serving; Redis-backed channel layer for production fanout | GraphQL subscription mounting; uvicorn serves the composed ASGI app and sends the lifespan that enters the MCP mount's `http_app` lifespan (`angee.asgi`); in-memory channel layer remains dev/test only |
-| django-zed-rebac | REBAC engine, actor scoping, relationship storage, local and SpiceDB-compatible backends | Per-addon schema merge, reserved roles, actor resolver |
+| django-zed-rebac 0.15 development commit | REBAC engine, Zed introspection/rendering/extension, identity storage attributes and permission-aware queryset projection/combination | Addon schema composition, reserved roles and actor resolution through public REBAC APIs |
 | django-axes | Login failure throttling at Django's `authenticate()`/auth-backend signal seam | IAM composes the app, standalone backend, and middleware so password GraphQL login stays a thin `authenticate(request=...)` caller |
 | django-sqids | Opaque external IDs | `SqidMixin`, `SqidField` (NULL-safe decode on joins), GraphQL boundary scalar |
 | django-simple-history | Shadow history tables and revert | `HistoryMixin` marker (knowledge Vault/Page; messaging edits are in-row `edit_history` + immutable fragments instead) |
 | django.contrib.postgres | Postgres full-text search (`SearchVectorField`, `GinIndex`, `SearchQuery`) | `messaging.Fragment.search` — stamped once at fragment creation (content-addressed rows are immutable, so no trigger/queue); dedup indexes each unique text exactly once. Postgres-only: the SQLite test backend leaves the vector NULL |
 | django-reversion | Versioned field snapshots and revert | `RevisionMixin` convenience API, composer-emitted model registration |
 | cryptography | Encryption primitives | `EncryptedField` (Fernet at rest, secret-by-type) |
-| django-import-export + tablib | Resource import/export resources, tabular formats, row cleaning, and row results | Tiered manifests, xref ledger, and frozen-tier policy |
+| django-import-export + tablib | Native Dataset parsing, model field coercion, instance loading, import lifecycle, row results and transactions | Source grouping/diagnostic indexes, tier/xref/adoption policy and ledger/grant hooks in the native transaction. The bounded declaration-constraint evaluator remains because Django Q.check fails open on database errors |
 | pyyaml | YAML parsing substrate | Resource loader reads `.yaml`/`.yml` resource files; django-yamlconf consumes project settings YAML |
 | ruamel.yaml | Comment/format-preserving round-trip YAML editing | The `AddonInstaller`'s `settings.yaml` `INSTALLED_APPS` install/uninstall edit — the one writer that must preserve operator comments and layout (pyyaml round-trips lose them); not used at boot |
 | django-yamlconf | Django settings YAML overlays | `angee.compose.settings` loads `settings.yaml` beside `manage.py`; `Composer` applies addon `autoconfig.py` fragments |
@@ -111,14 +114,15 @@ GPL code is incompatible with a framework composed into commercial consumers.
 |---|---|---|
 | React 19 | View library | Component conventions |
 | TypeScript >= 6 | Language and type system | Branded boundary types |
-| valibot | Runtime parsing and narrowing for opaque GraphQL JSON-scalar fields | Domain owners declare Valibot schemas and parse at the boundary instead of asserting an application shape |
+| valibot | Runtime schemas, parsing and inferred wire types for generated metadata, supported recursive form specs and opaque GraphQL JSON values | Domain owners declare supported contracts and preserve the permitted extension keys |
 | @refinedev/core | Resource registry, standard data hooks, react-query cache/invalidation, auth/i18n/live provider contracts | Angee projects emitted `angee.resources` metadata to refine resources and mounts one composed `<Refine>` root with named providers and the TanStack Router binding |
 | @refinedev/hasura + graphql-request 5 + graphql 16 | Hasura GraphQL data provider (`_bool_exp`, `order_by`, `_aggregate`, `_by_pk`, `_set`) and authored `meta.gqlQuery` / `meta.gqlMutation` execution | Angee pins `idType: "String"` and `namingConvention: "hasura-default"`, uses refine-compatible GraphQL document ASTs, and applies session/CSRF or service auth at the transport boundary |
 | graphql-ws 6 + 5 | GraphQL WebSocket lifecycle for the Hasura live provider and daemon-owned operator transport | Endpoint derivation, connection params, retry policy, and the operator daemon subscription + raw log socket transport — request/response now rides a Refine `operator` data provider, leaving only the intrinsically streaming surfaces on this ws transport. Two majors resolve honestly: the Hasura live provider pulls `graphql-ws@6` (the peer of `@refinedev/hasura@7`), while the operator daemon transport pins `^5.16.2` |
 | GraphQL Code Generator (client-preset) + @graphql-typed-document-node/core + graphql-tag | Generated TypeScript schema and operation types from emitted Django SDL and daemon-owned SDL, as `TypedDocumentNode` documents; `graphql-tag` parses the schema-independent core document | `@angee/app` owns the one `angee-web-codegen` CLI: it reads `runtime/web/manifest.json`, generates each Django schema from `runtime/schemas/<schema>.graphql` (routing documents by filename: `documents.ts`/`documents.console.ts` → console, `documents.public.ts` → public), derives authored action/aggregate/group/delete-preview/revision documents, and emits the composed `runtime/web/app.ts`. The operator daemon joins the same pass as an external `[web].codegen` manifest entry — its committed SDL read straight from the operator package, scanning only `documents.daemon.ts`, with a bare `typescript` types module the console re-exports. Addon-authored operations carry no hand-written result/variables types; the framework's `BaseImplChoices` is hand-typed against its core-owned Python projection so the React packages remain independent of a composed schema fixture. |
 | TanStack Router | Type-safe routing and search params | `defineAddon` to `createApp` route composition and flat URL search codec |
-| @refinedev/react-hook-form + react-hook-form + @hookform/resolvers + zod | Form state, submit lifecycle, and validation binding | `FormView` keeps Angee's declarative rendered DSL while delegating state/validation to refine/react-hook-form |
-| @refinedev/react-table + TanStack Table | Server-backed table state, sort/filter/pagination bridge, columns, grouping, selection | `ListView` and `BoardView` keep Angee's rendered controls and domain view modes while delegating standard table/data mechanics |
+| react-hook-form | Native values, dirty/touched state, validation execution, errors and submission | Angee field/relation/required policy, atomic line diffs and Refine core read/write transport; successful saves reset the native baseline |
+| TanStack Table | Native pagination/sorting/selection state, row models and commands | Refine useList transport, route/favorite codecs, domain filters and grouped/board presentation; single-sort URL compatibility |
+| TanStack Query | One native authored-read cache, finite/infinite options, observers, retries, cancellation and mutation state | Provider/document/variables identity, canonical model invalidation interests, deduplicated Refine auth/notification policy and operator snapshot cache writes. Infinite history retention remains gated on domain cursor/revocation support; see [migration notes](frontend/upstream-reuse.md) |
 | TanStack Virtual | Row and column virtualization | Long-list wiring |
 | nuqs | Type-safe URL query state | Remaining chrome query state such as top-menu tabs |
 | i18next | Runtime i18n | `@angee/app` owns one instance; addons contribute namespace-relative bundles and `@angee/ui` exposes the namespace hook factory |
@@ -167,7 +171,8 @@ semantics or local provider dialects.
 
 Angee's frontend is Refine-native: the app composes one `<Refine>` root, resource
 metadata projects into refine resources, and the rendered binding owns only
-domain presentation over refine state. The active frontend owners are
+domain presentation over native TanStack and RHF state, with Refine core owning
+resource transport/auth/live integration. The active frontend owners are
 `@angee/app`, `@angee/refine`, `@angee/metadata`, and `@angee/ui`.
 
 | Pick | Owns | Angee adds |

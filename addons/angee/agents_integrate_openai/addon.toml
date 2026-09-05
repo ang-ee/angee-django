@@ -8,6 +8,7 @@ category = "Integration"
 depends_on = ["angee.agents", "angee.integrate"]
 dependencies = [
   "openai>=2.43.0",
+  "pydantic-ai-slim[openai]>=2.13",
 ]
 
 [resources]

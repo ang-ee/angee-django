@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Controller, useForm, useWatch } from "react-hook-form";
 import {
   canonicalModelLabelOrNull,
   modelMetadataForLabel,
@@ -204,7 +205,11 @@ export interface MutationDialogProps<
 export function MutationDialog<
   TValues extends Record<string, unknown>,
   TResult = unknown,
->({
+>(props: MutationDialogProps<TValues, TResult>): React.ReactElement | null {
+  return props.open ? <MutationDialogInstance {...props} /> : null;
+}
+
+function MutationDialogInstance<TValues extends Record<string, unknown>, TResult>({
   open,
   onOpenChange,
   title,
@@ -223,29 +228,23 @@ export function MutationDialog<
   placement = "prompt",
 }: MutationDialogProps<TValues, TResult>): React.ReactElement {
   const t = useUiT();
-  const [values, setValues] = React.useState<Record<string, unknown>>(() =>
-    initialDialogValues(fields, initialValues),
-  );
-  const [submitting, setSubmitting] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-  const wasOpenRef = React.useRef(open);
-
-  React.useEffect(() => {
-    if (open && !wasOpenRef.current) {
-      setValues(initialDialogValues(fields, initialValues));
-      setError(null);
-    }
-    if (!open && wasOpenRef.current) {
-      setValues(initialDialogValues(fields, initialValues));
-      setError(null);
-      setSubmitting(false);
-    }
-    wasOpenRef.current = open;
-  }, [fields, initialValues, open]);
-
-  const ready = fields.every(
-    (field) => !field.required || !emptyDialogValue(values[field.name]),
-  );
+  const form = useForm<Record<string, unknown>>({
+    defaultValues: initialDialogValues(fields, initialValues),
+    mode: "onChange",
+    resolver: (formValues) => {
+      const missing = fields.filter((field) => field.required && !field.readOnly && !field.readOnlyWhen?.(formValues) && emptyDialogValue(formValues[field.name]));
+      return missing.length ? {
+        values: {}, errors: Object.fromEntries(missing.map((field) => [field.name, { type: "required", message: t("form.required") }])),
+      } : { values: formValues, errors: {} };
+    },
+  });
+  const values = useWatch({ control: form.control });
+  const submitting = form.formState.isSubmitting;
+  const error = form.formState.errors.root?.server?.message ?? null;
+  const ready = form.formState.isValid;
+  const submittingRef = React.useRef(false);
+  const mounted = React.useRef(true);
+  React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const footer = (
     <>
       <Button
@@ -270,24 +269,30 @@ export function MutationDialog<
     </>
   );
 
-  async function submit(
-    event: React.FormEvent<HTMLFormElement>,
-  ): Promise<void> {
-    event.preventDefault();
-    if (!ready || submitting) return;
-    setSubmitting(true);
-    setError(null);
+  const submit = form.handleSubmit(async (collected) => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    form.clearErrors();
     try {
-      const submittedValues = parseValues(values);
+      const submittedValues = parseValues(collected);
       const result = await onSubmit(submittedValues);
+      if (!mounted.current) return;
       onSubmitted?.(result, submittedValues);
       if (closeOnSubmit) onOpenChange(false);
     } catch (cause) {
-      setError(errorMessage(cause, errorFallback ?? t("error.generic")));
+      if (mounted.current) {
+        form.setError("root.server", {
+          type: "server",
+          message: errorMessage(cause, errorFallback ?? t("error.generic")),
+        });
+        // Root transport errors must not lock a valid form out of retrying.
+        // Revalidate the fields while retaining the root error for display.
+        await form.trigger(fields.map((field) => field.name));
+      }
     } finally {
-      setSubmitting(false);
+      submittingRef.current = false;
     }
-  }
+  });
 
   return (
     <DialogForm
@@ -301,17 +306,17 @@ export function MutationDialog<
       placement={placement}
     >
       {fields.map((field) => (
-        <LabeledDescriptorField
-          key={field.name}
-          field={field}
-          value={values[field.name]}
-          dialogValues={values}
-          readOnly={
-            field.readOnly || field.readOnlyWhen?.(values) || submitting
-          }
-          onChange={(next) =>
-            setValues((current) => ({ ...current, [field.name]: next }))
-          }
+        <Controller key={field.name} name={field.name} control={form.control}
+          render={({ field: control, fieldState }) => (
+            <LabeledDescriptorField
+              field={field}
+              value={control.value}
+              dialogValues={values}
+              messages={fieldState.error?.message ? [fieldState.error.message] : []}
+              readOnly={field.readOnly || field.readOnlyWhen?.(values) || submitting}
+              onChange={control.onChange}
+            />
+          )}
         />
       ))}
       <ErrorBanner description={error} />

@@ -84,12 +84,12 @@ export function TimelinePane(props: TimelinePaneProps): React.ReactElement {
       ),
     [timeline.rows],
   );
-  const firstPage = timeline.pages[0];
+  const firstPage = timeline.data?.pages[0];
   const total = (circle ? firstPage?.circle_timeline : firstPage?.party_timeline)?.count
     ?? rows.length;
-  const exhausted = !timeline.hasMore || rows.length >= total;
+  const exhausted = !timeline.hasNextPage || rows.length >= total;
 
-  if (timeline.fetching && rows.length === 0) return <LoadingPanel />;
+  if (timeline.isFetching && rows.length === 0) return <LoadingPanel />;
   if (timeline.error && rows.length === 0) {
     return <EmptyState icon="triangle-alert" title={timeline.error.message} />;
   }
@@ -149,8 +149,8 @@ export function TimelinePane(props: TimelinePaneProps): React.ReactElement {
           variant="ghost"
           size="sm"
           className="self-center"
-          disabled={timeline.fetching}
-          onClick={timeline.fetchOlder}
+          disabled={timeline.isFetching}
+          onClick={() => { void timeline.fetchNextPage(); }}
         >
           {t("timeline.loadOlder")}
         </Button>

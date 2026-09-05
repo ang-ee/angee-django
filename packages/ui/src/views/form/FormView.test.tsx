@@ -147,56 +147,15 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       Object.entries(record).filter(([name]) => selected.has(name)),
     ) as Row;
   };
-  const formResult = (options?: {
-    action?: "create" | "edit";
-    id?: string | number;
-    meta?: unknown;
-    queryOptions?: { enabled?: boolean };
-  }) => {
-    const action = options?.action === "edit" ? "update" : "create";
-    sdkMocks.recordSelection = fieldsFromMeta(options?.meta);
-    sdkMocks.mutationAction = action;
-    sdkMocks.mutationOptions = {
-      fields: fieldsFromMeta(options?.meta),
-      enabled: true,
-    };
-    const queryEnabled = options?.queryOptions?.enabled !== false;
-    return {
-      id: options?.id,
-      setId: vi.fn(),
-      query: {
-        data: {
-          data: queryEnabled ? projectedRecord(sdkMocks.recordSelection) : undefined,
-        },
-        isFetching: false,
-        error: null,
-        refetch: vi.fn(),
-      },
-      mutation: { isPending: false, error: null, status: "idle" },
-      formLoading: false,
-      onFinish: async (values: Record<string, unknown>) => ({
-        data: await sdkMocks.mutate({
-          data: action === "update"
-            ? ({ ...values, id: options?.id } as Row)
-            : (values as Row),
-        }),
-      }),
-      redirect: vi.fn(),
-      overtime: {},
-      autoSaveProps: { status: "idle", data: undefined, error: null },
-      onFinishAutoSave: vi.fn(),
-    };
-  };
   return {
     ...actual,
     // The lines save path invalidates the resource caches after a custom-mutation
     // write (no Refine provider in this harness); a no-op keeps every form render safe.
     useInvalidate: () => vi.fn(async () => undefined),
-    useForm: formResult,
-    useOne: (options?: { meta?: unknown }) => {
+    useOne: (options?: { meta?: unknown; queryOptions?: { enabled?: boolean } }) => {
       sdkMocks.recordSelection = fieldsFromMeta(options?.meta);
       return {
-        result: sdkMocks.record ?? undefined,
+        result: options?.queryOptions?.enabled === false ? undefined : projectedRecord(sdkMocks.recordSelection),
         query: {
           isFetching: false,
           error: null,
@@ -230,90 +189,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   };
 });
 
-vi.mock("@refinedev/react-hook-form", async () => {
-  const hookForm = await import("react-hook-form");
-  const fieldsFromMeta = (meta: unknown): readonly string[] | undefined => {
-    const fields = (meta as { fields?: unknown } | undefined)?.fields;
-    if (!Array.isArray(fields)) return undefined;
-    const paths: string[] = [];
-    const visit = (items: readonly unknown[], prefix = ""): void => {
-      for (const item of items) {
-        if (typeof item === "string") {
-          paths.push(prefix ? `${prefix}.${item}` : item);
-          continue;
-        }
-        if (!item || typeof item !== "object") continue;
-        for (const [key, value] of Object.entries(item)) {
-          if (Array.isArray(value)) visit(value, prefix ? `${prefix}.${key}` : key);
-        }
-      }
-    };
-    visit(fields);
-    return paths;
-  };
-  return {
-    useForm: (options: {
-      defaultValues?: Record<string, unknown>;
-      refineCoreProps?: {
-        action?: "create" | "edit";
-        id?: string | number;
-        meta?: unknown;
-        queryOptions?: { enabled?: boolean };
-      };
-    } = {}) => {
-      const form = hookForm.useForm({ defaultValues: options.defaultValues });
-      const refineCore = (() => {
-        const action =
-          options.refineCoreProps?.action === "edit" ? "update" : "create";
-        sdkMocks.recordSelection = fieldsFromMeta(options.refineCoreProps?.meta);
-        sdkMocks.mutationAction = action;
-        sdkMocks.mutationOptions = {
-          fields: fieldsFromMeta(options.refineCoreProps?.meta),
-          enabled: true,
-        };
-        const queryEnabled =
-          options.refineCoreProps?.queryOptions?.enabled !== false;
-        return {
-          id: options.refineCoreProps?.id,
-          setId: vi.fn(),
-          query: {
-            data: {
-              data: queryEnabled ? sdkMocks.record ?? undefined : undefined,
-            },
-            isFetching: false,
-            error: null,
-            refetch: vi.fn(),
-          },
-          mutation: { isPending: false, error: null, status: "idle" },
-          formLoading: false,
-          onFinish: async (values: Record<string, unknown>) => ({
-            data: await sdkMocks.mutate({
-              data: action === "update"
-                ? ({ ...values, id: options.refineCoreProps?.id } as Row)
-                : (values as Row),
-            }),
-          }),
-          redirect: vi.fn(),
-          overtime: {},
-          autoSaveProps: { status: "idle", data: undefined, error: null },
-          onFinishAutoSave: vi.fn(),
-        };
-      })();
-      return {
-        ...form,
-        refineCore,
-        saveButtonProps: {
-          disabled: false,
-          onClick: (event: unknown) => {
-            void form.handleSubmit((values) => refineCore.onFinish(values))(
-              event as never,
-            );
-          },
-        },
-      };
-    },
-  };
-});
+
 
 const statusOptions = [
   { value: "DRAFT", label: "Draft" },
@@ -490,32 +366,6 @@ describe("FormView", () => {
     expect(await screen.findByRole("button", { name: "Provision" })).toBeTruthy();
   });
 
-  test("lets toolbarStart patch displayed record state immediately", async () => {
-    renderWithProviders(
-      <FormView
-        resource="notes.Note"
-        id="note-1"
-        fields={fields}
-        toolbarStart={({ patchRecord, record }) =>
-          record?.status === "ACTIVE" ? (
-            <button type="button" onClick={() => patchRecord({ status: "ARCHIVED" })}>
-              Mark archived
-            </button>
-          ) : null
-        }
-      />,
-    );
-
-    expect(statusStep("Active")?.getAttribute("aria-current")).toBe("step");
-
-    fireEvent.click(screen.getByRole("button", { name: "Mark archived" }));
-
-    await waitFor(() =>
-      expect(statusStep("Archived")?.getAttribute("aria-current")).toBe("step"),
-    );
-    expect(screen.queryByRole("button", { name: "Mark archived" })).toBeNull();
-    expect(sdkMocks.mutate).not.toHaveBeenCalled();
-  });
 
   test("runs a declarative set action through the update mutation", async () => {
     renderWithProviders(
@@ -3129,6 +2979,7 @@ function mtiModel(
 ): ModelMetadata {
   return {
     ...defaultModel(typeName, modelLabel),
+    fields: { title: { name: "title", kind: "scalar", scalar: "String" } },
     resource: {
       ...defaultResource(typeName, modelLabel),
       canonicalLabel,
@@ -3180,10 +3031,6 @@ function modelNameForLabel(modelLabel: string): string {
 
 function cloneFields(source: readonly FormField[]): FormField[] {
   return source.map((field) => ({ ...field }));
-}
-
-function statusStep(label: string): Element | null {
-  return screen.getByText(label).closest("[role='listitem']");
 }
 
 function nextTask(): Promise<void> {

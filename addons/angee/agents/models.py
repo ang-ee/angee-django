@@ -12,27 +12,31 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from typing import Any, cast
 
-from angee.base.fields import StateField
-from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, role_anchor
-from angee.base.transitions import StateTransitions, save_state, transition
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import models, transaction
 from django.db.models.signals import class_prepared, m2m_changed, post_delete
 from django.utils import timezone
+from pydantic_ai.messages import ModelMessage, ModelResponse
+from pydantic_ai.models import Model, ModelRequestParameters
+from pydantic_ai.settings import ModelSettings
 from rebac import RelationshipTuple, SubjectRef, system_context, to_object_ref
 from rebac.relationships import delete_relationships, write_relationships
 from rebac.types import RelationshipFilter
 
-from angee.agents.backends import InferenceBackend, InferenceRequest, InferenceResponse
+from angee.agents.backends import InferenceBackend
 from angee.agents.grants import revoke_tool_grant, write_tool_grant
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
+from angee.base.fields import StateField
+from angee.base.impl import ImplClassField, ImplDefaultsMixin
+from angee.base.mixins import AuditMixin, SqidMixin
+from angee.base.models import AngeeManager, AngeeModel, role_anchor
+from angee.base.transitions import StateTransitions, save_state, transition
 
 
 class InferenceModelUse(models.TextChoices):
@@ -208,25 +212,20 @@ class InferenceProvider(ImplDefaultsMixin, AngeeModel):
         self,
         *,
         model: str,
-        messages: Sequence[Mapping[str, Any]],
-        system: str = "",
-        max_tokens: int = 1024,
-        temperature: float | None = None,
-        tools: Sequence[Mapping[str, Any]] = (),
-        options: Mapping[str, Any] | None = None,
-    ) -> InferenceResponse:
-        """Send one non-streaming chat request through this provider."""
+        messages: Sequence[ModelMessage],
+        model_settings: ModelSettings | None = None,
+        model_request_parameters: ModelRequestParameters | None = None,
+        credential: Any | None = None,
+    ) -> ModelResponse:
+        """Send one request using Pydantic AI's native message/settings contract."""
 
-        request = InferenceRequest(
-            model=model,
-            messages=messages,
-            system=system,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            tools=tools,
-            options={} if options is None else dict(options),
+        return self.backend.chat(
+            model,
+            messages,
+            model_settings=model_settings,
+            model_request_parameters=model_request_parameters,
+            credential=credential,
         )
-        return self.backend.chat(request)
 
 
 class InferenceModelManager(AngeeManager):
@@ -309,26 +308,27 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
 
         return self.provider.credential
 
+    def bind(self, *, credential: Any | None = None) -> AbstractAsyncContextManager[Model]:
+        """Bind this catalogue model's native adapter and own its client lifetime."""
+
+        return self.provider.backend.model(self.provider_model_name, credential=credential)
+
     def chat(
         self,
-        messages: Sequence[Mapping[str, Any]],
+        messages: Sequence[ModelMessage],
         *,
-        system: str = "",
-        max_tokens: int = 1024,
-        temperature: float | None = None,
-        tools: Sequence[Mapping[str, Any]] = (),
-        options: Mapping[str, Any] | None = None,
-    ) -> InferenceResponse:
-        """Send one non-streaming chat request through this catalogue model."""
+        model_settings: ModelSettings | None = None,
+        model_request_parameters: ModelRequestParameters | None = None,
+        credential: Any | None = None,
+    ) -> ModelResponse:
+        """Make one native request using this catalogue model's provider handle."""
 
         return self.provider.chat(
-            model=self.name,
+            model=self.provider_model_name,
             messages=messages,
-            system=system,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            tools=tools,
-            options=options,
+            model_settings=model_settings,
+            model_request_parameters=model_request_parameters,
+            credential=credential,
         )
 
 
@@ -1112,6 +1112,13 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         if not self.inference_secret():
             return False
         return not runtime.renders_service or runtime.supports_credential(credential)
+
+    def inference_model(self) -> AbstractAsyncContextManager[Model]:
+        """Bind the native model using this agent's credential override."""
+
+        if self.model is None:
+            raise ValueError("An in-process agent requires an inference model.")
+        return self.model.bind(credential=self.inference_credential_for_runtime())
 
     def inference_credential_for_runtime(self) -> Any:
         """Return the ``integrate.Credential`` backing this agent's inference, or ``None``.

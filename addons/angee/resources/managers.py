@@ -5,13 +5,14 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from angee.base.models import AngeeUnscopedManager, AngeeUnscopedQuerySet
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django.db import IntegrityError, models, transaction
+from django.db import DEFAULT_DB_ALIAS, IntegrityError, models, router, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
+from rebac.models import active_relationship_model
 
+from angee.base.models import AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.resources.entries import (
     GRANT_KIND,
     EntryGraph,
@@ -20,9 +21,7 @@ from angee.resources.entries import (
     LoadResult,
     ResourceEntry,
     ResourceGroup,
-    ResourceRow,
     ValidationResult,
-    resolve_model,
     resource_manifest_for,
 )
 from angee.resources.exceptions import ResourceLoadError
@@ -54,9 +53,9 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
             addon_aliases=self._addon_aliases(selected_addons),
         )
         return ValidationResult(
-            checked_files=len(row_groups) + len(grant_groups),
+            checked_files=len({group.entry.key for group in row_groups} | {group.entry.key for group in grant_groups}),
             checked_rows=(
-                sum(len(group.rows) for group in row_groups) + sum(len(group.rows) for group in grant_groups)
+                sum(len(group.dataset) for group in row_groups) + sum(len(group.rows) for group in grant_groups)
             ),
         )
 
@@ -100,30 +99,51 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
         rows — before rolling everything back.
         """
 
+        loaded_groups = [
+            (
+                group,
+                build_resource(group.model, group.entry, ledger_model=self.model, addon_aliases=addon_aliases),
+            )
+            for group in row_groups
+        ]
+        write_models = [self.model, *(group.model for group in row_groups)]
+        write_models.extend(
+            field.remote_field.through
+            for group in row_groups
+            for field in group.model._meta.many_to_many
+            if field.name in group.dataset.headers
+        )
+        if grant_groups:
+            write_models.append(active_relationship_model())
+        aliases = {
+            self.db,
+            *(router.db_for_write(model) for model in write_models),
+            *(resource.get_db_connection_name() for _group, resource in loaded_groups),
+        }
+        if aliases != {DEFAULT_DB_ALIAS}:
+            raise ResourceLoadError(
+                "Resource rows, ledger and grants must use the default database to share the resource load transaction."
+            )
         load_result = LoadResult(created=0, updated=0, skipped=0)
         try:
             reason = "resources.validate" if dry_run else "resources.load"
             with system_context(reason=reason), transaction.atomic():
-                loaded_groups: list[tuple[ResourceGroup, Any]] = []
-                for group in row_groups:
-                    resource = build_resource(
-                        group.model,
-                        group.entry,
-                        ledger_model=self.model,
-                        addon_aliases=addon_aliases,
-                    )
+                for group, resource in loaded_groups:
                     try:
                         result = resource.import_data(
-                            group.to_dataset(),
+                            group.dataset,
                             dry_run=False,
                             raise_errors=True,
                             rollback_on_validation_errors=True,
                             use_transactions=False,
                         )
-                    except (IntegrityError, ResourceImportError) as error:
+                    except ResourceImportError as error:
+                        if error.number is not None:
+                            error.number = group.source_rows[error.number - 1]
+                        raise ResourceLoadError(f"{group.entry.display}: {error}") from error
+                    except IntegrityError as error:
                         raise ResourceLoadError(f"{group.entry.display}: {error}") from error
                     load_result = load_result.with_result(result)
-                    loaded_groups.append((group, resource))
                 if not dry_run:
                     self._run_post_load_hooks(loaded_groups)
                 created, skipped = materialize_grant_groups(
@@ -153,8 +173,8 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
             if not callable(hook):
                 continue
             instances_by_pk: dict[Any, models.Model] = {}
-            for row in group.rows:
-                instance = resource.instance_for_xref(row.xref)
+            for xref in group.dataset["_xref"]:
+                instance = resource.instance_for_xref(xref)
                 if instance is not None:
                     instances_by_pk[instance.pk] = instance
             if instances_by_pk:
@@ -187,7 +207,9 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
         return tuple(
             (
                 entry.display,
-                len(entry.read_grant_rows() if entry.kind == GRANT_KIND else entry.read_resource_rows()),
+                len(entry.read_grant_rows())
+                if entry.kind == GRANT_KIND
+                else sum(len(group.dataset) for group in entry.read_groups()),
             )
             for entry in self._entries_for(addons, tiers=tiers)
         )
@@ -227,20 +249,11 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
 
         groups: list[ResourceGroup] = []
         grant_groups: list[GrantGroup] = []
-        by_key: dict[tuple[str, str, str], ResourceGroup] = {}
         for entry in self._entries_for(addons, tiers=tiers):
             if entry.kind == GRANT_KIND:
                 grant_groups.append(GrantGroup(entry=entry, rows=entry.read_grant_rows()))
-                continue
-            for row in entry.read_resource_rows():
-                model = resolve_model(row.model_label)
-                key = (entry.addon.name, entry.source, model._meta.label_lower)
-                group = by_key.get(key)
-                if group is None:
-                    group = ResourceGroup(entry=entry, model=model, rows=[])
-                    by_key[key] = group
-                    groups.append(group)
-                group.rows.append(row)
+            else:
+                groups.extend(entry.read_groups())
         return tuple(groups), tuple(grant_groups)
 
     def _entries_for(
@@ -274,20 +287,14 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
         if raw is None:
             return frozenset()
         if isinstance(raw, str) or not isinstance(raw, Iterable):
-            raise ImproperlyConfigured(
-                "ANGEE_RESOURCE_EXCLUDED_ENTRIES must be an iterable of 'addon:source' strings."
-            )
+            raise ImproperlyConfigured("ANGEE_RESOURCE_EXCLUDED_ENTRIES must be an iterable of 'addon:source' strings.")
         keys: list[EntryKey] = []
         for item in raw:
             if not isinstance(item, str):
-                raise ImproperlyConfigured(
-                    "ANGEE_RESOURCE_EXCLUDED_ENTRIES must contain only 'addon:source' strings."
-                )
+                raise ImproperlyConfigured("ANGEE_RESOURCE_EXCLUDED_ENTRIES must contain only 'addon:source' strings.")
             addon, separator, source = item.partition(":")
             if not separator or not addon or not source:
-                raise ImproperlyConfigured(
-                    "ANGEE_RESOURCE_EXCLUDED_ENTRIES entries must use 'addon:source' strings."
-                )
+                raise ImproperlyConfigured("ANGEE_RESOURCE_EXCLUDED_ENTRIES entries must use 'addon:source' strings.")
             keys.append((addon, source))
         return frozenset(keys)
 
@@ -305,18 +312,18 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
     ) -> None:
         """Raise when an addon declares the same xref more than once."""
 
-        seen: dict[tuple[str, str], ResourceRow] = {}
+        seen: dict[tuple[str, str], ResourceEntry] = {}
         for group in groups:
-            for row in group.rows:
-                key = (group.entry.addon.name, row.xref)
+            for xref in group.dataset["_xref"]:
+                key = (group.entry.addon.name, xref)
                 previous = seen.get(key)
                 if previous is not None:
                     raise ResourceLoadError(
                         f"xref collision in {group.entry.addon.name}: "
-                        f"{row.xref!r} appears in {previous.entry.display} "
+                        f"{xref!r} appears in {previous.display} "
                         f"and {group.entry.display}"
                     )
-                seen[key] = row
+                seen[key] = group.entry
 
 
 setattr(ResourceQuerySet._entries_for, "queryset_only", False)

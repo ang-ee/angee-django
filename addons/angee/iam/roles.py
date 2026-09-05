@@ -9,20 +9,11 @@ from django.contrib.auth import get_user_model
 from django.db.models import Exists, OuterRef, QuerySet, Subquery, TextField
 from django.db.models.functions import Cast
 from django.http import HttpRequest
-from rebac import ObjectRef, app_settings, system_context
+from rebac import ObjectRef, app_settings, subject_id_attr, system_context
 from rebac import backend as rebac_backend
 from rebac.models import active_relationship_model
 from rebac.roles import ROLE_RELATION
-from rebac.schema import (
-    Definition,
-    PermArrow,
-    PermBinOp,
-    PermExpr,
-    PermNil,
-    PermRef,
-    Relation,
-    Schema,
-)
+from rebac.schema import permission_object_sources, permission_sources, render_allowed_subject
 
 from angee.iam.identity import user_display_labels
 
@@ -31,17 +22,6 @@ IAM_OVERVIEW_MAX_PEEK_LIMIT = 100
 PERMISSION_HUB_LIST_CAP = 1000
 PRIVILEGED_PERMISSION_NAMES = frozenset({"admin", "create", "write", "delete"})
 ROLE_SUFFIX = "/role"
-REBAC_BUILTIN_PERMISSION_REFS = frozenset({"anonymous", "authenticated"})
-
-
-@dataclass(frozen=True, slots=True)
-class PermissionSources:
-    """Flattened REBAC permission-expression leaves for the IAM console."""
-
-    direct_relations: frozenset[str] = frozenset()
-    arrows: frozenset[tuple[str, str]] = frozenset()
-    builtins: frozenset[str] = frozenset()
-    subpermissions: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,9 +215,9 @@ def relationship_rows(limit: int | None = PERMISSION_HUB_LIST_CAP) -> QuerySet[A
     """Return active relationship rows in stable order."""
 
     relationship_model = active_relationship_model()
-    rows = _order_relationship_rows(relationship_model.objects.all())
+    rows = relationship_model.objects.order_by_resource()
     if limit is not None:
-        rows = _order_relationship_rows(relationship_model.objects.filter(pk__in=Subquery(rows.values("pk")[:limit])))
+        rows = relationship_model.objects.filter(pk__in=Subquery(rows.values("pk")[:limit])).order_by_resource()
     return cast(QuerySet[Any], rows)
 
 
@@ -250,11 +230,8 @@ def permission_hub_roles(limit: int | None = PERMISSION_HUB_LIST_CAP) -> list[Ro
 def permission_hub_role_rows(limit: int | None = PERMISSION_HUB_LIST_CAP) -> QuerySet[Any]:
     """Return relationship rows that mention schema-declared role objects."""
 
-    rows = (
-        active_relationship_model()
-        .objects.filter(resource_type__in=schema_role_resource_types())
-    )
-    rows = _order_relationship_rows(rows)
+    rows = active_relationship_model().objects.filter(resource_type__in=schema_role_resource_types())
+    rows = rows.order_by_resource()
     if limit is not None:
         rows = rows[:limit]
     return cast(QuerySet[Any], rows)
@@ -273,51 +250,16 @@ def permission_hub_grants(
 def permission_hub_grant_rows(limit: int | None = PERMISSION_HUB_LIST_CAP) -> QuerySet[Any]:
     """Return direct user role-grant rows in stable order."""
 
-    rows = (
-        active_relationship_model()
-        .objects.filter(
-            resource_type__in=schema_role_resource_types(),
-            relation=ROLE_RELATION,
-            subject_type=app_settings.REBAC_USER_TYPE,
-            optional_subject_relation="",
-        )
+    rows = active_relationship_model().objects.filter(
+        resource_type__in=schema_role_resource_types(),
+        relation=ROLE_RELATION,
+        subject_type=app_settings.REBAC_USER_TYPE,
+        optional_subject_relation="",
     )
-    rows = _order_relationship_rows(rows)
+    rows = rows.order_by_resource()
     if limit is not None:
         rows = rows[:limit]
     return cast(QuerySet[Any], rows)
-
-
-def _order_relationship_rows(rows: QuerySet[Any]) -> QuerySet[Any]:
-    """Return relationship rows in canonical wire-order for IAM lists."""
-
-    if any(field.name == "resource_fk" for field in rows.model._meta.fields):
-        return cast(
-            QuerySet[Any],
-            rows.order_by(
-                "resource_fk__resource_type",
-                "resource_fk__resource_id",
-                "relation",
-                "subject_fk__resource_type",
-                "subject_fk__resource_id",
-                "optional_subject_relation",
-                "caveat_name",
-                "pk",
-            ),
-        )
-    return cast(
-        QuerySet[Any],
-        rows.order_by(
-            "resource_type",
-            "resource_id",
-            "relation",
-            "subject_type",
-            "subject_id",
-            "optional_subject_relation",
-            "caveat_name",
-            "pk",
-        ),
-    )
 
 
 def schema_role_resource_types() -> set[str]:
@@ -328,242 +270,6 @@ def schema_role_resource_types() -> set[str]:
         for definition in rebac_backend().schema().definitions
         if is_role_type(definition.resource_type)
     }
-
-
-def schema_allowed_subject_name(allowed: Any) -> str:
-    """Return one relation allowed-subject declaration as a compact string."""
-
-    value = str(allowed.type)
-    if getattr(allowed, "wildcard", False):
-        value = f"{value}:*"
-    elif getattr(allowed, "id", ""):
-        value = f"{value}:{allowed.id}"
-    if getattr(allowed, "relation", ""):
-        value = f"{value}#{allowed.relation}"
-    if getattr(allowed, "with_caveat", ""):
-        value = f"{value} with {allowed.with_caveat}"
-    return value
-
-
-def permission_sources(schema: Schema, resource_type: str, permission_name: str) -> PermissionSources:
-    """Return flattened source labels for a REBAC permission expression."""
-
-    definition = schema.get_definition(resource_type)
-    permission = schema.get_permission(resource_type, permission_name)
-    if definition is None or permission is None:
-        return PermissionSources()
-    sources = _MutablePermissionSources()
-    _collect_permission_sources(
-        schema,
-        definition,
-        permission.expression,
-        sources,
-        seen_permissions=frozenset({(resource_type, permission_name)}),
-    )
-    return sources.freeze()
-
-
-def roles_reaching_permission(
-    schema: Schema,
-    resource_type: str,
-    permission_name: str,
-    *,
-    role_resource_type: str,
-) -> tuple[ObjectRef, ...]:
-    """Return schema-named role objects that can feed one permission."""
-
-    definition = schema.get_definition(resource_type)
-    permission = schema.get_permission(resource_type, permission_name)
-    if definition is None or permission is None:
-        return ()
-    refs: set[ObjectRef] = set()
-    _collect_role_refs_from_expr(
-        schema,
-        definition,
-        permission.expression,
-        role_resource_type=role_resource_type,
-        refs=refs,
-        seen_permissions=frozenset({(resource_type, permission_name)}),
-    )
-    return tuple(sorted(refs, key=lambda ref: (ref.resource_type, ref.resource_id)))
-
-
-@dataclass(slots=True)
-class _MutablePermissionSources:
-    direct_relations: set[str]
-    arrows: set[tuple[str, str]]
-    builtins: set[str]
-    subpermissions: set[str]
-
-    def __init__(self) -> None:
-        self.direct_relations = set()
-        self.arrows = set()
-        self.builtins = set()
-        self.subpermissions = set()
-
-    def freeze(self) -> PermissionSources:
-        """Return an immutable projection."""
-
-        return PermissionSources(
-            direct_relations=frozenset(self.direct_relations),
-            arrows=frozenset(self.arrows),
-            builtins=frozenset(self.builtins),
-            subpermissions=frozenset(self.subpermissions),
-        )
-
-
-def _collect_permission_sources(
-    schema: Schema,
-    definition: Definition,
-    expression: PermExpr,
-    sources: _MutablePermissionSources,
-    *,
-    seen_permissions: frozenset[tuple[str, str]],
-) -> None:
-    """Accumulate leaf names from one permission expression."""
-
-    if isinstance(expression, PermNil):
-        return
-    if isinstance(expression, PermArrow):
-        sources.arrows.add((expression.via, expression.target))
-        return
-    if isinstance(expression, PermBinOp):
-        _collect_permission_sources(
-            schema,
-            definition,
-            expression.left,
-            sources,
-            seen_permissions=seen_permissions,
-        )
-        _collect_permission_sources(
-            schema,
-            definition,
-            expression.right,
-            sources,
-            seen_permissions=seen_permissions,
-        )
-        return
-    if isinstance(expression, PermRef):
-        if expression.name in REBAC_BUILTIN_PERMISSION_REFS:
-            sources.builtins.add(expression.name)
-            return
-        if _relation_by_name(definition, expression.name) is not None:
-            sources.direct_relations.add(expression.name)
-            return
-        subpermission = schema.get_permission(definition.resource_type, expression.name)
-        if subpermission is None:
-            return
-        key = (definition.resource_type, expression.name)
-        if key in seen_permissions:
-            return
-        sources.subpermissions.add(expression.name)
-        _collect_permission_sources(
-            schema,
-            definition,
-            subpermission.expression,
-            sources,
-            seen_permissions=seen_permissions | {key},
-        )
-
-
-def _collect_role_refs_from_expr(
-    schema: Schema,
-    definition: Definition,
-    expression: PermExpr,
-    *,
-    role_resource_type: str,
-    refs: set[ObjectRef],
-    seen_permissions: frozenset[tuple[str, str]],
-) -> None:
-    """Accumulate statically named role refs from one permission expression."""
-
-    if isinstance(expression, PermNil):
-        return
-    if isinstance(expression, PermArrow):
-        relation = _relation_by_name(definition, expression.via)
-        if relation is None:
-            return
-        refs.update(_role_refs_for_relation(relation, role_resource_type))
-        for allowed in relation.allowed_subjects:
-            target_definition = schema.get_definition(str(allowed.type))
-            target_permission = schema.get_permission(str(allowed.type), expression.target)
-            if target_definition is None or target_permission is None:
-                continue
-            key = (target_definition.resource_type, expression.target)
-            if key in seen_permissions:
-                continue
-            _collect_role_refs_from_expr(
-                schema,
-                target_definition,
-                target_permission.expression,
-                role_resource_type=role_resource_type,
-                refs=refs,
-                seen_permissions=seen_permissions | {key},
-            )
-        return
-    if isinstance(expression, PermBinOp):
-        _collect_role_refs_from_expr(
-            schema,
-            definition,
-            expression.left,
-            role_resource_type=role_resource_type,
-            refs=refs,
-            seen_permissions=seen_permissions,
-        )
-        if expression.op != "-":
-            _collect_role_refs_from_expr(
-                schema,
-                definition,
-                expression.right,
-                role_resource_type=role_resource_type,
-                refs=refs,
-                seen_permissions=seen_permissions,
-            )
-        return
-    if isinstance(expression, PermRef):
-        relation = _relation_by_name(definition, expression.name)
-        if relation is not None:
-            refs.update(_role_refs_for_relation(relation, role_resource_type))
-            return
-        if expression.name in REBAC_BUILTIN_PERMISSION_REFS:
-            return
-        subpermission = schema.get_permission(definition.resource_type, expression.name)
-        if subpermission is None:
-            return
-        key = (definition.resource_type, expression.name)
-        if key in seen_permissions:
-            return
-        _collect_role_refs_from_expr(
-            schema,
-            definition,
-            subpermission.expression,
-            role_resource_type=role_resource_type,
-            refs=refs,
-            seen_permissions=seen_permissions | {key},
-        )
-
-
-def _role_refs_for_relation(relation: Relation, role_resource_type: str) -> set[ObjectRef]:
-    """Return statically named role objects declared by one relation."""
-
-    refs: set[ObjectRef] = set()
-    const_id = str(getattr(relation.backing, "target_id", "") or "")
-    for allowed in relation.allowed_subjects:
-        if str(allowed.type) != role_resource_type:
-            continue
-        role_id = str(getattr(allowed, "id", "") or const_id)
-        if role_id:
-            refs.add(ObjectRef(role_resource_type, role_id))
-    return refs
-
-
-def _relation_by_name(definition: Definition, name: str) -> Relation | None:
-    """Return a relation declaration from one REBAC definition."""
-
-    for relation in definition.relations:
-        if relation.name == name:
-            return relation
-    return None
 
 
 def permission_conditions(schema: Any, resource_type: str, permission_name: str) -> list[PermissionConditionInfo]:
@@ -589,7 +295,7 @@ def permission_schema() -> list[ResourceSchemaInfo]:
         relations = [
             RelationInfo(
                 name=relation.name,
-                allowed_subject_types=[schema_allowed_subject_name(allowed) for allowed in relation.allowed_subjects],
+                allowed_subject_types=[render_allowed_subject(allowed) for allowed in relation.allowed_subjects],
             )
             for relation in sorted(definition.relations, key=lambda item: item.name)
         ]
@@ -671,9 +377,7 @@ def unassigned_user_queryset() -> QuerySet[Any]:
         assigned_user_pks = user_model._default_manager.filter(sqid__in=subject_ids).values("pk")
         return cast(
             QuerySet[Any],
-            user_queryset
-            .exclude(pk__in=Subquery(assigned_user_pks))
-            .order_by(*user_ordering(user_model)),
+            user_queryset.exclude(pk__in=Subquery(assigned_user_pks)).order_by(*user_ordering(user_model)),
         )
 
     # REBAC stores subject ids as text (``str(<attr>)`` — see the sqid branch
@@ -695,8 +399,7 @@ def unassigned_user_queryset() -> QuerySet[Any]:
     )
     return cast(
         QuerySet[Any],
-        user_queryset
-        .annotate(_iam_has_role=Exists(assigned_exists))
+        user_queryset.annotate(_iam_has_role=Exists(assigned_exists))
         .filter(_iam_has_role=False)
         .order_by(*user_ordering(user_model)),
     )
@@ -712,11 +415,11 @@ def user_subject_lookup(user_model: type[Any] | None = None) -> str:
     """Return the User field lookup used by REBAC actor subject ids."""
 
     model = user_model or get_user_model()
-    subject_id_attr = str(getattr(model._meta, "rebac_id_attr", None) or app_settings.REBAC_USER_ID_ATTR)
-    if subject_id_attr == "pk":
+    attribute = subject_id_attr(model)
+    if attribute == "pk":
         pk = model._meta.pk
         return pk.name if pk is not None else "pk"
-    return subject_id_attr
+    return attribute
 
 
 def user_ordering(user_model: type[Any] | None = None) -> tuple[str, ...]:
@@ -748,11 +451,11 @@ def privileged_role_refs() -> set[str]:
             for role_resource_type in role_resource_types:
                 refs.update(
                     str(role)
-                    for role in roles_reaching_permission(
+                    for role in permission_object_sources(
                         schema,
                         definition.resource_type,
                         permission_name,
-                        role_resource_type=role_resource_type,
+                        object_type=role_resource_type,
                     )
                 )
     return refs

@@ -79,12 +79,12 @@ beforeEach(() => {
       mocks.queryCalls.push(variables);
       return {
         rows: mocks.transcriptRows,
-        pages: [{ messages_aggregate: { aggregate: { count: mocks.total } } }],
-        fetching: false,
-        fetchingOlder: false,
+        data: { pages: [{ messages_aggregate: { aggregate: { count: mocks.total } } }], pageParams: [null] },
+        isFetching: false,
+        isFetchingNextPage: false,
         error: null,
-        hasMore: mocks.hasMore,
-        fetchOlder: mocks.fetchOlder,
+        hasNextPage: mocks.hasMore,
+        fetchNextPage: mocks.fetchOlder,
         refetch: vi.fn(),
       };
     },

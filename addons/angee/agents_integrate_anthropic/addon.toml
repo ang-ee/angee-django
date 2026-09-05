@@ -8,6 +8,7 @@ category = "Integration"
 depends_on = ["angee.agents", "angee.integrate"]
 dependencies = [
   "anthropic>=0.109.2",
+  "pydantic-ai-slim[anthropic]>=2.13",
 ]
 
 [resources]

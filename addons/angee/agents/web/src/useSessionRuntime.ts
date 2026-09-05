@@ -103,7 +103,7 @@ export function useSessionRuntime(
 
   React.useEffect(() => {
     let active = true;
-    if (initialSessionId !== undefined || latest.fetching || reusableId !== undefined) return;
+    if (initialSessionId !== undefined || latest.isFetching || reusableId !== undefined) return;
     if (startingRef.current === agentId) return;
     startingRef.current = agentId;
     void startSession({ agent: agentId, context: view })
@@ -117,7 +117,7 @@ export function useSessionRuntime(
     return () => {
       active = false;
     };
-  }, [agentId, initialSessionId, latest.fetching, reusableId, startSession, view]);
+  }, [agentId, initialSessionId, latest.isFetching, reusableId, startSession, view]);
 
   const allMessages = React.useMemo(
     () => transcriptMessages(sessionId ?? "", displayedTurns, turnMessagesRef.current),

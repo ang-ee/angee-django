@@ -1,20 +1,35 @@
+import type {
+  AngeeSchemaMetadata,
+  DataResourceMetadata,
+  DataResourceLinesMetadata,
+  DataResourceRootMetadata,
+  DataResourceFieldMetadata,
+  DataResourceRelationAxisMetadata,
+  ModelEnumValueMetadata,
+  ModelFieldKind,
+} from "./artifact-schema";
+export { defineAngeeSchemaMetadata } from "./artifact-schema";
+export type {
+  AngeeSchemaMetadata,
+  DataResourceMetadata,
+  DataResourceSubtitleMetadata,
+  DataResourceLinesMetadata,
+  DataResourceRootMetadata,
+  DataResourceTypeMetadata,
+  DataResourceFieldMetadata,
+  DataResourceRelationAxisMetadata,
+  DataResourceGroupAliasMetadata,
+  DataResourceGroupBucketFilterValueMapMetadata,
+  DataResourceGroupBucketFilterMetadata,
+  DataResourceGroupExtractionMetadata,
+  DataResourceGroupDimensionMetadata,
+  DataResourceAggregateMeasureMetadata,
+  DataResourceDefaultSortMetadata,
+  ModelEnumValueMetadata,
+  ModelFieldKind,
+} from "./artifact-schema";
 import { canonicalModelLabelOrNull } from "./canonical-model-label";
 import { modelLabelSegment } from "./naming";
-
-/** Field shape classes the backend resource artifact exposes. */
-export type ModelFieldKind = "scalar" | "enum" | "relation" | "list";
-
-const MODEL_FIELD_KINDS = new Set<ModelFieldKind>([
-  "scalar",
-  "enum",
-  "relation",
-  "list",
-]);
-
-export interface ModelEnumValueMetadata {
-  value: string;
-  description?: string;
-}
 
 export type ModelRelationFilterMode = "lookup" | "id";
 
@@ -84,125 +99,9 @@ export interface ModelRootFieldMetadata {
   changes?: string;
 }
 
-export interface AngeeSchemaMetadata {
-  angee?: {
-    resources?: readonly DataResourceMetadata[];
-  };
-}
-
-export interface DataResourceMetadata {
-  schemaName: string;
-  modelLabel: string;
-  resourceType?: string | null;
-  appLabel: string;
-  modelName: string;
-  /** Canonical pk-chain MTI record target, e.g. every Party subtype maps to `parties.Party`. */
-  canonicalLabel?: string | null;
-  publicIdField: string;
-  roots: DataResourceRootMetadata;
-  typeNames: DataResourceTypeMetadata;
-  /**
-   * Where list operations (filter/sort/paginate/group) resolve: ``"server"``
-   * (Hasura ``where``/``order_by``/``limit`` + the ``_groups`` aggregate) or
-   * ``"client"`` (one fetch, then the grid's client row-model pipeline over the
-   * loaded set). Defaults to ``"server"`` for an older payload without it.
-  */
-  rowModel?: "client" | "server";
-  recordRepresentation?: string | null;
-  /** Dotted GraphQL selection paths for semantic record subtitle facts. */
-  subtitle?: DataResourceSubtitleMetadata | null;
-  /**
-   * Column names on this resource that carry an `ImplClassField` key — the
-   * declared per-row fact an addon varies a contribution on (`FormView` resolves
-   * its record-verb slot by one). Emitted sorted, and only for columns the
-   * resource projects, so each name is readable — a reader still has to select
-   * it for a row to carry the value (`FormView` folds these into its selection).
-   */
-  implFields?: readonly string[];
-  capabilities: readonly string[];
-  fields?: readonly DataResourceFieldMetadata[];
-  filterFields: readonly string[];
-  orderFields: readonly string[];
-  aggregateFields: readonly string[];
-  groupByFields: readonly string[];
-  groupDimensions?: readonly DataResourceGroupDimensionMetadata[];
-  aggregateMeasures?: readonly DataResourceAggregateMeasureMetadata[];
-  defaultMeasures?: readonly DataResourceAggregateMeasureMetadata[];
-  defaultSort?: readonly DataResourceDefaultSortMetadata[];
-  createFields?: readonly string[];
-  updateFields?: readonly string[];
-  requiredCreateFields?: readonly string[];
-  revisionFields?: readonly string[];
-  relationAxes: readonly DataResourceRelationAxisMetadata[];
-  groupAliases?: readonly DataResourceGroupAliasMetadata[];
-  /**
-   * Editable child-lines contract (F6), present only for a document resource that
-   * declares `lines=` in `schema.py`. `EditableLines` reads it to render the line
-   * cells (each child column's widget from `fields`) and the `<resource>_save`
-   * diff-apply mutation reads `roots.save`. The wire key is `linesResource`.
-   */
-  linesResource?: DataResourceLinesMetadata | null;
-}
-
-/**
- * Closed renderer vocabulary for record subtitles. Adding a fact extends this
- * contract and its presentation semantics together.
- */
-export interface DataResourceSubtitleMetadata {
-  created?: string | null;
-  updated?: string | null;
-  wordCount?: string | null;
-}
-
-export interface DataResourceLinesMetadata {
-  /** Parent GraphQL field holding the ordered child lines, e.g. `"lines"`. */
-  field: string;
-  /** Child model label, e.g. `"accounting.JournalItem"`. */
-  modelLabel: string;
-  /** Shared line input type name (an optional public `id` plus the editable columns). */
-  inputType?: string | null;
-  /** Integer order column maintained by drag-reorder, when the child carries one. */
-  positionField?: string | null;
-  /** Per-column metadata (scalar/widget/relation) the line cells render. */
-  fields?: readonly DataResourceFieldMetadata[];
-}
-
-export interface DataResourceRootMetadata {
-  list?: string | null;
-  detail?: string | null;
-  aggregate?: string | null;
-  groups?: string | null;
-  groupsCount?: string | null;
-  create?: string | null;
-  update?: string | null;
-  /** Authored `<resource>_save(pk, patch, lines)` diff-apply mutation (F6). */
-  save?: string | null;
-  delete?: string | null;
-  deletePreview?: string | null;
-  revisions?: string | null;
-  changes?: string | null;
-}
-
 export interface DataResourceOperationTarget {
   dataProviderName: string;
   root: string;
-}
-
-export interface DataResourceTypeMetadata {
-  query?: string | null;
-  node?: string | null;
-  filter?: string | null;
-  order?: string | null;
-  aggregate?: string | null;
-  grouped?: string | null;
-  groupKey?: string | null;
-  groupBySpec?: string | null;
-  groupOrder?: string | null;
-  having?: string | null;
-  createInput?: string | null;
-  updateInput?: string | null;
-  deletePayload?: string | null;
-  revision?: string | null;
 }
 
 /**
@@ -230,85 +129,6 @@ export function resourceOperationTarget(
   };
 }
 
-export interface DataResourceFieldMetadata {
-  name: string;
-  kind: ModelFieldKind;
-  scalar?: string | null;
-  values?: readonly ModelEnumValueMetadata[];
-  widget?: string | null;
-  currencyField?: string | null;
-  readable: boolean;
-  filterable: boolean;
-  sortable: boolean;
-  aggregatable: boolean;
-  groupable: boolean;
-  creatable: boolean;
-  updatable: boolean;
-  requiredOnCreate: boolean;
-  nullable?: boolean;
-  relationModelLabel?: string | null;
-  relationLabelAxis?: string | null;
-  relationObject?: boolean | null;
-}
-
-export interface DataResourceRelationAxisMetadata {
-  field: string;
-  modelLabel: string;
-  publicIdField: string;
-  labelAxis?: string | null;
-}
-
-export interface DataResourceGroupAliasMetadata {
-  field: string;
-  aggregateField: string;
-  aggregateKey: string;
-}
-
-export interface DataResourceGroupBucketFilterValueMapMetadata {
-  from: unknown;
-  to: unknown;
-}
-
-export interface DataResourceGroupBucketFilterMetadata {
-  kind: "equality" | "range" | string;
-  field: string;
-  valueKey?: string | null;
-  rangeKey?: string | null;
-  lookup?: string | null;
-  nullLookup?: string | null;
-  valueTransform?: "json" | string | null;
-  valueMap?: readonly DataResourceGroupBucketFilterValueMapMetadata[];
-}
-
-export interface DataResourceGroupExtractionMetadata {
-  name: string;
-  input: string;
-  key: string;
-  rangeKey?: string | null;
-  filter?: DataResourceGroupBucketFilterMetadata | null;
-}
-
-export interface DataResourceGroupDimensionMetadata {
-  field: string;
-  input: string;
-  key: string;
-  kind: "column" | "relation" | string;
-  scalar?: string | null;
-  filter?: DataResourceGroupBucketFilterMetadata | null;
-  extractions?: readonly DataResourceGroupExtractionMetadata[];
-}
-
-export interface DataResourceAggregateMeasureMetadata {
-  op: string;
-  field?: string | null;
-  input?: string | null;
-}
-
-export interface DataResourceDefaultSortMetadata {
-  field: string;
-  direction: "ASC" | "DESC" | string;
-}
-
 export interface ModelMetadata {
   typeName: string;
   fields: Readonly<Record<string, ModelFieldMetadata>>;
@@ -322,23 +142,6 @@ export interface SchemaFieldMetadata {
   /** Exact model-label index — the collision-free lookup key for data views. */
   labels?: Readonly<Record<string, ModelMetadata>>;
   resources?: readonly DataResourceMetadata[];
-}
-
-export function defineAngeeSchemaMetadata(
-  metadata: unknown,
-): AngeeSchemaMetadata {
-  const root = metadataObject(metadata, "schema metadata");
-  const angee = optionalMetadataObject(root.angee, "schema metadata.angee");
-  const resources = angee
-    ? optionalMetadataArray(
-      angee.resources,
-      "schema metadata.angee.resources",
-    )
-    : undefined;
-  resources?.forEach((resource, index) =>
-    validateGeneratedResource(resource, `schema metadata.angee.resources[${index}]`),
-  );
-  return root as AngeeSchemaMetadata;
 }
 
 export function schemaFieldMetadataFromAngeeSchemaMetadata(
@@ -845,195 +648,4 @@ function withoutUndefined<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
     Object.entries(value).filter(([, item]) => item !== undefined),
   ) as T;
-}
-
-function validateGeneratedResource(resource: unknown, path: string): void {
-  const value = metadataObject(resource, path);
-  for (const property of [
-    "schemaName",
-    "modelLabel",
-    "appLabel",
-    "modelName",
-    "publicIdField",
-  ]) {
-    expectMetadataString(value[property], `${path}.${property}`);
-  }
-  validateStringRecord(metadataObject(value.roots, `${path}.roots`), `${path}.roots`);
-  validateStringRecord(
-    metadataObject(value.typeNames, `${path}.typeNames`),
-    `${path}.typeNames`,
-  );
-  for (const property of [
-    "capabilities",
-    "filterFields",
-    "orderFields",
-    "aggregateFields",
-    "groupByFields",
-  ]) {
-    validateStringArray(
-      metadataArray(value[property], `${path}.${property}`),
-      `${path}.${property}`,
-    );
-  }
-  metadataArray(value.relationAxes, `${path}.relationAxes`);
-  const implFields = optionalMetadataArray(value.implFields, `${path}.implFields`);
-  if (implFields) validateStringArray(implFields, `${path}.implFields`);
-  optionalMetadataArray(value.fields, `${path}.fields`)?.forEach((field, index) =>
-    validateGeneratedField(field, `${path}.fields[${index}]`),
-  );
-  if (value.recordRepresentation != null) {
-    expectMetadataString(value.recordRepresentation, `${path}.recordRepresentation`);
-  }
-  if (value.canonicalLabel != null) {
-    expectMetadataString(value.canonicalLabel, `${path}.canonicalLabel`);
-  }
-  validateGeneratedSubtitle(value.subtitle, `${path}.subtitle`);
-  optionalMetadataArray(value.groupDimensions, `${path}.groupDimensions`)?.forEach(
-    (dimension, index) =>
-      validateGeneratedGroupDimension(dimension, `${path}.groupDimensions[${index}]`),
-  );
-}
-
-function validateGeneratedSubtitle(subtitle: unknown, path: string): void {
-  const value = optionalMetadataObject(subtitle, path);
-  if (!value) return;
-  const properties = new Set(["created", "updated", "wordCount"]);
-  for (const property of Object.keys(value)) {
-    if (!properties.has(property)) {
-      throw new Error(`${path}.${property} is not a supported subtitle fact.`);
-    }
-  }
-  for (const property of properties) {
-    const selectionPath = value[property];
-    if (selectionPath == null) continue;
-    expectMetadataString(selectionPath, `${path}.${property}`);
-    if (!/^[_A-Za-z][_0-9A-Za-z]*(?:\.[_A-Za-z][_0-9A-Za-z]*)*$/.test(selectionPath)) {
-      throw new Error(`${path}.${property} must be a dotted selection path.`);
-    }
-  }
-}
-
-function validateGeneratedField(field: unknown, path: string): void {
-  const value = metadataObject(field, path);
-  expectMetadataString(value.name, `${path}.name`);
-  if (!MODEL_FIELD_KINDS.has(value.kind as ModelFieldKind)) {
-    throw new Error(
-      `${path}.kind must be one of ${[...MODEL_FIELD_KINDS].join(", ")}.`,
-    );
-  }
-  optionalMetadataArray(value.values, `${path}.values`)?.forEach((entry, index) => {
-    const enumValue = metadataObject(entry, `${path}.values[${index}]`);
-    expectMetadataString(enumValue.value, `${path}.values[${index}].value`);
-    if (enumValue.description != null) {
-      expectMetadataString(
-        enumValue.description,
-        `${path}.values[${index}].description`,
-      );
-    }
-  });
-}
-
-function validateGeneratedGroupDimension(dimension: unknown, path: string): void {
-  const value = metadataObject(dimension, path);
-  for (const property of ["field", "input", "key", "kind"]) {
-    expectMetadataString(value[property], `${path}.${property}`);
-  }
-  if (value.scalar != null) {
-    expectMetadataString(value.scalar, `${path}.scalar`);
-  }
-  validateGeneratedGroupBucketFilter(value.filter, `${path}.filter`);
-  optionalMetadataArray(value.extractions, `${path}.extractions`)?.forEach(
-    (extraction, index) => {
-      const extractionValue = metadataObject(
-        extraction,
-        `${path}.extractions[${index}]`,
-      );
-      for (const property of ["name", "input", "key"]) {
-        expectMetadataString(
-          extractionValue[property],
-          `${path}.extractions[${index}].${property}`,
-        );
-      }
-      if (extractionValue.rangeKey != null) {
-        expectMetadataString(
-          extractionValue.rangeKey,
-          `${path}.extractions[${index}].rangeKey`,
-        );
-      }
-      validateGeneratedGroupBucketFilter(
-        extractionValue.filter,
-        `${path}.extractions[${index}].filter`,
-      );
-    },
-  );
-}
-
-function validateGeneratedGroupBucketFilter(
-  filter: unknown,
-  path: string,
-): void {
-  if (filter == null) return;
-  const value = metadataObject(filter, path);
-  expectMetadataString(value.kind, `${path}.kind`);
-  expectMetadataString(value.field, `${path}.field`);
-  for (const property of ["valueKey", "rangeKey", "lookup", "nullLookup", "valueTransform"]) {
-    if (value[property] != null) {
-      expectMetadataString(value[property], `${path}.${property}`);
-    }
-  }
-  optionalMetadataArray(value.valueMap, `${path}.valueMap`)?.forEach((entry, index) => {
-    metadataObject(entry, `${path}.valueMap[${index}]`);
-  });
-}
-
-function validateStringRecord(
-  value: Record<string, unknown>,
-  path: string,
-): void {
-  for (const [key, entry] of Object.entries(value)) {
-    if (entry == null) continue;
-    expectMetadataString(entry, `${path}.${key}`);
-  }
-}
-
-function validateStringArray(value: readonly unknown[], path: string): void {
-  value.forEach((entry, index) =>
-    expectMetadataString(entry, `${path}[${index}]`),
-  );
-}
-
-function expectMetadataString(value: unknown, path: string): asserts value is string {
-  if (typeof value !== "string") {
-    throw new Error(`${path} must be a string.`);
-  }
-}
-
-function metadataArray(value: unknown, path: string): readonly unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`${path} must be an array.`);
-  }
-  return value;
-}
-
-function optionalMetadataArray(
-  value: unknown,
-  path: string,
-): readonly unknown[] | undefined {
-  if (value == null) return undefined;
-  return metadataArray(value, path);
-}
-
-function metadataObject(value: unknown, path: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${path} must be an object.`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function optionalMetadataObject(
-  value: unknown,
-  path: string,
-): Record<string, unknown> | undefined {
-  if (value == null) return undefined;
-  return metadataObject(value, path);
 }

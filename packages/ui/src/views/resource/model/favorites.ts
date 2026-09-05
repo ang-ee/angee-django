@@ -1,7 +1,7 @@
 import * as v from "valibot";
 import { RESOURCE_VIEW_GROUP_GRANULARITIES, RESOURCE_VIEW_KINDS, RESOURCE_VIEW_SORT_DIRECTIONS } from "./capabilities";
 import type { ResourceViewKind } from "./capabilities";
-import { isResourceViewFilter } from "./filter";
+import { Filter, isResourceViewFilter } from "./filter";
 import type { ResourceViewFilter, ResourceViewGroup, ResourceViewSort } from "./filter";
 export interface ResourceViewFavorite {
   id: string;
@@ -77,4 +77,23 @@ function slugifyFavoriteLabel(label: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+
+/** Preserve favorites v1 while live table state uses TanStack's own types. */
+export function favoriteFromResourceView(
+  state: import("./state").ResourceViewState,
+  label: string,
+  existing: readonly ResourceViewFavorite[] = [],
+): ResourceViewFavorite {
+  const sort = state.sorting[0];
+  return {
+    id: nextResourceViewFavoriteId(label, existing),
+    label,
+    pageSize: state.pagination.pageSize,
+    ...(sort ? { sort: { field: sort.id, dir: sort.desc ? "desc" as const : "asc" as const } } : {}),
+    ...(Filter.from(state.filter).hasEntries() ? { filter: state.filter } : {}),
+    ...(state.groupStack.length > 0 ? { groupStack: state.groupStack } : {}),
+    ...(state.view !== "list" ? { view: state.view } : {}),
+  };
 }

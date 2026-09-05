@@ -59,7 +59,7 @@ export function MessagingOverviewContribution(): React.ReactElement {
   const channels = query.data?.channels ?? [];
   const total = query.data?.channels_aggregate.aggregate?.count ?? channels.length;
   return (
-    <RailPanel title={t("overview.channels.title")} count={total} fetching={query.fetching}>
+    <RailPanel title={t("overview.channels.title")} count={total} fetching={query.isFetching}>
       {channels.length > 0 ? (
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
           {channels.map((channel) => {

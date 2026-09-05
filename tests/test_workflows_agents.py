@@ -20,11 +20,13 @@ from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
+from pydantic_ai.messages import ModelResponse, SystemPromptPart, TextPart
+from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.toolsets.function import FunctionToolset
+from pydantic_ai.usage import RequestUsage
 from rebac import actor_context, current_actor, system_context, to_subject_ref
 
-from angee.agents.backends import InferenceRequest, InferenceResponse
 from angee.agents.models import AgentLifecycle, RuntimeStatus, SessionStatus, TurnStatus
 from angee.agents.runners import TurnOutcome
 from angee.graphql.access import ChangeReadGate
@@ -73,28 +75,36 @@ def workflows_agents_tables(transactional_db: Any) -> Iterator[None]:
 
 
 @pytest.fixture()
-def stub_chats(monkeypatch: pytest.MonkeyPatch) -> list[InferenceRequest]:
+def stub_chats(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     """Capture chat requests sent through the configured stub inference backend."""
 
-    calls: list[InferenceRequest] = []
+    calls: list[dict[str, Any]] = []
 
-    def chat(self: StubInferenceBackend, request: InferenceRequest) -> InferenceResponse:
-        del self
-        calls.append(request)
-        return InferenceResponse(
-            text="stub response " + ("x" * 6000),
-            content=[{"type": "text", "text": "stub response"}],
-            usage={"input_tokens": 2, "output_tokens": 3},
-        )
+    def model(self, handle, *, credential=None):
+        def respond(messages, info):
+            calls.append(
+                {
+                    "model": handle,
+                    "messages": messages,
+                    "settings": info.model_settings,
+                    "tools": info.function_tools,
+                    "credential": credential,
+                }
+            )
+            return ModelResponse(
+                parts=[TextPart("stub response " + ("x" * 6000))], usage=RequestUsage(input_tokens=2, output_tokens=3)
+            )
 
-    monkeypatch.setattr(StubInferenceBackend, "chat", chat)
+        return FunctionModel(respond)
+
+    monkeypatch.setattr(StubInferenceBackend, "model", model)
     return calls
 
 
 def test_agent_step_renders_template_and_journals_bounded_io(
     workflows_agents_tables: None,
     no_workflow_queue: None,
-    stub_chats: list[InferenceRequest],
+    stub_chats: list[dict[str, Any]],
 ) -> None:
     """An agent-configured step renders subject/run/step context and bounds its journal."""
 
@@ -134,11 +144,12 @@ def test_agent_step_renders_template_and_journals_bounded_io(
     row = step_run_for(run, "agent")
     encoded_output = json.dumps(row.output, sort_keys=True)
     assert row.outcome == "completed"
-    assert stub_chats[0].model == model.name
-    assert stub_chats[0].system == "Answer with a short summary."
-    assert stub_chats[0].messages == [
-        {"role": "user", "content": f"Review workflow-subject in agent for run {run.pk}."}
-    ]
+    assert stub_chats[0]["model"] == model.name
+    message = stub_chats[0]["messages"][0]
+    assert isinstance(message.parts[0], SystemPromptPart)
+    assert message.parts[0].content == "Answer with a short summary."
+    assert message.parts[1].content == f"Review workflow-subject in agent for run {run.pk}."
+    assert stub_chats[0]["settings"]["max_tokens"] == 32
     assert len(encoded_output.encode("utf-8")) <= AGENT_STEP_JOURNAL_MAX_BYTES
     assert AGENT_STEP_TRUNCATION_MARKER in encoded_output
     assert "workflow-subject" in encoded_output
@@ -147,7 +158,7 @@ def test_agent_step_renders_template_and_journals_bounded_io(
 def test_agent_step_debits_token_usage_into_run_budget_spent(
     workflows_agents_tables: None,
     no_workflow_queue: None,
-    stub_chats: list[InferenceRequest],
+    stub_chats: list[dict[str, Any]],
 ) -> None:
     """Token usage returned by the backend lands on the run budget ledger."""
 
@@ -177,10 +188,15 @@ def test_agent_step_debits_token_usage_into_run_budget_spent(
     assert run.budget_spent == {"input_tokens": 2, "output_tokens": 3, "tokens": 5}
 
 
+@pytest.mark.parametrize(
+    "axis,ceiling", [("tokens", 4), ("prompt_tokens", 1), ("completion_tokens", 2), ("total_tokens", 4)]
+)
 def test_budget_ceiling_fails_run_via_engine(
     workflows_agents_tables: None,
     no_workflow_queue: None,
-    stub_chats: list[InferenceRequest],
+    stub_chats: list[dict[str, Any]],
+    axis: str,
+    ceiling: int,
 ) -> None:
     """The engine fails a run whose journaled token spend exceeds its budget."""
 
@@ -189,7 +205,7 @@ def test_budget_ceiling_fails_run_via_engine(
     model = _inference_model("stub-ceiling")
     workflow = workflow_with_steps(
         name="Workflow agent",
-        budget={"tokens": 4},
+        budget={axis: ceiling},
         steps=(
             {
                 "key": "agent",
@@ -213,14 +229,14 @@ def test_budget_ceiling_fails_run_via_engine(
 
     assert run.status == run_status.FAILED
     assert "budget" in run.error
-    assert "tokens" in run.error
+    assert axis in run.error
     assert step_run_for(run, "finish").status == step_status.SCHEDULED
 
 
 def test_replay_does_not_reinvoke_completed_agent_step(
     workflows_agents_tables: None,
     no_workflow_queue: None,
-    stub_chats: list[InferenceRequest],
+    stub_chats: list[dict[str, Any]],
 ) -> None:
     """Replaying a completed agent activity reuses the journaled output."""
 
@@ -262,8 +278,8 @@ def test_backend_error_routes_failed_outcome(
     del workflows_agents_tables, no_workflow_queue
     model = _inference_model("stub-error")
 
-    def chat(self: StubInferenceBackend, request: InferenceRequest) -> InferenceResponse:
-        del self, request
+    def chat(self: StubInferenceBackend, handle, messages, **kwargs) -> ModelResponse:
+        del self, handle, messages, kwargs
         raise RuntimeError("backend unavailable")
 
     monkeypatch.setattr(StubInferenceBackend, "chat", chat)
@@ -307,8 +323,8 @@ def test_agent_step_reraises_transient_backend_errors(
     del workflows_agents_tables, no_workflow_queue
     model = _inference_model("stub-transient")
 
-    def chat(self: StubInferenceBackend, request: InferenceRequest) -> InferenceResponse:
-        del self, request
+    def chat(self: StubInferenceBackend, handle, messages, **kwargs) -> ModelResponse:
+        del self, handle, messages, kwargs
         raise TransientStepError("rate limited")
 
     monkeypatch.setattr(StubInferenceBackend, "chat", chat)
@@ -490,8 +506,8 @@ def test_generic_toolset_turn_keeps_outer_actor_and_async_db_boundary(
         return username
 
     monkeypatch.setattr(
-        runner_module,
-        "model_for_agent",
+        type(agent),
+        "inference_model",
         lambda selected: TestModel(call_tools=["builtin_read_owner"], custom_output_text="done"),
     )
     monkeypatch.setattr(
@@ -698,3 +714,70 @@ def _session_workflow() -> Any:
         steps=({"key": "session", "step_class": "agent_session", "config": {}},),
         edges=(),
     )
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}},
+        {"name": "lookup", "input_schema": {"type": "object"}},
+    ],
+)
+def test_one_shot_journals_native_tool_response_and_uses_agent_credential(
+    workflows_agents_tables,
+    no_workflow_queue,
+    monkeypatch,
+    tool,
+):
+    from pydantic_ai.messages import ToolCallPart
+
+    owner = User.objects.create_user(username="workflow-override")
+    model = _inference_model("tool-journal")
+    override = _provider("workflow-credential", material={"api_key": "override"}).credential
+    calls = []
+
+    def bind(self, handle, *, credential=None):
+        # Credential resolution must happen before crossing the async boundary.
+        assert credential.pk == override.pk
+        assert credential.secret_value() == "override"
+
+        def respond(messages, info):
+            calls.append(info.function_tools)
+            return ModelResponse(
+                parts=[ToolCallPart("lookup", {"key": "value"}, "call-1")],
+                usage=RequestUsage(input_tokens=2, output_tokens=1),
+            )
+
+        return FunctionModel(respond)
+
+    monkeypatch.setattr(StubInferenceBackend, "model", bind)
+    with system_context(reason="test one-shot credential override"):
+        agent = Agent.objects.create(name="Override", owner=owner, model=model, inference_credential=override)
+    workflow = workflow_with_steps(
+        name="Native journal",
+        steps=(
+            {
+                "key": "agent",
+                "step_class": "agent",
+                "config": {
+                    "agent": agent.sqid,
+                    "prompt_template": "Look up",
+                    "tools": [tool],
+                },
+            },
+        ),
+        edges=(),
+    )
+    run = start_run(workflow)
+    row = advance_once(run)[0]
+    execute_started(run)
+    engine.execute(row.pk)
+    row.refresh_from_db()
+    assert row.outcome == "completed"
+    assert len(calls) == 1
+    assert calls[0][0].name == "lookup"
+    assert row.output["request"]["tools"] == [tool]
+    assert row.output["response"]["format_version"] == 2
+    assert row.output["response"]["text"] == ""
+    assert row.output["response"]["content"][0]["part_kind"] == "tool-call"
+    assert row.output["response"]["usage"]["input_tokens"] == 2

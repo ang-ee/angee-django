@@ -7,5 +7,5 @@ keywords = ["agents", "pydantic-ai", "runtime"]
 category = "Agents"
 depends_on = ["angee.agents", "angee.integrate", "angee.mcp"]
 dependencies = [
-  "pydantic-ai-slim[anthropic,mcp,openai]>=2.13",
+  "pydantic-ai-slim[mcp]>=2.13",
 ]

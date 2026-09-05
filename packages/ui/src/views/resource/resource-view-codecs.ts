@@ -3,7 +3,6 @@ import type {
   GroupingState,
   Row as TableRowModel,
   RowSelectionState,
-  SortingState,
 } from "@tanstack/react-table";
 
 import type { ColumnDescriptor } from "../page";
@@ -14,7 +13,6 @@ import {
 import type {
   ResourceListOrder,
   ResourceViewGroup,
-  ResourceViewSort,
 } from "./resource-view-model";
 import type { UiTranslate } from "../../i18n";
 
@@ -80,24 +78,10 @@ export function stringRowId<TRow extends Row & { id: string }>(row: TRow): strin
   return row.id;
 }
 
-export function sortingStateFromResourceSort(
-  sort: ResourceViewSort | null,
-): SortingState {
-  return sort ? [{ id: sort.field, desc: sort.dir === "desc" }] : [];
-}
-
 export function groupingStateFromResourceGroups(
   groupStack: readonly ResourceViewGroup[],
 ): GroupingState {
   return groupStack.map((group) => group.field);
-}
-
-export function rowSelectionStateFromIds(
-  ids: ReadonlySet<string>,
-): RowSelectionState {
-  const state: RowSelectionState = {};
-  for (const id of ids) state[id] = true;
-  return state;
 }
 
 export function idsFromRowSelectionState(

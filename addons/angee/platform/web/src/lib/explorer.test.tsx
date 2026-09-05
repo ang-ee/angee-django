@@ -3,7 +3,7 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import type { AuthoredQueryResult } from "@angee/refine";
+import type { UseQueryResult } from "@tanstack/react-query";
 
 import type {
   PlatformAddonData,
@@ -20,7 +20,7 @@ import {
 } from "./explorer";
 
 const sdkMocks = vi.hoisted(() => ({
-  query: null as AuthoredQueryResult<PlatformExplorerResult> | null,
+  query: null as UseQueryResult<PlatformExplorerResult> | null,
 }));
 
 vi.mock("@angee/refine", async (importOriginal) => {
@@ -85,31 +85,31 @@ describe("platform explorer hooks", () => {
     const { result } = renderHook(() => usePlatformExplorer());
 
     expect(result.current.explorer).toBeNull();
-    expect(result.current.fetching).toBe(false);
+    expect(result.current.isFetching).toBe(false);
   });
 
   test("preserves loading state for missing detail records", () => {
-    sdkMocks.query = queryResult(undefined, { fetching: true });
+    sdkMocks.query = queryResult(undefined, { isFetching: true });
 
     const { result } = renderHook(() => usePlatformAddon("angee.iam"));
 
     expect(result.current.addon).toBeUndefined();
     expect(result.current.notFound).toBe(false);
-    expect(result.current.fetching).toBe(true);
+    expect(result.current.isFetching).toBe(true);
   });
 });
 
 function queryResult(
   data: PlatformExplorerResult | undefined,
-  overrides: Partial<AuthoredQueryResult<PlatformExplorerResult>> = {},
-): AuthoredQueryResult<PlatformExplorerResult> {
+  overrides: Partial<UseQueryResult<PlatformExplorerResult>> = {},
+): UseQueryResult<PlatformExplorerResult> {
   return {
     data,
-    fetching: false,
+    isFetching: false,
     error: null,
     refetch: vi.fn(),
     ...overrides,
-  };
+  } as UseQueryResult<PlatformExplorerResult>;
 }
 
 function explorerResult(): PlatformExplorerResult {

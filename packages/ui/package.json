@@ -724,8 +724,6 @@
     "@fullcalendar/react": "^6.1.21",
     "@fullcalendar/timegrid": "^6.1.21",
     "@refinedev/core": "^5.0.12",
-    "@refinedev/react-hook-form": "^5.0.4",
-    "@refinedev/react-table": "^6.0.1",
     "@tanstack/react-table": "^8.21.3",
     "@tanstack/react-virtual": "^3.14.3",
     "@xyflow/react": "^12.11.1",
@@ -750,7 +748,8 @@
   "peerDependencies": {
     "@tanstack/react-router": "^1",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "@tanstack/react-query": "^5.101.1"
   },
   "devDependencies": {
     "@tanstack/react-query": "^5.101.1",

@@ -8,14 +8,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from angee.addons import AddonContract
-from angee.base.models import CATALOGUE_TIERS, AngeeModel
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, connection, models
 from import_export.results import Result, RowResult
 from rebac import system_context
 
+from angee.addons import AddonContract
+from angee.base.models import CATALOGUE_TIERS, AngeeModel
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import _grant_tuples, materialize_grant_groups
@@ -152,12 +152,12 @@ def test_resource_entry_reads_structured_rows_and_fields(
     rows = entry(
         tmp_path,
         {"path": "resources/notes.yaml"},
-    ).read_resource_rows()
+    ).read_groups()
 
     assert len(rows) == 1
     assert rows[0].model_label == "base.ImportNote"
-    assert rows[0].xref == "n1"
-    assert rows[0].dataset_row == {"_xref": "n1", "title": "First"}
+    assert rows[0].dataset["_xref"] == ["n1"]
+    assert rows[0].dataset.dict[0] == {"_xref": "n1", "title": "First"}
 
 
 def test_resource_entry_rejects_reserved_keys_in_structured_fields(
@@ -176,7 +176,7 @@ def test_resource_entry_rejects_reserved_keys_in_structured_fields(
         entry(
             tmp_path,
             {"path": "resources/notes.yaml"},
-        ).read_resource_rows()
+        ).read_groups()
 
 
 def test_resource_entry_allows_model_field_in_structured_fields(
@@ -191,10 +191,10 @@ def test_resource_entry_allows_model_field_in_structured_fields(
         encoding="utf-8",
     )
 
-    rows = entry(tmp_path, {"path": "resources/agents.yaml"}).read_resource_rows()
+    rows = entry(tmp_path, {"path": "resources/agents.yaml"}).read_groups()
 
     assert rows[0].model_label == "base.ImportNote"
-    assert rows[0].dataset_row == {"_xref": "a1", "model": "notes.model_x"}
+    assert rows[0].dataset.dict[0] == {"_xref": "a1", "model": "notes.model_x"}
 
 
 def test_resource_entry_rejects_model_conflicts(tmp_path: Path) -> None:
@@ -211,7 +211,7 @@ def test_resource_entry_rejects_model_conflicts(tmp_path: Path) -> None:
         entry(
             tmp_path,
             {"path": "resources/data.yaml", "model": "base.ImportNote"},
-        ).read_resource_rows()
+        ).read_groups()
 
 
 def test_resource_entry_rejects_unsupported_formats(tmp_path: Path) -> None:
@@ -222,7 +222,7 @@ def test_resource_entry_rejects_unsupported_formats(tmp_path: Path) -> None:
     (resource_dir / "data.xlsx").write_bytes(b"binary")
 
     with pytest.raises(ImproperlyConfigured, match="unsupported format"):
-        entry(tmp_path, {"path": "resources/data.xlsx"}).read_resource_rows()
+        entry(tmp_path, {"path": "resources/data.xlsx"}).read_groups()
 
 
 def test_entry_graph_respects_same_and_cross_addon_dependencies(
@@ -305,9 +305,7 @@ def test_resource_entries_exclude_settings_declared_entry(tmp_path: Path, settin
             ),
         },
     )
-    settings.ANGEE_RESOURCE_EXCLUDED_ENTRIES = (
-        "angee.iam:resources/demo/020_iam.directory_wildcard_reader.yaml",
-    )
+    settings.ANGEE_RESOURCE_EXCLUDED_ENTRIES = ("angee.iam:resources/demo/020_iam.directory_wildcard_reader.yaml",)
 
     entries = SelectionLedger.objects._entries_for((owner,), tiers=[Resource.Tier.DEMO])
 
@@ -413,7 +411,7 @@ def test_resolve_xref_accepts_addon_label_alias() -> None:
 
             app_label = "base"
 
-    class ResolveExactLedger(models.Model):
+    class ResolveExactLedger(Resource):
         """Ledger model without the production uniqueness constraint."""
 
         source_addon = models.CharField(max_length=200)
@@ -436,6 +434,7 @@ def test_resolve_xref_accepts_addon_label_alias() -> None:
     try:
         target = ResolveExactTarget.objects.create(name="target")
         ResolveExactLedger.objects.create(
+            tier=Resource.Tier.MASTER,
             source_addon="tests.resource_addon",
             xref="target",
             target_model="base.ResolveExactTarget",
@@ -482,7 +481,7 @@ def test_resolve_xref_reports_ambiguous_source_rows() -> None:
 
             app_label = "base"
 
-    class ResolveAmbiguousLedger(models.Model):
+    class ResolveAmbiguousLedger(Resource):
         """Ledger model without the production uniqueness constraint."""
 
         source_addon = models.CharField(max_length=200)
@@ -507,12 +506,14 @@ def test_resolve_xref_reports_ambiguous_source_rows() -> None:
         first = ResolveAmbiguousTargetA.objects.create(name="first")
         second = ResolveAmbiguousTargetB.objects.create(name="second")
         ResolveAmbiguousLedger.objects.create(
+            tier=Resource.Tier.MASTER,
             source_addon="tests.resource_addon",
             xref="shared",
             target_model="base.ResolveAmbiguousTargetA",
             target_id=str(first.pk),
         )
         ResolveAmbiguousLedger.objects.create(
+            tier=Resource.Tier.MASTER,
             source_addon="tests.resource_addon",
             xref="shared",
             target_model="base.ResolveAmbiguousTargetB",
@@ -551,7 +552,7 @@ def test_resolve_ledger_xref_binds_ledger_and_app_registry_aliases(monkeypatch) 
 
             app_label = "base"
 
-    class LedgerXrefLedger(models.Model):
+    class LedgerXrefLedger(Resource):
         """Ledger model without the production uniqueness constraint."""
 
         source_addon = models.CharField(max_length=200)
@@ -584,6 +585,7 @@ def test_resolve_ledger_xref_binds_ledger_and_app_registry_aliases(monkeypatch) 
     try:
         target = LedgerXrefTarget.objects.create(name="alice")
         LedgerXrefLedger.objects.create(
+            tier=Resource.Tier.MASTER,
             source_addon="angee.resources",
             xref="user_alice",
             target_model="base.LedgerXrefTarget",
@@ -643,7 +645,7 @@ def test_xref_widgets_resolve_mti_descendant_to_parent_fk() -> None:
 
             app_label = "base"
 
-    class XrefMtiLedger(models.Model):
+    class XrefMtiLedger(Resource):
         """Ledger model without the production uniqueness constraint."""
 
         source_addon = models.CharField(max_length=200)
@@ -682,6 +684,7 @@ def test_xref_widgets_resolve_mti_descendant_to_parent_fk() -> None:
             ("bare", "base.XrefMtiParent"),
         ):
             XrefMtiLedger.objects.create(
+                tier=Resource.Tier.MASTER,
                 source_addon="tests.resource_addon",
                 xref=xref,
                 target_model=target,
@@ -2155,6 +2158,7 @@ def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
         entry = ResourceEntry.from_declaration(
             addon(tmp_path), "demo", {"path": "grants/010_demo.yaml", "kind": "grants"}
         )
+
         def _grant_row(xref: str, index: int) -> GrantRow:
             return GrantRow(
                 entry=entry,
@@ -2208,9 +2212,7 @@ def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
         for resource in (child_as_child, child_as_parent, plain_ref):
             assert backend().has_access(subject=subject, action="read", resource=resource)
         # No grant, no parent-typed read — the materialized tuple is what opens the edge.
-        assert not backend().has_access(
-            subject=to_subject_ref(outsider), action="read", resource=child_as_parent
-        )
+        assert not backend().has_access(subject=to_subject_ref(outsider), action="read", resource=child_as_parent)
     finally:
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(MtiGrantLedger)

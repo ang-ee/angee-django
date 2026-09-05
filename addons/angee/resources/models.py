@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from angee.base.fields import StateField
-from angee.base.models import AngeeModel
 from django.db import models
 
+from angee.base.fields import StateField
+from angee.base.identity import instance_from_public_id
+from angee.base.models import AngeeModel
+from angee.resources.entries import resolve_model
 from angee.resources.managers import ResourceManager
 from angee.resources.tiers import ResourceTier
 
@@ -44,6 +46,13 @@ class Resource(AngeeModel):
 
     objects = ResourceManager()
     """Manager with validate, load, and diff operations."""
+
+    def target_instance(self) -> models.Model | None:
+        """Resolve this ledger's stored public identity through its model owner."""
+
+        if not self.target_id:
+            return None
+        return instance_from_public_id(resolve_model(self.target_model), self.target_id)
 
     class Meta:
         """Django model options for the abstract resource ledger."""

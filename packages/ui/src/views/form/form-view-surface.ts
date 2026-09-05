@@ -423,7 +423,6 @@ export function useFormViewSurface({
             ? [save.form.formState.errors[titleField.name]]
             : [],
         ),
-        ...(save.serverFieldErrors[titleField.name] ?? []),
       ]
     : [];
   const sections = React.useMemo(

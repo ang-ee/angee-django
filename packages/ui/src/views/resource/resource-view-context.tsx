@@ -9,20 +9,22 @@ import {
   type ReactNode,
 } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
+import { functionalUpdate, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState } from "@tanstack/react-table";
+import { clampPageSize } from "@angee/refine";
+import { normaliseGroupStack } from "./model/search";
 
 import {
-  ResourceViewState,
+  createResourceViewState,
+  type ResourceViewState,
   resourceViewSearchToState,
   resourceViewStateToSearch,
   mergeResourceViewSearch,
   type CalendarViewMode,
-  type ResourceViewAction,
   type ResourceViewFavorite,
   type ResourceViewFilter,
   type ResourceViewGroup,
   type ResourceViewInitialState,
   type ResourceViewKind,
-  type ResourceViewSort,
 } from "./resource-view-model";
 import { useResourceViewFavorites } from "./resource-view-favorites";
 
@@ -30,11 +32,12 @@ export interface ResourceViewContextValue {
   state: ResourceViewState;
   setPage: (page: number) => void;
   setPageSize: (pageSize: number) => void;
-  setSort: (sort: ResourceViewSort | null) => void;
+  setPagination: OnChangeFn<PaginationState>;
+  setSorting: OnChangeFn<SortingState>;
+  setRowSelection: OnChangeFn<RowSelectionState>;
   setFilter: (filter: ResourceViewFilter) => void;
   setGroup: (group: ResourceViewGroup | null) => void;
   setGroupStack: (groupStack: readonly ResourceViewGroup[]) => void;
-  setSelectedIds: (selectedIds: Iterable<string>) => void;
   toggleSelectedId: (id: string, selected?: boolean) => void;
   clearSelectedIds: () => void;
   setView: (view: ResourceViewKind) => void;
@@ -65,10 +68,6 @@ export interface ResourceViewScopeMountOptions {
 }
 
 const ResourceViewContext = createContext<ResourceViewContextValue | null>(null);
-type ResourceViewActions = Omit<
-  ResourceViewContextValue,
-  "state" | "savedFavorites" | "saveFavorite"
->;
 type ResourceViewNavigate = (options: {
   search: (current: Record<string, unknown>) => Record<string, unknown>;
   replace?: boolean;
@@ -134,44 +133,24 @@ function RouteResourceViewProvider({
   // Narrow Router navigation to functional search updates; no from is supplied
   // because the updater is route-agnostic.
   const navigate = useNavigate() as ResourceViewNavigate;
-  const [selectedIds, setSelectedIdsState] = useState<ReadonlySet<string>>(
-    () => new Set(initialState?.selectedIds ?? []),
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>(
+    () => createResourceViewState(initialState).rowSelection,
   );
   const queryState = useMemo(
     () => resourceViewSearchToState(search, initialState),
     [search, initialState],
   );
-  const state = useMemo<ResourceViewState>(
-    () => queryState.withSelectedIds(selectedIds),
-    [queryState, selectedIds],
-  );
-
-  const dispatch = useCallback(
-    (action: ResourceViewAction) => {
-      if (isLocalSelectionAction(action)) {
-        setSelectedIdsState((current) => reduceSelectedIds(current, action));
-        return;
-      }
-      setSelectedIdsState((current) => reduceSelectedIds(current, action));
-      void navigate({
-        search: (current) => {
-          const currentState = resourceViewSearchToState(current, initialState);
-          const next = currentState.reduce(action);
-          return mergeResourceViewSearch(
-            current,
-            resourceViewStateToSearch(next, initialState),
-          );
-        },
-        // View-state writes replace history so filter/sort/page churn does not
-        // spam Back; selection churn stays local.
-        replace: true,
-      });
-    },
-    [initialState, navigate],
-  );
-
-  const actions = useMemo(() => createResourceViewActions(dispatch), [dispatch]);
-  const value = useResourceViewContextValue({ actions, resource, state });
+  const state = useMemo(() => ({ ...queryState, rowSelection }), [queryState, rowSelection]);
+  const updateState = useCallback<OnChangeFn<ResourceViewState>>((updater) => {
+    void navigate({
+      search: (current) => mergeResourceViewSearch(
+        current,
+        resourceViewStateToSearch(functionalUpdate(updater, resourceViewSearchToState(current, initialState)), initialState),
+      ),
+      replace: true,
+    });
+  }, [initialState, navigate]);
+  const value = useResourceViewContextValue({ updateState, setRowSelection, resource, state });
 
   return (
     <ResourceViewContext.Provider value={value}>
@@ -185,12 +164,11 @@ function LocalResourceViewProvider({
   initialState,
   resource,
 }: Omit<ResourceViewProviderProps, "scope">): ReactNode {
-  const [state, setState] = useState(() => ResourceViewState.create(initialState));
-  const dispatch = useCallback((action: ResourceViewAction) => {
-    setState((current) => current.reduce(action));
+  const [state, updateState] = useState(() => createResourceViewState(initialState));
+  const setRowSelection = useCallback<OnChangeFn<RowSelectionState>>((updater) => {
+    updateState((current) => ({ ...current, rowSelection: functionalUpdate(updater, current.rowSelection) }));
   }, []);
-  const actions = useMemo(() => createResourceViewActions(dispatch), [dispatch]);
-  const value = useResourceViewContextValue({ actions, resource, state });
+  const value = useResourceViewContextValue({ updateState, setRowSelection, resource, state });
 
   return (
     <ResourceViewContext.Provider value={value}>
@@ -200,29 +178,69 @@ function LocalResourceViewProvider({
 }
 
 function useResourceViewContextValue({
-  actions,
+  updateState,
+  setRowSelection,
   resource,
   state,
 }: {
-  actions: ResourceViewActions;
+  updateState: OnChangeFn<ResourceViewState>;
+  setRowSelection: OnChangeFn<RowSelectionState>;
   resource: string | undefined;
   state: ResourceViewState;
 }): ResourceViewContextValue {
-  const { savedFavorites, saveFavorite } = useResourceViewFavorites(
-    resource,
+  const { savedFavorites, saveFavorite } = useResourceViewFavorites(resource, state);
+  const clearSelectedIds = useCallback(() => setRowSelection({}), [setRowSelection]);
+  const resetScope = useCallback<OnChangeFn<ResourceViewState>>((updater) => {
+    clearSelectedIds();
+    updateState((current) => {
+      const next = functionalUpdate(updater, current);
+      return { ...next, rowSelection: {}, pagination: { ...next.pagination, pageIndex: 0 } };
+    });
+  }, [clearSelectedIds, updateState]);
+  const setPagination = useCallback<OnChangeFn<PaginationState>>((updater) => {
+    if (functionalUpdate(updater, state.pagination).pageSize !== state.pagination.pageSize) clearSelectedIds();
+    updateState((current) => {
+      const next = functionalUpdate(updater, current.pagination);
+      const sizeChanged = next.pageSize !== current.pagination.pageSize;
+      return {
+        ...current,
+        ...(sizeChanged ? { rowSelection: {} } : {}),
+        pagination: {
+          pageIndex: sizeChanged ? 0 : Math.max(0, Number.isFinite(next.pageIndex) ? Math.floor(next.pageIndex) : 0),
+          pageSize: clampPageSize(next.pageSize),
+        },
+      };
+    });
+  }, [clearSelectedIds, state.pagination, updateState]);
+  const setSorting = useCallback<OnChangeFn<SortingState>>((updater) => {
+    resetScope((current) => ({ ...current, sorting: functionalUpdate(updater, current.sorting) }));
+  }, [resetScope]);
+  const setGroupStack = useCallback((groups: readonly ResourceViewGroup[]) => {
+    const groupStack = normaliseGroupStack(groups);
+    resetScope((current) => ({ ...current, group: groupStack[0] ?? null, groupStack }));
+  }, [resetScope]);
+  return useMemo(() => ({
     state,
-  );
-
-  const value = useMemo<ResourceViewContextValue>(
-    () => ({
-      state,
-      savedFavorites,
-      saveFavorite,
-      ...actions,
-    }),
-    [actions, saveFavorite, savedFavorites, state],
-  );
-  return value;
+    savedFavorites,
+    saveFavorite,
+    setPagination,
+    setSorting,
+    setRowSelection,
+    setPage: (page: number) => setPagination((current) => ({ ...current, pageIndex: page - 1 })),
+    setPageSize: (pageSize: number) => setPagination((current) => ({ ...current, pageSize })),
+    setFilter: (filter: ResourceViewFilter) => resetScope((current) => ({ ...current, filter })),
+    setGroup: (group: ResourceViewGroup | null) => setGroupStack(group ? [group] : []),
+    setGroupStack,
+    toggleSelectedId: (id: string, selected?: boolean) => setRowSelection((current) => ({ ...current, [id]: selected ?? !current[id] })),
+    clearSelectedIds,
+    setView: (view: ResourceViewKind) => updateState((current) => ({ ...current, view })),
+    setMode: (mode: CalendarViewMode) => updateState((current) => ({ ...current, mode })),
+    setAnchor: (anchor: string) => updateState((current) => ({ ...current, anchor })),
+    applyFavorite: (favorite: ResourceViewFavorite) => resetScope((current) => ({
+      ...current,
+      ...createResourceViewState({ ...favorite, mode: current.mode, anchor: current.anchor }),
+    })),
+  }), [state, savedFavorites, saveFavorite, setPagination, setSorting, setRowSelection, resetScope, setGroupStack, clearSelectedIds, updateState]);
 }
 
 export function useResourceView(): ResourceViewContextValue {
@@ -235,49 +253,4 @@ export function useResourceView(): ResourceViewContextValue {
 
 export function useResourceViewMaybe(): ResourceViewContextValue | null {
   return useContext(ResourceViewContext);
-}
-
-function isLocalSelectionAction(
-  action: ResourceViewAction,
-): action is Extract<
-  ResourceViewAction,
-  | { type: "setSelectedIds" }
-  | { type: "toggleSelectedId" }
-  | { type: "clearSelectedIds" }
-> {
-  return (
-    action.type === "setSelectedIds"
-    || action.type === "toggleSelectedId"
-    || action.type === "clearSelectedIds"
-  );
-}
-
-function reduceSelectedIds(
-  selectedIds: ReadonlySet<string>,
-  action: ResourceViewAction,
-): ReadonlySet<string> {
-  return ResourceViewState.create({ selectedIds }).reduce(action).selectedIds;
-}
-
-function createResourceViewActions(
-  dispatch: (action: ResourceViewAction) => void,
-): ResourceViewActions {
-  return {
-    setPage: (page) => dispatch({ type: "setPage", page }),
-    setPageSize: (pageSize) => dispatch({ type: "setPageSize", pageSize }),
-    setSort: (sort) => dispatch({ type: "setSort", sort }),
-    setFilter: (filter) => dispatch({ type: "setFilter", filter }),
-    setGroup: (group) => dispatch({ type: "setGroup", group }),
-    setGroupStack: (groupStack) =>
-      dispatch({ type: "setGroupStack", groupStack }),
-    setSelectedIds: (selectedIds) =>
-      dispatch({ type: "setSelectedIds", selectedIds }),
-    toggleSelectedId: (id, selected) =>
-      dispatch({ type: "toggleSelectedId", id, selected }),
-    clearSelectedIds: () => dispatch({ type: "clearSelectedIds" }),
-    setView: (view) => dispatch({ type: "setView", view }),
-    setMode: (mode) => dispatch({ type: "setMode", mode }),
-    setAnchor: (anchor) => dispatch({ type: "setAnchor", anchor }),
-    applyFavorite: (favorite) => dispatch({ type: "applyFavorite", favorite }),
-  };
 }

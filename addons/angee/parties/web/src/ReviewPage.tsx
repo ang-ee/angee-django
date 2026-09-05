@@ -68,7 +68,7 @@ export function ReviewPage(): React.ReactElement {
           <RailPanel
             title={t("review.handleLinks")}
             count={handleCount}
-            fetching={counts.fetching}
+            fetching={counts.isFetching}
           >
             {counts.error ? <ErrorBanner description={t("review.error")} /> : null}
             <ListView<SuggestionRow>
@@ -99,9 +99,9 @@ export function ReviewPage(): React.ReactElement {
           <RailPanel
             title={t("review.possibleDuplicates")}
             count={duplicateCandidates.length}
-            fetching={duplicates.fetching && duplicateCandidates.length > 0}
+            fetching={duplicates.isFetching && duplicateCandidates.length > 0}
           >
-            {duplicates.fetching && duplicateCandidates.length === 0 ? (
+            {duplicates.isFetching && duplicateCandidates.length === 0 ? (
               <LoadingPanel density="inline" />
             ) : duplicates.error ? (
               <ErrorBanner description={t("review.error")} />

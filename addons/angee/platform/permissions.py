@@ -24,12 +24,12 @@ and prunes stale rows inside still-composed packages too.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from django.apps import apps
 from django.db import DatabaseError, transaction
 from rebac.models import active_relationship_model
+from rebac.schema import resolve_schema_path
 
 # A managed record's ``external_id`` is ``<kind>:<name>``; only schema rows are ours
 # to prune (the library also manages relationship rows under other prefixes).
@@ -91,7 +91,7 @@ def _current_schema_external_ids_by_package() -> dict[str, set[str]]:
     seen_definitions: dict[str, str] = {}
     seen_caveats: dict[str, str] = {}
     for app_config in apps.get_app_configs():
-        schema_path = _resolve_schema_path(app_config)
+        schema_path = resolve_schema_path(app_config)
         if schema_path is None:
             continue
 
@@ -119,30 +119,19 @@ def _current_schema_external_ids_by_package() -> dict[str, set[str]]:
             previous = seen_definitions.get(definition.resource_type)
             if previous is not None:
                 raise PermissionSchemaReconcileError(
-                    f"Duplicate definition {definition.resource_type!r} found in "
-                    f"{previous} and {package}"
+                    f"Duplicate definition {definition.resource_type!r} found in {previous} and {package}"
                 )
             seen_definitions[definition.resource_type] = package
             external_ids.add(f"definition:{definition.resource_type}")
             external_ids.update(
-                f"relation:{definition.resource_type}#{relation.name}"
-                for relation in definition.relations
+                f"relation:{definition.resource_type}#{relation.name}" for relation in definition.relations
             )
             external_ids.update(
-                f"permission:{definition.resource_type}#{permission.name}"
-                for permission in definition.permissions
+                f"permission:{definition.resource_type}#{permission.name}" for permission in definition.permissions
             )
 
         current[package] = external_ids
     return current
-
-
-def _resolve_schema_path(app_config: Any) -> Path | None:
-    """Return the package's REBAC schema path, matching ``rebac sync``."""
-
-    rel = getattr(app_config, "rebac_schema", None)
-    path = Path(app_config.path) / rel if rel is not None else Path(app_config.path) / "permissions.zed"
-    return path if path.exists() else None
 
 
 def _is_stale_schema_record(

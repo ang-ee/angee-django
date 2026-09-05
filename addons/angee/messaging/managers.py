@@ -31,9 +31,6 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
-from angee.base.actors import actor_user_id
-from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.refs import canonical_record_target
 from django.apps import apps
 from django.contrib.postgres.search import SearchQuery, SearchVector
 from django.core.exceptions import ImproperlyConfigured
@@ -42,6 +39,9 @@ from django.db.models.functions import MD5, Coalesce, Greatest
 from django.utils import timezone
 from rebac import PermissionDenied, current_actor, system_context
 
+from angee.base.actors import actor_user_id
+from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.refs import canonical_record_target
 from angee.graphql.publishing import mute_changes
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.messaging.events import message_ingested
@@ -59,6 +59,7 @@ logger = logging.getLogger(__name__)
 
 _SUBJECT_PREFIX_RE = re.compile(r"^\s*(?:re|fwd|fw|aw|sv|vs|ref|tr|rif)\s*(?:\[\d+\])?\s*:\s*", re.IGNORECASE)
 _WS_RE = re.compile(r"\s+")
+
 
 def strip_null_bytes(value: Any) -> Any:
     """Recursively remove ``\\x00`` from strings inside str/dict/list values.
@@ -208,9 +209,7 @@ def _bounded_message_metadata(value: dict[str, Any]) -> dict[str, Any]:
         separators=(",", ":"),
     ).encode("utf-8")
     if len(encoded) > _MESSAGE_METADATA_MAX_BYTES:
-        raise ValueError(
-            f"message metadata exceeds {_MESSAGE_METADATA_MAX_BYTES} UTF-8 JSON bytes"
-        )
+        raise ValueError(f"message metadata exceeds {_MESSAGE_METADATA_MAX_BYTES} UTF-8 JSON bytes")
     return cast(dict[str, Any], metadata)
 
 
@@ -456,9 +455,7 @@ class FragmentManager(AngeeManager):
                 # prose — vectorise a bounded prefix; the row keeps the full text.
                 searchable: Any = "text"
                 if len(encoded) > _SEARCH_MAX_BYTES:
-                    searchable = models.Value(
-                        encoded[:_SEARCH_MAX_BYTES].decode("utf-8", errors="ignore")
-                    )
+                    searchable = models.Value(encoded[:_SEARCH_MAX_BYTES].decode("utf-8", errors="ignore"))
                 self.model._base_manager.filter(pk=fragment.pk).update(
                     search=SearchVector(searchable, config=_SEARCH_CONFIG)
                 )
@@ -577,9 +574,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
 
         fragment_model = apps.get_model("messaging", "Fragment")
         if thread is not None and thread.external_id:
-            title = (
-                fragment_model.objects.upsert(text=thread.title, owner_id=owner_id) if thread.title else None
-            )
+            title = fragment_model.objects.upsert(text=thread.title, owner_id=owner_id) if thread.title else None
             scope = channel.pk if channel is not None else ""
             named, _created = self.get_or_create_by_external_id(
                 platform=platform,
@@ -638,9 +633,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
                     if existing is not None:
                         return existing
             deterministic_id = f"subj:{normalized}" if normalized else f"msg:{message_external_id}"
-            title = (
-                fragment_model.objects.upsert(text=normalized, owner_id=owner_id) if normalized else None
-            )
+            title = fragment_model.objects.upsert(text=normalized, owner_id=owner_id) if normalized else None
             thread, _created = self.get_or_create_by_external_id(
                 platform=platform,
                 external_id=deterministic_id,
@@ -669,9 +662,9 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         # Identity resolution is system bookkeeping (the callers gate reads at their
         # own surface), so it runs elevated — a REBAC-scoped read that cannot see
         # the existing row would double-create and then dead-end.
-        queryset = _external_id_annotated(
-            self.sudo(reason="messaging.thread.identity").lock_if_supported()
-        ).filter(_external_id_q(external_id), platform=platform)
+        queryset = _external_id_annotated(self.sudo(reason="messaging.thread.identity").lock_if_supported()).filter(
+            _external_id_q(external_id), platform=platform
+        )
         existing = queryset.first()
         if existing is not None:
             return existing, False
@@ -955,9 +948,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         """Anchor a fresh follower's receipt at the latest pre-join message."""
 
         message_model = apps.get_model("messaging", "Message")
-        queryset = message_model._base_manager.filter(thread=thread).annotate(
-            _order_at=_MESSAGE_ORDER_ANNOTATION
-        )
+        queryset = message_model._base_manager.filter(thread=thread).annotate(_order_at=_MESSAGE_ORDER_ANNOTATION)
         if history_before is not None:
             queryset = queryset.filter(_message_before(_message_chronological_key(history_before)))
         latest = queryset.order_by("-_order_at", "-pk").first()
@@ -1192,8 +1183,12 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
         # Notification bookkeeping bypasses per-row REBAC: the record-level gate has
         # already authorised the whole chatter read, so scope the reads with sudo
         # and let the chainable predicates own the filters.
-        return self.sudo(reason="messaging.notification.for_record").for_attachment(attachment).filter(
-            user_id=resolved_user_id,
+        return (
+            self.sudo(reason="messaging.notification.for_record")
+            .for_attachment(attachment)
+            .filter(
+                user_id=resolved_user_id,
+            )
         )
 
     def error_count_for_record(
@@ -1324,9 +1319,7 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
                 existing_row.attachment = follower.attachment
                 existing_row.follower = follower
                 existing_row.notification_type = self.model.NotificationType.EMAIL
-                existing_row.save(
-                    update_fields=("thread", "attachment", "follower", "notification_type", "updated_at")
-                )
+                existing_row.save(update_fields=("thread", "attachment", "follower", "notification_type", "updated_at"))
                 continue
             if follower.user_id in queued:
                 continue
@@ -1652,9 +1645,13 @@ def _reaction_handle_for_user(user: Any) -> Any:
     email = strip_null_bytes(getattr(user, "email", "") or "").strip()
     username = strip_null_bytes(user.get_username() if hasattr(user, "get_username") else getattr(user, "username", ""))
     value = email or username or str(user.pk)
-    display_name = strip_null_bytes(
-        user.get_full_name() if hasattr(user, "get_full_name") else "",
-    ).strip() or username or value
+    display_name = (
+        strip_null_bytes(
+            user.get_full_name() if hasattr(user, "get_full_name") else "",
+        ).strip()
+        or username
+        or value
+    )
     return handle_model.objects.claim_own(
         user,
         platform=handle_model.Platform.for_value(value),
@@ -1755,10 +1752,7 @@ class MessageStarManager(AngeeManager):
         user_id = getattr(user, "pk", None)
         if user_id is None:
             return False
-        if (
-            hasattr(message, "_prefetched_objects_cache")
-            and "stars" in message._prefetched_objects_cache
-        ):
+        if hasattr(message, "_prefetched_objects_cache") and "stars" in message._prefetched_objects_cache:
             return any(star.user_id == user_id for star in message.stars.all())
         return self.model._base_manager.filter(message=message, user_id=user_id).exists()
 
@@ -1770,11 +1764,7 @@ class MessageStarManager(AngeeManager):
             raise ValueError("A user is required to star a message.")
         with transaction.atomic():
             message = type(message)._base_manager.select_for_update().get(pk=message.pk)
-            star = (
-                self.model._base_manager.select_for_update()
-                .filter(message=message, user_id=user_id)
-                .first()
-            )
+            star = self.model._base_manager.select_for_update().filter(message=message, user_id=user_id).first()
             next_starred = not bool(star) if starred is None else bool(starred)
             if next_starred and star is None:
                 self.model._base_manager.create(
@@ -1927,12 +1917,7 @@ class MessageQuerySet(AngeeQuerySet[Any]):
 
         handle_model = apps.get_model("parties", "Handle")
         participant_model = apps.get_model("messaging", "Participant")
-        visible_handle_ids = (
-            handle_model.objects.all()
-            .scoped_for_aggregate()
-            .filter(party__in=parties)
-            .values("pk")
-        )
+        visible_handle_ids = handle_model.objects.all().scoped_for_aggregate().filter(party__in=parties).values("pk")
         visible_message_ids = (
             participant_model.objects.all()
             .scoped_for_aggregate()
@@ -2013,11 +1998,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
     def _record_message_anchor(self, queryset: Any, value: Any) -> tuple[Any, Any] | None:
         """Resolve a public message id to its ``(order_at, pk)`` cursor in the window."""
 
-        return (
-            queryset.filter(**self.model.public_id_lookup(str(value)))
-            .values_list("_order_at", "pk")
-            .first()
-        )
+        return queryset.filter(**self.model.public_id_lookup(str(value))).values_list("_order_at", "pk").first()
 
     def timeline_for_parties(
         self,
@@ -2040,13 +2021,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         """
 
         limit = max(1, min(int(limit or 50), 200))
-        queryset = (
-            self.all()
-            .apply_ambient_scope()
-            .inbox()
-            .involving_parties(parties)
-            .annotate(_order_at=_MESSAGE_ORDER_ANNOTATION)
-        )
+        queryset = self.all().scoped().inbox().involving_parties(parties).annotate(_order_at=_MESSAGE_ORDER_ANNOTATION)
         search = strip_null_bytes(search or "").strip()
         for term in (item for item in _WS_RE.split(search) if item):
             queryset = queryset.searching(term)
@@ -2547,9 +2522,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         if created:
             try:
                 with transaction.atomic():
-                    message = self.create(
-                        external_id=parsed.external_id, created_by_id=owner_id, **defaults
-                    )
+                    message = self.create(external_id=parsed.external_id, created_by_id=owner_id, **defaults)
             except IntegrityError:
                 # A concurrent ingest of the same provider event landed first;
                 # converge on its row and fall through to the update path.
@@ -2618,9 +2591,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         if not reply_to or reply_to == parsed.external_id:
             return None
         rows = list(
-            _external_id_annotated(self.model._base_manager).filter(
-                _external_id_q(reply_to), platform=parsed.platform
-            )
+            _external_id_annotated(self.model._base_manager).filter(_external_id_q(reply_to), platform=parsed.platform)
         )
         if not rows:
             return None
@@ -2798,10 +2769,7 @@ class PartQuerySet(AngeeQuerySet[Any]):
 
         return cast(
             PartQuerySet,
-            self.filter(
-                models.Q(message__thread__isnull=True)
-                | models.Q(message__thread__attachments__isnull=True)
-            ),
+            self.filter(models.Q(message__thread__isnull=True) | models.Q(message__thread__attachments__isnull=True)),
         )
 
     def attachments(self) -> PartQuerySet:
@@ -2901,9 +2869,7 @@ class MessageEdgeManager(AngeeManager):
         other_ids = {edge.src_id for edge in edges} | {edge.dst_id for edge in edges}
         other_ids.discard(message.pk)
         readable: set[Any] = (
-            set(message_model.objects.filter(pk__in=other_ids).values_list("pk", flat=True))
-            if other_ids
-            else set()
+            set(message_model.objects.filter(pk__in=other_ids).values_list("pk", flat=True)) if other_ids else set()
         )
         readable.add(message.pk)
         return [edge for edge in edges if edge.src_id in readable and edge.dst_id in readable]

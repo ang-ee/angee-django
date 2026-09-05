@@ -28,7 +28,7 @@ Dependencies point down only. A package never imports a package above it.
 
 ```
 rented libs   @refinedev/core · @refinedev/hasura · graphql-request/ws ·
-              TanStack Router/Table · react-hook-form/zod · i18next · lucide · Base UI
+              TanStack Router/Table/Query · react-hook-form · Valibot · i18next · lucide · Base UI
    │
 @angee/refine     Hasura-dialect Refine binding — zero domain/metadata knowledge
    │
@@ -43,7 +43,7 @@ rented libs   @refinedev/core · @refinedev/hasura · graphql-request/ws ·
 
 | Package | Owns |
 |---|---|
-| `@angee/refine` | the parts of a Refine+Hasura app every project shares, with **zero domain/metadata knowledge**: data/transport/live providers, the router bridge, typed-document contracts, and the `dialect/` hooks (action, aggregate, groupBy, facets, deletePreview, revisions) over `useCustom`. |
+| `@angee/refine` | the parts of a Refine+Hasura app every project shares, with **zero domain/metadata knowledge**: data/transport/live providers, the router bridge, typed-document contracts, and the `dialect/` operation hooks; authored reads use native TanStack Query options/results through the Refine data provider, while mutations use Refine core. |
 | `@angee/metadata` | the **only** consumer of `angee.resources` metadata: artifact load/validate, projection to Refine `resources[]` + `meta`, the one field kind/scalar/widget classifier, group/facet/drill-down dimension specs, and per-action capabilities → accessControl. |
 | `@angee/ui` | the single rendered binding + headless view-state: resource list/form/record/relation/visualization surfaces under `views/`, chrome (rail/topbar/breadcrumb/spotlight), widgets, feedback (toast), the Base UI primitives binding, and the `runtime/` contracts it consumes — the `AppRuntime` registry/session context + its lookup hooks, `makeContext`, and the menu/slot/preview/widget/form contribution types (the binding owns the runtime it renders against; `@angee/app` only mounts the provider). |
 | `@angee/app` | assembles the app: `define-addon`, `defineBaseAddon`, `createApp`, the `providers/{auth,i18n,notification,accessControl}`, addon-route → TanStack tree routing, the slot/widget/form/preview/icon registries, and the app shell. |
@@ -76,9 +76,9 @@ real package names below.
 | Concern | Current owner | Target owner |
 |---|---|---|
 | Data/transport/live providers, router bridge, typed-document contracts, stable-deps | `@angee/refine` | `@angee/refine` |
-| Dialect data hooks (aggregate/action/deletePreview/facets/groupBy, revisions, authored-hooks) | `@angee/ui` rendered-data hooks | `@angee/refine` dialect hooks (metadata-free; target resolved at the caller edge as `{ root }`) |
+| Dialect data hooks (aggregate/action/deletePreview/facets/groupBy, revisions, authored-hooks) | `@angee/refine` dialect hooks | `@angee/refine` dialect hooks (metadata-free; target resolved at the caller edge as `{ root }`) |
 | Metadata artifact, resource projection, field classifier, dimensions, capabilities, row contracts | `@angee/metadata` | `@angee/metadata` |
-| Invalidation: resource targets vs authored-query metadata | `@angee/metadata` resource targets + `@angee/ui` authored-query hooks | `@angee/metadata` resource targets + `@angee/refine` authored-query metadata |
+| Invalidation: resource targets vs authored-query metadata | `@angee/metadata` resource targets + `@angee/refine` authored-query metadata | `@angee/metadata` resource targets + `@angee/refine` authored-query metadata |
 | Rendered views / chrome / widgets / feedback / primitives | `@angee/ui` | `@angee/ui` |
 | `lib/` styling helpers (cn/tv/tones/dnd) | `@angee/ui` | `@angee/ui` |
 | Runtime contracts the binding consumes — the `AppRuntime` registry + its `useWidget`/`useSlot`/`usePreviews`/`useT`/`useNamespaceT` lookups, the `makeContext` factory, and the menu/slot/preview/widget/form contribution contracts | `@angee/ui` | `@angee/ui` |
@@ -112,10 +112,11 @@ convenience.
 
 ### Carried debts
 
-No shared frontend engine is intentionally carried as debt: client-side
-filtering, sorting, grouping, expansion, row selection, and pagination compose
-TanStack Table row models. Angee keeps only the thin lookup evaluator that lets
-TanStack apply the URL-owned filter object to in-memory rows.
+Client-side filtering, sorting, grouping, expansion, row selection, and pagination
+compose TanStack Table row models. Angee keeps the thin lookup evaluator that lets
+TanStack apply the URL-owned filter object to in-memory rows. Infinite history
+still retains its documented [archive gate](upstream-reuse.md#history-retention-gate)
+until the domain can reconcile retained rows authoritatively.
 
 ## Rules
 
@@ -164,9 +165,9 @@ TanStack apply the URL-owned filter object to in-memory rows.
   alike; never hand-roll the fire → toast → navigate ceremony in a chrome.
 - React does not own business logic, permissions, models, or persistence.
 - **React state has one owner.** Keep canonical facts in the smallest owner:
-  route/search facts in TanStack Router/nuqs, server facts in refine data hooks
-  and react-query, resource-view facts in `ResourceViewProvider`, form facts in
-  `@refinedev/react-hook-form`/`FormView`, and ephemeral interaction state in the
+  route/search facts in TanStack Router/nuqs, server facts in Refine core reads
+  and TanStack Query, native controlled table state in `ResourceViewProvider`,
+  form values/baselines/errors in React Hook Form through `FormView`, and ephemeral interaction state in the
   component that handles it. Lift state when siblings coordinate; do not keep
   parallel local copies.
 - **Derive during render.** Do not store `filteredRows`, selected records,
@@ -530,11 +531,17 @@ Hard-won traps — the wise learn from others' mistakes
   miss it — so verify the full composed app still boots (`angee dev`, or the
   stack CI lane's composed render) after touching `baseIcons` or an addon's
   `icons`; `tsc` alone cannot catch the collision.
-- **A new web package needs `pnpm install` + a Vite restart** (Vite snapshots
+- **A new web package needs a stack-owned `pnpm install` + a Vite restart** (Vite snapshots
   workspace packages at start) plus registration in the host `main.tsx` addons and
   `package.json`.
-- **Install JS dependencies once at the monorepo root.** Never run `pnpm install`
-  inside `packages/`, `addons/`, or `examples/`: a nested install forks linked
+- **pnpm 11 can install dependencies before running scripts.** Inside a source
+  worktree slot, use `pnpm --config.verify-deps-before-run=false run <script>`
+  (or the same flag with `--filter`). Its `verifyDepsBeforeRun=install` default
+  otherwise turns a test/typecheck command into an install inside the slot.
+  Dependency installation belongs to the owning stack workspace.
+- **Install JS dependencies once at the owning stack workspace root.** Never run
+  `pnpm install` inside a source slot, `packages/`, `addons/`, or `examples/`: a
+  nested install forks linked
   `vite`/`vitest` identities and can produce `Excessive stack depth comparing
   types 'UserConfig' and 'UserConfig'` in `vitest.shared.ts`. Fix that environment
   by removing the nested package `node_modules` and reinstalling at the root;
@@ -653,9 +660,9 @@ Hard-won traps — the wise learn from others' mistakes
 Run package-scoped commands while editing, then the broad checks before handoff:
 
 ```sh
-pnpm run typecheck
-pnpm run test
-pnpm run build
+pnpm --config.verify-deps-before-run=false run typecheck
+pnpm --config.verify-deps-before-run=false run test
+pnpm --config.verify-deps-before-run=false run build
 ```
 
 Run the package vitest suite — not just `tsc` and a story render, which miss
@@ -674,7 +681,7 @@ Run the architecture guardrail when changing package layering, public shared
 owners, or addon manifests:
 
 ```sh
-pnpm --filter @angee/app run test -- architecture-guardrails
+pnpm --config.verify-deps-before-run=false --filter @angee/app run test -- architecture-guardrails
 ```
 
 A hit is not automatically wrong, but it must either compose the shared primitive

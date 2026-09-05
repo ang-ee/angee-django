@@ -271,15 +271,6 @@ function isFieldVisible(field: FieldDescriptor, values: FormValues): boolean {
   return !field.showWhen || field.showWhen(values);
 }
 
-export function fieldValidationRules(
-  field: FieldDescriptor,
-  requiredFieldNames: ReadonlySet<string>,
-  requiredMessage: string,
-): { validate: (value: unknown) => true | string } | undefined {
-  if (field.readOnly || !requiredFieldNames.has(field.name)) return undefined;
-  return { validate: (value) => !isEmptyFieldValue(value) || requiredMessage };
-}
-
 export function missingRequiredFieldNames(
   values: FormValues,
   fields: readonly FieldDescriptor[],
@@ -415,23 +406,6 @@ function isBlankCreateValue(
 
 function isStringScalar(metadata: ModelFieldMetadata | undefined): boolean {
   return metadata?.kind === "scalar" && metadata.scalar === "String";
-}
-
-function valuesEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (!Array.isArray(left) || !Array.isArray(right)) return false;
-  return (
-    left.length === right.length &&
-    left.every((item, index) => valuesEqual(item, right[index]))
-  );
-}
-
-export function formValuesEqual(left: FormValues, right: FormValues): boolean {
-  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
-  for (const key of keys) {
-    if (!valuesEqual(left[key], right[key])) return false;
-  }
-  return true;
 }
 
 function isRecord(value: unknown): value is Row {

@@ -15,7 +15,6 @@ from dataclasses import replace
 from typing import Any
 
 import strawberry.experimental.pydantic
-from angee.data.metadata import DataAggregateMeasureMetadata
 from django.core.exceptions import ImproperlyConfigured
 from pydantic import BaseModel
 from strawberry_django_hasura import (
@@ -25,6 +24,7 @@ from strawberry_django_hasura import (
     hasura_run_query_resource,
 )
 
+from angee.data.metadata import DataAggregateMeasureMetadata
 from angee.graphql.data.metadata import (
     attach_data_resource_metadata,
     make_data_resource_metadata,
@@ -82,7 +82,7 @@ def hasura_pydantic_resource(
         source=source,
         id_field=id_field,
     )
-    roots, type_names, filter_type, order_type = resource_query_metadata(resource, name=name, node_type=node)
+    roots, type_names, filter_type, order_type = resource_query_metadata(resource)
     if roots.detail_name is None:
         raise ImproperlyConfigured(f"{model_label or name} Hasura resource did not expose a detail root.")
     attach_data_resource_metadata(
