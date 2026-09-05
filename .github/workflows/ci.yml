@@ -17,5 +17,3 @@ jobs:
       # against generated GraphQL documents in the composed-stack lane.
       pnpm-enabled: true
       stack-enabled: true
-      # The compatibility companion is merged after the shared workflow lands.
-      bridges-ref: workspace/django-native-composition
