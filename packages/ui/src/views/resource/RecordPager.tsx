@@ -9,7 +9,7 @@ import { textRoleVariants } from "../../ui/text";
 export interface RecordNavigation {
   /** Undefined when the open record isn't in the loaded slice. */
   current?: number;
-  total: number;
+  total?: number;
   onPrev?: () => void;
   onNext?: () => void;
 }
@@ -32,10 +32,10 @@ export function RecordPager({
             <span className="font-medium text-fg">
               {navigation.current.toLocaleString()}
             </span>{" "}
-            / {navigation.total.toLocaleString()}
+            / {navigation.total?.toLocaleString() ?? "?"}
           </>
         ) : (
-          <>/ {navigation.total.toLocaleString()}</>
+          <>/ {navigation.total?.toLocaleString() ?? "?"}</>
         )}
       </span>
       <div className="flex items-center gap-1">

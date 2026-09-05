@@ -26,6 +26,8 @@ export interface ControlBandProviderProps {
    * controls in the dialog.
    */
   host: HTMLElement | null | undefined;
+  /** Use the parent's host and registry while preserving this subtree's identity. */
+  inherit?: boolean;
 }
 
 /** Provide the control-band host (`area-control`) for the bands rendered below. */

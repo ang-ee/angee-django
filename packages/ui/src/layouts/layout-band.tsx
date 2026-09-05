@@ -27,6 +27,8 @@ export interface LayoutBand {
   Provider: (props: {
     children: React.ReactNode;
     host: HTMLElement | null | undefined;
+    /** Keep the parent host and registry without replacing this subtree. */
+    inherit?: boolean;
   }) => React.ReactElement;
   Band: (props: {
     children: React.ReactNode;
@@ -81,13 +83,16 @@ export function createLayoutBand(
   function Provider({
     children,
     host,
+    inherit = false,
   }: {
     children: React.ReactNode;
     host: HTMLElement | null | undefined;
+    inherit?: boolean;
   }): React.ReactElement {
+    const parent = React.useContext(BandContext);
     const registry = React.useMemo(createBandRegistry, []);
     const value = React.useMemo(() => ({ host, registry }), [host, registry]);
-    return <BandContext.Provider value={value}>{children}</BandContext.Provider>;
+    return <BandContext.Provider value={inherit ? parent : value}>{children}</BandContext.Provider>;
   }
 
   function Band({

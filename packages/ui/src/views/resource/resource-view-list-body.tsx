@@ -1,5 +1,5 @@
-export { bucketFilterForGroup, estimateGroupedItemSize, ALIGN_CLASS, LIST_VIEW_SCROLL_BUDGET, TABLE_SCROLL_STYLE, GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT, GROUP_HEADER_HEIGHT, PAGER_ROW_HEIGHT, SKELETON_ROW_HEIGHT, GROUP_STATUS_HEIGHT } from "./list-body/types";
-export type { ColumnAlign, ListColumn, VisibleFieldOption, GroupByDimension, RowGroup, GroupMeasure, GroupedRecordNav, GroupedListItem } from "./list-body/types";
+export { bucketFilterForGroup, estimateGroupedItemSize, ALIGN_CLASS, LIST_VIEW_SCROLL_BUDGET, TABLE_SCROLL_STYLE, GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT, GROUP_HEADER_HEIGHT, SKELETON_ROW_HEIGHT, GROUP_STATUS_HEIGHT } from "./list-body/types";
+export type { ColumnAlign, ListColumn, VisibleFieldOption, GroupByDimension, RowGroup, GroupMeasure, GroupedListPager, GroupedRecordNav, GroupedListItem } from "./list-body/types";
 export { SelectionBar, FlatListBody, MeasureFooter, RowActionsHeader, ListHeaderCell, VisibleFieldsMenu } from "./list-body/table-pieces";
 export type { FlatListBodyProps } from "./list-body/table-pieces";
 export { buildColumns, ListCellContent } from "./list-body/columns";

@@ -779,7 +779,7 @@ addons = [
     { name = "ruamel-yaml", specifier = ">=0.18" },
     { name = "slack-sdk", specifier = ">=3.43.0" },
     { name = "strawberry-django-aggregates", specifier = ">=0.11.0" },
-    { name = "strawberry-django-hasura", specifier = ">=0.8.1" },
+    { name = "strawberry-django-hasura", specifier = ">=0.9.0" },
     { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?rev=e4fa3198f704d81b3ca96b6dcac75420c5fee516" },
     { name = "strawberry-graphql-django", specifier = ">=0.86.7" },
     { name = "tablib", specifier = ">=3" },
@@ -2459,7 +2459,7 @@ wheels = [
 
 [[package]]
 name = "strawberry-django-hasura"
-version = "0.8.1"
+version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
@@ -2467,9 +2467,9 @@ dependencies = [
     { name = "strawberry-graphql" },
     { name = "strawberry-graphql-django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9c/62/4472032d75e333fa97b4efd3a57caec508513f1852b4ac63215a557626dd/strawberry_django_hasura-0.8.1.tar.gz", hash = "sha256:67a15aaa8a67f69cb45c68396574128e9c417db50a30d23e6651469d3b2aadc0", size = 133524, upload-time = "2026-09-05T15:43:25.948Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e3/38/d193662ad1722e0fc9792509ba103c98f41f6b7f93fa46f49b7e736f99af/strawberry_django_hasura-0.9.0.tar.gz", hash = "sha256:17b70f3c672681b6a00cdfa570d18299b229faa333b9a38e943dd093fbeadbf7", size = 136198, upload-time = "2026-09-05T19:57:38.394Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/96/5c/f9f48ec4eb1ecd8307e230c67722559676f2f0800165ee3f91e22f6e8ae3/strawberry_django_hasura-0.8.1-py3-none-any.whl", hash = "sha256:c4c4bf8683ba5d2d6f220fbc3690f0dd6003797aa5dcad477d780aced47292ae", size = 61578, upload-time = "2026-09-05T15:43:24.634Z" },
+    { url = "https://files.pythonhosted.org/packages/86/ca/fd79f2ee90186a932e18830270f5aa70f02f1dd85e0fcc39c929b68cde16/strawberry_django_hasura-0.9.0-py3-none-any.whl", hash = "sha256:c9c4e5ee37fcc6c751dd487423b8b3f249303110619420741bdf0487c77f8329", size = 62278, upload-time = "2026-09-05T19:57:37.176Z" },
 ]
 
 [[package]]

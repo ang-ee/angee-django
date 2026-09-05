@@ -15,7 +15,7 @@ import type {
   Row,
 } from "@angee/metadata";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { OperationDocumentsProvider } from "@angee/refine";
+import { OperationDocumentsProvider, type GroupByBatchScope } from "@angee/refine";
 
 import { ToastProvider } from "../../feedback";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
@@ -33,6 +33,8 @@ const tableMocks = vi.hoisted(() => ({
   ] as Row[],
   refetch: vi.fn(),
   mutateAsync: vi.fn(),
+  subgroupTotal: null as number | null,
+  subgroupPages: [] as number[],
 }));
 
 vi.mock("@refinedev/core", async (importOriginal) => {
@@ -104,6 +106,25 @@ vi.mock("@angee/refine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/refine")>();
   return {
     ...actual,
+    useAngeeGroupByBatch: (...args: Parameters<typeof actual.useAngeeGroupByBatch>) => {
+      if (tableMocks.subgroupTotal === null) return actual.useAngeeGroupByBatch(...args);
+      return new Map(args[1].map((scope: GroupByBatchScope, index) => {
+        const page = scope.query.page ?? 1;
+        if (index > 0) tableMocks.subgroupPages.push(page);
+        return [scope.key, {
+          buckets: index === 0
+            ? [{ key: { status: "active" }, count: 5 }]
+            : page <= Math.ceil(tableMocks.subgroupTotal! / 2)
+              ? [{ key: { title: "subgroup" }, count: 1 }]
+              : [],
+          count: 5,
+          totalCount: index === 0 ? 1 : tableMocks.subgroupTotal!,
+          fetching: false,
+          error: null,
+          refetch: vi.fn(),
+        }];
+      }));
+    },
     useAngeeAggregate: () => ({
       aggregate: null,
       fetching: false,
@@ -118,6 +139,8 @@ afterEach(() => {
   tableMocks.activeFilters = [];
   tableMocks.refetch.mockClear();
   tableMocks.mutateAsync.mockClear();
+  tableMocks.subgroupTotal = null;
+  tableMocks.subgroupPages = [];
 });
 
 describe("useResourceViewSurface", () => {
@@ -162,6 +185,28 @@ function SurfaceProbe(): React.ReactElement {
 }
 
 describe("useGroupedResourceViewSurface", () => {
+  test("fetches the last valid nested page after a live count shrinks", async () => {
+    tableMocks.subgroupTotal = 5;
+    const probe = () => (
+      <ToastProvider>
+        <OperationDocumentsProvider documents={{ console: { groups: { "notes.Note": {} } } }}>
+          <ResourceViewProvider scope="local" initialState={{ pageSize: 2 }}>
+            <NestedPageProbe />
+          </ResourceViewProvider>
+        </OperationDocumentsProvider>
+      </ToastProvider>
+    );
+    const { rerender } = render(probe());
+    fireEvent.click(await screen.findByRole("button", { name: "open root" }));
+    fireEvent.click(await screen.findByRole("button", { name: "last subgroup page" }));
+    await waitFor(() => expect(tableMocks.subgroupPages.at(-1)).toBe(3));
+
+    tableMocks.subgroupTotal = 2;
+    rerender(probe());
+    await waitFor(() => expect(tableMocks.subgroupPages.at(-1)).toBe(1));
+    expect(screen.getByTestId("nested-page").textContent).toBe("1");
+  });
+
   test("publishes a snapshot carrying its own scope so the record pager never keeps a stale flat scope", () => {
     const onListStateChange = vi.fn();
     const filter = { drive: { exact: "drive-a" }, is_trashed: { exact: false } };
@@ -187,6 +232,23 @@ describe("useGroupedResourceViewSurface", () => {
     });
   });
 });
+
+function NestedPageProbe(): React.ReactElement {
+  const resourceView = useResourceView();
+  const surface = useGroupedResourceViewSurface({
+    resource: "notes.Note", columns: NOTE_COLUMNS, resourceView, modelMetadata: NOTE_METADATA,
+    groupStack: [{ field: "status" }, { field: "title" }],
+    defaultExpandedGroups: "none",
+  });
+  const header = surface.groupedItems.find((item) => item.kind === "groupHeader");
+  return <>
+    {header ? <button onClick={() => surface.toggleGroup(header.bucketKey)}>open root</button> : null}
+    {header?.pager ? <>
+      <button onClick={() => surface.setScopePage(header.pager!.pageKey, 3)}>last subgroup page</button>
+      <span data-testid="nested-page">{header.pager.page}</span>
+    </> : null}
+  </>;
+}
 
 function renderGroupedProbe(
   filter: Record<string, unknown>,
@@ -269,8 +331,12 @@ const NOTE_RESOURCE: DataResourceMetadata = {
   filterFields: ["status"],
   orderFields: [],
   aggregateFields: [],
-  groupByFields: ["status"],
+  groupByFields: ["status", "title"],
   groupDimensions: [
+    {
+      field: "title", input: "title", key: "title", kind: "column", scalar: "String",
+      filter: { kind: "equality", field: "title", valueKey: "title" },
+    },
     {
       field: "status",
       input: "status",

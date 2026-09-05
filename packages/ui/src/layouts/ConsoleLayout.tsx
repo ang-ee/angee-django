@@ -140,7 +140,11 @@ function ConsoleWorkbench({
       scrollMode="browser"
       secondaryDefaultCollapsed
       primary={publishedPrimary ?? undefined}
-      secondary={showChatter ? <Chatter /> : undefined}
+      secondary={showChatter ? (
+        <ControlBandProvider host={undefined}>
+          <Chatter />
+        </ControlBandProvider>
+      ) : undefined}
       onPrimaryController={onPrimaryController}
       onSecondaryController={registerSecondaryController}
     >

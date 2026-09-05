@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, test } from "vitest";
 
@@ -65,5 +65,34 @@ describe("createLayoutBand", () => {
   test("with no provider the band renders inline", () => {
     render(<band.Band>bare</band.Band>);
     expect(screen.getByText("bare")).toBeTruthy();
+  });
+
+  test("switching inheritance isolates a retained collection band without remounting its native state", () => {
+    function Collection() {
+      const [page, setPage] = React.useState(1);
+      return <section>
+        <band.Band>collection</band.Band>
+        <button type="button" onClick={() => setPage((current) => current + 1)}>Page {page}</button>
+      </section>;
+    }
+    function View({ open }: { open: boolean }) {
+      return <Harness>
+        <band.Provider inherit={!open} host={undefined}>
+          <div hidden={open} data-testid="retained"><Collection /></div>
+        </band.Provider>
+        {open ? <band.Band>record</band.Band> : null}
+      </Harness>;
+    }
+    const view = render(<View open={false} />);
+    expect(screen.getByTestId("row").textContent).toBe("collection");
+    fireEvent.click(screen.getByRole("button", { name: "Page 1" }));
+    const page = screen.getByRole("button", { name: "Page 2" });
+    view.rerender(<View open />);
+    expect(screen.getByTestId("row").textContent).toBe("record");
+    expect(screen.getByTestId("retained").textContent).toContain("collection");
+    expect(page.isConnected).toBe(true);
+    view.rerender(<View open={false} />);
+    expect(screen.getByTestId("row").textContent).toBe("collection");
+    expect(screen.getByRole("button", { name: "Page 2" })).toBe(page);
   });
 });

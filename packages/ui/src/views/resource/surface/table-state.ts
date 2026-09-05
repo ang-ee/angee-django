@@ -1,5 +1,5 @@
 import * as React from "react";
-import { type ModelMetadata, type Row } from "@angee/metadata";
+import { resourceOrderFieldForPath, type ModelMetadata, type Row } from "@angee/metadata";
 import { functionalUpdate, type ColumnDef, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState, type Table, type VisibilityState } from "@tanstack/react-table";
 import { refineSortersFromAngeeOrder } from "@angee/refine";
 import { errorFromUnknown } from "../../../data/errors";
@@ -142,11 +142,14 @@ export function useResourceViewQueryFacts<TRow extends Row>({
     [resourceView.state.filter, filter],
   );
   const sortOrder = React.useMemo(
-    () =>
-      (resourceView.state.sorting.length ? Object.fromEntries(resourceView.state.sorting.map(({ id, desc }) => [id, desc ? "DESC" : "ASC"])) : undefined)
-      ?? (includeDeclaredOrder
-        ? order ?? defaultResourceOrder(modelMetadata)
-        : undefined),
+    () => {
+      const sorting = resourceView.state.sorting;
+      if (sorting !== undefined) {
+        return Object.fromEntries(sorting.map(({ id, desc }) => [resourceOrderFieldForPath(id, modelMetadata?.resource) ?? id, desc ? "DESC" : "ASC"]));
+      }
+      const declaredOrder = includeDeclaredOrder ? order ?? defaultResourceOrder(modelMetadata) : undefined;
+      return declaredOrder ? Object.fromEntries(Object.entries(declaredOrder).map(([field, direction]) => [resourceOrderFieldForPath(field, modelMetadata?.resource) ?? field, direction])) : undefined;
+    },
     [includeDeclaredOrder, resourceView.state.sorting, modelMetadata, order],
   );
   return { requestedFields, mergedFilter, sortOrder };
@@ -191,9 +194,14 @@ export function useResourceViewTableState<TRow extends Row>({
   );
   const pagination = resourceView.state.pagination;
   const sorting = React.useMemo<SortingState>(() => {
-    if (!sortOrder) return resourceView.state.sorting;
-    return (refineSortersFromAngeeOrder(sortOrder) ?? []).map(({ field, order }) => ({ id: field, desc: order === "desc" }));
-  }, [resourceView.state.sorting, sortOrder]);
+    const state = resourceView.state.sorting ?? (refineSortersFromAngeeOrder(sortOrder) ?? []).map(({ field, order }) => ({ id: field, desc: order === "desc" }));
+    return state.map((sort) => {
+      if (columns.some((column) => column.field === sort.id)) return sort;
+      const wireField = resourceOrderFieldForPath(sort.id, modelMetadata?.resource);
+      const column = wireField ? columns.find((candidate) => resourceOrderFieldForPath(candidate.field, modelMetadata?.resource) === wireField) : undefined;
+      return column ? { ...sort, id: column.field } : sort;
+    });
+  }, [columns, modelMetadata, resourceView.state.sorting, sortOrder]);
   const grouping = React.useMemo(() => groupingStateFromResourceGroups(groupStack), [groupStack]);
   const rowSelection = resourceView.state.rowSelection;
   const handlePaginationChange = resourceView.setPagination;

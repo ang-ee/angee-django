@@ -2052,6 +2052,61 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         target = attachment.target
         return target if isinstance(target, ThreadedModelMixin) else None
 
+    def sender_name(self) -> str:
+        """Return the actor-visible sender label, using its selected SQL value."""
+
+        annotated = getattr(self, "_sender_name", None)
+        if annotated is not None:
+            return str(annotated)
+        actor = self.actor() or current_actor()
+        if self.sender_id is None or actor is None:
+            return ""
+        handle_model = apps.get_model("parties", "Handle")
+        return (
+            handle_model.objects.with_actor(actor).with_sender_name()
+            .filter(pk=self.sender_id)
+            .values_list("_sender_name", flat=True)
+            .first()
+            or ""
+        )
+
+    def thread_title(self) -> str:
+        """Return the readable thread title selected by the inbox projection."""
+
+        annotated = getattr(self, "_thread_title", None)
+        if annotated is not None:
+            return str(annotated)
+        actor = self.actor() or current_actor()
+        if self.thread_id is None or actor is None:
+            return ""
+        # The caller already owns access to this materialized Message. The
+        # expression independently scopes its related records, including when
+        # the parent was loaded through record-gated chatter or elevated code.
+        return (
+            type(self)._base_manager.filter(pk=self.pk)
+            .annotate(_thread_title=type(self).objects.with_actor(actor).thread_title_expression())
+            .values_list("_thread_title", flat=True)
+            .first()
+            or ""
+        )
+
+    def channel_vendor_name(self) -> str:
+        """Return the readable channel vendor selected by the inbox projection."""
+
+        annotated = getattr(self, "_channel_vendor_name", None)
+        if annotated is not None:
+            return str(annotated)
+        actor = self.actor() or current_actor()
+        if self.channel_id is None or actor is None:
+            return ""
+        return (
+            type(self)._base_manager.filter(pk=self.pk)
+            .annotate(_channel_vendor_name=type(self).objects.with_actor(actor).channel_vendor_name_expression())
+            .values_list("_channel_vendor_name", flat=True)
+            .first()
+            or ""
+        )
+
     def title(self) -> str:
         """Return this message's title text — its ``TITLE`` part's fragment, or ``""``.
 

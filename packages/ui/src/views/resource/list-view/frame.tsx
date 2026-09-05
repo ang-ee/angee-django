@@ -1,5 +1,4 @@
 import * as React from "react";
-import { stableSerialize } from "@angee/refine";
 import { isClientRowModel, modelMetadataForLabel, useModelMetadata, useSchemaFieldMetadata } from "@angee/metadata";
 import type { Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
@@ -17,6 +16,7 @@ import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
 import { defaultGroupForView } from "../resource-view-toolbar-inputs";
 import { useResourceViewGroupState } from "../resource-view-group-state";
+import { initialResourceSorting } from "../resource-view-codecs";
 import { useRowActionsSurface } from "../RowActions";
 import { isBoardFoldField, isBoardRankField, ListViewContent } from "./content";
 import { ClientSurfaceBody, GroupedServerSurfaceBody, ServerSurfaceBody } from "./surface-adapters";
@@ -30,34 +30,23 @@ function ListViewFrame<TRow extends Row = Row>(
   props: ListViewProps<TRow>,
 ): React.ReactElement {
   const resourceView = useResourceViewMaybe();
+  const modelMetadata = useModelMetadata(props.resource);
   const scope = props.scope ?? "inherit";
-  const navigationScope = props.navigationScope;
-  const resolvedProps = navigationScope
-    ? {
-        ...props,
-        baseFilter:
-          navigationScope.filter as ListViewProps<TRow>["baseFilter"],
-        order: navigationScope.order as ListViewProps<TRow>["order"],
-        pageSize: navigationScope.pageSize,
-      }
-    : props;
   const initialState = React.useMemo(
     () => ({
-      page: navigationScope?.page,
-      pageSize: resolvedProps.pageSize,
+      pageSize: props.pageSize,
       view: props.defaultView,
+      sorting: initialResourceSorting(modelMetadata, props.order),
     }),
-    [navigationScope?.page, props.defaultView, resolvedProps.pageSize],
+    [props.defaultView, props.pageSize, props.order, modelMetadata],
   );
   return withResourceViewScope({
     ambient: resourceView,
     resource: props.resource,
     scope,
     initialState,
-    isolated: navigationScope !== undefined,
-    providerKey: navigationScope ? stableSerialize(navigationScope) : undefined,
     children: (scopedResourceView) => (
-      <ListViewBody {...resolvedProps} resourceView={scopedResourceView} />
+      <ListViewBody {...props} resourceView={scopedResourceView} />
     ),
   });
 }

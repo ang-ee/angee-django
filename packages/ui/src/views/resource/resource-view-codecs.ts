@@ -1,8 +1,10 @@
 import { rowPublicId, type DataResourceDefaultSortMetadata, type ModelMetadata, type Row } from "@angee/metadata";
+import { refineSortersFromAngeeOrder } from "@angee/refine";
 import type {
   GroupingState,
   Row as TableRowModel,
   RowSelectionState,
+  SortingState,
 } from "@tanstack/react-table";
 
 import type { ColumnDescriptor } from "../page";
@@ -61,11 +63,19 @@ export function modelRowId<TRow extends Row>(row: TRow, index: number): string {
 export function defaultResourceOrder(
   modelMetadata: ModelMetadata | null | undefined,
 ): ResourceListOrder | undefined {
-  // The resource-hook order input is single-field; project the primary metadata
-  // default while preserving its direction.
-  const [sort] = modelMetadata?.resource?.defaultSort ?? [];
-  if (!sort) return undefined;
-  return { [sort.field]: defaultSortDirection(sort) };
+  const sorts = modelMetadata?.resource?.defaultSort;
+  if (!sorts?.length) return undefined;
+  return Object.fromEntries(sorts.map((sort) => [sort.field, defaultSortDirection(sort)]));
+}
+
+/** Seed the native initial sorting at a declaring list's provider boundary. */
+export function initialResourceSorting(
+  modelMetadata: ModelMetadata | null | undefined,
+  order?: ResourceListOrder,
+): SortingState | undefined {
+  const declared = order ?? defaultResourceOrder(modelMetadata);
+  return declared === undefined ? undefined
+    : (refineSortersFromAngeeOrder(declared) ?? []).map(({ field, order }) => ({ id: field, desc: order === "desc" }));
 }
 
 function defaultSortDirection(

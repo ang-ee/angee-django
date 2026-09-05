@@ -55,7 +55,7 @@ export interface GroupMeasure extends AggregateMeasure {
 /**
  * One windowed row of a server-grouped list. The grouped surface flattens its
  * group tree (per-level `_groups` headers, the leaf record rows of expanded
- * buckets, and the per-group pagers) into this stream and feeds it to the shared
+ * buckets, with pagination attached to each header) into this stream and feeds it to the shared
  * `useVirtualizer`; the thin grouped body renders each kind. Every variant is
  * self-describing so the renderer never re-decodes a bucket or filter — the
  * surface that owns the data put the rendered facts here.
@@ -77,6 +77,16 @@ export interface GroupedRecordNav {
   fetching: boolean;
 }
 
+/** Pagination of the children shown immediately beneath a group header. */
+export interface GroupedListPager {
+  pageKey: string;
+  page: number;
+  pageSize: number;
+  total: number | undefined;
+  unit: "groups" | "records";
+  pending: boolean;
+}
+
 export type GroupedListItem<TRow extends Row> =
   | {
       kind: "groupHeader";
@@ -88,19 +98,9 @@ export type GroupedListItem<TRow extends Row> =
       expandable: boolean;
       expanded: boolean;
       bucket: AggregateBucket;
+      pager?: GroupedListPager;
     }
   | { kind: "record"; itemKey: string; row: TableRowModel<TRow>; nav: GroupedRecordNav }
-  | {
-      kind: "pager";
-      /** The page-state key the surface pages on (a level or leaf scope). */
-      pageKey: string;
-      depth: number;
-      label: string;
-      page: number;
-      pageSize: number;
-      total: number;
-      unit: "groups" | "records";
-    }
   | { kind: "skeleton"; itemKey: string; depth: number; rowCount: number }
   | {
       kind: "status";
@@ -119,8 +119,6 @@ export function estimateGroupedItemSize<TRow extends Row>(
       return GROUP_HEADER_HEIGHT;
     case "record":
       return RECORD_ROW_HEIGHT;
-    case "pager":
-      return PAGER_ROW_HEIGHT;
     case "skeleton":
       return Math.max(1, item.rowCount) * SKELETON_ROW_HEIGHT;
     case "status":
@@ -143,8 +141,6 @@ export const GROUP_ROW_HEIGHT = 32;
 export const RECORD_ROW_HEIGHT = 40;
 /** Server-grouped header row (`h-9`); taller than the flat `h-8` group header. */
 export const GROUP_HEADER_HEIGHT = 36;
-/** In-body pager row (the sub-group and leaf-record pagers). */
-export const PAGER_ROW_HEIGHT = 44;
 /** A single skeleton/placeholder row while a grouped page loads. */
 export const SKELETON_ROW_HEIGHT = 40;
 /** A single empty/error status row inside the grouped body. */
