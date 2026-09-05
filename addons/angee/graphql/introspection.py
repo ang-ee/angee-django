@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from angee.data import field_classification as data_field_classification
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from strawberry.types import get_object_definition
 from strawberry_django.utils.typing import get_django_definition
+
+from angee.data import field_classification as data_field_classification
 
 
 def surface_name(surface: object) -> str:
@@ -56,8 +57,18 @@ def require_field_for_path(model: type[models.Model], path: str) -> models.Field
     each caller renders its own diagnostic message.
     """
 
+    fields = fields_for_path(model, path)
+    return fields[-1]
+
+
+def fields_for_path(
+    model: type[models.Model],
+    path: str,
+) -> tuple[models.Field[Any, Any], ...]:
+    """Resolve every field in a scalar path through to-one relations."""
+
     current_model: type[models.Model] | None = model
-    field: models.Field[Any, Any] | None = None
+    fields: list[models.Field[Any, Any]] = []
     for part in path.replace(".", "__").split("__"):
         if current_model is None:
             raise FieldPathError(to_many=False)
@@ -67,9 +78,10 @@ def require_field_for_path(model: type[models.Model], path: str) -> models.Field
             raise FieldPathError(to_many=False) from None
         if data_field_classification.is_to_many_relation(field):
             raise FieldPathError(to_many=True)
+        fields.append(field)
         remote_field = getattr(field, "remote_field", None)
         related_model = getattr(remote_field, "model", None)
         current_model = related_model if isinstance(related_model, type) else None
-    if field is None:
+    if not fields:
         raise FieldPathError(to_many=False)
-    return field
+    return tuple(fields)

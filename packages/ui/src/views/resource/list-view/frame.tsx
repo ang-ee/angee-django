@@ -8,7 +8,6 @@ import { Filter, availableResourceViewKinds } from "../resource-view-model";
 import { CalendarCollectionSurface } from "../../calendar/calendar-collection-surface";
 import { type GroupedResourceViewSurface, type ResourceViewSurface, type UseResourceViewSurfaceProps } from "../resource-view-surface";
 import type { ResolvedBoardLaneSource } from "../resource-view-board-lanes";
-import { resourceViewGroupToAggregateDimension } from "../resource-view-list-body";
 import type { ListViewProps } from "../resource-view-types";
 import { resolveResourceViewGroup } from "../resource-view-utils";
 import { columnsWithMetadataDefaults, relationFieldInfo } from "../model-metadata-defaults";
@@ -195,18 +194,9 @@ function ListViewBody<TRow extends Row = Row>({
   // TanStack row models — never the server _groups/GroupedListBody path (the
   // aggregate it would query does not exist).
   const clientRowModel = isClientRowModel(modelMetadata?.resource);
-  const groupDimensions = React.useMemo(
-    () =>
-      clientRowModel
-        ? []
-        : effectiveGroupStack.map((group) =>
-            resourceViewGroupToAggregateDimension(group, modelMetadata),
-          ),
-    [clientRowModel, effectiveGroupStack, modelMetadata],
-  );
   const groupedListMode =
     resourceView.state.view === "list"
-    && groupDimensions.length > 0
+    && effectiveGroupStack.length > 0
     && !clientRowModel;
   const surfaceProps: UseResourceViewSurfaceProps<TRow> = {
     resource,

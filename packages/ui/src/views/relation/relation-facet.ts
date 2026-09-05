@@ -24,10 +24,7 @@ import type {
 import type { ResourceViewFilter, ResourceViewGroup } from "../resource/resource-view-model";
 import { facetRequestSpec } from "./facet-query";
 import {
-  resourceViewGroupToAggregateDimension,
-  groupLabelDimension,
-  hasuraGroupDimension,
-  hasuraGroupOrderForDimensions,
+  resourceViewGroupQueryProjection,
 } from "../resource/resource-view-list-body";
 import {
   resourceFieldGroupLabel,
@@ -250,20 +247,13 @@ function relationFacetSpecs(
   },
 ): readonly FacetRequestSpec[] {
   if (!group || !options.id) return EMPTY_FACET_SPECS;
-  const identity = resourceViewGroupToAggregateDimension(group, metadata);
-  const label = groupLabelDimension(group, metadata);
-  const identityDimension = hasuraGroupDimension(identity);
-  const labelDimension = label ? hasuraGroupDimension(label) : null;
-  const dimensions = labelDimension
-    ? [identityDimension, labelDimension]
-    : [identityDimension];
-  const orderBy = hasuraGroupOrderForDimensions(dimensions);
+  const projection = resourceViewGroupQueryProjection(group, metadata);
   return [{
     id: options.id,
-    dimensions,
-    ...(orderBy ? { orderBy } : {}),
-    ...(identityDimension.key ? { valueKey: identityDimension.key } : {}),
-    ...(labelDimension?.key ? { labelKey: labelDimension.key } : {}),
+    dimensions: projection.dimensions,
+    ...(projection.orderBy ? { orderBy: projection.orderBy } : {}),
+    valueKey: projection.valueKey,
+    ...(projection.labelKey ? { labelKey: projection.labelKey } : {}),
     pageSize: options.pageSize,
   }];
 }

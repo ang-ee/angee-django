@@ -210,14 +210,13 @@ export function ListViewContent<TRow extends Row = Row>({
     >
       {surface.kind === "grouped" ? (
         <GroupedListBody
-          columns={resolvedColumns}
           table={surface.table}
           tableColumns={surface.tableColumns}
           visibleColumnCount={surface.visibleColumnCount}
           visibleFields={surface.visibleFields}
           onVisibleFieldToggle={surface.toggleVisibleField}
           resourceView={resourceView}
-          modelMetadata={modelMetadata}
+          measures={surface.measures}
           listItems={surface.groupedItems}
           tableScrollRef={surface.tableScrollRef}
           rowVirtualizer={surface.rowVirtualizer}

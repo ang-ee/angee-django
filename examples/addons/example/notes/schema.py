@@ -5,7 +5,6 @@ from __future__ import annotations
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.db import models
 from strawberry import auto
 
 from angee.data.metadata import DataResourceSubtitleMetadata
@@ -37,20 +36,6 @@ class NoteType(AuthoredRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
     word_count: auto
-
-
-def _note_queryset(info: strawberry.Info) -> models.QuerySet[Note]:
-    """Return the actor-scoped note queryset for row reads."""
-
-    del info
-    return Note.objects.all()
-
-
-def _note_aggregate_queryset(info: strawberry.Info) -> models.QuerySet[Note]:
-    """Return the row-scoped queryset safe for aggregate/group math."""
-
-    del info
-    return Note.objects.all().scoped_for_aggregate()
 
 
 @strawberry.type
@@ -86,8 +71,6 @@ _NOTE_RESOURCE = hasura_model_resource(
     aggregatable=["id", "word_count"],
     groupable=["status", "tags", "updated_at"],
     writable=["title", "body", "status", "tags", "is_starred", "reminder_at"],
-    get_queryset=_note_queryset,
-    get_aggregate_queryset=_note_aggregate_queryset,
     id_column="sqid",
     subtitle=DataResourceSubtitleMetadata(word_count="word_count"),
 )

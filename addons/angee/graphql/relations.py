@@ -7,9 +7,90 @@ from typing import Any
 import strawberry_django
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
+from django.db.models.expressions import Combinable
 from rebac import current_actor
+from rebac.relation_loading import relation_actor
+from rebac.resources import model_resource_type
+
+from angee.base.scoping import aggregate_scoped_queryset, read_scoped_queryset
+from angee.data.field_classification import is_to_one_relation
+from angee.graphql.introspection import FieldPathError, fields_for_path
 
 _UNCACHED = object()
+
+
+def actor_scoped_relation_group_expression(
+    queryset: models.QuerySet[Any],
+    field_path: str,
+) -> Combinable | None:
+    """Return a read-safe scalar expression for one related group axis.
+
+    Every protected target crossed by the selected to-one path contributes an
+    uncorrelated membership guard. The related scalar is projected only when
+    all guarded rows are readable by the source queryset's actor; otherwise it
+    becomes SQL ``NULL`` while the parent row and relation identity stay in the
+    group. Paths with no protected target need no override and return ``None``.
+    """
+
+    try:
+        fields = fields_for_path(queryset.model, field_path)
+    except FieldPathError as error:
+        raise ImproperlyConfigured(
+            f"{queryset.model._meta.label}.{field_path} must traverse "
+            "to-one relations to a scalar field"
+        ) from error
+    terminal = fields[-1]
+    relations = fields[:-1]
+    if not relations or terminal.is_relation:
+        return None
+    if not all(is_to_one_relation(field) for field in relations):
+        raise ImproperlyConfigured(
+            f"{queryset.model._meta.label}.{field_path} must traverse "
+            "to-one relations to a scalar field"
+        )
+
+    actor = relation_actor(queryset)
+    guards: list[models.Q] = []
+    traversed: list[str] = []
+    parts = field_path.split("__")
+    for part, relation in zip(parts[:-1], relations, strict=True):
+        related_model = relation.related_model
+        if not model_resource_type(related_model):
+            traversed.append(part)
+            continue
+        related_queryset = read_scoped_queryset(related_model, actor)
+        if related_queryset is None:
+            related_queryset = related_model._default_manager.none()
+        else:
+            related_queryset = aggregate_scoped_queryset(related_queryset)
+
+        if isinstance(relation, (models.ForeignKey, models.OneToOneField)):
+            lookup = "__".join((*traversed, relation.attname))
+            target_name = relation.target_field.attname
+        else:
+            lookup = "__".join((*traversed, part, related_model._meta.pk.attname))
+            target_name = related_model._meta.pk.attname
+        guards.append(
+            models.Q(
+                **{
+                    f"{lookup}__in": related_queryset.values_list(
+                        target_name, flat=True
+                    )
+                }
+            )
+        )
+        traversed.append(part)
+
+    if not guards:
+        return None
+    guard = models.Q()
+    for item in guards:
+        guard &= item
+    return models.Case(
+        models.When(guard, then=models.F(field_path)),
+        default=models.Value(None),
+        output_field=terminal,
+    )
 
 
 def actor_scoped_to_one(field_name: str) -> Any:

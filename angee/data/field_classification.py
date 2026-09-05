@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+import decimal
 from typing import Any
 
 from django.db import models
@@ -90,6 +92,21 @@ def model_field_scalar(field: models.Field[Any, Any]) -> str | None:
     if isinstance(field, (models.CharField, models.TextField, models.UUIDField)):
         return "String"
     return None
+
+
+def python_type_scalar(python_type: object) -> str | None:
+    """Return the metadata scalar for one native Python value type."""
+
+    scalars: dict[object, str] = {
+        str: "String",
+        bool: "Boolean",
+        int: "Int",
+        float: "Float",
+        decimal.Decimal: "Decimal",
+        datetime.datetime: "DateTime",
+        datetime.date: "Date",
+    }
+    return scalars.get(python_type)
 
 
 def is_archive_field(field: models.Field[Any, Any] | None) -> bool:

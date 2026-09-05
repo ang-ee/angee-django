@@ -12,11 +12,15 @@ from typing import Any
 import strawberry
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models, transaction
+from django.db.models.expressions import Combinable
 from rebac import PermissionDenied, system_context
 from strawberry_django.mutations import resolvers as mutation_resolvers
 from strawberry_django_aggregates import (
     default_operators_for,
     group_by_alias,
+    group_by_enum_member,
+    group_by_range_alias,
+    python_type_for_json,
 )
 from strawberry_django_aggregates.granularity import NumberGranularity, TimeGranularity
 from strawberry_django_hasura import (
@@ -39,7 +43,11 @@ from angee.base.scoping import (
     bind_actor,
     requires_angee_rebac_contract,
 )
-from angee.data.field_classification import is_to_one_relation, model_field_scalar
+from angee.data.field_classification import (
+    is_to_one_relation,
+    model_field_scalar,
+    python_type_scalar,
+)
 from angee.data.metadata import (
     DataAggregateMeasureMetadata,
     DataGroupBucketFilterMetadata,
@@ -71,6 +79,7 @@ from angee.graphql.introspection import (
     FieldPathError,
     require_field_for_path,
 )
+from angee.graphql.relations import actor_scoped_relation_group_expression
 from angee.graphql.writes import write_queryset
 
 # The stock Refine provider emits anchored regexes for case-insensitive
@@ -589,6 +598,24 @@ def _aggregate_queryset(
     return get_aggregate_queryset
 
 
+def _group_by_expression_provider(
+    info: strawberry.Info,
+    queryset: models.QuerySet[Any],
+    spec: list[tuple[str, Any]],
+) -> Mapping[str, Combinable]:
+    """Project selected related scalar axes through actor-scoped guards."""
+
+    del info
+    expressions: dict[str, Combinable] = {}
+    for path, _granularity in spec:
+        if "__" not in path or "." in path:
+            continue
+        expression = actor_scoped_relation_group_expression(queryset, path)
+        if expression is not None:
+            expressions[path] = expression
+    return expressions
+
+
 def declared_hasura_resource_fields(
     model: type[models.Model],
     attribute: str,
@@ -790,6 +817,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         groupable=list(active_groupable) or None,
         json_paths=active_json_paths,
         group_key_encoders=_relation_group_key_encoders(model, active_groupable),
+        get_group_by_expressions=_group_by_expression_provider,
         filter_lookups=_HASURA_FILTER_LOOKUPS,
         writable=list(writable) if writable is not None else None,
         insertable=list(insertable) if insertable is not None else None,
@@ -1208,12 +1236,17 @@ def _hasura_group_dimension(
         filter_metadata = _hasura_json_group_bucket_filter(model, path, key)
         return DataGroupDimensionMetadata(
             field=path,
-            input=_group_input_name(path),
+            input=group_by_enum_member(path),
             key=key,
             kind="json",
-            scalar=_scalar_for_json_group_type(declared_json_type),
+            scalar=_group_scalar(
+                python_type_scalar(python_type_for_json(declared_json_type))
+            ),
             filter=filter_metadata,
-            extractions=_hasura_json_group_extractions(path, declared_json_type, key),
+            extractions=_hasura_group_extractions(
+                path,
+                declared_json_type=declared_json_type,
+            ),
         )
     field = _require_group_field(model, path)
     key = _group_key_path(field, path)
@@ -1227,26 +1260,39 @@ def _hasura_group_dimension(
     )
     return DataGroupDimensionMetadata(
         field=path,
-        input=_group_input_name(path),
+        input=group_by_enum_member(path),
         key=key,
         kind="relation" if is_relation else "column",
         scalar="ID" if is_relation else _scalar_for_field(field),
         filter=filter_metadata,
-        extractions=_hasura_group_extractions(field, key, filter_metadata),
+        extractions=_hasura_group_extractions(
+            path,
+            field=field,
+            bucket_filter=filter_metadata,
+        ),
     )
 
 
 def _hasura_group_extractions(
-    field: models.Field[Any, Any],
-    key: str,
-    bucket_filter: DataGroupBucketFilterMetadata | None,
+    path: str,
+    *,
+    field: models.Field[Any, Any] | None = None,
+    declared_json_type: str | None = None,
+    bucket_filter: DataGroupBucketFilterMetadata | None = None,
 ) -> tuple[DataGroupExtractionMetadata, ...]:
-    if not isinstance(field, (models.DateField, models.DateTimeField)):
+    if not (
+        isinstance(field, (models.DateField, models.DateTimeField))
+        or declared_json_type in {"date", "datetime"}
+    ):
         return ()
     extractions: list[DataGroupExtractionMetadata] = []
     for granularity in (*TimeGranularity, *NumberGranularity):
-        extraction_key = f"{key}_{granularity.value}"
-        range_key = f"{key}_{granularity.value}_range" if isinstance(granularity, TimeGranularity) else None
+        extraction_key = group_by_alias(path, granularity, field)
+        range_key = (
+            group_by_range_alias(path, granularity)
+            if isinstance(granularity, TimeGranularity)
+            else None
+        )
         extractions.append(
             DataGroupExtractionMetadata(
                 name=granularity.value,
@@ -1262,30 +1308,6 @@ def _hasura_group_extractions(
                     if range_key is not None
                     else None
                 ),
-            )
-        )
-    return tuple(extractions)
-
-
-def _hasura_json_group_extractions(
-    path: str,
-    declared_type: str,
-    key: str,
-) -> tuple[DataGroupExtractionMetadata, ...]:
-    """Return date/datetime extraction metadata for a JSON-path group axis."""
-
-    if declared_type not in {"date", "datetime"}:
-        return ()
-    extractions: list[DataGroupExtractionMetadata] = []
-    for granularity in (*TimeGranularity, *NumberGranularity):
-        extraction_key = group_by_alias(path, granularity)
-        range_key = f"{extraction_key}_range" if isinstance(granularity, TimeGranularity) else None
-        extractions.append(
-            DataGroupExtractionMetadata(
-                name=granularity.value,
-                input=granularity.name,
-                key=extraction_key,
-                range_key=range_key,
             )
         )
     return tuple(extractions)
@@ -1424,12 +1446,6 @@ def _require_group_field(
         ) from None
 
 
-def _group_input_name(path: str) -> str:
-    """Return the generated ``<Model>GroupableField`` enum member name."""
-
-    return path.replace(".", "__").upper()
-
-
 def _group_key_path(
     field: models.Field[Any, Any],
     path: str,
@@ -1468,19 +1484,10 @@ def _measure_ops_for_field(field: models.Field[Any, Any]) -> tuple[str, ...]:
 def _scalar_for_field(field: models.Field[Any, Any]) -> str | None:
     """Return the group-dimension key scalar for a field; String columns carry none."""
 
-    scalar = model_field_scalar(field)
+    return _group_scalar(model_field_scalar(field))
+
+
+def _group_scalar(scalar: str | None) -> str | None:
+    """Return a group-dimension scalar; String is the implicit default."""
+
     return None if scalar == "String" else scalar
-
-
-def _scalar_for_json_group_type(declared_type: str) -> str | None:
-    """Return the group-dimension key scalar for a declared JSON-path type."""
-
-    return {
-        "str": None,
-        "int": "Int",
-        "float": "Float",
-        "Decimal": "Decimal",
-        "bool": "Boolean",
-        "date": "Date",
-        "datetime": "DateTime",
-    }.get(declared_type)

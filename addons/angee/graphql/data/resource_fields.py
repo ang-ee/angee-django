@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import dataclasses
-from datetime import date, datetime
-from decimal import Decimal
 from typing import Any
+
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
+from django.db import models
+from strawberry.types import get_object_definition
+from strawberry.types.base import StrawberryList, StrawberryOptional
+from strawberry.types.enum import StrawberryEnumDefinition
+from strawberry.types.lazy_type import LazyType
+from strawberry_django_hasura import SnakeNameConverter
 
 from angee.base.impl import ImplClassField
 from angee.data import metadata as data_contract
@@ -22,17 +28,10 @@ from angee.data.field_classification import (
     is_archive_field,
     model_field_scalar,
     money_currency_field,
+    python_type_scalar,
     resource_field_kind,
     resource_field_widget,
 )
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
-from django.db import models
-from strawberry.types import get_object_definition
-from strawberry.types.base import StrawberryList, StrawberryOptional
-from strawberry.types.enum import StrawberryEnumDefinition
-from strawberry.types.lazy_type import LazyType
-from strawberry_django_hasura import SnakeNameConverter
-
 from angee.graphql.introspection import surface_field_names, surface_name
 
 _FILTER_CONTROL_FIELDS = frozenset({"AND", "OR", "NOT", "DISTINCT", "and", "or", "not", "distinct"})
@@ -84,7 +83,7 @@ def resource_type_name(surface: type | None) -> str | None:
     return surface_name(surface)
 
 
-def resource_relation_surface(surface: type | None, name: str) -> object | None:
+def resource_relation_surface(surface: type | None, name: str) -> type | None:
     """Return the object surface projected by one to-one field, if any."""
 
     value = _surface_field_type(surface, name)
@@ -92,7 +91,11 @@ def resource_relation_surface(surface: type | None, name: str) -> object | None:
         related_surface, is_list = _selection_surface(value)
     except NotImplementedError:
         return None
-    if is_list or get_object_definition(related_surface) is None:
+    if (
+        is_list
+        or not isinstance(related_surface, type)
+        or get_object_definition(related_surface) is None
+    ):
         return None
     return related_surface
 
@@ -526,21 +529,7 @@ def _surface_field_scalar_or_none(value: object | None) -> str | None:
     scalar_name = getattr(value, "__name__", None)
     if scalar_name in {"ID", "JSON"}:
         return str(scalar_name)
-    if value is str:
-        return "String"
-    if value is bool:
-        return "Boolean"
-    if value is int:
-        return "Int"
-    if value is Decimal:
-        return "Decimal"
-    if value is float:
-        return "Float"
-    if value is datetime:
-        return "DateTime"
-    if value is date:
-        return "Date"
-    return None
+    return python_type_scalar(value)
 
 
 def _surface_type_name(value: object | None) -> str:
