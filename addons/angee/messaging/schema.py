@@ -33,7 +33,7 @@ from angee.graphql.data import (
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID, require_instance_for_id
-from angee.graphql.node import AngeeNode
+from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, request_from_info
@@ -411,6 +411,10 @@ class RecordMessageReactionGroupType:
 class MessageType(AngeeNode):
     """GraphQL projection of a message."""
 
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name, only=["preview"], description=NODE_DISPLAY_NAME_DESCRIPTION
+    )
+
     @strawberry_django.field(only=["sent_at", "created_at"])
     def feed_order_key(self) -> str:
         """Opaque server key; descending ASCII comparison preserves feed order."""
@@ -588,6 +592,13 @@ class RecordMessageType(AngeeNode):
 @strawberry_django.type(Thread)
 class ThreadType(AngeeNode):
     """GraphQL projection of a thread."""
+
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name,
+        only=["title__text"],
+        select_related=["title"],
+        description=NODE_DISPLAY_NAME_DESCRIPTION,
+    )
 
     platform: auto
     modality: auto
