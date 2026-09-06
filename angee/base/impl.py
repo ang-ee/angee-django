@@ -126,7 +126,7 @@ class ImplBase:
         )
 
     @classmethod
-    def validate_config(cls, value: Any) -> dict[str, Any]:
+    def normalize_config(cls, value: Any) -> dict[str, Any]:
         """Validate and normalize adapter-owned JSON through its optional model."""
 
         if cls.config_model is None:
@@ -150,7 +150,7 @@ class ImplBase:
             return None
         properties: dict[str, Any] = {}
         required: list[str] = []
-        supported = {str: "string", int: "integer", float: "number", bool: "boolean"}
+        supported: dict[Any, str] = {str: "string", int: "integer", float: "number", bool: "boolean"}
         for name, field in cls.config_model.model_fields.items():
             if field.alias is not None or field.validation_alias is not None or field.serialization_alias is not None:
                 raise ImproperlyConfigured(f"{cls.__name__}.config_model field {name!r} cannot declare aliases.")
@@ -377,6 +377,8 @@ class ImplClassField(TextChoicesField):
 
         keys = sorted(self._registry())
         if not keys:
+            if self.base_class is None:
+                return cast("type[models.TextChoices]", models.TextChoices(self._enum_name(), ()))
             raise ImproperlyConfigured(
                 f"ImplClassField registry settings.{self.registry_setting} is empty; an addon must "
                 "contribute at least one impl (e.g. a noop/null-object default) before the field is built."
@@ -542,9 +544,13 @@ class ImplDefaultsMixin(models.Model):
             if not key:
                 continue
             impl = field.resolve_class(key)
-            if isinstance(impl, type) and issubclass(impl, ImplBase):
-                normalized = impl.validate_config(self.config)
-                self.config = normalized
+            if (
+                isinstance(impl, type)
+                and issubclass(impl, ImplBase)
+                and impl.config_model is not None
+            ):
+                normalized = impl.normalize_config(self.config)
+                setattr(self, "config", normalized)
 
     def set_impl_key(self, field_name: str, value: Any, *, default: str | None = None) -> bool:
         """Assign an impl key and return whether the stored key changed."""

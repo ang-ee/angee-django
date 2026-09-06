@@ -148,7 +148,7 @@ def test_typed_config_projects_supported_scalars_and_validates_paths() -> None:
     }
 
     with pytest.raises(ValidationError, match="config.retries"):
-        _TypedConfigImpl.validate_config({"endpoint": "https://example.test"})
+        _TypedConfigImpl.normalize_config({"endpoint": "https://example.test"})
 
 
 def test_typed_config_rejects_constraints_the_form_wire_cannot_express() -> None:

@@ -959,6 +959,30 @@ def test_workflow_run_save_uses_loaded_dedup_key_without_extra_select(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_workflow_step_save_preserves_validated_config(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """The shared impl mixin must not replace workflow validation with typed normalization."""
+
+    del workflow_engine_tables, no_workflow_queue
+    with system_context(reason="test workflow config preservation"):
+        workflow = Workflow.objects.create(name="Config preservation")
+        step = Step.objects.create(
+            workflow=workflow,
+            key="start",
+            name="Start",
+            config={"outcome": "done"},
+            is_entry=True,
+        )
+        step.name = "Updated"
+        step.save(update_fields={"name", "updated_at"})
+        step.refresh_from_db()
+
+    assert step.config == {"outcome": "done"}
+
+
+@pytest.mark.django_db(transaction=True)
 def test_event_wait_surface_is_not_accepted(
     workflow_engine_tables: None,
     no_workflow_queue: None,
