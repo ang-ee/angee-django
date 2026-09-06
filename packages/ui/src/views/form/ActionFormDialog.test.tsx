@@ -1,8 +1,11 @@
 // @vitest-environment happy-dom
 
-import type { Row, SchemaFieldMetadata } from "@angee/metadata";
-import { ModelMetadataProvider } from "@angee/metadata";
-import { withTestResourceInventory } from "@angee/metadata/testing";
+import type { DataResourceMetadata, Row, SchemaFieldMetadata } from "@angee/metadata";
+import {
+  ModelMetadataProvider,
+  schemaFieldMetadataFromDataResources,
+} from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
 import {
   cleanup,
   fireEvent,
@@ -42,6 +45,22 @@ const listRows = vi.hoisted(() => ({
 
 const listOptions = vi.hoisted(() => [] as unknown[]);
 
+function scalarField(name: string, scalar: string) {
+  return {
+    name,
+    kind: "scalar" as const,
+    scalar,
+    readable: true,
+    filterable: true,
+    sortable: true,
+    aggregatable: false,
+    groupable: false,
+    creatable: false,
+    updatable: false,
+    requiredOnCreate: false,
+  };
+}
+
 vi.mock("@refinedev/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@refinedev/core")>();
   return {
@@ -75,49 +94,26 @@ function resourceMetadata(
   modelLabel: string,
   listRoot: string,
   representation: string,
-): SchemaFieldMetadata["types"][string] {
-  return {
-    typeName,
+): DataResourceMetadata {
+  return testDataResource(modelLabel, {
+    modelName: modelLabel,
+    roots: { list: listRoot },
+    typeNames: { node: typeName },
     recordRepresentation: representation,
-    fields: {
-      id: { name: "id", kind: "scalar", scalar: "ID" },
-      [representation]: {
-        name: representation,
-        kind: "scalar",
-        scalar: "String",
-      },
-    },
-    rootFields: { list: listRoot },
-    resource: {
-      schemaName: "console",
-      modelLabel,
-      appLabel: "",
-      modelName: modelLabel,
-      publicIdField: "id",
-      roots: { list: listRoot },
-      typeNames: { node: typeName },
-      capabilities: ["list"],
-      fields: [],
-      filterFields: [],
-      orderFields: [],
-      aggregateFields: [],
-      groupByFields: [],
-      relationAxes: [],
-    },
-  };
+    fields: [scalarField("id", "ID"), scalarField(representation, "String")],
+    capabilities: ["list"],
+  });
 }
 
-const metadata: SchemaFieldMetadata = withTestResourceInventory({
-  types: {
-    JournalType: resourceMetadata("JournalType", "Journal", "journals", "name"),
-    InvoiceType: resourceMetadata(
+const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([
+  resourceMetadata("JournalType", "Journal", "journals", "name"),
+  resourceMetadata(
       "InvoiceType",
       "Invoice",
       "invoices",
       "number",
-    ),
-  },
-});
+  ),
+]);
 
 const registerPaymentArgs: readonly ActionArg[] = [
   {

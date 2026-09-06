@@ -361,7 +361,7 @@ export function useFormViewSurface({
       }
     }
     for (const extra of returning ?? []) paths.add(extra);
-    const representation = modelMetadata?.recordRepresentation;
+    const representation = modelMetadata?.resource.recordRepresentation;
     if (representation && modelMetadata.fields[representation]) paths.add(representation);
     // The artifact emits only projected/readable impl columns, so every name is
     // safe to select even when the form does not declare that implementation field.

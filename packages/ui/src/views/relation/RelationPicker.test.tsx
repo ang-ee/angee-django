@@ -22,6 +22,7 @@ import {
   } from "../../runtime";
 import {
   ModelMetadataProvider,
+  schemaFieldMetadataFromDataResources,
 } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import type {
@@ -104,35 +105,15 @@ const oauthResource = testDataResource("integrate.OAuthClient", {
     delete: "delete_oauth_clients_by_pk",
   },
   typeNames: { node: "OAuthClientType" },
+  recordRepresentation: "displayName",
   capabilities: ["list", "detail", "create", "update", "delete"],
-  fields: [],
+  fields: [
+    { name: "id", kind: "scalar", scalar: "ID", readable: true, filterable: false, sortable: false, aggregatable: false, groupable: false, creatable: false, updatable: false, requiredOnCreate: false },
+    { name: "displayName", kind: "scalar", scalar: "String", readable: true, filterable: false, sortable: false, aggregatable: false, groupable: false, creatable: true, updatable: true, requiredOnCreate: false },
+  ],
 });
 
-const metadata: SchemaFieldMetadata = {
-  resources: [oauthResource],
-  types: {
-    OAuthClientType: {
-      typeName: "OAuthClientType",
-      recordRepresentation: "displayName",
-      fields: {
-        id: { name: "id", kind: "scalar", scalar: "ID" },
-        displayName: {
-          name: "displayName",
-          kind: "scalar",
-          scalar: "String",
-          label: "Display Name",
-        },
-      },
-      rootFields: {
-        list: "oauth_clients",
-        detail: "oauth_clients_by_pk",
-        create: "insert_oauth_clients_one",
-        update: "update_oauth_clients_by_pk",
-      },
-      resource: oauthResource,
-    },
-  },
-};
+const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([oauthResource]);
 
 describe("RelationPicker edit affordance", () => {
   afterEach(() => cleanup());

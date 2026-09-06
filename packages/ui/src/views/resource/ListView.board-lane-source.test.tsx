@@ -188,7 +188,7 @@ describe("ListView board laneSource", () => {
     expect(lastTableOption()).toMatchObject({
       meta: {
         fields: expect.arrayContaining([
-          "id", "name", { customer: ["id", "name"] }, { stage: ["id"] },
+          "id", "name", { customer: ["sqid", "name"] }, { stage: ["id"] },
         ]),
       },
     });

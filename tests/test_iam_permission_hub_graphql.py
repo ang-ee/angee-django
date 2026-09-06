@@ -185,6 +185,40 @@ def test_roles_grants_resources_are_admin_scoped(
     assert _data(allowed)["iam_grants"]
 
 
+def test_legacy_and_computed_role_bindings_share_canonical_rows(
+    iam_permission_hub_tables: None,
+) -> None:
+    """One role computation preserves legacy short IDs and canonical resource IDs."""
+
+    admin = _platform_admin("hub-role-bindings-admin")
+    target = User.objects.create_user(username="hub-role-bindings-target")
+    grant(actor=target, role="angee/role:auditor")
+
+    data = _data(
+        _execute(
+            _schema("console"),
+            """
+            query {
+              roles { id namespace label }
+              iam_roles(limit: 50) { id role_id namespace label }
+            }
+            """,
+            user=admin,
+        )
+    )
+    computed = {row["id"]: row for row in data["iam_roles"]}
+
+    assert data["roles"]
+    for legacy in data["roles"]:
+        canonical_id = f"{legacy['namespace']}/role:{legacy['id']}"
+        assert computed[canonical_id] == {
+            "id": canonical_id,
+            "role_id": legacy["id"],
+            "namespace": legacy["namespace"],
+            "label": legacy["label"],
+        }
+
+
 def test_roles_query_excludes_role_types_missing_from_rebac_schema(
     iam_permission_hub_tables: None,
 ) -> None:

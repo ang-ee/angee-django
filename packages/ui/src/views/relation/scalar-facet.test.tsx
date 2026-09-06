@@ -150,7 +150,7 @@ describe("useScalarFacets", () => {
       {
         id: "implClass",
         field: "implClass",
-        label: "Implementation",
+        label: "Impl Category",
         group: {
           field: "implCategory",
           aggregateField: "implClass",
@@ -170,20 +170,17 @@ describe("useScalarFacets", () => {
 });
 
 const NOTE_METADATA: ModelMetadata = {
-  typeName: "NoteType",
   fields: {
-    title: { name: "title", kind: "scalar", scalar: "String", label: "Title" },
+    title: { name: "title", kind: "scalar", scalar: "String" },
     status: {
       name: "status",
       kind: "enum",
-      enumName: "NoteStatus",
-      label: "Status",
       values: [
         { value: "DRAFT", description: "Draft" },
         { value: "ACTIVE", description: "Active" },
       ],
     },
-    source: { name: "source", kind: "scalar", scalar: "String", label: "Source" },
+    source: { name: "source", kind: "scalar", scalar: "String" },
     wordCount: { name: "wordCount", kind: "scalar", scalar: "Int" },
     updatedAt: { name: "updatedAt", kind: "scalar", scalar: "DateTime" },
   },
@@ -231,21 +228,19 @@ const NOTE_METADATA: ModelMetadata = {
     ],
     relationAxes: [],
   },
+  relationAxes: {},
 };
 
 const INTEGRATION_METADATA: ModelMetadata = {
-  typeName: "IntegrationType",
   fields: {
     implCategory: {
       name: "implCategory",
       kind: "scalar",
       scalar: "String",
-      label: "Implementation",
     },
     implClass: {
       name: "implClass",
       kind: "enum",
-      enumName: "IntegrationImplsImpl",
       values: [{ value: "NONE", description: "None" }],
     },
   },
@@ -279,6 +274,7 @@ const INTEGRATION_METADATA: ModelMetadata = {
       },
     ],
   },
+  relationAxes: {},
 };
 
 function resourceFacets(

@@ -470,7 +470,6 @@ _OAUTH_CLIENT_RESOURCE = hasura_model_resource(
     sortable=["slug", "environment", "display_name", "is_enabled", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["provider_type", "environment", "is_enabled"],
-    declared_fields=_OAUTH_CLIENT_EXTENSION_READ_FIELDS,
     insertable=[
         "display_name",
         "client_id",

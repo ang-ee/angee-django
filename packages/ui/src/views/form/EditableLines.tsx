@@ -18,7 +18,6 @@ import {
 } from "@dnd-kit/sortable";
 import {
   defaultWidgetForModelField,
-  lineChildModelMetadata,
   useSchemaFieldMetadata,
   type DataResourceLinesMetadata,
   type ModelFieldMetadata,
@@ -42,8 +41,8 @@ import {
 import { FieldDescriptorControl } from "./field-descriptor-control";
 import {
   enumOptions,
-  relationFieldInfo,
-  relationListFieldInfo,
+  relationFieldInfoForField,
+  relationListFieldInfoForField,
   type RelationFieldInfo,
 } from "../resource/model-metadata-defaults";
 import type { FieldDescriptor } from "../page";
@@ -335,8 +334,7 @@ function lineColumns(
   config: LineDiffConfig,
   schemaMetadata: ReturnType<typeof useSchemaFieldMetadata>,
 ): LineColumn[] {
-  const childMetadata = lineChildModelMetadata(lines);
-  return Object.values(childMetadata.fields)
+  return (lines.fields ?? [])
     .filter((field) => field.name !== config.positionField)
     .map((field) => {
       const widget = defaultWidgetForModelField(field);
@@ -350,9 +348,9 @@ function lineColumns(
       return {
         field,
         descriptor,
-        relation: relationFieldInfo(field.name, childMetadata, schemaMetadata),
-        relationMulti: relationListFieldInfo(field.name, childMetadata, schemaMetadata),
-        header: field.label ?? titleCase(field.name),
+        relation: relationFieldInfoForField(field, schemaMetadata),
+        relationMulti: relationListFieldInfoForField(field, schemaMetadata),
+        header: titleCase(field.name),
       };
     });
 }

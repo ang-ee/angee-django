@@ -20,7 +20,6 @@ from django.contrib.auth.models import Group as DjangoGroup
 from django.db import transaction
 from django.db.models import QuerySet
 from django.http import HttpRequest
-from pydantic import BaseModel
 from rebac import system_context
 from rebac.models import active_relationship_model
 from rebac.roles import (
@@ -32,6 +31,7 @@ from rebac.roles import (
 from rebac.roles import (
     roles_of as rebac_roles_of,
 )
+from rebac.schema import Definition, Permission, Relation, Schema, render_allowed_subject
 from strawberry import auto
 from strawberry.scalars import JSON
 
@@ -52,16 +52,14 @@ from angee.iam.roles import (
     IAM_OVERVIEW_DEFAULT_PEEK_LIMIT as _IAM_OVERVIEW_DEFAULT_PEEK_LIMIT,
 )
 from angee.iam.roles import (
-    GrantInfo,
-    OverviewInfo,
-    PermissionConditionInfo,
-    PermissionInfo,
-    RelationInfo,
-    ResourceSchemaInfo,
-    RoleInfo,
+    IAMGrantRow,
+    IAMRoleRow,
 )
 from angee.iam.roles import (
     iam_overview as _iam_overview_owner,
+)
+from angee.iam.roles import (
+    permission_conditions as _permission_conditions_owner,
 )
 from angee.iam.roles import (
     permission_hub_grants as _permission_hub_grants_owner,
@@ -83,9 +81,6 @@ User = cast(type[Any], get_user_model())
 Group = DjangoGroup
 GROUP_PUBLIC_IDENTITY = SqidPublicIdentity(prefix="grp_", min_length=8)
 """Public data identity for Django auth groups exposed by IAM."""
-
-_ROLE_SUFFIX = "/role"
-
 
 def _preference_object(user: Any) -> JSON:
     """Return a safe UI preference object for user projections."""
@@ -174,18 +169,24 @@ class GroupType:
         return PublicID(GROUP_PUBLIC_IDENTITY.public_id_from_pk(cast(Any, self).pk))
 
 
+def _legacy_role_id(root: Any) -> str:
+    """Return the short ID exposed by the authored legacy role binding."""
+
+    return cast(IAMRoleRow, root).role_id
+
+
 @strawberry.type
 class IAMRoleType:
-    """Tuple-derived role exposed by the IAM permission hub."""
+    """Legacy role binding over the canonical computed IAM role row."""
 
-    id: str
+    id: str = strawberry.field(resolver=_legacy_role_id)
     namespace: str
     label: str
 
 
 @strawberry.type
 class IAMGrantType:
-    """Direct role grant for a user principal."""
+    """Legacy grant binding over the canonical computed IAM grant row."""
 
     principal_id: str
     principal_type: str
@@ -198,10 +199,15 @@ class IAMGrantType:
 
 @strawberry.type
 class IAMRelationType:
-    """Relation declaration from the installed REBAC schema."""
+    """Direct binding over a relation in the installed REBAC schema."""
 
     name: str
-    allowed_subject_types: list[str]
+
+    @strawberry.field
+    def allowed_subject_types(self) -> list[str]:
+        """Render native allowed-subject declarations for the wire boundary."""
+
+        return [render_allowed_subject(allowed) for allowed in cast(Relation, self).allowed_subjects]
 
 
 @strawberry.type
@@ -213,19 +219,59 @@ class IAMPermCondition:
 
 @strawberry.type
 class IAMPermissionType:
-    """Permission declaration from the installed REBAC schema."""
+    """Permission binding retaining only native schema context."""
 
-    name: str
-    conditions: list[IAMPermCondition]
+    schema: strawberry.Private[Schema]
+    resource_type: strawberry.Private[str]
+    permission: strawberry.Private[Permission]
+
+    @strawberry.field
+    def name(self) -> str:
+        """Return the native permission name."""
+
+        return str(self.permission.name)
+
+    @strawberry.field
+    def conditions(self) -> list[IAMPermCondition]:
+        """Return flattened source labels for the native permission expression."""
+
+        return [
+            IAMPermCondition(name=name)
+            for name in _permission_conditions_owner(self.schema, self.resource_type, self.permission.name)
+        ]
 
 
 @strawberry.type
 class IAMResourceSchemaType:
-    """Resource definition projected from the installed REBAC schema."""
+    """Resource binding retaining the native schema and definition."""
 
-    resource_type: str
-    relations: list[IAMRelationType]
-    permissions: list[IAMPermissionType]
+    schema: strawberry.Private[Schema]
+    definition: strawberry.Private[Definition]
+
+    @strawberry.field
+    def resource_type(self) -> str:
+        """Return the native resource type."""
+
+        return str(self.definition.resource_type)
+
+    @strawberry.field
+    def relations(self) -> list[IAMRelationType]:
+        """Return native relations in deterministic name order."""
+
+        return cast(list[IAMRelationType], sorted(self.definition.relations, key=lambda item: item.name))
+
+    @strawberry.field
+    def permissions(self) -> list[IAMPermissionType]:
+        """Bind native permissions with the schema context their labels require."""
+
+        return [
+            IAMPermissionType(
+                schema=self.schema,
+                resource_type=self.definition.resource_type,
+                permission=permission,
+            )
+            for permission in sorted(self.definition.permissions, key=lambda item: item.name)
+        ]
 
 
 @strawberry.type
@@ -313,106 +359,23 @@ class LoginPayload:
     user: UserType | None = None
 
 
-def _role_type(role: RoleInfo) -> IAMRoleType:
-    """Project a permission-hub role value to its Strawberry type."""
-
-    return IAMRoleType(
-        id=role.id,
-        namespace=role.namespace,
-        label=role.label,
-    )
-
-
-def _grant_type(grant: GrantInfo) -> IAMGrantType:
-    """Project a permission-hub grant value to its Strawberry type."""
-
-    return IAMGrantType(
-        principal_id=grant.principal_id,
-        principal_type=grant.principal_type,
-        principal_label=grant.principal_label,
-        principal_ref=grant.principal_ref,
-        role=grant.role,
-        role_name=grant.role_name,
-        namespace=grant.namespace,
-    )
-
-
-def _relation_type(relation: RelationInfo) -> IAMRelationType:
-    """Project a REBAC relation declaration to its Strawberry type."""
-
-    return IAMRelationType(
-        name=relation.name,
-        allowed_subject_types=relation.allowed_subject_types,
-    )
-
-
-def _permission_condition_type(condition: PermissionConditionInfo) -> IAMPermCondition:
-    """Project a REBAC permission expression leaf to its Strawberry type."""
-
-    return IAMPermCondition(name=condition.name)
-
-
-def _permission_type(permission: PermissionInfo) -> IAMPermissionType:
-    """Project a REBAC permission declaration to its Strawberry type."""
-
-    return IAMPermissionType(
-        name=permission.name,
-        conditions=[_permission_condition_type(condition) for condition in permission.conditions],
-    )
-
-
-def _resource_schema_type(resource: ResourceSchemaInfo) -> IAMResourceSchemaType:
-    """Project one REBAC resource declaration to its Strawberry type."""
-
-    return IAMResourceSchemaType(
-        resource_type=resource.resource_type,
-        relations=[_relation_type(relation) for relation in resource.relations],
-        permissions=[_permission_type(permission) for permission in resource.permissions],
-    )
-
-
-def _overview_namespace_type(namespace: Any) -> IAMOverviewNamespaceType:
-    """Project one IAM overview namespace value to its Strawberry type."""
-
-    return IAMOverviewNamespaceType(
-        namespace=namespace.namespace,
-        role_count=namespace.role_count,
-        grant_count=namespace.grant_count,
-    )
-
-
-def _overview_type(overview: OverviewInfo) -> IAMOverviewType:
-    """Project IAM overview values to the GraphQL return type."""
-
-    return IAMOverviewType(
-        user_count=overview.user_count,
-        role_count=overview.role_count,
-        grant_count=overview.grant_count,
-        relationship_count=overview.relationship_count,
-        privileged_grant_count=overview.privileged_grant_count,
-        unassigned_user_count=overview.unassigned_user_count,
-        namespaces=[_overview_namespace_type(namespace) for namespace in overview.namespaces],
-        privileged_grants=[_grant_type(grant) for grant in overview.privileged_grants],
-        unassigned_users=cast(list[UserType], overview.unassigned_users),
-    )
-
-
 def _permission_hub_roles() -> list[IAMRoleType]:
     """Return roles visible from active role relationship rows."""
 
-    return [_role_type(role) for role in _permission_hub_roles_owner()]
+    return cast(list[IAMRoleType], _permission_hub_roles_owner())
 
 
 def _permission_schema() -> list[IAMResourceSchemaType]:
-    """Return the installed REBAC schema projected for the IAM console."""
+    """Bind native installed REBAC definitions for the IAM console."""
 
-    return [_resource_schema_type(resource) for resource in _permission_schema_owner()]
+    schema, definitions = _permission_schema_owner()
+    return [IAMResourceSchemaType(schema=schema, definition=definition) for definition in definitions]
 
 
 def _iam_overview(peek_limit: int, *, request: HttpRequest | None = None) -> IAMOverviewType:
     """Return IAM dashboard facts independent of paginated list rows."""
 
-    return _overview_type(_iam_overview_owner(peek_limit, request=request))
+    return cast(IAMOverviewType, _iam_overview_owner(peek_limit, request=request))
 
 
 def _admin_relationship_queryset(info: strawberry.Info) -> QuerySet[Any]:
@@ -568,74 +531,6 @@ class IAMGroupWriteBackend:
             return _delete_instance(_group_for_resource_id(pk, Group.objects.all()))
 
 
-class IAMRoleRow(BaseModel):
-    """Computed IAM role row (no Django table behind it).
-
-    The row-shape SSOT for the ``iam.Role`` Hasura resource. Roles are deduped
-    from active role-relationship tuples and labelled from the REBAC schema AST
-    (the same computation the authored ``roles`` query exposed). ``IAMRoleType``
-    keys by the short ``resource_id`` (``role_id``), which is not unique across
-    namespaces; the row adds an explicit ``id`` (the canonical ``<namespace>/role:<id>``
-    ref) for by-pk addressing.
-    """
-
-    id: str
-    role_id: str
-    namespace: str
-    label: str
-
-
-class IAMGrantRow(BaseModel):
-    """Computed IAM role-grant row (no Django table behind it).
-
-    The row-shape SSOT for the ``iam.Grant`` Hasura resource, projected from the
-    direct user role-grant tuples (the same rows the authored ``grants`` query
-    paginated). The principal/role pair is unique, so ``id`` is the
-    ``<principal_ref>:<role>`` composite for by-pk addressing.
-    """
-
-    id: str
-    principal_id: str
-    principal_type: str
-    principal_ref: str
-    principal_label: str
-    role: str
-    role_name: str
-    namespace: str
-
-
-def _role_rows() -> list[IAMRoleRow]:
-    """Project active tuple-derived roles as computed resource rows."""
-
-    return [
-        IAMRoleRow(
-            id=f"{role.namespace}{_ROLE_SUFFIX}:{role.id}",
-            role_id=role.id,
-            namespace=role.namespace,
-            label=role.label,
-        )
-        for role in _permission_hub_roles()
-    ]
-
-
-def _grant_rows(request: HttpRequest | None = None) -> list[IAMGrantRow]:
-    """Project direct user role-grant tuples as computed resource rows."""
-
-    return [
-        IAMGrantRow(
-            id=f"{grant.principal_ref}:{grant.role}",
-            principal_id=grant.principal_id,
-            principal_type=grant.principal_type,
-            principal_ref=grant.principal_ref,
-            principal_label=grant.principal_label,
-            role=grant.role,
-            role_name=grant.role_name,
-            namespace=grant.namespace,
-        )
-        for grant in _permission_hub_grants_owner(request=request)
-    ]
-
-
 def _admin_actor(info: strawberry.Info) -> bool:
     """Return whether the request actor reaches IAM's platform-admin role."""
 
@@ -648,7 +543,7 @@ def _role_rows_for(info: strawberry.Info) -> list[IAMRoleRow]:
     if not _admin_actor(info):
         return []
     with system_context(reason="iam.graphql.roles"):
-        return _role_rows()
+        return _permission_hub_roles_owner()
 
 
 def _grant_rows_for(info: strawberry.Info) -> list[IAMGrantRow]:
@@ -657,7 +552,7 @@ def _grant_rows_for(info: strawberry.Info) -> list[IAMGrantRow]:
     if not _admin_actor(info):
         return []
     with system_context(reason="iam.graphql.grants"):
-        return _grant_rows(_request(info))
+        return _permission_hub_grants_owner(request=_request(info))
 
 
 _ROLE_RESOURCE = hasura_pydantic_resource(

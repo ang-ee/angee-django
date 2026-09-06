@@ -18,10 +18,20 @@ from pathlib import Path
 from typing import Any
 
 
-def boot(source_root: Path, runtime_dir: Path, extra_addon_dirs: list[Path]) -> None:
-    """Compose all local manifests through the public settings and app lifecycle."""
+def boot(
+    source_root: Path,
+    runtime_dir: Path,
+    extra_addon_dirs: list[Path],
+    *,
+    include_examples: bool = True,
+    root_apps: list[str] | None = None,
+) -> None:
+    """Compose selected app roots and their native dependency closure."""
 
-    addon_dirs = [source_root / "addons", source_root / "examples" / "addons", *extra_addon_dirs]
+    addon_dirs = [source_root / "addons"]
+    if include_examples:
+        addon_dirs.append(source_root / "examples" / "addons")
+    addon_dirs.extend(extra_addon_dirs)
     sys.path[:0] = [str(source_root), *(str(path) for path in addon_dirs)]
     for name in tuple(os.environ):
         if name.startswith("ANGEE_") or name in {"DJANGO_SETTINGS_MODULE", "DATABASE_URL"}:
@@ -33,6 +43,11 @@ def boot(source_root: Path, runtime_dir: Path, extra_addon_dirs: list[Path]) -> 
 
     from angee.compose.composer import Composer
 
+    installed_apps = (
+        list(root_apps)
+        if root_apps is not None
+        else [manifest.name for _, manifest in discover(addon_dirs)]
+    )
     namespace = runpy.run_module(
         "angee.compose.defaults",
         init_globals={
@@ -40,7 +55,7 @@ def boot(source_root: Path, runtime_dir: Path, extra_addon_dirs: list[Path]) -> 
             "SECRET_KEY": "isolated-composition-check",
             "ANGEE_RUNTIME_DIR": runtime_dir,
             "ANGEE_ADDON_DIRS": tuple(addon_dirs),
-            "INSTALLED_APPS": [manifest.name for _, manifest in discover(addon_dirs)],
+            "INSTALLED_APPS": installed_apps,
             "DATABASES": {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
         },
     )
@@ -149,11 +164,28 @@ def main() -> None:
     parser.add_argument("--source-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--runtime-dir", type=Path, required=True)
     parser.add_argument("--addon-dir", type=Path, action="append", default=[])
+    parser.add_argument(
+        "--app",
+        action="append",
+        default=None,
+        help="Root app to compose (repeatable); dependencies are resolved from addon manifests.",
+    )
+    parser.add_argument(
+        "--no-examples",
+        action="store_true",
+        help="Exclude showcase addons from the composed host profile.",
+    )
     parser.add_argument("--action", choices=("resources", "snapshot", "state", "tests"), default="resources")
     parser.add_argument("--test-label", action="append", default=[])
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    boot(args.source_root.resolve(), args.runtime_dir.resolve(), [path.resolve() for path in args.addon_dir])
+    boot(
+        args.source_root.resolve(),
+        args.runtime_dir.resolve(),
+        [path.resolve() for path in args.addon_dir],
+        include_examples=not args.no_examples,
+        root_apps=args.app,
+    )
     if args.action == "tests":
         from django.apps import apps
         from django.conf import settings

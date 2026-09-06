@@ -20,6 +20,10 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     },
+    "./headless": {
+      "types": "./src/headless.ts",
+      "import": "./dist/headless.js"
+    },
     "./testing": {
       "types": "./src/testing.ts",
       "import": "./src/testing.ts"
@@ -34,6 +38,10 @@
         "types": "./dist/index.d.ts",
         "default": "./dist/index.js"
       },
+      "./headless": {
+        "types": "./dist/headless.d.ts",
+        "default": "./dist/headless.js"
+      },
       "./testing": {
         "types": "./dist/testing.d.ts",
         "default": "./dist/testing.js"
@@ -43,7 +51,8 @@
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepare": "pnpm run build"
   },
   "dependencies": {
     "@refinedev/core": "^5.0.12",

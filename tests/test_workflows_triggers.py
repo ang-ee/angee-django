@@ -8,6 +8,7 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
+import strawberry
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -99,6 +100,13 @@ class BackfillBridge(Bridge, AngeeModel):
 TRIGGER_TEST_MODELS = (TriggerSubject, SecuredTriggerSubject, UnpublishedTriggerSubject, BackfillBridge)
 
 
+@strawberry.type
+class TriggerSchemaQuery:
+    """Minimal query root for the change-feed-only workflow test schema."""
+
+    ready: bool = True
+
+
 @pytest.fixture()
 def workflow_trigger_tables(transactional_db: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Create trigger-specific concrete tables and sync workflow REBAC."""
@@ -111,6 +119,7 @@ def workflow_trigger_tables(transactional_db: Any, monkeypatch: pytest.MonkeyPat
             SchemaAddon(
                 {
                     "public": {
+                        "query": (TriggerSchemaQuery,),
                         "subscription": (
                             changes(TriggerSubject, field="triggerSubjectChanged"),
                             changes(SecuredTriggerSubject, field="securedTriggerSubjectChanged"),

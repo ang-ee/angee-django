@@ -13,11 +13,11 @@ ledger for the per-addon count) and projects their answers.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.db.models import Model
-from pydantic import BaseModel
 from rebac import ObjectRef
 from strawberry import auto
 
@@ -42,9 +42,15 @@ class PlatformField:
     addon: str
 
 
+def _nested_model_fields(root: Any) -> list[PlatformField]:
+    """Return a model row's lazily projected canonical field rows."""
+
+    return cast(list[PlatformField], cast(composed.PlatformModelRow, root).fields())
+
+
 @strawberry.type
 class PlatformModel:
-    """One concrete runtime model and its fields."""
+    """Legacy nested binding over a canonical computed platform model row."""
 
     label: str
     app_label: str
@@ -56,7 +62,7 @@ class PlatformModel:
     resource_type: str | None
     field_count: int
     relation_count: int
-    fields: list[PlatformField]
+    fields: list[PlatformField] = strawberry.field(resolver=_nested_model_fields)
     depends_on: list[str]
 
 
@@ -71,11 +77,17 @@ class PlatformEdge:
     field_name: str
 
 
+def _addon_id(root: Any) -> str:
+    """Return the addon's native composed name as the explorer identity."""
+
+    return cast(composed.AddonRollup, root).name
+
+
 @strawberry.type
 class PlatformAddon:
-    """One composed addon with its model/field/resource rollups."""
+    """Direct binding over the composed addon's live rollup."""
 
-    id: str
+    id: str = strawberry.field(resolver=_addon_id)
     label: str
     namespace: str
     kind: str
@@ -88,11 +100,34 @@ class PlatformAddon:
 
 @strawberry.type
 class PlatformExplorerData:
-    """The whole composed surface: addons, models, and relation edges."""
+    """Selected live composed views sharing one request-local model projection."""
 
-    addons: list[PlatformAddon]
-    models: list[PlatformModel]
-    edges: list[PlatformEdge]
+    _model_rows: strawberry.Private[list[composed.PlatformModelRow] | None] = None
+
+    def model_rows(self) -> list[composed.PlatformModelRow]:
+        """Return one lazily materialized model projection for nested consumers."""
+
+        if self._model_rows is None:
+            self._model_rows = composed.model_rows()
+        return self._model_rows
+
+    @strawberry.field
+    def addons(self) -> list[PlatformAddon]:
+        """Return live addon rollups only when the client selected them."""
+
+        return cast(list[PlatformAddon], composed.addon_rollups())
+
+    @strawberry.field
+    def models(self) -> list[PlatformModel]:
+        """Return canonical model rows through the legacy nested binding."""
+
+        return cast(list[PlatformModel], self.model_rows())
+
+    @strawberry.field
+    def edges(self) -> list[PlatformEdge]:
+        """Build graph edges from the same request-local model and field facts."""
+
+        return _edge_rows(self.model_rows())
 
 
 @strawberry.type
@@ -105,7 +140,7 @@ class PlatformQuery:
 
         if not platform_can_read():
             return None
-        return _build_explorer()
+        return PlatformExplorerData()
 
 
 def platform_can_read() -> bool:
@@ -119,105 +154,28 @@ def platform_can_read() -> bool:
     return actor_can_read(_EXPLORER)
 
 
-def _field_rows(model: type[Model]) -> list[PlatformField]:
-    """Project one model's own fields for the explorer."""
+def _edge_rows(models: list[composed.PlatformModelRow]) -> list[PlatformEdge]:
+    """Return relation edges from already-read canonical model and field rows."""
 
-    addon_label = model._meta.app_label
-    rows: list[PlatformField] = []
-    for field in composed.own_fields(model):
-        related = field.related_model if field.is_relation else None
-        rows.append(
-            PlatformField(
-                name=field.name,
-                attname=getattr(field, "attname", field.name),
-                kind=field.get_internal_type(),
-                is_relation=bool(field.is_relation),
-                relation_target=related._meta.label_lower if related else None,
-                addon=addon_label,
-            )
-        )
-    return rows
-
-
-def _edge_rows(model: type[Model], known: set[str]) -> list[PlatformEdge]:
-    """Return relation edges from ``model`` to other shown models."""
-
-    source = model._meta.label_lower
+    known = {model.label for model in models}
     edges: list[PlatformEdge] = []
-    for field in composed.own_fields(model):
-        related = field.related_model if field.is_relation else None
-        if related is None:
-            continue
-        target = related._meta.label_lower
-        if target not in known:
-            continue
-        if field.many_to_many:
-            kind = "many_to_many"
-        elif field.one_to_one:
-            kind = "one_to_one"
-        else:
-            kind = "foreign_key"
-        edges.append(
-            PlatformEdge(
-                id=f"{source}.{field.name}",
-                source=source,
-                target=target,
-                kind=kind,
-                field_name=field.name,
-            )
-        )
-    return edges
-
-
-def _build_explorer() -> PlatformExplorerData:
-    """Project the composed models + relation edges, and the addon rollups.
-
-    Addons come from the shared rollup (``composed.addon_rollups``), the single
-    derivation the reflection table reads too — not a second walk here.
-    """
-
-    configs = composed.addons()
-    models_by_addon = {config.name: composed.data_models(config) for config in configs}
-    known = {model._meta.label_lower for models in models_by_addon.values() for model in models}
-
-    models_out: list[PlatformModel] = []
-    edges_out: list[PlatformEdge] = []
-    for config in configs:
-        for model in models_by_addon[config.name]:
-            fields = _field_rows(model)
-            relations = [field for field in fields if field.is_relation]
-            models_out.append(
-                PlatformModel(
-                    label=model._meta.label_lower,
-                    app_label=model._meta.app_label,
-                    model_name=model._meta.model_name,
-                    verbose_name=str(model._meta.verbose_name),
-                    db_table=model._meta.db_table,
-                    addon_id=config.name,
-                    addon_label=config.label,
-                    resource_type=getattr(model._meta, "rebac_resource_type", None),
-                    field_count=len(fields),
-                    relation_count=len(relations),
-                    fields=fields,
-                    depends_on=sorted({field.relation_target for field in relations if field.relation_target}),
+    for model in models:
+        for field in model.fields():
+            if field.relation_target not in known:
+                continue
+            kind = field.relation_kind()
+            if kind is None:
+                continue
+            edges.append(
+                PlatformEdge(
+                    id=field.id,
+                    source=model.label,
+                    target=field.relation_target,
+                    kind=kind,
+                    field_name=field.name,
                 )
             )
-            edges_out.extend(_edge_rows(model, known))
-    addons_out = [
-        PlatformAddon(
-            id=rollup.name,
-            label=rollup.label,
-            namespace=rollup.namespace,
-            kind=rollup.kind,
-            model_count=rollup.model_count,
-            field_count=rollup.field_count,
-            resource_count=rollup.resource_count,
-            depends_on=rollup.depends_on,
-            model_labels=rollup.model_labels,
-        )
-        for rollup in composed.addon_rollups()
-    ]
-    return PlatformExplorerData(addons=addons_out, models=models_out, edges=edges_out)
+    return edges
 
 
 _Addon = apps.get_model("platform", "Addon")
@@ -282,108 +240,22 @@ _ADDON_RESOURCE = hasura_model_resource(
 )
 
 
-class PlatformModelRow(BaseModel):
-    """Computed platform-explorer model row (no Django table behind it).
-
-    The row-shape SSOT for the ``platform.Model`` Hasura resource. The strawberry
-    ``PlatformModel`` keys by ``label`` and carries no ``id``; the row adds an
-    explicit ``id`` (= ``label``) for by-pk addressing. The nested ``fields`` list
-    stays a detail concern (it is the ``platform.Field`` resource, flattened), so
-    it is dropped here in favour of the ``field_count``/``relation_count`` rollup.
-    """
-
-    id: str
-    label: str
-    app_label: str
-    model_name: str
-    verbose_name: str
-    db_table: str
-    addon_id: str
-    addon_label: str
-    resource_type: str | None
-    field_count: int
-    relation_count: int
-    depends_on: list[str]
-
-
-class PlatformFieldRow(BaseModel):
-    """Computed platform-explorer field row, flattened across all models.
-
-    The row-shape SSOT for the ``platform.Field`` Hasura resource. The strawberry
-    ``PlatformField`` is nested under one model; this row flattens every model's
-    fields into one collection, carrying the owning ``model`` label and ``addon``
-    context plus a synthetic ``id`` (``f"{model}.{name}"``) for by-pk addressing.
-    """
-
-    id: str
-    name: str
-    attname: str
-    kind: str
-    is_relation: bool
-    relation_target: str | None
-    model: str
-    addon: str
-
-
-def _model_rows() -> list[PlatformModelRow]:
-    """Project composed models as rows (the explorer's per-model rollup)."""
-
-    explorer = _build_explorer()
-    return [
-        PlatformModelRow(
-            id=model.label,
-            label=model.label,
-            app_label=model.app_label,
-            model_name=model.model_name,
-            verbose_name=model.verbose_name,
-            db_table=model.db_table,
-            addon_id=model.addon_id,
-            addon_label=model.addon_label,
-            resource_type=model.resource_type,
-            field_count=model.field_count,
-            relation_count=model.relation_count,
-            depends_on=list(model.depends_on),
-        )
-        for model in explorer.models
-    ]
-
-
-def _field_rows_flat() -> list[PlatformFieldRow]:
-    """Project every composed model's fields, flattened into one collection."""
-
-    explorer = _build_explorer()
-    return [
-        PlatformFieldRow(
-            id=f"{model.label}.{field.name}",
-            name=field.name,
-            attname=field.attname,
-            kind=field.kind,
-            is_relation=field.is_relation,
-            relation_target=field.relation_target,
-            model=model.label,
-            addon=field.addon,
-        )
-        for model in explorer.models
-        for field in model.fields
-    ]
-
-
-def _model_rows_for(info: strawberry.Info) -> list[PlatformModelRow]:
+def _model_rows_for(info: strawberry.Info) -> list[composed.PlatformModelRow]:
     """Row provider gated on the same platform-admin read as the explorer."""
 
     del info
-    return _model_rows() if platform_can_read() else []
+    return composed.model_rows() if platform_can_read() else []
 
 
-def _field_rows_for(info: strawberry.Info) -> list[PlatformFieldRow]:
+def _field_rows_for(info: strawberry.Info) -> list[composed.PlatformFieldRow]:
     """Row provider gated on the same platform-admin read as the explorer."""
 
     del info
-    return _field_rows_flat() if platform_can_read() else []
+    return composed.field_rows() if platform_can_read() else []
 
 
 _MODEL_RESOURCE = hasura_pydantic_resource(
-    PlatformModelRow,
+    composed.PlatformModelRow,
     name="platform_models",
     model_label="platform.Model",
     filterable=[
@@ -415,7 +287,7 @@ _MODEL_RESOURCE = hasura_pydantic_resource(
 
 
 _FIELD_RESOURCE = hasura_pydantic_resource(
-    PlatformFieldRow,
+    composed.PlatformFieldRow,
     name="platform_fields",
     model_label="platform.Field",
     filterable=[

@@ -6,7 +6,7 @@ import {
   QueryClientProvider,
 } from "@tanstack/react-query";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { ModelMetadataProvider } from "@angee/metadata";
+import { ModelMetadataProvider, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 
 import { AppRuntimeProvider } from "../../runtime";
@@ -113,7 +113,7 @@ describe("MutationDialog", () => {
     render(
       <QueryClientProvider client={queryClient}>
         <ModelMetadataProvider
-          metadata={{ types: {}, resources: [testDataResource("parties.Party")] }}
+          metadata={schemaFieldMetadataFromDataResources([testDataResource("parties.Party")])}
         >
           <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
             <MutationDialog

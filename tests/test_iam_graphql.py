@@ -15,18 +15,10 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from angee.base.identity import (
-    instance_from_public_id,
-    public_data_id_field,
-    public_id_for,
-    public_id_of,
-)
-from angee.data.field_classification import resource_field_kind, resource_field_widget
 from django.apps import apps
 from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, get_user_model
 from django.contrib.auth.hashers import PBKDF2PasswordHasher
 from django.contrib.auth.models import AnonymousUser
-from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.db import connection
 from django.test import RequestFactory
@@ -35,8 +27,15 @@ from rebac import actor_context, app_settings, system_context, to_object_ref, to
 from rebac.backends import backend
 from rebac.roles import grant
 
+from angee.base.identity import (
+    instance_from_public_id,
+    public_data_id_field,
+    public_id_for,
+    public_id_of,
+)
+from angee.data.field_classification import resource_field_kind, resource_field_widget
 from angee.graphql import subscriptions
-from angee.graphql.data.metadata import model_resource_fields, readable_model_field_names
+from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.events import ChangePayload
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import state
@@ -1329,7 +1328,7 @@ def test_account_connect_schema_exposes_generic_flow_without_token_material(
 def test_oauth_client_resource_metadata_includes_oidc_extension_fields(
     iam_connection_tables: None,
 ) -> None:
-    """Same-row OIDC extension fields keep their model-owned resource metadata."""
+    """OIDC extension fields follow their executable GraphQL field shapes."""
 
     console_schema = _schema("console")
     metadata = {item.model_label: item for item in console_schema.angee_resources}
@@ -1351,33 +1350,34 @@ def test_oauth_client_resource_metadata_includes_oidc_extension_fields(
         assert fields[name].widget == "switch"
         assert fields[name].creatable is True
         assert fields[name].updatable is True
-    assert fields["allowed_email_domains"].scalar == "JSON"
-    assert fields["allowed_email_domains"].widget == "json"
+    assert fields["allowed_email_domains"].kind == "list"
+    assert fields["allowed_email_domains"].scalar == "String"
+    assert fields["allowed_email_domains"].widget == "tagInput"
 
 
-def test_model_resource_fields_rejects_enum_declared_field() -> None:
-    """A declared enum column fails fast: its values are owned by the node surface."""
+def test_external_account_final_metadata_owns_enum_and_relation_axis() -> None:
+    """The final node and relation surface own ExternalAccount metadata."""
 
-    with pytest.raises(ImproperlyConfigured, match="cannot reconstruct enum"):
-        model_resource_fields(ExternalAccount, ("status",))
+    resources = {item.model_label: item for item in _schema("console").angee_resources}
+    external_account = resources[ExternalAccount._meta.label]
+    fields = {field.name: field for field in external_account.fields}
+    axes = {axis.field: axis for axis in external_account.relation_axes}
+
+    assert fields["status"].kind == "enum"
+    assert [(value.value, value.description) for value in fields["status"].values] == [
+        ("ACTIVE", "Active"),
+        ("EXPIRED", "Expired"),
+        ("REVOKED", "Revoked"),
+    ]
+    assert axes["oauth_client"].model_label == OAuthClient._meta.label
+    assert axes["oauth_client"].label_axis == "oauth_client__display_name"
 
 
-def test_model_resource_fields_reconstructs_relation_target_label() -> None:
-    """A declared same-row relation keeps its target label, resolved from the model."""
+def test_scalar_id_to_one_relation_preserves_django_relation_semantics() -> None:
+    """An FK projected as a bare ``ID`` retains its native relation semantics.
 
-    (field,) = model_resource_fields(ExternalAccount, ("oauth_client",))
-    assert field.kind == "relation"
-    assert field.scalar is None
-    assert field.relation_model_label == OAuthClient._meta.label
-
-
-def test_scalar_id_to_one_relation_classifies_as_leaf() -> None:
-    """An FK a node projects as a bare ``ID`` scalar is a scalar leaf, not an object.
-
-    A to-one FK projected as an object stays a ``relation`` (an object selection, a
-    ``many2one`` picker). Projected as a bare ``ID`` scalar it must classify as a
-    ``scalar`` leaf so the detail/form query selects it without an invalid
-    sub-selection — while still resolving a scalar-id ``select`` picker widget.
+    ``relation_object`` separately tells consumers whether to sub-select the field;
+    kind and widget continue to describe the underlying Django foreign key.
     """
 
     oauth_client_fk = ExternalAccount._meta.get_field("oauth_client")
@@ -1386,25 +1386,24 @@ def test_scalar_id_to_one_relation_classifies_as_leaf() -> None:
     assert resource_field_kind(oauth_client_fk, is_object=True) == "relation"
     assert resource_field_widget(oauth_client_fk, "relation") == "many2one"
 
-    # Bare-ID-scalar projection: scalar leaf carrying the scalar-id select widget.
-    scalar_kind = resource_field_kind(oauth_client_fk, projected_as_scalar=True)
-    assert scalar_kind == "scalar"
-    assert resource_field_widget(oauth_client_fk, scalar_kind) == "select"
+    # Bare-ID projection: relation metadata with a leaf GraphQL projection.
+    scalar_kind = resource_field_kind(oauth_client_fk)
+    assert scalar_kind == "relation"
+    assert resource_field_widget(oauth_client_fk, scalar_kind) == "many2one"
 
 
-def test_scalar_id_relation_axis_classifies_as_leaf() -> None:
-    """A scalar-id FK stays a leaf even when it also contributes a group axis."""
+def test_scalar_id_relation_axis_preserves_django_relation_semantics() -> None:
+    """A grouped scalar-id FK remains a relation with a leaf projection."""
 
     oauth_client_fk = ExternalAccount._meta.get_field("oauth_client")
 
     kind = resource_field_kind(
         oauth_client_fk,
         has_relation_axis=True,
-        projected_as_scalar=True,
     )
 
-    assert kind == "scalar"
-    assert resource_field_widget(oauth_client_fk, kind) == "select"
+    assert kind == "relation"
+    assert resource_field_widget(oauth_client_fk, kind) == "many2one"
 
 
 def test_iam_schemas_expose_user_change_subscriptions(

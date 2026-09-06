@@ -204,14 +204,7 @@ describe("storage file/folder actions", () => {
 const STORAGE_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     FileType: {
-      typeName: "FileType",
       fields: {},
-      rootFields: {
-        detail: "file",
-        list: "files",
-        update: "updateFile",
-        delete: "deleteFile",
-      },
       resource: {
         schemaName: "console",
         modelLabel: "storage.File",
@@ -239,16 +232,8 @@ const STORAGE_METADATA: SchemaFieldMetadata = withTestResourceInventory({
       },
     },
     FolderType: {
-      typeName: "FolderType",
       fields: {
         name: { name: "name", kind: "scalar", scalar: "String" },
-      },
-      rootFields: {
-        detail: "folder",
-        list: "folders",
-        create: "createFolder",
-        update: "updateFolder",
-        delete: "deleteFolder",
       },
       resource: {
         schemaName: "console",

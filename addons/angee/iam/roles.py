@@ -9,11 +9,12 @@ from django.contrib.auth import get_user_model
 from django.db.models import Exists, OuterRef, QuerySet, Subquery, TextField
 from django.db.models.functions import Cast
 from django.http import HttpRequest
+from pydantic import BaseModel
 from rebac import ObjectRef, app_settings, subject_id_attr, system_context
 from rebac import backend as rebac_backend
 from rebac.models import active_relationship_model
 from rebac.roles import ROLE_RELATION
-from rebac.schema import permission_object_sources, permission_sources, render_allowed_subject
+from rebac.schema import Definition, Schema, permission_object_sources, permission_sources
 
 from angee.iam.identity import user_display_labels
 
@@ -24,35 +25,36 @@ PRIVILEGED_PERMISSION_NAMES = frozenset({"admin", "create", "write", "delete"})
 ROLE_SUFFIX = "/role"
 
 
-@dataclass(frozen=True, slots=True)
-class RoleInfo:
-    """Tuple-derived role projected by the IAM permission hub."""
+class IAMRoleRow(BaseModel):
+    """Canonical computed IAM role row derived from relationship tuples."""
 
     id: str
+    role_id: str
     namespace: str
     label: str
 
     @classmethod
-    def from_relationships(cls, rows: QuerySet[Any]) -> list[RoleInfo]:
+    def from_relationships(cls, rows: QuerySet[Any]) -> list[IAMRoleRow]:
         """Return distinct role types from relationship rows."""
 
-        roles: dict[tuple[str, str], RoleInfo] = {}
+        roles: dict[tuple[str, str], IAMRoleRow] = {}
         for row in rows:
             key = (str(row.resource_type), str(row.resource_id))
             if key in roles:
                 continue
             roles[key] = cls(
-                id=str(row.resource_id),
+                id=role_ref(*key),
+                role_id=str(row.resource_id),
                 namespace=role_namespace(str(row.resource_type)),
                 label=role_label(str(row.resource_id)),
             )
-        return sorted(roles.values(), key=lambda role: (role.namespace, role.id))
+        return sorted(roles.values(), key=lambda role: (role.namespace, role.role_id))
 
 
-@dataclass(frozen=True, slots=True)
-class GrantInfo:
-    """Direct user role grant projected by the IAM permission hub."""
+class IAMGrantRow(BaseModel):
+    """Canonical computed direct-user role grant row."""
 
+    id: str
     principal_id: str
     principal_type: str
     principal_ref: str
@@ -67,13 +69,13 @@ class GrantInfo:
         rows: QuerySet[Any],
         *,
         request: HttpRequest | None = None,
-    ) -> list[GrantInfo]:
+    ) -> list[IAMGrantRow]:
         """Project direct user role-grant tuples with batched principal labels."""
 
         materialized = list(rows)
         label_ids = [str(row.subject_id) for row in materialized]
         labels = user_display_labels(label_ids, request=request)
-        grants: list[GrantInfo] = []
+        grants: list[IAMGrantRow] = []
         for row in materialized:
             resource_type = str(row.resource_type)
             resource_id = str(row.resource_id)
@@ -83,6 +85,7 @@ class GrantInfo:
             role = role_ref(resource_type, resource_id)
             grants.append(
                 cls(
+                    id=f"{principal_ref}:{role}",
                     principal_id=subject_id,
                     principal_type=subject_type,
                     principal_ref=principal_ref,
@@ -93,38 +96,6 @@ class GrantInfo:
                 )
             )
         return grants
-
-
-@dataclass(frozen=True, slots=True)
-class RelationInfo:
-    """Installed REBAC relation declaration."""
-
-    name: str
-    allowed_subject_types: list[str]
-
-
-@dataclass(frozen=True, slots=True)
-class PermissionConditionInfo:
-    """Flattened permission expression leaf."""
-
-    name: str
-
-
-@dataclass(frozen=True, slots=True)
-class PermissionInfo:
-    """Installed REBAC permission declaration."""
-
-    name: str
-    conditions: list[PermissionConditionInfo]
-
-
-@dataclass(frozen=True, slots=True)
-class ResourceSchemaInfo:
-    """Installed REBAC resource definition projected for IAM."""
-
-    resource_type: str
-    relations: list[RelationInfo]
-    permissions: list[PermissionInfo]
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,7 +118,7 @@ class OverviewInfo:
     privileged_grant_count: int
     unassigned_user_count: int
     namespaces: list[OverviewNamespaceInfo]
-    privileged_grants: list[GrantInfo]
+    privileged_grants: list[IAMGrantRow]
     unassigned_users: list[Any]
 
     @classmethod
@@ -161,19 +132,19 @@ class OverviewInfo:
 
         peek_limit = clamped_peek_limit(peek_limit)
         with system_context(reason="iam.roles.overview"):
-            role_infos = RoleInfo.from_relationships(permission_hub_role_rows(limit=None))
+            role_rows = IAMRoleRow.from_relationships(permission_hub_role_rows(limit=None))
             grant_rows = permission_hub_grant_rows(limit=None)
             privileged_rows = _privileged_grant_rows(grant_rows)
             unassigned_queryset = unassigned_user_queryset()
             return cls(
                 user_count=_people_queryset(get_user_model()).count(),
-                role_count=len(role_infos),
+                role_count=len(role_rows),
                 grant_count=grant_rows.count(),
                 relationship_count=relationship_rows(limit=None).count(),
                 privileged_grant_count=privileged_rows.count(),
                 unassigned_user_count=unassigned_queryset.count(),
-                namespaces=overview_namespaces(role_infos, grant_rows),
-                privileged_grants=GrantInfo.from_relationships(privileged_rows[:peek_limit], request=request),
+                namespaces=overview_namespaces(role_rows, grant_rows),
+                privileged_grants=IAMGrantRow.from_relationships(privileged_rows[:peek_limit], request=request),
                 unassigned_users=list(unassigned_queryset[:peek_limit]),
             )
 
@@ -221,10 +192,10 @@ def relationship_rows(limit: int | None = PERMISSION_HUB_LIST_CAP) -> QuerySet[A
     return cast(QuerySet[Any], rows)
 
 
-def permission_hub_roles(limit: int | None = PERMISSION_HUB_LIST_CAP) -> list[RoleInfo]:
+def permission_hub_roles(limit: int | None = PERMISSION_HUB_LIST_CAP) -> list[IAMRoleRow]:
     """Return roles visible from active role relationship rows."""
 
-    return RoleInfo.from_relationships(permission_hub_role_rows(limit=limit))
+    return IAMRoleRow.from_relationships(permission_hub_role_rows(limit=limit))
 
 
 def permission_hub_role_rows(limit: int | None = PERMISSION_HUB_LIST_CAP) -> QuerySet[Any]:
@@ -241,10 +212,10 @@ def permission_hub_grants(
     *,
     request: HttpRequest | None = None,
     limit: int | None = PERMISSION_HUB_LIST_CAP,
-) -> list[GrantInfo]:
+) -> list[IAMGrantRow]:
     """Return direct user role grants with principal labels batched."""
 
-    return GrantInfo.from_relationships(permission_hub_grant_rows(limit=limit), request=request)
+    return IAMGrantRow.from_relationships(permission_hub_grant_rows(limit=limit), request=request)
 
 
 def permission_hub_grant_rows(limit: int | None = PERMISSION_HUB_LIST_CAP) -> QuerySet[Any]:
@@ -272,7 +243,7 @@ def schema_role_resource_types() -> set[str]:
     }
 
 
-def permission_conditions(schema: Any, resource_type: str, permission_name: str) -> list[PermissionConditionInfo]:
+def permission_conditions(schema: Schema, resource_type: str, permission_name: str) -> list[str]:
     """Return source condition labels for a REBAC permission."""
 
     sources = permission_sources(schema, resource_type, permission_name)
@@ -282,38 +253,15 @@ def permission_conditions(schema: Any, resource_type: str, permission_name: str)
         *sources.builtins,
         *sources.subpermissions,
     }
-    return [PermissionConditionInfo(name=name) for name in sorted(names)] or [PermissionConditionInfo(name="nil")]
+    return sorted(names) or ["nil"]
 
 
-def permission_schema() -> list[ResourceSchemaInfo]:
-    """Return the installed REBAC schema projected for the IAM console."""
+def permission_schema() -> tuple[Schema, list[Definition]]:
+    """Return the native installed schema and its deterministically ordered definitions."""
 
     schema = rebac_backend().schema()
-    resources: list[ResourceSchemaInfo] = []
     definitions = sorted(schema.definitions, key=lambda item: item.resource_type)
-    for definition in definitions[:PERMISSION_HUB_LIST_CAP]:
-        relations = [
-            RelationInfo(
-                name=relation.name,
-                allowed_subject_types=[render_allowed_subject(allowed) for allowed in relation.allowed_subjects],
-            )
-            for relation in sorted(definition.relations, key=lambda item: item.name)
-        ]
-        permissions = [
-            PermissionInfo(
-                name=permission.name,
-                conditions=permission_conditions(schema, definition.resource_type, permission.name),
-            )
-            for permission in sorted(definition.permissions, key=lambda item: item.name)
-        ]
-        resources.append(
-            ResourceSchemaInfo(
-                resource_type=definition.resource_type,
-                relations=relations,
-                permissions=permissions,
-            )
-        )
-    return resources
+    return schema, definitions[:PERMISSION_HUB_LIST_CAP]
 
 
 def iam_overview(
@@ -333,7 +281,7 @@ def clamped_peek_limit(value: int) -> int:
 
 
 def overview_namespaces(
-    roles: list[RoleInfo],
+    roles: list[IAMRoleRow],
     grants: QuerySet[Any],
 ) -> list[OverviewNamespaceInfo]:
     """Return namespace-level role and direct-grant counts."""

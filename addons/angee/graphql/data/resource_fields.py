@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 from typing import Any
 
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
@@ -11,6 +10,7 @@ from strawberry.types import get_object_definition
 from strawberry.types.base import StrawberryList, StrawberryOptional
 from strawberry.types.enum import StrawberryEnumDefinition
 from strawberry.types.lazy_type import LazyType
+from strawberry_django.utils.typing import get_django_definition
 from strawberry_django_hasura import SnakeNameConverter
 
 from angee.base.impl import ImplClassField
@@ -26,16 +26,20 @@ from angee.data.field_classification import (
 )
 from angee.data.field_classification import (
     is_archive_field,
-    model_field_scalar,
     money_currency_field,
-    python_type_scalar,
     resource_field_kind,
     resource_field_widget,
 )
 from angee.graphql.introspection import surface_field_names, surface_name
-
-_FILTER_CONTROL_FIELDS = frozenset({"AND", "OR", "NOT", "DISTINCT", "and", "or", "not", "distinct"})
-
+from graphql import (
+    GraphQLEnumType,
+    GraphQLList,
+    GraphQLNonNull,
+    GraphQLObjectType,
+    GraphQLScalarType,
+    GraphQLSchema,
+    get_named_type,
+)
 
 # The schema is built with ``hasura_config()`` (``angee/graphql/schema.py``); its
 # ``SnakeNameConverter`` owns the python-name -> wire-name rule, keeping snake_case
@@ -100,147 +104,35 @@ def resource_relation_surface(surface: type | None, name: str) -> type | None:
     return related_surface
 
 
-def require_resource_selection_path(
-    surface: type | None,
-    path: str,
-    *,
-    model_label: str,
-    fact: str = "subtitle",
-) -> None:
-    """Require a dotted GraphQL selection path to resolve through ``surface``.
+def resource_string_field_names(surface: type | None) -> tuple[str, ...]:
+    """Return projected Python field names whose native surface type is String."""
 
-    Each segment is matched by its actual wire name. Intermediate fields must
-    project another Strawberry object; walking through a scalar/list or naming a
-    missing field fails during metadata emission, before a generated detail query
-    can carry the invalid selection.
-    """
-
-    current_surface: object | None = surface
-    parts = path.split(".")
-    for index, part in enumerate(parts):
-        definition = get_object_definition(current_surface)
-        field = (
-            next(
-                (candidate for candidate in definition.fields if _wire_field_name(candidate) == part),
-                None,
-            )
-            if definition is not None
-            else None
-        )
-        if field is None:
-            raise ImproperlyConfigured(
-                f"resource metadata for {model_label} declares {fact} selection "
-                f"path {path!r} with unknown field {part!r}."
-            )
-        if index == len(parts) - 1:
-            try:
-                terminal_surface, _is_list = _selection_surface(field.type)
-            except NotImplementedError as error:
-                raise ImproperlyConfigured(
-                    f"resource metadata for {model_label} cannot resolve {fact} selection path {path!r}: {error}"
-                ) from error
-            if get_object_definition(terminal_surface) is not None:
-                raise ImproperlyConfigured(
-                    f"resource metadata for {model_label} declares {fact} selection "
-                    f"path {path!r} ending at object field {part!r}; declare a scalar "
-                    f"subfield such as {path + '.<record representation>'!r} instead."
-                )
-            return
-        try:
-            next_surface, is_list = _selection_surface(field.type)
-        except NotImplementedError as error:
-            raise ImproperlyConfigured(
-                f"resource metadata for {model_label} cannot resolve {fact} selection path {path!r}: {error}"
-            ) from error
-        if is_list or get_object_definition(next_surface) is None:
-            traversed = ".".join(parts[: index + 1])
-            raise ImproperlyConfigured(
-                f"resource metadata for {model_label} declares {fact} selection "
-                f"path {path!r} through non-object field {traversed!r}."
-            )
-        current_surface = next_surface
-
-
-def model_resource_fields(
-    model: type[models.Model],
-    fields: tuple[str | data_contract.DataResourceFieldMetadata, ...],
-    *,
-    filter_fields: tuple[str, ...] = (),
-    order_fields: tuple[str, ...] = (),
-    aggregate_fields: tuple[str, ...] = (),
-    group_by_fields: tuple[str, ...] = (),
-    create_fields: tuple[str, ...] = (),
-    update_fields: tuple[str, ...] = (),
-    required_create_fields: tuple[str, ...] = (),
-    relation_axes: tuple[data_contract.DataRelationAxisMetadata, ...] = (),
-) -> tuple[data_contract.DataResourceFieldMetadata, ...]:
-    """Return metadata for model fields exposed outside the node class.
-
-    A caller may supply explicit metadata for a projected donor field whose
-    shape the bare model cannot reconstruct (notably an enum). Ordinary string
-    declarations retain the model-only fail-fast contract.
-    """
-
-    filterable = set(filter_fields)
-    sortable = set(order_fields)
-    aggregatable = set(aggregate_fields)
-    groupable = set(group_by_fields)
-    creatable = set(create_fields)
-    updatable = set(update_fields)
-    required_on_create = set(required_create_fields)
-    relation_by_field = {axis.field: axis for axis in relation_axes}
-    return tuple(
-        (
-            name
-            if isinstance(name, data_contract.DataResourceFieldMetadata)
-            else _model_resource_field(
-                model,
-                name,
-                relation_axis=relation_by_field.get(name),
-                filterable=name in filterable,
-                sortable=name in sortable,
-                aggregatable=name in aggregatable,
-                groupable=name in groupable,
-                creatable=name in creatable,
-                updatable=name in updatable,
-                required_on_create=name in required_on_create,
-            )
-        )
-        for name in fields
-    )
-
-
-def input_wire_fields(surface: type | None, *, exclude: tuple[str, ...] = ()) -> tuple[str, ...]:
-    """Return declared input fields as GraphQL wire names."""
-
-    excluded = set(exclude)
-    return tuple(
-        resource_wire_field_name(surface, name) or name for name in _input_fields(surface) if name not in excluded
-    )
-
-
-def required_input_wire_fields(surface: type | None) -> tuple[str, ...]:
-    """Return input fields whose value is required by GraphQL coercion."""
-
-    if surface is None:
-        return ()
-    definition = get_object_definition(surface)
+    definition = get_object_definition(surface) if surface is not None else None
     if definition is None:
         return ()
-    required: list[str] = []
+    names: list[str] = []
     for field in definition.fields:
-        if field.python_name in _FILTER_CONTROL_FIELDS:
+        try:
+            value = field.type
+        except NotImplementedError:
             continue
-        default = getattr(field, "default", dataclasses.MISSING)
-        default_factory = getattr(field, "default_factory", dataclasses.MISSING)
-        if default is not dataclasses.MISSING or default_factory is not dataclasses.MISSING:
+        while isinstance(value, StrawberryOptional):
+            value = value.of_type
+        if isinstance(value, StrawberryList | StrawberryEnumDefinition):
             continue
-        required.append(_wire_field_name(field))
-    return tuple(required)
+        if isinstance(value, LazyType):
+            value = value.resolve_type()
+        scalar_definition = getattr(value, "_scalar_definition", None)
+        scalar_name = getattr(scalar_definition, "name", None)
+        if value is str or scalar_name == "String":
+            names.append(str(field.python_name))
+    return tuple(names)
 
 
-def resource_fields(
-    node_type: type,
+
+def final_resource_fields(
+    schema: GraphQLSchema,
+    node_name: str,
     model: type[models.Model] | None,
     *,
     filter_fields: tuple[str, ...],
@@ -252,8 +144,18 @@ def resource_fields(
     required_create_fields: tuple[str, ...],
     relation_axes: tuple[data_contract.DataRelationAxisMetadata, ...],
 ) -> tuple[data_contract.DataResourceFieldMetadata, ...]:
-    """Return model resource field metadata from the declared node surface."""
+    """Project fields from the composed schema's final node map.
 
+    Strawberry keeps the owning field on graphql-core's ``strawberry-definition``
+    extension. That source link supplies the Python/model name for aliases while
+    graphql-core supplies the actual post-extension wire type and enum values.
+    """
+
+    node = schema.get_type(node_name)
+    if not isinstance(node, GraphQLObjectType):
+        raise ImproperlyConfigured(
+            f"resource metadata node type {node_name!r} is absent from the composed schema."
+        )
     filterable = set(filter_fields)
     sortable = set(order_fields)
     aggregatable = set(aggregate_fields)
@@ -262,52 +164,375 @@ def resource_fields(
     updatable = set(update_fields)
     required_on_create = set(required_create_fields)
     relation_by_field = {axis.field: axis for axis in relation_axes}
-    fields: list[data_contract.DataResourceFieldMetadata] = []
-    for python_name in surface_field_names(node_type):
-        name = resource_wire_field_name(node_type, python_name) or python_name
-        axis = relation_by_field.get(name)
+    projected: list[data_contract.DataResourceFieldMetadata] = []
+    for name, graphql_field in node.fields.items():
+        source = (graphql_field.extensions or {}).get("strawberry-definition")
+        python_name = str(getattr(source, "python_name", None) or name)
+        axis = relation_by_field.get(name) or relation_by_field.get(python_name)
         model_field = _model_field_or_none(model, python_name)
-        surface_type = _surface_field_type(node_type, python_name)
-        is_object = _strawberry_type_is_object(surface_type)
-        is_list = _strawberry_type_is_list(surface_type)
-        is_enum = _strawberry_type_is_enum(surface_type)
+        named = get_named_type(graphql_field.type)
+        is_list = _graphql_type_is_list(graphql_field.type)
+        is_enum = isinstance(named, GraphQLEnumType)
+        is_object = isinstance(named, GraphQLObjectType)
         kind = resource_field_kind(
             model_field,
             has_relation_axis=axis is not None,
             is_list=is_list,
             is_enum=is_enum,
             is_object=is_object,
-            projected_as_scalar=surface_type is not None and not is_object and not is_list and not is_enum,
         )
-        scalar = _surface_field_scalar(
-            surface=node_type,
-            field_name=name,
-            value=surface_type,
-            kind=kind,
-        )
-        values = _resource_enum_values(model_field, surface_type) if kind == "enum" else ()
-        fields.append(
+        scalar = _graphql_scalar(named, kind=kind, field_name=name, node_name=node_name)
+        values = _graphql_enum_values(model_field, named) if kind == "enum" else ()
+        projected.append(
             data_contract.DataResourceFieldMetadata(
                 name=name,
                 kind=kind,
                 scalar=scalar,
                 values=values,
                 widget=_projected_widget(model_field, kind, scalar),
-                filterable=name in filterable,
-                sortable=name in sortable,
-                aggregatable=name in aggregatable,
-                groupable=name in groupable,
-                creatable=name in creatable,
-                updatable=name in updatable,
-                required_on_create=name in required_on_create,
+                filterable=name in filterable or python_name in filterable,
+                sortable=name in sortable or python_name in sortable,
+                aggregatable=name in aggregatable or python_name in aggregatable,
+                groupable=name in groupable or python_name in groupable,
+                creatable=name in creatable or python_name in creatable,
+                updatable=name in updatable or python_name in updatable,
+                required_on_create=name in required_on_create or python_name in required_on_create,
+                archivable=is_archive_field(model_field),
+                currency_field=money_currency_field(model_field),
+                relation_model_label=(
+                    _relation_model_label(model_field, axis)
+                    or _graphql_relation_model_label(named)
+                ),
+                relation_label_axis=axis.label_axis if axis is not None else None,
+                relation_object=kind == "relation" and is_object,
+                model_field_name=python_name if model_field is not None else None,
+            )
+        )
+    return tuple(projected)
+
+
+def final_input_only_resource_fields(
+    schema: GraphQLSchema,
+    *,
+    create_input_name: str | None,
+    update_input_name: str | None,
+    model: type[models.Model] | None,
+    filter_fields: tuple[str, ...],
+    order_fields: tuple[str, ...],
+    aggregate_fields: tuple[str, ...],
+    group_by_fields: tuple[str, ...],
+    create_fields: tuple[str, ...],
+    update_fields: tuple[str, ...],
+    required_create_fields: tuple[str, ...],
+    relation_axes: tuple[data_contract.DataRelationAxisMetadata, ...],
+    readable_fields: tuple[data_contract.DataResourceFieldMetadata, ...],
+) -> tuple[data_contract.DataResourceFieldMetadata, ...]:
+    """Project accepted final input fields absent from the readable node."""
+
+    filterable = set(filter_fields)
+    sortable = set(order_fields)
+    aggregatable = set(aggregate_fields)
+    groupable = set(group_by_fields)
+    create = set(create_fields)
+    update = set(update_fields)
+    required = set(required_create_fields)
+    relation_by_field = {axis.field: axis for axis in relation_axes}
+    readable_sources = {
+        field.model_field_name or field.name for field in readable_fields
+    }
+    candidates: dict[str, tuple[str, Any]] = {}
+    for type_name, accepted in (
+        (create_input_name, create),
+        (update_input_name, update),
+    ):
+        input_type = schema.get_type(type_name) if type_name else None
+        fields = getattr(input_type, "fields", None)
+        if not isinstance(fields, dict):
+            continue
+        for wire_name, graphql_field in fields.items():
+            if wire_name not in accepted:
+                continue
+            source = (graphql_field.extensions or {}).get("strawberry-definition")
+            python_name = str(getattr(source, "python_name", None) or wire_name)
+            candidates.setdefault(wire_name, (python_name, graphql_field))
+    projected: list[data_contract.DataResourceFieldMetadata] = []
+    for name, (python_name, graphql_field) in candidates.items():
+        if python_name in readable_sources:
+            continue
+        axis = relation_by_field.get(name) or relation_by_field.get(python_name)
+        model_field = _model_field_or_none(model, python_name)
+        named = get_named_type(graphql_field.type)
+        is_list = _graphql_type_is_list(graphql_field.type)
+        is_enum = isinstance(named, GraphQLEnumType)
+        is_object = isinstance(named, GraphQLObjectType)
+        kind = resource_field_kind(
+            model_field,
+            is_list=is_list,
+            is_enum=is_enum,
+            is_object=is_object,
+        )
+        scalar = _graphql_scalar(named, kind=kind, field_name=name, node_name="input")
+        projected.append(
+            data_contract.DataResourceFieldMetadata(
+                name=name,
+                kind=kind,
+                scalar=scalar,
+                values=_graphql_enum_values(model_field, named) if kind == "enum" else (),
+                widget=_projected_widget(model_field, kind, scalar),
+                readable=False,
+                filterable=name in filterable or python_name in filterable,
+                sortable=name in sortable or python_name in sortable,
+                aggregatable=name in aggregatable or python_name in aggregatable,
+                groupable=name in groupable or python_name in groupable,
+                creatable=name in create,
+                updatable=name in update,
+                required_on_create=name in required,
                 archivable=is_archive_field(model_field),
                 currency_field=money_currency_field(model_field),
                 relation_model_label=_relation_model_label(model_field, axis),
                 relation_label_axis=axis.label_axis if axis is not None else None,
-                relation_object=kind == "relation" and is_object,
+                relation_object=False,
+                model_field_name=python_name if model_field is not None else None,
             )
         )
-    return tuple(fields)
+    return tuple(projected)
+
+
+def final_wire_field_names(
+    schema: GraphQLSchema,
+    node_name: str,
+    names: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Map direct authored Python field names through final Strawberry aliases."""
+
+    node = schema.get_type(node_name)
+    fields = getattr(node, "fields", None)
+    if not isinstance(fields, dict):
+        return names
+    by_source: dict[str, str] = {}
+    for wire_name, graphql_field in fields.items():
+        source = (graphql_field.extensions or {}).get("strawberry-definition")
+        python_name = str(getattr(source, "python_name", None) or wire_name)
+        by_source[python_name] = wire_name
+    mapped: list[str] = []
+    for path in names:
+        separator = "__" if "__" in path else "." if "." in path else None
+        if separator is None:
+            mapped.append(by_source.get(path, path))
+            continue
+        head, tail = path.split(separator, 1)
+        mapped.append(f"{by_source.get(head, head)}{separator}{tail}")
+    return tuple(mapped)
+
+
+def final_input_policy_fields(
+    schema: GraphQLSchema,
+    input_name: str | None,
+    *,
+    accepted: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Map and validate authored read-policy paths against their final input."""
+
+    if input_name is None:
+        return ()
+    input_type = schema.get_type(input_name)
+    fields = getattr(input_type, "fields", None)
+    if not isinstance(fields, dict):
+        return ()
+    by_source: dict[str, str] = {}
+    for wire_name, input_field in fields.items():
+        source = (input_field.extensions or {}).get("strawberry-definition")
+        python_name = str(getattr(source, "python_name", None) or wire_name)
+        by_source[python_name] = wire_name
+    projected: list[str] = []
+    for path in accepted:
+        separator = "__" if "__" in path else "." if "." in path else None
+        head, tail = path.split(separator, 1) if separator is not None else (path, "")
+        wire_head = by_source.get(head)
+        if wire_head is None:
+            continue
+        projected.append(wire_head if separator is None else f"{wire_head}{separator}{tail}")
+    return tuple(projected)
+
+
+def final_aggregate_wire_fields(
+    schema: GraphQLSchema,
+    aggregate_container_name: str | None,
+    *,
+    accepted: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Map authored aggregate columns through the final native aggregate types."""
+
+    container = schema.get_type(aggregate_container_name) if aggregate_container_name else None
+    container_fields = getattr(container, "fields", None)
+    aggregate_field = container_fields.get("aggregate") if isinstance(container_fields, dict) else None
+    aggregate = get_named_type(aggregate_field.type) if aggregate_field is not None else None
+    operation_fields = getattr(aggregate, "fields", None)
+    by_source: dict[str, str] = {}
+    if isinstance(operation_fields, dict):
+        for operation in operation_fields.values():
+            columns = getattr(get_named_type(operation.type), "fields", None)
+            if isinstance(columns, dict):
+                for wire_name, column in columns.items():
+                    source = (column.extensions or {}).get("strawberry-definition")
+                    python_name = str(getattr(source, "python_name", None) or wire_name)
+                    by_source[python_name] = wire_name
+            for argument in operation.args.values():
+                enum_type = get_named_type(argument.type)
+                if not isinstance(enum_type, GraphQLEnumType):
+                    continue
+                for enum_value in enum_type.values.values():
+                    value = str(enum_value.value)
+                    by_source[value] = value
+    return tuple(by_source[name] for name in accepted if name in by_source)
+
+
+def final_input_wire_fields(
+    schema: GraphQLSchema,
+    input_name: str | None,
+    *,
+    accepted: tuple[str, ...],
+    exclude: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    """Return final executable input fields restricted by authored write policy."""
+
+    if input_name is None:
+        return ()
+    input_type = schema.get_type(input_name)
+    fields = getattr(input_type, "fields", None)
+    if not isinstance(fields, dict):
+        raise ImproperlyConfigured(
+            f"resource metadata input type {input_name!r} is absent from the composed schema."
+        )
+    excluded = set(exclude)
+    by_source: dict[str, str] = {}
+    for wire_name, input_field in fields.items():
+        source = (input_field.extensions or {}).get("strawberry-definition")
+        python_name = str(getattr(source, "python_name", None) or wire_name)
+        by_source[python_name] = wire_name
+    return tuple(
+        wire_name
+        for name in accepted
+        if (wire_name := by_source.get(name)) is not None and wire_name not in excluded
+    )
+
+
+def final_required_input_wire_fields(
+    schema: GraphQLSchema,
+    input_name: str | None,
+    *,
+    accepted: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return accepted final inputs required by GraphQL coercion."""
+
+    from graphql import Undefined
+
+    if input_name is None:
+        return ()
+    input_type = schema.get_type(input_name)
+    fields = getattr(input_type, "fields", None)
+    if not isinstance(fields, dict):
+        return ()
+    return tuple(
+        name
+        for name in accepted
+        if name in fields
+        and isinstance(fields[name].type, GraphQLNonNull)
+        and fields[name].default_value is Undefined
+    )
+
+
+def require_final_selection_path(
+    schema: GraphQLSchema,
+    node_name: str,
+    path: str,
+    *,
+    model_label: str,
+    fact: str,
+) -> None:
+    """Validate a dotted selection against the composed schema."""
+
+    current = schema.get_type(node_name)
+    parts = path.split(".")
+    for index, part in enumerate(parts):
+        fields = getattr(current, "fields", None)
+        field = fields.get(part) if isinstance(fields, dict) else None
+        if field is None:
+            raise ImproperlyConfigured(
+                f"resource metadata for {model_label} declares {fact} selection path "
+                f"{path!r} with unknown field {part!r}."
+            )
+        named = get_named_type(field.type)
+        if index == len(parts) - 1:
+            if isinstance(named, GraphQLObjectType):
+                raise ImproperlyConfigured(
+                    f"resource metadata for {model_label} declares {fact} selection path "
+                    f"{path!r} ending at object field {part!r}; declare a scalar subfield instead."
+                )
+            return
+        if _graphql_type_is_list(field.type) or not isinstance(named, GraphQLObjectType):
+            traversed = ".".join(parts[: index + 1])
+            raise ImproperlyConfigured(
+                f"resource metadata for {model_label} declares {fact} selection path "
+                f"{path!r} through non-object field {traversed!r}."
+            )
+        current = named
+
+
+def _graphql_type_is_list(value: object) -> bool:
+    while isinstance(value, GraphQLNonNull):
+        value = value.of_type
+    return isinstance(value, GraphQLList)
+
+
+def _graphql_scalar(value: object, *, kind: str, field_name: str, node_name: str) -> str | None:
+    if kind in {"relation", "enum"}:
+        return None
+    if not isinstance(value, GraphQLScalarType):
+        if kind == "list":
+            return None
+        raise ImproperlyConfigured(
+            f"resource metadata for {node_name} cannot classify GraphQL scalar for "
+            f"field {field_name!r}."
+        )
+    scalar = value.name
+    if scalar not in _RESOURCE_FIELD_SCALARS:
+        raise ImproperlyConfigured(
+            f"resource metadata for {node_name} cannot classify GraphQL scalar for "
+            f"field {field_name!r} ({scalar})."
+        )
+    return scalar
+
+
+def _graphql_enum_values(
+    field: models.Field[Any, Any] | None,
+    value: object,
+) -> tuple[data_contract.DataResourceEnumValueMetadata, ...]:
+    if not isinstance(value, GraphQLEnumType):
+        return ()
+    labels = _field_choice_labels(field)
+    result: list[data_contract.DataResourceEnumValueMetadata] = []
+    for name, enum_value in value.values.items():
+        raw = getattr(enum_value.value, "value", enum_value.value)
+        description = labels.get(str(raw)) or enum_value.description
+        result.append(
+            data_contract.DataResourceEnumValueMetadata(
+                value=name,
+                description=str(description) if description is not None and str(description).strip() else None,
+            )
+        )
+    return tuple(result)
+
+
+def _graphql_relation_model_label(value: object) -> str | None:
+    """Return the Django owner retained by a final object type's source link."""
+
+    if not isinstance(value, GraphQLObjectType):
+        return None
+    definition = (value.extensions or {}).get("strawberry-definition")
+    origin = getattr(definition, "origin", None)
+    django_definition = get_django_definition(origin) if isinstance(origin, type) else None
+    return django_definition.model._meta.label if django_definition is not None else None
 
 
 def require_unique_resource_fields(
@@ -362,73 +587,14 @@ def _validate_resource_field(model_label: str, field: data_contract.DataResource
 def _projected_widget(field: models.Field[Any, Any] | None, kind: str, scalar: str | None) -> str | None:
     """Return the rendered widget for a projected surface field.
 
-    A plain ``ID`` scalar (a record's own public id) renders no widget; a scalar-id
-    to-one relation (``kind == "scalar"``, ``scalar == "ID"``, a relation field)
-    keeps its ``select`` picker widget so the relation still wires through.
+    A plain ``ID`` scalar (a record's own public id) renders no widget. A to-one
+    relation exposed as an ID leaf keeps its Django ``many2one`` widget because
+    relation semantics are independent of the GraphQL selection shape.
     """
 
     if scalar == "ID" and not (field is not None and field.is_relation):
         return None
     return resource_field_widget(field, kind)
-
-
-def _input_fields(surface: type | None) -> tuple[str, ...]:
-    """Return declared input fields, excluding Strawberry-Django filter controls."""
-
-    if surface is None:
-        return ()
-    return tuple(name for name in surface_field_names(surface) if name not in _FILTER_CONTROL_FIELDS)
-
-
-def _model_resource_field(
-    model: type[models.Model],
-    name: str,
-    *,
-    relation_axis: data_contract.DataRelationAxisMetadata | None,
-    filterable: bool,
-    sortable: bool,
-    aggregatable: bool,
-    groupable: bool,
-    creatable: bool,
-    updatable: bool,
-    required_on_create: bool,
-) -> data_contract.DataResourceFieldMetadata:
-    try:
-        field = model._meta.get_field(name)
-    except FieldDoesNotExist as error:
-        raise ImproperlyConfigured(
-            f"resource metadata for {model._meta.label} declares unknown model field {name!r}."
-        ) from error
-    kind = resource_field_kind(field, has_relation_axis=relation_axis is not None)
-    if kind in {"enum", "list"}:
-        raise ImproperlyConfigured(
-            f"resource metadata for {model._meta.label} cannot reconstruct {kind} field "
-            f"{name!r} from the model; the node surface owns its enum values and item shape."
-        )
-    scalar = None if kind == "relation" else model_field_scalar(field)
-    if scalar is None and kind == "scalar":
-        raise ImproperlyConfigured(
-            f"resource metadata for {model._meta.label} cannot classify model field "
-            f"{name!r} ({field.__class__.__name__})."
-        )
-    return data_contract.DataResourceFieldMetadata(
-        name=name,
-        kind=kind,
-        scalar=scalar,
-        values=(),
-        widget=resource_field_widget(field, kind),
-        filterable=filterable,
-        sortable=sortable,
-        aggregatable=aggregatable,
-        groupable=groupable,
-        creatable=creatable,
-        updatable=updatable,
-        required_on_create=required_on_create,
-        archivable=is_archive_field(field),
-        currency_field=money_currency_field(field),
-        relation_model_label=_relation_model_label(field, relation_axis),
-        relation_label_axis=relation_axis.label_axis if relation_axis is not None else None,
-    )
 
 
 def _relation_model_label(
@@ -484,138 +650,6 @@ def _selection_surface(value: object) -> tuple[object, bool]:
     return value, is_list
 
 
-def _surface_field_scalar(
-    *,
-    surface: type,
-    field_name: str,
-    value: object | None,
-    kind: str,
-) -> str | None:
-    """Return the scalar family exposed by a Strawberry surface field."""
-
-    if kind in {"relation", "enum"} or value is None:
-        return None
-    if isinstance(value, StrawberryOptional):
-        return _surface_field_scalar(
-            surface=surface,
-            field_name=field_name,
-            value=value.of_type,
-            kind=kind,
-        )
-    if kind == "list":
-        return _surface_field_scalar_or_none(value)
-    if isinstance(value, StrawberryEnumDefinition):
-        return None
-    scalar = _surface_field_scalar_or_none(value)
-    if scalar is not None:
-        return scalar
-    raise ImproperlyConfigured(
-        f"resource metadata for {surface_name(surface)} cannot classify "
-        f"GraphQL scalar for field '{field_name}' ({_surface_type_name(value)})."
-    )
-
-
-def _surface_field_scalar_or_none(value: object | None) -> str | None:
-    """Return a supported scalar family for ``value`` when it is scalar-like."""
-
-    if value is None:
-        return None
-    if isinstance(value, StrawberryOptional):
-        return _surface_field_scalar_or_none(value.of_type)
-    if isinstance(value, StrawberryList):
-        return _surface_field_scalar_or_none(value.of_type)
-    if isinstance(value, StrawberryEnumDefinition):
-        return None
-    scalar_name = getattr(value, "__name__", None)
-    if scalar_name in {"ID", "JSON"}:
-        return str(scalar_name)
-    return python_type_scalar(value)
-
-
-def _surface_type_name(value: object | None) -> str:
-    """Return a compact name for an unsupported Strawberry surface type."""
-
-    if value is None:
-        return "None"
-    scalar_definition = getattr(value, "_scalar_definition", None)
-    return str(
-        getattr(value, "__name__", None)
-        or getattr(value, "name", None)
-        or getattr(scalar_definition, "name", None)
-        or value.__class__.__name__
-    )
-
-
-def _strawberry_type_is_list(value: object) -> bool:
-    """Return whether ``value`` is, or wraps, a Strawberry list type."""
-
-    if isinstance(value, StrawberryList):
-        return True
-    if isinstance(value, StrawberryOptional):
-        return _strawberry_type_is_list(value.of_type)
-    return False
-
-
-def _strawberry_type_is_enum(value: object | None) -> bool:
-    """Return whether ``value`` is, or wraps, a Strawberry enum type."""
-
-    if isinstance(value, StrawberryEnumDefinition):
-        return True
-    if isinstance(value, StrawberryOptional):
-        return _strawberry_type_is_enum(value.of_type)
-    return False
-
-
-def _surface_enum_values(value: object | None) -> tuple[data_contract.DataResourceEnumValueMetadata, ...]:
-    """Return enum value metadata from the Strawberry enum surface."""
-
-    definition = _strawberry_enum_definition(value)
-    if definition is None:
-        return ()
-    return tuple(
-        data_contract.DataResourceEnumValueMetadata(
-            value=str(enum_value.name),
-            description=(
-                str(enum_value.description)
-                if enum_value.description is not None and str(enum_value.description).strip()
-                else None
-            ),
-        )
-        for enum_value in definition.values
-    )
-
-
-def _resource_enum_values(
-    field: models.Field[Any, Any] | None,
-    value: object | None,
-) -> tuple[data_contract.DataResourceEnumValueMetadata, ...]:
-    """Return enum metadata, folding the field's choice labels into descriptions.
-
-    An enum field's human labels live on the Django field — a ``StateField`` /
-    ``TextChoices`` member's ``label`` (``ASSIGNED = "assigned", "Ready"``) or an
-    ``ImplClassField`` registry label — not on the Strawberry enum value, so the
-    frontend cannot derive "Ready" from the wire member name alone. Fold each label
-    into the matching enum value's ``description`` so the metadata carries the
-    authored label; a value the field does not label keeps any Strawberry-declared
-    description.
-    """
-
-    values = _surface_enum_values(value)
-    labels_by_value = _field_choice_labels(field)
-    if not values or not labels_by_value:
-        return values
-
-    definition = _strawberry_enum_definition(value)
-    if definition is None:
-        return values
-    labels_by_name = {
-        str(enum_value.name): labels_by_value.get(str(enum_value.value)) for enum_value in definition.values
-    }
-    return tuple(
-        dataclasses.replace(item, description=labels_by_name.get(item.value) or item.description) for item in values
-    )
-
-
 def _field_choice_labels(field: models.Field[Any, Any] | None) -> dict[str, str]:
     """Return a stored-value -> human-label map for an enum-backed field, or empty.
 
@@ -631,33 +665,6 @@ def _field_choice_labels(field: models.Field[Any, Any] | None) -> dict[str, str]
     if choices_enum is None:
         return {}
     return {str(member.value): str(member.label) for member in choices_enum}
-
-
-def _strawberry_enum_definition(value: object | None) -> StrawberryEnumDefinition | None:
-    """Return the unwrapped Strawberry enum definition for ``value``."""
-
-    if isinstance(value, StrawberryEnumDefinition):
-        return value
-    if isinstance(value, StrawberryOptional):
-        return _strawberry_enum_definition(value.of_type)
-    return None
-
-
-def _strawberry_type_is_object(value: object | None) -> bool:
-    """Return whether ``value`` is, or will resolve as, a Strawberry object type."""
-
-    if value is None:
-        return False
-    if isinstance(value, StrawberryOptional):
-        return _strawberry_type_is_object(value.of_type)
-    if isinstance(value, StrawberryList):
-        return False
-    try:
-        if get_object_definition(value) is not None:
-            return True
-    except TypeError:
-        pass
-    return _surface_type_name(value) == "UNRESOLVED"
 
 
 def _model_field_or_none(model: type[models.Model] | None, name: str) -> models.Field[Any, Any] | None:

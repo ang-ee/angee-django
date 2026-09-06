@@ -4,6 +4,7 @@ import { createElement, type ReactNode } from "react";
 import { describe, expect, test, vi } from "vitest";
 import {
   ModelMetadataProvider,
+  schemaFieldMetadataFromDataResources,
   type SchemaFieldMetadata,
 } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
@@ -35,13 +36,10 @@ function wrapperFor(runtime: Partial<AppRuntime>) {
     });
 }
 
-const TEST_METADATA: SchemaFieldMetadata = {
-  types: {},
-  resources: [
+const TEST_METADATA: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([
     testDataResource("messaging.Thread"),
     testDataResource("messaging.Message"),
-  ],
-};
+]);
 
 describe("useWidget", () => {
   test("returns a registered widget by id", () => {

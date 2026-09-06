@@ -174,15 +174,8 @@ describe("knowledge page actions", () => {
 const PAGE_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     PageType: {
-      typeName: "PageType",
       fields: {
         title: { name: "title", kind: "scalar", scalar: "String" },
-      },
-      rootFields: {
-        list: "pages",
-        create: "createPage",
-        update: "updatePage",
-        delete: "deletePage",
       },
       resource: {
         schemaName: "console",

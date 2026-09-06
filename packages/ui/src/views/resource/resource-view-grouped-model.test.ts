@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import type { UseAngeeGroupByResult } from "@angee/refine";
-import type { ModelMetadata, Row } from "@angee/metadata";
+import { schemaFieldMetadataFromDataResources, type Row } from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
 
 import {
   buildGroupedRenderModel,
@@ -9,11 +10,8 @@ import {
 
 const EMPTY_LEAVES = new Map();
 const EMPTY_ROWS = new Map();
-const TEST_METADATA = {
-  typeName: "TestRow",
-  fields: {},
-  rootFields: {},
-  resource: {
+const TEST_METADATA = schemaFieldMetadataFromDataResources([
+  testDataResource("test.Row", {
     groupDimensions: [
       {
         field: "status",
@@ -44,8 +42,8 @@ const TEST_METADATA = {
         kind: "column",
       },
     ],
-  },
-} as unknown as ModelMetadata;
+  }),
+]).labels["test.Row"]!;
 
 function params(overrides: Partial<GroupedRenderParams> = {}): GroupedRenderParams {
   return {

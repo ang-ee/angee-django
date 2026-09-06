@@ -2,10 +2,11 @@
 
 import {
   ModelMetadataProvider,
+  schemaFieldMetadataFromDataResources,
   type Row,
   type SchemaFieldMetadata,
 } from "@angee/metadata";
-import { withTestResourceInventory } from "@angee/metadata/testing";
+import { testDataResource } from "@angee/metadata/testing";
 import {
   cleanup,
   fireEvent,
@@ -37,41 +38,21 @@ const channelRows: Row[] = [
   { id: "chn-general", name: "General" },
 ];
 
-const metadata: SchemaFieldMetadata = withTestResourceInventory({
-  types: {
-    ChannelType: {
-      typeName: "ChannelType",
-      recordRepresentation: "name",
-      fields: {
-        id: { name: "id", kind: "scalar", scalar: "ID" },
-        name: { name: "name", kind: "scalar", scalar: "String" },
-      },
-      rootFields: {
-        list: "channels",
-        create: "insert_channels_one",
-      },
-      resource: {
-        schemaName: "console",
-        modelLabel: "Channel",
-        appLabel: "",
-        modelName: "Channel",
-        publicIdField: "id",
-        roots: {
-          list: "channels",
-          create: "insert_channels_one",
-        },
-        typeNames: { node: "ChannelType" },
-        capabilities: ["list", "create"],
-        fields: [],
-        filterFields: [],
-        orderFields: [],
-        aggregateFields: [],
-        groupByFields: [],
-        relationAxes: [],
-      },
-    },
-  },
-});
+const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([
+  testDataResource("Channel", {
+    schemaName: "console",
+    appLabel: "",
+    modelName: "Channel",
+    recordRepresentation: "name",
+    roots: { list: "channels", create: "insert_channels_one" },
+    typeNames: { node: "ChannelType" },
+    capabilities: ["list", "create"],
+    fields: [
+      { name: "id", kind: "scalar", scalar: "ID", readable: true, filterable: false, sortable: false, aggregatable: false, groupable: false, creatable: false, updatable: false, requiredOnCreate: false },
+      { name: "name", kind: "scalar", scalar: "String", readable: true, filterable: false, sortable: false, aggregatable: false, groupable: false, creatable: true, updatable: false, requiredOnCreate: false },
+    ],
+  }),
+]);
 
 describe("rows widget", () => {
   afterEach(cleanup);

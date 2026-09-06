@@ -116,7 +116,6 @@ _TAG_RESOURCE = hasura_model_resource(
     groupable=list(_TAG_GROUPABLE_FIELDS),
     insertable=[*_TAG_BASE_WRITABLE_FIELDS, *_TAG_EXTENSION_INSERT_FIELDS],
     updatable=[*_TAG_BASE_WRITABLE_FIELDS, *_TAG_EXTENSION_UPDATE_FIELDS],
-    declared_fields=_TAG_EXTENSION_READ_FIELDS,
     write_backend=AngeeHasuraWriteBackend(
         Tag,
         public_id_fields=_TAG_EXTENSION_PUBLIC_ID_FIELDS,

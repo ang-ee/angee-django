@@ -328,14 +328,8 @@ function NoDeleteMetadata({ children }: { children: ReactNode }): ReactElement {
       metadata={withTestResourceInventory({
         types: {
           SaleType: {
-            typeName: "SaleType",
             fields: {
               title: { name: "title", kind: "scalar", scalar: "String" },
-            },
-            rootFields: {
-              detail: "sale",
-              list: "sales",
-              aggregate: "saleAggregate",
             },
             resource: {
               schemaName: "console",
@@ -373,15 +367,8 @@ function NoDeleteMetadata({ children }: { children: ReactNode }): ReactElement {
 const SALE_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     SaleType: {
-      typeName: "SaleType",
       fields: {
         title: { name: "title", kind: "scalar", scalar: "String" },
-      },
-      rootFields: {
-        detail: "sale",
-        list: "sales",
-        aggregate: "saleAggregate",
-        delete: "deleteSale",
       },
       resource: {
         schemaName: "console",

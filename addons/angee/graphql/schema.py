@@ -23,9 +23,10 @@ from strawberry.utils.str_converters import to_camel_case
 from strawberry_django_hasura import hasura_config
 
 from angee.addons import addon_manifest, optional_addon_module, resolve_addon_reference
-from angee.data.metadata import DataResourceMetadata, merge_data_resources, serialize_data_resources
+from angee.data.metadata import DataResourceMetadata, serialize_data_resources
 from angee.graphql.data.metadata import (
-    data_resource_metadata,
+    data_resource_contributions,
+    finalize_data_resources,
     readable_model_field_names,
 )
 from angee.graphql.ids import assert_unique_sqid_prefixes
@@ -252,16 +253,9 @@ class GraphQLSchemas:
         return self.build(name)._schema
 
     def resources(self, name: str = DEFAULT_SCHEMA_NAME) -> tuple[DataResourceMetadata, ...]:
-        """Return model resource metadata contributed to the named schema bucket."""
+        """Return the named schema's finalized model resource descriptions."""
 
-        try:
-            parts = self.parts[name]
-        except KeyError as error:
-            available = ", ".join(self.names()) or "none"
-            raise ImproperlyConfigured(
-                f"GraphQL schema {name!r} has no contributions; available schemas: {available}"
-            ) from error
-        return self._data_resources_from_parts(parts)
+        return cast(AngeeSchema, self.build(name)).angee_resources
 
     def change_publisher_models(self) -> tuple[type[models.Model], ...]:
         """Return every model declared into the GraphQL change feed.
@@ -278,10 +272,12 @@ class GraphQLSchemas:
             return cached
         models_by_label: dict[str, type[models.Model]] = {}
         for schema_name in self.names():
-            for resource in self.resources(schema_name):
-                if resource.model is None or "changes" not in resource.capabilities:
-                    continue
-                models_by_label[resource.model._meta.label_lower] = resource.model
+            parts = self.parts[schema_name]
+            for surface in parts.subscription:
+                for contribution in data_resource_contributions(surface):
+                    if contribution.model is None or "changes" not in contribution.capabilities:
+                        continue
+                    models_by_label[contribution.model._meta.label_lower] = contribution.model
         result = tuple(models_by_label[label] for label in sorted(models_by_label))
         self._change_publisher_models = result
         return result
@@ -296,9 +292,7 @@ class GraphQLSchemas:
 
         from angee.graphql.publishing import connect_publishers
 
-        readable_by_model = {
-            model: set[str]() for model in self.change_publisher_models()
-        }
+        readable_by_model = {model: set[str]() for model in self.change_publisher_models()}
         for schema_name in self.names():
             for resource in self.resources(schema_name):
                 if resource.model in readable_by_model:
@@ -329,8 +323,6 @@ class GraphQLSchemas:
         self._assert_rebac_managers(name, types)
         assert_unique_sqid_prefixes(types)
         self._describe_choice_enums(types)
-        resources = self._data_resources_from_parts(parts)
-        self._assert_revision_visibility(resources)
         schema = AngeeSchema(
             query=query,
             mutation=self._merge_root(name, "mutation", parts.mutation),
@@ -350,19 +342,13 @@ class GraphQLSchemas:
             ),
             config=hasura_config(),
         )
+        resources = finalize_data_resources(
+            schema._schema,
+            (*parts.query, *parts.mutation, *parts.subscription),
+        )
+        self._assert_revision_visibility(resources)
         self._attach_schema_metadata(schema, name=name, resources=resources)
         return schema
-
-    def _data_resources_from_parts(
-        self,
-        parts: SchemaParts,
-    ) -> tuple[DataResourceMetadata, ...]:
-        """Return merged resource metadata from normalized schema parts."""
-
-        metadata: list[DataResourceMetadata] = []
-        for surface in (*parts.query, *parts.mutation, *parts.subscription):
-            metadata.extend(data_resource_metadata(surface))
-        return merge_data_resources(tuple(metadata))
 
     def _attach_schema_metadata(
         self,

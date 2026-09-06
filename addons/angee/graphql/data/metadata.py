@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import dataclasses
 import re
+from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast
 
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from rebac.resources import model_resource_type
+from strawberry_django_hasura import HasuraResource
 
 from angee.base.impl import ImplClassField
 from angee.base.refs import canonical_record_model
@@ -16,14 +18,19 @@ from angee.data import metadata as data_contract
 from angee.data.field_classification import is_to_one_relation, model_field_scalar
 from angee.graphql.access import is_gated_read_axis
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
+from angee.graphql.data.final_schema import final_schema_references
 from angee.graphql.data.resource_fields import (
-    input_wire_fields,
-    model_resource_fields,
-    require_resource_selection_path,
+    final_aggregate_wire_fields,
+    final_input_only_resource_fields,
+    final_input_policy_fields,
+    final_input_wire_fields,
+    final_required_input_wire_fields,
+    final_resource_fields,
+    final_wire_field_names,
+    require_final_selection_path,
     require_unique_resource_fields,
-    required_input_wire_fields,
-    resource_fields,
     resource_relation_surface,
+    resource_string_field_names,
     resource_type_name,
     resource_wire_field_name,
     resource_wire_field_names,
@@ -32,36 +39,351 @@ from angee.graphql.introspection import (
     FieldPathError,
     require_field_for_path,
 )
+from graphql import GraphQLEnumType, GraphQLSchema, get_named_type
 
 __all__ = [
-    "DATA_RESOURCE_METADATA_ATTR",
-    "attach_data_resource_metadata",
-    "data_resource_metadata",
-    "make_data_resource_metadata",
-    "model_resource_fields",
+    "attach_data_resource_contribution",
+    "data_resource_contributions",
+    "DataResourceContribution",
+    "DataResourcePolicy",
+    "finalize_data_resources",
     "readable_model_field_names",
-    "resource_fields",
     "relation_group_by_fields",
     "resource_type_name",
     "resource_wire_field_name",
     "resource_wire_field_names",
 ]
 
-DATA_RESOURCE_METADATA_ATTR = "__angee_data_resource__"
-"""Attribute attached to schema surfaces that contribute model resource metadata."""
+DATA_RESOURCE_CONTRIBUTIONS_ATTR = "__angee_data_resource_contributions__"
 
 
-def data_resource_metadata(surface: object) -> tuple[data_contract.DataResourceMetadata, ...]:
-    """Return model resource metadata attached to ``surface``."""
+@dataclass(frozen=True, slots=True)
+class DataResourcePolicy:
+    """Angee-only resource policy not recoverable from a composed schema."""
 
-    metadata = getattr(surface, DATA_RESOURCE_METADATA_ATTR, None)
-    if metadata is None:
+    filter_fields: tuple[str, ...] | None = None
+    order_fields: tuple[str, ...] | None = None
+    aggregate_fields: tuple[str, ...] | None = None
+    group_by_fields: tuple[str, ...] | None = None
+    group_dimensions: tuple[data_contract.DataGroupDimensionMetadata, ...] | None = None
+    aggregate_measures: tuple[data_contract.DataAggregateMeasureMetadata, ...] | None = None
+    default_measures: tuple[data_contract.DataAggregateMeasureMetadata, ...] | None = None
+    revision_fields: tuple[str, ...] | None = None
+    group_aliases: tuple[data_contract.DataGroupAliasMetadata, ...] | None = None
+    lines_declaration: object | None = None
+    subtitle: data_contract.DataResourceSubtitleMetadata | None = None
+    public_id_field: str | None = None
+    row_model: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DataResourceContribution:
+    """Native/authored GraphQL references plus a small Angee policy delta."""
+
+    model: type[models.Model] | None
+    model_label: str
+    origin: str = ""
+    native_resource: HasuraResource | None = None
+    roots: data_contract.DataResourceRoots = field(default_factory=data_contract.DataResourceRoots)
+    type_names: data_contract.DataResourceTypeNames = field(default_factory=data_contract.DataResourceTypeNames)
+    capabilities: tuple[str, ...] = ()
+    policy: DataResourcePolicy = field(default_factory=DataResourcePolicy)
+
+
+def data_resource_contributions(surface: object) -> tuple[DataResourceContribution, ...]:
+    """Return deferred resource contributions attached to ``surface``."""
+
+    value = getattr(surface, DATA_RESOURCE_CONTRIBUTIONS_ATTR, ())
+    return value if isinstance(value, tuple) else ()
+
+
+def attach_data_resource_contribution(
+    surface: type[_SurfaceT], contribution: DataResourceContribution
+) -> type[_SurfaceT]:
+    """Attach one deferred contribution with its declaring origin."""
+
+    origin = resource_type_name(surface) or surface.__name__
+    existing = data_resource_contributions(surface)
+    setattr(
+        surface,
+        DATA_RESOURCE_CONTRIBUTIONS_ATTR,
+        existing + (dataclasses.replace(contribution, origin=origin),),
+    )
+    return surface
+
+
+def finalize_data_resources(
+    schema: GraphQLSchema,
+    surfaces: tuple[object, ...],
+) -> tuple[data_contract.DataResourceMetadata, ...]:
+    """Create one neutral description per model label from the composed schema."""
+
+    by_label: dict[str, list[DataResourceContribution]] = {}
+    for surface in surfaces:
+        for contribution in data_resource_contributions(surface):
+            by_label.setdefault(contribution.model_label, []).append(contribution)
+
+    finalized: list[data_contract.DataResourceMetadata] = []
+    for model_label, contributions in by_label.items():
+        first = contributions[0]
+        for contribution in contributions[1:]:
+            if contribution.model is not first.model:
+                raise ImproperlyConfigured(
+                    f"resource metadata model label {model_label!r} is contributed by "
+                    f"different model owners ({first.origin}, {contribution.origin})."
+                )
+        native_items = [item for item in contributions if item.native_resource is not None]
+        native_resource = native_items[0].native_resource if native_items else None
+        if any(item.native_resource is not native_resource for item in native_items[1:]):
+            raise ImproperlyConfigured(
+                f"resource metadata for {model_label} has multiple native resource owners."
+            )
+        native_roots = data_contract.DataResourceRoots()
+        native_type_names = data_contract.DataResourceTypeNames()
+        create_fields: tuple[str, ...] = ()
+        update_fields: tuple[str, ...] = ()
+        lines: data_contract.DataLinesMetadata | None = None
+        if native_resource is not None:
+            query = native_resource.query
+            mutation = native_resource.mutation
+            query_fields = schema.query_type.fields if schema.query_type is not None else {}
+            mutation_fields = schema.mutation_type.fields if schema.mutation_type is not None else {}
+
+            def exposed(surface: type, python_name: str | None, fields: dict[str, Any]) -> str | None:
+                wire_name = resource_wire_field_name(surface, python_name)
+                return wire_name if wire_name in fields else None
+
+            list_name = exposed(query, native_resource.list_root, query_fields)
+            detail_name = exposed(query, native_resource.detail_root, query_fields)
+            aggregate_name = exposed(query, native_resource.aggregate_root, query_fields)
+            group_name = exposed(query, native_resource.groups_root, query_fields)
+            group_count_name = exposed(query, native_resource.groups_count_root, query_fields)
+            create_name = exposed(mutation, native_resource.insert_one_root, mutation_fields)
+            update_name = exposed(mutation, native_resource.update_by_pk_root, mutation_fields)
+            delete_name = exposed(mutation, native_resource.delete_by_pk_root, mutation_fields)
+            save_name = _merge_description_values(
+                model_label, contributions, "roots", data_contract.DataResourceRoots
+            ).save_name
+            if save_name not in mutation_fields:
+                save_name = None
+            native_roots = data_contract.DataResourceRoots(
+                list_name=list_name,
+                detail_name=detail_name,
+                aggregate_name=aggregate_name,
+                group_name=group_name,
+                group_count_name=group_count_name,
+                create_name=create_name,
+                update_name=update_name,
+                save_name=save_name,
+                delete_name=delete_name,
+            )
+            native_type_names = data_contract.DataResourceTypeNames(
+                query=resource_type_name(query),
+                node=resource_type_name(native_resource.node_type),
+                filter=resource_type_name(native_resource.filter_type),
+                order=resource_type_name(native_resource.order_by_type),
+                aggregate=resource_type_name(native_resource.aggregate_container_type),
+                grouped=resource_type_name(native_resource.group_type),
+                group_key=resource_type_name(native_resource.group_key_type),
+                group_by_spec=resource_type_name(native_resource.group_by_spec_type),
+                group_order=resource_type_name(native_resource.group_order_type),
+                having=resource_type_name(native_resource.having_type),
+                create_input=(
+                    resource_type_name(native_resource.insert_input_type) if create_name else None
+                ),
+                update_input=(
+                    resource_type_name(native_resource.set_input_type)
+                    if update_name or save_name
+                    else None
+                ),
+            )
+            create_fields = native_resource.insertable_fields if create_name else ()
+            update_fields = (
+                native_resource.updatable_fields if update_name or save_name else ()
+            )
+            lines_declaration = _single_policy_value(
+                model_label, contributions, "lines_declaration"
+            )
+            if lines_declaration is not None:
+                from angee.graphql.data.hasura import HasuraLines, _line_metadata
+
+                lines = _line_metadata(
+                    cast(HasuraLines, lines_declaration), native_resource, schema
+                )
+        roots = _merge_description_values(
+            model_label,
+            contributions,
+            "roots",
+            data_contract.DataResourceRoots,
+            initial=native_roots,
+        )
+        type_names = _merge_description_values(
+            model_label,
+            contributions,
+            "type_names",
+            data_contract.DataResourceTypeNames,
+            initial=native_type_names,
+        )
+        roots, type_names, final_capabilities = final_schema_references(
+            schema, roots, type_names
+        )
+        subtitle = _merge_subtitle_contributions(model_label, contributions)
+        metadata = _finalize_data_resource(
+            model=first.model,
+            model_label=model_label,
+            roots=roots,
+            type_names=type_names,
+            capabilities=final_capabilities,
+            filter_fields=_single_sequence(model_label, contributions, "filter_fields"),
+            order_fields=_single_sequence(model_label, contributions, "order_fields"),
+            aggregate_fields=_single_sequence(model_label, contributions, "aggregate_fields"),
+            group_by_fields=_single_sequence(model_label, contributions, "group_by_fields"),
+            group_dimensions=_single_sequence(model_label, contributions, "group_dimensions"),
+            aggregate_measures=_single_sequence(model_label, contributions, "aggregate_measures"),
+            default_measures=_single_sequence(model_label, contributions, "default_measures"),
+            create_fields=create_fields,
+            update_fields=update_fields,
+            revision_fields=_single_sequence(model_label, contributions, "revision_fields"),
+            group_aliases=_single_sequence(model_label, contributions, "group_aliases"),
+            lines=lines,
+            subtitle=subtitle,
+            public_id_field=cast(
+                str,
+                _single_policy_value(model_label, contributions, "public_id_field")
+                or PUBLIC_ID_FIELD_NAME,
+            ),
+            row_model=cast(
+                str, _single_policy_value(model_label, contributions, "row_model") or "server"
+            ),
+            graphql_schema=schema,
+            contributors=tuple(dict.fromkeys(item.origin for item in contributions)),
+        )
+        finalized.append(metadata)
+    return tuple(finalized)
+
+
+def _single_sequence(
+    model_label: str,
+    contributions: list[DataResourceContribution],
+    name: str,
+) -> tuple[Any, ...]:
+    active = [item for item in contributions if getattr(item.policy, name) is not None]
+    if not active:
         return ()
-    if isinstance(metadata, data_contract.DataResourceMetadata):
-        return (metadata,)
-    if isinstance(metadata, tuple) and all(isinstance(item, data_contract.DataResourceMetadata) for item in metadata):
-        return metadata
-    return ()
+    value = getattr(active[0].policy, name)
+    for item in active[1:]:
+        if getattr(item.policy, name) != value:
+            raise ImproperlyConfigured(
+                f"resource metadata for {model_label} has conflicting {name} from "
+                f"{active[0].origin} and {item.origin}."
+            )
+    return cast(tuple[Any, ...], value)
+
+
+def _single_policy_value(
+    model_label: str,
+    contributions: list[DataResourceContribution],
+    name: str,
+) -> object | None:
+    values = [
+        (getattr(item.policy, name), item.origin)
+        for item in contributions
+        if getattr(item.policy, name) is not None
+    ]
+    if not values:
+        return None
+    value, origin = values[0]
+    for candidate, candidate_origin in values[1:]:
+        if candidate != value:
+            raise ImproperlyConfigured(
+                f"resource metadata for {model_label} has conflicting {name}: "
+                f"{value!r} from {origin} and {candidate!r} from {candidate_origin}."
+            )
+    return value
+
+
+def _merge_description_values(
+    model_label: str,
+    contributions: list[DataResourceContribution],
+    name: str,
+    description_type: type[Any],
+    *,
+    initial: object | None = None,
+) -> Any:
+    values: dict[str, object] = {}
+    origins: dict[str, str] = {}
+    if initial is not None:
+        for field_def in dataclasses.fields(description_type):
+            candidate = getattr(initial, field_def.name)
+            if candidate is not None:
+                values[field_def.name] = candidate
+                origins[field_def.name] = "native resource"
+    for item in contributions:
+        description = getattr(item, name)
+        for field_def in dataclasses.fields(description_type):
+            candidate = getattr(description, field_def.name)
+            if candidate is None:
+                continue
+            existing = values.get(field_def.name)
+            if existing is not None and existing != candidate:
+                raise ImproperlyConfigured(
+                    f"resource metadata for {model_label} has conflicting {name}.{field_def.name}: "
+                    f"{existing!r} from {origins[field_def.name]} and {candidate!r} from {item.origin}."
+                )
+            values[field_def.name] = candidate
+            origins[field_def.name] = item.origin
+    return description_type(**values)
+
+
+def _final_group_by_fields(
+    schema: GraphQLSchema,
+    group_by_spec_name: str | None,
+    *,
+    accepted: tuple[str, ...],
+    dimensions: tuple[data_contract.DataGroupDimensionMetadata, ...],
+) -> tuple[str, ...]:
+    """Keep authored group axes accepted by the final native group input."""
+
+    group_by_spec = schema.get_type(group_by_spec_name) if group_by_spec_name else None
+    fields = getattr(group_by_spec, "fields", None)
+    field_input = fields.get("field") if isinstance(fields, dict) else None
+    enum_type = get_named_type(field_input.type) if field_input is not None else None
+    if not isinstance(enum_type, GraphQLEnumType):
+        return ()
+    final_inputs = set(enum_type.values)
+    dimensions_by_field = {dimension.field: dimension for dimension in dimensions}
+    return tuple(
+        name
+        for name in accepted
+        if (dimension := dimensions_by_field.get(name)) is not None
+        and dimension.input in final_inputs
+    )
+
+
+def _merge_subtitle_contributions(
+    model_label: str,
+    contributions: list[DataResourceContribution],
+) -> data_contract.DataResourceSubtitleMetadata | None:
+    active = [item for item in contributions if item.policy.subtitle is not None]
+    if not active:
+        return None
+    values: dict[str, str] = {}
+    origins: dict[str, str] = {}
+    for item in active:
+        assert item.policy.subtitle is not None
+        for field_def in dataclasses.fields(data_contract.DataResourceSubtitleMetadata):
+            candidate = getattr(item.policy.subtitle, field_def.name)
+            if candidate is None:
+                continue
+            existing = values.get(field_def.name)
+            if existing is not None and existing != candidate:
+                raise ImproperlyConfigured(
+                    f"resource metadata for {model_label} has conflicting subtitle.{field_def.name}: "
+                    f"{existing!r} from {origins[field_def.name]} and {candidate!r} from {item.origin}."
+                )
+            values[field_def.name] = candidate
+            origins[field_def.name] = item.origin
+    return data_contract.DataResourceSubtitleMetadata(**values)
 
 
 def readable_model_field_names(
@@ -69,28 +391,28 @@ def readable_model_field_names(
 ) -> frozenset[str]:
     """Return concrete model fields projected readably by the GraphQL node."""
 
-    if metadata.model is None or metadata.node_type is None:
+    if metadata.model is None:
         return frozenset()
-    readable = {field.name for field in metadata.fields if field.readable}
     names: set[str] = set()
-    for model_field in metadata.model._meta.local_fields:
-        wire_name = resource_wire_field_name(metadata.node_type, model_field.name)
-        if wire_name not in readable:
+    by_name = {field.name: field for field in metadata.model._meta.local_fields}
+    for resource_field in metadata.fields:
+        if not resource_field.readable or resource_field.model_field_name is None:
+            continue
+        model_field = by_name.get(resource_field.model_field_name)
+        if model_field is None:
             continue
         names.add(model_field.name)
         names.add(model_field.attname)
     return frozenset(names)
 
 
-def make_data_resource_metadata(
+def _finalize_data_resource(
     *,
+    graphql_schema: GraphQLSchema,
     model: type[models.Model] | None = None,
     roots: data_contract.DataResourceRoots,
     type_names: data_contract.DataResourceTypeNames,
     capabilities: tuple[str, ...],
-    node_type: type | None = None,
-    filter_type: type | None = None,
-    order_type: type | None = None,
     filter_fields: tuple[str, ...] = (),
     order_fields: tuple[str, ...] = (),
     aggregate_fields: tuple[str, ...] = (),
@@ -99,22 +421,19 @@ def make_data_resource_metadata(
     aggregate_measures: tuple[data_contract.DataAggregateMeasureMetadata, ...] = (),
     default_measures: tuple[data_contract.DataAggregateMeasureMetadata, ...] = (),
     default_sort: tuple[data_contract.DataDefaultSortMetadata, ...] = (),
-    create_input_type: type | None = None,
-    update_input_type: type | None = None,
     create_fields: tuple[str, ...] = (),
     update_fields: tuple[str, ...] = (),
-    required_create_fields: tuple[str, ...] = (),
     revision_fields: tuple[str, ...] = (),
     relation_axes: tuple[data_contract.DataRelationAxisMetadata, ...] = (),
     group_aliases: tuple[data_contract.DataGroupAliasMetadata, ...] = (),
     lines: data_contract.DataLinesMetadata | None = None,
-    fields: tuple[data_contract.DataResourceFieldMetadata, ...] = (),
     subtitle: data_contract.DataResourceSubtitleMetadata | None = None,
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
     row_model: str = "server",
+    contributors: tuple[str, ...] = (),
 ) -> data_contract.DataResourceMetadata:
-    """Build one resource metadata contribution from an owning schema surface.
+    """Build one final neutral resource description.
 
     ``model`` is the owning Django model for a model-backed resource. A computed
     (non-model) resource passes ``model=None`` and a dotted ``model_label`` (e.g.
@@ -132,7 +451,7 @@ def make_data_resource_metadata(
     elif model is not None:
         exposed_model_label = model._meta.label
     else:
-        raise ImproperlyConfigured("make_data_resource_metadata requires model_label when model is None.")
+        raise ImproperlyConfigured("final resource metadata requires model_label when model is None.")
     app_label, model_name = _model_label_parts(exposed_model_label, model)
     filter_fields = _require_unique(exposed_model_label, "filter field", filter_fields)
     order_fields = _require_unique(exposed_model_label, "order field", order_fields)
@@ -142,26 +461,77 @@ def make_data_resource_metadata(
         relation_axes = _relation_axes(model, group_by_fields)
     if model is not None and order_fields and not default_sort:
         default_sort = _default_sort(model, order_fields)
-    active_create_fields = _require_unique(
-        exposed_model_label,
-        "create field",
-        create_fields or input_wire_fields(create_input_type, exclude=("id",)),
+    filter_fields = final_input_policy_fields(
+        graphql_schema, type_names.filter, accepted=filter_fields
     )
-    active_update_fields = _require_unique(
-        exposed_model_label,
-        "update field",
-        update_fields or input_wire_fields(update_input_type, exclude=("id",)),
+    order_fields = final_input_policy_fields(
+        graphql_schema, type_names.order, accepted=order_fields
     )
+    aggregate_fields = final_aggregate_wire_fields(
+        graphql_schema, type_names.aggregate, accepted=aggregate_fields
+    )
+    group_by_fields = _final_group_by_fields(
+        graphql_schema,
+        type_names.group_by_spec,
+        accepted=group_by_fields,
+        dimensions=group_dimensions,
+    )
+    default_sort = tuple(
+        dataclasses.replace(item, field=mapped[0])
+        for item in default_sort
+        if (
+            mapped := final_input_policy_fields(
+                graphql_schema,
+                type_names.order,
+                accepted=(item.field,),
+            )
+        )
+    )
+    if type_names.node is not None:
+        relation_axes = tuple(
+            dataclasses.replace(
+                axis,
+                field=final_wire_field_names(
+                    graphql_schema, type_names.node, (axis.field,)
+                )[0],
+                label_axis=(
+                    final_wire_field_names(
+                        graphql_schema, type_names.node, (axis.label_axis,)
+                    )[0]
+                    if axis.label_axis is not None
+                    else None
+                ),
+            )
+            for axis in relation_axes
+        )
+    active_create_fields = final_input_wire_fields(
+        graphql_schema,
+        type_names.create_input,
+        accepted=create_fields,
+        exclude=("id",),
+    )
+    active_update_fields = final_input_wire_fields(
+        graphql_schema,
+        type_names.update_input,
+        accepted=update_fields,
+        exclude=("id",),
+    )
+    active_required_create_fields = final_required_input_wire_fields(
+        graphql_schema,
+        type_names.create_input,
+        accepted=active_create_fields,
+    )
+    active_create_fields = _require_unique(exposed_model_label, "create field", active_create_fields)
+    active_update_fields = _require_unique(exposed_model_label, "update field", active_update_fields)
     active_required_create_fields = _require_unique(
-        exposed_model_label,
-        "required create field",
-        required_create_fields or required_input_wire_fields(create_input_type),
+        exposed_model_label, "required create field", active_required_create_fields
     )
     revision_fields = _require_unique(exposed_model_label, "revision field", revision_fields)
-    declared_fields = require_unique_resource_fields(exposed_model_label, fields)
-    generated_fields = (
-        resource_fields(
-            node_type,
+    generated_fields: tuple[data_contract.DataResourceFieldMetadata, ...] = ()
+    if type_names.node is not None:
+        generated_fields = final_resource_fields(
+            graphql_schema,
+            type_names.node,
             model,
             filter_fields=filter_fields,
             order_fields=order_fields,
@@ -172,29 +542,31 @@ def make_data_resource_metadata(
             required_create_fields=active_required_create_fields,
             relation_axes=relation_axes,
         )
-        if node_type is not None
-        else ()
+    generated_fields = (
+        *generated_fields,
+        *final_input_only_resource_fields(
+            graphql_schema,
+            create_input_name=type_names.create_input,
+            update_input_name=type_names.update_input,
+            model=model,
+            filter_fields=filter_fields,
+            order_fields=order_fields,
+            aggregate_fields=aggregate_fields,
+            group_by_fields=group_by_fields,
+            create_fields=active_create_fields,
+            update_fields=active_update_fields,
+            required_create_fields=active_required_create_fields,
+            relation_axes=relation_axes,
+            readable_fields=generated_fields,
+        ),
     )
-    active_fields = (
-        data_contract.merge_resource_fields(generated_fields, declared_fields) if declared_fields else generated_fields
-    )
-    active_fields = require_unique_resource_fields(exposed_model_label, active_fields)
-    object_relations = _declared_object_relation_names(model)
-    if object_relations:
-        # Same-row donors project some to-one relations as objects via a
-        # name-targeted type extension the node class cannot see; the donor's
-        # model base declares them so selection layers emit sub-selections.
-        active_fields = tuple(
-            dataclasses.replace(field, relation_object=True)
-            if field.name in object_relations and field.kind == "relation"
-            else field
-            for field in active_fields
-        )
+    active_fields = require_unique_resource_fields(exposed_model_label, generated_fields)
     record_representation = _record_representation_field(active_fields)
     active_subtitle = _resource_subtitle(
         model=model,
         model_label=exposed_model_label,
-        node_type=node_type,
+        graphql_schema=graphql_schema,
+        node_name=type_names.node,
         fields=active_fields,
         declared=subtitle,
     )
@@ -207,11 +579,12 @@ def make_data_resource_metadata(
         public_id_field=public_id_field,
         roots=roots,
         type_names=type_names,
+        contributors=contributors,
         canonical_label=canonical_record_model(model)._meta.label if model is not None else None,
         row_model=row_model,
         record_representation=record_representation,
         subtitle=active_subtitle,
-        impl_fields=_impl_fields(model, node_type, active_fields),
+        impl_fields=_impl_fields(model, active_fields),
         capabilities=capabilities,
         fields=active_fields,
         filter_fields=filter_fields,
@@ -229,36 +602,10 @@ def make_data_resource_metadata(
         relation_axes=relation_axes,
         group_aliases=group_aliases,
         lines=lines,
-        node_type=node_type,
-        filter_type=filter_type,
-        order_type=order_type,
     )
 
 
 _SurfaceT = TypeVar("_SurfaceT")
-
-
-def attach_data_resource_metadata(
-    surface: type[_SurfaceT],
-    metadata: data_contract.DataResourceMetadata,
-) -> type[_SurfaceT]:
-    """Attach model resource metadata to a generated Strawberry surface.
-
-    Only query/mutation/subscription *roots* are scanned for resource
-    metadata, so an addon that extends another model's GraphQL *type* (a
-    ``type_extensions`` entry adds fields to the node, never to the model's
-    resource projection) anchors its contribution on one of its own root
-    surfaces — typically its action-mutation bucket — and the per-model merge
-    (:func:`angee.data.metadata.merge_data_resources`) folds it into the owning model's resource
-    by model label. Fields only a server verb advances are contributed
-    read-only (neither creatable nor updatable).
-    """
-
-    existing = data_resource_metadata(surface)
-    contributor = resource_type_name(surface) or surface.__name__
-    attached = dataclasses.replace(metadata, contributors=(contributor,))
-    setattr(surface, DATA_RESOURCE_METADATA_ATTR, existing + (attached,))
-    return surface
 
 
 def _require_unique(
@@ -283,7 +630,8 @@ def _resource_subtitle(
     *,
     model: type[models.Model] | None,
     model_label: str,
-    node_type: type | None,
+    graphql_schema: GraphQLSchema,
+    node_name: str | None,
     fields: tuple[data_contract.DataResourceFieldMetadata, ...],
     declared: data_contract.DataResourceSubtitleMetadata | None,
 ) -> data_contract.DataResourceSubtitleMetadata | None:
@@ -296,16 +644,14 @@ def _resource_subtitle(
     declared by its owning addon.
     """
 
-    readable = {field.name for field in fields if field.readable}
-
     def timestamp_path(flag: str) -> str | None:
         if model is None:
             return None
         candidates = tuple(
-            wire_name
-            for model_field in model._meta.fields
-            if getattr(model_field, flag, False)
-            if (wire_name := resource_wire_field_name(node_type, model_field.name)) in readable
+            projected.name
+            for projected in fields
+            if projected.model_field_name is not None
+            if getattr(model._meta.get_field(projected.model_field_name), flag, False)
         )
         if len(candidates) > 1:
             raise ImproperlyConfigured(
@@ -331,12 +677,14 @@ def _resource_subtitle(
                 f"selection path {path!r}."
             )
         if path is not None:
-            require_resource_selection_path(
-                node_type,
-                path,
-                model_label=model_label,
-                fact=f"subtitle.{field_def.name}",
-            )
+            if node_name is not None:
+                require_final_selection_path(
+                    graphql_schema,
+                    node_name,
+                    path,
+                    model_label=model_label,
+                    fact=f"subtitle.{field_def.name}",
+                )
     has_fact = any(getattr(active, field_def.name) is not None for field_def in dataclasses.fields(active))
     return active if has_fact else None
 
@@ -345,25 +693,6 @@ def _record_representation_field(fields: tuple[data_contract.DataResourceFieldMe
     """Return the backend-owned display field for a resource record."""
 
     return next(iter(_record_representation_fields(fields)), None)
-
-
-def _declared_object_relation_names(model: type[models.Model] | None) -> frozenset[str]:
-    """Return relation fields a same-row donor projects as objects.
-
-    Donor extensions declare ``hasura_object_relation_fields`` on their model
-    base (the same MRO-walk idiom as the other ``hasura_*`` declarations); the
-    composed runtime model inherits the base, so the fact is readable here even
-    though the node class never sees the extension's type fields.
-    """
-
-    if model is None:
-        return frozenset()
-    names: set[str] = set()
-    for cls in model.__mro__:
-        value = cls.__dict__.get("hasura_object_relation_fields")
-        if value:
-            names.update(str(item) for item in value)
-    return frozenset(names)
 
 
 #: Backend-owned display-field precedence, shared by record representation and
@@ -433,19 +762,16 @@ def relation_group_by_fields(
         related_model = cast(type[models.Model], related_model)
         related_surface = resource_relation_surface(node_type, path)
         if related_surface is not None:
-            related_fields = resource_fields(
-                related_surface,
-                related_model,
-                filter_fields=(),
-                order_fields=(),
-                aggregate_fields=(),
-                group_by_fields=(),
-                create_fields=(),
-                update_fields=(),
-                required_create_fields=(),
-                relation_axes=(),
+            projected_names = resource_string_field_names(related_surface)
+            candidates = tuple(
+                candidate
+                for candidate in _PREFERRED_DISPLAY_FIELDS
+                if candidate in projected_names
+            ) + tuple(
+                candidate
+                for candidate in projected_names
+                if candidate not in _PREFERRED_DISPLAY_FIELDS
             )
-            candidates = _record_representation_fields(related_fields)
         else:
             # Donor-contributed and scalar-id relation axes carry no node
             # surface; fall back to the preferred display names over the
@@ -473,7 +799,6 @@ def relation_group_by_fields(
 
 def _impl_fields(
     model: type[models.Model] | None,
-    node_type: type | None,
     fields: tuple[data_contract.DataResourceFieldMetadata, ...],
 ) -> tuple[str, ...]:
     """Return this resource's readable ``ImplClassField`` column names, sorted.
@@ -488,13 +813,16 @@ def _impl_fields(
 
     if model is None:
         return ()
-    readable = {field.name for field in fields}
-    names = {
-        resource_wire_field_name(node_type, field.name) or field.name
-        for field in model._meta.get_fields()
-        if isinstance(field, ImplClassField)
+    impl_names = {
+        field.name for field in model._meta.get_fields() if isinstance(field, ImplClassField)
     }
-    return tuple(sorted(names & readable))
+    return tuple(
+        sorted(
+            field.name
+            for field in fields
+            if field.readable and field.model_field_name in impl_names
+        )
+    )
 
 
 def _default_sort(

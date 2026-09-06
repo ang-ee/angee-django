@@ -237,9 +237,10 @@ async function selectTrigger(label: string): Promise<HTMLElement> {
 
 function overviewData(overrides: Record<string, unknown> = {}): unknown {
   return {
-    roles: [
+    iam_roles: [
       {
-        id: "writer",
+        id: "angee/role:writer",
+        role_id: "writer",
         namespace: "angee",
         label: "Writer",
       },

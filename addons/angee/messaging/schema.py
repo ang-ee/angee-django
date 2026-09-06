@@ -25,7 +25,6 @@ from strawberry import auto
 from strawberry.types.nodes import SelectedField
 
 from angee.base.identity import instance_from_public_id
-from angee.data.metadata import DataResourceEnumValueMetadata, DataResourceFieldMetadata
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
@@ -95,49 +94,6 @@ _CHANNEL_EXTENSION_PUBLIC_ID_FIELDS = tuple(
     name for name in _CHANNEL_EXTENSION_UPDATE_FIELDS if Channel._meta.get_field(name).is_relation
 )
 
-
-def _channel_extension_declared_fields() -> tuple[str | DataResourceFieldMetadata, ...]:
-    """Return parent-resource metadata for donor fields outside ChannelType.
-
-    Relations and scalars retain the framework's model reconstruction. A donor
-    ``StateField`` supplies explicit enum metadata because its GraphQL projection
-    is contributed later by the downstream addon's type extension.
-    """
-
-    filterable = set(_CHANNEL_EXTENSION_FILTER_FIELDS)
-    sortable = set(_CHANNEL_EXTENSION_ORDER_FIELDS)
-    aggregatable = set(_CHANNEL_EXTENSION_AGGREGATE_FIELDS)
-    groupable = set(_CHANNEL_EXTENSION_GROUP_FIELDS)
-    updatable = set(_CHANNEL_EXTENSION_UPDATE_FIELDS)
-    declared: list[str | DataResourceFieldMetadata] = []
-    for name in _CHANNEL_EXTENSION_READ_FIELDS:
-        choices_enum = getattr(Channel._meta.get_field(name), "choices_enum", None)
-        if choices_enum is None:
-            declared.append(name)
-            continue
-        declared.append(
-            DataResourceFieldMetadata(
-                name=name,
-                kind="enum",
-                values=tuple(
-                    DataResourceEnumValueMetadata(
-                        value=str(member.name),
-                        description=str(member.label) if str(member.label).strip() else None,
-                    )
-                    for member in choices_enum
-                ),
-                widget="select",
-                filterable=name in filterable,
-                sortable=name in sortable,
-                aggregatable=name in aggregatable,
-                groupable=name in groupable,
-                updatable=name in updatable,
-            )
-        )
-    return tuple(declared)
-
-
-_CHANNEL_EXTENSION_DECLARED_FIELDS = _channel_extension_declared_fields()
 
 
 @strawberry_django.type(Channel)
@@ -1875,7 +1831,6 @@ _CHANNEL_RESOURCE = hasura_model_resource(
         Channel,
         public_id_fields=_CHANNEL_EXTENSION_PUBLIC_ID_FIELDS,
     ),
-    declared_fields=_CHANNEL_EXTENSION_DECLARED_FIELDS,
 )
 _MESSAGE_RESOURCE = hasura_model_resource(
     MessageType,

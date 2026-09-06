@@ -16,7 +16,6 @@ from typing import Any
 import pytest
 import strawberry
 import strawberry_django
-from angee.data.metadata import merge_data_resources
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.db import connection
@@ -32,9 +31,9 @@ from rebac import (
 from strawberry import auto
 
 from angee.graphql.data.hasura import HasuraLines, hasura_model_resource
-from angee.graphql.data.metadata import data_resource_metadata, resource_fields
 from angee.graphql.node import AngeeNode
-from tests.conftest import create_user, execute_schema, result_data
+from angee.graphql.schema import GraphQLSchemas
+from tests.conftest import SchemaAddon, create_user, execute_schema, result_data
 from tests.linesdemo.models import Product, SaleDoc, SaleLine, Tag
 
 
@@ -89,11 +88,23 @@ _RESOURCE = hasura_model_resource(
     id_column="sqid",
 )
 
-_SCHEMA = strawberry.Schema(
-    query=_RESOURCE.query,
-    mutation=_RESOURCE.mutation,
-    types=[SaleDocType, SaleLineType, *_RESOURCE.types],
-)
+def _resource_schema(resource: Any) -> strawberry.Schema:
+    return GraphQLSchemas(
+        [
+            SchemaAddon(
+                {
+                    "public": {
+                        "query": [resource.query],
+                        "mutation": [resource.mutation],
+                        "types": [SaleDocType, SaleLineType, *resource.types],
+                    }
+                }
+            )
+        ]
+    ).build("public")
+
+
+_SCHEMA = _resource_schema(_RESOURCE)
 
 # A second resource whose lines expose the ``product`` relation as a public id, so
 # the write must decode it under the caller's actor (the finding #5 handle).
@@ -117,11 +128,7 @@ _RESOURCE_WITH_PRODUCT = hasura_model_resource(
     id_column="sqid",
 )
 
-_SCHEMA_WITH_PRODUCT = strawberry.Schema(
-    query=_RESOURCE_WITH_PRODUCT.query,
-    mutation=_RESOURCE_WITH_PRODUCT.mutation,
-    types=[SaleDocType, SaleLineType, *_RESOURCE_WITH_PRODUCT.types],
-)
+_SCHEMA_WITH_PRODUCT = _resource_schema(_RESOURCE_WITH_PRODUCT)
 
 # A third resource whose lines expose an enum child (``kind``) and an M2M child
 # (``tags``): the F6 line-metadata reconstruction must project both (an enum's
@@ -148,11 +155,7 @@ _RESOURCE_RICH = hasura_model_resource(
     id_column="sqid",
 )
 
-_SCHEMA_RICH = strawberry.Schema(
-    query=_RESOURCE_RICH.query,
-    mutation=_RESOURCE_RICH.mutation,
-    types=[SaleDocType, SaleLineType, *_RESOURCE_RICH.types],
-)
+_SCHEMA_RICH = _resource_schema(_RESOURCE_RICH)
 
 
 _TAGS_THROUGH = SaleLine._meta.get_field("tags").remote_field.through
@@ -633,13 +636,7 @@ def test_lines_writable_relation_requires_a_public_id_decode():
 def test_lines_resource_metadata_is_emitted():
     """The resource advertises the editable-lines contract + the save root."""
 
-    merged = merge_data_resources(
-        (
-            *data_resource_metadata(_RESOURCE.query),
-            *data_resource_metadata(_RESOURCE.mutation),
-        )
-    )
-    (resource,) = [m for m in merged if m.model_label == "linesdemo.SaleDoc"]
+    (resource,) = [m for m in _SCHEMA.angee_resources if m.model_label == "linesdemo.SaleDoc"]
     assert "save" in resource.capabilities
     assert resource.roots.save_name == "sale_docs_save"
     assert resource.lines is not None
@@ -679,13 +676,7 @@ def test_rich_lines_metadata_projects_enum_and_m2m_child_fields():
     target — instead of the old model reconstruction raising on either.
     """
 
-    merged = merge_data_resources(
-        (
-            *data_resource_metadata(_RESOURCE_RICH.query),
-            *data_resource_metadata(_RESOURCE_RICH.mutation),
-        )
-    )
-    (resource,) = [m for m in merged if m.model_label == "linesdemo.SaleDoc"]
+    (resource,) = [m for m in _SCHEMA_RICH.angee_resources if m.model_label == "linesdemo.SaleDoc"]
     assert resource.lines is not None
     by_name = {field.name: field for field in resource.lines.fields}
     kind = by_name["kind"]
@@ -778,38 +769,3 @@ def test_rich_save_round_trips_enum_and_m2m_diff(linesdemo_tables):
         # The enum stored its lowercase model value; the M2M swapped red → blue+green.
         assert line.kind == "service"
         assert set(line.tags.values_list("name", flat=True)) == {"Blue", "Green"}
-
-
-def test_enum_field_metadata_carries_django_choice_labels() -> None:
-    """A choices column's Django labels ride into the resource enum metadata.
-
-    The metadata is projected when the resource is built (addon import), *before*
-    the schema-build step that copies labels onto the SDL enum, so the label is
-    folded from the Django field directly — the same path ImplClassField enums use.
-    Without it the ``values`` descriptions are ``None`` and the frontend title-cases
-    the wire member name instead of showing the authored label. (This ``SaleLineType``
-    is only ever built through a plain ``strawberry.Schema``, which never runs Angee's
-    label-copy step, so the metadata is the only source of the labels here.)
-    """
-
-    fields = {
-        field.name: field
-        for field in resource_fields(
-            SaleLineType,
-            SaleLine,
-            filter_fields=(),
-            order_fields=(),
-            aggregate_fields=(),
-            group_by_fields=(),
-            create_fields=(),
-            update_fields=(),
-            required_create_fields=(),
-            relation_axes=(),
-        )
-    }
-    kind = fields["kind"]
-    assert kind.kind == "enum"
-    assert {value.value: value.description for value in kind.values} == {
-        "GOODS": "Goods",
-        "SERVICE": "Service",
-    }

@@ -1,4 +1,5 @@
 import type {
+  DataResourceRelationAxisMetadata,
   DataResourceMetadata,
   ModelMetadata,
   SchemaFieldMetadata,
@@ -46,14 +47,27 @@ export function testDataResource(
  * object whose model entries already carry their resource facts.
  */
 export function withTestResourceInventory(
-  metadata: SchemaFieldMetadata,
+  metadata: {
+    types: Readonly<Record<
+      string,
+      Omit<ModelMetadata, "relationAxes"> & {
+        relationAxes?: Readonly<Record<string, DataResourceRelationAxisMetadata>>;
+      }
+    >>;
+  },
 ): SchemaFieldMetadata {
-  const models = Object.values(metadata.types);
-  const resources = metadata.resources
-    ?? models.flatMap((model) => model.resource ? [model.resource] : []);
-  const labels: Record<string, ModelMetadata> = { ...metadata.labels };
-  for (const model of models) {
-    if (model.resource) labels[model.resource.modelLabel] = model;
+  const types: Record<string, ModelMetadata> = {};
+  const labels: Record<string, ModelMetadata> = {};
+  const resources: DataResourceMetadata[] = [];
+  for (const model of Object.values(metadata.types)) {
+    const relationAxes = model.relationAxes ?? Object.fromEntries(
+      model.resource.relationAxes.map((axis) => [axis.field, axis]),
+    );
+    const indexed: ModelMetadata = { ...model, relationAxes };
+    resources.push(indexed.resource);
+    labels[indexed.resource.modelLabel] = indexed;
+    const nodeName = indexed.resource.typeNames.node;
+    if (nodeName) types[nodeName] = indexed;
   }
-  return { ...metadata, labels, resources };
+  return { types, labels, resources };
 }

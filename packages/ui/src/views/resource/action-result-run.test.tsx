@@ -5,6 +5,7 @@ import * as React from "react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   ModelMetadataProvider,
+  schemaFieldMetadataFromDataResources,
 } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 
@@ -31,13 +32,10 @@ vi.mock("../../feedback", async (importOriginal) => ({
 function wrapper({ children }: { children: React.ReactNode }) {
   return (
     <ModelMetadataProvider
-      metadata={{
-        types: {},
-        resources: [
+      metadata={schemaFieldMetadataFromDataResources([
           testDataResource("inventory.Transfer"),
           testDataResource("accounting.Invoice"),
-        ],
-      }}
+      ])}
     >
       <AppRuntimeProvider
         runtime={{

@@ -58,21 +58,24 @@ from angee.data.metadata import (
     DataResourceFieldMetadata,
     DataResourceRoots,
     DataResourceSubtitleMetadata,
-    DataResourceTypeNames,
 )
 from angee.graphql.access import assert_no_gated_read_fields
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.metadata import (
-    attach_data_resource_metadata,
-    make_data_resource_metadata,
-    model_resource_fields,
+    DataResourceContribution,
+    DataResourcePolicy,
+    attach_data_resource_contribution,
     relation_group_by_fields,
-    resource_fields,
     resource_type_name,
     resource_wire_field_name,
     resource_wire_field_names,
 )
-from angee.graphql.data.resource_bundle import resource_query_metadata
+from angee.graphql.data.resource_fields import (
+    final_input_only_resource_fields,
+    final_input_wire_fields,
+    final_required_input_wire_fields,
+    final_resource_fields,
+)
 from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.introspection import (
@@ -729,7 +732,6 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     write_backend: WriteBackend | None = None,
     id_decode: Callable[[Any], Any] | None = None,
     id_column: str = "pk",
-    declared_fields: Sequence[str | DataResourceFieldMetadata] = (),
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
     row_model: str = "server",
@@ -839,17 +841,12 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         resource,
         node=node,
         model=model,
-        name=resource_name,
         filterable=tuple(filterable),
         sortable=tuple(sortable),
         aggregatable=tuple(aggregatable),
         groupable=active_groupable,
         json_paths=active_json_paths,
-        insert=insert,
-        update=update,
-        delete=delete,
         lines=lines,
-        declared_fields=tuple(declared_fields),
         model_label=model_label,
         public_id_field=public_id_field,
         row_model=row_model,
@@ -1001,129 +998,51 @@ def attach_hasura_resource_metadata(
     *,
     node: type,
     model: type[models.Model],
-    name: str,
     filterable: tuple[str, ...],
     sortable: tuple[str, ...],
     aggregatable: tuple[str, ...],
     groupable: tuple[str, ...] = (),
     json_paths: Mapping[str, str] | None = None,
-    insert: bool = True,
-    update: bool = True,
-    delete: bool = True,
     lines: HasuraLines | None = None,
-    declared_fields: tuple[str | DataResourceFieldMetadata, ...] = (),
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
     row_model: str = "server",
     subtitle: DataResourceSubtitleMetadata | None = None,
 ) -> HasuraResource:
-    """Attach Angee resource metadata to a built Hasura resource bundle."""
+    """Attach the native bundle and Angee-only policy for final projection."""
 
-    roots, type_names, filter_type, order_type = resource_query_metadata(resource)
-    insert_input_type = resource.insert_input_type
-    set_input_type = resource.set_input_type
-    insert_one_root = resource.insert_one_root
-    update_by_pk_root = resource.update_by_pk_root
-    delete_by_pk_root = resource.delete_by_pk_root
-    insert = "insert" in resource.enabled_operations
-    update = "update" in resource.enabled_operations
-    delete = "delete" in resource.enabled_operations
-
-    parent_create_fields = (
-        resource_wire_field_names(insert_input_type, exclude=_parent_write_exclude(lines)) if insert else ()
-    )
-    parent_update_fields = resource_wire_field_names(set_input_type, exclude=("id",)) if update else ()
     active_json_paths = dict(json_paths or {})
-    fields = model_resource_fields(
-        model,
-        declared_fields,
-        filter_fields=filterable,
-        order_fields=sortable,
-        aggregate_fields=aggregatable,
-        group_by_fields=groupable,
-        create_fields=parent_create_fields,
-        update_fields=parent_update_fields,
-    )
-    if roots.detail_name is None:
+    if resource.detail_root is None:
         raise ImproperlyConfigured(f"{model._meta.label} Hasura resource did not expose a detail root.")
-    attach_data_resource_metadata(
-        resource.query,
-        make_data_resource_metadata(
-            model=model,
-            model_label=model_label,
-            public_id_field=public_id_field,
-            node_type=node,
-            filter_type=filter_type,
-            order_type=order_type,
-            roots=roots,
-            type_names=type_names,
-            capabilities=("list", "detail", "aggregate", *(("groups",) if groupable else ())),
+    contribution = DataResourceContribution(
+        model=model,
+        model_label=model_label or model._meta.label,
+        native_resource=resource,
+        roots=DataResourceRoots(
+            save_name=(
+                resource_wire_field_name(resource.mutation, f"{resource.name}_save")
+                if lines is not None
+                else None
+            )
+        ),
+        policy=DataResourcePolicy(
             filter_fields=filterable,
             order_fields=sortable,
             aggregate_fields=aggregatable,
             group_by_fields=groupable,
-            group_dimensions=_hasura_group_dimensions(model, groupable, filterable, json_paths=active_json_paths),
+            group_dimensions=_hasura_group_dimensions(
+                model, groupable, filterable, json_paths=active_json_paths
+            ),
             aggregate_measures=_hasura_aggregate_measures(model, aggregatable),
             default_measures=(DataAggregateMeasureMetadata(op="count"),),
-            fields=fields,
+            public_id_field=public_id_field,
             row_model=row_model,
             subtitle=subtitle,
+            lines_declaration=lines,
         ),
     )
-    mutation_capabilities = tuple(
-        "create" if operation == "insert" else operation for operation in resource.enabled_operations
-    )
-    if lines is not None:
-        mutation_capabilities = (*mutation_capabilities, "save")
-    if mutation_capabilities:
-        save_root = resource_wire_field_name(resource.mutation, f"{name}_save") if lines is not None else None
-        attach_data_resource_metadata(
-            resource.mutation,
-            make_data_resource_metadata(
-                model=model,
-                model_label=model_label,
-                public_id_field=public_id_field,
-                node_type=node,
-                roots=DataResourceRoots(
-                    create_name=(
-                        resource_wire_field_name(
-                            resource.mutation,
-                            insert_one_root,
-                        )
-                        if insert and insert_one_root is not None
-                        else None
-                    ),
-                    update_name=(
-                        resource_wire_field_name(
-                            resource.mutation,
-                            update_by_pk_root,
-                        )
-                        if update and update_by_pk_root is not None
-                        else None
-                    ),
-                    save_name=save_root,
-                    delete_name=(
-                        resource_wire_field_name(
-                            resource.mutation,
-                            delete_by_pk_root,
-                        )
-                        if delete and delete_by_pk_root is not None
-                        else None
-                    ),
-                ),
-                type_names=DataResourceTypeNames(
-                    node=resource_type_name(node),
-                    create_input=resource_type_name(insert_input_type),
-                    update_input=resource_type_name(set_input_type),
-                ),
-                create_input_type=insert_input_type,
-                update_input_type=set_input_type,
-                create_fields=parent_create_fields,
-                update_fields=parent_update_fields,
-                lines=_line_metadata(lines, resource) if lines is not None else None,
-                capabilities=mutation_capabilities,
-            ),
-        )
+    attach_data_resource_contribution(resource.query, contribution)
+    attach_data_resource_contribution(resource.mutation, contribution)
     return resource
 
 
@@ -1133,16 +1052,25 @@ def _parent_write_exclude(lines: HasuraLines | None) -> tuple[str, ...]:
     return ("id",) if lines is None else ("id", lines.field)
 
 
-def _line_metadata(lines: HasuraLines, resource: HasuraResource) -> DataLinesMetadata:
+def _line_metadata(
+    lines: HasuraLines,
+    resource: HasuraResource,
+    schema: Any,
+) -> DataLinesMetadata:
     """Return the frontend editable-lines contract for a document resource."""
 
     line_input = resource.nested_input_types.get(lines.field)
-    child_fields = resource_wire_field_names(line_input, exclude=("id",))
+    input_name = resource_type_name(line_input)
+    child_fields = final_input_wire_fields(
+        schema,
+        input_name,
+        accepted=resource_wire_field_names(line_input, exclude=("id",)),
+    )
     return DataLinesMetadata(
         field=lines.field,
         model_label=lines.model._meta.label,
-        input_type=resource_type_name(line_input),
-        fields=_line_child_fields(lines, child_fields),
+        input_type=input_name,
+        fields=_line_child_fields(lines, child_fields, schema, input_name),
         position_field=lines.position_field if _has_model_field(lines.model, lines.position_field) else None,
     )
 
@@ -1150,53 +1078,61 @@ def _line_metadata(lines: HasuraLines, resource: HasuraResource) -> DataLinesMet
 def _line_child_fields(
     lines: HasuraLines,
     child_fields: tuple[str, ...],
+    schema: Any,
+    input_name: str | None,
 ) -> tuple[DataResourceFieldMetadata, ...]:
     """Return per-column metadata for a document's editable child fields.
 
     The child **node** surface owns each field's projected shape — an enum's
     values, a relation/list target — so the line cells read it there through the
-    same :func:`resource_fields` classifier the parent resource uses, instead of
-    re-deriving enum members and item shapes from the model (which the bare model
-    reconstruction cannot do). An M2M child is a ``kind="list"`` relation whose
+    final composed node and input types instead of re-deriving enum members and
+    item shapes from the model. An M2M child is a ``kind="list"`` relation whose
     target the frontend renders as a multi-select and persists as public ids; an
-    enum child carries its wire values. A writable child column the node does not
-    project (a write-only relation) falls back to the model reconstruction.
+    enum child carries its final wire values. Accepted input-only fields retain
+    Django relation and widget semantics with ``readable=False``.
     """
 
-    wanted = set(child_fields)
-    by_name: dict[str, DataResourceFieldMetadata] = {
-        field.name: field for field in _line_node_fields(lines, child_fields) if field.name in wanted
-    }
-    unprojected = tuple(name for name in child_fields if name not in by_name)
-    for field in model_resource_fields(
-        lines.model,
-        unprojected,
-        create_fields=unprojected,
-        update_fields=unprojected,
-    ):
-        by_name[field.name] = field
-    return tuple(by_name[name] for name in child_fields)
-
-
-def _line_node_fields(
-    lines: HasuraLines,
-    child_fields: tuple[str, ...],
-) -> tuple[DataResourceFieldMetadata, ...]:
-    """Return node-surface field metadata for the editable child columns."""
-
-    if lines.node is None:
-        return ()
-    return resource_fields(
-        lines.node,
-        lines.model,
+    required = final_required_input_wire_fields(
+        schema,
+        input_name,
+        accepted=child_fields,
+    )
+    readable: tuple[DataResourceFieldMetadata, ...] = ()
+    node_name = resource_type_name(lines.node)
+    if node_name is not None and schema.get_type(node_name) is not None:
+        readable = final_resource_fields(
+            schema,
+            node_name,
+            lines.model,
+            filter_fields=(),
+            order_fields=(),
+            aggregate_fields=(),
+            group_by_fields=(),
+            create_fields=child_fields,
+            update_fields=child_fields,
+            required_create_fields=required,
+            relation_axes=(),
+        )
+    input_only = final_input_only_resource_fields(
+        schema,
+        create_input_name=input_name,
+        update_input_name=input_name,
+        model=lines.model,
         filter_fields=(),
         order_fields=(),
         aggregate_fields=(),
         group_by_fields=(),
         create_fields=child_fields,
         update_fields=child_fields,
-        required_create_fields=(),
+        required_create_fields=required,
         relation_axes=(),
+        readable_fields=readable,
+    )
+    wanted = set(child_fields)
+    return tuple(
+        field
+        for field in (*readable, *input_only)
+        if field.name in wanted or field.model_field_name in wanted
     )
 
 

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import {
   publicIdLabel,
+  relationModelLabelForField,
   rowPublicId,
   rowValueAtPath,
   type DataResourceSubtitleMetadata,
@@ -110,7 +111,7 @@ function titleFieldFor(
   const stable = fields.filter((field) => !field.showWhen);
   return (
     stable.find((field) => field.title) ??
-    stable.find((field) => field.name === metadata?.recordRepresentation) ??
+    stable.find((field) => field.name === metadata?.resource.recordRepresentation) ??
     stable.find((field) => field.name === "title")
   );
 }
@@ -153,7 +154,7 @@ export function recordRepresentationValue(
   record: Row | null | undefined,
   metadata: ModelMetadata | null,
 ): unknown {
-  const field = metadata?.recordRepresentation;
+  const field = metadata?.resource.recordRepresentation;
   if (!record || !field) return undefined;
   return (record as Record<string, unknown>)[field];
 }
@@ -393,7 +394,7 @@ function isBlankCreateValue(
     return !isStringScalar(metadata);
   }
   if (value !== "") return false;
-  if (isRelationIdField(field) || metadata?.relationTarget) return true;
+  if (isRelationIdField(field) || (metadata && relationModelLabelForField(metadata))) return true;
   if (metadata) {
     return metadata.kind === "enum" || !isStringScalar(metadata);
   }

@@ -8,9 +8,6 @@ from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
 import strawberry
-from angee.base.identity import public_id_of
-from angee.base.scoping import read_scoped_queryset
-from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
 from django.db import models, transaction
 from django.db.models.deletion import (
     Collector,
@@ -20,10 +17,14 @@ from django.db.models.deletion import (
 from rebac import current_actor, system_context
 from rebac.resources import model_resource_type
 
+from angee.base.identity import public_id_of
+from angee.base.scoping import read_scoped_queryset
+from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.metadata import (
-    attach_data_resource_metadata,
-    make_data_resource_metadata,
+    DataResourceContribution,
+    DataResourcePolicy,
+    attach_data_resource_contribution,
     resource_type_name,
     resource_wire_field_name,
 )
@@ -330,13 +331,11 @@ def attach_delete_preview_metadata(
 ) -> type[_SurfaceT]:
     """Attach resource metadata for one authored cascade-preview mutation."""
 
-    return attach_data_resource_metadata(
+    return attach_data_resource_contribution(
         surface,
-        make_data_resource_metadata(
+        DataResourceContribution(
             model=model,
-            model_label=model_label,
-            public_id_field=public_id_field,
-            node_type=node,
+            model_label=model_label or model._meta.label,
             roots=DataResourceRoots(
                 delete_preview_name=resource_wire_field_name(surface, field),
             ),
@@ -345,6 +344,7 @@ def attach_delete_preview_metadata(
                 delete_payload=resource_type_name(DeletePreview),
             ),
             capabilities=("deletePreview",),
+            policy=DataResourcePolicy(public_id_field=public_id_field),
         ),
     )
 

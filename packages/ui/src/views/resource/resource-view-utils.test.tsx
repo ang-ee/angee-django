@@ -10,12 +10,13 @@ function meta(over: {
   fields?: Record<string, { kind: string; scalar?: string }>;
 }): ModelMetadata {
   return {
-    recordRepresentation: over.recordRepresentation,
     fields: over.fields ?? {},
     resource: {
       rowModel: over.rowModel ?? "server",
+      recordRepresentation: over.recordRepresentation,
       filterFields: over.filterFields ?? [],
     },
+    relationAxes: {},
   } as unknown as ModelMetadata;
 }
 

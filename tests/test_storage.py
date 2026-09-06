@@ -24,7 +24,6 @@ from rebac.roles import grant
 
 from angee.base.mixins import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
 from angee.data.field_classification import is_archive_field
-from angee.graphql.data.resource_fields import model_resource_fields
 from angee.storage import exceptions
 from angee.storage.models import FileManager, UploadState
 from angee.storage.signals import file_finalized
@@ -123,13 +122,17 @@ def test_archive_queryset_scopes_partition_storage_rows(drive: Any) -> None:
 
 
 def test_archive_column_is_marked_archivable_in_resource_metadata() -> None:
-    """The field classifier marks the mixin column archivable by its one name.
+    """The final resource marks the mixin column archivable by its one name.
 
     A same-typed boolean under a different contract (storage's soft-delete
     ``is_trashed``) is deliberately left plain — the vocabulary is name-based.
     """
 
-    fields = {field.name: field for field in model_resource_fields(Drive, ("is_archived", "slug"))}
+    schema = addon_schema(storage_schema.schemas, "public")
+    resource = next(
+        item for item in schema.angee_resources if item.model_label == Drive._meta.label
+    )
+    fields = {field.name: field for field in resource.fields}
     assert fields["is_archived"].archivable is True
     assert fields["slug"].archivable is False
 

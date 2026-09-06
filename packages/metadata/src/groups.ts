@@ -33,7 +33,7 @@ export function groupDimensionForField(
 ): DataResourceGroupDimensionMetadata {
   const dimension = resourceGroupDimensionForField(field, metadata);
   if (!dimension) {
-    const model = metadata?.typeName ?? "unknown model";
+    const model = metadata?.resource.modelLabel ?? "unknown model";
     throw new Error(
       `Resource metadata for ${model} does not declare group dimension "${field}".`,
     );

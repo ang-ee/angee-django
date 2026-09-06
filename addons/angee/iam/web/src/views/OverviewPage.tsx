@@ -14,7 +14,7 @@ import {
   type IAMUsersVariables,
 } from "../documents";
 import { titleLabel, userLabel } from "../identity-labels";
-import { grantRows, roleRef, roleRows } from "../identity-rows";
+import { grantRows } from "../identity-rows";
 import { IAM_LIST_LIMIT } from "../list-config";
 import { useIamT } from "../i18n";
 
@@ -41,7 +41,7 @@ export function OverviewPage(): ReactElement {
   const [grant_role, grantState] = useAuthoredMutation(IamGrantRole);
 
   const overviewFacts = overview.data?.iam_overview;
-  const roles = useMemo(() => roleRows(overview.data?.roles ?? []), [overview.data]);
+  const roles = overview.data?.iam_roles ?? [];
   const users = useMemo(
     () => [...(usersQuery.data?.users ?? [])],
     [usersQuery.data],
@@ -59,7 +59,7 @@ export function OverviewPage(): ReactElement {
   const roleOptions = useMemo(
     () =>
       roles.map((role) => ({
-        value: roleRef(role),
+        value: role.id,
         label: `${role.namespace} / ${role.label}`,
       })),
     [roles],

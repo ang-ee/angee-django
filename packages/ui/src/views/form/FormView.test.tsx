@@ -88,6 +88,9 @@ const sdkMocks = vi.hoisted(() => ({
   mutationOptions: undefined as { fields?: readonly string[]; enabled?: boolean } | undefined,
 }));
 
+type TestSchemaMetadata = Pick<SchemaFieldMetadata, "types"> &
+  Partial<Pick<SchemaFieldMetadata, "labels" | "resources">>;
+
 vi.mock("@angee/refine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/refine")>();
   return {
@@ -691,16 +694,12 @@ describe("FormView", () => {
       },
       capabilities: ["list", "detail", "delete"],
     } satisfies DataResourceMetadata;
-    const metadata: SchemaFieldMetadata = {
+    const metadata: TestSchemaMetadata = {
       types: {
         InferenceProviderType: {
-          typeName: "InferenceProviderType",
+          ...defaultModel("InferenceProviderType", "agents.InferenceProvider"),
           fields: {
             name: { name: "name", kind: "scalar", scalar: "String" },
-          },
-          rootFields: {
-            list: "inference_providers",
-            detail: "inference_providers_by_pk",
           },
           resource,
         },
@@ -811,16 +810,12 @@ describe("FormView", () => {
       },
       capabilities: ["list", "detail", "delete"],
     } satisfies DataResourceMetadata;
-    const metadata: SchemaFieldMetadata = {
+    const metadata: TestSchemaMetadata = {
       types: {
         InferenceProviderType: {
-          typeName: "InferenceProviderType",
+          ...defaultModel("InferenceProviderType", "agents.InferenceProvider"),
           fields: {
             name: { name: "name", kind: "scalar", scalar: "String" },
-          },
-          rootFields: {
-            list: "inference_providers",
-            detail: "inference_providers_by_pk",
           },
           resource,
         },
@@ -950,28 +945,29 @@ describe("FormView", () => {
       vendor: { id: "vnd_1", display_name: "Anthropic Vendor" },
     };
     sdkMocks.listRows = [{ id: "vnd_1", display_name: "Vendor From List" }];
-    const metadata: SchemaFieldMetadata = {
+    const metadata: TestSchemaMetadata = {
       types: {
         InferenceProviderType: {
-          typeName: "InferenceProviderType",
+          ...defaultModel("InferenceProviderType", "agents.InferenceProvider"),
           fields: {
             name: { name: "name", kind: "scalar", scalar: "String" },
             vendor: {
               name: "vendor",
               kind: "relation",
-              relationTarget: "VendorType",
+              relationModelLabel: "Vendor",
             },
           },
-          rootFields: {
-            list: "inference_providers",
-            detail: "inference_provider",
-            update: "update_inference_provider",
+          resource: {
+            ...defaultResource("InferenceProviderType", "agents.InferenceProvider"),
+            roots: {
+              list: "inference_providers",
+              detail: "inference_provider",
+              update: "update_inference_provider",
+            },
           },
-          resource: defaultResource("InferenceProviderType", "agents.InferenceProvider"),
         },
         VendorType: {
-          typeName: "VendorType",
-          recordRepresentation: "display_name",
+          ...defaultModel("VendorType", "Vendor"),
           fields: {
             display_name: {
               name: "display_name",
@@ -979,11 +975,11 @@ describe("FormView", () => {
               scalar: "String",
             },
           },
-          rootFields: {
-            list: "vendors",
-            detail: "vendor",
+          resource: {
+            ...defaultResource("VendorType", "Vendor"),
+            recordRepresentation: "display_name",
+            roots: { list: "vendors", detail: "vendor" },
           },
-          resource: defaultResource("VendorType", "Vendor"),
         },
       },
     };
@@ -1025,10 +1021,10 @@ describe("FormView", () => {
   });
 
   test("submits create on title Enter while omitting blank non-string values", async () => {
-    const metadata: SchemaFieldMetadata = {
+    const metadata: TestSchemaMetadata = {
       types: {
         NoteType: {
-          typeName: "NoteType",
+          ...defaultModel("NoteType", "notes.Note"),
           fields: {
             title: { name: "title", kind: "scalar", scalar: "String" },
             note: { name: "note", kind: "scalar", scalar: "String" },
@@ -1037,7 +1033,7 @@ describe("FormView", () => {
               name: "assignee",
               kind: "scalar",
               scalar: "ID",
-              relationTarget: "UserType",
+              relationModelLabel: "iam.User",
             },
             deadline: { name: "deadline", kind: "scalar", scalar: "DateTime" },
           },
@@ -1215,26 +1211,30 @@ describe("FormView", () => {
   test("submits only fields accepted by the schema create input", async () => {
     sdkMocks.record = null;
     sdkMocks.mutate.mockReset();
-    const metadata: SchemaFieldMetadata = {
+    const metadata: TestSchemaMetadata = {
       types: {
         IntegrationType: {
-          typeName: "IntegrationType",
+          ...defaultModel("IntegrationType", "integrate.Integration"),
           fields: {
             displayName: { name: "displayName", kind: "scalar", scalar: "String" },
-            vendor: { name: "vendor", kind: "relation", relationTarget: "VendorType" },
-            owner: { name: "owner", kind: "relation", relationTarget: "UserType" },
+            vendor: { name: "vendor", kind: "relation", relationModelLabel: "Vendor" },
+            owner: { name: "owner", kind: "relation", relationModelLabel: "iam.User" },
             credential: {
               name: "credential",
               kind: "relation",
-              relationTarget: "CredentialType",
+              relationModelLabel: "Credential",
             },
             implClass: { name: "implClass", kind: "scalar", scalar: "String" },
             implLabel: { name: "implLabel", kind: "scalar", scalar: "String" },
             config: { name: "config", kind: "scalar", scalar: "JSON" },
             lastError: { name: "lastError", kind: "scalar", scalar: "String" },
           },
-          rootFields: {
-            create: "createIntegration",
+          resource: {
+            ...defaultResource("IntegrationType", "integrate.Integration"),
+            roots: {
+              ...defaultResource("IntegrationType", "integrate.Integration").roots,
+              create: "createIntegration",
+            },
             createFields: ["vendor", "owner", "credential", "implClass", "config"],
           },
         },
@@ -2326,19 +2326,22 @@ describe("FormView", () => {
     // A write-only input (password) is declared on the form but absent from the
     // read type. Selecting it would make the whole detail/return query invalid
     // and the record would load as null (every field blank, "Untitled").
-    const metadata: SchemaFieldMetadata = {
+    const metadata: TestSchemaMetadata = {
       types: {
         UserType: {
-          typeName: "UserType",
-          recordRepresentation: "username",
+          ...defaultModel("UserType", "iam.User"),
           fields: {
             username: { name: "username", kind: "scalar", scalar: "String" },
             email: { name: "email", kind: "scalar", scalar: "String" },
             vendor: {
               name: "vendor",
               kind: "relation",
-              relationTarget: "VendorType",
+              relationModelLabel: "Vendor",
             },
+          },
+          resource: {
+            ...defaultResource("UserType", "iam.User"),
+            recordRepresentation: "username",
           },
         },
       },
@@ -2386,17 +2389,16 @@ describe("FormView", () => {
         wordCount: "markdown.word_count",
       },
     };
-    const metadata: SchemaFieldMetadata = {
+    const metadata: TestSchemaMetadata = {
       types: {
         PageType: {
-          typeName: "PageType",
+          ...defaultModel("PageType", "knowledge.Page"),
           fields: {
             title: { name: "title", kind: "scalar", scalar: "String" },
             created_at: { name: "created_at", kind: "scalar", scalar: "DateTime" },
             updated_at: { name: "updated_at", kind: "scalar", scalar: "DateTime" },
             markdown: { name: "markdown", kind: "relation" },
           },
-          rootFields: { detail: "pages_by_pk", update: "update_pages_by_pk" },
           resource,
         },
       },
@@ -2421,16 +2423,20 @@ describe("FormView", () => {
   test("blocks create and flags a missing required field in an inactive form tab", async () => {
     sdkMocks.record = null;
     sdkMocks.mutate.mockReset();
-    const metadata: SchemaFieldMetadata = {
+    const metadata: TestSchemaMetadata = {
       types: {
         NoteType: {
-          typeName: "NoteType",
+          ...defaultModel("NoteType", "notes.Note"),
           fields: {
             title: { name: "title", kind: "scalar", scalar: "String" },
             deadline: { name: "deadline", kind: "scalar", scalar: "DateTime" },
           },
-          rootFields: {
-            create: "createNote",
+          resource: {
+            ...defaultResource("NoteType", "notes.Note"),
+            roots: {
+              ...defaultResource("NoteType", "notes.Note").roots,
+              create: "createNote",
+            },
             requiredCreateFields: ["deadline"],
           },
         },
@@ -2789,23 +2795,18 @@ function saleLineField(
   };
 }
 
-const SALES_METADATA: SchemaFieldMetadata = {
+const SALES_METADATA: TestSchemaMetadata = {
   types: {
     SaleDocType: {
-      typeName: "SaleDocType",
-      recordRepresentation: "title",
+      ...defaultModel("SaleDocType", "demo.SaleDoc"),
       fields: { title: { name: "title", kind: "scalar", scalar: "String" } },
-      rootFields: {
-        list: "sale_docs",
-        detail: "sale_docs_by_pk",
-        update: "update_sale_docs_by_pk",
-      },
       resource: {
         schemaName: "console",
         modelLabel: "demo.SaleDoc",
         appLabel: "demo",
         modelName: "SaleDoc",
         publicIdField: "id",
+        recordRepresentation: "title",
         roots: {
           list: "sale_docs",
           detail: "sale_docs_by_pk",
@@ -2847,7 +2848,7 @@ function renderForm(id: string | null): void {
 
 function renderWithProviders(
   children: ReactElement,
-  metadata?: SchemaFieldMetadata,
+  metadata?: TestSchemaMetadata,
   forms?: Record<string, unknown>,
   runtime?: Partial<AppRuntime>,
   documents?: ComponentProps<typeof OperationDocumentsProvider>["documents"],
@@ -2899,7 +2900,7 @@ function createTestQueryClient(): QueryClient {
 }
 
 function withDefaultResourceMetadata(
-  metadata: SchemaFieldMetadata | undefined,
+  metadata: TestSchemaMetadata | undefined,
 ): SchemaFieldMetadata {
   const seed = metadata ?? { types: {} };
   const types: Record<string, ModelMetadata> = {
@@ -2924,17 +2925,10 @@ function withDefaultResourceMetadata(
 }
 
 function defaultModel(typeName: string, modelLabel: string): ModelMetadata {
-  const modelName = modelNameForLabel(modelLabel);
   return {
-    typeName,
     fields: {},
-    rootFields: {
-      list: `${modelName.toLowerCase()}s`,
-      detail: `${modelName.toLowerCase()}_by_pk`,
-      create: `create${modelName}`,
-      update: `update${modelName}`,
-    },
     resource: defaultResource(typeName, modelLabel),
+    relationAxes: {},
   };
 }
 
@@ -2971,12 +2965,12 @@ function defaultResource(typeName: string, modelLabel: string): DataResourceMeta
  * is its own canonical label, as the backend emits it.
  */
 function mtiMetadata(): SchemaFieldMetadata {
-  return {
+  return withTestResourceInventory({
     types: {
       NoteType: mtiModel("NoteType", "notes.Note", "parties.Party"),
       PartyType: mtiModel("PartyType", "parties.Party", "parties.Party"),
     },
-  };
+  });
 }
 
 function mtiModel(
@@ -3008,7 +3002,7 @@ function mtiModel(
  */
 function implMetadata(): SchemaFieldMetadata {
   const note = mtiModel("NoteType", "notes.Note", "parties.Party", ["kind"]);
-  return {
+  return withTestResourceInventory({
     types: {
       NoteType: {
         ...note,
@@ -3016,7 +3010,7 @@ function implMetadata(): SchemaFieldMetadata {
       },
       PartyType: mtiModel("PartyType", "parties.Party", "parties.Party"),
     },
-  };
+  });
 }
 
 function modelLabelForType(typeName: string): string {

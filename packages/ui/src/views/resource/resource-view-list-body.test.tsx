@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 
 import { render, screen } from "@testing-library/react";
-import type { ModelMetadata } from "@angee/metadata";
+import { schemaFieldMetadataFromDataResources, type ModelMetadata } from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
 import { getCoreRowModel, useReactTable, flexRender } from "@tanstack/react-table";
 import { expect, test, vi } from "vitest";
 
@@ -99,12 +100,7 @@ test("routes boolean cell copy through the UI translator", () => {
 });
 
 test("renders a metadata-declared date scalar without relying on its name", () => {
-  const metadata: ModelMetadata = {
-    typeName: "ReleaseType",
-    fields: {
-      published: { name: "published", kind: "scalar", scalar: "DateTime" },
-    },
-  };
+  const metadata = modelMetadata("published", "DateTime");
 
   const { container } = render(
     <>{cellContent(
@@ -121,12 +117,7 @@ test("renders a metadata-declared date scalar without relying on its name", () =
 });
 
 test("does not probe a date-looking field declared as a string", () => {
-  const metadata: ModelMetadata = {
-    typeName: "ReleaseType",
-    fields: {
-      published_at: { name: "published_at", kind: "scalar", scalar: "String" },
-    },
-  };
+  const metadata = modelMetadata("published_at", "String");
 
   const { container } = render(
     <>{cellContent(
@@ -140,3 +131,14 @@ test("does not probe a date-looking field declared as a string", () => {
   expect(container.querySelector("time")).toBeNull();
   expect(screen.getByText("2026-08-22T10:00:00Z")).toBeTruthy();
 });
+
+function modelMetadata(name: string, scalar: string): ModelMetadata {
+  const resource = testDataResource("tests.Row", {
+    fields: [{
+      name, kind: "scalar", scalar, readable: true, filterable: false,
+      sortable: false, aggregatable: false, groupable: false, creatable: false,
+      updatable: false, requiredOnCreate: false,
+    }],
+  });
+  return schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!;
+}
