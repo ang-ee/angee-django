@@ -28,7 +28,7 @@ class CatalogProvenance(models.Model):
     hasura_readable_fields = ("vcs_path",)
 
     vcs_source = models.ForeignKey(
-        "integrate.Source",
+        "integrate_vcs.Source",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -110,7 +110,7 @@ class AddonCatalog(AngeeModel):
 
     runtime = True
     source_kind = "addon"
-    """Binds the ``addon`` source kind to this model (see ``integrate.Source``)."""
+    """Binds the ``addon`` source kind to this model (see ``integrate_vcs.Source``)."""
 
     objects = AddonCatalogManager()
 

@@ -6,7 +6,8 @@ import pytest
 from django.db import models
 
 from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus
-from angee.integrate.registry import bridge_models, check_source_kind_contracts, source_kind_models
+from angee.integrate.registry import bridge_models
+from angee.integrate_vcs.registry import check_source_kind_contracts, source_kind_models
 from tests.conftest import Integration, Source, Template
 
 
@@ -70,7 +71,7 @@ def test_source_kind_registry_is_deterministic_and_checked() -> None:
     assert labels == sorted(labels)
     assert Template in models_with_source_kind
     assert "template" in Source.available_kinds()
-    assert not [error for error in check_source_kind_contracts() if error.id.startswith("angee.integrate.")]
+    assert not [error for error in check_source_kind_contracts() if error.id.startswith("angee.integrate_vcs.")]
 
 
 def test_report_status_records_integration_telemetry() -> None:

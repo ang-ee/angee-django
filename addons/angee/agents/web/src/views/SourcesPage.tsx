@@ -4,10 +4,10 @@ import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useAgentsT } from "../i18n";
 
-// Skill sources are `integrate.Source` rows of kind "skill". The repository and its
+// Skill sources are `integrate_vcs.Source` rows of kind "skill". The repository and its
 // VCS bridge are set up in the integrate console; here a source points at a
 // repo path, and Refresh (re-)discovers its skills.
-const MODEL = "integrate.Source";
+const MODEL = "integrate_vcs.Source";
 const SKILL_MODEL = "agents.Skill";
 const SKILL_DEFAULTS = { kind: "skill" };
 

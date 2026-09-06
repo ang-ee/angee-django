@@ -1,0 +1,45 @@
+// Authorization schema for the integrate_vcs addon.
+// @rebac_package: integrate_vcs
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+definition integrate_vcs/vcs_bridge {
+    relation integration: integrate/integration // rebac:field=integration_ptr
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    // VCS access derives from the parent integration; platform admins reach all.
+    permission read = integration->read + admin->member
+    permission write = integration->write + admin->member
+    permission delete = integration->write + admin->member
+}
+
+definition integrate_vcs/repository {
+    relation vcs_bridge: integrate_vcs/vcs_bridge // rebac:field=vcs_bridge
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = vcs_bridge->read + admin->member
+    permission write = vcs_bridge->write + admin->member
+    permission delete = vcs_bridge->write + admin->member
+}
+
+definition integrate_vcs/source {
+    relation repository: integrate_vcs/repository // rebac:field=repository
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = repository->read + admin->member
+    permission write = repository->write + admin->member
+    permission delete = repository->write + admin->member
+}
+
+definition integrate_vcs/template {
+    relation source: integrate_vcs/source // rebac:field=source
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = source->read + admin->member
+    permission write = source->write + admin->member
+    permission delete = source->write + admin->member
+}

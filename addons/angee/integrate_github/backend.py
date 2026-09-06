@@ -20,7 +20,7 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from angee.integrate.vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
+from angee.integrate_vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
 
 HTTP_TIMEOUT_SECONDS = 15
 DEFAULT_API_BASE = "https://api.github.com"

@@ -32,11 +32,5 @@ SETTINGS = {
     # append guards here without wiring model-delete signals that also fire during
     # unrelated cascades.
     "ANGEE_CREDENTIAL_DISCONNECT_GUARDS": (),
-    # VCS bridge backends. ``local`` inventories a local working tree with no
-    # network (dev/offline template + skill discovery); host addons add their own
-    # backends with yamlconf dotted keys (``"ANGEE_VCS_BACKEND_CLASSES.github"``).
-    "ANGEE_VCS_BACKEND_CLASSES": {
-        "local": "angee.integrate.vcs.backend.LocalVCSBackend",
-    },
 }
 """Django settings contributed when the integrate addon is installed."""

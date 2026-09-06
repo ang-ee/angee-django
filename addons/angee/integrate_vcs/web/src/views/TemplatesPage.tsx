@@ -2,17 +2,17 @@ import * as React from "react";
 import { Action, Column, ControlBandProvider, ResourceList, DrawerResourceList, Facet, Field, Form, Group, List, REFINE_CREATE_ID, SettingsSection, SettingsShell, useRecordActionMutation } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
-import { useIntegrateT } from "../i18n";
+import { useIntegrateVcsT } from "../i18n";
 
-const TEMPLATE_MODEL = "integrate.Template";
-const SOURCE_MODEL = "integrate.Source";
+const TEMPLATE_MODEL = "integrate_vcs.Template";
+const SOURCE_MODEL = "integrate_vcs.Source";
 const TEMPLATE_SOURCE_KIND = "template";
 const TEMPLATE_SOURCE_DEFAULTS = { kind: TEMPLATE_SOURCE_KIND };
 const TEMPLATE_KIND_OPTIONS = [
   { value: TEMPLATE_SOURCE_KIND, label: "Template" },
 ];
 
-function templateList(t: ReturnType<typeof useIntegrateT>): React.ReactElement {
+function templateList(t: ReturnType<typeof useIntegrateVcsT>): React.ReactElement {
   return (
     <List resource={TEMPLATE_MODEL} pageSize={50}>
       <Facet field="source" label={t("col.source")} labelField="path" />
@@ -26,7 +26,7 @@ function templateList(t: ReturnType<typeof useIntegrateT>): React.ReactElement {
 }
 
 function templateSourceList(
-  t: ReturnType<typeof useIntegrateT>,
+  t: ReturnType<typeof useIntegrateVcsT>,
 ): React.ReactElement {
   return (
     <List resource={SOURCE_MODEL} pageSize={50}>
@@ -42,7 +42,7 @@ function templateSourceList(
 // Templates are reconciled from template Source rows; this surface manages those
 // sources and then inspects the discovered Copier manifest metadata.
 export function TemplatesPage(): React.ReactElement {
-  const t = useIntegrateT();
+  const t = useIntegrateVcsT();
   const [syncTemplates] = useRecordActionMutation<ActionFieldName>(
     "refresh_source",
     { invalidateModels: [SOURCE_MODEL, TEMPLATE_MODEL] },

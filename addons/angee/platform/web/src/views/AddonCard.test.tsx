@@ -5,7 +5,6 @@ import { useCallback } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { AddonCard, AddonCardActions, type AddonResourceRow } from "./AddonCard";
-import { AddonSourceControls } from "./AddonSourceControls";
 
 const mocks = vi.hoisted(() => ({
   mutate: vi.fn(async () => ({
@@ -59,7 +58,6 @@ function row(overrides: Partial<AddonResourceRow> = {}): AddonResourceRow {
     resource_count: 0,
     depends_on: [],
     depended_by: [],
-    vcs_path: "",
     ...overrides,
   };
 }
@@ -161,23 +159,5 @@ describe("AddonCardActions", () => {
     expect((button as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(button);
     expect(mocks.mutate).not.toHaveBeenCalled();
-  });
-});
-
-describe("AddonSourceControls", () => {
-  test("routes add and scan invalidation through the resource owner", () => {
-    render(<AddonSourceControls />);
-
-    expect(mocks.resourceMutation).toHaveBeenCalledTimes(2);
-    expect(mocks.resourceMutation.mock.calls.map((call) => call[1])).toEqual([
-      {
-        invalidateModels: ["platform.Addon"],
-        shouldInvalidate: expect.any(Function),
-      },
-      {
-        invalidateModels: ["platform.Addon"],
-        shouldInvalidate: expect.any(Function),
-      },
-    ]);
   });
 });

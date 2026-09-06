@@ -13,7 +13,7 @@ import { usePlatformT } from "../i18n";
 export const ADDON_MODEL = "platform.Addon";
 
 // The `platform.Addon` Hasura resource row (`hasura_model_resource` over the
-// system-synced reflection table) plus the VCS marketplace tier's `vcs_path`. Raw
+// system-synced reflection table). Raw
 // snake fields, fetched + grouped client-side by the board's client row model.
 export interface AddonResourceRow extends Record<string, unknown> {
   id: string;
@@ -32,7 +32,6 @@ export interface AddonResourceRow extends Record<string, unknown> {
   resource_count: number;
   depends_on: readonly string[];
   depended_by: readonly string[];
-  vcs_path: string;
 }
 
 const MAX_CARD_KEYWORDS = 5;

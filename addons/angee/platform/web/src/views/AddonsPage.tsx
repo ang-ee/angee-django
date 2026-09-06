@@ -1,7 +1,7 @@
 import { type ReactElement } from "react";
 
 import {
-  Badge, Chip, ListView, statusTone, textRoleVariants, useRouteHref, type CardActionContext, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
+  Badge, Chip, ListView, SlotOutlet, statusTone, textRoleVariants, useRouteHref, useSlot, type CardActionContext, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
 import {
@@ -12,12 +12,12 @@ import {
   STATE_TONES,
   type AddonResourceRow,
 } from "./AddonCard";
-import { AddonSourceControls } from "./AddonSourceControls";
+import { PLATFORM_ADDON_TOOLBAR_SLOT } from "../slots";
 
 // Board-card data not shown as a list column: the description/keywords the card
-// renders, the forced/pending flags the lifecycle actions branch on, and the VCS
-// provenance. Fetched alongside the column fields by the one client row-model query.
-const CARD_FIELDS = ["description", "keywords", "forced", "pending", "vcs_path"] as const;
+// renders and the forced/pending flags the lifecycle actions branch on. Fetched
+// alongside the column fields by the one client row-model query.
+const CARD_FIELDS = ["description", "keywords", "forced", "pending"] as const;
 
 function columns(t: (key: string) => string): readonly ListColumn<AddonResourceRow>[] {
   return [
@@ -84,6 +84,7 @@ function groupOptions(t: (key: string) => string): readonly ResourceToolbarGroup
 export function AddonsPage(): ReactElement {
   const t = usePlatformT();
   const routeHref = useRouteHref();
+  const toolbarEntries = useSlot(PLATFORM_ADDON_TOOLBAR_SLOT);
   return (
     <ListView<AddonResourceRow>
       resource={ADDON_MODEL}
@@ -94,7 +95,7 @@ export function AddonsPage(): ReactElement {
       defaultGroup={{ field: "category" }}
       pageSize={100}
       rowHref={(row) => routeHref("platform.addons.record", { id: row.id })}
-      toolbarActions={<AddonSourceControls />}
+      toolbarActions={<SlotOutlet entries={toolbarEntries} />}
       renderCard={(row) => <AddonCard row={row} />}
       cardActions={(row: AddonResourceRow, context: CardActionContext) => (
         <AddonCardActions row={row} context={context} />

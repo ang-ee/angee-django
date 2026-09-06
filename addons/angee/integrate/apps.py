@@ -24,11 +24,9 @@ class IntegrateConfig(AppConfig):
         # both resolve concrete models from Django's loaded registry.
         from angee.integrate import signals
         from angee.integrate.models import check_credential_disconnect_guards
-        from angee.integrate.registry import check_source_kind_contracts
 
         signals.connect()
         _register_checks(
-            check_source_kind_contracts,
             check_credential_disconnect_guards,
         )
 

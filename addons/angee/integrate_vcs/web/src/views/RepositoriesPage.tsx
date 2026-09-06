@@ -1,13 +1,13 @@
 import * as React from "react";
 import { Column, ResourceList, Facet, Field, Form, Group, List } from "@angee/ui";
 
-import { useIntegrateT } from "../i18n";
+import { useIntegrateVcsT } from "../i18n";
 import { AddRepositoryControl } from "./AddRepositoryControl";
 
-const MODEL = "integrate.Repository";
+const MODEL = "integrate_vcs.Repository";
 
 function repositoryList(
-  t: ReturnType<typeof useIntegrateT>,
+  t: ReturnType<typeof useIntegrateVcsT>,
 ): React.ReactElement {
   return (
     <List resource={MODEL}>
@@ -28,7 +28,7 @@ function repositoryList(
  * `discover` and leave via the per-record delete.
  */
 export function RepositoriesPage(): React.ReactElement {
-  const t = useIntegrateT();
+  const t = useIntegrateVcsT();
   return (
     <ResourceList
       resource={MODEL}

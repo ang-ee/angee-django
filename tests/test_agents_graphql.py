@@ -560,17 +560,19 @@ def test_create_inference_provider_creates_child_row(agents_console_tables: None
         assert provider.backend_class == "manual"
 
 
-def test_update_inference_provider_backend_rematerializes_defaults(agents_console_tables: None) -> None:
-    """Changing a provider backend applies the new backend defaults on the owner row."""
+def test_update_inference_provider_backend_is_create_only(agents_console_tables: None) -> None:
+    """A saved provider cannot switch implementation or absorb another backend's defaults."""
 
     admin = _platform_admin("agt-provider-update-admin")
     with system_context(reason="test.agents.provider_update.seed"):
-        anthropic = Vendor.objects.create(slug="anthropic", display_name="Anthropic")
+        Vendor.objects.create(slug="anthropic", display_name="Anthropic")
     provider = _provider(
         "agt-provider-update",
         backend_class="manual",
         name="Custom",
     )
+    original_vendor_id = provider.vendor_id
+    original_account_id = provider.account_id
     with system_context(reason="test.agents.provider_update.account"):
         oauth_client = OAuthClient.objects.create(
             slug="agt-provider-update-account",
@@ -593,24 +595,23 @@ def test_update_inference_provider_backend_rematerializes_defaults(agents_consol
         }
     """
 
-    updated = _data(
-        _execute(
-            _schema(),
-            mutation,
-            {"id": _public_id(provider.sqid), "account": _public_id(account.sqid)},
-            user=admin,
-        )
-    )["update_inference_provider"]
-
-    assert updated == {
-        "backend_class": "ANTHROPIC",
-        "name": "Anthropic",
-        "vendor": {"slug": "anthropic"},
-        "account": {"external_id": "agt-provider-update-ext"},
+    result = _execute(
+        _schema(),
+        mutation,
+        {"id": _public_id(provider.sqid), "account": _public_id(account.sqid)},
+        user=admin,
+    )
+    assert result.errors is not None
+    assert result.errors[0].extensions == {
+        "code": "VALIDATION",
+        "validationErrors": {"backendClass": ["Implementation selection is create-only."]},
+        "formErrors": [],
     }
     provider.refresh_from_db()
-    assert provider.vendor_id == anthropic.pk
-    assert provider.account_id == account.pk
+    assert provider.backend_class == "manual"
+    assert provider.name == "Custom"
+    assert provider.vendor_id == original_vendor_id
+    assert provider.account_id == original_account_id
 
 
 def test_connect_inference_provider_uses_provider_backend_oauth_client(agents_console_tables: None) -> None:
@@ -680,7 +681,7 @@ def test_connect_inference_provider_uses_shared_oauth_client_error_code(
 
     assert result == {
         "attached": False,
-        "error": "Inference provider has no enabled OAuth client.",
+        "error": "This connection is not available.",
         "error_code": "oauth_client_not_connectable",
     }
 

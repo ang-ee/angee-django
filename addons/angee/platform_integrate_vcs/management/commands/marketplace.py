@@ -27,7 +27,7 @@ class Command(BaseCommand):
     def handle(self, *args: Any, **options: Any) -> None:
         """Refresh each addon source and report the discovered count."""
 
-        source_model = apps.get_model("integrate", "Source")
+        source_model = apps.get_model("integrate_vcs", "Source")
         with system_context(reason="platform_integrate_vcs.marketplace.sync"):
             sources = list(source_model.objects.filter(kind="addon"))
             discovered = sum(source.refresh() for source in sources)

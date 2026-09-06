@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Button, DialogForm, Glyph, RelationField, errorMessage, useAuthoredResourceMutation, useRelationOptions } from "@angee/ui";
 
-import { useIntegrateT } from "../i18n";
+import { useIntegrateVcsT } from "../i18n";
 import { VCS_BRIDGE_RELATION } from "../data/vcs-bridge";
 import {
   INTEGRATE_ADD_REPOSITORY_INVALIDATES,
@@ -18,7 +18,7 @@ import { RepositoryPicker } from "./RepositoryPicker";
  * be added in one sitting.
  */
 export function AddRepositoryControl(): React.ReactElement {
-  const t = useIntegrateT();
+  const t = useIntegrateVcsT();
   const [open, setOpen] = React.useState(false);
   return (
     <>
@@ -38,7 +38,7 @@ function AddRepositoryDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }): React.ReactElement {
-  const t = useIntegrateT();
+  const t = useIntegrateVcsT();
   const { options: bridgeOptions } = useRelationOptions(VCS_BRIDGE_RELATION, {
     enabled: open,
     sort: true,

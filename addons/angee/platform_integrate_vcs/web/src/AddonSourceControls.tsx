@@ -1,16 +1,17 @@
 import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
 import { Button, Dialog, Glyph, MutationDialog, Spinner, errorMessage, mutationDialogValueCodecs, textRoleVariants, useAuthoredResourceMutation, useRelationOptions, useToast, type MutationDialogField, type MutationDialogValues } from "@angee/ui";
-import { RepositoryPicker, VCS_BRIDGE_RELATION } from "@angee/integrate";
+import { ErrorBanner } from "@angee/ui/fragments/ErrorBanner";
+import { RepositoryPicker, VCS_BRIDGE_RELATION } from "@angee/integrate-vcs";
+import { PLATFORM_ADDON_MUTATION_INVALIDATES } from "@angee/platform";
 
 import {
   AddAddonSource,
   AddonSources,
-  PLATFORM_ADDON_MUTATION_INVALIDATES,
   ScanAddonSource,
   type AddonSourceRow,
-} from "../documents";
-import { usePlatformT } from "../i18n";
+} from "./documents";
+import { usePlatformIntegrateVcsT } from "./i18n";
 
 /**
  * The marketplace source controls for the board toolbar: **Add source** inventories a
@@ -19,7 +20,7 @@ import { usePlatformT } from "../i18n";
  * are admin-gated server-side; the buttons render for everyone and the mutation refuses.
  */
 export function AddonSourceControls(): React.ReactElement {
-  const t = usePlatformT();
+  const t = usePlatformIntegrateVcsT();
   const [addOpen, setAddOpen] = React.useState(false);
   const [scanOpen, setScanOpen] = React.useState(false);
   return (
@@ -45,7 +46,7 @@ function AddSourceDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }): React.ReactElement {
-  const t = usePlatformT();
+  const t = usePlatformIntegrateVcsT();
   const toast = useToast();
   const { options: bridgeOptions } = useRelationOptions(VCS_BRIDGE_RELATION, {
     enabled: open,
@@ -159,7 +160,7 @@ function ScanSourcesDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }): React.ReactElement {
-  const t = usePlatformT();
+  const t = usePlatformIntegrateVcsT();
   const toast = useToast();
   const query = useAuthoredQuery(AddonSources, undefined, { enabled: open });
   const sources = query.data?.sources ?? [];
@@ -207,12 +208,19 @@ function ScanSourcesDialog({
             </div>
           </Dialog.Header>
           <Dialog.Body>
-            <ScanSourceList
-              sources={sources}
-              fetching={query.isFetching}
-              scanning={scanning}
-              onScan={runScan}
-            />
+            {query.error ? (
+              <ErrorBanner
+                description={errorMessage(query.error, t("apps.scan.loadError"))}
+                actions={<Button variant="secondary" size="sm" onClick={() => void refetch()}>{t("apps.scan.retry")}</Button>}
+              />
+            ) : (
+              <ScanSourceList
+                sources={sources}
+                fetching={query.isFetching}
+                scanning={scanning}
+                onScan={runScan}
+              />
+            )}
           </Dialog.Body>
         </Dialog.Content>
       </Dialog.Portal>
@@ -231,7 +239,7 @@ function ScanSourceList({
   scanning: string | null;
   onScan: (id: string) => void;
 }): React.ReactElement {
-  const t = usePlatformT();
+  const t = usePlatformIntegrateVcsT();
   if (fetching && sources.length === 0) {
     return (
       <div className={textRoleVariants({ role: "meta" })}>

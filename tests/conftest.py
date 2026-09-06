@@ -29,13 +29,13 @@ from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import Credential as AbstractCredential
 from angee.integrate.models import ExternalAccount as AbstractExternalAccount
 from angee.integrate.models import OAuthClient as AbstractOAuthClient
-from angee.integrate.models import Repository as AbstractRepository
-from angee.integrate.models import Source as AbstractSource
-from angee.integrate.models import Template as AbstractTemplate
-from angee.integrate.models import VcsBridge as AbstractVcsBridge
 from angee.integrate.models import Vendor as AbstractVendor
 from angee.integrate.models import WebhookSubscription as AbstractWebhookSubscription
-from angee.integrate.vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
+from angee.integrate_vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
+from angee.integrate_vcs.models import Repository as AbstractRepository
+from angee.integrate_vcs.models import Source as AbstractSource
+from angee.integrate_vcs.models import Template as AbstractTemplate
+from angee.integrate_vcs.models import VcsBridge as AbstractVcsBridge
 from angee.knowledge.models import Link as AbstractLink
 from angee.knowledge.models import MarkdownPage as AbstractMarkdownPage
 from angee.knowledge.models import Page as AbstractPage
@@ -187,7 +187,7 @@ INTEGRATE_TEST_MODELS = (Vendor, Integration)
 class VcsBridge(AbstractVcsBridge, Integration):
     """Concrete VCS bridge used by source-addon tests.
 
-    ``angee.integrate.schema`` binds the VCS console types at import time via
+    ``angee.integrate_vcs.schema`` binds the VCS console types at import time via
     ``apps.get_model``, so the concrete models live here (imported before any test
     module) rather than in a single test file — otherwise importing the schema from
     one test depends on another test having been collected first.
@@ -197,9 +197,9 @@ class VcsBridge(AbstractVcsBridge, Integration):
         """Django model options for the canonical test VCS bridge."""
 
         abstract = False
-        app_label = "integrate"
+        app_label = "integrate_vcs"
         db_table = "test_integrate_vcs_bridge"
-        rebac_resource_type = "integrate/vcs_bridge"
+        rebac_resource_type = "integrate_vcs/vcs_bridge"
         rebac_id_attr = "sqid"
 
 
@@ -229,9 +229,9 @@ class Repository(AbstractRepository):
         """Django model options for the canonical test repository."""
 
         abstract = False
-        app_label = "integrate"
+        app_label = "integrate_vcs"
         db_table = "test_integrate_repository"
-        rebac_resource_type = "integrate/repository"
+        rebac_resource_type = "integrate_vcs/repository"
         rebac_id_attr = "sqid"
 
 
@@ -242,9 +242,9 @@ class Source(AbstractSource):
         """Django model options for the canonical test source."""
 
         abstract = False
-        app_label = "integrate"
+        app_label = "integrate_vcs"
         db_table = "test_integrate_source"
-        rebac_resource_type = "integrate/source"
+        rebac_resource_type = "integrate_vcs/source"
         rebac_id_attr = "sqid"
 
 
@@ -257,9 +257,9 @@ class Template(AbstractTemplate):
         """Django model options for the canonical test template."""
 
         abstract = False
-        app_label = "integrate"
+        app_label = "integrate_vcs"
         db_table = "test_integrate_template"
-        rebac_resource_type = "integrate/template"
+        rebac_resource_type = "integrate_vcs/template"
         rebac_id_attr = "sqid"
 
 

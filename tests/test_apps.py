@@ -302,8 +302,8 @@ def test_notes_demo_only_composes_reusable_agent_seeds(monkeypatch) -> None:
     assert master_by_path["resources/master/081_integrate.vendor.yaml"]["adopt"] == "slug"
     demo_by_path = {item["path"]: item for item in manifest["demo"]}
     assert demo_by_path["resources/demo/080_integrate.credential.yaml"]["adopt"] == ("user", "name")
-    assert demo_by_path["resources/demo/084_integrate.repository.yaml"]["adopt"] == ("vcs_bridge", "name")
-    assert demo_by_path["resources/demo/094_integrate.template.yaml"]["adopt"] == ("source", "path")
+    assert demo_by_path["resources/demo/084_integrate_vcs.repository.yaml"]["adopt"] == ("vcs_bridge", "name")
+    assert demo_by_path["resources/demo/094_integrate_vcs.template.yaml"]["adopt"] == ("source", "path")
     demo_paths = {item["path"] for item in manifest["demo"]}
 
     assert "resources/demo/010_iam.user.yaml" not in demo_paths

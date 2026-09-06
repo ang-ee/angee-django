@@ -5,6 +5,7 @@ import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, baseIcons } from "@angee/ui";
 
 import { AddRepositoryControl } from "./AddRepositoryControl";
+import { RepositoryPicker } from "./RepositoryPicker";
 
 const baseMocks = vi.hoisted(() => ({
   bridgeOptions: [] as Array<{ value: string; label: string }>,
@@ -86,6 +87,8 @@ describe("AddRepositoryControl typeahead", () => {
     baseMocks.bridgeOptions = [];
     sdkMocks.search.data = undefined;
     sdkMocks.search.fetching = false;
+    sdkMocks.search.error = null;
+    sdkMocks.search.refetch.mockReset();
     sdkMocks.lastSearchVars = null;
     sdkMocks.addOptions = null;
     sdkMocks.resourceAddOptions = null;
@@ -135,9 +138,42 @@ describe("AddRepositoryControl typeahead", () => {
     );
     // Adding declares the repository model so the resource-aware owner refreshes the list.
     expect(sdkMocks.resourceAddOptions).toEqual({
-      invalidateModels: ["integrate.Repository"],
+      invalidateModels: ["integrate_vcs.Repository"],
     });
     expect(await screen.findByText("Added")).toBeTruthy();
+  });
+
+  test("shows a bounded search failure with retry instead of no matches", async () => {
+    baseMocks.bridgeOptions = bridgeOptions();
+    sdkMocks.search.error = new Error("Request failed.");
+    renderControl();
+    fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "widget" } });
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Request failed.");
+    expect(screen.queryByText("No matching repositories.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(sdkMocks.search.refetch).toHaveBeenCalledOnce();
+  });
+
+  test("disables loaded candidate actions when the picker becomes read-only", async () => {
+    sdkMocks.search.data = searchData();
+    const onPick = vi.fn();
+    const view = render(
+      <AppRuntimeProvider runtime={{ icons: baseIcons }}>
+        <RepositoryPicker vcsBridgeId={VCS_ID} onPick={onPick} />
+      </AppRuntimeProvider>,
+    );
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "widget" } });
+    const candidate = await screen.findByRole("button", { name: /acme\/widgets/ });
+    view.rerender(
+      <AppRuntimeProvider runtime={{ icons: baseIcons }}>
+        <RepositoryPicker vcsBridgeId={VCS_ID} onPick={onPick} readOnly />
+      </AppRuntimeProvider>,
+    );
+    expect((candidate as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(candidate);
+    expect(onPick).not.toHaveBeenCalled();
   });
 });
 

@@ -31,10 +31,6 @@ describe("integrate addon manifest", () => {
       ["integrate.integration", "integrate.integrations"],
       ["integrate.vendor", "integrate.vendors"],
       ["integrate.webhook", "integrate.webhooks"],
-      ["integrate.vcsBridge", "integrate.vcs"],
-      ["integrate.repository", "integrate.repositories"],
-      ["integrate.source", "integrate.sources"],
-      ["integrate.template", "integrate.templates"],
     ] as const) {
       const record = (integrate.routes ?? []).find((route) => route.name === name);
       expect(record?.path).toContain("/$id");
@@ -47,10 +43,6 @@ describe("integrate addon manifest", () => {
     for (const [name, path] of [
       ["integrate.vendors", "/integrate/vendors"],
       ["integrate.webhooks", "/integrate/webhooks"],
-      ["integrate.vcs", "/integrate/vcs"],
-      ["integrate.repositories", "/integrate/repositories"],
-      ["integrate.sources", "/integrate/sources"],
-      ["integrate.templates", "/integrate/templates"],
     ] as const) {
       const route = (integrate.routes ?? []).find((entry) => entry.name === name);
       expect(route?.path).toBe(path);
@@ -58,7 +50,7 @@ describe("integrate addon manifest", () => {
     }
   });
 
-  test("exposes an Integrations menu grouped by integration, source, OAuth, and credentials concern", () => {
+  test("exposes an Integrations menu grouped by integration, OAuth, and credentials concern", () => {
     expect(integrate.menus).toHaveLength(1);
     const menu = integrate.menus?.[0] as BaseMenuItem | undefined;
     expect(menu?.id).toBe("integrate");
@@ -67,7 +59,6 @@ describe("integrate addon manifest", () => {
     expect(menu?.group).toBe("platform");
     expect(menu?.children?.map((child) => child.id)).toEqual([
       "integrate.integrations.group",
-      "integrate.sources.group",
       "integrate.oauth.group",
       "integrate.credentials",
     ]);
@@ -84,21 +75,6 @@ describe("integrate addon manifest", () => {
       "integrate.integrations",
       "integrate.vendors",
       "integrate.webhooks",
-    ]);
-  });
-
-  test("groups repository inventory under Sources with VCS bridges", () => {
-    const menu = integrate.menus?.[0] as BaseMenuItem | undefined;
-    const sources = menu?.children?.find(
-      (child) => child.id === "integrate.sources.group",
-    );
-    expect(sources?.label).toBe("Sources");
-    expect(sources?.route).toBeUndefined();
-    expect(sources?.children?.map((child) => [child.label, child.route])).toEqual([
-      ["Sources", "integrate.sources"],
-      ["Templates", "integrate.templates"],
-      ["Repositories", "integrate.repositories"],
-      ["VCS Bridges", "integrate.vcs"],
     ]);
   });
 
@@ -175,10 +151,6 @@ describe("integrate addon manifest", () => {
       "integration",
       "vendor",
       "webhook",
-      "vcs",
-      "repository",
-      "source",
-      "integrate-template",
     ] as const) {
       expect(integrate.icons?.[name]).toBeDefined();
     }

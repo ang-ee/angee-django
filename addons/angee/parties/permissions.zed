@@ -180,7 +180,7 @@ definition parties/relationship {
 
 // A Directory is a multi-table-inheritance child of integrate/integration (a
 // contacts-sync bridge), so its access derives from the parent integration the
-// way integrate/vcs_bridge does; platform admins reach all.
+// way integrate_vcs/vcs_bridge does; platform admins reach all.
 definition parties/directory {
     relation integration: integrate/integration // rebac:field=integration_ptr
     relation admin: angee/role // rebac:const=admin

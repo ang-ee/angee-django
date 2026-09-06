@@ -20,6 +20,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
+from graphql import GraphQLError
 from rebac import current_actor, system_context
 from strawberry import auto
 from strawberry.scalars import JSON
@@ -41,14 +42,13 @@ from angee.integrate.schema import (
     ConnectIntegrationResult,
     CredentialType,
     ExternalAccountType,
-    SourceType,
-    TemplateType,
     VendorType,
     apply_integration_patch_fields,
     connect_integration_target,
     integration_create_attrs,
     save_provided_fields,
 )
+from angee.integrate_vcs.schema import SourceType, TemplateType
 from angee.operator.daemon import OperatorDaemon
 
 InferenceProvider = apps.get_model("agents", "InferenceProvider")
@@ -65,8 +65,8 @@ Integration = apps.get_model("integrate", "Integration")
 Vendor = apps.get_model("integrate", "Vendor")
 Credential = apps.get_model("integrate", "Credential")
 ExternalAccount = apps.get_model("integrate", "ExternalAccount")
-Source = apps.get_model("integrate", "Source")
-Template = apps.get_model("integrate", "Template")
+Source = apps.get_model("integrate_vcs", "Source")
+Template = apps.get_model("integrate_vcs", "Template")
 User = get_user_model()
 
 
@@ -604,7 +604,10 @@ def _mint_session(agent: Any) -> dict[str, Any]:
         service = agent.service
         mcp_servers = agent.mcp_config().get("mcpServers", {})
     if not service:
-        raise ValueError("Agent is not running — provision it first.")
+        raise GraphQLError(
+            "Agent is not running — provision it first.",
+            extensions={"code": "BAD_USER_INPUT"},
+        )
     daemon = OperatorDaemon.from_settings()
     endpoint = daemon.service_endpoint(service)
     if not endpoint.get("routed"):

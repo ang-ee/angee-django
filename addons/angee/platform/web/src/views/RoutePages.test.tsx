@@ -95,10 +95,6 @@ vi.mock("./AddonCard", () => ({
   STATE_TONES: {},
 }));
 
-vi.mock("./AddonSourceControls", () => ({
-  AddonSourceControls: () => null,
-}));
-
 import { AddonsPage } from "./AddonsPage";
 import { FieldsPage } from "./FieldsPage";
 import { ModelsPage } from "./ModelsPage";

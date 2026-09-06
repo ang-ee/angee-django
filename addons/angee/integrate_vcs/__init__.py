@@ -1,0 +1,1 @@
+"""Standalone VCS integration capability."""

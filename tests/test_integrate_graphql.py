@@ -60,6 +60,7 @@ from tests.test_messaging import MESSAGING_TEST_MODELS
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
 integrate_schema = importlib.import_module("angee.integrate.schema")
+integrate_vcs_schema = importlib.import_module("angee.integrate_vcs.schema")
 _BRIDGE_SYNCED = str(EventKind.BRIDGE_SYNCED)
 """Raw stored value of one integration event kind (``str`` for clean typing)."""
 
@@ -119,7 +120,7 @@ def test_integration_capabilities_are_native_creatable_children(
         )
     )["integration_capabilities"]
     modes = {row["resource"]: row["create_mode"] for row in rows}
-    assert modes["integrate.VcsBridge"] == "FORM"
+    assert modes["integrate_vcs.VcsBridge"] == "FORM"
     assert "agents.InferenceProvider" not in modes
     assert "messaging.Channel" not in modes
     assert "posts.Feed" not in modes
@@ -144,7 +145,7 @@ def test_integration_concrete_target_keeps_parent_only_rows_unavailable(
     assert targets[_public_id(parent)] == {"state": "UNAVAILABLE", "resource": None, "id": None}
     assert targets[_public_id(child)] == {
         "state": "AVAILABLE",
-        "resource": "integrate.VcsBridge",
+        "resource": "integrate_vcs.VcsBridge",
         "id": _public_id(child),
     }
 
@@ -393,7 +394,7 @@ def test_resource_metadata_names_the_impl_columns_it_projects() -> None:
     schema = _schema()
     resources = {item.model_label: item for item in schema.angee_resources}
     assert resources["integrate.Integration"].impl_fields == ()
-    assert resources["integrate.VcsBridge"].impl_fields == ("backend_class",)
+    assert resources["integrate_vcs.VcsBridge"].impl_fields == ("backend_class",)
     assert resources["integrate.Vendor"].impl_fields == ()
 
     wire = {item["modelLabel"]: item for item in schema._schema.extensions["angee"]["resources"]}
@@ -409,7 +410,7 @@ def test_impl_choices_are_admin_only(integrate_console_tables: None) -> None:
     admin = _platform_admin("impl-choices-admin")
     query = """
         query {
-          impl_choices(model: "integrate.VcsBridge", field: "backendClass") {
+          impl_choices(model: "integrate_vcs.VcsBridge", field: "backendClass") {
             key
           }
         }
@@ -424,7 +425,7 @@ def test_impl_choices_are_admin_only(integrate_console_tables: None) -> None:
             console_schema,
             """
             query {
-              impl_choices(model: "integrate.VcsBridge", field: "backendClass") {
+              impl_choices(model: "integrate_vcs.VcsBridge", field: "backendClass") {
                 key
                 config_schema
               }
@@ -615,7 +616,7 @@ def test_attach_integration_credential_targets_owned_concrete_child(
         }
     """
     variables = {
-        "resource": "integrate.VcsBridge",
+        "resource": "integrate_vcs.VcsBridge",
         "id": _public_id(bridge),
         "credential": _public_id(replacement),
     }
@@ -654,7 +655,7 @@ def test_connect_integration_reuses_live_oauth_for_explicit_concrete_child(
           }
         }
     """
-    variables = {"resource": "integrate.VcsBridge", "id": _public_id(bridge)}
+    variables = {"resource": "integrate_vcs.VcsBridge", "id": _public_id(bridge)}
 
     result = _data(_execute(_schema(), mutation, variables, user=bridge.owner))["connect_integration"]
     assert result == {
@@ -900,6 +901,7 @@ def test_sync_integration_queues_bridge_for_an_admin(
 
     monkeypatch.setattr(integrate_queue, "queue_bridge_sync", fake_queue_bridge_sync)
     monkeypatch.setattr("angee.integrate.schema.queue_bridge_sync", fake_queue_bridge_sync)
+    monkeypatch.setattr("angee.integrate_vcs.schema.queue_bridge_sync", fake_queue_bridge_sync)
 
     result = _data(
         _execute(
@@ -1340,7 +1342,7 @@ def _schemas() -> GraphQLSchemas:
 
     addons = [
         SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
-        for module in (iam_schema, integrate_schema)
+        for module in (iam_schema, integrate_schema, integrate_vcs_schema)
     ]
     return GraphQLSchemas(addons)
 

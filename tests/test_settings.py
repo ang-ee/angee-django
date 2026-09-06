@@ -249,6 +249,7 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "django.contrib.sessions.apps.SessionsConfig",
         "angee.iam.apps.IAMConfig",
         "angee.integrate.apps.IntegrateConfig",
+        "angee.integrate_vcs.apps.IntegrateVcsConfig",
         "angee.mcp.apps.MCPConfig",
         "angee.operator",
         "angee.agents.apps.AgentsConfig",

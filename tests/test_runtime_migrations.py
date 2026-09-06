@@ -16,12 +16,40 @@ from django.db.migrations.state import ModelState, ProjectState
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.compose.migrations import RuntimeMigrations
+from angee.integrate_vcs.runtime_migrations.delete_integrate_vcs_state import applies as vcs_delete_applies
 from tests.conftest import make_addon, write_addon_manifest
 
 
 def _write_module(path: Path, text: str = "") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def test_vcs_state_delete_waits_for_non_moved_integrate_consumer() -> None:
+    """A generic integrate model can retain the old state just like another app."""
+
+    state = ProjectState()
+    for app_label in ("integrate", "integrate_vcs"):
+        for name in ("VcsBridge", "Repository", "Source", "Template"):
+            state.add_model(
+                ModelState(
+                    app_label=app_label,
+                    name=name,
+                    fields={"id": models.AutoField(primary_key=True)},
+                )
+            )
+    state.add_model(
+        ModelState(
+            app_label="integrate",
+            name="Consumer",
+            fields={
+                "id": models.AutoField(primary_key=True),
+                "source": models.ForeignKey("integrate.Source", on_delete=models.CASCADE),
+            },
+        )
+    )
+
+    assert vcs_delete_applies(state) is False
 
 
 @pytest.fixture

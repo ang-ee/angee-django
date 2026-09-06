@@ -62,7 +62,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
 describe("useImplConfigFields", () => {
   test("projects declared config through FormSpec and leaves undeclared choices raw", () => {
     const { result } = renderHook(
-      () => useImplConfigFields("integrate.VcsBridge", "backend_class"),
+      () => useImplConfigFields("integrate_vcs.VcsBridge", "backend_class"),
       { wrapper: RuntimeOwner },
     );
 

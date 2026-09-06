@@ -5,10 +5,6 @@ import { createNamespaceT } from "@angee/ui";
 // missing — model-driven `<Column>`/`<Field>` labels stay metadata-driven and are
 // not listed here. Keys are dotted within the `integrate` namespace.
 export const enIntegrateMessages: Record<string, string> = {
-  // Shared action verbs reused across the model-driven pages.
-  "action.syncNow": "Sync now",
-  "action.refresh": "Refresh",
-
   // Shared integration lifecycle record actions. Connect is absent by design:
   // it is a real handshake per subtype, so the addon that owns the vendor owns
   // its label as well as its UX.
@@ -20,15 +16,10 @@ export const enIntegrateMessages: Record<string, string> = {
     "It stops syncing and its live session ends. Its configuration is kept, so you can connect it again later.",
 
   // Shared list/group column labels.
-  "col.lifecycle": "Lifecycle",
-  "col.runtimeStatus": "Runtime",
   "col.type": "Type",
   "col.vendor": "Vendor",
   "col.credential": "Credential",
   "col.lastError": "Last error",
-  "col.source": "Source",
-  "col.repository": "Repository",
-  "col.vcsBridge": "VCS bridge",
 
   // Integrations page.
   "integrations.typeGroup": "Type",
@@ -41,27 +32,6 @@ export const enIntegrateMessages: Record<string, string> = {
   "integrations.add.connectDescription": "Continue to its connection setup.",
   "integrations.add.back": "Back",
   "integrations.add.continue": "Continue",
-
-  // VCS bridge page.
-  "vcs.backendClass": "Backend",
-  "vcs.discover": "Discover repositories",
-  "bridge.group.sync": "Sync",
-
-  // Repositories page detail groups.
-  "repositories.repository": "Repository",
-  "repositories.remote": "Remote",
-
-  // Sources page detail group.
-  "sources.pointer": "Pointer",
-
-  // Templates page detail groups.
-  "templates.title": "Templates",
-  "templates.template": "Template",
-  "templates.source": "Source",
-  "templateSources.title": "Template sources",
-  "templateSources.pointer": "Pointer",
-  "templateSources.sync": "Sync templates",
-
   // Webhooks page.
   "webhooks.filters": "Filters",
   "webhooks.sendTest": "Send test event",
@@ -71,24 +41,6 @@ export const enIntegrateMessages: Record<string, string> = {
   "webhooks.newSecretBody": "Copy this now — it is shown only once.",
   "webhooks.signingSecret": "Signing secret",
   "webhooks.rotated": "Signing secret rotated.",
-
-  // Add-repository dialog.
-  "addRepo.title": "Add repository",
-  "addRepo.description":
-    "Pick a VCS bridge, then type to find a repository to inventory.",
-  "addRepo.integrationLabel": "VCS bridge",
-  "addRepo.integrationPlaceholder": "Select a bridge",
-  "addRepo.integrationSearch": "Search bridges…",
-  "addRepo.nameLabel": "Repository name",
-  "addRepo.namePlaceholder": "Type a repository name…",
-  "addRepo.addFailed": "Could not add repository.",
-  "addRepo.selectIntegration":
-    "Select a bridge to search its repositories.",
-  "addRepo.typeToSearch": "Type a repository name to search.",
-  "addRepo.searching": "Searching…",
-  "addRepo.noMatches": "No matching repositories.",
-  "addRepo.added": "Added",
-
   // --- Connect surface (outbound OAuth: providers, accounts, credentials) ---
   // Cohesive block; relocatable to a future `iam_integrate_oidc/web` as a unit.
   // OAuth providers page — form-section labels and actions.

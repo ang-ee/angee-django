@@ -25,8 +25,8 @@ from angee.graphql.ids import PublicID
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 
 _Addon = apps.get_model("platform", "Addon")
-_VcsBridge = apps.get_model("integrate", "VcsBridge")
-_Source = apps.get_model("integrate", "Source")
+_VcsBridge = apps.get_model("integrate_vcs", "VcsBridge")
+_Source = apps.get_model("integrate_vcs", "Source")
 
 # The owner of "what string is the addon source kind" is the model that binds it to
 # integrate's ``Source`` dispatch — read it off ``AddonCatalog.source_kind`` rather than

@@ -80,7 +80,7 @@ definition agents/inference_model {
 }
 
 definition agents/skill {
-    relation source: integrate/source // rebac:field=source
+    relation source: integrate_vcs/source // rebac:field=source
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member

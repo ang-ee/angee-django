@@ -844,7 +844,7 @@ describe("FormView", () => {
     sdkMocks.record = { id: "repo-1", name: "widgets", org: "acme" };
     renderWithProviders(
       <FormView
-        resource="integrate.Repository"
+        resource="integrate_vcs.Repository"
         id="repo-1"
         fields={[
           { name: "org", label: "Org", readOnly: true },
@@ -2550,6 +2550,7 @@ describe("FormView", () => {
     sdkMocks.mutate.mockRejectedValue({
       graphQLErrors: [
         {
+          message: "Validation failed.",
           extensions: {
             code: "VALIDATION",
             validationErrors: {
@@ -2664,7 +2665,9 @@ describe("FormView", () => {
     sdkMocks.mutate.mockRejectedValue({
       graphQLErrors: [
         {
+          message: "Validation failed.",
           extensions: {
+            code: "VALIDATION",
             validationErrors: {
               title: ["This field cannot be blank."],
               environment: ["This field cannot be blank."],
@@ -2809,7 +2812,9 @@ describe("FormView", () => {
     sdkMocks.save.mockRejectedValue({
       graphQLErrors: [
         {
+          message: "Validation failed.",
           extensions: {
+            code: "VALIDATION",
             validationErrors: { "lines.1.label": ["This field is required."] },
             formErrors: [],
           },
@@ -2985,7 +2990,7 @@ function withDefaultResourceMetadata(
   const seed = metadata ?? { types: {} };
   const types: Record<string, ModelMetadata> = {
     NoteType: defaultModel("NoteType", "notes.Note"),
-    RepositoryType: defaultModel("RepositoryType", "integrate.Repository"),
+    RepositoryType: defaultModel("RepositoryType", "integrate_vcs.Repository"),
     InferenceModelType: defaultModel("InferenceModelType", "agents.InferenceModel"),
     IntegrationType: defaultModel("IntegrationType", "integrate.Integration"),
     OAuthClientType: defaultModel("OAuthClientType", "OAuthClient"),
@@ -3097,7 +3102,7 @@ function modelLabelForType(typeName: string): string {
   const known: Record<string, string> = {
     NoteType: "notes.Note",
     PartyType: "parties.Party",
-    RepositoryType: "integrate.Repository",
+    RepositoryType: "integrate_vcs.Repository",
     InferenceModelType: "agents.InferenceModel",
     IntegrationType: "integrate.Integration",
     OAuthClientType: "OAuthClient",

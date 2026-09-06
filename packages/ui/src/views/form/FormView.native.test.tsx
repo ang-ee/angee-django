@@ -138,7 +138,7 @@ test("native validation includes unmounted required fields and respects visibili
 });
 
 test("nested server errors and root failures share the native form store", async () => {
-  const f = await fixture({ submit: async () => { throw { graphQLErrors: [{ extensions: { validationErrors: { "lines.0.title": ["Invalid line"], title: ["Invalid title"] }, formErrors: ["Cannot save"] } }] }; } });
+  const f = await fixture({ submit: async () => { throw { graphQLErrors: [{ message: "Validation failed.", extensions: { code: "VALIDATION", validationErrors: { "lines.0.title": ["Invalid line"], title: ["Invalid title"] }, formErrors: ["Cannot save"] } }] }; } });
   edit("title", "Rejected");
   await act(async () => f.surface().submitForm());
   expect(f.surface().form.getFieldState("lines.0.title").error?.message).toBe("Invalid line");

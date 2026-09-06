@@ -696,7 +696,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
             return
         message_model = apps.get_model("messaging", "Message")
         # FOLLOW-UP: give messaging/thread + messaging/message a channel/integration-derived
-        # REBAC `delete` arm (mirror integrate/vcs_bridge) so this elevated cascade is
+        # REBAC `delete` arm (mirror integrate_vcs/vcs_bridge) so this elevated cascade is
         # authorized by schema, not the sync co-ownership invariant. Non-exploitable today
         # (the teardown runs under system_context behind the channel `delete` preflight).
         with system_context(reason="messaging.channel.teardown"), mute_changes(), transaction.atomic():

@@ -48,7 +48,7 @@ User = get_user_model()
 platform_schema = importlib.import_module("angee.platform.schema")
 vcs_schema = importlib.import_module("angee.platform_integrate_vcs.schema")
 Addon = apps.get_model("platform", "Addon")
-VcsBridge = apps.get_model("integrate", "VcsBridge")
+VcsBridge = apps.get_model("integrate_vcs", "VcsBridge")
 
 _REPOS = [
     {

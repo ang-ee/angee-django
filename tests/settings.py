@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     "angee.resources",
     "tests.iam_app.TestIAMConfig",
     "angee.integrate",
+    "angee.integrate_vcs",
     "angee.integrate_iphone",
     "angee.iam_integrate_oidc",
     "angee.agents",
@@ -141,7 +142,7 @@ ANGEE_RESOURCE_SOURCE_CLASSES = {
     "url": "angee.integrate.resource_source.url_source",
 }
 ANGEE_VCS_BACKEND_CLASSES = {
-    "local": "angee.integrate.vcs.backend.LocalVCSBackend",
+    "local": "angee.integrate_vcs.backend.LocalVCSBackend",
     "stub": "tests.conftest.StubVCSBackend",
 }
 ANGEE_INFERENCE_BACKEND_CLASSES = {

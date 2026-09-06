@@ -5,7 +5,7 @@ name = "angee.integrate_github"
 description = "GitHub backend for the VCS inventory — reads repositories over the GitHub REST API"
 keywords = ["github", "vcs"]
 category = "Integration"
-depends_on = ["angee.integrate"]
+depends_on = ["angee.integrate_vcs"]
 
 [resources]
 install = [

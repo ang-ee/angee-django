@@ -1,0 +1,23 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see hatch-angee's native AddonManifest.
+[addon]
+name = "angee.integrate_vcs"
+description = "VCS bridges, repository inventory, sources, and templates"
+keywords = ["integrations", "vcs", "repositories"]
+category = "Integration"
+depends_on = ["angee.integrate"]
+
+[[migrations]]
+name = "adopt_vcs_models"
+app_label = "integrate_vcs"
+module = "runtime_migrations.adopt_vcs_models"
+
+[[migrations]]
+name = "migrate_vcs_identities"
+app_label = "integrate_vcs"
+module = "runtime_migrations.migrate_vcs_identities"
+
+[[migrations]]
+name = "delete_integrate_vcs_state"
+app_label = "integrate"
+module = "runtime_migrations.delete_integrate_vcs_state"

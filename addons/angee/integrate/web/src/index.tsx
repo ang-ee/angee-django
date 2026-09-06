@@ -3,10 +3,6 @@ import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute } from "@angee
 import { lazyRouteComponent } from "@tanstack/react-router";
 import {
   Cable,
-  FolderGit2,
-  GitBranch,
-  GitFork,
-  LayoutTemplate,
   Link2,
   Store,
   Webhook,
@@ -18,7 +14,6 @@ import {
   CONNECT_CALLBACK_PATH,
 } from "./connect/redirects";
 import { enIntegrateMessages } from "./i18n";
-import { vcsBridgeForm } from "./views/VcsBridgesPage";
 import {
   DisconnectIntegrationAction,
   INTEGRATION_DISCONNECT_ACTION_ID,
@@ -48,10 +43,6 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
   ...resourcePageRoutes("integrate.integrations", "/integrate", lazyRouteComponent(() => import("./views/IntegrationsPage"), "IntegrationsPage"), "integrate.Integration", { detailName: "integrate.integration" }),
   ...resourcePageRoutes("integrate.vendors", "/integrate/vendors", lazyRouteComponent(() => import("./views/VendorsPage"), "VendorsPage"), "integrate.Vendor", { detailName: "integrate.vendor" }),
   ...resourcePageRoutes("integrate.webhooks", "/integrate/webhooks", lazyRouteComponent(() => import("./views/WebhooksPage"), "WebhooksPage"), "integrate.WebhookSubscription", { detailName: "integrate.webhook" }),
-  ...resourcePageRoutes("integrate.vcs", "/integrate/vcs", lazyRouteComponent(() => import("./views/VcsBridgesPage"), "VcsBridgesPage"), "integrate.VcsBridge", { detailName: "integrate.vcsBridge" }),
-  ...resourcePageRoutes("integrate.repositories", "/integrate/repositories", lazyRouteComponent(() => import("./views/RepositoriesPage"), "RepositoriesPage"), "integrate.Repository", { detailName: "integrate.repository" }),
-  ...resourcePageRoutes("integrate.sources", "/integrate/sources", lazyRouteComponent(() => import("./views/SourcesPage"), "SourcesPage"), "integrate.Source", { detailName: "integrate.source" }),
-  ...resourcePageRoutes("integrate.templates", "/integrate/templates", lazyRouteComponent(() => import("./views/TemplatesPage"), "TemplatesPage"), "integrate.Template", { detailName: "integrate.template" }),
 
   // --- Connect surface (outbound OAuth) -----------------------------------
   // The account-connect callback: the provider redirects back here after the user
@@ -98,18 +89,6 @@ const integrateMenu: readonly BaseMenuItem[] = [
         ],
       },
       {
-        // Repository/source inventory hangs off VCS-capable integrations.
-        id: "integrate.sources.group",
-        label: "Sources",
-        icon: "source",
-        children: [
-          { id: "integrate.sources", label: "Sources", icon: "source", route: "integrate.sources" },
-          { id: "integrate.templates", label: "Templates", icon: "integrate-template", route: "integrate.templates" },
-          { id: "integrate.repositories", label: "Repositories", icon: "repository", route: "integrate.repositories" },
-          { id: "integrate.vcs", label: "VCS Bridges", icon: "vcs", route: "integrate.vcs" },
-        ],
-      },
-      {
         // OAuth client setup and the external identities those clients discover.
         id: "integrate.oauth.group",
         label: "OAuth",
@@ -133,7 +112,6 @@ const integrate = defineBaseAddon({
   // relation-picker inline create (e.g. an Integration's credential field).
   forms: {
     "integrate.Credential": credentialCreateForm,
-    "integrate.VcsBridge": vcsBridgeForm,
   },
   // Lifecycle verbs contributed against the MTI parent, so every integration
   // subtype's form inherits them. Connecting is not among them: it means a real
@@ -164,10 +142,6 @@ const integrate = defineBaseAddon({
     integration: Link2,
     vendor: Store,
     webhook: Webhook,
-    vcs: GitFork,
-    repository: FolderGit2,
-    source: GitBranch,
-    "integrate-template": LayoutTemplate,
   },
 });
 
@@ -202,11 +176,5 @@ export {
   connectCallbackRedirectUri,
   currentConnectCallbackRedirectUri,
 } from "./connect/redirects";
-export {
-  RepositoryPicker,
-  type RepositoryPickerProps,
-} from "./views/RepositoryPicker";
-export { type RepoCandidate } from "./documents";
 
 export default integrate;
-export { VCS_BRIDGE_MODEL, VCS_BRIDGE_RELATION } from "./data/vcs-bridge";

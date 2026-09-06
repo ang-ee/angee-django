@@ -5,8 +5,13 @@ name = "angee.agents"
 description = "AI agents — the inference provider/model catalogue and the runtimes agents run on"
 keywords = ["agents", "ai", "inference"]
 category = "Agents"
-depends_on = ["angee.integrate", "angee.operator", "angee.mcp"]
+depends_on = ["angee.integrate", "angee.integrate_vcs", "angee.operator", "angee.mcp"]
 dependencies = ["pydantic-ai-slim>=2.13"]
+
+[[migrations]]
+name = "vcs_models_cutover"
+app_label = "agents"
+module = "runtime_migrations.vcs_models_cutover"
 
 [resources]
 demo = [

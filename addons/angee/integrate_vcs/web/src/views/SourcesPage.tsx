@@ -2,11 +2,11 @@ import * as React from "react";
 import { Action, Column, ResourceList, Facet, Field, Form, Group, List, useRecordActionMutation } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
-import { useIntegrateT } from "../i18n";
+import { useIntegrateVcsT } from "../i18n";
 
-const MODEL = "integrate.Source";
+const MODEL = "integrate_vcs.Source";
 
-function sourceList(t: ReturnType<typeof useIntegrateT>): React.ReactElement {
+function sourceList(t: ReturnType<typeof useIntegrateVcsT>): React.ReactElement {
   return (
     <List resource={MODEL}>
       <Facet field="repository" label={t("col.repository")} labelField="name" />
@@ -24,7 +24,7 @@ function sourceList(t: ReturnType<typeof useIntegrateT>): React.ReactElement {
  * the host.
  */
 export function SourcesPage(): React.ReactElement {
-  const t = useIntegrateT();
+  const t = useIntegrateVcsT();
   const [refresh] = useRecordActionMutation<ActionFieldName>("refresh_source");
 
   return (

@@ -4,7 +4,7 @@ import { Action, Column, Facet, Field, Form, Group, List, ResourceList, register
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import type { DocumentVariables } from "@angee/refine";
 
-import { useIntegrateT } from "../i18n";
+import { useIntegrateVcsT } from "../i18n";
 import {
   INTEGRATE_VCS_BRIDGE_INVALIDATES,
   IntegrateCreateVcsBridge,
@@ -12,13 +12,13 @@ import {
   IntegrateUpdateVcsBridge,
 } from "../documents";
 
-const MODEL = "integrate.VcsBridge";
+const MODEL = "integrate_vcs.VcsBridge";
 
 /**
  * VCS bridges own repository discovery and source sync for one integration child row.
  */
 export function VcsBridgesPage(): React.ReactElement {
-  const t = useIntegrateT();
+  const t = useIntegrateVcsT();
   return (
     <ResourceList resource={MODEL} form={vcsBridgeForm} placement="inline" routed>
       <List resource={MODEL}>
@@ -35,7 +35,7 @@ export function VcsBridgesPage(): React.ReactElement {
 }
 
 function VcsBridgeForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
-  const t = useIntegrateT();
+  const t = useIntegrateVcsT();
   const [sync] = useRecordActionMutation<ActionFieldName>("sync_vcs_bridge");
   const [discover] = useAuthoredMutation(IntegrateDiscoverRepositories);
   const backendClassOptions = useEnumOptions(MODEL, "backend_class");

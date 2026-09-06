@@ -1121,12 +1121,12 @@ def test_credential_crud_create_delete_are_admin_only(
         assert credential.kind == CredentialKind.STATIC_TOKEN
         assert credential.oauth_client_id is None
     credential_id = str(credential.sqid)
-    scheduled: list[Any] = []
+    scheduled: list[tuple[Any, bool]] = []
     revoked: list[Any] = []
     monkeypatch.setattr(
         integrate_schema.transaction,
         "on_commit",
-        lambda callback, robust=False: scheduled.append(callback),
+        lambda callback, robust=False: scheduled.append((callback, robust)),
     )
     monkeypatch.setattr(Credential, "revoke_remote", lambda credential: revoked.append(credential.pk))
 
@@ -1146,7 +1146,9 @@ def test_credential_crud_create_delete_are_admin_only(
     assert deleted["total_deleted_count"] >= 1
     assert revoked == []
     assert len(scheduled) == 1
-    scheduled.pop()()
+    callback, robust = scheduled.pop()
+    assert robust is True
+    callback()
     assert revoked == [credential.pk]
     with system_context(reason="test.iam.credential_crud.delete"):
         assert not Credential.objects.filter(pk=credential.pk).exists()

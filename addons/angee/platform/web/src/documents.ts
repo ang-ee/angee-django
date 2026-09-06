@@ -91,38 +91,3 @@ export const UninstallAddon = graphql(`
     }
   }
 `);
-
-/** Inventory a repository on a VCS bridge and point a new addon `Source` at it. */
-export const AddAddonSource = graphql(`
-  mutation AddAddonSource($data: AddonSourceInput!) {
-    add_source(data: $data) {
-      ok
-      message
-    }
-  }
-`);
-
-/** Re-enumerate one addon `Source` into the marketplace (`platform.Addon`) rows. */
-export const ScanAddonSource = graphql(`
-  mutation ScanAddonSource($sourceId: ID!) {
-    scan(source_id: $sourceId) {
-      ok
-      message
-    }
-  }
-`);
-
-/** The addon `Source` rows the Scan dialog offers — VCS sources of `kind: "addon"`. */
-export const AddonSources = graphql(`
-  query AddonSources {
-    sources(where: { kind: { _eq: "addon" } }, order_by: [{ updated_at: desc }]) {
-      id
-      display_name
-      kind
-      ref
-      path
-    }
-  }
-`);
-
-export type AddonSourceRow = DocumentType<typeof AddonSources>["sources"][number];

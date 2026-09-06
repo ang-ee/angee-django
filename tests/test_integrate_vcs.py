@@ -19,7 +19,7 @@ from django.db import connection
 from django.utils import timezone
 from rebac import system_context
 
-from angee.integrate.vcs.backend import LocalVCSBackend
+from angee.integrate_vcs.backend import LocalVCSBackend
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,

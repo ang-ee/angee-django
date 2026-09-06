@@ -15,7 +15,6 @@
   },
   "dependencies": {
     "@angee/app": "workspace:*",
-    "@angee/integrate": "workspace:*",
     "@angee/refine": "workspace:*",
     "@angee/ui": "workspace:*",
     "nuqs": "^2.5.0"

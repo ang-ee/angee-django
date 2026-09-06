@@ -1,10 +1,11 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import { Glyph, Input, Spinner, cn, textRoleVariants } from "@angee/ui";
+import { Button, Glyph, Input, Spinner, cn, errorMessage, textRoleVariants } from "@angee/ui";
+import { ErrorBanner } from "@angee/ui/fragments/ErrorBanner";
 import { useDebounce } from "use-debounce";
 import type { DocumentVariables } from "@angee/refine";
 
-import { useIntegrateT } from "../i18n";
+import { useIntegrateVcsT } from "../i18n";
 import { IntegrateSearchRepositories, type RepoCandidate } from "../documents";
 
 // Debounce keystrokes before hitting the host search API.
@@ -49,7 +50,7 @@ export function RepositoryPicker({
   describedBy,
   readOnly = false,
 }: RepositoryPickerProps): React.ReactElement {
-  const t = useIntegrateT();
+  const t = useIntegrateVcsT();
   const [query, setQuery] = React.useState("");
   const [debouncedQuery] = useDebounce(query.trim(), SEARCH_DEBOUNCE_MS);
   const searchEnabled = vcsBridgeId !== "" && debouncedQuery !== "";
@@ -79,16 +80,24 @@ export function RepositoryPicker({
         disabled={readOnly || vcsBridgeId === ""}
         onChange={(event) => setQuery(event.currentTarget.value)}
       />
-      <RepoCandidateList
-        candidates={candidates}
-        fetching={searchQuery.isFetching}
-        searching={searchEnabled}
-        hasBridge={vcsBridgeId !== ""}
-        busyName={busyName}
-        pickedNames={pickedNames}
-        pickedLabel={pickedLabel ?? t("addRepo.added")}
-        onPick={onPick}
-      />
+      {searchEnabled && searchQuery.error ? (
+        <ErrorBanner
+          description={errorMessage(searchQuery.error, t("addRepo.searchFailed"))}
+          actions={<Button variant="secondary" size="sm" onClick={() => void searchQuery.refetch()}>{t("addRepo.retry")}</Button>}
+        />
+      ) : (
+        <RepoCandidateList
+          candidates={candidates}
+          fetching={searchQuery.isFetching}
+          searching={searchEnabled}
+          hasBridge={vcsBridgeId !== ""}
+          busyName={busyName}
+          pickedNames={pickedNames}
+          pickedLabel={pickedLabel ?? t("addRepo.added")}
+          onPick={onPick}
+          readOnly={readOnly}
+        />
+      )}
     </div>
   );
 }
@@ -102,6 +111,7 @@ function RepoCandidateList({
   pickedNames,
   pickedLabel,
   onPick,
+  readOnly,
 }: {
   candidates: readonly RepoCandidate[];
   fetching: boolean;
@@ -111,8 +121,9 @@ function RepoCandidateList({
   pickedNames: ReadonlySet<string> | undefined;
   pickedLabel: string;
   onPick: (candidate: RepoCandidate) => void;
+  readOnly: boolean;
 }): React.ReactElement {
-  const t = useIntegrateT();
+  const t = useIntegrateVcsT();
   if (!hasBridge) {
     return <ListHint>{t("addRepo.selectIntegration")}</ListHint>;
   }
@@ -139,7 +150,7 @@ function RepoCandidateList({
           <li key={candidate.name}>
             <button
               type="button"
-              disabled={isPicked || isBusy}
+              disabled={readOnly || isPicked || isBusy}
               onClick={() => onPick(candidate)}
               className="flex w-full items-center gap-3 rounded-6 border border-border bg-sheet px-3 py-2 text-left outline-none transition-colors hover:border-border-strong focus-visible:focus-ring disabled:cursor-not-allowed disabled:opacity-60"
             >
