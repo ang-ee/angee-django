@@ -28,6 +28,22 @@ from tests.test_messaging_graphql import Channel
 LIVE_TEST_MODELS = (*MESSAGING_TEST_MODELS, Channel)
 
 
+@pytest.mark.django_db
+def test_run_bridge_session_skips_actual_periodic_vcs_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stale live-session delivery for a periodic VCS bridge exits cleanly."""
+
+    from angee.integrate import tasks as tasks_module
+    from tests.conftest import VcsBridge
+
+    monkeypatch.setattr(tasks_module, "_bridge", lambda *_: VcsBridge())
+
+    assert tasks_module.run_bridge_session("integrate_vcs.vcsbridge", 1) == {
+        "ok": True,
+        "skipped": True,
+        "reason": "not-live-capable",
+    }
+
+
 class FakeLiveSession(LiveSession):
     """Worker-only fake selected through a real dotted session-class path."""
 
@@ -809,6 +825,16 @@ def test_ensure_bridge_sessions_reconciles_live_desire_and_routes_to_session_que
 
     from angee.integrate import tasks as tasks_module
     from angee.integrate.constants import RUN_SESSION_TASK, SESSION_START_EXPIRES
+    from angee.integrate.models import Bridge
+    from angee.integrate.registry import bridge_models
+    from tests.conftest import VcsBridge
+
+    discovered = bridge_models(Bridge)
+    assert VcsBridge in discovered
+    assert Channel in discovered
+    assert VcsBridge.live_implementation_field() is None
+    assert Channel.live_implementation_field() is Channel._meta.get_field("backend_class")
+    monkeypatch.setattr(tasks_module, "bridge_models", bridge_models)
 
     sent: list[dict[str, Any]] = []
     monkeypatch.setattr(

@@ -6,7 +6,6 @@ import logging
 import threading
 from typing import Any
 
-from angee.jobs.locks import task_locks_are_cross_process
 from celery import shared_task
 from celery.signals import worker_shutting_down
 from django.apps import apps
@@ -23,6 +22,7 @@ from angee.integrate.models import Bridge, IntegrationRuntimeStatus
 from angee.integrate.registry import bridge_models
 from angee.integrate.sync import bridge_progress_context
 from angee.integrate.sync_runner import run_bridge_sync_job
+from angee.jobs.locks import task_locks_are_cross_process
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,8 @@ def run_bridge_session(model_label: str, pk: Any) -> dict[str, Any]:
         bridge = _bridge(model_label, pk)
         if bridge is None:
             return {"ok": True, "skipped": True, "reason": "not-a-bridge"}
+        if type(bridge).live_implementation_field() is None:
+            return {"ok": True, "skipped": True, "reason": "not-live-capable"}
         impl = bridge.live_impl
         if not isinstance(impl, LiveBridgeImpl):
             return {"ok": True, "skipped": True, "reason": "not-live-capable"}
@@ -149,7 +151,9 @@ def ensure_bridge_sessions(timestamp: int | None = None) -> dict[str, Any]:
     cross_process = task_locks_are_cross_process()
     with system_context(reason="integrate.ensure_bridge_sessions"):
         for model in bridge_models(Bridge):
-            field = model._meta.get_field(model.live_impl_field)
+            field = model.live_implementation_field()
+            if field is None:
+                continue
             live_keys: list[str] = []
             for key in field.registered_keys():
                 try:
@@ -166,7 +170,7 @@ def ensure_bridge_sessions(timestamp: int | None = None) -> dict[str, Any]:
             if not live_keys:
                 continue
             bridges = model._default_manager.filter(
-                **{f"{model.live_impl_field}__in": live_keys},
+                **{f"{field.name}__in": live_keys},
                 lifecycle=str(model.Lifecycle.CONNECTED),
                 runtime_status=str(IntegrationRuntimeStatus.OK),
             ).order_by("pk")

@@ -4,17 +4,14 @@ This addon owns the integration layer end to end. The connection substrate — t
 ``OAuthClient`` registration, the user's ``ExternalAccount`` at a provider, and the
 per-user ``Credential`` material — authenticates everything above it. On top of
 that sit the third-party ``Vendor`` catalogue, the first-class ``Integration``
-an integration runs over, concrete child integration kinds such as ``VcsBridge``,
-addon-owned children such as ``agents.InferenceProvider``, the
-host-agnostic VCS inventory (``VcsBridge`` + ``Repository``/``Source``/
-``Template``), and outbound ``WebhookSubscription``.
+an integration runs over, addon-owned concrete child integration kinds, and
+outbound ``WebhookSubscription``.
 
 This addon is pure OAuth: it connects *out* to external systems and never
 authenticates a session. OIDC login fields and ID-token verification live one
 level up in ``iam_integrate_oidc``, which extends this OAuth base and composes the
-``iam`` user. Host-specific VCS backends live in their own addons
-(``integrate_github``) and are named per ``VcsBridge.backend_class`` row; this
-addon never imports them.
+``iam`` user. Concrete capabilities and their implementation selectors live in
+their owning addons; this addon never imports them.
 """
 
 from __future__ import annotations
@@ -1559,11 +1556,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     def capability_impl(self) -> Any:
         """Return the one implementation selected by a concrete capability child."""
 
-        fields = [
-            field
-            for field in self._meta.get_fields()
-            if isinstance(field, ImplClassField)
-        ]
+        fields = [field for field in self._meta.get_fields() if isinstance(field, ImplClassField)]
         if len(fields) != 1:
             raise ImproperlyConfigured(
                 f"{self._meta.label} must declare exactly one child implementation field; found {len(fields)}."
@@ -1871,8 +1864,12 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         LIVE = "live", "Live"
         STOPPED = "stopped", "Stopped"
 
-    live_impl_field: ClassVar[str]
-    """Name the ImplClassField that selects this bridge's runtime implementation."""
+    live_impl_field: ClassVar[str | None] = None
+    """Name the ImplClassField that may select a long-lived session implementation.
+
+    Periodic-only bridges leave this unset. Their periodic sync remains in the due
+    scheduler, but the live-session reconciler does not inspect or dispatch them.
+    """
 
     config = models.JSONField(default=dict, blank=True)
     """Bridge-scoped settings interpreted by the selected backend."""
@@ -1903,11 +1900,28 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
         abstract = True
 
+    @classmethod
+    def live_implementation_field(cls) -> ImplClassField | None:
+        """Return this bridge's explicitly declared live implementation field."""
+
+        field_name = cls.live_impl_field
+        if field_name is None:
+            return None
+        field = cls._meta.get_field(field_name)
+        if not isinstance(field, ImplClassField):
+            raise ImproperlyConfigured(
+                f"{cls._meta.label}.{field_name} must be an ImplClassField to select live implementations."
+            )
+        return field
+
     @property
     def live_impl(self) -> IntegrationImpl:
         """Return this bridge's selected runtime implementation."""
 
-        impl_class = cast(type[IntegrationImpl], self.resolve_impl(self.live_impl_field))
+        field = type(self).live_implementation_field()
+        if field is None:
+            raise TypeError(f"{self._meta.label} is a periodic-only bridge.")
+        impl_class = cast(type[IntegrationImpl], self.resolve_impl(field.name))
         return impl_class(self)
 
     @property
