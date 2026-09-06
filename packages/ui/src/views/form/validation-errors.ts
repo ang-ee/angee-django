@@ -1,4 +1,5 @@
 import * as React from "react";
+import { errorFromUnknown, graphQLErrorsFromUnknown } from "../../data/errors";
 
 export type DottedPathFieldErrorMap = Readonly<
   Record<string, readonly string[]>
@@ -50,11 +51,6 @@ export function lineRowErrorsFromDottedPaths(
   return rows;
 }
 
-interface GraphQLErrorLike {
-  message?: unknown;
-  extensions?: Record<string, unknown> | null;
-}
-
 /**
  * Extract per-field and form-level validation messages from a mutation error.
  * The GraphQL runtime surfaces Django model-validation failures as structured
@@ -66,8 +62,11 @@ export function validationErrorsFromError(error: unknown): ValidationErrors {
   const formErrors: string[] = [];
   let structured = false;
 
-  for (const graphQLError of graphQLErrorsOf(error)) {
-    const extensions = graphQLError.extensions ?? undefined;
+  for (const graphQLError of graphQLErrorsFromUnknown(error)) {
+    const extensionsValue = graphQLError.extensions;
+    const extensions = extensionsValue && typeof extensionsValue === "object"
+      ? extensionsValue as Record<string, unknown>
+      : undefined;
     const validation = validationErrorMap(extensions?.validationErrors);
     if (validation) {
       structured = true;
@@ -193,14 +192,6 @@ function dottedPathErrorSummary(
   return messages.length > 0 ? messages.join(" ") : null;
 }
 
-function graphQLErrorsOf(error: unknown): readonly GraphQLErrorLike[] {
-  if (error && typeof error === "object" && "graphQLErrors" in error) {
-    const list = (error as { graphQLErrors?: unknown }).graphQLErrors;
-    if (Array.isArray(list)) return list as GraphQLErrorLike[];
-  }
-  return [];
-}
-
 function isStringListMap(value: unknown): value is Record<string, string[]> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   return Object.values(value).every(
@@ -210,7 +201,8 @@ function isStringListMap(value: unknown): value is Record<string, string[]> {
 }
 
 function validationErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message.replace(/^\[\w+\]\s*/, "");
+  const safe = errorFromUnknown(error);
+  if (safe) return safe.message.replace(/^\[\w+\]\s*/, "");
   if (typeof error === "string") return error.replace(/^\[\w+\]\s*/, "");
   return "Could not save record.";
 }

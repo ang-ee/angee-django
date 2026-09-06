@@ -58,10 +58,10 @@ test("native Table keeps dotted display IDs while Refine sends declared flat ord
   expect(f.bodies.some(({ variables }) => variables.order_by && "thread" in (variables.order_by as object))).toBe(false);
 });
 
-test("unknown active URL sorts reach native query errors rather than disappearing or falling back", async () => {
+test("unknown active URL sorts reach a bounded native query error rather than disappearing or falling back", async () => {
   const f = await fixture("unsupported");
   expect(f.bodies[0]?.variables.order_by).toEqual({ unsupported: "desc" });
-  await waitFor(() => expect(f.surface().list.error?.message).toContain("unsupported"));
+  await waitFor(() => expect(f.surface().list.error?.message).toBe("Request failed."));
   expect(screen.getByText("Sent").closest("button")).not.toBeNull();
   await act(async () => fireEvent.click(screen.getByText("Sent")));
   await waitFor(() => expect(f.surface().list.error).toBeNull());

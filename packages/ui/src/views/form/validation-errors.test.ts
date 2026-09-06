@@ -115,27 +115,41 @@ describe("useDottedPathFieldErrors", () => {
 });
 
 describe("validationErrorsFromError", () => {
+  test("does not use transport messages containing request variables", () => {
+    const secret = "form-secret-sentinel";
+    const error = Object.assign(new Error(`request variables ${secret}`), {
+      request: { variables: { secret } },
+      response: { status: 500 },
+    });
+    expect(validationErrorsFromError(error)).toEqual({
+      fieldErrors: {},
+      formErrors: ["Request failed."],
+    });
+  });
   test("splits a structured extension into field and form messages", () => {
     const error = {
       message: "[GraphQL] validation failed",
-      graphQLErrors: [
-        {
-          message: "validation failed",
-          extensions: {
-            code: "VALIDATION",
-            validationErrors: {
-              slug: ["This field cannot be blank."],
-              clientId: ["This field cannot be blank."],
+      request: { variables: { password: "must-not-render" } },
+      response: {
+        errors: [
+          {
+            message: "validation failed",
+            extensions: {
+              code: "VALIDATION",
+              validationErrors: {
+                "config.local_root": ["This field cannot be blank."],
+                clientId: ["This field cannot be blank."],
+              },
+              formErrors: ["Provider is misconfigured."],
             },
-            formErrors: ["Provider is misconfigured."],
           },
-        },
-      ],
+        ],
+      },
     };
 
     expect(validationErrorsFromError(error)).toEqual({
       fieldErrors: {
-        slug: ["This field cannot be blank."],
+        "config.local_root": ["This field cannot be blank."],
         clientId: ["This field cannot be blank."],
       },
       formErrors: ["Provider is misconfigured."],
@@ -165,6 +179,17 @@ describe("validationErrorsFromError", () => {
 
   test("returns empty maps for an unrecognised value", () => {
     expect(validationErrorsFromError(undefined)).toEqual({
+      fieldErrors: {},
+      formErrors: ["Could not save record."],
+    });
+  });
+
+  test("uses the bounded fallback for opaque objects", () => {
+    expect(validationErrorsFromError({})).toEqual({
+      fieldErrors: {},
+      formErrors: ["Could not save record."],
+    });
+    expect(validationErrorsFromError({ message: undefined })).toEqual({
       fieldErrors: {},
       formErrors: ["Could not save record."],
     });
