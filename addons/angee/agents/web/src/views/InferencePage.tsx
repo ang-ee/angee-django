@@ -1,13 +1,14 @@
 import * as React from "react";
 import { rowPublicId, type Row, } from "@angee/metadata";
 import {
-  Action, Column, ResourceList, Facet, Field, Form, Group, List, useAuthoredResourceMutation, useRecordActionMutation, useEnumOptions, useImplPrefill, useRouteHref, type FormSubmit } from "@angee/ui";
+  Action, Column, ResourceList, Facet, Field, Form, Group, List, registerForm, useAuthoredResourceMutation, useRecordActionMutation, useEnumOptions, useImplPrefill, useRouteHref, type FormSubmit, type RegisteredFormProps } from "@angee/ui";
 import { canConnectRecord, ConnectOAuthButton, } from "@angee/integrate";
 import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import {
   ConnectInferenceProvider,
+  CreateInferenceProvider,
   INFERENCE_PROVIDER_UPDATE_INVALIDATES,
   UpdateInferenceProvider,
 } from "../documents";
@@ -18,38 +19,10 @@ const MODEL_MODEL = "agents.InferenceModel";
 
 export function InferenceProvidersPage(): React.ReactElement {
   const t = useAgentsT();
-  const [refreshModels] = useRecordActionMutation<ActionFieldName>(
-    "refresh_provider_models",
-    { invalidateModels: [MODEL_MODEL] },
-  );
-  const [updateProvider] = useAuthoredResourceMutation(UpdateInferenceProvider, {
-    invalidateModels: INFERENCE_PROVIDER_UPDATE_INVALIDATES,
-  });
-  const backendClassOptions = useEnumOptions(PROVIDER_MODEL, "backend_class");
-  const backendClassPrefill = useImplPrefill(PROVIDER_MODEL, "backend_class");
-  const submitProvider = React.useCallback<FormSubmit>(
-    async (data, context) => {
-      if (!context.id) {
-        throw new Error("Inference provider updates require a saved record.");
-      }
-      // `data` is FormView's already-normalized payload: relation fields arrive
-      // as flat public ids (FormView owns the {id} -> id flattening), so it maps
-      // straight onto the patch input. The cast only bridges FormSubmit's untyped
-      // `Record<string, unknown>` contract to the typed document variables.
-      const variables: DocumentVariables<typeof UpdateInferenceProvider> = {
-        data: { ...data, id: context.id } as DocumentVariables<
-          typeof UpdateInferenceProvider
-        >["data"],
-      };
-      const result = await updateProvider(variables);
-      return result?.update_inference_provider ?? null;
-    },
-    [updateProvider],
-  );
-
   return (
     <ResourceList
       resource={PROVIDER_MODEL}
+      form={inferenceProviderForm}
       placement="inline"
       routed
       cardActions={(row, context) =>
@@ -64,7 +37,51 @@ export function InferenceProvidersPage(): React.ReactElement {
         <Column field="runtime_status" widget="colorDot" />
         <Column field="credential.display_name" header={t("inference.credential")} />
       </List>
-      <Form resource={PROVIDER_MODEL} submit={submitProvider}>
+    </ResourceList>
+  );
+}
+
+function InferenceProviderForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
+  const t = useAgentsT();
+  const [refreshModels] = useRecordActionMutation<ActionFieldName>(
+    "refresh_provider_models",
+    { invalidateModels: [MODEL_MODEL] },
+  );
+  const [updateProvider] = useAuthoredResourceMutation(UpdateInferenceProvider, {
+    invalidateModels: INFERENCE_PROVIDER_UPDATE_INVALIDATES,
+  });
+  const [createProvider] = useAuthoredResourceMutation(CreateInferenceProvider, {
+    invalidateModels: INFERENCE_PROVIDER_UPDATE_INVALIDATES,
+  });
+  const backendClassOptions = useEnumOptions(PROVIDER_MODEL, "backend_class");
+  const privateConfigReset = React.useMemo(() => ({ config: {} }), []);
+  const backendClassPrefill = useImplPrefill(PROVIDER_MODEL, "backend_class", privateConfigReset);
+  const submitProvider = React.useCallback<FormSubmit>(
+    async (data, context) => {
+      if (context.isCreate) {
+        const variables: DocumentVariables<typeof CreateInferenceProvider> = {
+          data: data as DocumentVariables<typeof CreateInferenceProvider>["data"],
+        };
+        return (await createProvider(variables))?.create_inference_provider ?? null;
+      }
+      if (!context.id) throw new Error("Inference provider update requires a saved record.");
+      // `data` is FormView's already-normalized payload: relation fields arrive
+      // as flat public ids (FormView owns the {id} -> id flattening), so it maps
+      // straight onto the patch input. The cast only bridges FormSubmit's untyped
+      // `Record<string, unknown>` contract to the typed document variables.
+      const variables: DocumentVariables<typeof UpdateInferenceProvider> = {
+        data: { ...data, id: context.id } as DocumentVariables<
+          typeof UpdateInferenceProvider
+        >["data"],
+      };
+      const result = await updateProvider(variables);
+      return result?.update_inference_provider ?? null;
+    },
+    [createProvider, updateProvider],
+  );
+
+  return (
+      <Form {...props} resource={PROVIDER_MODEL} submit={submitProvider}>
         <Field name="name" title />
         <Group label={t("inference.backend")} columns={2}>
           <Field name="owner" />
@@ -73,6 +90,9 @@ export function InferenceProvidersPage(): React.ReactElement {
             widget="select"
             options={backendClassOptions}
             prefill={backendClassPrefill}
+            prefillPreserveDirty
+            prefillReplace={["config"]}
+            createOnly
           />
           <Field name="vendor" />
           <Field name="credential" />
@@ -86,9 +106,10 @@ export function InferenceProvidersPage(): React.ReactElement {
         <Field name="config" widget="json" />
         <Action id="refresh-models" label={t("inference.refreshModels")} icon="refresh" run={refreshModels} />
       </Form>
-    </ResourceList>
   );
 }
+
+export const inferenceProviderForm = registerForm(PROVIDER_MODEL, InferenceProviderForm);
 
 function ProviderConnectButton({
   row,

@@ -18,6 +18,7 @@ import {
   CONNECT_CALLBACK_PATH,
 } from "./connect/redirects";
 import { enIntegrateMessages } from "./i18n";
+import { vcsBridgeForm } from "./views/VcsBridgesPage";
 import {
   DisconnectIntegrationAction,
   INTEGRATION_DISCONNECT_ACTION_ID,
@@ -37,6 +38,11 @@ const oauthConnectCallback = lazyRouteComponent(
 );
 
 const integrateRoutes: readonly BaseAddonRoute[] = [
+  {
+    name: "integrate.add",
+    path: "/integrate/add",
+    component: lazyRouteComponent(() => import("./views/AddIntegrationPage"), "AddIntegrationPage"),
+  },
   // List/detail pairs: the list route owns the component/model, and the `$id`
   // child carries only the nested record URL.
   ...resourcePageRoutes("integrate.integrations", "/integrate", lazyRouteComponent(() => import("./views/IntegrationsPage"), "IntegrationsPage"), "integrate.Integration", { detailName: "integrate.integration" }),
@@ -127,6 +133,7 @@ const integrate = defineBaseAddon({
   // relation-picker inline create (e.g. an Integration's credential field).
   forms: {
     "integrate.Credential": credentialCreateForm,
+    "integrate.VcsBridge": vcsBridgeForm,
   },
   // Lifecycle verbs contributed against the MTI parent, so every integration
   // subtype's form inherits them. Connecting is not among them: it means a real

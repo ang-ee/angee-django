@@ -1,52 +1,47 @@
-import { useAuthoredMutation } from "@angee/refine";
+import { type Row } from "@angee/metadata";
 import * as React from "react";
-import { rowPublicId, type Row, } from "@angee/metadata";
-import {
-  Column, ResourceList, Field, Form, Group, List, useEnumOptions, useImplPrefill,
-  useRouteHref } from "@angee/ui";
+import { Button, Column, List, ResourceList, useResourceRecordHrefLookup, useRouteHref } from "@angee/ui";
+import { useNavigate } from "@tanstack/react-router";
 
-import { canConnectRecord, ConnectOAuthButton } from "../connect/ConnectOAuthButton";
-import { ConnectIntegration } from "../documents";
 import { useIntegrateT } from "../i18n";
 
 const MODEL = "integrate.Integration";
+interface ConcreteTarget { state?: string | null; resource?: string | null; id?: string | null; }
+function concreteTarget(row: Row): ConcreteTarget | null {
+  const value = row.concrete_target;
+  return value && typeof value === "object" ? value as ConcreteTarget : null;
+}
+
+export function concreteIntegrationHref(
+  row: Row,
+  lookup: (resource: string, id: string) => string | undefined,
+): string {
+  const target = concreteTarget(row);
+  if (target?.state !== "AVAILABLE" || !target.resource || !target.id) return "";
+  return lookup(target.resource, target.id) ?? "";
+}
+
 export function IntegrationsPage(): React.ReactElement {
   const t = useIntegrateT();
-  const implClassOptions = useEnumOptions(MODEL, "impl_class");
-  const implClassPrefill = useImplPrefill(MODEL, "impl_class");
-  const groupOptions = React.useMemo(
-    () => [
-      {
-        id: "kind",
-        label: t("integrations.typeGroup"),
-        group: { field: "kind" },
-        type: "value" as const,
-      },
-    ],
-    [t],
-  );
-
-  const cardActions = React.useCallback(
-    (row: Row, context: { refresh: () => void }) =>
-      canConnectRecord(row) ? (
-        <IntegrationConnectButton row={row} refresh={context.refresh} />
-      ) : null,
-    [],
-  );
+  const navigate = useNavigate();
+  const routeHref = useRouteHref();
+  const recordHref = useResourceRecordHrefLookup();
+  const groupOptions = React.useMemo(() => [{ id: "kind", label: t("integrations.typeGroup"), group: { field: "kind" }, type: "value" as const }], [t]);
+  const rowHref = React.useCallback((row: Row): string => {
+    return concreteIntegrationHref(row, recordHref);
+  }, [recordHref]);
 
   return (
     <ResourceList
       resource={MODEL}
-      placement="inline"
-      routed
-      cardActions={cardActions}
+      rowHref={rowHref}
+      hideCreate
+      toolbarActions={<Button variant="primary" onClick={() => void navigate({ to: routeHref("integrate.add") })}>{t("integrations.add.title")}</Button>}
     >
       <List
         resource={MODEL}
-        defaultGroups={{
-          list: { field: "kind" },
-          board: { field: "kind" },
-        }}
+        fields={["concrete_target.state", "concrete_target.resource", "concrete_target.id"]}
+        defaultGroups={{ list: { field: "kind" }, board: { field: "kind" } }}
         groupOptions={groupOptions}
       >
         <Column field="display_name" />
@@ -54,72 +49,10 @@ export function IntegrationsPage(): React.ReactElement {
         <Column field="vendor.display_name" header={t("col.vendor")} />
         <Column field="lifecycle" widget="statusBadge" />
         <Column field="runtime_status" widget="colorDot" />
-        <Column
-          field="credential.display_name"
-          header={t("col.credential")}
-        />
+        <Column field="credential.display_name" header={t("col.credential")} />
+        <Column field="concrete_target.state" header={t("integrations.targetState")} />
         <Column field="last_error" header={t("col.lastError")} />
       </List>
-      <Form resource={MODEL} layout="tabs">
-        <Field name="display_name" title readOnly />
-        <Group label={t("integrations.identity")} columns={2}>
-          <Field name="owner" createOnly />
-          <Field name="vendor" createOnly />
-          <Field
-            name="impl_class"
-            label={t("integrations.implClass")}
-            widget="select"
-            options={implClassOptions}
-            prefill={implClassPrefill}
-            createOnly
-          />
-          <Field name="lifecycle" widget="statusbar" readOnly />
-        </Group>
-        <Group label={t("integrations.authentication")} columns={2}>
-          <Field name="credential" editOnly />
-          <Field name="account" editOnly />
-        </Group>
-        <Group label={t("integrations.runtime")} columns={2}>
-          <Field name="last_used_at" readOnly />
-          <Field name="runtime_status" readOnly />
-          <Field name="last_used_status" readOnly />
-          <Field name="use_count_24h" readOnly />
-          <Field name="error_count_24h" readOnly />
-          <Field name="last_error" readOnly />
-        </Group>
-      </Form>
     </ResourceList>
-  );
-}
-
-function IntegrationConnectButton({
-  row,
-  refresh,
-}: {
-  row: Row;
-  refresh: () => void;
-}): React.ReactElement | null {
-  const t = useIntegrateT();
-  const routeHref = useRouteHref();
-  const [connectIntegration] = useAuthoredMutation(ConnectIntegration);
-  const id = rowPublicId(row) ?? "";
-  if (!id) return null;
-
-  return (
-    <ConnectOAuthButton
-      label={t("integrations.action.connect")}
-      connectedTitle={t("integrations.connect.connected")}
-      startErrorTitle={t("integrations.connect.startError")}
-      next={routeHref("integrate.integrations")}
-      onConnected={refresh}
-      start={async ({ redirectUri, next }) => {
-        const result = await connectIntegration({
-          integrationId: id,
-          redirectUri,
-          next,
-        });
-        return result?.connect_integration;
-      }}
-    />
   );
 }

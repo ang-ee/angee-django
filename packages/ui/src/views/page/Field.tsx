@@ -27,6 +27,10 @@ export interface FieldDescriptor extends FieldPresentation {
   showWhen?: (values: Row) => boolean;
   /** Load the chosen preset onto sibling fields when this field changes (see `FieldProps.prefill`). */
   prefill?: (value: unknown) => Record<string, unknown> | null | undefined;
+  /** Keep dirty sibling values when applying a preset, except for names explicitly replaced below. */
+  prefillPreserveDirty?: boolean;
+  /** Fields a preset must replace even when they are dirty (for example private implementation config). */
+  prefillReplace?: readonly string[];
   /** Source field a `widget="slug"` field derives from on create (see `FieldProps.slugFrom`). */
   slugFrom?: string;
   title?: boolean;

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Action, Column, ResourceList, Field, Form, Group, List, SlotOutlet, useRecordActionMutation, useSlot } from "@angee/ui";
+import { Action, Column, ResourceList, Field, Form, Group, List, SlotOutlet, registerForm, useRecordActionMutation, useSlot, type RegisteredFormProps } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { CHANNEL_MODEL } from "./documents";
@@ -13,10 +13,9 @@ import { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
  */
 export function ChannelsPage(): React.ReactElement {
   const t = useMessagingT();
-  const [sync] = useRecordActionMutation<ActionFieldName>("sync_integration");
   const toolbarEntries = useSlot(MESSAGING_CHANNEL_TOOLBAR_SLOT);
   return (
-    <ResourceList resource={CHANNEL_MODEL} placement="inline" routed hideCreate toolbarActions={<SlotOutlet entries={toolbarEntries} />}>
+    <ResourceList resource={CHANNEL_MODEL} form={channelForm} placement="inline" routed hideCreate toolbarActions={<SlotOutlet entries={toolbarEntries} />}>
       <List resource={CHANNEL_MODEL}>
         <Column field="display_name" header={t("channel.name")} />
         <Column field="lifecycle" widget="statusBadge" />
@@ -27,7 +26,15 @@ export function ChannelsPage(): React.ReactElement {
         <Column field="last_sync_items" />
         <Column field="last_sync_completed_at" />
       </List>
-      <Form resource={CHANNEL_MODEL}>
+    </ResourceList>
+  );
+}
+
+function ChannelForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
+  const t = useMessagingT();
+  const [sync] = useRecordActionMutation<ActionFieldName>("sync_integration");
+  return (
+      <Form {...props} resource={CHANNEL_MODEL}>
         {/* The one channel fact a human owns; the rest of this form is runtime truth. */}
         <Field name="display_name" title />
         <Field name="lifecycle" readOnly />
@@ -54,9 +61,10 @@ export function ChannelsPage(): React.ReactElement {
         </Group>
         <Action id="sync" label={t("channel.action.sync")} icon="refresh" run={sync} />
       </Form>
-    </ResourceList>
   );
 }
+
+export const channelForm = registerForm(CHANNEL_MODEL, ChannelForm);
 
 function isWebformChannel(values: Record<string, unknown>): boolean {
   return String(values.backend_class ?? "").toLowerCase() === "webform";

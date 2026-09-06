@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactElement } from "react";
 import { Field } from "@angee/ui";
 
 /**
@@ -10,7 +10,7 @@ import { Field } from "@angee/ui";
  * server-side by `createVault`. Labels fall back to the SDL field metadata, so
  * neither field hard-codes its label.
  */
-export const vaultCreateForm: ReactNode = (
+export const vaultCreateForm: ReactElement = (
   <>
     <Field name="name" title />
     <Field name="description" widget="textarea" />

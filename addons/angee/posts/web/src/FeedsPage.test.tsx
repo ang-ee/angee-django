@@ -76,9 +76,11 @@ vi.mock("@angee/ui", async () => {
       <div>{reactions.map((reaction) => `${reaction.reaction}:${reaction.count}`).join(",")}</div>
     ),
     reactionsFromGroups: actual.reactionsFromGroups,
+    registerForm: actual.registerForm,
     ResourceList: (props: Record<string, unknown>) => {
       pageMocks.resourceProps = props;
-      return <div>{props.children as React.ReactNode}</div>;
+      const form = props.form as { Component: React.ComponentType<{ resource: string }> } | undefined;
+      return <div>{props.children as React.ReactNode}{form ? <form.Component resource={String(props.resource)} /> : null}</div>;
     },
     avatarInitials: (label: string) => label.slice(0, 2).toUpperCase(),
     createNamespaceT: () => () => (key: string) => key,

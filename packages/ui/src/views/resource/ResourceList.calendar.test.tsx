@@ -18,6 +18,7 @@ const captured = vi.hoisted(() => ({
   listCalendar: undefined as CalendarViewSpec | undefined,
   onCreateInLane: undefined as ListViewProps["onCreateInLane"],
   formDefaults: undefined as Record<string, unknown> | undefined,
+  registeredFormId: undefined as string | null | undefined,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -69,6 +70,7 @@ beforeEach(() => {
   captured.listCalendar = undefined;
   captured.onCreateInLane = undefined;
   captured.formDefaults = undefined;
+  captured.registeredFormId = undefined;
 });
 const clients: QueryClient[] = [];
 afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
@@ -79,6 +81,26 @@ function render(element: ReactElement) {
 }
 
 describe("ResourceList calendar quick-create", () => {
+  test("renders an addon-owned complete form through the resource controller", () => {
+    const CompleteForm = (props: FormViewProps) => {
+      captured.registeredFormId = props.id;
+      captured.formDefaults = props.defaultValues;
+      return null;
+    };
+    render(
+      <ResourceList
+        resource="agents.InferenceProvider"
+        columns={[]}
+        form={{ resource: "agents.InferenceProvider", Component: CompleteForm }}
+        creating
+        createDefaults={{ owner: "owner-1" }}
+      />,
+    );
+
+    expect(captured.registeredFormId).toBeNull();
+    expect(captured.formDefaults).toEqual({ owner: "owner-1" });
+  });
+
   test("range-select seeds the create form defaults through the routed-create seam", () => {
     const onSelect = vi.fn();
     const { rerender } = render(

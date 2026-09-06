@@ -7,9 +7,11 @@ import {
   Group,
   List,
   ResourceList,
+  registerForm,
   SlotOutlet,
   useRecordActionMutation,
   useSlot,
+  type RegisteredFormProps,
 } from "@angee/ui";
 import * as React from "react";
 
@@ -20,11 +22,11 @@ import { STORAGE_MOUNT_TOOLBAR_SLOT } from "../slots";
 /** Local and future vendor-backed external storage mounts. */
 export function MountsPage(): React.ReactElement {
   const t = useStorageIntegrateT();
-  const [sync] = useRecordActionMutation<ActionFieldName>("sync_mount");
   const toolbarEntries = useSlot(STORAGE_MOUNT_TOOLBAR_SLOT);
   return (
     <ResourceList
       resource={MOUNT_MODEL}
+      form={mountForm}
       placement="inline"
       routed
       hideCreate
@@ -38,7 +40,15 @@ export function MountsPage(): React.ReactElement {
         <Column field="sync_stage" />
         <Column field="last_sync_completed_at" />
       </List>
-      <Form resource={MOUNT_MODEL}>
+    </ResourceList>
+  );
+}
+
+function MountForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
+  const t = useStorageIntegrateT();
+  const [sync] = useRecordActionMutation<ActionFieldName>("sync_mount");
+  return (
+      <Form {...props} resource={MOUNT_MODEL}>
         <Field name="display_name" title readOnly />
         <Field name="mode" readOnly />
         <Field name="backend_class" readOnly />
@@ -63,6 +73,7 @@ export function MountsPage(): React.ReactElement {
           run={sync}
         />
       </Form>
-    </ResourceList>
   );
 }
+
+export const mountForm = registerForm(MOUNT_MODEL, MountForm);

@@ -250,7 +250,7 @@ export function useFormViewSave({
       } : { values: formValues, errors: {} };
     },
   });
-  const { reset, resetDefaultValues, clearErrors, setError, setValue } = form;
+  const { reset, resetDefaultValues, resetField, clearErrors, getFieldState, setError, setValue } = form;
   const { dirtyFields } = form.formState;
   const syncRecordValues = React.useCallback((next: FormValues, lineBaseline?: unknown) => {
     // RHF merges dirty paths by index. A full-list line mutation is atomic, so
@@ -491,7 +491,17 @@ export function useFormViewSave({
       if (isCreate || !field.createOnly) {
         const seeds = field.prefill?.(value);
         if (seeds) {
+          const replacements = new Set(field.prefillReplace ?? []);
           for (const [name, seed] of Object.entries(seeds)) {
+            if (
+              field.prefillPreserveDirty &&
+              !replacements.has(name) &&
+              getFieldState(name).isDirty
+            ) continue;
+            if (field.prefillPreserveDirty && !replacements.has(name)) {
+              resetField(name, { defaultValue: seed });
+              continue;
+            }
             setValue(name, seed, {
               shouldDirty: true,
               shouldTouch: true,
@@ -514,7 +524,7 @@ export function useFormViewSave({
         });
       }
     },
-    [clearErrors, defaultSlugSource, formFields, isCreate, setValue],
+    [clearErrors, defaultSlugSource, formFields, getFieldState, isCreate, resetField, setValue],
   );
   const fieldReadOnly = React.useCallback(
     (field: FieldDescriptor): boolean =>

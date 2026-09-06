@@ -26,6 +26,7 @@ import type {
   MenuItem,
   ModelSlotTarget,
   PreviewContribution,
+  RuntimeFormRegistration,
   SlotContribution,
   WidgetMap,
 } from "@angee/ui/runtime";
@@ -40,6 +41,7 @@ export type {
   MenuItem,
   ModelSlotTarget,
   PreviewContribution,
+  RuntimeFormRegistration,
   SlotContribution,
   WidgetMap,
 };
@@ -212,7 +214,7 @@ export function composeAddons(
   const widgets: WidgetMap = {};
   const i18n: Record<string, Record<string, string>> = {};
   const icons: Record<string, unknown> = {};
-  const forms: Record<string, unknown> = {};
+  const forms: FormOverrideMap = {};
   const dataProviders: Record<string, unknown> = {};
   const previews: PreviewContribution[] = [];
   const routeNames: Record<string, true> = {};
@@ -250,7 +252,17 @@ export function composeAddons(
       for (const [model, form] of Object.entries(addon.forms)) {
         const canonicalModel = canonicalizeModel(model);
         assertUnclaimed(forms, canonicalModel, addon.id, "form override");
-        forms[canonicalModel] = form;
+        if (isRuntimeFormRegistration(form)) {
+          const registeredModel = canonicalizeModel(form.resource);
+          if (registeredModel !== canonicalModel) {
+            throw new Error(
+              `Addon "${addon.id}" registers form key "${canonicalModel}" for component resource "${registeredModel}".`,
+            );
+          }
+          forms[canonicalModel] = { ...form, resource: canonicalModel };
+        } else {
+          forms[canonicalModel] = form;
+        }
       }
     }
     if (addon.dataProviders) {
@@ -301,6 +313,12 @@ export function composeAddons(
     drawers: mergeDrawerContributions(...addons.map((a) => a.drawers ?? [])),
     previews,
   };
+}
+
+function isRuntimeFormRegistration(value: unknown): value is RuntimeFormRegistration {
+  return Boolean(
+    value && typeof value === "object" && "resource" in value && "Component" in value,
+  );
 }
 
 function normalizeChatterContributions(

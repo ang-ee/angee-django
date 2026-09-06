@@ -5,6 +5,9 @@ import { composeAddons, defineAddon } from "./define-addon";
 const IDENTITY_CANONICALIZER = {
   canonicalModelLabel: (spelling: string) => spelling,
 };
+const FORM = { resource: "notes.Note", Component: () => null };
+const FORM_A = { resource: "Note", Component: () => null };
+const FORM_B = { resource: "notes.Note", Component: () => null };
 
 describe("defineAddon", () => {
   test("returns the manifest unchanged for typed authoring", () => {
@@ -155,7 +158,7 @@ describe("composeAddons", () => {
       defineAddon({
         id: "notes",
         routes: [{ name: "notes.home", path: "/notes", resource: "Note" }],
-        forms: { note: "FORM" },
+        forms: { note: FORM },
         chatter: [{ id: "history", model: "Note" }],
         slots: [
           {
@@ -168,7 +171,7 @@ describe("composeAddons", () => {
     ], { canonicalModelLabel: canonical });
 
     expect(composed.routes[0]?.resource).toBe("notes.Note");
-    expect(composed.forms).toEqual({ "notes.Note": "FORM" });
+    expect(composed.forms).toEqual({ "notes.Note": FORM });
     expect(composed.chatter[0]?.model).toBe("notes.Note");
     expect(composed.slots[0]).toMatchObject({
       slot: "form-view.sections",
@@ -183,10 +186,23 @@ describe("composeAddons", () => {
 
     expect(() =>
       composeAddons([
-        defineAddon({ id: "a", forms: { Note: "A" } }),
-        defineAddon({ id: "b", forms: { "notes.Note": "B" } }),
+        defineAddon({ id: "a", forms: { Note: FORM_A } }),
+        defineAddon({ id: "b", forms: { "notes.Note": FORM_B } }),
       ], { canonicalModelLabel: canonical }),
     ).toThrow(/form override "notes\.Note"/);
+  });
+
+  test("rejects a complete form registered under a different resource", () => {
+    expect(() =>
+      composeAddons([
+        defineAddon({
+          id: "bad",
+          forms: {
+            "notes.Note": { resource: "tasks.Task", Component: () => null },
+          },
+        }),
+      ], IDENTITY_CANONICALIZER),
+    ).toThrow(/component resource "tasks\.Task"/);
   });
 
   test("rejects an impl-scoped slot without a model", () => {

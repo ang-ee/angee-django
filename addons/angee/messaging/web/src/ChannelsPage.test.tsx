@@ -14,6 +14,7 @@ const pageMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@angee/ui", () => ({
+  registerForm: (resource: string, Component: React.ComponentType<Record<string, unknown>>) => ({ resource, Component }),
   Action: ({ label, run }: { label: string; run?: () => void }) => (
     <button type="button" onClick={() => run?.()}>
       {label}
@@ -39,6 +40,12 @@ vi.mock("@angee/ui", () => ({
       <div>
         {props.toolbarActions as React.ReactNode}
         {props.children as React.ReactNode}
+        {props.form
+          ? React.createElement(
+              (props.form as { Component: React.ComponentType<{ resource: string }> }).Component,
+              { resource: String(props.resource) },
+            )
+          : null}
       </div>
     );
   },

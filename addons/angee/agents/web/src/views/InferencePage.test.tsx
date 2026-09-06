@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { render } from "@testing-library/react";
-import type { ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
 import { describe, expect, test, vi } from "vitest";
 import { createRouteHref } from "@angee/ui/runtime";
 import agents from "../index";
@@ -24,16 +24,19 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   ResourceList: ({
     cardActions,
     children,
+    form,
   }: {
     cardActions?: (
       row: Record<string, unknown>,
       context: { refresh: () => void },
     ) => ReactNode;
     children?: ReactNode;
+    form?: { resource: string; Component: ComponentType<{ resource: string }> };
   }) => (
     <>
       {cardActions?.({ id: "provider-1" }, { refresh: vi.fn() })}
       {children}
+      {form ? <form.Component resource={form.resource} /> : null}
     </>
   ),
   useAuthoredResourceMutation: (_document: unknown, options: unknown) => {

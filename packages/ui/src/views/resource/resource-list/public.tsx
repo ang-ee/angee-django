@@ -5,6 +5,7 @@ import { type ListColumn, type ListViewProps } from "../ListView";
 import { FormView, type FormField, type FormViewProps } from "../../form/FormView";
 import type { ListComponent, ListProps } from "../List";
 import type { FormProps } from "../../form/Form";
+import type { RegisteredForm } from "../../form/registered-form";
 import { RoutedRecordController } from "../resource-routing";
 import { ResourceViewProvider, useResourceViewMaybe } from "../resource-view-context";
 import { initialResourceSorting } from "../resource-view-codecs";
@@ -59,6 +60,8 @@ export interface ResourceListProps<TRow extends Row = Row> {
   formFields?: readonly FormField[];
   /** Grouped sections for the record form. Omit when declaring a `Form` child. */
   formGroups?: readonly GroupDescriptor[];
+  /** Addon-owned complete form reused by this resource and composed entry points. */
+  form?: RegisteredForm;
   /**
    * Optional `List` and `Form` element declarations parsed by `ResourceList`.
    *
@@ -180,6 +183,11 @@ export function ResourceList<TRow extends Row = Row>({
   children,
   ...props
 }: ResourceListProps<TRow>): React.ReactElement {
+  if (props.form && props.form.resource !== props.resource) {
+    throw new Error(
+      `Registered form resource "${props.form.resource}" does not match ResourceList resource "${props.resource}".`,
+    );
+  }
   const declarations = parseResourceListDeclarations<TRow>(children);
   validateResourceListDeclarations(
     {

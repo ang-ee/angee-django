@@ -19,6 +19,7 @@ import {
   } from "@tanstack/react-router";
 import {
   AppRuntimeProvider,
+  type FormOverrideMap,
   } from "../../runtime";
 import {
   ModelMetadataProvider,
@@ -220,6 +221,31 @@ describe("RelationPicker edit affordance", () => {
 
     expect(await screen.findByText("New oauthclient")).toBeTruthy();
   });
+
+  test("uses a registered complete form for inline create", async () => {
+    const CompleteForm = () => <div>Complete registered form</div>;
+    renderPicker(
+      <RelationPicker
+        options={[]}
+        create={{ resource: "integrate.OAuthClient" }}
+        aria-label="OAuth Client"
+      />,
+      {
+        "integrate.OAuthClient": {
+          resource: "integrate.OAuthClient",
+          Component: CompleteForm,
+        },
+      },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "OAuth Client" }));
+    fireEvent.change(await screen.findByPlaceholderText("Search…"), {
+      target: { value: "Acme" },
+    });
+    fireEvent.click(await screen.findByText("Create “Acme”"));
+
+    expect(await screen.findByText("Complete registered form")).toBeTruthy();
+  });
 });
 
 function QueryOwner({ children }: { children: ReactElement }): ReactElement {
@@ -229,7 +255,7 @@ function QueryOwner({ children }: { children: ReactElement }): ReactElement {
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 }
 
-function wrap(children: ReactElement): ReactElement {
+function wrap(children: ReactElement, forms: FormOverrideMap = {}): ReactElement {
   const rootRoute = createRootRoute();
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -246,7 +272,7 @@ function wrap(children: ReactElement): ReactElement {
       <ModalsHost>
         <ToastProvider>
           <ModelMetadataProvider metadata={metadata}>
-            <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+            <AppRuntimeProvider runtime={{ widgets: defaultWidgets, forms }}>
               {children}
             </AppRuntimeProvider>
           </ModelMetadataProvider>
@@ -257,6 +283,6 @@ function wrap(children: ReactElement): ReactElement {
   );
 }
 
-function renderPicker(children: ReactElement): ReturnType<typeof render> {
-  return render(wrap(children));
+function renderPicker(children: ReactElement, forms?: FormOverrideMap): ReturnType<typeof render> {
+  return render(wrap(children, forms));
 }

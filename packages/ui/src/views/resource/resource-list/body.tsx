@@ -28,6 +28,7 @@ export function ResourceListBody<TRow extends Row = Row>({
   columns,
   formFields,
   formGroups,
+  form,
   declarations,
   recordController,
   placement = "inline",
@@ -64,6 +65,7 @@ export function ResourceListBody<TRow extends Row = Row>({
   const resolvedRowHref = recordController.rowHref;
   const resolvedColumns = declarations.list?.columns ?? requiredColumns(columns);
   const hasRecordSurface =
+    form !== undefined ||
     declarations.form !== undefined ||
     formFields !== undefined ||
     formGroups !== undefined;
@@ -247,8 +249,9 @@ export function ResourceListBody<TRow extends Row = Row>({
       onRowClick={hasRecordSurface && handleSelectRecord ? handleRowClick : undefined}
     />
   );
+  const FormRenderer = form?.Component ?? FormView;
   const recordForm = open ? (
-    <FormView
+    <FormRenderer
       resource={resource}
       id={editId}
       fields={resolvedFormFields}

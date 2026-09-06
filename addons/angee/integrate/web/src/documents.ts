@@ -6,6 +6,21 @@
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 
+export const IntegrationCapabilities = graphql(`
+  query IntegrationCapabilities {
+    integration_capabilities {
+      resource
+      label
+      icon
+      create_mode
+    }
+  }
+`);
+
+export type IntegrationCapability = DocumentType<
+  typeof IntegrationCapabilities
+>["integration_capabilities"][number];
+
 // The OAuth connect result shared by every `connect_*` mutation that returns a
 // `ConnectIntegrationResult` (integrate's `connect_integration`, agents'
 // `connect_inference_provider`). One owner for the selection; consumers spread it.

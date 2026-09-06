@@ -52,7 +52,7 @@ export {
   type RouteHrefSearchValue,
   type RuntimeRouteDescriptor,
 } from "./route-href";
-export { isModelScopedSlot } from "./contracts";
+export { isModelScopedSlot, type RuntimeFormRegistration } from "./contracts";
 export type {
   ChatterContribution,
   ChatterRoute,

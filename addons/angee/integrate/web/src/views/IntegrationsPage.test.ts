@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import type { Row } from "@angee/metadata";
 
 import { canConnectRecord } from "../connect/ConnectOAuthButton";
+import { concreteIntegrationHref } from "./IntegrationsPage";
 
 describe("integration connect action visibility", () => {
   test("shows connect only for a row with no credential to connect with", () => {
@@ -33,5 +34,21 @@ describe("integration connect action visibility", () => {
     // evidence the row lacks one — so it offers no Connect either way.
     expect(canConnectRecord({ lifecycle: "connected" } as Row)).toBe(false);
     expect(canConnectRecord({ lifecycle: "disconnected" } as Row)).toBe(false);
+  });
+});
+
+describe("integration inventory child routing", () => {
+  const lookup = (resource: string, id: string) => `/${resource}/${id}`;
+
+  test("opens only an explicitly available concrete child", () => {
+    expect(concreteIntegrationHref({ concrete_target: {
+      state: "AVAILABLE", resource: "agents.InferenceProvider", id: "provider-1",
+    } } as unknown as Row, lookup)).toBe("/agents.InferenceProvider/provider-1");
+  });
+
+  test.each(["UNAVAILABLE", "AMBIGUOUS"])("keeps %s historical rows read-only", (state) => {
+    expect(concreteIntegrationHref({ concrete_target: {
+      state, resource: "agents.InferenceProvider", id: "hidden",
+    } } as unknown as Row, lookup)).toBe("");
   });
 });

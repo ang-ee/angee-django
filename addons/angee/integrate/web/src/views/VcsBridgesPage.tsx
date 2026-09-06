@@ -1,6 +1,6 @@
 import * as React from "react";
 import { runActionResult, useAuthoredMutation } from "@angee/refine";
-import { Action, Column, Facet, Field, Form, Group, List, ResourceList, useAuthoredResourceMutation, useEnumOptions, useImplPrefill, useRecordAction, useRecordActionMutation, type FormSubmit } from "@angee/ui";
+import { Action, Column, Facet, Field, Form, Group, List, ResourceList, registerForm, useAuthoredResourceMutation, useEnumOptions, useImplPrefill, useRecordAction, useRecordActionMutation, type FormSubmit, type RegisteredFormProps } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import type { DocumentVariables } from "@angee/refine";
 
@@ -19,10 +19,28 @@ const MODEL = "integrate.VcsBridge";
  */
 export function VcsBridgesPage(): React.ReactElement {
   const t = useIntegrateT();
+  return (
+    <ResourceList resource={MODEL} form={vcsBridgeForm} placement="inline" routed>
+      <List resource={MODEL}>
+        <Facet field="vendor" label={t("col.vendor")} labelField="display_name" />
+        <Column field="display_name" />
+        <Column field="backend_class" header={t("vcs.backendClass")} />
+        <Column field="lifecycle" header={t("col.lifecycle")} widget="statusBadge" />
+        <Column field="runtime_status" header={t("col.runtimeStatus")} widget="colorDot" />
+        <Column field="sync_stage" />
+        <Column field="last_sync_completed_at" />
+      </List>
+    </ResourceList>
+  );
+}
+
+function VcsBridgeForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
+  const t = useIntegrateT();
   const [sync] = useRecordActionMutation<ActionFieldName>("sync_vcs_bridge");
   const [discover] = useAuthoredMutation(IntegrateDiscoverRepositories);
   const backendClassOptions = useEnumOptions(MODEL, "backend_class");
-  const backendClassPrefill = useImplPrefill(MODEL, "backend_class");
+  const privateConfigReset = React.useMemo(() => ({ config: {} }), []);
+  const backendClassPrefill = useImplPrefill(MODEL, "backend_class", privateConfigReset);
 
   const discoverRepositories = React.useCallback(
     async (id: string) => {
@@ -70,25 +88,7 @@ export function VcsBridgesPage(): React.ReactElement {
   );
 
   return (
-    <ResourceList resource={MODEL} placement="inline" routed>
-      <List resource={MODEL}>
-        <Facet field="vendor" label={t("col.vendor")} labelField="display_name" />
-        <Column field="display_name" />
-        <Column field="backend_class" header={t("vcs.backendClass")} />
-        <Column
-          field="lifecycle"
-          header={t("col.lifecycle")}
-          widget="statusBadge"
-        />
-        <Column
-          field="runtime_status"
-          header={t("col.runtimeStatus")}
-          widget="colorDot"
-        />
-        <Column field="sync_stage" />
-        <Column field="last_sync_completed_at" />
-      </List>
-      <Form resource={MODEL} submit={submitBridge}>
+      <Form {...props} resource={MODEL} submit={submitBridge}>
         <Field name="owner" />
         <Field name="vendor" />
         <Field
@@ -96,6 +96,9 @@ export function VcsBridgesPage(): React.ReactElement {
           widget="select"
           options={backendClassOptions}
           prefill={backendClassPrefill}
+          prefillPreserveDirty
+          prefillReplace={["config"]}
+          createOnly
         />
         <Field name="credential" />
         <Field name="lifecycle" widget="statusbar" readOnly />
@@ -116,9 +119,10 @@ export function VcsBridgesPage(): React.ReactElement {
         <Action id="sync" label={t("action.syncNow")} icon="refresh" run={sync} />
         <Action id="discover" label={t("vcs.discover")} run={discoverAll} />
       </Form>
-    </ResourceList>
   );
 }
+
+export const vcsBridgeForm = registerForm(MODEL, VcsBridgeForm);
 
 /**
  * Copy the named keys the form actually submitted. An absent key stays absent so

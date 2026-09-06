@@ -4,7 +4,7 @@
 // addon-composition functions (`defineAddon` / `composeAddons`) in `@angee/app`
 // build manifests against them.
 
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 
 export const FORM_VIEW_RECORD_ACTIONS_SLOT = "form-view.record-actions";
 export const FORM_VIEW_SECTIONS_SLOT = "form-view.sections";
@@ -45,12 +45,15 @@ export interface ComposedMenuItem extends Omit<MenuItem, "children" | "id"> {
 export type WidgetMap = Record<string, unknown>;
 
 /**
- * Per-resource create-form override: resource id -> a declarative create form
- * (the rendered binding interprets it). An addon registers the form for a
- * resource it owns; the standard form renderer uses it wherever that resource is
- * created, including the relation-picker inline create. Opaque to the headless SDK.
+ * Per-resource form contribution. Direct elements retain create-only override
+ * compatibility; complete registrations are interpreted by the rendered binding.
  */
-export type FormOverrideMap = Record<string, unknown>;
+export interface RuntimeFormRegistration {
+  resource: string;
+  Component: unknown;
+}
+
+export type FormOverrideMap = Record<string, ReactElement | RuntimeFormRegistration>;
 
 /** The generic view envelope passed to cross-page chatter surfaces. */
 export interface ChatterView {

@@ -1,6 +1,6 @@
 import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
-import { Action, Button, Column, ResourceList, Field, Form, Glyph, Group, List, MutationDialog, mutationDialogValueCodecs, useRecordActionMutation, type MutationDialogField, type MutationDialogValues } from "@angee/ui";
+import { Action, Button, Column, ResourceList, Field, Form, Glyph, Group, List, MutationDialog, mutationDialogValueCodecs, registerForm, useRecordActionMutation, type MutationDialogField, type MutationDialogValues, type RegisteredFormProps } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { ConnectCardDavDirectory } from "./documents";
@@ -18,9 +18,8 @@ const MODEL = "parties.Directory";
  */
 export function DirectoriesPage(): React.ReactElement {
   const t = usePartiesT();
-  const [sync] = useRecordActionMutation<ActionFieldName>("sync_integration");
   return (
-    <ResourceList resource={MODEL} placement="inline" routed hideCreate toolbarActions={<ConnectCardDav />}>
+    <ResourceList resource={MODEL} form={directoryForm} placement="inline" routed hideCreate toolbarActions={<ConnectCardDav />}>
       <List resource={MODEL}>
         <Column field="display_name" header={t("directory.name")} />
         <Column field="lifecycle" widget="statusBadge" />
@@ -31,7 +30,15 @@ export function DirectoriesPage(): React.ReactElement {
         <Column field="last_sync_items" />
         <Column field="last_sync_completed_at" />
       </List>
-      <Form resource={MODEL}>
+    </ResourceList>
+  );
+}
+
+function DirectoryForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
+  const t = usePartiesT();
+  const [sync] = useRecordActionMutation<ActionFieldName>("sync_integration");
+  return (
+      <Form {...props} resource={MODEL}>
         <Field name="display_name" title readOnly />
         <Field name="lifecycle" readOnly />
         <Field name="runtime_status" readOnly />
@@ -49,9 +56,10 @@ export function DirectoriesPage(): React.ReactElement {
         </Group>
         <Action id="sync" label={t("directory.action.sync")} icon="refresh" run={sync} />
       </Form>
-    </ResourceList>
   );
 }
+
+export const directoryForm = registerForm(MODEL, DirectoryForm);
 
 /** Button + dialog that connects a CardDAV account, for the list toolbar slot. */
 function ConnectCardDav(): React.ReactElement {

@@ -20,9 +20,11 @@ import {
   avatarInitials,
   errorMessage,
   reactionsFromGroups,
+  registerForm,
   type ListColumn,
   type RecordPanelContext,
   type RecordTabDescriptor,
+  type RegisteredFormProps,
   type StringIdRow,
 } from "@angee/ui";
 
@@ -168,7 +170,7 @@ export function FeedsPage(): React.ReactElement {
   const tabs = React.useMemo(() => feedRecordTabs(t), [t]);
 
   return (
-    <ResourceList resource={FEED_MODEL} placement="inline" routed hideCreate recordTabs={tabs}>
+    <ResourceList resource={FEED_MODEL} form={feedForm} placement="inline" routed hideCreate recordTabs={tabs}>
       <List resource={FEED_MODEL}>
         <Column field="display_name" header={t("feed.name")} />
         <Column field="backend_class" header={t("feed.backend")} />
@@ -178,7 +180,14 @@ export function FeedsPage(): React.ReactElement {
         <Column field="last_sync_status" header={t("feed.sync")} widget="statusBadge" />
         <Column field="last_sync_completed_at" header={t("feed.syncedAt")} />
       </List>
-      <Form resource={FEED_MODEL}>
+    </ResourceList>
+  );
+}
+
+function FeedForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
+  const t = usePostsT();
+  return (
+      <Form {...props} resource={FEED_MODEL}>
         <Field name="display_name" label={t("feed.name")} title readOnly />
         <Group label={t("feed.details")} columns={2}>
           <Field name="backend_class" label={t("feed.backend")} readOnly />
@@ -194,6 +203,7 @@ export function FeedsPage(): React.ReactElement {
         <Field name="sync_progress" label={t("feed.progress")} readOnly />
         <Field name="sync_error" label={t("feed.error")} readOnly />
       </Form>
-    </ResourceList>
   );
 }
+
+export const feedForm = registerForm(FEED_MODEL, FeedForm);

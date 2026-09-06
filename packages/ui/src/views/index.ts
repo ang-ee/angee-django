@@ -145,6 +145,7 @@ export {
 } from "../ui/tree";
 export { Metric, type MetricProps } from "./dashboard/Metric";
 export { Form, type FormProps } from "./form/Form";
+export { RegisteredFormView, registerForm, useRegisteredForm, type RegisteredForm, type RegisteredFormProps } from "./form/registered-form";
 export {
   FormView,
   FORM_VIEW_RECORD_ACTIONS_SLOT,

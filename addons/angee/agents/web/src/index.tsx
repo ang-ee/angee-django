@@ -6,6 +6,7 @@ import { Box, Cpu, GitBranch, LayoutTemplate, Server, Sparkles, Wrench } from "l
 
 import { enAgentsMessages } from "./i18n";
 import { AgentChatterPane } from "./views/AgentChatterPane";
+import { inferenceProviderForm } from "./views/InferencePage";
 
 const AGENTS_ID = "agents";
 
@@ -88,6 +89,7 @@ const agents = defineBaseAddon({
   routes: agentsRoutes,
   menus: agentsMenu,
   i18n: { agents: enAgentsMessages },
+  forms: { "agents.InferenceProvider": inferenceProviderForm },
   icons: {
     // `agent` is a shared glyph owned by the base icon registry — reference it, don't
     // redefine it (the registry is fail-fast on re-registration).

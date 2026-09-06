@@ -30,6 +30,7 @@ import {
 import {
   AppRuntimeProvider,
   type AppRuntime,
+  type FormOverrideMap,
   } from "../../runtime";
 import {
   ModelMetadataProvider,
@@ -1356,6 +1357,42 @@ describe("FormView", () => {
         id: "client-1",
       },
     });
+  });
+
+  test("implementation prefill preserves dirty common fields and replaces private config", async () => {
+    renderWithProviders(
+      <FormView
+        resource="OAuthClient"
+        fields={[
+          { name: "displayName", label: "Display Name", title: true },
+          {
+            name: "providerType",
+            label: "Provider Type",
+            prefill: (value) => value === "second"
+              ? { displayName: "Second preset", vendor: "vendor-2", privateConfig: "second-private" }
+              : { displayName: "First preset", vendor: "vendor-1", privateConfig: "first-private" },
+            prefillPreserveDirty: true,
+            prefillReplace: ["privateConfig"],
+          },
+          { name: "vendor", label: "Vendor" },
+          { name: "privateConfig", label: "Private Config" },
+        ]}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Provider Type"), { target: { value: "first" } });
+    fireEvent.change(screen.getByLabelText("Display Name"), { target: { value: "My provider" } });
+    fireEvent.change(screen.getByLabelText("Display Name"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Private Config"), { target: { value: "old" } });
+    fireEvent.change(screen.getByLabelText("Provider Type"), { target: { value: "second" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: {
+      displayName: "",
+      providerType: "second",
+      vendor: "vendor-2",
+      privateConfig: "second-private",
+    } });
   });
 
   test("does not apply impl prefill on edit when the impl field is create-only", async () => {
@@ -2849,7 +2886,7 @@ function renderForm(id: string | null): void {
 function renderWithProviders(
   children: ReactElement,
   metadata?: TestSchemaMetadata,
-  forms?: Record<string, unknown>,
+  forms?: FormOverrideMap,
   runtime?: Partial<AppRuntime>,
   documents?: ComponentProps<typeof OperationDocumentsProvider>["documents"],
 ): void {

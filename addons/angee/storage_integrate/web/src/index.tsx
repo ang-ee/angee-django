@@ -5,6 +5,7 @@ import { ConnectLocalFolderAction } from "./ConnectLocalFolderAction";
 import { MOUNT_MODEL } from "./documents";
 import { enStorageIntegrateMessages } from "./i18n";
 import { STORAGE_MOUNT_TOOLBAR_SLOT } from "./slots";
+import { mountForm } from "./views/MountsPage";
 
 const storageIntegrate = defineBaseAddon({
   id: "storage-integrate",
@@ -25,6 +26,7 @@ const storageIntegrate = defineBaseAddon({
     },
   ],
   i18n: { storage: enStorageIntegrateMessages },
+  forms: { [MOUNT_MODEL]: mountForm },
   slots: [
     {
       slot: STORAGE_MOUNT_TOOLBAR_SLOT,

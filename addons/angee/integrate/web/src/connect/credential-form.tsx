@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactElement } from "react";
 import { Field } from "@angee/ui";
 
 /**
@@ -12,7 +12,7 @@ import { Field } from "@angee/ui";
  * to the session admin server-side. OAuth credentials are minted by the connect
  * flow, so they are not offered here.
  */
-export const credentialCreateForm: ReactNode = (
+export const credentialCreateForm: ReactElement = (
   <>
     <Field name="name" title placeholder="e.g. GitHub PAT" />
     <Field

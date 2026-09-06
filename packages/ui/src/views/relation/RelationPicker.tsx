@@ -1,6 +1,6 @@
-import { useState, type ReactElement, type ReactNode } from "react";
+import { createElement, useState, type ReactElement, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { modelLabelSegment, rowPublicId } from "@angee/metadata";
+import { modelLabelSegment, rowPublicId, type Row } from "@angee/metadata";
 
 import { Glyph } from "../../chrome/Glyph";
 import { useUiT } from "../../i18n";
@@ -13,6 +13,7 @@ import {
   type RelationOption,
 } from "../../widgets/RelationField";
 import { FormView, type FormSubmit } from "../form/FormView";
+import { RegisteredFormView, useRegisteredForm } from "../form/registered-form";
 import type { FieldDescriptor } from "../page";
 
 /** What the inline create form needs to make a new related record. */
@@ -121,6 +122,7 @@ export function RelationPicker({
   onOpenChange,
   followHref,
 }: RelationPickerProps): ReactElement {
+  const registeredForm = useRegisteredForm(create?.resource ?? edit?.resource ?? "");
   const t = useUiT();
   // The open inline-form dialog; `null` means closed.
   const [dialog, setDialog] = useState<DialogState | null>(null);
@@ -182,34 +184,36 @@ export function RelationPicker({
                   instead of portaling to the layout's top band. */}
               {dialog?.mode === "create" && create ? (
                 <ControlBandProvider host={undefined}>
-                  <FormView
-                    resource={create.resource}
-                    id={null}
-                    fields={create.fields}
-                    {...(create.submit ? { submit: create.submit } : {})}
-                    defaultValues={{ [prefillField]: dialog.query }}
-                    onSaved={(row) => {
+                  {createElement(registeredForm ? RegisteredFormView : FormView, {
+                    resource: create.resource,
+                    id: null,
+                    ...(registeredForm ? {} : {
+                      fields: create.fields,
+                      ...(create.submit ? { submit: create.submit } : {}),
+                    }),
+                    defaultValues: { [prefillField]: dialog.query },
+                    onSaved: (row: Row) => {
                       const id = rowPublicId(row);
                       if (id) {
                         onChange?.(id);
                         onCreated?.(id);
                       }
                       setDialog(null);
-                    }}
-                  />
+                    },
+                  })}
                 </ControlBandProvider>
               ) : null}
               {dialog?.mode === "edit" && edit ? (
                 <ControlBandProvider host={undefined}>
-                  <FormView
-                    resource={edit.resource}
-                    id={dialog.id}
-                    fields={edit.fields}
-                    onSaved={(row) => {
+                  {createElement(registeredForm ? RegisteredFormView : FormView, {
+                    resource: edit.resource,
+                    id: dialog.id,
+                    ...(registeredForm ? {} : { fields: edit.fields }),
+                    onSaved: (row: Row) => {
                       onEdited?.(rowPublicId(row) || dialog.id);
                       setDialog(null);
-                    }}
-                  />
+                    },
+                  })}
                 </ControlBandProvider>
               ) : null}
             </Dialog.Body>

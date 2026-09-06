@@ -170,8 +170,8 @@ export function useWidget(id: string): unknown {
   return useAppRuntime().widgets[id];
 }
 
-/** Look up an addon-registered create-form override for a resource (or undefined). */
-export function useFormOverride(resource: string): unknown {
+/** Look up an addon-contributed legacy create override or complete form. */
+export function useFormOverride(resource: string): FormOverrideMap[string] | undefined {
   // `?.` guards a `Partial<AppRuntime>` provider that spread `forms: undefined`.
   return useAppRuntime().forms?.[resource];
 }

@@ -8,6 +8,8 @@ import type { WidgetOption } from "../../widgets";
 import { BaseImplChoices, type ImplChoice } from "../resource/documents";
 import { enumValueLabel } from "../resource/resource-view-list-body";
 
+const EMPTY_IMPL_PREFILL_RESET: Readonly<Record<string, unknown>> = {};
+
 /**
  * SDL-derived `<select>` options for an enum field, with lower-cased values.
  *
@@ -56,6 +58,7 @@ export function useImplCategory(resource: string, field: string): (value: unknow
 export function useImplPrefill(
   resource: string,
   field: string,
+  reset: Readonly<Record<string, unknown>> = EMPTY_IMPL_PREFILL_RESET,
 ): (value: unknown) => Record<string, unknown> | undefined {
   const choices = useImplChoices(resource, field);
   return React.useMemo(() => {
@@ -65,7 +68,7 @@ export function useImplPrefill(
     return (value: unknown) => {
       const defaults = byKey.get(String(value));
       if (!defaults) return undefined;
-      return defaults as Record<string, unknown>;
+      return { ...reset, ...defaults } as Record<string, unknown>;
     };
-  }, [choices]);
+  }, [choices, reset]);
 }
