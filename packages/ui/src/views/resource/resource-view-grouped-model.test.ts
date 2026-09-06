@@ -180,6 +180,23 @@ describe("buildGroupedRenderModel", () => {
       pending: true,
     });
     expect(expanded.leafScopes[0]?.page).toBe(3);
+
+    const secret = "leaf-variable-canary";
+    const failed = buildGroupedRenderModel<Row>(
+      results,
+      new Map([[header.bucketKey, {
+        rows: [], total: undefined, fetching: false,
+        error: Object.assign(new Error(`variables secret=${secret}`), {
+          request: { variables: { secret } }, response: { status: 500 },
+        }),
+      }]]),
+      EMPTY_ROWS,
+      { ...leafParams, expandedKeys: new Set([header.bucketKey]) },
+    );
+    expect(failed.items).toContainEqual(expect.objectContaining({
+      kind: "status", message: "Request failed.", tone: "danger",
+    }));
+    expect(JSON.stringify(failed.items)).not.toContain(secret);
   });
 
   test("retains the parent pager when an out-of-range subgroup page is empty", () => {

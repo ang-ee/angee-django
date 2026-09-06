@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useResourceRevisions } from "../data/revisions";
+import { errorMessage } from "../feedback/error-message";
 import { revisionSnapshot } from "@angee/refine";
 
 import { useUiT } from "../i18n";
@@ -41,7 +42,7 @@ export function RevisionsTab({
     return (
       <ErrorBanner
         title={t("revisions.unavailable")}
-        description={revisions.error.message}
+        description={errorMessage(revisions.error, t("revisions.unavailable"))}
       />
     );
   }

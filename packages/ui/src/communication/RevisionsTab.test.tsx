@@ -56,6 +56,22 @@ describe("RevisionsTab", () => {
     expect(screen.getByText("Revision query failed")).toBeTruthy();
   });
 
+  test("does not render revision request variables from a transport error", () => {
+    const secret = "revision-variable-canary";
+    dataMocks.useResourceRevisions.mockReturnValue(
+      revisionsResult({
+        error: Object.assign(new Error(`variables secret=${secret}`), {
+          request: { variables: { secret } }, response: { status: 500 },
+        }),
+      }),
+    );
+
+    render(<RevisionsTab resource="notes.Note" recordId="1" />);
+
+    expect(screen.getByText("Request failed.")).toBeTruthy();
+    expect(document.body.textContent).not.toContain(secret);
+  });
+
   test("renders the empty state", () => {
     render(<RevisionsTab resource="notes.Note" recordId="1" />);
 

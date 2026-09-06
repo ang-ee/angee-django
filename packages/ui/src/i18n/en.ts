@@ -282,6 +282,7 @@ export const enUiMessages: Record<string, string> = {
   "markdown.source": "Markdown source",
   "markdown.preview": "Rendered preview",
   "aggregate.loading": "Loading…",
+  "aggregate.loadError": "Could not load summary.",
   "aggregate.noData": "No data.",
   "list.total": "Total",
   "list.totalMeasure": "Total {label}",

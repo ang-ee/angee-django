@@ -10,6 +10,7 @@ import type { AggregateBucket } from "@angee/refine";
 
 import { useUiT } from "../../i18n";
 import { cn } from "../../lib/cn";
+import { errorMessage } from "../../feedback/error-message";
 import { CountBadge } from "../../ui/badge";
 import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
 import { textRoleVariants } from "../../ui/text";
@@ -106,7 +107,9 @@ export function AggregatePanel({
       </div>
 
       {error ? (
-        <p className="text-13 text-danger-text">{error.message}</p>
+        <p className="text-13 text-danger-text">
+          {errorMessage(error, t("aggregate.loadError"))}
+        </p>
       ) : fetching ? (
         <AggregateSkeleton grouped={grouped} loadingLabel={t("aggregate.loading")} />
       ) : !grouped ? null : group.buckets.length === 0 ? (
