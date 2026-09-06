@@ -755,7 +755,7 @@ addons = [
     { name = "croniter", specifier = ">=6.0" },
     { name = "django-anymail", specifier = ">=15.1" },
     { name = "django-axes", specifier = ">=8.0" },
-    { name = "django-import-export", specifier = ">=4.3" },
+    { name = "django-import-export", specifier = ">=4.4" },
     { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.15.2" },
     { name = "fastmcp", specifier = ">=3.4.2,<4" },
     { name = "httpcore", specifier = ">=1.0,<2" },

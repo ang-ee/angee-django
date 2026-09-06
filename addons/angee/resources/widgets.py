@@ -127,7 +127,7 @@ def resolve_ledger_xref(handle: str) -> models.Model | None:
     ``resources.Resource`` ledger and builds the addon-alias map from the app
     registry — each installed app's dotted name and short label both resolve to
     its canonical dotted name, the same alias convention the loader builds per
-    selected addon (:meth:`~angee.resources.managers.ResourceQuerySet._addon_aliases`).
+    selected addon (:meth:`~angee.resources.managers.ResourceManager._addon_aliases`).
     So a demo-seed ``after_resource_load`` hook resolves a persona (or any ledger
     row) by the very xref the grant fixtures use, with a single owner for who a
     handle names. Returns ``None`` for an unresolved or ambiguous handle so the

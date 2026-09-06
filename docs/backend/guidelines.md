@@ -619,17 +619,14 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   reason. Keep the gate on the shared `runtime_status` rather than a private
   health key: a private one is a further axis the generic verbs cannot clear, so
   it reintroduces the same latch on the generic path.
-- **A method on `Integration` cannot be overridden by an Integration child.**
-  The composer emits a child as `class Child(Integration, AbstractChild)`, so the
-  parent's *abstract source* precedes the child's own source in the MRO and
-  shadows it — `angee.integrate.models.Integration` wins over
-  `angee.messaging.models.Channel`. A seam a child must override therefore belongs
-  on a base that follows the child source (`Bridge` owns `start_live` /
-  `stop_live` / `_next_sync_at` for exactly this reason), never on `Integration`.
-  A parent verb that needs child behaviour has to compose instead: reach the
-  concrete row by the primary key it shares (`sync_integration` is the
-  precedent) — and note that walking `bridge_models` fans a query across every
-  installed bridge's table, so it is not free.
+- **Integration children use the ordinary emitted Django MRO.** The composer
+  emits donors, the child's abstract source, then its concrete parent, so child
+  behavior can override parent behavior and cooperative methods delegate with
+  `super()`. A verb starting from an `Integration` parent row must still resolve
+  the concrete child before dispatch because Django does not downcast multi-table
+  parent instances automatically (`sync_integration` is the precedent). Walking
+  `bridge_models` fans a query across every installed bridge table, so it is not
+  free.
 - **`hasura_model_resource` create `full_clean`s the input, so model + input defaults must agree.**
   The Hasura model-resource create path builds a dummy instance from the input and calls
   `full_clean()` before saving — two traps follow. (1) A `JSONField(default=dict)`

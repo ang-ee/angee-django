@@ -7,7 +7,7 @@ keywords = ["resources", "import", "data"]
 category = "Foundation"
 depends_on = ["angee.base"]
 dependencies = [
-  "django-import-export>=4.3",
+  "django-import-export>=4.4",
   "pyyaml>=6",
   "tablib>=3",
 ]
