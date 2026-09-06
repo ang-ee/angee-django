@@ -80,6 +80,45 @@ describe("Angee app auth provider", () => {
     expect(onAuthChange).toHaveBeenCalledTimes(2);
   });
 
+  test("never exposes login request variables from a transport error", async () => {
+    const sentinel = "password-must-never-render";
+    const provider = createAngeeAuthProviderFromRequest(async () => {
+      const error = new Error(`GraphQL Error: request variables { password: ${sentinel} }`);
+      Object.assign(error, { response: { status: 429, error: "Account locked" } });
+      throw error;
+    });
+
+    const result = await provider.login({ username: "admin", password: sentinel });
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toBe(
+      "Too many sign-in attempts. Try again later or contact an administrator.",
+    );
+    expect(result.error?.message).not.toContain(sentinel);
+    expect(result.error?.message).not.toContain("variables");
+  });
+
+  test.each([
+    [{ response: { status: 401 } }, "Invalid username or password."],
+    [{ response: { errors: [{ message: "denied", extensions: { code: "UNAUTHENTICATED" } }] } }, "Invalid username or password."],
+    [new Error("query and secret variables"), "Sign-in request failed. Please try again."],
+  ])("maps auth failures to bounded user-facing copy", async (caught, expected) => {
+    const provider = createAngeeAuthProviderFromRequest(async () => { throw caught; });
+    const result = await provider.login({ username: "ada", password: "sentinel" });
+    expect(result.error?.message).toBe(expected);
+    expect(result.error?.message).not.toContain("sentinel");
+  });
+
+  test("preserves the normal invalid-credential result without an error message", async () => {
+    const provider = createAngeeAuthProviderFromRequest(async () => ({
+      login: { ok: false, user: null },
+    }) as never);
+    await expect(provider.login({ username: "ada", password: "wrong" })).resolves.toEqual({
+      success: false,
+      ok: false,
+      user: null,
+    });
+  });
+
   test("auth state uses role refs for role checks", () => {
     const auth = currentUserToAuthState(currentUser);
 
