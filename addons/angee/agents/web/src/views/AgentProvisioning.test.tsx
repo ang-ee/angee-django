@@ -18,6 +18,7 @@ import {
 import type {
   SchemaFieldMetadata,
 } from "@angee/metadata";
+import { withTestResourceInventory } from "@angee/metadata/testing";
 
 import { enAgentsMessages } from "../i18n";
 import { AgentProvisioning } from "./AgentProvisioning";
@@ -179,15 +180,10 @@ describe("AgentProvisioning", () => {
   });
 });
 
-const AGENT_METADATA: SchemaFieldMetadata = {
+const AGENT_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     AgentType: {
-      typeName: "AgentType",
       fields: {},
-      rootFields: {
-        detail: "agent",
-        list: "agents",
-      },
       resource: {
         schemaName: "console",
         modelLabel: "agents.Agent",
@@ -209,7 +205,7 @@ const AGENT_METADATA: SchemaFieldMetadata = {
       },
     },
   },
-};
+});
 
 function renderProvisioning(children: ReactElement): ReturnType<typeof render> {
   return render(

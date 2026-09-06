@@ -708,7 +708,6 @@ class TaskWork(StagedModelMixin):
     hasura_groupable_fields = ("queue", "stage", "cycle")
     # Projected as objects by the work type extension; the node class cannot
     # see extension fields, so selection layers read this declaration.
-    hasura_object_relation_fields = ("queue", "stage", "cycle")
     hasura_insertable_fields = ("queue", "stage", "cycle", "estimate")
     hasura_updatable_fields = hasura_insertable_fields
     hasura_forbidden_insertable_fields = ("status",)

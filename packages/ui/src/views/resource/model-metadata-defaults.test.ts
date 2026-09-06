@@ -1,11 +1,16 @@
 import { describe, expect, test } from "vitest";
 import type {
+  DataResourceFieldMetadata,
   DataResourceMetadata,
+  ModelFieldMetadata,
   ModelMetadata,
   Row,
-  SchemaFieldMetadata,
 } from "@angee/metadata";
-import { RelationRepresentationError, rowValueAtPath } from "@angee/metadata";
+import {
+  RelationRepresentationError,
+  rowValueAtPath,
+  schemaFieldMetadataFromDataResources,
+} from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { refineFieldsFromPaths } from "@angee/refine";
 
@@ -26,16 +31,11 @@ import { RESOURCE_VIEW_GROUP_GRANULARITIES } from "./resource-view-model";
 import { requestedFieldPaths } from "./resource-view-codecs";
 import type { ColumnDescriptor, FieldDescriptor } from "../page";
 
-const NOTE_METADATA: ModelMetadata = {
-  typeName: "NoteType",
-  recordRepresentation: "title",
-  fields: {
-    title: { name: "title", kind: "scalar", scalar: "String", label: "Title" },
+const NOTE_METADATA = canonicalModel({
+    title: { name: "title", kind: "scalar", scalar: "String" },
     status: {
       name: "status",
       kind: "enum",
-      enumName: "NoteStatus",
-      label: "Status",
       values: [
         { value: "DRAFT", description: "Draft" },
         { value: "IN_REVIEW" },
@@ -46,13 +46,13 @@ const NOTE_METADATA: ModelMetadata = {
     createdAt: { name: "createdAt", kind: "scalar", scalar: "DateTime" },
     updatedAt: { name: "updatedAt", kind: "scalar", scalar: "DateTime" },
     wordCount: { name: "wordCount", kind: "scalar", scalar: "Int" },
-  },
-  resource: {
+  }, {
     schemaName: "public",
     modelLabel: "notes.Note",
     appLabel: "notes",
     modelName: "note",
     publicIdField: "sqid",
+    recordRepresentation: "title",
     roots: {},
     typeNames: {
       node: "NoteType",
@@ -63,30 +63,19 @@ const NOTE_METADATA: ModelMetadata = {
     aggregateFields: ["id", "wordCount"],
     groupByFields: ["status", "updatedAt", "createdAt"],
     relationAxes: [],
-  },
-};
+  });
 
 // A resource that groups by a relation and carries the related row's name along
 // as that relation's label axis — the shape every `x`/`x__display_name` groupable
 // pair emits.
-const MESSAGE_METADATA: ModelMetadata = {
-  typeName: "MessageType",
-  fields: {
+const MESSAGE_METADATA = canonicalModel({
     sender: {
       name: "sender",
       kind: "relation",
-      label: "Sender",
-      relationFilter: {
-        field: "sender",
-        mode: "lookup",
-        lookup: "sqid",
-        aggregateKey: "sender_id",
-        labelKey: "sender__display_name",
-      },
+      relationModelLabel: "messaging.Handle",
     },
     status: { name: "status", kind: "enum", values: [{ value: "SENT" }] },
-  },
-  resource: {
+  }, {
     schemaName: "public",
     modelLabel: "messaging.Message",
     appLabel: "messaging",
@@ -139,8 +128,7 @@ const MESSAGE_METADATA: ModelMetadata = {
         labelAxis: "sender__display_name",
       },
     ],
-  },
-};
+  });
 
 // The widget options enumOptions derives: SDL description, else humanized value.
 const STATUS_OPTIONS = [
@@ -202,21 +190,17 @@ describe("resource metadata defaults", () => {
   });
 
   test("resolves the default widget for a bare field from its SDL kind/scalar", () => {
-    const policyMetadata: ModelMetadata = {
-      typeName: "OAuthClientType",
-      fields: {
+    const policyMetadata = canonicalModel({
         isEnabled: { name: "isEnabled", kind: "scalar", scalar: "Boolean" },
         environment: { name: "environment", kind: "scalar", scalar: "String" },
         status: {
           name: "status",
           kind: "enum",
-          enumName: "ConfigState",
           values: [{ value: "READY" }],
         },
         defaultScopes: { name: "defaultScopes", kind: "list", scalar: "String" },
-        vendor: { name: "vendor", kind: "relation", relationTarget: "VendorType" },
-      },
-    };
+        vendor: { name: "vendor", kind: "relation", relationModelLabel: "Vendor" },
+      }, testDataResource("policies.Policy"));
     const resolved = fieldsWithMetadataDefaults(
       [
         { name: "isEnabled" },
@@ -315,18 +299,13 @@ describe("resource metadata defaults", () => {
   });
 
   test("does not derive server selection filters from the current page rows", () => {
-    const metadata: ModelMetadata = {
-      typeName: "TicketType",
-      fields: {
+    const metadata = canonicalModel({
         status: {
           name: "status",
           kind: "enum",
-          enumName: "TicketStatus",
-          label: "Status",
           values: [],
         },
-      },
-      resource: {
+      }, {
         schemaName: "public",
         modelLabel: "support.Ticket",
         appLabel: "support",
@@ -340,8 +319,7 @@ describe("resource metadata defaults", () => {
         aggregateFields: ["id"],
         groupByFields: [],
         relationAxes: [],
-      },
-    };
+      });
     const rows = [
       { id: "one", status: "OPEN" },
       { id: "two", status: "CLOSED" },
@@ -393,23 +371,13 @@ describe("resource metadata defaults", () => {
   });
 
   test("derives relation label group options from data-query relation metadata", () => {
-    const handleMetadata: ModelMetadata = {
-      typeName: "HandleType",
-      fields: {
+    const handleMetadata = canonicalModel({
         party: {
           name: "party",
           kind: "relation",
-          label: "Contact",
-          relationTarget: "PartyType",
-          relationFilter: {
-            field: "party",
-            mode: "lookup",
-            aggregateKey: "partyId",
-            labelKey: "party_DisplayName",
-          },
+          relationModelLabel: "parties.Party",
         },
-      },
-      resource: {
+      }, {
         schemaName: "public",
         modelLabel: "parties.Handle",
         appLabel: "parties",
@@ -422,9 +390,31 @@ describe("resource metadata defaults", () => {
         orderFields: [],
         aggregateFields: ["id"],
         groupByFields: ["party", "party_DisplayName"],
-        relationAxes: [],
-      },
-    };
+        groupDimensions: [
+          {
+            field: "party",
+            input: "PARTY",
+            key: "partyId",
+            kind: "relation",
+            scalar: "ID",
+          },
+          {
+            field: "party_DisplayName",
+            input: "PARTY__DISPLAY_NAME",
+            key: "party_DisplayName",
+            kind: "column",
+            scalar: "String",
+          },
+        ],
+        relationAxes: [
+          {
+            field: "party",
+            modelLabel: "parties.Party",
+            publicIdField: "sqid",
+            labelAxis: "party_DisplayName",
+          },
+        ],
+      });
 
     expect(
       buildGroupOptions(
@@ -456,7 +446,7 @@ describe("resource metadata defaults", () => {
     ).toEqual([
       {
         id: "party.displayName",
-        label: "Contact",
+        label: "Party",
         group: {
           field: "party.displayName",
           aggregateField: "party",
@@ -468,25 +458,19 @@ describe("resource metadata defaults", () => {
   });
 
   test("derives scalar group alias options from resource metadata", () => {
-    const integrationMetadata: ModelMetadata = {
-      typeName: "IntegrationType",
-      fields: {
+    const integrationMetadata = canonicalModel({
         implCategory: {
           name: "implCategory",
           kind: "scalar",
           scalar: "String",
-          label: "Implementation",
         },
         implClass: {
           name: "implClass",
           kind: "enum",
-          enumName: "IntegrationImplsImpl",
-          label: "Impl Class",
           values: [{ value: "NONE", description: "None" }],
         },
-        status: { name: "status", kind: "scalar", scalar: "String", label: "Status" },
-      },
-      resource: {
+        status: { name: "status", kind: "scalar", scalar: "String" },
+      }, {
         schemaName: "console",
         modelLabel: "integrate.Integration",
         appLabel: "integrate",
@@ -507,13 +491,12 @@ describe("resource metadata defaults", () => {
             aggregateKey: "implClass",
           },
         ],
-      },
-    };
+      });
 
     expect(buildGroupOptions([], integrationMetadata, null)).toEqual([
       {
         id: "implCategory",
-        label: "Implementation",
+        label: "Impl Category",
         group: {
           field: "implCategory",
           aggregateField: "implClass",
@@ -536,10 +519,7 @@ describe("resource metadata defaults", () => {
   });
 
   test("derives group options from JSON path dimensions", () => {
-    const messageMetadata: ModelMetadata = {
-      typeName: "MessageType",
-      fields: {},
-      resource: {
+    const messageMetadata = canonicalModel({}, {
         schemaName: "console",
         modelLabel: "messaging.Message",
         appLabel: "messaging",
@@ -561,8 +541,7 @@ describe("resource metadata defaults", () => {
             kind: "json",
           },
         ],
-      },
-    };
+      });
 
     expect(buildGroupOptions([], messageMetadata, null)).toEqual([
       {
@@ -576,39 +555,47 @@ describe("resource metadata defaults", () => {
 });
 
 describe("relationFieldInfo / relationListFieldInfo", () => {
-  const schema: SchemaFieldMetadata = {
-    types: {
-      TaxType: {
-        typeName: "TaxType",
-        recordRepresentation: "name",
-        fields: {},
-        rootFields: { list: "taxes", create: "insert_taxes_one" },
-        resource: relationResource("taxes.Tax", "taxes"),
+  const tax = canonicalModel({}, {
+    ...relationResource("taxes.Tax", "taxes"),
+    recordRepresentation: "name",
+    roots: { list: "taxes", create: "insert_taxes_one" },
+  });
+  const productVariant = canonicalModel({}, {
+    ...relationResource("catalog.ProductVariant", "product_variants"),
+    recordRepresentation: "displayName",
+  });
+  const unlistable = canonicalModel({}, testDataResource("misc.Unlistable", {
+    roots: { list: null },
+    capabilities: [],
+  }));
+  const scope = canonicalModel({}, {
+    ...relationResource("accounting.Scope", "scopes"),
+    recordRepresentation: "name",
+  });
+  const schema = schemaFieldMetadataFromDataResources([
+    tax.resource,
+    productVariant.resource,
+    unlistable.resource,
+    scope.resource,
+  ]);
+  const model = canonicalModel({
+      product: {
+        name: "product",
+        kind: "relation",
+        relationModelLabel: "catalog.ProductVariant",
       },
-      ProductVariantType: {
-        typeName: "ProductVariantType",
-        recordRepresentation: "displayName",
-        fields: {},
-        rootFields: { list: "product_variants" },
-        resource: relationResource("catalog.ProductVariant", "product_variants"),
+      taxes: {
+        name: "taxes",
+        kind: "list",
+        scalar: "ID",
+        relationModelLabel: "taxes.Tax",
       },
-      UnlistableType: { typeName: "UnlistableType", fields: {}, rootFields: {} },
-      ScopeType: {
-        typeName: "ScopeType",
-        recordRepresentation: "name",
-        fields: {},
-        rootFields: { list: "scopes" },
-        resource: relationResource("accounting.Scope", "scopes"),
-      },
-    },
-  };
-  const model: ModelMetadata = {
-    typeName: "JournalItemType",
-    fields: {
-      product: { name: "product", kind: "relation", relationTarget: "ProductVariantType" },
-      taxes: { name: "taxes", kind: "list", scalar: "ID", relationTarget: "TaxType" },
       labels: { name: "labels", kind: "list", scalar: "String" },
-      orphan: { name: "orphan", kind: "list", relationTarget: "UnlistableType" },
+      orphan: {
+        name: "orphan",
+        kind: "list",
+        relationModelLabel: "misc.Unlistable",
+      },
       // A to-one FK the node projects as a bare `ID!` scalar: a scalar leaf that
       // still carries a relation target + the scalar-id `select` widget.
       scope: {
@@ -616,12 +603,11 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
         kind: "scalar",
         scalar: "ID",
         widget: "select",
-        relationTarget: "ScopeType",
+        relationModelLabel: "accounting.Scope",
       },
       // The record's own opaque id — a bare `ID` scalar with no relation target.
       id: { name: "id", kind: "scalar", scalar: "ID" },
-    },
-  };
+    }, testDataResource("orders.Line"));
 
   test("resolves a to-one relation, but not a to-many, for relationFieldInfo", () => {
     expect(relationFieldInfo("product", model, schema)?.resource).toBe(
@@ -665,19 +651,15 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
 });
 
 describe("money currencyField plumbing", () => {
-  const metadata: ModelMetadata = {
-    typeName: "InvoiceType",
-    fields: {
+  const metadata = canonicalModel({
       amountTotal: {
         name: "amountTotal",
         kind: "scalar",
         scalar: "Decimal",
         widget: "money",
         currencyField: "currency",
-        label: "Total",
       },
-    },
-  };
+    }, testDataResource("orders.Order"));
 
   test("a bare column inherits the backend widget and currencyField from metadata", () => {
     const [column] = columnsWithMetadataDefaults<Row>([{ field: "amountTotal" }], metadata);
@@ -720,16 +702,13 @@ describe("money currencyField plumbing", () => {
 });
 
 describe("relation column read expansion", () => {
-  const metadata: ModelMetadata = {
-    typeName: "StockLevelType",
-    fields: {
+  const metadata = canonicalModel({
       product: {
         name: "product",
         kind: "relation",
         widget: "many2one",
-        relationTarget: "ProductVariantType",
+        relationModelLabel: "catalog.ProductVariant",
         relationObject: true,
-        label: "Product",
       },
       // A to-one FK projected as a public-id scalar: `relation` semantics
       // (many2one widget, relation axis) but NOT a nested object — must stay a leaf.
@@ -737,56 +716,65 @@ describe("relation column read expansion", () => {
         name: "location",
         kind: "relation",
         widget: "many2one",
-        relationTarget: "LocationType",
-        label: "Location",
+        relationModelLabel: "stock.Location",
+        relationObject: false,
       },
       quantity: { name: "quantity", kind: "scalar", scalar: "Decimal" },
       project: {
         name: "project",
         kind: "relation",
-        relationTarget: "ProjectType",
+        relationModelLabel: "projects.Project",
         relationObject: true,
       },
-    },
-  };
-  const schema: SchemaFieldMetadata = {
-    types: {
-      ProductVariantType: {
-        typeName: "ProductVariantType",
-        recordRepresentation: "display_name",
-        fields: {
+    }, testDataResource("orders.Line", {
+      relationAxes: [{
+        field: "location",
+        modelLabel: "stock.Location",
+        publicIdField: "id",
+      }],
+    }));
+  const productVariant = canonicalModel(
+    {
           display_name: {
             name: "display_name",
             kind: "scalar",
             scalar: "String",
           },
-        },
-      },
-      LocationType: {
-        typeName: "LocationType",
-        recordRepresentation: "name",
-        fields: {},
-      },
-      ProjectType: {
-        typeName: "ProjectType",
-        recordRepresentation: "title",
-        fields: {
+    },
+    testDataResource("catalog.ProductVariant", {
+      recordRepresentation: "display_name",
+    }),
+  );
+  const location = canonicalModel(
+    {},
+    testDataResource("stock.Location", { recordRepresentation: "name" }),
+  );
+  const project = canonicalModel(
+    {
           title: { name: "title", kind: "scalar", scalar: "String" },
           product: {
             name: "product",
             kind: "relation",
-            relationTarget: "ProductVariantType",
-            relationObject: false,
-            relationFilter: {
-              field: "product",
-              mode: "lookup",
-              lookup: "sqid",
-            },
+            relationModelLabel: "catalog.ProductVariant",
+            relationObject: true,
           },
-        },
-      },
     },
-  };
+    testDataResource("projects.Project", {
+      recordRepresentation: "title",
+      relationAxes: [
+        {
+          field: "product",
+          modelLabel: "catalog.ProductVariant",
+          publicIdField: "sqid",
+        },
+      ],
+    }),
+  );
+  const schema = schemaFieldMetadataFromDataResources([
+    productVariant.resource,
+    location.resource,
+    project.resource,
+  ]);
 
   test("a bare relation column reads its related type's label path, not a leaf object", () => {
     const [column] = columnsWithMetadataDefaults<Row>(
@@ -805,9 +793,9 @@ describe("relation column read expansion", () => {
   });
 
   test("a relation column falls back to the related id when the type declares no representation", () => {
-    const bare: SchemaFieldMetadata = {
-      types: { ProductVariantType: { typeName: "ProductVariantType", fields: {} } },
-    };
+    const bare = schemaFieldMetadataFromDataResources([
+      testDataResource("catalog.ProductVariant"),
+    ]);
     const [column] = columnsWithMetadataDefaults<Row>([{ field: "product" }], metadata, bare);
     expect(column?.field).toBe("product.id");
   });
@@ -846,32 +834,28 @@ describe("relation column read expansion", () => {
   });
 
   test("keeps an explicit scalar path structural when an intermediate relation target has no metadata", () => {
-    const message: ModelMetadata = {
-      typeName: "MessageType",
-      fields: {
+    const message = canonicalModel({
         thread: {
           name: "thread",
           kind: "relation",
-          relationTarget: "ThreadType",
+          relationModelLabel: "messaging.Thread",
           relationObject: true,
         },
-      },
-    };
-    const messagingSchema: SchemaFieldMetadata = {
-      types: {
-        ThreadType: {
-          typeName: "ThreadType",
-          fields: {
+      }, testDataResource("messaging.Message"));
+    const thread = canonicalModel(
+      {
             title: {
               name: "title",
               kind: "relation",
-              relationTarget: "FragmentType",
+              relationModelLabel: "messaging.Fragment",
               relationObject: true,
             },
-          },
-        },
       },
-    };
+      testDataResource("messaging.Thread"),
+    );
+    const messagingSchema = schemaFieldMetadataFromDataResources([
+      thread.resource,
+    ]);
     const resolved = columnsWithMetadataDefaults<Row>(
       [{ field: "thread.title.text" }],
       message,
@@ -991,4 +975,29 @@ function relationResource(
     typeNames: {},
     capabilities: ["list"],
   });
+}
+
+function canonicalModel(
+  fields: Readonly<Record<string, ModelFieldMetadata>>,
+  resource: DataResourceMetadata,
+): ModelMetadata {
+  const resourceFields: DataResourceFieldMetadata[] = Object.values(fields).map(
+    (field) => ({
+      readable: true,
+      filterable: false,
+      sortable: false,
+      aggregatable: false,
+      groupable: false,
+      creatable: false,
+      updatable: false,
+      requiredOnCreate: false,
+      ...field,
+    }),
+  );
+  const schema = schemaFieldMetadataFromDataResources([
+    { ...resource, fields: resourceFields },
+  ]);
+  const model = schema.labels[resource.modelLabel];
+  if (!model) throw new Error(`Missing test resource ${resource.modelLabel}.`);
+  return model;
 }

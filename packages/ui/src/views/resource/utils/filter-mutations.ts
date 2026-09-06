@@ -43,7 +43,7 @@ export function nextFacetFilter(
 export function resolveTextFilterField(
   metadata: ModelMetadata | null | undefined,
 ): string {
-  const rep = metadata?.recordRepresentation ?? DEFAULT_TEXT_FILTER_FIELD;
+  const rep = metadata?.resource.recordRepresentation ?? DEFAULT_TEXT_FILTER_FIELD;
   const resource = metadata?.resource;
   if (!resource || isClientRowModel(resource) || resource.filterFields.includes(rep)) {
     return rep;

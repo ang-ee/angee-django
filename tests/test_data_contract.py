@@ -7,73 +7,38 @@ from angee.data.metadata import (
     DataResourceSubtitleMetadata,
     DataResourceTypeNames,
     _metadata_key,
-    merge_data_resources,
-    merge_resource_fields,
     serialize_data_resources,
 )
 
 
-def test_resource_descriptions_merge_and_serialize_without_projection_types() -> None:
-    """Neutral descriptions compose and retain their historical wire envelope."""
+def test_final_resource_description_serializes_without_projection_types() -> None:
+    """The sole final neutral description retains its historical wire envelope."""
 
-    left_field = DataResourceFieldMetadata(name="title", kind="scalar", scalar="String", sortable=True)
-    right_field = DataResourceFieldMetadata(name="title", kind="scalar", filterable=True)
+    title_field = DataResourceFieldMetadata(
+        name="title", kind="scalar", scalar="String", sortable=True, filterable=True
+    )
     status_field = DataResourceFieldMetadata(
         name="status",
         kind="enum",
         required_on_create=True,
     )
 
-    fields = merge_resource_fields((left_field,), (right_field, status_field))
-    assert tuple(field.name for field in fields) == ("title", "status")
-    assert fields[0].sortable is True
-    assert fields[0].filterable is True
-
-    left = DataResourceMetadata(
+    final = DataResourceMetadata(
         model=None,
         model_label="catalog.item",
         resource_type=None,
         app_label="catalog",
         model_name="item",
         public_id_field="id",
-        roots=DataResourceRoots(list_name="catalog_items"),
-        type_names=DataResourceTypeNames(node="CatalogItem"),
-        contributors=("CatalogItemQuery",),
-        capabilities=("detail",),
-        fields=(left_field,),
-        subtitle=DataResourceSubtitleMetadata(created="created_at"),
-        node_type=object,
-    )
-    right = DataResourceMetadata(
-        model=None,
-        model_label="catalog.item",
-        resource_type=None,
-        app_label="catalog",
-        model_name="item",
-        public_id_field="id",
-        roots=DataResourceRoots(detail_name="catalog_item"),
-        type_names=DataResourceTypeNames(filter="catalog_items_bool_exp"),
-        contributors=("CatalogItemMutation",),
-        capabilities=("list", "create"),
-        fields=(right_field, status_field),
-        subtitle=DataResourceSubtitleMetadata(word_count="body.word_count"),
-        filter_type=object,
-        order_type=object,
+        roots=DataResourceRoots(list_name="catalog_items", detail_name="catalog_item"),
+        type_names=DataResourceTypeNames(node="CatalogItem", filter="catalog_items_bool_exp"),
+        contributors=("CatalogItemQuery", "CatalogItemMutation"),
+        capabilities=("list", "detail", "create"),
+        fields=(title_field, status_field),
+        subtitle=DataResourceSubtitleMetadata(created="created_at", word_count="body.word_count"),
     )
 
-    [merged] = merge_data_resources((left, right))
-    assert merged.roots == DataResourceRoots(
-        list_name="catalog_items",
-        detail_name="catalog_item",
-    )
-    assert merged.capabilities == ("list", "detail", "create")
-    assert merged.fields == fields
-    assert merged.subtitle == DataResourceSubtitleMetadata(
-        created="created_at",
-        word_count="body.word_count",
-    )
-
-    [wire] = serialize_data_resources((merged,), schema_name="console")
+    [wire] = serialize_data_resources((final,), schema_name="console")
     assert wire["schemaName"] == "console"
     assert wire["modelLabel"] == "catalog.item"
     assert wire["publicIdField"] == "id"

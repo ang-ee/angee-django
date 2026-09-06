@@ -58,8 +58,8 @@ describe("canonicalModelLabel", () => {
 
   test("merges normalized resource inventories across schemas", () => {
     const resources = mergeModelLabelInventory([
-      { types: {}, resources: [testDataResource("notes.Note")] },
-      { types: {}, resources: [testDataResource("parties.Party")] },
+      { types: {}, labels: {}, resources: [testDataResource("notes.Note")] },
+      { types: {}, labels: {}, resources: [testDataResource("parties.Party")] },
     ]);
 
     expect(resources.map((resource) => resource.modelLabel)).toEqual([

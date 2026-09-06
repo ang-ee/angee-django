@@ -13,9 +13,14 @@ from __future__ import annotations
 import decimal
 from typing import cast
 
-import angee.base.fields as base_fields
 import strawberry
 import strawberry_django
+from django.db import models
+from django.db.migrations.autodetector import MigrationAutodetector
+from django.db.migrations.state import ModelState, ProjectState
+from strawberry import auto
+
+import angee.base.fields as base_fields
 from angee.base.fields import SqidField
 from angee.data.field_classification import model_field_scalar, money_currency_field, resource_field_widget
 from angee.data.metadata import (
@@ -23,13 +28,7 @@ from angee.data.metadata import (
     DataResourceTypeNames,
     serialize_data_resources,
 )
-from django.db import models
-from django.db.migrations.autodetector import MigrationAutodetector
-from django.db.migrations.state import ModelState, ProjectState
-from strawberry import auto
-
-from angee.graphql.data.metadata import make_data_resource_metadata
-from angee.graphql.data.resource_fields import model_resource_fields
+from angee.graphql.data.metadata import _finalize_data_resource
 from angee.money.fields import MoneyField
 from tests.money_models import MoneyDocument, MoneyLine, MoneyStatement
 
@@ -165,18 +164,6 @@ def test_changing_currency_field_makes_no_migration() -> None:
     assert changes == {}
 
 
-def test_model_metadata_carries_the_money_vocabulary() -> None:
-    """The model-path field classifier emits Decimal + money + currency path."""
-
-    fields = {field.name: field for field in model_resource_fields(MoneyDocument, ("amount",))}
-
-    amount = fields["amount"]
-    assert amount.kind == "scalar"
-    assert amount.scalar == "Decimal"
-    assert amount.widget == "money"
-    assert amount.currency_field == "currency"
-
-
 def test_resource_metadata_wire_projects_the_money_widget_and_currency_path() -> None:
     """The serialized resource wire carries widget ``money`` + ``currencyField``."""
 
@@ -187,9 +174,16 @@ def test_resource_metadata_wire_projects_the_money_widget_and_currency_path() ->
         id: strawberry.ID
         amount: decimal.Decimal
 
-    metadata = make_data_resource_metadata(
+    @strawberry.type
+    class MoneyProbeQuery:
+        ready: bool = True
+
+    metadata = _finalize_data_resource(
+        graphql_schema=strawberry.Schema(
+            query=MoneyProbeQuery,
+            types=[MoneyDocType],
+        )._schema,
         model=MoneyDocument,
-        node_type=MoneyDocType,
         roots=DataResourceRoots(list_name="money_docs", aggregate_name="money_docs_aggregate"),
         type_names=DataResourceTypeNames(
             query="money_docs_Query",

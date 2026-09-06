@@ -6,15 +6,15 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import strawberry
-from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
 from asgiref.sync import sync_to_async
 from django.db import close_old_connections, models
 from rebac import current_actor
 
+from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.data.metadata import (
-    attach_data_resource_metadata,
-    make_data_resource_metadata,
+    DataResourceContribution,
+    attach_data_resource_contribution,
     resource_wire_field_name,
 )
 from angee.graphql.events import ChangeEvent, ChangePayload
@@ -62,10 +62,11 @@ def changes(
     surface = type(f"{model.__name__}Subscription", (), namespace)
     surface.__doc__ = f"Live changes to {label}."
     surface = strawberry.type(surface)
-    return attach_data_resource_metadata(
+    return attach_data_resource_contribution(
         surface,
-        make_data_resource_metadata(
+        DataResourceContribution(
             model=model,
+            model_label=model._meta.label,
             roots=DataResourceRoots(changes_name=resource_wire_field_name(surface, field)),
             type_names=DataResourceTypeNames(),
             capabilities=("changes",),

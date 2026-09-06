@@ -68,7 +68,7 @@ export function useBulkDelete(
     queryOptions: { enabled: Boolean(refineResource) },
   });
   const canDelete =
-    (rootFields === null || Boolean(rootFields.delete))
+    (rootFields === null || Boolean(rootFields.deletePreview))
     && (deleteAccess.data?.can ?? true);
   const deletePreview = useAngeeDeletePreview(deletePreviewOperation.target, {
     document: deletePreviewOperation.document,

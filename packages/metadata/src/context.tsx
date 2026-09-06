@@ -8,12 +8,16 @@ import {
 
 import {
   modelMetadataForLabel,
+  type DataResourceRootMetadata,
   type ModelMetadata,
-  type ModelRootFieldMetadata,
   type SchemaFieldMetadata,
 } from "./artifact";
 
-export const EMPTY_SCHEMA_FIELD_METADATA: SchemaFieldMetadata = { types: {} };
+export const EMPTY_SCHEMA_FIELD_METADATA: SchemaFieldMetadata = {
+  types: {},
+  labels: {},
+  resources: [],
+};
 
 const ModelMetadataContext = createContext<SchemaFieldMetadata | null>(null);
 const ActiveGraphQLSchemaContext = createContext<string | null>(null);
@@ -43,25 +47,25 @@ export function useSchemaFieldMetadata(): SchemaFieldMetadata {
   return useContext(ModelMetadataContext) ?? EMPTY_SCHEMA_FIELD_METADATA;
 }
 
-export function useModelRootFields(modelLabel: string): ModelRootFieldMetadata | null;
+export function useModelRootFields(modelLabel: string): DataResourceRootMetadata | null;
 export function useModelRootFields(
   modelLabel: string,
   options: { required: false },
-): ModelRootFieldMetadata | null | undefined;
+): DataResourceRootMetadata | null | undefined;
 export function useModelRootFields(
   modelLabel: string,
   options: { required: boolean },
-): ModelRootFieldMetadata | null | undefined;
+): DataResourceRootMetadata | null | undefined;
 export function useModelRootFields(
   modelLabel: string,
   options: { required?: boolean } = {},
-): ModelRootFieldMetadata | null | undefined {
+): DataResourceRootMetadata | null | undefined {
   const metadata = useSchemaFieldMetadata();
   return useMemo(() => {
     if (!modelLabel) return null;
-    if (Object.keys(metadata.types).length === 0) return null;
+    if (metadata.resources.length === 0) return null;
     const model = modelMetadataForLabel(metadata, modelLabel);
-    if (!model?.rootFields) {
+    if (!model) {
       if (options.required === false) return undefined;
       throw new Error(
         `GraphQL schema is configured with SDL but exposes no resource metadata ` +
@@ -69,7 +73,7 @@ export function useModelRootFields(
           "model label.",
       );
     }
-    return model.rootFields;
+    return model.resource.roots;
   }, [metadata, modelLabel, options.required]);
 }
 

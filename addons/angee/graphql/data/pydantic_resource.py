@@ -26,10 +26,10 @@ from strawberry_django_hasura import (
 
 from angee.data.metadata import DataAggregateMeasureMetadata
 from angee.graphql.data.metadata import (
-    attach_data_resource_metadata,
-    make_data_resource_metadata,
+    DataResourceContribution,
+    DataResourcePolicy,
+    attach_data_resource_contribution,
 )
-from angee.graphql.data.resource_bundle import resource_query_metadata
 
 
 def pydantic_node(row_model: type[BaseModel], *, name: str) -> type:
@@ -82,29 +82,25 @@ def hasura_pydantic_resource(
         source=source,
         id_field=id_field,
     )
-    roots, type_names, filter_type, order_type = resource_query_metadata(resource)
-    if roots.detail_name is None:
+    if resource.detail_root is None:
         raise ImproperlyConfigured(f"{model_label or name} Hasura resource did not expose a detail root.")
-    attach_data_resource_metadata(
+    attach_data_resource_contribution(
         resource.query,
-        make_data_resource_metadata(
+        DataResourceContribution(
             model=None,
             model_label=model_label,
             # The computed row is addressed by ``id_field`` — the same fact the
             # library uses for ``<name>_by_pk``; keep them one source of truth.
-            public_id_field=id_field,
-            node_type=node,
-            filter_type=filter_type,
-            order_type=order_type,
-            roots=roots,
-            type_names=type_names,
-            capabilities=("list", "detail", "aggregate"),
-            # A computed pydantic source is small and admin-only: the frontend
-            # fetches it once and filters/sorts/paginates/groups in the browser.
-            row_model="client",
-            filter_fields=tuple(filterable),
-            order_fields=tuple(sortable),
-            default_measures=(DataAggregateMeasureMetadata(op="count"),),
+            native_resource=resource,
+            policy=DataResourcePolicy(
+                # A computed pydantic source is small and admin-only: the frontend
+                # fetches it once and filters/sorts/paginates/groups in the browser.
+                public_id_field=id_field,
+                row_model="client",
+                filter_fields=tuple(filterable),
+                order_fields=tuple(sortable),
+                default_measures=(DataAggregateMeasureMetadata(op="count"),),
+            ),
         ),
     )
     # The derived node is reachable from the query, but register it in the

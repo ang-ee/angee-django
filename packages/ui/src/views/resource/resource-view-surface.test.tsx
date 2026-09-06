@@ -388,6 +388,7 @@ const NOTE_RESOURCE: DataResourceMetadata = {
   publicIdField: "id",
   roots: { list: "notes", groups: "notes_groups" },
   typeNames: { node: "NoteType" },
+  recordRepresentation: "title",
   capabilities: ["list"],
   fields: [
     resourceField(ID_FIELD, { filterable: true, aggregatable: true }),
@@ -420,15 +421,13 @@ const NOTE_RESOURCE: DataResourceMetadata = {
 };
 
 const NOTE_METADATA: ModelMetadata = {
-  typeName: "NoteType",
   fields: {
     id: ID_FIELD,
     title: TITLE_FIELD,
     status: STATUS_FIELD,
   },
-  rootFields: { list: "notes" },
   resource: NOTE_RESOURCE,
-  recordRepresentation: "title",
+  relationAxes: {},
 };
 
 const CLIENT_NOTE_METADATA: ModelMetadata = {

@@ -137,7 +137,7 @@ export function useFormViewSave({
   const submittingRef = React.useRef(false);
   const requiredFieldNames = React.useMemo<ReadonlySet<string>>(() => {
     if (!isCreate) return new Set();
-    const required = new Set(modelMetadata?.rootFields?.requiredCreateFields ?? []);
+    const required = new Set(modelMetadata?.resource.requiredCreateFields ?? []);
     return new Set(
       formFields
         .filter((field) => required.has(field.name) && !field.readOnly)
@@ -146,7 +146,7 @@ export function useFormViewSave({
   }, [formFields, isCreate, modelMetadata]);
   const writableFieldNames = React.useMemo<ReadonlySet<string> | null>(() => {
     const writable = isCreate
-      ? modelMetadata?.rootFields?.createFields
+      ? modelMetadata?.resource.createFields
       : submit
         ? undefined
         : modelMetadata

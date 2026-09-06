@@ -774,13 +774,13 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   inputs too: a child enum/choices column is a `String` on the line insert input
   (write the lowercase value), while the child node projects it as an enum (read
   UPPERCASE); an M2M child column is `[ID]` (public sqids in and out).
-- **F6 line-cell metadata is projected from the child node surface, not the bare
-  model** — `HasuraLines(node=…)`'s child fields reconstruct through
-  `resource_fields(node, model)` (the same classifier the parent uses), because the
-  node owns a choices column's wire enum values and an M2M's `kind:"list"` relation
-  target. A writable child column the node does not expose falls back to the model
-  reconstruction, which still cannot carry enum/list — so expose any enum/M2M line
-  cell on the child node.
+- **F6 line-cell metadata is projected from the final child node and nested
+  input surfaces.** `HasuraLines(node=…)` declares the child node owner; after
+  schema composition, its executable GraphQL types supply enum values,
+  relation/list targets, accepted inputs, and required inputs. Input-only fields
+  retain their Django relation and widget semantics with `readable=False`.
+  Expose enum and M2M line cells on the child node so their complete read shape is
+  present in the final schema.
 - **Intersect write-only fields out of the read/return selection** — a field
   absent from the SDL read type (e.g. `password`) makes the detail query invalid
   and the form loads blank if it is selected.
@@ -841,6 +841,34 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   `GraphQLSchemas` connects publishers from declared `changes` metadata after
   app population, so building a schema no longer mutates process-global signal
   state.
+- **Resource metadata is finalized from each named schema once.** A
+  `HasuraResource` remains the native owner of its generated roots, types, and
+  readable/writable field surfaces. Addon surfaces contribute that native
+  reference plus only explicit Angee policy that the composed schema cannot
+  recover, such as curated group axes, subtitle paths, editable lines, row
+  model, and change/revision capabilities. `GraphQLSchemas` builds the complete
+  Strawberry schema, projects one neutral `DataResourceMetadata` per model from
+  its graphql-core schema, and attaches that same tuple for `resources()`, MCP,
+  publishers, and serialized artifacts. Declare resource behavior through the
+  existing Hasura/Pydantic resource and authored-root helpers; do not construct
+  partial resource descriptions for later reconciliation.
+- **Migrate metadata snapshot and merge callers to the built schema owner.** Read
+  finalized descriptions through `GraphQLSchemas.resources(name)` or serialized
+  artifacts through `GraphQLSchemas.render_metadata()`. The former
+  `make_data_resource_metadata()`, `attach_data_resource_metadata()`, and
+  `data_resource_metadata()` surface-snapshot path was removed, along with
+  `merge_data_resources()`, `merge_resource_fields()`, and the `merge()` methods
+  on resource descriptions, roots, type names, and subtitles. The former
+  `resource_fields()`, `model_resource_fields()`, and
+  `require_resource_selection_path()` reconstruction helpers were also removed;
+  metadata projection and selection validation now use the composed schema
+  internally, so public callers should consume the finalized descriptions.
+- **A custom model value field registers its GraphQL wire type when its field
+  module imports.** Call `angee.graphql.field_types.register_field_type()` beside
+  the field declaration. `GraphQLConfig.ready()` may discover and build final
+  schemas before later app `ready()` callbacks run, so registration from a later
+  callback is unsupported and can leave Strawberry's exact-class `auto` lookup
+  unconfigured.
 - **Change events read through the row unless the model declares another read
   anchor.** A target-derived child or polymorphic edge may implement
   `change_read_resource()` and return the `ObjectRef` whose `read` permission

@@ -1,8 +1,14 @@
 import { describe, expect, test, vi } from "vitest";
 import type { SchemaFieldMetadata } from "./artifact";
 
+const EMPTY_SCHEMA_FIELD_METADATA: SchemaFieldMetadata = {
+  types: {},
+  labels: {},
+  resources: [],
+};
+
 const hookMocks = vi.hoisted(() => ({
-  metadata: { types: {} } as SchemaFieldMetadata,
+  metadata: { types: {}, labels: {}, resources: [] } as SchemaFieldMetadata,
 }));
 
 vi.mock("react", () => ({
@@ -64,12 +70,12 @@ describe("resource invalidation targets", () => {
 
   test("fails fast when resource metadata is unavailable", () => {
     expect(() =>
-      resourceInvalidationTargets({ types: {} }, ["notes.Note"]),
+        resourceInvalidationTargets(EMPTY_SCHEMA_FIELD_METADATA, ["notes.Note"]),
     ).toThrow(/schema metadata exposes no resources/);
   });
 
   test("provider-less render degrades to no invalidations with a development warning", () => {
-    hookMocks.metadata = { types: {} };
+    hookMocks.metadata = EMPTY_SCHEMA_FIELD_METADATA;
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const result = useResourceInvalidates(["notes.Note"]);
 

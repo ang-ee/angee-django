@@ -20,7 +20,7 @@ import type { UiTranslate } from "../../i18n";
 
 interface LaneFieldSource {
   field: string;
-  fieldMetadata: { relationObject?: boolean };
+  fieldMetadata: { relationObject?: boolean | null };
   rankField?: string;
 }
 

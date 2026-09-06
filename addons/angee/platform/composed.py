@@ -1,17 +1,18 @@
-"""Composed-addon introspection — the single walk over the app registry.
+"""Native composed-addon, model, and field read projections.
 
-One owner for the per-addon rollups (model/field/resource counts, dependency
-edges) the platform surface needs. Both the live explorer view
-(``schema._build_explorer``) and the ``Addon`` reflection sync
-(``AddonManager.reconcile_from_registry``) read these — never two parallel walks.
+This module owns the app-registry reads behind both the live platform explorer
+and the persisted ``Addon`` reflection sync. Computed model and field resources
+are projected here directly from Django's native objects.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from django.apps import AppConfig, apps
 from django.db.models import Model
+from pydantic import BaseModel, PrivateAttr
 
 from angee.addons import addon_manifest, is_angee_addon
 
@@ -36,6 +37,111 @@ class AddonRollup:
     description: str
     keywords: list[str]
     category: str
+
+
+class PlatformFieldRow(BaseModel):
+    """Canonical computed row for one native Django model field."""
+
+    id: str
+    name: str
+    attname: str
+    kind: str
+    is_relation: bool
+    relation_target: str | None
+    model: str
+    addon: str
+
+    _field: Any = PrivateAttr()
+
+    @classmethod
+    def from_field(cls, model: type[Model], field: Any) -> PlatformFieldRow:
+        """Project a native Django field while retaining its request-local reference."""
+
+        related = field.related_model if field.is_relation else None
+        row = cls(
+            id=f"{model._meta.label_lower}.{field.name}",
+            name=field.name,
+            attname=getattr(field, "attname", field.name),
+            kind=field.get_internal_type(),
+            is_relation=bool(field.is_relation),
+            relation_target=related._meta.label_lower if related else None,
+            model=model._meta.label_lower,
+            addon=model._meta.app_label,
+        )
+        row._field = field
+        return row
+
+    def relation_kind(self) -> str | None:
+        """Return the graph-edge kind for this native relation field."""
+
+        if not self.is_relation:
+            return None
+        if self._field.many_to_many:
+            return "many_to_many"
+        if self._field.one_to_one:
+            return "one_to_one"
+        return "foreign_key"
+
+
+class PlatformModelRow(BaseModel):
+    """Canonical computed row for one native Django model."""
+
+    id: str
+    label: str
+    app_label: str
+    model_name: str
+    verbose_name: str
+    db_table: str
+    addon_id: str
+    addon_label: str
+    resource_type: str | None
+    field_count: int
+    relation_count: int
+    depends_on: list[str]
+
+    _model: type[Model] = PrivateAttr()
+    _native_fields: tuple[Any, ...] = PrivateAttr()
+    _field_rows: tuple[PlatformFieldRow, ...] | None = PrivateAttr(default=None)
+
+    @classmethod
+    def from_model(cls, config: AppConfig, model: type[Model]) -> PlatformModelRow:
+        """Project a native Django model and retain its already-read native fields."""
+
+        fields = tuple(own_fields(model))
+        relations = [field for field in fields if field.is_relation]
+        row = cls(
+            id=model._meta.label_lower,
+            label=model._meta.label_lower,
+            app_label=model._meta.app_label,
+            model_name=model._meta.model_name,
+            verbose_name=str(model._meta.verbose_name),
+            db_table=model._meta.db_table,
+            addon_id=config.name,
+            addon_label=config.label,
+            resource_type=getattr(model._meta, "rebac_resource_type", None),
+            field_count=len(fields),
+            relation_count=len(relations),
+            depends_on=sorted(
+                {
+                    field.related_model._meta.label_lower
+                    for field in relations
+                    if field.related_model is not None
+                }
+            ),
+        )
+        row._model = model
+        row._native_fields = fields
+        return row
+
+    def fields(self) -> list[PlatformFieldRow]:
+        """Lazily project and cache field rows from the retained native fields."""
+
+        if self._field_rows is None:
+            self._field_rows = tuple(
+                PlatformFieldRow.from_field(self._model, field)
+                for field in self._native_fields
+            )
+        return list(self._field_rows)
 
 
 def addons() -> list[AppConfig]:
@@ -116,3 +222,24 @@ def addon_rollups() -> list[AddonRollup]:
             )
         )
     return rollups
+
+
+def model_rows() -> list[PlatformModelRow]:
+    """Project composed Django models without reading addon resource rollups or graph edges."""
+
+    return [
+        PlatformModelRow.from_model(config, model)
+        for config in addons()
+        for model in data_models(config)
+    ]
+
+
+def field_rows() -> list[PlatformFieldRow]:
+    """Project composed Django fields without building an explorer envelope."""
+
+    return [
+        PlatformFieldRow.from_field(model, field)
+        for config in addons()
+        for model in data_models(config)
+        for field in own_fields(model)
+    ]

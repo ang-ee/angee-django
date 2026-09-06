@@ -1,28 +1,41 @@
-import { isClientRowModel, type DataResourceMetadata, type ModelFieldMetadata, type ModelMetadata } from "./artifact";
+import {
+  isClientRowModel,
+  relationModelLabelForField,
+  type DataResourceMetadata,
+  type ModelFieldMetadata,
+  type ModelMetadata,
+} from "./artifact";
 import { resourceFieldPathToSnake } from "./naming";
 
 /**
- * A to-one relation the node projects as a bare `ID` scalar rather than a nested
- * object (`relationObject: false`): the wire carries the related row's public id
- * as a leaf, so a detail/form query selects it directly instead of emitting a
- * sub-selection the `ID` scalar would reject.
+ * A to-one relation the node projects as a bare `ID` rather than a nested object.
+ * Final metadata keeps relation semantics in `kind: "relation"` and records the
+ * executable GraphQL shape as `relationObject: false`; older wire producers may
+ * still describe the same leaf as a scalar `ID` with a canonical relation target.
  */
-export function isScalarIdRelation(field: ModelFieldMetadata): boolean {
-  return field.kind === "scalar" && field.scalar === "ID" && Boolean(field.relationTarget);
+export function isScalarIdRelation(
+  field: ModelFieldMetadata,
+  model?: ModelMetadata | null,
+): boolean {
+  if (!relationModelLabelForField(field, model)) return false;
+  return (field.kind === "relation" && field.relationObject === false)
+    || (field.kind === "scalar" && field.scalar === "ID");
 }
 
 /**
  * Is this field a to-one relation, whichever way the node projects it?
  *
- * The projection is a wire detail — an object sub-selection or a bare `ID` leaf —
- * not a different kind of fact. Both shapes name the same related model, carry the
- * same relation filter, and group by the same identity axis, so anything reasoning
- * about *relation-ness* must ask this rather than test `kind === "relation"` and
- * silently drop every scalar-id relation.
+ * The projection is a wire detail — an object sub-selection or a bare `ID` leaf.
+ * Both shapes name the same related model, carry the same relation filter, and
+ * group by the same identity axis. The scalar branch below remains for older
+ * metadata whose coarse kind predates the finalized relation classifier.
  */
-export function isToOneRelationField(field: ModelFieldMetadata | undefined): boolean {
+export function isToOneRelationField(
+  field: ModelFieldMetadata | undefined,
+  model?: ModelMetadata | null,
+): boolean {
   if (!field) return false;
-  return field.kind === "relation" || isScalarIdRelation(field);
+  return field.kind === "relation" || isScalarIdRelation(field, model);
 }
 
 const SCALAR_WIDGET: Readonly<Record<string, string>> = {
@@ -96,9 +109,8 @@ export function fieldUpdatable(
   metadata: ModelMetadata | null | undefined,
   fieldName: string,
 ): boolean {
-  if (!metadata?.rootFields?.update && !metadata?.resource?.roots.update) return false;
-  const updateFields =
-    metadata.rootFields?.updateFields ?? metadata.resource?.updateFields;
+  if (!metadata?.resource.roots.update) return false;
+  const updateFields = metadata.resource.updateFields;
   if (updateFields && !updateFields.includes(fieldName)) return false;
   return metadata.fields[fieldName]?.updatable !== false;
 }

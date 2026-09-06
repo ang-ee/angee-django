@@ -204,30 +204,16 @@ describe("useRelationFacets", () => {
 const METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     InferenceModelType: {
-      typeName: "InferenceModelType",
       fields: {
         provider: {
           name: "provider",
           kind: "relation",
-          relationTarget: "InferenceProviderType",
-          relationFilter: {
-            field: "provider",
-            mode: "lookup",
-            lookup: "sqid",
-            aggregateKey: "providerId",
-            labelKey: "provider_Name",
-          },
+          relationModelLabel: "agents.InferenceProvider",
         },
         publisher: {
           name: "publisher",
           kind: "relation",
-          relationTarget: "InferenceProviderType",
-          relationFilter: {
-            field: "publisher",
-            mode: "lookup",
-            lookup: "sqid",
-            aggregateKey: "publisher",
-          },
+          relationModelLabel: "agents.InferenceProvider",
         },
         name: { name: "name", kind: "scalar", scalar: "String" },
       },
@@ -267,17 +253,26 @@ const METADATA: SchemaFieldMetadata = withTestResourceInventory({
             scalar: "ID",
           },
         ],
-        relationAxes: [],
+        relationAxes: [
+          {
+            field: "provider",
+            modelLabel: "agents.InferenceProvider",
+            publicIdField: "sqid",
+            labelAxis: "provider_Name",
+          },
+          {
+            field: "publisher",
+            modelLabel: "agents.InferenceProvider",
+            publicIdField: "sqid",
+          },
+        ],
       },
     },
     InferenceProviderType: {
-      typeName: "InferenceProviderType",
-      recordRepresentation: "name",
-      rootFields: { list: "inference_providers" },
-      resource: relationResource(
-        "agents.InferenceProvider",
-        "inference_providers",
-      ),
+      resource: {
+        ...relationResource("agents.InferenceProvider", "inference_providers"),
+        recordRepresentation: "name",
+      },
       fields: {
         name: { name: "name", kind: "scalar", scalar: "String" },
       },

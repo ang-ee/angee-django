@@ -730,20 +730,11 @@ const formFields = [
 const TEST_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     NoteType: {
-      typeName: "NoteType",
-      recordRepresentation: "title",
-      rootFields: {
-        detail: "note",
-        list: "notes",
-        aggregate: "noteAggregate",
-        delete: "deleteNote",
-      },
       fields: {
         title: { name: "title", kind: "scalar", scalar: "String" },
         status: {
           name: "status",
           kind: "enum",
-          enumName: "NoteStatus",
           values: [
             { value: "DRAFT", description: "Draft" },
             { value: "ACTIVE", description: "Active" },
@@ -760,6 +751,7 @@ const TEST_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
         appLabel: "notes",
         modelName: "note",
         publicIdField: "sqid",
+        recordRepresentation: "title",
         roots: {
           list: "notes",
           detail: "note",
@@ -854,12 +846,11 @@ const TEST_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
       },
     },
     SaleType: {
-      typeName: "SaleType",
       fields: {},
-      rootFields: {
-        detail: "sale",
-        list: "sales",
-      },
+      resource: testDataResource("sales.Sale", {
+        roots: { detail: "sale", list: "sales" },
+        typeNames: { node: "SaleType" },
+      }),
     },
   },
 });
@@ -867,13 +858,6 @@ const TEST_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
 const SNAKE_NOTE_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     NoteType: {
-      typeName: "NoteType",
-      recordRepresentation: "title",
-      rootFields: {
-        detail: "notes_by_pk",
-        list: "notes",
-        aggregate: "notes_aggregate",
-      },
       fields: {
         title: { name: "title", kind: "scalar", scalar: "String" },
         status: { name: "status", kind: "scalar", scalar: "String" },
@@ -889,6 +873,7 @@ const SNAKE_NOTE_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventor
         appLabel: "notes",
         modelName: "note",
         publicIdField: "sqid",
+        recordRepresentation: "title",
         roots: {
           list: "notes",
           detail: "notes_by_pk",
@@ -2693,13 +2678,7 @@ function NoDeleteMetadata({ children }: { children: ReactNode }): ReactElement {
       metadata={withTestResourceInventory({
         types: {
           SaleType: {
-            typeName: "SaleType",
             fields: {},
-            rootFields: {
-              detail: "sale",
-              list: "sales",
-              aggregate: "saleAggregate",
-            },
             resource: {
               schemaName: "public",
               modelLabel: "sales.Sale",

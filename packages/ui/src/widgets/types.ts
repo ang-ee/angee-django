@@ -81,20 +81,22 @@ export function optionTextLabel(
   return fallback;
 }
 
-export interface WidgetField {
-  name?: string;
+/** Presentation facts shared by page descriptors and rendered widget fields. */
+export interface FieldPresentation {
   label?: ReactNode;
   options?: readonly WidgetOption[];
   placeholder?: string;
-  /** Explicit `value → Tone` map (from `<Column tone>`) for status widgets. */
-  tone?: Record<string, Tone>;
   /**
    * For a money widget: the path to the FK owning the row's currency — a sibling
-   * field (`"currency"`) or a one-hop related path (`"order.currency"`). Carried
-   * from the backend field metadata so the money renderer resolves the row's
-   * currency from the record without re-deriving it.
+   * field (`"currency"`) or a one-hop related path (`"order.currency"`).
    */
   currencyField?: string;
+}
+
+export interface WidgetField extends FieldPresentation {
+  name?: string;
+  /** Explicit `value → Tone` map (from `<Column tone>`) for status widgets. */
+  tone?: Record<string, Tone>;
   /** DOM association supplied by a descriptor-form owner for its actual control. */
   controlProps?: WidgetControlProps;
 }

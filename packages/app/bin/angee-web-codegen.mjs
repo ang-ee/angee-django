@@ -11,10 +11,17 @@ import path from "node:path";
 
 import { generate } from "@graphql-codegen/cli";
 import {
+  defineAngeeSchemaMetadata,
+  lineReadSelectionPaths,
+  resourceReadSelectionPaths,
+  schemaFieldMetadataFromAngeeSchemaMetadata,
+} from "@angee/metadata/headless";
+import {
   GraphQLObjectType,
   buildSchema,
   getNamedType,
   parse,
+  validate,
 } from "graphql";
 
 const AGGREGATE_MEASURE_OPERATORS = ["sum", "avg", "min", "max"];
@@ -32,10 +39,6 @@ const SCALARS = {
   JSON: "unknown",
 };
 const ADDON_ENTRY_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx"];
-
-class RelationRepresentationError extends Error {
-  name = "RelationRepresentationError";
-}
 
 const options = parseOptions(process.argv.slice(2));
 const webRoot = resolveFromCwd(options["web-root"] ?? ".");
@@ -260,13 +263,16 @@ function buildOperationDocuments(name, runtimeDir) {
   const sdlPath = path.join(runtimeDir, "schemas", `${name}.graphql`);
   const metadataPath = path.join(runtimeDir, "schemas", `${name}.metadata.json`);
   const outPath = path.join(runtimeDir, "gql", name, "actions.ts");
-  const actions = actionFields(sdlPath);
+  const schema = buildSchema(readFileSync(sdlPath, "utf8"));
+  const metadata = readSchemaMetadata(metadataPath);
+  const index = schemaFieldMetadataFromAngeeSchemaMetadata(metadata);
+  const actions = actionFields(schema);
   const names = actions.map((action) => action.name);
-  const aggregateResources = aggregateFields(metadataPath);
-  const deletePreviewResources = deletePreviewFields(metadataPath);
-  const groupResources = groupFields(metadataPath);
-  const revisionResources = revisionFields(metadataPath);
-  const saveResources = saveFields(metadataPath);
+  const aggregateResources = aggregateFields(index.resources);
+  const deletePreviewResources = deletePreviewFields(index.resources);
+  const groupResources = groupFields(index.resources);
+  const revisionResources = revisionFields(index.resources);
+  const saveResources = saveFields(index);
   const union = names.length > 0 ? names.map((n) => JSON.stringify(n)).join(" | ") : "never";
   const aggregateUnion = aggregateResources.length > 0
     ? aggregateResources.map((resource) => JSON.stringify(resource.modelLabel)).join(" | ")
@@ -284,31 +290,43 @@ function buildOperationDocuments(name, runtimeDir) {
     ? saveResources.map((resource) => JSON.stringify(resource.modelLabel)).join(" | ")
     : "never";
   const documents = actions.map((action) => {
-    const ast = JSON.stringify(actionDocument(action), null, 2);
+    const ast = JSON.stringify(validatedDocument(schema, actionDocument(action), action.name), null, 2);
     return `  ${JSON.stringify(action.name)}: ${ast} as ActionDocument<${JSON.stringify(action.name)}>,`;
   });
   const aggregateDocuments = aggregateResources.map((resource) => {
     const ast = JSON.stringify(
-      aggregateDocument(resource.aggregateRoot, resource.filterType, resource.measures),
+      validatedDocument(
+        schema,
+        aggregateDocument(resource.aggregateRoot, resource.filterType, resource.measures),
+        resource.aggregateRoot,
+      ),
       null,
       2,
     );
     return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as AggregateDocument,`;
   });
   const deletePreviewDocuments = deletePreviewResources.map((resource) => {
-    const ast = JSON.stringify(deletePreviewDocument(resource.deletePreviewRoot), null, 2);
+    const ast = JSON.stringify(
+      validatedDocument(schema, deletePreviewDocument(resource.deletePreviewRoot), resource.deletePreviewRoot),
+      null,
+      2,
+    );
     return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as DeletePreviewDocument,`;
   });
   const groupDocuments = groupResources.map((resource) => {
-    const ast = JSON.stringify(groupDocument(resource), null, 2);
+    const ast = JSON.stringify(validatedDocument(schema, groupDocument(resource), resource.groupsRoot), null, 2);
     return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as GroupDocument,`;
   });
   const revisionDocuments = revisionResources.map((resource) => {
-    const ast = JSON.stringify(revisionDocument(resource.revisionsRoot, resource.fields), null, 2);
+    const ast = JSON.stringify(
+      validatedDocument(schema, revisionDocument(resource.revisionsRoot, resource.fields), resource.revisionsRoot),
+      null,
+      2,
+    );
     return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as RevisionDocument,`;
   });
   const saveDocuments = saveResources.map((resource) => {
-    const ast = JSON.stringify(saveDocument(resource), null, 2);
+    const ast = JSON.stringify(validatedDocument(schema, saveDocument(resource), resource.saveRoot), null, 2);
     return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as SaveDocument,`;
   });
   const body = [
@@ -488,8 +506,7 @@ function buildOperationDocuments(name, runtimeDir) {
   );
 }
 
-function actionFields(sdlPath) {
-  const schema = buildSchema(readFileSync(sdlPath, "utf8"));
+function actionFields(schema) {
   const mutation = schema.getMutationType();
   if (!mutation) return [];
   const fields = mutation.getFields();
@@ -519,10 +536,7 @@ function actionFields(sdlPath) {
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
-function deletePreviewFields(metadataPath) {
-  const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
-  const resources = metadata?.angee?.resources;
-  if (!Array.isArray(resources)) return [];
+function deletePreviewFields(resources) {
   return resources
     .flatMap((resource) => {
       const modelLabel = resource?.modelLabel;
@@ -539,10 +553,7 @@ function deletePreviewFields(metadataPath) {
     .sort((left, right) => left.modelLabel.localeCompare(right.modelLabel));
 }
 
-function aggregateFields(metadataPath) {
-  const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
-  const resources = metadata?.angee?.resources;
-  if (!Array.isArray(resources)) return [];
+function aggregateFields(resources) {
   return resources
     .flatMap((resource) => {
       const modelLabel = resource?.modelLabel;
@@ -569,10 +580,7 @@ function aggregateFields(metadataPath) {
     .sort((left, right) => left.modelLabel.localeCompare(right.modelLabel));
 }
 
-function groupFields(metadataPath) {
-  const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
-  const resources = metadata?.angee?.resources;
-  if (!Array.isArray(resources)) return [];
+function groupFields(resources) {
   return resources
     .flatMap((resource) => {
       const modelLabel = resource?.modelLabel;
@@ -623,10 +631,7 @@ function groupFields(metadataPath) {
     .sort((left, right) => left.modelLabel.localeCompare(right.modelLabel));
 }
 
-function revisionFields(metadataPath) {
-  const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
-  const resources = metadata?.angee?.resources;
-  if (!Array.isArray(resources)) return [];
+function revisionFields(resources) {
   return resources
     .flatMap((resource) => {
       const modelLabel = resource?.modelLabel;
@@ -650,18 +655,8 @@ function revisionFields(metadataPath) {
     .sort((left, right) => left.modelLabel.localeCompare(right.modelLabel));
 }
 
-function saveFields(metadataPath) {
-  const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
-  const resources = metadata?.angee?.resources;
-  if (!Array.isArray(resources)) return [];
-  const resourcesByModelLabel = new Map(
-    resources.flatMap((resource) =>
-      typeof resource?.modelLabel === "string"
-        ? [[resource.modelLabel, resource]]
-        : [],
-    ),
-  );
-  return resources
+function saveFields(index) {
+  return index.resources
     .flatMap((resource) => {
       const modelLabel = resource?.modelLabel;
       const saveRoot = resource?.roots?.save;
@@ -688,107 +683,34 @@ function saveFields(metadataPath) {
         linesInputType: nonEmptyString(linesInputType),
         linesField: lines.field,
         selection: selectionFields(
-          resource.fields,
-          lines.field,
-          resourcesByModelLabel,
-          modelLabel,
+          resourceReadSelectionPaths(index.labels[modelLabel], index, lines.field),
         ),
-        linesSelection: selectionFields(
-          lines.fields,
-          null,
-          resourcesByModelLabel,
-          `${modelLabel}.${lines.field}`,
-        ),
+        linesSelection: selectionFields(lineReadSelectionPaths(lines, index)),
       }];
     })
     .sort((left, right) => left.modelLabel.localeCompare(right.modelLabel));
 }
 
-// The read selection for a save return type: the public `id`, then each readable
-// scalar/enum field bare and each relation as `{ id <recordRepresentation> }` —
-// enough for the composing form to re-seed every declared field (and a picker's
-// label) from the saved row. The lines list is added by its own child selection,
-// so it is excluded here. Mirrors the parent form's own detail selection shape.
-function selectionFields(fields, excludeField, resourcesByModelLabel, owner) {
-  const parts = ["id"];
-  const seen = new Set(["id"]);
-  for (const field of fields ?? []) {
-    const name = field?.name;
-    if (
-      typeof name !== "string" ||
-      name === excludeField ||
-      field?.readable !== true ||
-      seen.has(name)
-    ) {
-      continue;
+// Convert shared dotted scalar paths to one GraphQL selection tree. GraphQL's
+// own parser and validator remain the syntax/type authority.
+function selectionFields(paths) {
+  const root = new Map();
+  for (const path of paths) {
+    let current = root;
+    for (const segment of path.split(".")) {
+      const name = assertGraphQLName(segment);
+      if (!current.has(name)) current.set(name, new Map());
+      current = current.get(name);
     }
-    seen.add(name);
-    if (field.kind === "relation") {
-      parts.push(
-        `${assertGraphQLName(name)} { id${relationLabelSelection(
-          field,
-          resourcesByModelLabel,
-          `${owner}.${name}`,
-        )} }`,
-      );
-    } else if (field.kind === "scalar" || field.kind === "enum") {
-      parts.push(assertGraphQLName(name));
-    }
-    // A nested list (`kind === "list"`) is only the lines field here; skip it.
   }
-  return parts;
+  return renderSelectionTree(root);
 }
 
-function relationLabelSelection(
-  field,
-  resourcesByModelLabel,
-  owner,
-  visited = new Set(),
-) {
-  const targetLabel = nonEmptyString(field?.relationModelLabel);
-  if (!targetLabel) {
-    throw new RelationRepresentationError(
-      `Relation field "${owner}" does not declare relationModelLabel.`,
-    );
-  }
-  if (visited.has(targetLabel)) {
-    throw new RelationRepresentationError(
-      `Relation representation for "${owner}" contains a cycle at "${targetLabel}".`,
-    );
-  }
-  const target = resourcesByModelLabel.get(targetLabel);
-  if (!target) {
-    throw new RelationRepresentationError(
-      `Relation field "${owner}" targets missing resource metadata "${targetLabel}".`,
-    );
-  }
-  const representation = nonEmptyString(target.recordRepresentation);
-  if (!representation || representation === "id") return "";
-  const representationField = (target.fields ?? []).find(
-    (candidate) => candidate?.name === representation,
-  );
-  if (!representationField) {
-    throw new RelationRepresentationError(
-      `Record representation "${representation}" is not declared on "${targetLabel}".`,
-    );
-  }
-  const name = assertGraphQLName(representation);
-  if (
-    representationField.kind === "scalar"
-    || representationField.kind === "enum"
-  ) {
-    return ` ${name}`;
-  }
-  if (representationField.kind === "relation") {
-    return ` ${name} { id${relationLabelSelection(
-      representationField,
-      resourcesByModelLabel,
-      `${targetLabel}.${representation}`,
-      new Set(visited).add(targetLabel),
-    )} }`;
-  }
-  throw new RelationRepresentationError(
-    `Record representation "${targetLabel}.${representation}" must be a scalar, enum, or to-one relation.`,
+function renderSelectionTree(tree) {
+  return [...tree.entries()].map(([name, children]) =>
+    children.size === 0
+      ? name
+      : `${name} { ${renderSelectionTree(children).join(" ")} }`,
   );
 }
 
@@ -817,6 +739,29 @@ function saveDocument(resource) {
 
 function nonEmptyString(value) {
   return typeof value === "string" && value !== "" ? value : null;
+}
+
+function readSchemaMetadata(metadataPath) {
+  try {
+    return defineAngeeSchemaMetadata(
+      JSON.parse(readFileSync(metadataPath, "utf8")),
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid schema metadata ${metadataPath}: ${message}`);
+  }
+}
+
+function validatedDocument(schema, document, owner) {
+  const errors = validate(schema, document);
+  if (errors.length > 0) {
+    throw new Error(
+      `Generated operation for "${owner}" does not validate: ${errors
+        .map((error) => error.message)
+        .join("; ")}`,
+    );
+  }
+  return document;
 }
 
 function actionDocument(action) {

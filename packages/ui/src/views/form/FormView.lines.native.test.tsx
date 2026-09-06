@@ -5,7 +5,7 @@ import { Refine, type DataProvider } from "@refinedev/core";
 import { QueryClient } from "@tanstack/react-query";
 import { createRootRoute, createRouter, createMemoryHistory, RouterContextProvider } from "@tanstack/react-router";
 import { Controller, useFieldArray, type Control } from "react-hook-form";
-import { refineResourcesFromDataResources, type DataResourceFieldMetadata, type ModelMetadata, type Row } from "@angee/metadata";
+import { refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type DataResourceFieldMetadata, type ModelMetadata, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
@@ -20,15 +20,13 @@ const lineField = (name: string, scalar: string): DataResourceFieldMetadata => (
   aggregatable: false, groupable: false, creatable: true, updatable: true, requiredOnCreate: false,
 });
 const resource = testDataResource("review.Document", {
+  fields: [lineField("title", "String")],
   linesResource: {
     field: "lines", modelLabel: "review.Line", positionField: "position",
     fields: [lineField("label", "String"), lineField("quantity", "Int"), lineField("position", "Int")],
   },
 });
-const model: ModelMetadata = {
-  typeName: "DocumentType", resource,
-  fields: { title: { name: "title", kind: "scalar", scalar: "String" } },
-};
+const model: ModelMetadata = schemaFieldMetadataFromDataResources([resource]).labels["review.Document"]!;
 const initialLines: readonly Row[] = [
   { id: "a", label: "Alpha", quantity: 10, position: 0 },
   { id: "b", label: "Bravo", quantity: 20, position: 1 },

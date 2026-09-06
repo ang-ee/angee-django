@@ -6,8 +6,12 @@ import type {
 import {
   defaultWidgetForModelField,
   isToOneRelationField,
+  modelMetadataForLabel,
+  relationFilterForRelation,
+  relationModelLabelForField,
   relationRepresentationForPath,
 } from "@angee/metadata";
+import { EMPTY_SCHEMA_FIELD_METADATA } from "@angee/metadata";
 import type { ReactNode } from "react";
 import type { ModelFieldMetadata } from "@angee/metadata";
 
@@ -72,8 +76,8 @@ export function relationFieldInfo(
   schemaMetadata: SchemaFieldMetadata,
 ): RelationFieldInfo | null {
   const field = modelMetadata?.fields[fieldName];
-  if (!field || !isToOneRelationField(field)) return null;
-  return resolveRelationTarget(field, schemaMetadata);
+  if (!field || !isToOneRelationField(field, modelMetadata)) return null;
+  return resolveRelationTarget(field, modelMetadata, schemaMetadata);
 }
 
 /**
@@ -90,7 +94,29 @@ export function relationListFieldInfo(
 ): RelationFieldInfo | null {
   const field = modelMetadata?.fields[fieldName];
   if (field?.kind !== "list") return null;
-  return resolveRelationTarget(field, schemaMetadata);
+  return resolveRelationTarget(field, modelMetadata, schemaMetadata);
+}
+
+/** Resolve an editable-line field directly from its canonical wire context. */
+export function relationFieldInfoForField(
+  field: ModelFieldMetadata,
+  schemaMetadata: SchemaFieldMetadata,
+  modelMetadata: ModelMetadata | null = null,
+): RelationFieldInfo | null {
+  return isToOneRelationField(field, modelMetadata)
+    ? resolveRelationTarget(field, modelMetadata, schemaMetadata)
+    : null;
+}
+
+/** Resolve an M2M editable-line field directly from its canonical wire context. */
+export function relationListFieldInfoForField(
+  field: ModelFieldMetadata,
+  schemaMetadata: SchemaFieldMetadata,
+  modelMetadata: ModelMetadata | null = null,
+): RelationFieldInfo | null {
+  return field.kind === "list"
+    ? resolveRelationTarget(field, modelMetadata, schemaMetadata)
+    : null;
 }
 
 /**
@@ -102,17 +128,20 @@ export function relationListFieldInfo(
  */
 function resolveRelationTarget(
   field: ModelFieldMetadata,
+  modelMetadata: ModelMetadata | null,
   schemaMetadata: SchemaFieldMetadata,
 ): RelationFieldInfo | null {
-  if (!field.relationTarget) return null;
-  const related = schemaMetadata.types[field.relationTarget];
-  const resource = related?.resource;
-  if (!related?.rootFields?.list || !resource) return null;
+  const targetLabel = relationModelLabelForField(field, modelMetadata);
+  if (!targetLabel) return null;
+  const related = modelMetadataForLabel(schemaMetadata, targetLabel);
+  if (!related?.resource.roots.list) return null;
   return {
-    resource: resource.modelLabel,
-    labelField: related.recordRepresentation ?? "id",
-    canCreate: Boolean(related.rootFields.create),
-    ...(field.relationFilter ? { filter: field.relationFilter } : {}),
+    resource: related.resource.modelLabel,
+    labelField: related.resource.recordRepresentation ?? related.resource.publicIdField,
+    canCreate: Boolean(related.resource.roots.create),
+    ...(modelMetadata
+      ? { filter: relationFilterForRelation(field.name, modelMetadata) }
+      : {}),
   };
 }
 
@@ -127,11 +156,11 @@ export function relationFieldInfoForResource(
   resource: string,
   model: ModelMetadata | null,
 ): RelationFieldInfo | null {
-  if (!model?.rootFields?.list) return null;
+  if (!model?.resource.roots.list) return null;
   return {
     resource,
-    labelField: model.recordRepresentation ?? "id",
-    canCreate: Boolean(model.rootFields.create),
+    labelField: model.resource.recordRepresentation ?? model.resource.publicIdField,
+    canCreate: Boolean(model.resource.roots.create),
   };
 }
 
@@ -183,7 +212,7 @@ export function columnsWithMetadataDefaults<TRow extends object>(
       ? relationRepresentationForPath(
           column.field,
           metadata,
-          schemaMetadata ?? { types: {} },
+          schemaMetadata ?? EMPTY_SCHEMA_FIELD_METADATA,
         )
       : null;
     const relationLabelField = column.render
@@ -256,7 +285,7 @@ export function fieldLabel(
   metadata: ModelFieldMetadata | undefined,
   explicit?: ReactNode,
 ): ReactNode {
-  return explicit ?? metadata?.label ?? titleCase(name);
+  return explicit ?? titleCase(name);
 }
 
 /** Resolve a grouping-field label from resource metadata, then field text. */
@@ -264,7 +293,7 @@ export function resourceFieldGroupLabel(
   name: string,
   metadata: ModelFieldMetadata | undefined,
 ): string {
-  return metadata?.label ?? groupFieldLabel(name);
+  return groupFieldLabel(name);
 }
 
 /** Return enum widget options for a metadata field, or an empty list. */

@@ -40,7 +40,7 @@ export function refineResourcesFromSchemaMetadata(
   metadata: SchemaFieldMetadata,
   options: RefineResourceOptions = {},
 ): readonly AngeeRefineResource[] {
-  return refineResourcesFromDataResources(metadata.resources ?? [], options);
+  return refineResourcesFromDataResources(metadata.resources, options);
 }
 
 export function refineResourcesFromAngeeSchemaMetadata(

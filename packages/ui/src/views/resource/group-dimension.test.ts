@@ -26,7 +26,6 @@ const TEST_T = (key: string, vars?: Record<string, unknown>): string => {
 // A model whose resource artifact owns group dimensions, including a relation
 // label axis for `party__display_name`.
 const GROUP_METADATA = {
-  typeName: "ExampleType",
   fields: {
     status: {
       name: "status",
@@ -36,15 +35,11 @@ const GROUP_METADATA = {
     party: {
       name: "party",
       kind: "relation",
-      relationFilter: {
-        field: "party",
-        mode: "lookup",
-        aggregateKey: "partyId",
-        labelKey: "party_DisplayName",
-      },
+      relationModelLabel: "parties.Party",
     },
   },
   resource: {
+    filterFields: ["party"],
     groupDimensions: [
       {
         field: "status",
@@ -157,6 +152,22 @@ const GROUP_METADATA = {
         },
       },
     ],
+    relationAxes: [
+      {
+        field: "party",
+        modelLabel: "parties.Party",
+        publicIdField: "id",
+        labelAxis: "party_DisplayName",
+      },
+    ],
+  },
+  relationAxes: {
+    party: {
+      field: "party",
+      modelLabel: "parties.Party",
+      publicIdField: "id",
+      labelAxis: "party_DisplayName",
+    },
   },
 } as unknown as ModelMetadata;
 
@@ -167,7 +178,6 @@ const PARTY_GROUP = {
 };
 
 const HASURA_SNAKE_METADATA = {
-  typeName: "NoteType",
   fields: {},
   resource: {
     filterFields: ["updated_at"],
@@ -201,6 +211,7 @@ const HASURA_SNAKE_METADATA = {
       },
     ],
   },
+  relationAxes: {},
 } as unknown as ModelMetadata;
 
 describe("resourceViewGroupToAggregateDimension", () => {
@@ -302,7 +313,6 @@ describe("resourceViewGroupToAggregateDimension", () => {
       aggregateKey: "implClass",
     };
     const metadata = {
-      typeName: "IntegrationType",
       fields: {
         implClass: { name: "implClass", kind: "enum" },
       },

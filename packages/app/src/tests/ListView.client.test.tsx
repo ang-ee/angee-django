@@ -102,13 +102,6 @@ const columns = [
 const ADDON_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     AddonType: {
-      typeName: "AddonType",
-      recordRepresentation: "label",
-      rootFields: {
-        list: "platform_addons",
-        detail: "platform_addons_by_pk",
-        aggregate: "platform_addons_aggregate",
-      },
       fields: {
         label: { name: "label", kind: "scalar", scalar: "String" },
         namespace: { name: "namespace", kind: "scalar", scalar: "String" },
@@ -120,6 +113,7 @@ const ADDON_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
         appLabel: "platform",
         modelName: "addon",
         publicIdField: "id",
+        recordRepresentation: "label",
         rowModel: "client",
         roots: {
           list: "platform_addons",

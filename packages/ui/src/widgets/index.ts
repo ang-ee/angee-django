@@ -32,6 +32,7 @@ export {
 } from "./wikilink";
 
 export type {
+  FieldPresentation,
   WidgetDefinition,
   WidgetControlProps,
   WidgetField,

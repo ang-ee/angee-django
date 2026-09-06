@@ -1,5 +1,5 @@
-import type { DataResourceMetadata, SchemaFieldMetadata } from "./artifact";
-import { modelLabelSegment } from "./naming";
+import type { DataResourceMetadata, SchemaFieldMetadata } from "./artifact.js";
+import { modelLabelSegment } from "./naming.js";
 
 /**
  * Merge the resource inventories emitted for several normalized GraphQL

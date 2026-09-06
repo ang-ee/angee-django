@@ -5,7 +5,7 @@ import { Refine, type DataProvider } from "@refinedev/core";
 import { QueryClient } from "@tanstack/react-query";
 import { createRootRoute, createRouter, createMemoryHistory, RouterContextProvider } from "@tanstack/react-router";
 import { Controller } from "react-hook-form";
-import { refineResourcesFromDataResources, type ModelMetadata, type Row } from "@angee/metadata";
+import { refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type ModelMetadata, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
@@ -18,12 +18,16 @@ const fields: readonly FieldDescriptor[] = [
 ];
 const refineFields = ["id", "title", "body", "deadline"];
 const fieldByName = new Map(fields.map((field) => [field.name, field]));
-const resource = testDataResource("notes.Note");
-const model: ModelMetadata = {
-  typeName: "NoteType", resource,
-  fields: Object.fromEntries(fields.map((field) => [field.name, { name: field.name, kind: "scalar", scalar: "String" }])),
-  rootFields: { createFields: ["title", "body", "deadline"], requiredCreateFields: ["deadline"] },
-};
+const resource = testDataResource("notes.Note", {
+  createFields: ["title", "body", "deadline"],
+  requiredCreateFields: ["deadline"],
+  fields: fields.map((field) => ({
+    name: field.name, kind: "scalar", scalar: "String", readable: true,
+    filterable: false, sortable: false, aggregatable: false, groupable: false,
+    creatable: true, updatable: true, requiredOnCreate: field.name === "deadline",
+  })),
+});
+const model: ModelMetadata = schemaFieldMetadataFromDataResources([resource]).labels["notes.Note"]!;
 const clients: QueryClient[] = [];
 afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
 

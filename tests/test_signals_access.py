@@ -291,10 +291,10 @@ def test_publish_change_robust_receivers_log_and_continue(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_graphql_ready_connects_publishers_without_schema_build(
+def test_graphql_ready_finalizes_schema_before_connecting_publishers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """App ready wiring publishes changes without building a GraphQL schema."""
+    """App ready builds final metadata before deriving publisher readable fields."""
 
     class ReadyPublished(models.Model):
         """Concrete model exposed as a changes-capable resource by a fake discovery."""
@@ -304,14 +304,24 @@ def test_graphql_ready_connects_publishers_without_schema_build(
         class Meta:
             app_label = "auth"
 
-    class FakeSchemas:
-        """Schema discovery stand-in that exposes metadata without building."""
+    @strawberry.type
+    class ReadyQuery:
+        ready: bool = True
 
-        def connect_change_publishers(self) -> None:
-            publishing.connect_publishers(ReadyPublished)
-
-        def build(self, name: str) -> object:
-            pytest.fail(f"schema build should not be called for {name}")
+    schemas = GraphQLSchemas(
+        [
+            SchemaAddon(
+                {
+                    "public": {
+                        "query": (ReadyQuery,),
+                        "subscription": (
+                            changes(ReadyPublished, field="readyPublishedChanged"),
+                        ),
+                    }
+                }
+            )
+        ]
+    )
 
     payloads: list[ChangePayload] = []
 
@@ -322,7 +332,7 @@ def test_graphql_ready_connects_publishers_without_schema_build(
     created_models = _create_missing_tables((ReadyPublished,))
     from angee.graphql.apps import GraphQLConfig
 
-    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: FakeSchemas()))
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
     monkeypatch.setattr(publishing, "_broadcast", lambda model, event: None)
     monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
     publishing.disconnect_publishers(ReadyPublished)
@@ -332,6 +342,7 @@ def test_graphql_ready_connects_publishers_without_schema_build(
     )
     try:
         GraphQLConfig("graphql", importlib.import_module("angee.graphql")).ready()
+        assert tuple(schemas._builds) == ("public",)
         ReadyPublished.objects.create(name="ready")
     finally:
         publishing.disconnect_publishers(ReadyPublished)
@@ -347,10 +358,10 @@ def test_graphql_ready_connects_publishers_without_schema_build(
     assert [payload.action for payload in payloads] == ["create"]
 
 
-def test_ready_publisher_discovery_does_not_require_value_field_registration(
+def test_publisher_membership_discovery_does_not_build_or_require_field_registration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Ready-time publisher discovery must not depend on late field-type registrations."""
+    """The early membership pass reads changes declarations without finalizing fields."""
 
     class LateRegisteredDecimalField(models.DecimalField):
         """Value field whose GraphQL type is registered after publisher discovery."""
@@ -390,13 +401,8 @@ def test_ready_publisher_discovery_does_not_require_value_field_registration(
     prior = field_type_map.pop(LateRegisteredDecimalField, None)
     publishing.disconnect_publishers(LateValuePublished)
     try:
-        monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
-        from angee.graphql.apps import GraphQLConfig
-
-        GraphQLConfig("graphql", importlib.import_module("angee.graphql")).ready()
-
-        assert _receiver_count(post_save, "angee-changes-auth.LateValuePublished-save") == 1
         assert schemas.change_publisher_models() == (LateValuePublished,)
+        assert schemas._builds == {}
 
         register_field_type(LateRegisteredDecimalField, decimal.Decimal)
         sdl = schemas.build(DEFAULT_SCHEMA_NAME).as_str()
@@ -433,14 +439,20 @@ def test_alias_imported_changes_declaration_connects_publisher(
             """
             from __future__ import annotations
 
+            import strawberry
             from django.apps import apps
 
             from angee.graphql.subscriptions import changes as publish
 
             AliasPublished = apps.get_model("auth", "AliasPublished")
 
+            @strawberry.type
+            class Query:
+                ready: bool = True
+
             schemas = {
                 "public": {
+                    "query": [Query],
                     "subscription": [publish(AliasPublished, field="aliasPublishedChanged")],
                 },
             }
@@ -463,8 +475,85 @@ def test_alias_imported_changes_declaration_connects_publisher(
 
         assert _receiver_count(post_save, "angee-changes-auth.AliasPublished-save") == 1
         assert schemas.change_publisher_models() == (AliasPublished,)
+        assert tuple(schemas._builds) == ("public",)
     finally:
         publishing.disconnect_publishers(AliasPublished)
+        sys.modules.pop(f"{module_name}.schema", None)
+        sys.modules.pop(module_name, None)
+
+
+def test_graphql_ready_imports_and_finalizes_before_later_addon_ready(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """Schema declarations are complete before a later app's ready callback runs."""
+
+    class LateReadyPublished(models.Model):
+        name = models.CharField(max_length=40)
+
+        class Meta:
+            app_label = "auth"
+
+    module_name = "later_ready_graphql_app"
+    package_dir = tmp_path / module_name
+    package_dir.mkdir()
+    (package_dir / "__init__.py").write_text("events = []\n", encoding="utf-8")
+    (package_dir / "schema.py").write_text(
+        textwrap.dedent(
+            """
+            import strawberry
+            from django.apps import apps
+
+            from angee.graphql.subscriptions import changes
+            from . import events
+
+            events.append("schema-import")
+            LateReadyPublished = apps.get_model("auth", "LateReadyPublished")
+
+            @strawberry.type
+            class Query:
+                ready: bool = True
+
+            schemas = {
+                "public": {
+                    "query": [Query],
+                    "subscription": [
+                        changes(LateReadyPublished, field="lateReadyPublishedChanged")
+                    ],
+                },
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "addon.toml").write_text(f'[addon]\nname = "{module_name}"\n')
+    monkeypatch.syspath_prepend(str(tmp_path))
+    module = importlib.import_module(module_name)
+
+    class LaterReadyConfig(AppConfig):
+        def ready(self) -> None:
+            module.events.append("addon-ready")
+
+    addon = LaterReadyConfig(module_name, module)
+    addon.path = str(package_dir)
+    schemas = GraphQLSchemas((addon,))
+    publishing.disconnect_publishers(LateReadyPublished)
+    try:
+        monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
+        from angee.graphql.apps import GraphQLConfig
+
+        GraphQLConfig("graphql", importlib.import_module("angee.graphql")).ready()
+
+        assert module.events == ["schema-import"]
+        assert tuple(schemas._builds) == ("public",)
+        [resource] = schemas.resources("public")
+        assert resource.roots.changes_name == "lateReadyPublishedChanged"
+
+        addon.ready()
+        assert module.events == ["schema-import", "addon-ready"]
+        assert schemas.resources("public") == (resource,)
+    finally:
+        publishing.disconnect_publishers(LateReadyPublished)
         sys.modules.pop(f"{module_name}.schema", None)
         sys.modules.pop(module_name, None)
 

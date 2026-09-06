@@ -48,7 +48,7 @@ describe("refine resource metadata", () => {
     expect(mapped?.list).toBeUndefined();
   });
 
-  test("keeps a model-label fallback when no explicit node type claims it", () => {
+  test("indexes a custom node name and the canonical model label", () => {
     // A computed `hasura_pydantic_resource` names its node after the pydantic
     // class (`PlatformAddonRow`), not `<Model>Type`; the data view still resolves
     // it by the model label it passes to `useModelMetadata`.
@@ -63,22 +63,44 @@ describe("refine resource metadata", () => {
     expect(modelMetadataForLabel(metadata, "platform.Addon")?.resource).toBe(
       computed,
     );
-    // The node type name stays addressable too (relation/aggregate joins use it).
+    // Only declared node names are indexed; model labels never guess a type name.
     expect(metadata.types.PlatformAddonRow?.resource).toBe(computed);
-    expect(metadata.types.AddonType?.resource).toBe(computed);
+    expect(metadata.types.AddonType).toBeUndefined();
+    expect(modelMetadataForLabel(metadata, "Addon")?.resource).toBe(computed);
   });
 
-  test("routes legacy bare-label lookup through the canonical alias resolver", () => {
-    const computed: DataResourceMetadata = {
+  test("keeps original field and axis references when the node name is omitted", () => {
+    const field = {
+      name: "owner",
+      kind: "relation",
+      readable: true,
+      filterable: true,
+      sortable: false,
+      aggregatable: false,
+      groupable: false,
+      creatable: false,
+      updatable: false,
+      requiredOnCreate: false,
+      relationModelLabel: "accounts.User",
+      relationObject: true,
+    } as const;
+    const axis = {
+      field: "owner",
+      modelLabel: "accounts.User",
+      publicIdField: "id",
+    } as const;
+    const withoutNode: DataResourceMetadata = {
       ...resource(),
-      modelLabel: "platform.Addon",
-      modelName: "addon",
-      typeNames: { node: "PlatformAddonRow" },
+      typeNames: {},
+      fields: [field],
+      relationAxes: [axis],
     };
-    const projected = schemaFieldMetadataFromDataResources([computed]);
-    const legacy = { ...projected, labels: undefined };
+    const metadata = schemaFieldMetadataFromDataResources([withoutNode]);
+    const indexed = metadata.labels["notes.Note"]!;
 
-    expect(modelMetadataForLabel(legacy, "Addon")?.resource).toBe(computed);
+    expect(metadata.types).toEqual({});
+    expect(indexed.fields.owner).toBe(field);
+    expect(indexed.relationAxes.owner).toBe(axis);
   });
 
   test("an ambiguous legacy bare label degrades to null with a development warning", () => {
@@ -96,7 +118,7 @@ describe("refine resource metadata", () => {
     warn.mockRestore();
   });
 
-  test("lets an explicit node type beat another model's label-derived fallback", () => {
+  test("keeps distinct declared node names for identical model segments", () => {
     // Regression: distinct model labels stay authoritative even when both model
     // names are Relationship. Their GraphQL node/root names are deliberately
     // disambiguated by the owning addons.
@@ -120,7 +142,7 @@ describe("refine resource metadata", () => {
     ).toBe(partyRelationships);
   });
 
-  test("keeps explicit-over-fallback resolution independent of resource order", () => {
+  test("keeps declared-name resolution independent of resource order", () => {
     const { iamRelationships, partyRelationships } = relationshipResources();
     const metadata = schemaFieldMetadataFromDataResources([
       partyRelationships,
@@ -141,7 +163,7 @@ describe("refine resource metadata", () => {
     ).toBe(partyRelationships);
   });
 
-  test("drops a name claimed by two model-label-derived fallbacks", () => {
+  test("does not add a guessed type alias shared by two model labels", () => {
     const { iamRelationships } = relationshipResources();
     const crmRelationships: DataResourceMetadata = {
       ...resource(),
@@ -262,7 +284,7 @@ describe("relation contract, whichever way the node projects the FK", () => {
   test("a relation projected as a bare ID scalar still carries its relation filter", () => {
     const metadata = schemaFieldMetadataFromDataResources([relationResource()]);
     const model = modelMetadataForLabel(metadata, "storage.File");
-    expect(model?.fields.drive?.relationFilter).toEqual({
+    expect(relationFilterForRelation("drive", model)).toEqual({
       field: "drive",
       mode: "lookup",
       lookup: "sqid",

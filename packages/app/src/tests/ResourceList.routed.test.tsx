@@ -522,18 +522,8 @@ function TestUrlStateObserver({
 const TEST_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
     NoteType: {
-      typeName: "NoteType",
-      recordRepresentation: "title",
       fields: {
         title: { name: "title", kind: "scalar", scalar: "String" },
-      },
-      rootFields: {
-        detail: "note",
-        list: "notes",
-        aggregate: "noteAggregate",
-        create: "createNote",
-        update: "updateNote",
-        delete: "deleteNote",
       },
       resource: {
         schemaName: "console",
@@ -541,6 +531,7 @@ const TEST_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
         appLabel: "notes",
         modelName: "Note",
         publicIdField: "id",
+        recordRepresentation: "title",
         roots: {
           list: "notes",
           detail: "note",

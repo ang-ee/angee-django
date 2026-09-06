@@ -7,17 +7,18 @@ from types import SimpleNamespace
 from typing import Any, Optional, cast
 
 import strawberry
-from angee.base.mixins import RevisionMixin
-from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from rebac.errors import MissingActorError
 from strawberry_django.fields.types import resolve_model_field_type
 
+from angee.base.mixins import RevisionMixin
+from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
 from angee.graphql.access import assert_no_gated_read_fields
 from angee.graphql.data.metadata import (
-    attach_data_resource_metadata,
-    make_data_resource_metadata,
+    DataResourceContribution,
+    DataResourcePolicy,
+    attach_data_resource_contribution,
     resource_type_name,
     resource_wire_field_name,
     resource_wire_field_names,
@@ -67,18 +68,20 @@ def revisions(
     type_name = f"{_type_stem(singular)}RevisionQuery"
     surface = type(type_name, (), namespace)
     typed_surface = strawberry.type(surface)
-    attach_data_resource_metadata(
+    attach_data_resource_contribution(
         typed_surface,
-        make_data_resource_metadata(
+        DataResourceContribution(
             model=model,
-            node_type=node,
+            model_label=model._meta.label,
             roots=DataResourceRoots(revisions_name=resource_wire_field_name(typed_surface, attr)),
             type_names=DataResourceTypeNames(
                 node=resource_type_name(node),
                 revision=resource_type_name(revision_type),
             ),
-            revision_fields=resource_wire_field_names(revision_type, exclude=("id",)),
             capabilities=("revisions",),
+            policy=DataResourcePolicy(
+                revision_fields=resource_wire_field_names(revision_type, exclude=("id",)),
+            ),
         ),
     )
     _SURFACE_CACHE[cache_key] = typed_surface
