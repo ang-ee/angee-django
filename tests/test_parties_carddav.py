@@ -173,7 +173,8 @@ def test_connect_probe_failure_writes_no_rows(
     result = _connect_carddav(admin)
 
     assert result.errors is not None
-    assert "CardDAV probe rejected" in str(result.errors[0])
+    assert result.errors[0].message == "An unexpected error occurred."
+    assert result.errors[0].extensions == {"code": "INTERNAL"}
     assert probe_atomic_states == [False]
     with system_context(reason="test.parties.carddav.probe_failure.verify"):
         for model in (Credential, Vendor, Integration, Directory, Handle, Party, Person, PartyHandle):

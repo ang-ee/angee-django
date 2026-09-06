@@ -22,6 +22,10 @@ _IMAP_VENDOR_SLUG = "imap"
 _CREDENTIAL_NAME_MAX_LENGTH = 255
 
 
+class ImapConnectError(ValueError):
+    """A safe, actionable IMAP connection input failure."""
+
+
 def connect_imap_channel(
     user: Any,
     *,
@@ -38,7 +42,7 @@ def connect_imap_channel(
 
     clean_host = str(host).strip()
     if not clean_host:
-        raise ValueError("An IMAP host is required.")
+        raise ImapConnectError("An IMAP host is required.")
     display_name = str(name).strip() or clean_host
     config = _connection_config(
         host=clean_host,

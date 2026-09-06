@@ -91,6 +91,35 @@ def test_channel_pairing_projects_neutral_identity(pairing_graphql: list[dict[st
     }
 
 
+def test_channel_pairing_bounds_arbitrary_backend_value_error(
+    pairing_graphql: list[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Provider ValueError text is not treated as a public pairing precondition."""
+
+    del pairing_graphql
+    admin = _platform_admin("msg-pairing-error-admin")
+    channel = _live_channel("msg-pairing-error")
+    secret = "provider-secret-value"
+    monkeypatch.setattr(
+        messaging_schema.connect,
+        "channel_pairing",
+        lambda _channel: (_ for _ in ()).throw(ValueError(secret)),
+    )
+
+    result = execute_schema(
+        _schema(),
+        _PAIRING_QUERY,
+        {"id": channel.sqid},
+        request=_request(admin),
+    )
+
+    assert result.errors is not None
+    assert result.errors[0].message == "An unexpected error occurred."
+    assert result.errors[0].extensions == {"code": "INTERNAL"}
+    assert secret not in str(result.errors[0])
+
+
 def test_pairing_projection_owns_the_pairing_wire_name(
     pairing_graphql: list[dict[str, Any]],
 ) -> None:

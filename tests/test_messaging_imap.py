@@ -1404,7 +1404,7 @@ def test_failed_run_never_persists_the_cursor(
     assert channel.cursor == {}  # in-memory advance was never persisted
     assert channel.last_sync_status == "error"
     assert channel.sync_stage == Channel.SyncStage.FAILED
-    assert channel.sync_error == "RuntimeError: ingest died"
+    assert channel.sync_error == "Integration operation failed."
     assert channel.sync_progress["stage"] == Channel.SyncStage.FAILED
     assert channel.sync_progress["details"]["backend"] == "imap"
     assert channel.sync_progress["details"]["mailbox"] == "INBOX"
@@ -1447,4 +1447,4 @@ def test_failed_run_keeps_successfully_ingested_batch_cursor(
     channel.refresh_from_db()
     assert channel.cursor["mailboxes"]["INBOX"] == {"uidvalidity": 100, "last_uid": 2}
     assert channel.last_sync_status == "error"
-    assert channel.sync_error == "RuntimeError: second batch died"
+    assert channel.sync_error == "Integration operation failed."

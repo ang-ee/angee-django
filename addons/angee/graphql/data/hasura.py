@@ -84,6 +84,7 @@ from angee.graphql.introspection import (
 )
 from angee.graphql.relations import actor_scoped_relation_group_expression
 from angee.graphql.writes import write_queryset
+from graphql import GraphQLError
 
 # The stock Refine provider emits anchored regexes for case-insensitive
 # starts/ends-with. Enable the Django lookup per model resource; computed
@@ -389,7 +390,7 @@ class AngeeHasuraWriteBackend:
                 return
             message = self.delete_guard(instance)
             if message:
-                raise ValueError(message)
+                raise GraphQLError(message, extensions={"code": "BAD_USER_INPUT"})
 
         preview = delete_by_public_id(
             self.model,

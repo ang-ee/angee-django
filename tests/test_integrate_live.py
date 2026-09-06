@@ -609,7 +609,7 @@ def test_missing_credential_at_password_delivery_is_a_latched_session_outcome(
         assert fresh_channel.runtime_status == IntegrationRuntimeStatus.ERROR
         assert fresh_channel.sync_stage == fresh_channel.SyncStage.FAILED
         assert fresh_channel.sync_progress["details"]["pairing"]["state"] == PairingState.STOPPED
-        assert "live bridge has no credential" in fresh_channel.sync_error.lower()
+        assert fresh_channel.sync_error == "Integration operation failed."
     assert "live bridge has no credential" in caplog.text.lower()
     assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 0}
 
@@ -667,7 +667,7 @@ def test_missing_password_at_consume_time_reports_and_rearms(
             "state": PairingState.AWAITING_PASSWORD,
             "message": "The submitted password was unavailable. Enter the bridge password again.",
         }
-        assert "no submitted password" in fresh_channel.sync_error.lower()
+        assert fresh_channel.sync_error == "Integration operation failed."
     assert "no submitted password" in caplog.text.lower()
     assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 0}
 

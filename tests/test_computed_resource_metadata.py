@@ -109,6 +109,7 @@ def test_computed_resource_metadata_is_model_optional() -> None:
             order="platform_addons_order_by",
         ),
         capabilities=("list", "aggregate"),
+        public_id_field="id",
         filter_fields=("id", "label"),
         order_fields=("label",),
     )

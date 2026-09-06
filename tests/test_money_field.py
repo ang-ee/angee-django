@@ -191,8 +191,9 @@ def test_resource_metadata_wire_projects_the_money_widget_and_currency_path() ->
             filter="money_docs_bool_exp",
             order="money_docs_order_by",
         ),
-        capabilities=("list", "aggregate"),
-        filter_fields=("id", "amount"),
+            capabilities=("list", "aggregate"),
+            public_id_field="id",
+            filter_fields=("id", "amount"),
     )
 
     [wire] = serialize_data_resources((metadata,), schema_name="console")

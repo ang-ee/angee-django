@@ -163,7 +163,7 @@ def test_login_start_rejects_non_oidc_or_disabled_oauth_client(
         data = _data(_execute(public_schema, query, {"oauthClientSqid": oauth_client.sqid}))
 
         assert data["login_start"]["state"] == ""
-        assert "enabled for OIDC" in data["login_start"]["error"]
+        assert data["login_start"]["error"] == "This connection is not configured."
         assert data["login_start"]["error_code"] == "client_not_configured"
 
 
@@ -204,7 +204,7 @@ def test_login_start_returns_oidc_flow_error_payload(
     assert data["login_start"] == {
         "authorize_url": "",
         "state": "",
-        "error": "missing_endpoint",
+        "error": "The provider does not expose the required endpoint.",
         "error_code": "missing_endpoint",
     }
 
@@ -370,7 +370,7 @@ def test_login_complete_returns_oidc_flow_error_payload(
         "intent": "login",
         "next": "/",
         "claims": None,
-        "error": "bad token",
+        "error": "The provider returned an invalid identity token.",
         "error_code": "invalid_id_token",
     }
 
@@ -562,11 +562,11 @@ def test_link_account_complete_returns_account_claims_intent_and_coerced_next(
     }
 
 
-def test_connect_account_complete_surfaces_provider_error_message(
+def test_connect_account_complete_uses_bounded_provider_error_message(
     iam_connection_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Connect completion keeps the stable code but shows provider error text."""
+    """Connect completion keeps the stable code without exposing provider text."""
 
     user = User.objects.create_user(username="connect-rate-limited", email="connect@example.com")
     oauth_client = _oauth_client("connect-anthropic", is_oidc=False)
@@ -641,7 +641,7 @@ def test_connect_account_complete_surfaces_provider_error_message(
     assert completed["connect_account_complete"] == {
         "account": None,
         "credential": None,
-        "error": "Rate limited. Please try again later.",
+        "error": "The provider could not complete authorization.",
         "error_code": "token_exchange_failed",
     }
 
@@ -1785,7 +1785,7 @@ def test_disconnect_account_blocks_last_oidc_sign_in_method_for_passwordless_use
 
     assert data["disconnect_account"] == {
         "ok": False,
-        "error": "only_sign_in_method",
+        "error": "This is your only sign-in method.",
         "error_code": "only_sign_in_method",
     }
     with system_context(reason="test assertions"):

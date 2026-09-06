@@ -768,7 +768,7 @@ def test_run_sync_records_success_and_missing_root_error_telemetry(
     assert mount.last_sync_completed_at == first_now
     assert mount.last_sync_status == "error"
     assert mount.sync_stage == mount.SyncStage.FAILED
-    assert mount.sync_error.startswith("ValidationError:")
+    assert mount.sync_error == "Integration configuration is invalid."
     assert mount.runtime_status == IntegrationRuntimeStatus.ERROR
     assert mount.next_sync_at is None
 

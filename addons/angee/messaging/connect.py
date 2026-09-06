@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.core.exceptions import ImproperlyConfigured
 from django.views.decorators.debug import sensitive_variables
 from rebac import system_context
 
@@ -16,6 +17,10 @@ from angee.integrate.live import (
     skipped_password_marker,
 )
 from angee.integrate.models import IntegrationLifecycle, IntegrationRuntimeStatus
+
+
+class PairingActionError(ValueError):
+    """A safe, actionable pairing precondition failure."""
 
 
 def channel_pairing(channel: Any) -> PairingProjection:
@@ -41,15 +46,15 @@ def submit_channel_password(channel: Any, password: str) -> None:
 
     _live_impl(channel)
     if not password:
-        raise ValueError("A channel password is required.")
+        raise PairingActionError("A channel password is required.")
     with system_context(reason="messaging.submit_channel_password"):
         channel.refresh_from_db()
         material_key = armed_material_key(channel.subscription_state)
         if not material_key:
-            raise ValueError("This channel is not awaiting a password.")
+            raise PairingActionError("This channel is not awaiting a password.")
         credential = channel.credential
         if credential is None:
-            raise ValueError("This channel has no credential for password input.")
+            raise PairingActionError("This channel has no credential for password input.")
         credential.update_material(**{material_key: password})
         # See ``LiveSession._mark_awaiting_password`` for the awaiting tri-state.
         channel.merge_subscription_state(awaiting="")
@@ -63,9 +68,9 @@ def skip_channel_password(channel: Any) -> None:
         channel.refresh_from_db()
         material_key = armed_material_key(channel.subscription_state)
         if not material_key:
-            raise ValueError("This channel is not awaiting a password.")
+            raise PairingActionError("This channel is not awaiting a password.")
         if not impl.pairing().can_skip:
-            raise ValueError("This channel password cannot be skipped.")
+            raise PairingActionError("This channel password cannot be skipped.")
         channel.merge_subscription_state(awaiting=skipped_password_marker(material_key))
 
 
@@ -75,7 +80,16 @@ def reset_channel_pairing(channel: Any) -> None:
     impl = _live_impl(channel)
     with system_context(reason="messaging.reset_channel_pairing"):
         channel.stop_live()
-        await_session_exit(channel)
+        try:
+            await_session_exit(channel)
+        except TimeoutError as error:
+            raise PairingActionError(
+                "The channel is still shutting down; try again shortly."
+            ) from error
+        except ImproperlyConfigured as error:
+            raise PairingActionError(
+                "Resetting this channel requires a cross-process task lock backend."
+            ) from error
         channel.refresh_from_db(fields=["credential"])
         if channel.credential is not None:
             channel.credential.update_material(
@@ -100,5 +114,5 @@ def _live_impl(channel: Any) -> LiveBridgeImpl:
 
     impl = channel.live_impl
     if not isinstance(impl, LiveBridgeImpl):
-        raise ValueError("This action requires a live channel.")
+        raise PairingActionError("This action requires a live channel.")
     return impl

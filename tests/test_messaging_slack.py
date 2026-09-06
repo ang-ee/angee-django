@@ -676,7 +676,7 @@ def test_non_rate_limit_api_error_uses_generic_sync_telemetry(
     channel.refresh_from_db()
     assert channel.lifecycle == "connected"
     assert channel.last_sync_status == "error"
-    assert channel.sync_error.startswith("SlackApiError:")
+    assert channel.sync_error == "Integration operation failed."
 
 
 @pytest.mark.django_db(transaction=True)

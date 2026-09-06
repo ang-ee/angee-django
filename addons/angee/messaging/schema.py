@@ -20,6 +20,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.views.decorators.debug import sensitive_variables
+from graphql import GraphQLError
 from rebac import PermissionDenied
 from strawberry import auto
 from strawberry.types.nodes import SelectedField
@@ -154,6 +155,15 @@ def _channel_webform_extension() -> type[Any] | None:
 _CHANNEL_WEBFORM_EXTENSION = _channel_webform_extension()
 
 
+def _pairing_result(operation: Any, *args: Any) -> Any:
+    """Expose only pairing-owner failures whose text is deliberately public."""
+
+    try:
+        return operation(*args)
+    except connect.PairingActionError as error:
+        raise GraphQLError(str(error), extensions={"code": "BAD_USER_INPUT"}) from error
+
+
 @strawberry.type
 class MessagingPairingQuery:
     """Admin pairing state for live message channels."""
@@ -167,7 +177,7 @@ class MessagingPairingQuery:
             id,
             reason="messaging.graphql.channel_pairing",
         )
-        return connect.channel_pairing(channel)
+        return _pairing_result(connect.channel_pairing, channel)
 
 
 @strawberry.type
@@ -179,7 +189,7 @@ class MessagingPairingMutation:
         """Resume retained pairing material or start a new pairing session."""
 
         with action_target(Channel, id, reason="messaging.graphql.resume_channel_pairing") as channel:
-            connect.resume_channel_pairing(channel)
+            _pairing_result(connect.resume_channel_pairing, channel)
         return ActionResult(ok=True, message="Channel connection started.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
@@ -188,7 +198,7 @@ class MessagingPairingMutation:
         """Submit one consume-once account password to the live channel session."""
 
         with action_target(Channel, id, reason="messaging.graphql.submit_channel_password") as channel:
-            connect.submit_channel_password(channel, password)
+            _pairing_result(connect.submit_channel_password, channel, password)
         return ActionResult(ok=True, message="Password submitted.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
@@ -196,7 +206,7 @@ class MessagingPairingMutation:
         """Skip one optional consume-once secret round."""
 
         with action_target(Channel, id, reason="messaging.graphql.skip_channel_password") as channel:
-            connect.skip_channel_password(channel)
+            _pairing_result(connect.skip_channel_password, channel)
         return ActionResult(ok=True, message="Password skipped.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
@@ -204,7 +214,7 @@ class MessagingPairingMutation:
         """Wipe released pairing material and restart with a fresh session."""
 
         with action_target(Channel, id, reason="messaging.graphql.reset_channel_pairing") as channel:
-            connect.reset_channel_pairing(channel)
+            _pairing_result(connect.reset_channel_pairing, channel)
         return ActionResult(ok=True, message="Pairing reset; link the channel again.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
@@ -212,7 +222,7 @@ class MessagingPairingMutation:
         """Stop the live session while retaining reusable pairing material."""
 
         with action_target(Channel, id, reason="messaging.graphql.disconnect_channel") as channel:
-            connect.disconnect_channel(channel)
+            _pairing_result(connect.disconnect_channel, channel)
         return ActionResult(ok=True, message="Disconnected channel.")
 
 

@@ -5,10 +5,12 @@ from __future__ import annotations
 from typing import Annotated, cast
 
 import strawberry
+from django.core.exceptions import ImproperlyConfigured
+from graphql import GraphQLError
 
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
 from angee.messaging.schema import ChannelType
-from angee.messaging_integrate_imap.connect import connect_imap_channel
+from angee.messaging_integrate_imap.connect import ImapConnectError, connect_imap_channel
 
 
 @strawberry.type
@@ -33,17 +35,25 @@ class MessagingImapMutation:
     ) -> ChannelType:
         """Create a Basic-auth credential and active IMAP channel for sync."""
 
-        channel = connect_imap_channel(
-            session_user(info),
-            name=name,
-            host=host,
-            username=username,
-            password=password,
-            security=security,
-            port=port,
-            mailboxes=mailboxes,
-            own_addresses=own_addresses,
-        )
+        try:
+            channel = connect_imap_channel(
+                session_user(info),
+                name=name,
+                host=host,
+                username=username,
+                password=password,
+                security=security,
+                port=port,
+                mailboxes=mailboxes,
+                own_addresses=own_addresses,
+            )
+        except ImapConnectError as error:
+            raise GraphQLError(str(error), extensions={"code": "BAD_USER_INPUT"}) from error
+        except ImproperlyConfigured as error:
+            raise GraphQLError(
+                "IMAP integration is not configured.",
+                extensions={"code": "BAD_USER_INPUT"},
+            ) from error
         return cast(ChannelType, channel)
 
 

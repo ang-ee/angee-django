@@ -142,8 +142,8 @@ def test_connect_imap_channel_requires_seeded_vendor(messaging_graphql_tables: N
     )
 
     assert result.errors
-    message = str(result.errors[0])
-    assert "imap" in message and "resources load" in message
+    assert result.errors[0].message == "IMAP integration is not configured."
+    assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
     with system_context(reason="test.messaging.imap.vendor.verify"):
         assert not Vendor.objects.filter(slug="imap").exists()
 
