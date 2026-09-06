@@ -21,7 +21,7 @@ import {
   type Fields,
   type HttpError,
 } from "@refinedev/core";
-import { useForm, type UseFormReturn } from "react-hook-form";
+import { set, useForm, type FieldErrors, type UseFormReturn } from "react-hook-form";
 import { replaceEqualDeep, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import type { UiTranslate } from "../../i18n";
@@ -140,7 +140,7 @@ export function useFormViewSave({
     const required = new Set(modelMetadata?.resource.requiredCreateFields ?? []);
     return new Set(
       formFields
-        .filter((field) => required.has(field.name) && !field.readOnly)
+        .filter((field) => (field.required || required.has(field.name)) && !field.readOnly)
         .map((field) => field.name),
     );
   }, [formFields, isCreate, modelMetadata]);
@@ -246,7 +246,7 @@ export function useFormViewSave({
     resolver: (formValues) => {
       const missing = missingRequiredFieldNames(formValues, formFields, requiredFieldNames);
       return missing.length ? {
-        values: {}, errors: Object.fromEntries(missing.map((name) => [name, { type: "required", message: t("form.required") }])),
+        values: {}, errors: requiredErrors(missing, t("form.required")),
       } : { values: formValues, errors: {} };
     },
   });
@@ -532,9 +532,9 @@ export function useFormViewSave({
     [recordUnavailable],
   );
   const discardChanges = React.useCallback(() => {
-    reset(isCreate ? undefined : values, { keepDirtyValues: false, keepDirty: false });
+    reset(isCreate ? emptyValues : values, { keepDirtyValues: false, keepDirty: false });
     formIsDirtyRef.current = false;
-  }, [isCreate, reset, values]);
+  }, [emptyValues, isCreate, reset, values]);
 
   return {
     form,
@@ -558,4 +558,10 @@ export function useFormViewSave({
     afterFieldChange,
     fieldReadOnly,
   };
+}
+
+function requiredErrors(names: readonly string[], message: string): FieldErrors<FormValues> {
+  const errors: FieldErrors<FormValues> = {};
+  for (const name of names) set(errors, name, { type: "required", message });
+  return errors;
 }

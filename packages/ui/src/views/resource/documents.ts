@@ -8,6 +8,7 @@ export interface ImplChoice {
   key: string;
   category: string;
   defaults: unknown;
+  config_schema: unknown | null;
 }
 
 interface BaseImplChoicesResult {
@@ -28,6 +29,7 @@ export const BaseImplChoices: TypedDocumentNode<
       key
       category
       defaults
+      config_schema
     }
   }
 `;

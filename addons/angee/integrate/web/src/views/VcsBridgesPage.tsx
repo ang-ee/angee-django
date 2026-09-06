@@ -1,6 +1,6 @@
 import * as React from "react";
 import { runActionResult, useAuthoredMutation } from "@angee/refine";
-import { Action, Column, Facet, Field, Form, Group, List, ResourceList, registerForm, useAuthoredResourceMutation, useEnumOptions, useImplPrefill, useRecordAction, useRecordActionMutation, type FormSubmit, type RegisteredFormProps } from "@angee/ui";
+import { Action, Column, Facet, Field, Form, Group, List, ResourceList, registerForm, useAuthoredResourceMutation, useEnumOptions, useImplConfigFields, useImplPrefill, useRecordAction, useRecordActionMutation, type FormSubmit, type RegisteredFormProps } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import type { DocumentVariables } from "@angee/refine";
 
@@ -41,6 +41,7 @@ function VcsBridgeForm({ resource: _resource, ...props }: RegisteredFormProps): 
   const backendClassOptions = useEnumOptions(MODEL, "backend_class");
   const privateConfigReset = React.useMemo(() => ({ config: {} }), []);
   const backendClassPrefill = useImplPrefill(MODEL, "backend_class", privateConfigReset);
+  const implConfig = useImplConfigFields(MODEL, "backend_class");
 
   const discoverRepositories = React.useCallback(
     async (id: string) => {
@@ -66,6 +67,7 @@ function VcsBridgeForm({ resource: _resource, ...props }: RegisteredFormProps): 
       // public ids. Only keys the form actually submitted are forwarded, so an
       // untouched patch field stays UNSET server-side instead of being cleared.
       const fields = pickPresent(data, [
+        "display_name",
         "vendor",
         "owner",
         "credential",
@@ -89,6 +91,7 @@ function VcsBridgeForm({ resource: _resource, ...props }: RegisteredFormProps): 
 
   return (
       <Form {...props} resource={MODEL} submit={submitBridge}>
+        <Field name="display_name" title />
         <Field name="owner" />
         <Field name="vendor" />
         <Field
@@ -103,7 +106,12 @@ function VcsBridgeForm({ resource: _resource, ...props }: RegisteredFormProps): 
         <Field name="credential" />
         <Field name="lifecycle" widget="statusbar" readOnly />
         <Field name="runtime_status" readOnly />
-        <Field name="config" widget="json" />
+        <Field
+          name="config"
+          widget="json"
+          showWhen={(values) => !implConfig.hasSchema(values.backend_class)}
+        />
+        {implConfig.fields.map((field) => <Field key={field.name} {...field} />)}
         <Group label={t("bridge.group.sync")} columns={2}>
           <Field name="is_syncing" readOnly />
           <Field name="sync_stage" readOnly />

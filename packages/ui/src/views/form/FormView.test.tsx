@@ -1395,6 +1395,49 @@ describe("FormView", () => {
     } });
   });
 
+  test("discard restores the original create baseline after implementation prefill", async () => {
+    renderWithProviders(
+      <FormView
+        resource="OAuthClient"
+        fields={[
+          {
+            name: "providerType",
+            label: "Provider Type",
+            prefill: () => ({ vendor: "vendor-2", privateConfig: "private" }),
+            prefillPreserveDirty: true,
+            prefillReplace: ["privateConfig"],
+          },
+          { name: "vendor", label: "Vendor" },
+          { name: "privateConfig", label: "Private Config" },
+        ]}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Provider Type"), { target: { value: "second" } });
+    expect((screen.getByLabelText("Vendor") as HTMLInputElement).value).toBe("vendor-2");
+    expect((screen.getByLabelText("Private Config") as HTMLInputElement).value).toBe("private");
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+
+    expect((screen.getByLabelText("Provider Type") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Vendor") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Private Config") as HTMLInputElement).value).toBe("");
+  });
+
+  test("binds a declarative required error to a dotted field", async () => {
+    sdkMocks.mutate.mockReset();
+    renderWithProviders(
+      <FormView resource="OAuthClient" fields={[
+        { name: "config.local_root", label: "Local root", required: true },
+      ]} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(await screen.findByText("This field is required.")).toBeTruthy();
+    expect(screen.getByLabelText("Local root").getAttribute("aria-required")).toBe("true");
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
   test("does not apply impl prefill on edit when the impl field is create-only", async () => {
     sdkMocks.record = {
       id: "client-1",

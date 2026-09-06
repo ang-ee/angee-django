@@ -84,7 +84,9 @@ export {
 export {
   useEnumOptions,
   useImplCategory,
+  useImplConfigFields,
   useImplChoices,
+  type ImplConfigFields,
   useImplPrefill,
 } from "./relation/enum-options";
 export {

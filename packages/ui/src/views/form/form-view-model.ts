@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { get, set } from "react-hook-form";
 import {
   publicIdLabel,
   relationModelLabelForField,
@@ -22,6 +23,7 @@ import {
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 
 export type FormValues = Record<string, unknown>;
+const MISSING_DOTTED_VALUE = Symbol("missing-dotted-value");
 
 /** Child lines threaded through a form reset alongside declared field values. */
 export interface LinesSeed {
@@ -223,13 +225,23 @@ export function emptyDraft(
   fields: readonly FieldDescriptor[],
   defaultValues?: Record<string, unknown>,
 ): FormValues {
-  const draft: FormValues = {};
+  const evaluation: FormValues = {};
   for (const field of fields) {
-    draft[field.name] = Object.hasOwn(defaultValues ?? {}, field.name)
-      ? defaultValues?.[field.name]
+    setDottedValue(evaluation, field.name, cloneFormValue(hasDottedValue(defaultValues, field.name)
+      ? dottedValue(defaultValues, field.name)
       : field.defaultValue !== undefined
         ? field.defaultValue
-        : emptyValue(field);
+        : emptyValue(field)));
+  }
+  const draft: FormValues = {};
+  for (const declared of fields) {
+    const field = resolveField(declared, evaluation);
+    if (!isFieldVisible(field, evaluation)) continue;
+    setDottedValue(draft, field.name, cloneFormValue(hasDottedValue(defaultValues, field.name)
+      ? dottedValue(defaultValues, field.name)
+      : field.defaultValue !== undefined
+        ? field.defaultValue
+        : emptyValue(field)));
   }
   return draft;
 }
@@ -240,10 +252,13 @@ export function recordToValues(
   lines?: LinesSeed,
 ): FormValues {
   const values: FormValues = {};
-  for (const field of fields) {
-    values[field.name] = isRelationIdField(field)
-      ? record[field.name] ?? null
-      : recordFieldValue(record, field) ?? emptyValue(field);
+  for (const declared of fields) {
+    const field = resolveField(declared, record);
+    if (!isFieldVisible(field, record)) continue;
+    const raw = dottedValue(record, field.name);
+    setDottedValue(values, field.name, isRelationIdField(field)
+      ? raw ?? null
+      : recordFieldValue({ ...record, [field.name]: raw }, field) ?? emptyValue(field));
   }
   if (lines) values[lines.field] = lines.rows;
   return values;
@@ -278,11 +293,12 @@ export function missingRequiredFieldNames(
   requiredFieldNames: ReadonlySet<string>,
 ): readonly string[] {
   return fields
+    .map((field) => resolveField(field, values))
     .filter(
       (field) =>
-        requiredFieldNames.has(field.name)
+        (field.required || requiredFieldNames.has(field.name))
         && isFieldVisible(field, values)
-        && isEmptyFieldValue(values[field.name]),
+        && isEmptyFieldValue(dottedValue(values, field.name)),
     )
     .map((field) => field.name);
 }
@@ -293,7 +309,9 @@ export function visibleSections(
 ): readonly FormSectionModel[] {
   return sections.map((section) => ({
     ...section,
-    fields: section.fields.filter((field) => isFieldVisible(field, values)),
+    fields: section.fields
+      .map((field) => resolveField(field, values))
+      .filter((field) => isFieldVisible(field, values)),
   }));
 }
 
@@ -310,8 +328,9 @@ export function mutationData(
   },
 ): FormValues {
   const data: FormValues = {};
-  for (const field of fields) {
-    if (options.writableFields && !options.writableFields.has(field.name)) continue;
+  for (const declared of fields) {
+    const field = resolveField(declared, values);
+    if (options.writableFields && !isWritableDottedField(options.writableFields, field.name)) continue;
     const seededDefault =
       options.isCreate &&
       !field.editOnly &&
@@ -319,7 +338,11 @@ export function mutationData(
         (options.seededFieldNames?.has(field.name) ?? false));
     if (field.readOnly && !seededDefault) continue;
     if (!isFieldVisible(field, values)) continue;
-    const next = mutationFieldValue(field, values[field.name]);
+    const next = mutationFieldValue(field, dottedValue(values, field.name));
+    const dirty = Boolean(dottedValue(options.dirtyFields, field.name));
+    const structuredRootDirty = field.name.includes(".") && isDirtyValue(
+      dottedValue(options.dirtyFields, field.name.split(".", 1)[0] ?? field.name),
+    );
     if (
       options.isCreate
       && isBlankCreateValue(
@@ -327,18 +350,49 @@ export function mutationData(
         options.fieldMetadata?.[field.name],
         next,
         {
-          dirty: Boolean(options.dirtyFields[field.name]),
+          dirty,
           seeded: seededDefault,
         },
       )
     ) {
       continue;
     }
-    if (!options.isCreate && !options.dirtyFields[field.name]) continue;
-    data[field.name] = next;
+    if (!options.isCreate && !dirty && !structuredRootDirty) continue;
+    setDottedValue(data, field.name, next);
   }
   if (!options.isCreate && options.id != null) data.id = options.id;
   return data;
+}
+
+function resolveField(field: FieldDescriptor, values: FormValues): FieldDescriptor {
+  return field.resolve?.(values) ?? field;
+}
+
+function isWritableDottedField(writable: ReadonlySet<string>, path: string): boolean {
+  return writable.has(path) || writable.has(path.split(".", 1)[0] ?? path);
+}
+
+function isDirtyValue(value: unknown): boolean {
+  if (value === true) return true;
+  if (!value || typeof value !== "object") return false;
+  return Object.values(value).some(isDirtyValue);
+}
+
+function hasDottedValue(value: unknown, path: string): boolean {
+  return get(value, path, MISSING_DOTTED_VALUE) !== MISSING_DOTTED_VALUE;
+}
+
+function dottedValue(value: unknown, path: string): unknown {
+  return get(value, path);
+}
+
+function setDottedValue(target: Record<string, unknown>, path: string, value: unknown): void {
+  set(target, path, value);
+}
+
+function cloneFormValue(value: unknown): unknown {
+  if (value == null || typeof value !== "object") return value;
+  return structuredClone(value);
 }
 
 function mutationFieldValue(field: FieldDescriptor, value: unknown): unknown {

@@ -31,10 +31,6 @@ export const enIntegrateMessages: Record<string, string> = {
   "col.vcsBridge": "VCS bridge",
 
   // Integrations page.
-  "integrations.identity": "Identity",
-  "integrations.authentication": "Authentication",
-  "integrations.runtime": "Runtime",
-  "integrations.implClass": "Implementation",
   "integrations.typeGroup": "Type",
   "integrations.targetState": "Availability",
   "integrations.add.loading": "Loading integration types…",
@@ -45,9 +41,6 @@ export const enIntegrateMessages: Record<string, string> = {
   "integrations.add.connectDescription": "Continue to its connection setup.",
   "integrations.add.back": "Back",
   "integrations.add.continue": "Continue",
-  "integrations.action.connect": "Connect",
-  "integrations.connect.startError": "Could not start integration connection.",
-  "integrations.connect.connected": "Integration connected.",
 
   // VCS bridge page.
   "vcs.backendClass": "Backend",

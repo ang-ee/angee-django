@@ -81,6 +81,41 @@ describe("Breadcrumb", () => {
       .toBe("page");
     expect(within(breadcrumb).queryByText("Show")).toBeNull();
   });
+
+  test("collapses adjacent menu groups with the same label to the deepest route", async () => {
+    refineMocks.breadcrumbs = [
+      { label: "Integrations", href: "/integrate" },
+      { label: "Integrations", href: "/integrate" },
+      { label: "Integrations", href: "/integrate" },
+      { label: "Show" },
+    ];
+
+    renderBreadcrumb({ leafLabel: "Local checkout" });
+
+    const breadcrumb = await screen.findByRole("navigation", { name: "Breadcrumb" });
+    expect(within(breadcrumb).getAllByText("Integrations")).toHaveLength(1);
+    expect(within(breadcrumb).getByRole("link", { name: "Integrations" }).getAttribute("href"))
+      .toBe("/integrate");
+    expect(within(breadcrumb).getByText("Local checkout").getAttribute("aria-current"))
+      .toBe("page");
+  });
+
+  test("keeps equal adjacent labels when they navigate to different places", async () => {
+    refineMocks.breadcrumbs = [
+      { label: "Records", href: "/records" },
+      { label: "Records", href: "/records/nested" },
+      { label: "Records" },
+    ];
+
+    renderBreadcrumb();
+
+    const breadcrumb = await screen.findByRole("navigation", { name: "Breadcrumb" });
+    expect(within(breadcrumb).getAllByText("Records")).toHaveLength(3);
+    expect(within(breadcrumb).getAllByRole("link").map((link) => link.getAttribute("href")))
+      .toEqual(["/records", "/records/nested"]);
+    expect(within(breadcrumb).getAllByText("Records").at(-1)?.getAttribute("aria-current"))
+      .toBe("page");
+  });
 });
 
 function renderBreadcrumb({

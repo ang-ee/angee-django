@@ -17,6 +17,8 @@ export interface FieldDescriptor extends FieldPresentation {
   name: string;
   widget?: string;
   readOnly?: boolean;
+  /** Require a value independently of generated model create metadata. */
+  required?: boolean;
   /** Editable only while creating; read-only (and never patched) on an edit. */
   createOnly?: boolean;
   /** Editable only while editing; read-only (and never sent) on a create. */
@@ -25,6 +27,8 @@ export interface FieldDescriptor extends FieldPresentation {
   defaultValue?: unknown;
   /** Render and submit this field only when the predicate matches form values (see `FieldProps`). */
   showWhen?: (values: Row) => boolean;
+  /** Resolve implementation-dependent presentation from current form values. */
+  resolve?: (values: Row) => FieldDescriptor;
   /** Load the chosen preset onto sibling fields when this field changes (see `FieldProps.prefill`). */
   prefill?: (value: unknown) => Record<string, unknown> | null | undefined;
   /** Keep dirty sibling values when applying a preset, except for names explicitly replaced below. */

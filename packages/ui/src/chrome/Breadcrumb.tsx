@@ -143,9 +143,17 @@ function breadcrumbItemsFromRefine(
   leafLabel?: string | null,
   collection?: BreadcrumbCollectionLink | null,
 ): readonly BreadcrumbItem[] {
-  return breadcrumbs.map((item) => ({
+  const items = breadcrumbs.map((item) => ({
     label:
       leafLabel && item === breadcrumbs.at(-1) ? leafLabel : item.label,
     ...(item.href ? { to: item.href === collection?.to ? collection.href : item.href } : {}),
   }));
+
+  // Menu grouping may repeat the same human label and destination at adjacent
+  // levels (for example Integrations / Integrations / Integrations). Keep the
+  // deepest owner without collapsing equally named, distinct destinations.
+  return items.filter((item, index) => {
+    const next = items[index + 1];
+    return item.label !== next?.label || item.to !== next.to;
+  });
 }
