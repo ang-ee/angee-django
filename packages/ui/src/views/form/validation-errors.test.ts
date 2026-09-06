@@ -2,6 +2,8 @@
 
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
+import { boundedGraphQLTransportError } from "@angee/refine";
+import { errorFromUnknown } from "../../data/errors";
 
 import {
   directDottedPathMessages,
@@ -115,6 +117,29 @@ describe("useDottedPathFieldErrors", () => {
 });
 
 describe("validationErrorsFromError", () => {
+  test("reads a bounded native validation error exactly once", () => {
+    const error = boundedGraphQLTransportError({
+      request: { variables: { secret: "must-not-render" } },
+      response: {
+        status: 400,
+        errors: [{
+          message: "Fix this field.",
+          extensions: {
+            code: "VALIDATION",
+            validationErrors: { "config.local_root": ["Required."] },
+            formErrors: ["Check the form."],
+          },
+        }],
+      },
+    });
+
+    expect(errorFromUnknown(error)?.message).toBe("Fix this field.");
+    expect(validationErrorsFromError(error)).toEqual({
+      fieldErrors: { "config.local_root": ["Required."] },
+      formErrors: ["Check the form."],
+    });
+  });
+
   test("does not use transport messages containing request variables", () => {
     const secret = "form-secret-sentinel";
     const error = Object.assign(new Error(`request variables ${secret}`), {
@@ -159,8 +184,14 @@ describe("validationErrorsFromError", () => {
   test("merges field messages across multiple graphQL errors", () => {
     const error = {
       graphQLErrors: [
-        { extensions: { validationErrors: { slug: ["Required."] } } },
-        { extensions: { validationErrors: { slug: ["Too short."] } } },
+        {
+          message: "Validation failed.",
+          extensions: { code: "VALIDATION", validationErrors: { slug: ["Required."] } },
+        },
+        {
+          message: "Validation failed.",
+          extensions: { code: "VALIDATION", validationErrors: { slug: ["Too short."] } },
+        },
       ],
     };
 

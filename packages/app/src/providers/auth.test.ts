@@ -53,6 +53,35 @@ describe("Angee app auth provider", () => {
     });
   });
 
+  test("rejects a transient identity failure with bounded transport copy", async () => {
+    const sentinel = "identity-request-secret";
+    const provider = createAngeeAuthProviderFromRequest(async () => {
+      const error = new Error(`GraphQL Error (Code: 502): request variables ${sentinel}`);
+      Object.assign(error, { response: { status: 502 }, request: { variables: sentinel } });
+      throw error;
+    });
+
+    await expect(provider.check()).rejects.toThrow("Request failed.");
+  });
+
+  test("does not invent an authenticated session on an initial transport failure", async () => {
+    const provider = createAngeeAuthProviderFromRequest(async () => {
+      throw Object.assign(new Error("gateway"), { response: { status: 502 }, request: {} });
+    });
+    await expect(provider.check()).rejects.toThrow("Request failed.");
+  });
+
+  test("redirects when the identity endpoint explicitly returns 401", async () => {
+    const provider = createAngeeAuthProviderFromRequest(async () => {
+      throw Object.assign(new Error("unauthorized"), { response: { status: 401 } });
+    });
+
+    await expect(provider.check()).resolves.toEqual(expect.objectContaining({
+      authenticated: false,
+      redirectTo: "/login",
+    }));
+  });
+
   test("logs in and logs out through the Refine auth contract", async () => {
     const onAuthChange = vi.fn();
     const request = vi.fn(async (document: unknown, variables?: object) => {

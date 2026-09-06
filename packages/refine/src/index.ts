@@ -35,11 +35,15 @@ export {
 } from "./operation-documents";
 export {
   ANGEE_HASURA_PROVIDER_OPTIONS,
+  boundedGraphQLTransportError,
   createAngeeChangeLiveProvider,
   createAngeeGraphQLClient,
   createAngeeHasuraDataProvider,
   createAngeeHasuraDataProviders,
   createAngeeHasuraLiveProvider,
+  isPublicGraphQLErrorCode,
+  publicGraphQLError,
+  publicGraphQLErrorsFromUnknown,
   resolveGraphQLWebSocketEndpoint,
   type AngeeHasuraClientOptions,
   type AngeeHasuraDataProviderOptions,
@@ -47,6 +51,7 @@ export {
   type AngeeHasuraSchemaConfig,
   type AngeeHasuraWebSocketOptions,
   type AngeeLiveResource,
+  type PublicGraphQLError,
 } from "./provider";
 export {
   ActiveDataProviderNameProvider,

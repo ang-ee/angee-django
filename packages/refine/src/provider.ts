@@ -85,6 +85,9 @@ export function createAngeeGraphQLClient(
   return new GraphQLClient(options.url, {
     fetch: auth(baseFetch),
     headers: options.headers,
+    responseMiddleware(response) {
+      if (response instanceof Error) throw boundedGraphQLTransportError(response);
+    },
   });
 }
 
@@ -95,6 +98,67 @@ export function createAngeeHasuraDataProvider(
     createAngeeGraphQLClient(options),
     hasuraOptions(options.providerOptions),
   );
+}
+
+export function boundedGraphQLTransportError(value: unknown): Error {
+  const record = recordValue(value);
+  if (!record || (!("request" in record) && !("response" in record))) {
+    return new Error("Request failed.");
+  }
+  const response = recordValue(record.response);
+  const errors = Array.isArray(response?.errors)
+    ? response.errors.flatMap((error) => publicGraphQLError(error) ?? [])
+    : [];
+  const message = errors.map((error) => error.message).join(" ") || "Request failed.";
+  return Object.assign(new Error(message), {
+    response: {
+      status: response?.status,
+      errors,
+    },
+    graphQLErrors: errors,
+  });
+}
+
+export interface PublicGraphQLError {
+  message: string;
+  extensions: Record<string, unknown>;
+}
+
+export function publicGraphQLError(value: unknown): PublicGraphQLError | null {
+  const error = recordValue(value);
+  const extensions = recordValue(error?.extensions);
+  const code = extensions?.code;
+  if (typeof error?.message !== "string" || !isPublicGraphQLErrorCode(code)) return null;
+  return {
+    message: error.message,
+    extensions: {
+      code,
+      ...(code === "VALIDATION"
+        ? {
+            validationErrors: extensions?.validationErrors,
+            formErrors: extensions?.formErrors,
+          }
+        : {}),
+    },
+  };
+}
+
+export function isPublicGraphQLErrorCode(code: unknown): boolean {
+  return code === "VALIDATION" || code === "BAD_USER_INPUT"
+    || code === "UNAUTHENTICATED" || code === "PERMISSION_DENIED" || code === "FORBIDDEN";
+}
+
+/** Read and safely project the native graphql-request and urql error containers. */
+export function publicGraphQLErrorsFromUnknown(value: unknown): readonly PublicGraphQLError[] {
+  const record = recordValue(value);
+  if (!record) return [];
+  const response = recordValue(record.response);
+  const errors = Array.isArray(record.graphQLErrors)
+    ? record.graphQLErrors
+    : Array.isArray(response?.errors) ? response.errors : [];
+  return errors
+    .map(publicGraphQLError)
+    .filter((error): error is PublicGraphQLError => error !== null);
 }
 
 export function createAngeeHasuraDataProviders(

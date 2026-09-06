@@ -160,7 +160,17 @@ export function createAngeeAuthProviderFromRequest(
           ? { authenticated: true }
           : { authenticated: false, redirectTo: loginPath };
       } catch (caught) {
-        return { authenticated: false, error: authErrorFromUnknown(caught) };
+        if (isUnauthorizedError(caught)) {
+          return {
+            authenticated: false,
+            redirectTo: loginPath,
+            error: sharedErrorFromUnknown(caught) ?? new Error("Authentication required."),
+          };
+        }
+        // Reject transient failures so TanStack Query retains any last
+        // successful authentication result without inventing a first-load
+        // session or redirecting to login.
+        throw sharedErrorFromUnknown(caught) ?? new Error("Request failed.");
       }
     },
     async getIdentity() {
@@ -201,7 +211,7 @@ export function createAngeeAuthProviderFromRequest(
       }
     },
     async onError(error) {
-      const resolved = authErrorFromUnknown(error);
+      const resolved = sharedErrorFromUnknown(error) ?? new Error("Request failed.");
       return isUnauthorizedError(error)
         ? { logout: true, redirectTo: loginPath, error: resolved }
         : { error: resolved };
@@ -550,5 +560,13 @@ function hasAuthGraphQLError(value: unknown): boolean {
 function isUnauthorizedError(value: unknown): boolean {
   const record = recordValue(value);
   const response = recordValue(record?.response);
-  return response?.status === 401 || record?.statusCode === 401 || record?.status === 401;
+  return response?.status === 401 || record?.statusCode === 401 || record?.status === 401
+    || hasGraphQLErrorCode(response?.errors, "UNAUTHENTICATED");
+}
+
+function hasGraphQLErrorCode(value: unknown, code: string): boolean {
+  return Array.isArray(value) && value.some((item) => {
+    const error = recordValue(item);
+    return recordValue(error?.extensions)?.code === code;
+  });
 }

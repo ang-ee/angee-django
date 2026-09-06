@@ -4,6 +4,8 @@ import type { AngeeLiveResource } from "./provider";
 
 import {
   ANGEE_HASURA_PROVIDER_OPTIONS,
+  boundedGraphQLTransportError,
+  createAngeeGraphQLClient,
   createAngeeChangeLiveProvider,
   resolveGraphQLWebSocketEndpoint,
 } from "./provider";
@@ -18,6 +20,71 @@ describe("Angee Hasura provider defaults", () => {
       idType: "String",
       namingConvention: "hasura-default",
     });
+  });
+
+  test("bounds native transport errors while preserving safe validation fields", () => {
+    const sentinel = "request-variable-secret";
+    const normalized = boundedGraphQLTransportError({
+      request: { variables: { token: sentinel } },
+      response: {
+        status: 400,
+        errors: [{
+          message: "Fix the highlighted fields.",
+          extensions: {
+            code: "VALIDATION",
+            validationErrors: { "config.local_root": ["Required."] },
+            formErrors: [],
+            debug: sentinel,
+          },
+        }],
+      },
+    }) as Error & { response: Record<string, unknown> };
+
+    expect(normalized.message).toBe("Fix the highlighted fields.");
+    expect(normalized.response).toEqual({
+      status: 400,
+      errors: [{
+        message: "Fix the highlighted fields.",
+        extensions: {
+          code: "VALIDATION",
+          validationErrors: { "config.local_root": ["Required."] },
+          formErrors: [],
+        },
+      }],
+    });
+    expect(JSON.stringify(normalized)).not.toContain(sentinel);
+  });
+
+  test("drops request metadata and unexpected GraphQL messages", () => {
+    const sentinel = "unexpected-secret";
+    const normalized = boundedGraphQLTransportError({
+      request: { query: sentinel },
+      response: { status: 502, errors: [{ message: sentinel, extensions: { code: "INTERNAL" } }] },
+    });
+    expect(normalized.message).toBe("Request failed.");
+    expect(JSON.stringify(normalized)).not.toContain(sentinel);
+  });
+
+  test("bounds plain network errors", () => {
+    expect(boundedGraphQLTransportError(new Error("fetch https://secret.invalid failed")).message)
+      .toBe("Request failed.");
+  });
+
+  test("normalizes graphql-request failures in the native response middleware", async () => {
+    const sentinel = "middleware-request-secret";
+    const client = createAngeeGraphQLClient({
+      url: "https://example.invalid/graphql",
+      auth: (fetch) => fetch,
+      fetch: async () => new Response(JSON.stringify({
+        errors: [{ message: sentinel, extensions: { code: "INTERNAL", debug: sentinel } }],
+      }), { status: 502, headers: { "Content-Type": "application/json" } }),
+    });
+
+    const caught = await client.request("query Secret($token: String!) { value }", { token: sentinel })
+      .catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe("Request failed.");
+    expect(JSON.stringify(caught)).not.toContain(sentinel);
   });
 
   test("derives GraphQL WebSocket endpoints from HTTP endpoints", () => {
