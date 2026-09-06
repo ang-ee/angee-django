@@ -65,6 +65,7 @@ class RuntimeMigrations:
         leaves: dict[str, tuple[str, str] | None] = {}
         declared_origins: set[str] = set()
 
+        declarations: list[tuple[AppConfig, Mapping[str, Any]]] = []
         for addon in self.addons:
             for declaration in self._declarations(addon):
                 origin = f"{addon.name}:{declaration['name']}"
@@ -72,6 +73,16 @@ class RuntimeMigrations:
                     raise RuntimeError(f"duplicate addon runtime migration origin {origin}")
                 declared_origins.add(origin)
                 self._validate_declaration(declaration, origin)
+                declarations.append((addon, declaration))
+
+        pending = declarations
+        round_number = 0
+        while pending:
+            remaining: list[tuple[AppConfig, Mapping[str, Any]]] = []
+            progressed = False
+            evaluation_state = state.clone()
+            for addon, declaration in pending:
+                origin = f"{addon.name}:{declaration['name']}"
                 module = self._source_module(addon, declaration, origin)
                 migration_class = self._migration_class(module, origin)
                 if migration_class.replaces:
@@ -95,12 +106,13 @@ class RuntimeMigrations:
                 if not callable(applies):
                     raise RuntimeError(f"{origin}: source module must define applies(project_state)")
                 try:
-                    applicable = applies(state.clone())
+                    applicable = applies(evaluation_state.clone())
                 except Exception as error:
                     raise RuntimeError(f"{origin}: applies(project_state) failed") from error
                 if not isinstance(applicable, bool):
                     raise RuntimeError(f"{origin}: applies(project_state) must return bool")
                 if not applicable:
+                    remaining.append((addon, declaration))
                     continue
 
                 if declaration["app_label"] not in next_numbers:
@@ -121,6 +133,13 @@ class RuntimeMigrations:
                     current_app=declaration["app_label"],
                     origin=origin,
                 )
+                if round_number:
+                    deferred_dependencies = tuple(
+                        node
+                        for label, node in leaves.items()
+                        if label != declaration["app_label"] and node is not None and node not in dependencies
+                    )
+                    dependencies += deferred_dependencies
                 if target_leaf is not None and target_leaf not in dependencies:
                     dependencies += (target_leaf,)
                 output_path = self.runtime_dir / declaration["app_label"] / "migrations" / f"{name}.py"
@@ -161,6 +180,12 @@ class RuntimeMigrations:
                     raise RuntimeError(f"{origin}: migration state transition is invalid") from error
                 leaves[declaration["app_label"]] = node
                 plans.append(plan)
+                progressed = True
+
+            if not progressed:
+                break
+            pending = remaining
+            round_number += 1
 
         return tuple(plans)
 

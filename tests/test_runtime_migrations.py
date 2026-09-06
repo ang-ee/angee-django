@@ -179,6 +179,94 @@ class Migration(migrations.Migration):
     assert 'Migration.dependencies.append(("resources", "0002_rename_legacy"))' in second
 
 
+def test_deferred_declaration_is_retried_in_same_materialization(runtime_migration_probe) -> None:
+    """A guard enabled by a later declaration does not require another build."""
+
+    materializer, addon, _, runtime_dir, source_root = runtime_migration_probe
+    _write_module(
+        source_root / "runtime_migrations" / "add_marker.py",
+        """\
+from django.db import migrations, models
+
+
+def applies(project_state):
+    model = project_state.models.get(("resources", "legacy"))
+    return model is not None and "new_name" in model.fields and "marker" not in model.fields
+
+
+class Migration(migrations.Migration):
+    dependencies = []
+    operations = [
+        migrations.AddField(
+            model_name="legacy",
+            name="marker",
+            field=models.BooleanField(default=False),
+        ),
+    ]
+""",
+    )
+    write_addon_manifest(
+        addon,
+        migrations=(
+            dict(name="add_marker", app_label="resources", module="runtime_migrations.add_marker"),
+            dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),
+        ),
+    )
+    importlib.invalidate_caches()
+
+    written = materializer.materialize()
+
+    assert [path.name for path in written] == ["0002_rename_legacy.py", "0003_add_marker.py"]
+    assert materializer.materialize() == ()
+    state = MigrationLoader(None, ignore_no_migrations=True).project_state()
+    assert "marker" in state.models["resources", "legacy"].fields
+
+
+@pytest.mark.parametrize("dependent_first", [True, False])
+def test_deferred_cross_app_declaration_depends_on_present_planned_leaf(
+    runtime_migration_probe, monkeypatch, settings, dependent_first: bool
+) -> None:
+    """A later-round declaration receives a concrete native cross-app dependency."""
+
+    materializer, addon, _, runtime_dir, source_root = runtime_migration_probe
+    iam_migrations = runtime_dir / "iam" / "migrations"
+    _write_module(runtime_dir / "iam" / "__init__.py")
+    _write_module(iam_migrations / "__init__.py")
+    _write_module(
+        source_root / "runtime_migrations" / "after_flag.py",
+        """from django.db import migrations
+def applies(project_state):
+    return ("iam", "flag") in project_state.models
+class Migration(migrations.Migration):
+    dependencies = []
+    operations = []
+""",
+    )
+    _write_module(
+        source_root / "runtime_migrations" / "add_flag.py",
+        """from django.db import migrations, models
+def applies(project_state):
+    return ("iam", "flag") not in project_state.models
+class Migration(migrations.Migration):
+    dependencies = []
+    operations = [migrations.CreateModel(name="Flag", fields=[("id", models.AutoField(primary_key=True))])]
+""",
+    )
+    dependent = dict(name="after_flag", app_label="resources", module="runtime_migrations.after_flag")
+    enabling = dict(name="add_flag", app_label="iam", module="runtime_migrations.add_flag")
+    write_addon_manifest(addon, migrations=(dependent, enabling) if dependent_first else (enabling, dependent))
+    monkeypatch.setitem(settings.MIGRATION_MODULES, "iam", f"{runtime_dir.name}.iam.migrations")
+    importlib.invalidate_caches()
+    materializer = RuntimeMigrations((addon,), runtime_dir=runtime_dir, labels=("resources", "iam"))
+
+    written = materializer.materialize()
+
+    assert [path.name for path in written] == ["0001_add_flag.py", "0002_after_flag.py"]
+    deferred = (runtime_dir / "resources" / "migrations" / "0002_after_flag.py").read_text()
+    assert 'Migration.dependencies.append(("iam", "0001_add_flag"))' in deferred
+    assert materializer.materialize() == ()
+
+
 def test_latest_dependency_resolves_to_other_runtime_leaf(runtime_migration_probe, monkeypatch, settings) -> None:
     materializer, _, source_path, runtime_dir, _ = runtime_migration_probe
     iam_migrations = runtime_dir / "iam" / "migrations"
