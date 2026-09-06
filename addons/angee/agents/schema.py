@@ -15,7 +15,6 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
-from angee.base.actors import actor_user_id
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -29,6 +28,7 @@ from angee.agents import provisioning
 from angee.agents.autoconfig import SETTINGS as _AGENTS_SETTINGS
 from angee.agents.context import render_view_context
 from angee.agents.models import RuntimeStatus, SessionStatus
+from angee.base.actors import actor_user_id
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID
@@ -46,7 +46,6 @@ from angee.integrate.schema import (
     VendorType,
     apply_integration_patch_fields,
     connect_integration_target,
-    impl_default_update_fields,
     integration_create_attrs,
     save_provided_fields,
 )
@@ -588,8 +587,7 @@ class InferenceProviderUpdateMutation:
                 provider.config = data.config
                 provided.add("config")
             if backend_changed:
-                provider.materialize_impl_defaults("backend_class", provided=frozenset(provided))
-                provided.update(impl_default_update_fields(provider, "backend_class"))
+                provided.update(provider.materialize_impl_defaults("backend_class", provided=frozenset(provided)))
             save_provided_fields(provider, provided)
         return cast(InferenceProviderType, provider)
 
@@ -647,11 +645,7 @@ def _agent_for_view(view: dict[str, Any]) -> Any:
             .order_by("-updated_at")
         )
         return next(
-            (
-                agent
-                for agent in candidates
-                if agent.runtime_backend.runs_in_process or bool(agent.service)
-            ),
+            (agent for agent in candidates if agent.runtime_backend.runs_in_process or bool(agent.service)),
             None,
         )
 

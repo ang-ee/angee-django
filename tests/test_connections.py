@@ -753,6 +753,37 @@ def test_connect_from_credential_reconnect_swaps_credential_on_connected_integra
 
 
 @pytest.mark.django_db(transaction=True)
+def test_attach_credential_preserves_paused_lifecycle_while_resetting_health() -> None:
+    """Credential replacement does not silently resume an operator-paused row."""
+
+    created_models = _create_missing_tables()
+    try:
+        user = get_user_model().objects.create_user(username="attach-paused", email="paused@example.com")
+        call_command("rebac", "sync", verbosity=0)
+        with system_context(reason="test paused attach setup"):
+            vendor = Vendor.objects.create(slug="attach-paused", display_name="Attach Paused")
+            first = Credential.objects.create_local_credential(
+                user, kind=CredentialKind.STATIC_TOKEN, name="paused-first", material={"api_key": "first"}
+            )
+            second = Credential.objects.create_local_credential(
+                user, kind=CredentialKind.STATIC_TOKEN, name="paused-second", material={"api_key": "second"}
+            )
+        integration = Integration.objects.connect_from_credential(user, vendor=vendor, credential=first)
+        with system_context(reason="test paused attach state"):
+            integration.pause()
+            integration.report_status("error", "expired token")
+            integration.attach_credential(second)
+
+        integration.refresh_from_db()
+        assert str(integration.lifecycle) == "paused"
+        assert str(integration.runtime_status) == "ok"
+        assert integration.credential_id == second.pk
+        assert integration.last_error == ""
+    finally:
+        _drop_models(created_models)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_ensure_fresh_is_a_noop_for_a_valid_token(monkeypatch: pytest.MonkeyPatch) -> None:
     """`ensure_fresh` does not call the provider when the token is comfortably in date."""
 

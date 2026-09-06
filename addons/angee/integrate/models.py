@@ -61,8 +61,10 @@ from angee.integrate import registry
 from angee.integrate.credentials import CredentialKind, handler_for
 from angee.integrate.events import EventKind
 from angee.integrate.impl import IntegrationImpl
+from angee.integrate.live import PairingProjection, PairingState, armed_material_key
 from angee.integrate.locks import bridge_is_locked
 from angee.integrate.net import validate_public_url
+from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.discovery import discovery_document
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.oauth.providers import OAuthProviderType
@@ -70,7 +72,7 @@ from angee.integrate.sync import bridge_progress_context, bridge_sync_context
 from angee.integrate.vcs.backend import VCSBackend
 from angee.integrate.vcs.templates import parse_template_meta
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
-from angee.jobs.locks import LockKey, record_lock_key, task_locks_are_cross_process
+from angee.jobs.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -775,6 +777,12 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
         for guard in credential_disconnect_guards():
             guard(credential)
 
+    def prepare_disconnect(self, credential: Any) -> None:
+        """Validate a disconnect and schedule remote revocation after commit."""
+
+        self.check_disconnect(credential)
+        transaction.on_commit(credential.revoke_remote, robust=True)
+
     def live_oauth_for_user(self, user: Any, oauth_client: Any) -> Any | None:
         """Return this user's active, non-expired OAuth credential for one client."""
 
@@ -1000,6 +1008,17 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
     """Per-user credential material for acting against a vendor OAuth client."""
 
     runtime = True
+
+    def revoke_remote(self) -> None:
+        """Revoke this credential's OAuth token when its provider supports it."""
+
+        oauth_client = self.oauth_client
+        if oauth_client is None or not getattr(oauth_client, "revoke_endpoint", ""):
+            return
+        token = str(self.reveal().get("access_token") or "")
+        if not token:
+            return
+        OAuthClientProtocol(oauth_client).revoke_token(token)
 
     sqid_prefix = "crd_"
     user = models.ForeignKey(
@@ -1343,7 +1362,38 @@ class IntegrationRuntimeStatus(models.TextChoices):
             raise ValueError(f"Unsupported integration runtime status: {raw}") from error
 
 
-class IntegrationManager(AngeeManager):
+class IntegrationQuerySet(AngeeQuerySet[Any]):
+    """Chainable collection scopes for integration and bridge rows."""
+
+    def due_for_enqueue(self, *, timestamp: datetime, stale_before: datetime) -> Any:
+        """Return bridge rows due for a new queue attempt or stale recovery."""
+
+        return self.filter(Q(next_sync_at__lte=timestamp) | Q(sync_stage="queued", updated_at__lte=stale_before))
+
+    def live_account_owners(
+        self,
+        bridge: Any,
+        impl_key: str,
+        external_id: str,
+        *,
+        identity_key: str,
+    ) -> Any:
+        """Return other rows retaining the same backend account claim."""
+
+        return (
+            self.filter(
+                **{
+                    bridge.live_impl_field: impl_key,
+                    f"subscription_state__{identity_key}": external_id,
+                    "lifecycle__in": (str(bridge.Lifecycle.CONNECTED), str(bridge.Lifecycle.PAUSED)),
+                }
+            )
+            .exclude(pk=bridge.pk)
+            .order_by("pk")
+        )
+
+
+class IntegrationManager(AngeeManager.from_queryset(IntegrationQuerySet)):  # type: ignore[misc]
     """Manager factories for invariants that span Integration and its impl row."""
 
     def impl_class_for_key(self, key: str) -> type[IntegrationImpl]:
@@ -1399,21 +1449,7 @@ class IntegrationManager(AngeeManager):
             integration = self.locked_get(pk=integration.pk)
             account = getattr(credential, "external_account", None)
             if str(integration.lifecycle) == str(IntegrationLifecycle.CONNECTED):
-                integration.credential = credential
-                integration.account = account
-                integration.runtime_status = cast(IntegrationRuntimeStatus, IntegrationRuntimeStatus.OK)
-                integration.last_error = ""
-                integration.last_error_at = None
-                integration.save(
-                    update_fields=[
-                        "account",
-                        "credential",
-                        "last_error",
-                        "last_error_at",
-                        "runtime_status",
-                        "updated_at",
-                    ]
-                )
+                integration.attach_connection(credential, account=account, connect_disconnected=False)
             else:
                 integration.connect(credential=credential, account=account)
         return integration
@@ -1597,6 +1633,11 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     def connect(self, *, credential: Any = _UNSET, account: Any = _UNSET) -> None:
         """Mark this integration connected, optionally attaching connection rows."""
 
+        self._transition_fields = self._set_connection_fields(credential=credential, account=account)
+
+    def _set_connection_fields(self, *, credential: Any = _UNSET, account: Any = _UNSET) -> set[str]:
+        """Attach connection rows and reset health, returning the fields changed."""
+
         fields: set[str] = set()
         if credential is not _UNSET:
             self.credential = credential
@@ -1608,7 +1649,32 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         self.last_error = ""
         self.last_error_at = None
         fields.update({"last_error", "last_error_at", "runtime_status"})
-        self._transition_fields = fields
+        return fields
+
+    def attach_connection(
+        self,
+        credential: Any,
+        *,
+        account: Any = _UNSET,
+        connect_disconnected: bool = True,
+    ) -> None:
+        """Attach a credential and reset health while preserving paused rows."""
+
+        resolved_account = getattr(credential, "external_account", None) if account is _UNSET else account
+        if self.pk is None:
+            self._set_connection_fields(credential=credential, account=resolved_account)
+            if connect_disconnected and self.lifecycle == IntegrationLifecycle.DISCONNECTED:
+                self.lifecycle_transitions.force_state(
+                    self,
+                    IntegrationLifecycle.CONNECTED,
+                    reason="unsaved integration attach resolves initial lifecycle before insert",
+                )
+            return
+        if connect_disconnected and self.lifecycle == IntegrationLifecycle.DISCONNECTED:
+            self.connect(credential=credential, account=resolved_account)
+            return
+        fields = self._set_connection_fields(credential=credential, account=resolved_account)
+        self.save(update_fields=[*fields, "updated_at"])
 
     @transition(
         lifecycle,
@@ -1646,40 +1712,8 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     def attach_credential(self, credential: Any) -> None:
         """Attach a live credential and connect this disconnected integration."""
 
-        account = getattr(credential, "external_account", None)
-        if self.pk is None:
-            self.credential = credential
-            self.account = account
-            self.runtime_status = cast(IntegrationRuntimeStatus, IntegrationRuntimeStatus.OK)
-            self.last_error = ""
-            self.last_error_at = None
-            if self.lifecycle == IntegrationLifecycle.DISCONNECTED:
-                self.lifecycle_transitions.force_state(
-                    self,
-                    IntegrationLifecycle.CONNECTED,
-                    reason="unsaved integration attach resolves initial lifecycle before insert",
-                )
-            return
-        if self.lifecycle == IntegrationLifecycle.DISCONNECTED:
-            with system_context(reason="integrate.integration.attach_credential"), transaction.atomic():
-                self.connect(credential=credential, account=account)
-            return
-        self.credential = credential
-        self.account = account
-        self.runtime_status = cast(IntegrationRuntimeStatus, IntegrationRuntimeStatus.OK)
-        self.last_error = ""
-        self.last_error_at = None
         with system_context(reason="integrate.integration.attach_credential"), transaction.atomic():
-            self.save(
-                update_fields=[
-                    "account",
-                    "credential",
-                    "last_error",
-                    "last_error_at",
-                    "runtime_status",
-                    "updated_at",
-                ]
-            )
+            self.attach_connection(credential)
 
     def report_status(self, status: IntegrationRuntimeStatus | str, error: str = "") -> None:
         """Record implementation status telemetry and persist this integration.
@@ -1816,6 +1850,154 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         """Return whether a worker currently holds this bridge's live sync lock."""
 
         return bridge_is_locked(self)
+
+    def live_account_lock_key(self, impl_key: str, external_id: str) -> LockKey:
+        """Return the cross-worker lock for one backend-normalized account id."""
+
+        if not external_id:
+            raise ValueError("A live bridge account id is required.")
+        return LockKey(f"{impl_key}-account", (external_id,))
+
+    def live_account_lock(self, impl_key: str, external_id: str) -> Any:
+        """Try to hold the account-scoped ownership lock."""
+
+        return task_lock(self.live_account_lock_key(impl_key, external_id))
+
+    def live_account_owners(
+        self,
+        impl_key: str,
+        external_id: str,
+        *,
+        identity_key: str,
+        queryset: Any | None = None,
+    ) -> Any:
+        """Return other rows that retain the same durable live-account claim."""
+
+        scope = queryset if queryset is not None else type(self).objects.all()
+        return scope.live_account_owners(
+            self,
+            impl_key,
+            external_id,
+            identity_key=identity_key,
+        )
+
+    def claim_live_account(self, impl_key: str, external_id: str, *, identity_key: str) -> bool:
+        """Persist this row's account claim when no live sibling owns it."""
+
+        if not external_id:
+            raise ValueError("A live bridge account id is required.")
+        model = type(self)
+        with system_context(reason="integrate.live.account.claim"), transaction.atomic():
+            row = model.objects.sudo(reason="integrate.live.account.claim.row").lock_if_supported().get(pk=self.pk)
+            owners = row.live_account_owners(
+                impl_key,
+                external_id,
+                identity_key=identity_key,
+                queryset=model.objects.sudo(reason="integrate.live.account.claim.owner"),
+            )
+            if owners.exists():
+                return False
+            state = dict(row.subscription_state)
+            state[identity_key] = external_id
+            row.subscription_state = state
+            row.save(update_fields=["subscription_state", "updated_at"])
+        self.refresh_from_db()
+        return True
+
+    def update_live_state(
+        self,
+        *,
+        identity_key: str,
+        drop_identity: bool = False,
+        drop_pairing_report: bool = False,
+        desired: Any | None = None,
+    ) -> None:
+        """Apply durable live-session state changes and save only changed fields."""
+
+        fields: list[str] = []
+        state = dict(self.subscription_state)
+        if drop_identity:
+            state.pop(identity_key, None)
+        if desired is not None:
+            state["desired"] = str(getattr(desired, "value", desired))
+        if state != self.subscription_state:
+            self.subscription_state = state
+            fields.append("subscription_state")
+        if drop_pairing_report:
+            progress = dict(self.sync_progress) if isinstance(self.sync_progress, Mapping) else {}
+            details = dict(progress.get("details") or {}) if isinstance(progress.get("details"), Mapping) else {}
+            if details.pop("pairing", None) is not None:
+                progress["details"] = details
+                self.sync_progress = progress
+                fields.append("sync_progress")
+        if fields:
+            self.save(update_fields=[*fields, "updated_at"])
+
+    def disconnect_live_account(self, *, identity_key: str, clear_identity: bool) -> None:
+        """Disconnect under a row lock and optionally clear claim and pairing state."""
+
+        model = type(self)
+        with system_context(reason="integrate.live.account.disconnect"), transaction.atomic():
+            row = model.objects.sudo(reason="integrate.live.account.disconnect.row").lock_if_supported().get(pk=self.pk)
+            row.set_lifecycle(type(row).Lifecycle.DISCONNECTED)
+            if clear_identity:
+                row.update_live_state(identity_key=identity_key, drop_identity=True, drop_pairing_report=True)
+        self.refresh_from_db()
+
+    def release_live_account(self, *, identity_key: str, desired: Any) -> None:
+        """Clear a void account claim without changing operator-owned lifecycle."""
+
+        model = type(self)
+        with system_context(reason="integrate.live.account.release"), transaction.atomic():
+            row = model.objects.sudo(reason="integrate.live.account.release.row").lock_if_supported().get(pk=self.pk)
+            row.update_live_state(identity_key=identity_key, drop_identity=True, desired=desired)
+        self.refresh_from_db()
+
+    def live_pairing(self, impl: Any) -> Any:
+        """Project pairing state from durable row facts and backend identity formatting."""
+
+        progress = self.sync_progress if isinstance(self.sync_progress, Mapping) else {}
+        details = progress.get("details") if isinstance(progress.get("details"), Mapping) else {}
+        report = details.get("pairing") if isinstance(details.get("pairing"), Mapping) else {}
+        reported = PairingState.from_report(report.get("state"))
+        raw_identity = self.subscription_state.get(impl.state_identity_key) or report.get("own_id") or ""
+        own_id = impl.normalize_account_id(str(raw_identity))
+        lifecycle = type(self).Lifecycle.from_value(self.lifecycle)
+        if lifecycle is type(self).Lifecycle.PAUSED:
+            state = PairingState.PAUSED
+        elif lifecycle is type(self).Lifecycle.DISCONNECTED:
+            state = PairingState.STOPPED
+        elif reported in (PairingState.AWAITING_PASSWORD, PairingState.LOGGED_OUT, PairingState.DUPLICATE_ACCOUNT):
+            state = reported
+        elif own_id:
+            state = PairingState.PAIRED
+        elif self.subscription_state.get("desired") != self.LiveState.LIVE:
+            state = PairingState.STOPPED
+        elif reported is PairingState.AWAITING_SCAN:
+            state = PairingState.AWAITING_SCAN
+        else:
+            state = PairingState.STARTING
+        duplicate = None
+        if own_id and state is PairingState.DUPLICATE_ACCOUNT:
+            duplicate = self.live_account_owners(
+                impl.key,
+                own_id,
+                identity_key=impl.state_identity_key,
+            ).first()
+        return PairingProjection(
+            state=state,
+            qr=str(report.get("qr") or "") if state is PairingState.AWAITING_SCAN else "",
+            message=str(report.get("message") or "") if state is PairingState.AWAITING_PASSWORD else "",
+            can_skip=(
+                bool(report.get("can_skip")) and bool(armed_material_key(self.subscription_state))
+                if state is PairingState.AWAITING_PASSWORD
+                else False
+            ),
+            own_id=own_id,
+            account_label=impl.account_label(own_id) if own_id else "",
+            duplicate_channel_id="" if duplicate is None else str(duplicate.sqid),
+            duplicate_channel_name="" if duplicate is None else str(duplicate.display_name),
+        )
 
     # The persisted stages that assert a live run. Their whole legitimate lifetime
     # is spent holding the advisory sync lock, so a row carrying one without the

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 from django.apps import apps
 from django.core import checks
 from django.db import models
@@ -27,7 +25,6 @@ def models_with(
     *,
     base: _Model | None = None,
     attribute: str | None = None,
-    predicate: Callable[[_Model], bool] | None = None,
 ) -> tuple[_Model, ...]:
     """Return loaded models matching the declared criteria in deterministic order."""
 
@@ -39,7 +36,6 @@ def models_with(
                 if not model._meta.abstract
                 and (base is None or issubclass(model, base))
                 and (attribute is None or bool(getattr(model, attribute, "")))
-                and (predicate is None or predicate(model))
             ),
             key=_model_key,
         )

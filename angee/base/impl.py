@@ -101,7 +101,7 @@ class ImplBase:
         )
 
     @classmethod
-    def materialize(cls, instance: models.Model, *, provided: frozenset[str] = frozenset()) -> None:
+    def materialize(cls, instance: models.Model, *, provided: frozenset[str] = frozenset()) -> set[str]:
         """Seed ``instance``'s fields from this impl's effective defaults on create.
 
         Seeds only fields the caller did not supply. A string foreign-key default
@@ -109,6 +109,7 @@ class ImplBase:
         deep-copied so rows never alias the class-level dict.
         """
 
+        changed: set[str] = set()
         for field_name, value in cls.effective_defaults().items():
             try:
                 field = instance._meta.get_field(field_name)
@@ -116,10 +117,15 @@ class ImplBase:
                 continue
             if field_name in provided or getattr(field, "attname", field_name) in provided:
                 continue
+            attname = getattr(field, "attname", field_name)
+            before = getattr(instance, attname)
             if field.many_to_one and isinstance(value, str):
                 cls._materialize_fk(instance, field, value)
-                continue
-            setattr(instance, field_name, copy.deepcopy(value))
+            else:
+                setattr(instance, field_name, copy.deepcopy(value))
+            if getattr(instance, attname) != before:
+                changed.add(attname)
+        return changed
 
     @staticmethod
     def _materialize_fk(instance: models.Model, field: Any, natural_key: str) -> None:
@@ -361,13 +367,19 @@ class ImplDefaultsMixin(models.Model):
         setattr(self, field.attname, key)
         return changed
 
-    def materialize_impl_defaults(self, field_name: str, *, provided: frozenset[str] = frozenset()) -> None:
+    def materialize_impl_defaults(
+        self,
+        field_name: str,
+        *,
+        provided: frozenset[str] = frozenset(),
+    ) -> set[str]:
         """Apply the selected impl's defaults for one impl field."""
 
         field = type(self).impl_field(field_name)
         key = getattr(self, field.attname, None)
         if not key:
-            return
+            return set()
         impl = field.resolve_class(key)
         if isinstance(impl, type) and issubclass(impl, ImplBase):
-            impl.materialize(self, provided=provided | {field.name, field.attname})
+            return impl.materialize(self, provided=provided | {field.name, field.attname})
+        return set()

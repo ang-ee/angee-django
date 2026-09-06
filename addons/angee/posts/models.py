@@ -46,7 +46,7 @@ class Feed(Bridge):
 
     An ``integrate.Integration`` child (identity / credential / status / owner from
     the connection substrate) and a ``Bridge`` (the scheduler + ``run_sync`` drive it
-    through ``sync``; ``integrate.scheduler.run_due_bridges`` auto-discovers any
+    through ``sync``; ``integrate.scheduler.enqueue_due_bridges`` auto-discovers any
     concrete ``Bridge`` subclass, so no registration is needed). ``backend_class``
     selects the platform — ``youtube`` / ``facebook`` are contributed by downstream
     ``posts_integrate_*`` addons; ``manual`` is the neutral null-object.

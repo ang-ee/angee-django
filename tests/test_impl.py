@@ -5,10 +5,10 @@ from __future__ import annotations
 import importlib.util
 
 import pytest
-from angee.base.impl import ImplBase, ImplChoice
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 
+from angee.base.impl import ImplBase, ImplChoice
 from tests.conftest import Integration, OAuthClient
 
 
@@ -64,7 +64,7 @@ def test_impl_owner_public_import_contract() -> None:
     assert ImplDefaultsMixin.__name__ == "ImplDefaultsMixin"
     assert callable(impl_registry)
     assert callable(resolve_impl_class)
-    legacy_modules = ("impl" "_types", "registry")
+    legacy_modules = ("impl_types", "registry")
     for legacy_module in legacy_modules:
         assert importlib.util.find_spec(f"angee.base.{legacy_module}") is None
 
@@ -121,10 +121,11 @@ def test_materialize_seeds_only_unprovided_fields() -> None:
     """Materialise fills fields the caller did not supply; a supplied field is kept."""
 
     client = OAuthClient(authorize_endpoint="https://kept/authorize")
-    _RefinedImpl.materialize(client, provided=frozenset({"authorize_endpoint"}))
+    changed = _RefinedImpl.materialize(client, provided=frozenset({"authorize_endpoint"}))
     assert client.authorize_endpoint == "https://kept/authorize"  # supplied → kept
     assert client.token_endpoint == "https://refined/token"  # unsupplied → seeded
     assert client.userinfo_endpoint == "https://refined/userinfo"  # unsupplied → seeded
+    assert changed == {"token_endpoint", "userinfo_endpoint"}
 
 
 def test_materialize_seeds_boolean_default_when_unprovided() -> None:
@@ -139,8 +140,9 @@ def test_materialize_keeps_explicit_value_equal_to_default() -> None:
     """A supplied value is never overwritten, even when it equals the model default."""
 
     client = OAuthClient(login_enabled=False)
-    _BoolImpl.materialize(client, provided=frozenset({"login_enabled"}))
+    changed = _BoolImpl.materialize(client, provided=frozenset({"login_enabled"}))
     assert client.login_enabled is False  # caller's explicit False survives the impl's True
+    assert changed == set()
 
 
 def test_materialize_deep_copies_mutable_defaults() -> None:

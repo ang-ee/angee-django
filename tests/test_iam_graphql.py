@@ -683,9 +683,7 @@ def test_oauth_client_crud_are_admin_only(
     denied = _execute(console_schema, create_oauth_client, user=user)
     assert denied.errors is not None
 
-    oauth_client = _data(
-        _execute(console_schema, create_oauth_client, user=admin)
-    )["insert_oauth_clients_one"]
+    oauth_client = _data(_execute(console_schema, create_oauth_client, user=admin))["insert_oauth_clients_one"]
     oauth_client_id = oauth_client["id"]
     assert oauth_client["slug"] == "console"
     assert oauth_client["icon"] == "console.svg"
@@ -741,12 +739,15 @@ def test_oauth_client_crud_are_admin_only(
     with system_context(reason="test.iam.external_account"):
         account = ExternalAccount.objects.get(external_id="admin-sub")
     assert ExternalAccount.objects.owner_for(account) == admin
-    assert _execute(
-        console_schema,
-        external_account_mutation,
-        {"oauthClient": oauth_client_id, "owner": _user_public_id(admin)},
-        user=user,
-    ).errors is not None
+    assert (
+        _execute(
+            console_schema,
+            external_account_mutation,
+            {"oauthClient": oauth_client_id, "owner": _user_public_id(admin)},
+            user=user,
+        ).errors
+        is not None
+    )
 
 
 def test_oauth_client_crud_sets_oidc_login_fields(
@@ -782,9 +783,7 @@ def test_oauth_client_crud_sets_oidc_login_fields(
 
     assert _execute(console_schema, update_oauth_client, variables, user=plain).errors is not None
 
-    updated = _data(
-        _execute(console_schema, update_oauth_client, variables, user=admin)
-    )["update_oauth_clients_by_pk"]
+    updated = _data(_execute(console_schema, update_oauth_client, variables, user=admin))["update_oauth_clients_by_pk"]
     assert updated == {
         "issuer": "https://issuer.example",
         "discovery_url": "https://issuer.example/.well-known/openid-configuration",
@@ -898,9 +897,10 @@ def test_user_crud_create_update_delete_are_admin_only(
         assert user.is_staff is False
         assert user.check_password("first-secret")
 
-    assert _execute(
-        console_schema,
-        """
+    assert (
+        _execute(
+            console_schema,
+            """
         mutation InvalidEmail($id: String!) {
           update_users_by_pk(
             pk_columns: {id: $id},
@@ -910,9 +910,11 @@ def test_user_crud_create_update_delete_are_admin_only(
           }
         }
         """,
-        {"id": user_id},
-        user=admin,
-    ).errors is not None
+            {"id": user_id},
+            user=admin,
+        ).errors
+        is not None
+    )
     with system_context(reason="test.iam.user_crud.invalid_email"):
         user.refresh_from_db()
         assert user.email == "console-user@example.com"
@@ -939,16 +941,19 @@ def test_user_crud_create_update_delete_are_admin_only(
         assert user.check_password("second-secret")
         assert not user.check_password("first-secret")
 
-    assert _execute(
-        console_schema,
-        """
+    assert (
+        _execute(
+            console_schema,
+            """
         mutation DeleteUser($id: ID!) {
           delete_user(id: $id, confirm: true) { total_deleted_count }
         }
         """,
-        {"id": user_id},
-        user=plain,
-    ).errors is not None
+            {"id": user_id},
+            user=plain,
+        ).errors
+        is not None
+    )
 
     deleted = _data(
         _execute(
@@ -1044,9 +1049,9 @@ def test_external_account_update_delete_are_admin_only(
 
     assert _execute(console_schema, update_account, {"id": account_id}, user=plain).errors is not None
 
-    updated = _data(
-        _execute(console_schema, update_account, {"id": account_id}, user=admin)
-    )["update_external_accounts_by_pk"]
+    updated = _data(_execute(console_schema, update_account, {"id": account_id}, user=admin))[
+        "update_external_accounts_by_pk"
+    ]
     # ``status`` is a choices field exposed as a GraphQL enum, so it renders as the
     # uppercase member name though the write input takes the raw ``"revoked"`` value.
     assert updated == {
@@ -1068,9 +1073,7 @@ def test_external_account_update_delete_are_admin_only(
 
     assert _execute(console_schema, delete_account, {"id": account_id}, user=plain).errors is not None
 
-    deleted = _data(
-        _execute(console_schema, delete_account, {"id": account_id}, user=admin)
-    )["delete_external_account"]
+    deleted = _data(_execute(console_schema, delete_account, {"id": account_id}, user=admin))["delete_external_account"]
     assert deleted["has_blockers"] is False
     assert deleted["total_deleted_count"] >= 1
     with system_context(reason="test.iam.external_account.after_delete"):
@@ -1107,9 +1110,7 @@ def test_credential_crud_create_delete_are_admin_only(
 
     assert _execute(console_schema, create_credential, variables, user=plain).errors is not None
 
-    created = _data(
-        _execute(console_schema, create_credential, variables, user=admin)
-    )["create_credential"]
+    created = _data(_execute(console_schema, create_credential, variables, user=admin))["create_credential"]
     assert created["name"] == "ci-token"
     # A provider-less static token reads its own name as the label.
     assert created["display_name"] == "ci-token"
@@ -1122,12 +1123,12 @@ def test_credential_crud_create_delete_are_admin_only(
     credential_id = str(credential.sqid)
     scheduled: list[Any] = []
     revoked: list[Any] = []
-    monkeypatch.setattr(integrate_schema.transaction, "on_commit", lambda callback: scheduled.append(callback))
     monkeypatch.setattr(
-        integrate_schema,
-        "_revoke_remote_oauth_token",
-        lambda credential: revoked.append(credential.pk),
+        integrate_schema.transaction,
+        "on_commit",
+        lambda callback, robust=False: scheduled.append(callback),
     )
+    monkeypatch.setattr(Credential, "revoke_remote", lambda credential: revoked.append(credential.pk))
 
     delete_credential = """
         mutation DeleteCredential($id: ID!) {
@@ -1140,9 +1141,7 @@ def test_credential_crud_create_delete_are_admin_only(
 
     assert _execute(console_schema, delete_credential, {"id": credential_id}, user=plain).errors is not None
 
-    deleted = _data(
-        _execute(console_schema, delete_credential, {"id": credential_id}, user=admin)
-    )["delete_credential"]
+    deleted = _data(_execute(console_schema, delete_credential, {"id": credential_id}, user=admin))["delete_credential"]
     assert deleted["has_blockers"] is False
     assert deleted["total_deleted_count"] >= 1
     assert revoked == []
@@ -1428,19 +1427,21 @@ def test_public_user_change_subscription_only_yields_the_actor(
     other = User.objects.create_user(username="preference-other")
     grant(actor=actor, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
     actor_ref = to_subject_ref(actor)
-    assert backend().check_access(
-        subject=actor_ref,
-        action="read",
-        resource=to_object_ref(other),
-    ).allowed
+    assert (
+        backend()
+        .check_access(
+            subject=actor_ref,
+            action="read",
+            resource=to_object_ref(other),
+        )
+        .allowed
+    )
 
     actor.preferences = {"chrome.rail": {"expanded": False}}
     other.preferences = {"chrome.rail": {"expanded": True}}
     actor.set_password("reset-secret")
     user_resource = next(
-        resource
-        for resource in _schema("console").angee_resources
-        if resource.model_label == "iam.User"
+        resource for resource in _schema("console").angee_resources if resource.model_label == "iam.User"
     )
     readable_fields = readable_model_field_names(user_resource)
     assert "preferences" in readable_fields
@@ -1808,9 +1809,7 @@ def iam_connection_tables(transactional_db: Any) -> Iterator[None]:
     """
 
     del transactional_db
-    connection_models = tuple(
-        dict.fromkeys(MESSAGING_TEST_MODELS + POSTS_TEST_MODELS + AGENTS_GRAPHQL_MODELS)
-    )
+    connection_models = tuple(dict.fromkeys(MESSAGING_TEST_MODELS + POSTS_TEST_MODELS + AGENTS_GRAPHQL_MODELS))
     _create_connection_tables(connection_models)
     auth_models = tuple(_create_auth_app_tables())
     call_command("rebac", "sync", verbosity=0)
@@ -1824,9 +1823,7 @@ def _create_auth_app_tables() -> list[Any]:
     """Create missing tables for concrete managed models in the ``auth`` app."""
 
     auth_models = tuple(
-        model
-        for model in apps.get_app_config("auth").get_models()
-        if model._meta.managed and not model._meta.abstract
+        model for model in apps.get_app_config("auth").get_models() if model._meta.managed and not model._meta.abstract
     )
     return _create_connection_tables(auth_models)
 
@@ -1836,9 +1833,7 @@ def test_discover_oauth_endpoints_is_admin_gated_and_validates_discovery_url(
 ) -> None:
     """Discover is admin-gated and reports when no discovery URL is configured."""
 
-    plain = User.objects.create_user(
-        username="discover-plain", email="discover-plain@example.com"
-    )
+    plain = User.objects.create_user(username="discover-plain", email="discover-plain@example.com")
     admin = _platform_admin("discover-admin")
     client = _oauth_client("discoverable", discovery_url="")
     oauth_client_id = str(client.sqid)
@@ -1847,9 +1842,7 @@ def test_discover_oauth_endpoints_is_admin_gated_and_validates_discovery_url(
 
     assert _execute(console_schema, discover, {"id": oauth_client_id}, user=plain).errors is not None
 
-    result = _data(
-        _execute(console_schema, discover, {"id": oauth_client_id}, user=admin)
-    )["discover_oauth_endpoints"]
+    result = _data(_execute(console_schema, discover, {"id": oauth_client_id}, user=admin))["discover_oauth_endpoints"]
     assert result["ok"] is False
     assert "discovery url" in result["message"].lower()
 

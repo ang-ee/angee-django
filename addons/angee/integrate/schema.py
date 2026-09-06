@@ -13,10 +13,8 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
-from angee.base.impl import ImplBase
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.core.exceptions import FieldDoesNotExist
 from django.db import transaction
 from django.db.models import Prefetch
 from django.utils import timezone
@@ -49,7 +47,6 @@ from angee.integrate.credentials import handler_for
 from angee.integrate.impl import IntegrationImpl
 from angee.integrate.models import Bridge, IntegrationLifecycle
 from angee.integrate.oauth import flow, state
-from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
 from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.registry import bridge_models
@@ -605,21 +602,6 @@ def _credential_material(data: CredentialInput) -> dict[str, str]:
     return material
 
 
-def _revoke_remote_oauth_token(credential: Any) -> None:
-    """Best-effort remote revocation before removing a local OAuth credential."""
-
-    try:
-        oauth_client = credential.oauth_client
-        # Provider-less (static/ssh) credentials have nothing to revoke remotely.
-        if oauth_client is None or not getattr(oauth_client, "revoke_endpoint", ""):
-            return
-        token = str(credential.reveal().get("access_token") or "")
-        if token:
-            OAuthClientProtocol(oauth_client).revoke_token(token)
-    except Exception:
-        return
-
-
 def _integration_impl_class(impl_class: str) -> type[IntegrationImpl]:
     """Return the configured implementation class for one integration key."""
 
@@ -706,26 +688,6 @@ def apply_integration_patch_fields(
     if data.lifecycle is not strawberry.UNSET and (data.lifecycle is not None or not ignore_null_lifecycle):
         target.set_lifecycle(IntegrationLifecycle.from_value(data.lifecycle))
     return provided
-
-
-def impl_default_update_fields(target: Any, field_name: str) -> set[str]:
-    """Return model fields the selected impl may have materialized on ``target``."""
-
-    field = type(target).impl_field(field_name)
-    key = getattr(target, field.attname, None)
-    if not key:
-        return set()
-    impl = field.resolve_class(key)
-    if not (isinstance(impl, type) and issubclass(impl, ImplBase)):
-        return set()
-    fields: set[str] = set()
-    for default_name in impl.effective_defaults():
-        try:
-            model_field = target._meta.get_field(default_name)
-        except FieldDoesNotExist:
-            continue
-        fields.add(model_field.name)
-    return fields
 
 
 def save_provided_fields(target: Any, provided: set[str]) -> None:
@@ -991,11 +953,8 @@ class ConnectionMutation:
                 return UnlinkAccountResult(ok=False)
             external_account = credential.external_account
             with system_context(reason="integrate.graphql.disconnect_account"), transaction.atomic():
-                Credential.objects.check_disconnect(credential)
+                Credential.objects.prepare_disconnect(credential)
                 ExternalAccount.objects.revoke_owner(external_account, user)
-                # Revoke at the provider only if the delete commits; local guards run
-                # before scheduling the remote side effect.
-                transaction.on_commit(lambda: _revoke_remote_oauth_token(credential))
                 deleted, _details = Credential.objects.filter(pk=credential.pk).with_action("delete").delete()
             return UnlinkAccountResult(ok=deleted > 0)
         except OAuthFlowError as error:
@@ -1105,8 +1064,7 @@ class IntegrateCredentialMutation:
         """Delete the credential, then best-effort revoke remotely after commit."""
 
         def prepare_delete(credential: Any) -> None:
-            Credential.objects.check_disconnect(credential)
-            transaction.on_commit(lambda: _revoke_remote_oauth_token(credential))
+            Credential.objects.prepare_disconnect(credential)
 
         return delete_by_public_id(
             Credential,
@@ -1799,8 +1757,7 @@ class VcsBridgeUpdateMutation:
                 bridge.webhook_secret = data.webhook_secret or ""
                 provided.add("webhook_secret")
             if backend_changed:
-                bridge.materialize_impl_defaults("backend_class", provided=frozenset(provided))
-                provided.update(impl_default_update_fields(bridge, "backend_class"))
+                provided.update(bridge.materialize_impl_defaults("backend_class", provided=frozenset(provided)))
             save_provided_fields(bridge, provided)
         return cast(VcsBridgeType, bridge)
 

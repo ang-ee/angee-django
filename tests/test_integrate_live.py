@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
-from angee.jobs.locks import task_lock_is_held
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.db import connection
@@ -20,6 +19,7 @@ from angee.integrate.live import PairingState
 from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import IntegrationRuntimeStatus
 from angee.integrate.session import PASSWORD_SKIPPED, LiveSession, PasswordSkipped
+from angee.jobs.locks import task_lock_is_held
 from angee.messaging.backends import LiveChannelBackend, ParsedMessage, ParsedPart, ParsedThread
 from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
 from tests.test_messaging import MESSAGING_TEST_MODELS, Message
@@ -872,11 +872,11 @@ def test_ensure_bridge_sessions_latches_runtime_error_until_resume(
 def test_live_backend_holds_account_lock_key() -> None:
     """The account-scoped lock namespace follows the backend key."""
 
-    backend = FakeLiveChannelBackend.__new__(FakeLiveChannelBackend)
-    assert backend.account_lock_key("account-1").name == "angee:fake_live-account:account-1"
-    with backend.account_lock("account-1") as acquired:
+    bridge = Channel()
+    assert bridge.live_account_lock_key("fake_live", "account-1").name == "angee:fake_live-account:account-1"
+    with bridge.live_account_lock("fake_live", "account-1") as acquired:
         assert acquired
-        assert task_lock_is_held(backend.account_lock_key("account-1"))
+        assert task_lock_is_held(bridge.live_account_lock_key("fake_live", "account-1"))
 
 
 @pytest.mark.django_db(transaction=True)
