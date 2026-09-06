@@ -16,6 +16,11 @@ from django.db.migrations.state import ModelState, ProjectState
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.compose.migrations import RuntimeMigrations
+from angee.integrate_vcs.runtime_migrations.adopt_vcs_permission_schema import (
+    NEW_PACKAGE,
+    OLD_PACKAGE,
+    adopt_vcs_permission_schema,
+)
 from angee.integrate_vcs.runtime_migrations.delete_integrate_vcs_state import applies as vcs_delete_applies
 from tests.conftest import make_addon, write_addon_manifest
 
@@ -50,6 +55,159 @@ def test_vcs_state_delete_waits_for_non_moved_integrate_consumer() -> None:
     )
 
     assert vcs_delete_applies(state) is False
+
+
+@pytest.mark.django_db
+def test_vcs_permission_schema_adoption_preserves_provenance_target() -> None:
+    """The append-only adoption changes only the package ledger identity."""
+
+    from django.apps import apps
+    from django.contrib.contenttypes.models import ContentType
+    from django.utils import timezone
+    from rebac.models import PackageManagedRecord, SchemaDefinition
+
+    definition = SchemaDefinition.objects.create(resource_type="integrate_vcs/source")
+    target_type = ContentType.objects.get_for_model(SchemaDefinition)
+    record = PackageManagedRecord.objects.create(
+        package=OLD_PACKAGE,
+        external_id="definition:integrate/source",
+        schema_revision=7,
+        target_ct=target_type,
+        target_pk=definition.pk,
+        content_hash="historical-content-hash",
+        no_update=True,
+        last_synced_at=timezone.now(),
+    )
+
+    adopt_vcs_permission_schema(apps, SimpleNamespace(connection=connection))
+
+    record.refresh_from_db()
+    assert (record.package, record.external_id) == (NEW_PACKAGE, "definition:integrate_vcs/source")
+    assert record.target_pk == definition.pk
+    assert record.target_ct_id == target_type.pk
+    assert record.schema_revision == 7
+    assert record.content_hash == "historical-content-hash"
+    assert record.no_update is True
+
+
+@pytest.mark.django_db
+def test_vcs_permission_schema_adoption_rejects_destination_collision() -> None:
+    """A pre-existing destination owner fails before any source record moves."""
+
+    from django.apps import apps
+    from django.contrib.contenttypes.models import ContentType
+    from django.utils import timezone
+    from rebac.models import PackageManagedRecord, SchemaDefinition
+
+    target_type = ContentType.objects.get_for_model(SchemaDefinition)
+    source = SchemaDefinition.objects.create(resource_type="integrate/source")
+    destination = SchemaDefinition.objects.create(resource_type="integrate_vcs/source")
+    common = {
+        "schema_revision": 1,
+        "target_ct": target_type,
+        "content_hash": "hash",
+        "no_update": True,
+        "last_synced_at": timezone.now(),
+    }
+    old_record = PackageManagedRecord.objects.create(
+        package=OLD_PACKAGE,
+        external_id="definition:integrate/source",
+        target_pk=source.pk,
+        **common,
+    )
+    PackageManagedRecord.objects.create(
+        package=NEW_PACKAGE,
+        external_id="definition:integrate_vcs/source",
+        target_pk=destination.pk,
+        **common,
+    )
+
+    with pytest.raises(ImproperlyConfigured, match="destination package records"):
+        adopt_vcs_permission_schema(apps, SimpleNamespace(connection=connection))
+
+    old_record.refresh_from_db()
+    assert (old_record.package, old_record.external_id) == (OLD_PACKAGE, "definition:integrate/source")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_vcs_permission_schema_adoption_survives_reconcile_and_sync() -> None:
+    """The next native reconcile/sync retains schema identities and live grants."""
+
+    from django.apps import apps
+    from django.core.management import call_command
+    from rebac.models import PackageManagedRecord, SchemaDefinition, active_relationship_model
+
+    call_command("rebac", "sync", verbosity=0)
+    definition = SchemaDefinition.objects.get(resource_type="integrate_vcs/source")
+    records = list(
+        PackageManagedRecord.objects.filter(
+            package=NEW_PACKAGE,
+            external_id__startswith="definition:integrate_vcs/source",
+        )
+    ) + list(
+        PackageManagedRecord.objects.filter(
+            package=NEW_PACKAGE,
+            external_id__startswith="relation:integrate_vcs/source#",
+        )
+    ) + list(
+        PackageManagedRecord.objects.filter(
+            package=NEW_PACKAGE,
+            external_id__startswith="permission:integrate_vcs/source#",
+        )
+    )
+    before = {
+        record.external_id: (
+            record.pk,
+            record.target_ct_id,
+            record.target_pk,
+            record.schema_revision,
+            record.no_update,
+        )
+        for record in records
+    }
+    assert before
+    for record in records:
+        record.package = OLD_PACKAGE
+        record.external_id = record.external_id.replace("integrate_vcs/source", "integrate/source", 1)
+        record.save(update_fields=["package", "external_id"])
+
+    active_relationship_model().objects.create(
+        resource_type="integrate_vcs/source",
+        resource_id="source-proof",
+        relation="proof",
+        subject_type="angee/role",
+        subject_id="admin",
+        optional_subject_relation="",
+    )
+
+    adopt_vcs_permission_schema(apps, SimpleNamespace(connection=connection))
+    call_command("reconcile_permissions", verbosity=0)
+    call_command("rebac", "sync", verbosity=0)
+    call_command("rebac", "sync", verbosity=0)
+
+    definition.refresh_from_db()
+    assert definition.resource_type == "integrate_vcs/source"
+    after_records = PackageManagedRecord.objects.filter(
+        package=NEW_PACKAGE,
+        external_id__in=before,
+    )
+    assert {
+        record.external_id: (
+            record.pk,
+            record.target_ct_id,
+            record.target_pk,
+            record.schema_revision,
+            record.no_update,
+        )
+        for record in after_records
+    } == before
+    assert active_relationship_model().objects.filter(
+        resource_type="integrate_vcs/source",
+        resource_id="source-proof",
+        relation="proof",
+        subject_type="angee/role",
+        subject_id="admin",
+    ).exists()
 
 
 @pytest.fixture

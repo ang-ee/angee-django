@@ -110,14 +110,18 @@ class Command(BaseCommand):
         1. Wait for the default database to accept connections (in-process).
         2. ``angee build`` — emit the concrete runtime and materialize applicable
            addon-owned migrations onto each downstream app's current leaf.
-        3. ``reconcile_permissions`` — prune stale package-managed REBAC schema
-           before any check-gated DB step (see angee.platform.permissions).
-        4. ``makemigrations`` — bare; the composer owns app discovery.
-        5. ``migrate --noinput``.
+        3. ``makemigrations --skip-checks`` — the composer owns app discovery;
+           checks are deferred while migrations reconcile persisted identities with
+           the newly emitted model graph.
+        4. ``migrate --noinput --skip-checks`` for the same bounded transition.
+        5. ``reconcile_permissions`` — prune stale package-managed REBAC schema
+           only after identity migrations have preserved moved rows.
         6. ``rebac sync --yes`` (``--force-overwrite`` when ``--force-rebac``).
-        7. ``resources load`` (``--include-demo`` when ``--demo``).
-        8. ``schema`` — render the GraphQL SDL.
-        9. ``bootstrap_admin`` — only when ``--bootstrap-admin``.
+        7. ``check`` — enforce the complete model and persisted-REBAC contract
+           after migration and sync, before user data or schema output proceeds.
+        8. ``resources load`` (``--include-demo`` when ``--demo``).
+        9. ``schema`` — render the GraphQL SDL.
+        10. ``bootstrap_admin`` — only when ``--bootstrap-admin``.
 
         Every step after the database wait runs in a fresh interpreter (see
         :meth:`_run_step`). App population repairs generated models at boot; each subsequent
@@ -149,10 +153,11 @@ class Command(BaseCommand):
             resources_load.append("--include-demo")
         plan = [
             ["angee", "build"],
+            ["makemigrations", "--skip-checks"],
+            ["migrate", "--noinput", "--skip-checks"],
             ["reconcile_permissions"],
-            ["makemigrations"],
-            ["migrate", "--noinput"],
             rebac_sync,
+            ["check"],
             resources_load,
             ["schema"],
         ]

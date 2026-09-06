@@ -11,7 +11,8 @@ from typing import Any, cast
 import pytest
 from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
-from django.core.management.base import CommandError
+from django.core.management import call_command
+from django.core.management.base import CommandError, SystemCheckError
 from django.db import OperationalError, models
 
 import angee.compose as compose_package
@@ -974,10 +975,11 @@ def test_provision_plan_default_flags_covers_the_no_flag_lifecycle() -> None:
 
     assert Command._provision_plan(_provision_options()) == [
         ["angee", "build"],
+        ["makemigrations", "--skip-checks"],
+        ["migrate", "--noinput", "--skip-checks"],
         ["reconcile_permissions"],
-        ["makemigrations"],
-        ["migrate", "--noinput"],
         ["rebac", "sync", "--yes"],
+        ["check"],
         ["resources", "load"],
         ["schema"],
     ]
@@ -1017,10 +1019,11 @@ def test_provision_plan_combines_every_flag() -> None:
 
     assert plan == [
         ["angee", "build"],
+        ["makemigrations", "--skip-checks"],
+        ["migrate", "--noinput", "--skip-checks"],
         ["reconcile_permissions"],
-        ["makemigrations"],
-        ["migrate", "--noinput"],
         ["rebac", "sync", "--yes", "--force-overwrite"],
+        ["check"],
         ["resources", "load", "--include-demo"],
         ["schema"],
         ["bootstrap_admin"],
@@ -1036,9 +1039,53 @@ def test_provision_plan_builds_before_it_migrates() -> None:
     ):
         plan = Command._provision_plan(options)
         build = plan.index(["angee", "build"])
-        makemigrations = plan.index(["makemigrations"])
-        migrate = plan.index(["migrate", "--noinput"])
+        makemigrations = plan.index(["makemigrations", "--skip-checks"])
+        migrate = plan.index(["migrate", "--noinput", "--skip-checks"])
         assert build < makemigrations < migrate
+
+
+def test_provision_defers_checks_only_across_the_schema_identity_transition() -> None:
+    """Persisted REBAC labels may lag emitted models until migrations finish."""
+
+    plan = Command._provision_plan(_provision_options())
+
+    assert [step for step in plan if "--skip-checks" in step] == [
+        ["makemigrations", "--skip-checks"],
+        ["migrate", "--noinput", "--skip-checks"],
+    ]
+    assert plan.index(["migrate", "--noinput", "--skip-checks"]) < plan.index(
+        ["rebac", "sync", "--yes"]
+    ) < plan.index(["check"])
+    assert plan.index(["check"]) < plan.index(["resources", "load"])
+
+
+@pytest.mark.django_db
+def test_provision_plan_can_cross_an_old_persisted_rebac_identity() -> None:
+    """An old persisted field target fails checks until the identity migration runs."""
+
+    from rebac.models import SchemaRelation
+
+    call_command("rebac", "sync", "--yes", verbosity=0)
+    source = SchemaRelation.objects.get(
+        definition__resource_type="agents/skill",
+        name="source",
+    )
+    source.allowed_subjects = [
+        {"type": "integrate/source", "relation": "", "wildcard": False}
+    ]
+    source.save(update_fields=["allowed_subjects"])
+
+    with pytest.raises(SystemCheckError, match=r"rebac\.E009"):
+        call_command("check", verbosity=0)
+
+    plan = Command._provision_plan(_provision_options())
+    assert plan[1:6] == [
+        ["makemigrations", "--skip-checks"],
+        ["migrate", "--noinput", "--skip-checks"],
+        ["reconcile_permissions"],
+        ["rebac", "sync", "--yes"],
+        ["check"],
+    ]
 
 
 def test_provision_runs_every_step_as_a_fresh_child_interpreter(
@@ -1071,7 +1118,7 @@ def test_provision_aborts_on_the_first_failed_step(
 
     def fake_run(argv: list[str], check: bool = False) -> SimpleNamespace:
         calls.append(argv)
-        returncode = 1 if argv[2:] == ["makemigrations"] else 0
+        returncode = 1 if argv[2:] == ["makemigrations", "--skip-checks"] else 0
         return SimpleNamespace(returncode=returncode)
 
     monkeypatch.setattr("angee.compose.management.commands.angee.subprocess.run", fake_run)
@@ -1079,14 +1126,13 @@ def test_provision_aborts_on_the_first_failed_step(
     command = Command()
     monkeypatch.setattr(command, "_wait_for_database", lambda seconds: None)
 
-    with pytest.raises(CommandError, match="step 'makemigrations' failed"):
+    with pytest.raises(CommandError, match="step 'makemigrations --skip-checks' failed"):
         command._handle_provision(_provision_options())
 
-    # Stops at the failing step: build, reconcile_permissions, makemigrations.
+    # Stops at the failing step: build, makemigrations.
     assert [argv[2:] for argv in calls] == [
         ["angee", "build"],
-        ["reconcile_permissions"],
-        ["makemigrations"],
+        ["makemigrations", "--skip-checks"],
     ]
 
 

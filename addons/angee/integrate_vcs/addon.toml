@@ -18,6 +18,11 @@ app_label = "integrate_vcs"
 module = "runtime_migrations.migrate_vcs_identities"
 
 [[migrations]]
+name = "adopt_vcs_permission_schema"
+app_label = "integrate_vcs"
+module = "runtime_migrations.adopt_vcs_permission_schema"
+
+[[migrations]]
 name = "delete_integrate_vcs_state"
 app_label = "integrate"
 module = "runtime_migrations.delete_integrate_vcs_state"
