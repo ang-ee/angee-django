@@ -143,10 +143,10 @@ class CardDavDirectoryBackend(DirectoryBackend):
             response = self.http.get(photo.uri, allow_private=True)
         except Exception:  # noqa: BLE001 — a broken avatar URL must not abort the sync.
             return replace(contact, photo=None)
-        if not response.ok or not response.body:
+        if not response.is_success or not response.content:
             return replace(contact, photo=None)
-        mime = photo.mime or response.header("content-type").split(";")[0].strip()
-        return replace(contact, photo=ParsedPhoto(data=response.body, mime=mime))
+        mime = photo.mime or response.headers.get("content-type", "").split(";")[0].strip()
+        return replace(contact, photo=ParsedPhoto(data=response.content, mime=mime))
 
     # --- transport ---
 
@@ -155,12 +155,12 @@ class CardDavDirectoryBackend(DirectoryBackend):
 
         headers = {"Depth": depth, "Content-Type": "application/xml; charset=utf-8", **self._auth()}
         response = self.http.request(method, url, headers=headers, body=body.encode("utf-8"), allow_private=True)
-        if response.status in _REDIRECT_STATUSES and _hops < 3:
-            location = response.header("location")
+        if response.status_code in _REDIRECT_STATUSES and _hops < 3:
+            location = response.headers.get("location", "")
             if location:
                 return self._request(method, urljoin(url, location), body, depth=depth, _hops=_hops + 1)
-        if not (response.ok or response.status == 207):
-            raise CardDavError(f"CardDAV {method} {url} returned HTTP {response.status}.")
+        if not (response.is_success or response.status_code == 207):
+            raise CardDavError(f"CardDAV {method} {url} returned HTTP {response.status_code}.")
         return response
 
     def _auth(self) -> dict[str, str]:
@@ -183,7 +183,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
             response = self._request("PROPFIND", url, body, depth="0")
         except CardDavError:
             return ""
-        node = _xml(response.body).find(xpath, _NS)
+        node = _xml(response.content).find(xpath, _NS)
         return urljoin(url, node.text.strip()) if node is not None and node.text else ""
 
     def _enumerate(self, home: str) -> list[ParsedAddressbook]:
@@ -191,7 +191,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
 
         response = self._request("PROPFIND", home, _BOOKS_BODY, depth="1")
         books: list[ParsedAddressbook] = []
-        for resp in _xml(response.body).findall("d:response", _NS):
+        for resp in _xml(response.content).findall("d:response", _NS):
             if resp.find(".//d:resourcetype/card:addressbook", _NS) is None:
                 continue
             href = _href(resp)
@@ -211,7 +211,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
 
         response = self._request("PROPFIND", collection, _LISTING_BODY, depth="1")
         hrefs: list[str] = []
-        for resp in _xml(response.body).findall("d:response", _NS):
+        for resp in _xml(response.content).findall("d:response", _NS):
             if "vcard" not in _text(resp, ".//d:getcontenttype").lower():
                 continue
             href = _href(resp)
@@ -233,7 +233,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
         )
         response = self._request("REPORT", collection, body, depth="1")
         contacts: list[ParsedContact] = []
-        for resp in _xml(response.body).findall("d:response", _NS):
+        for resp in _xml(response.content).findall("d:response", _NS):
             data = _text(resp, ".//card:address-data")
             if not data.strip():
                 continue

@@ -7,6 +7,7 @@ import socket
 from collections.abc import Iterator
 from typing import Any
 
+import httpx
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -17,7 +18,6 @@ from rebac.models import active_relationship_model
 
 from angee.base.models import AngeeModel
 from angee.integrate.events import EventKind
-from angee.integrate.http import HttpResponse
 from angee.integrate.models import Bridge
 from angee.integrate.net import validate_public_url
 from angee.integrate.webhooks import SIGNATURE_HEADER
@@ -535,12 +535,12 @@ def _record_posts(
         body: bytes | None = None,
         headers: dict[str, str] | None = None,
         **kwargs: Any,
-    ) -> HttpResponse:
+    ) -> httpx.Response:
         del kwargs
         posts.append({"url": url, "body": body, "headers": headers or {}})
         if post_error is not None:
             raise post_error
-        return HttpResponse(status=status, body=b"", headers={})
+        return httpx.Response(status, content=b"", headers={})
 
     monkeypatch.setattr("angee.integrate.http.HttpClient.post", fake_post)
     return posts

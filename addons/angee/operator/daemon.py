@@ -294,14 +294,14 @@ class OperatorDaemon:
             allow_private=True,
             timeout=timeout,
         )
-        if not response.ok:
+        if not response.is_success:
             # Surface the daemon's own error message instead of a bare "HTTP 500":
             # the body is JSON like ``{"error": "…"}`` (or text); the caller records it.
-            error_detail = _daemon_error_body(response.status, response.body)
+            error_detail = _daemon_error_body(response.status_code, response.content)
             message = f"operator {method} {url.rsplit('/', 1)[-1]}: {error_detail}"
-            error_class = OperatorDaemonNotFound if response.status == 404 else OperatorDaemonError
-            raise error_class(message, status_code=response.status)
-        return response.json() if response.body else None
+            error_class = OperatorDaemonNotFound if response.status_code == 404 else OperatorDaemonError
+            raise error_class(message, status_code=response.status_code)
+        return response.json() if response.content else None
 
     def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         """POST with the admin bearer on the short token/introspection budget."""

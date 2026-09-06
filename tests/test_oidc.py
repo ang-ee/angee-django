@@ -480,13 +480,6 @@ def test_jwks_fetch_uses_pinned_http_client(monkeypatch: pytest.MonkeyPatch) -> 
 
     requests: list[tuple[str, dict[str, str], bool, int]] = []
 
-    class FakeHttpResponse:
-        status = 200
-        ok = True
-
-        def json(self) -> dict[str, list[object]]:
-            return {"keys": []}
-
     class FakeHttpClient:
         def get(
             self,
@@ -496,10 +489,10 @@ def test_jwks_fetch_uses_pinned_http_client(monkeypatch: pytest.MonkeyPatch) -> 
             allow_private: bool,
             timeout: int,
             **kwargs: object,
-        ) -> FakeHttpResponse:
+        ) -> httpx.Response:
             del kwargs
             requests.append((url, headers, allow_private, timeout))
-            return FakeHttpResponse()
+            return httpx.Response(200, json={"keys": []})
 
     monkeypatch.setattr(oidc_protocol, "HttpClient", FakeHttpClient)
 

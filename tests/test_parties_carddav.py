@@ -11,8 +11,10 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import date
+from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 import vobject
 from django.core.management import call_command
@@ -22,6 +24,8 @@ from rebac import system_context
 from angee.parties_integrate_carddav.backend import (
     CardDavDirectoryBackend,
     CardDavError,
+    ParsedContact,
+    ParsedPhoto,
     _parse_data_uri,
     _parse_date,
     _parse_vcard,
@@ -90,6 +94,46 @@ ANNIVERSARY:18350101
 PHOTO;ENCODING=b;TYPE=PNG:QUJD
 NOTE:First programmer.
 END:VCARD"""
+
+
+def _backend_with_http(http: Any) -> CardDavDirectoryBackend:
+    bridge = SimpleNamespace(credential=None, config={"server_url": "https://dav.example/"})
+    backend = CardDavDirectoryBackend(bridge)
+    backend.__dict__["http"] = http
+    return backend
+
+
+def test_native_httpx_multistatus_and_case_insensitive_redirect() -> None:
+    """DAV accepts native 207 and resolves a mixed-case Location header."""
+
+    calls: list[str] = []
+
+    class FakeHttp:
+        def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+            del method, kwargs
+            calls.append(url)
+            if len(calls) == 1:
+                return httpx.Response(302, headers={"LoCaTiOn": "/addressbooks/"})
+            return httpx.Response(207, content=b"<d:multistatus xmlns:d='DAV:'/>")
+
+    response = _backend_with_http(FakeHttp())._request("PROPFIND", "https://dav.example/root", "")
+
+    assert response.status_code == 207
+    assert calls == ["https://dav.example/root", "https://dav.example/addressbooks/"]
+
+
+def test_native_httpx_photo_content_type_ignores_parameters() -> None:
+    """Native case-insensitive headers preserve photo bytes and strip MIME parameters."""
+
+    class FakeHttp:
+        def get(self, url: str, **kwargs: Any) -> httpx.Response:
+            del url, kwargs
+            return httpx.Response(200, content=b"photo", headers={"CoNtEnT-TyPe": "image/jpeg; charset=binary"})
+
+    contact = ParsedContact(uid="one", display_name="One", photo=ParsedPhoto(uri="photo.jpg"))
+    resolved = _backend_with_http(FakeHttp())._resolve_photo(contact)
+
+    assert resolved.photo == ParsedPhoto(data=b"photo", mime="image/jpeg")
 
 
 @pytest.fixture()

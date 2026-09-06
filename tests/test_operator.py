@@ -7,13 +7,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterator, cast
 
+import httpx
 import pytest
 import strawberry
 from django.core.cache import cache
 from rebac import LocalBackend, ObjectRef, RelationshipTuple, SubjectRef
 from rebac.schema import ConstBinding, parse_zed
 
-from angee.integrate.http import HttpResponse
 from angee.operator import daemon as daemon_module
 from angee.operator import schema as operator_schema
 from angee.operator.daemon import OperatorDaemon, OperatorDaemonError, OperatorDaemonNotFound, _daemon_error_body
@@ -56,9 +56,9 @@ def test_daemon_request_raises_typed_not_found(monkeypatch: pytest.MonkeyPatch) 
             body: bytes | None = None,
             allow_private: bool = False,
             timeout: int = 60,
-        ) -> HttpResponse:
+        ) -> httpx.Response:
             del method, url, headers, body, allow_private, timeout
-            return HttpResponse(status=404, body=b'{"error": "service \\"svc\\" is not declared"}')
+            return httpx.Response(404, content=b'{"error": "service \\"svc\\" is not declared"}')
 
     monkeypatch.setattr(daemon_module, "HttpClient", FakeHttpClient)
     daemon = OperatorDaemon(
@@ -91,7 +91,7 @@ def test_daemon_request_uses_the_shared_integrate_http_client(monkeypatch: pytes
             body: bytes | None = None,
             allow_private: bool = False,
             timeout: int = 60,
-        ) -> HttpResponse:
+        ) -> httpx.Response:
             calls.append(
                 {
                     "method": method,
@@ -102,7 +102,7 @@ def test_daemon_request_uses_the_shared_integrate_http_client(monkeypatch: pytes
                     "timeout": timeout,
                 }
             )
-            return HttpResponse(status=200, body=b'{"ok": true}')
+            return httpx.Response(200, content=b'{"ok": true}')
 
     monkeypatch.setattr(daemon_module, "HttpClient", FakeHttpClient)
     daemon = OperatorDaemon(

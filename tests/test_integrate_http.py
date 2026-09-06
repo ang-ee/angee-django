@@ -22,7 +22,7 @@ import pytest
 from django.core.exceptions import ValidationError
 
 from angee.integrate import http as http_module
-from angee.integrate.http import HttpClient, PinnedTransport, _PinnedBackend, _response_status, _without_host
+from angee.integrate.http import HttpClient, PinnedTransport, _PinnedBackend, _without_host
 
 URL = "https://dav.example.test/path?x=1"
 
@@ -173,20 +173,6 @@ def test_pinned_transport_installs_the_pinned_backend() -> None:
     assert isinstance(PinnedTransport(allow_private=False)._pool._network_backend, _PinnedBackend)
 
 
-def test_response_without_status_raises_rather_than_defaulting_to_200() -> None:
-    """A response carrying no status is an error, not a silent success."""
-
-    class Bare:
-        pass
-
-    class WithStatus:
-        status_code = 204
-
-    with pytest.raises(ValueError):
-        _response_status(Bare())
-    assert _response_status(WithStatus()) == 204
-
-
 def test_download_capped_stops_streaming_after_the_byte_cap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -294,5 +280,5 @@ def test_redirect_not_followed_by_default_and_host_is_the_url_host(monkeypatch: 
     monkeypatch.setattr(http_module, "PinnedTransport", transport)
     response = HttpClient().get("http://127.0.0.1:8123/", headers={"Host": "evil.example.com"}, allow_private=True)
 
-    assert response.status == 302
+    assert response.status_code == 302
     assert received_host == "127.0.0.1:8123"

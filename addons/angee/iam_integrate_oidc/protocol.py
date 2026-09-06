@@ -196,8 +196,8 @@ class _PinnedPyJWKClient(PyJWKClient):
                 allow_private=True,
                 timeout=HTTP_TIMEOUT_SECONDS,
             )
-            if not response.ok:
-                raise PyJWKClientConnectionError(f"Fail to fetch data from the url, status: {response.status}")
+            if not response.is_success:
+                raise PyJWKClientConnectionError(f"Fail to fetch data from the url, status: {response.status_code}")
             jwk_set = response.json()
         except PyJWKClientConnectionError:
             raise

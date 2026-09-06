@@ -56,9 +56,9 @@ class PinnedWebhookClient:
                 SIGNATURE_HEADER: self._signature(secret, body),
             },
         )
-        if not response.ok:
-            raise WebhookDeliveryError(f"HTTP {response.status}", status=str(response.status))
-        return str(response.status)
+        if not response.is_success:
+            raise WebhookDeliveryError(f"HTTP {response.status_code}", status=str(response.status_code))
+        return str(response.status_code)
 
     @staticmethod
     def _signature(secret: str, body: bytes) -> str:

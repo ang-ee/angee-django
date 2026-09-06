@@ -25,10 +25,8 @@ following stays safe.
 
 from __future__ import annotations
 
-import json
 import ssl
 from collections.abc import Iterable
-from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Any
 
@@ -47,31 +45,6 @@ _DOWNLOAD_CHUNK_BYTES = 64 * 1024
 _SSL_CONTEXT = ssl.create_default_context()
 """One shared system-trust-store TLS context reused by every pinned transport, so the
 CA bundle is parsed once rather than on every outbound request."""
-
-
-@dataclass(frozen=True, slots=True)
-class HttpResponse:
-    """One outbound HTTP response: the status code, raw body bytes, and headers."""
-
-    status: int
-    body: bytes
-    headers: dict[str, str] = field(default_factory=dict)
-
-    @property
-    def ok(self) -> bool:
-        """Return whether the status is a 2xx success."""
-
-        return 200 <= self.status < 300
-
-    def json(self) -> Any:
-        """Return the body parsed as JSON (``None`` for an empty body)."""
-
-        return json.loads(self.body or b"null")
-
-    def header(self, name: str) -> str:
-        """Return one response header by case-insensitive name, or ``""``."""
-
-        return self.headers.get(name.lower(), "")
 
 
 class _PinnedBackend(httpcore.SyncBackend):
@@ -169,7 +142,7 @@ class HttpClient:
         allow_private: bool = False,
         follow_redirects: bool = False,
         timeout: int = HTTP_TIMEOUT_SECONDS,
-    ) -> HttpResponse:
+    ) -> httpx.Response:
         """GET ``url`` and return the response."""
 
         return self.request(
@@ -229,7 +202,7 @@ class HttpClient:
         allow_private: bool = False,
         follow_redirects: bool = False,
         timeout: int = HTTP_TIMEOUT_SECONDS,
-    ) -> HttpResponse:
+    ) -> httpx.Response:
         """POST ``body`` to ``url`` and return the response."""
 
         return self.request(
@@ -252,7 +225,7 @@ class HttpClient:
         allow_private: bool = False,
         follow_redirects: bool = False,
         timeout: int = HTTP_TIMEOUT_SECONDS,
-    ) -> HttpResponse:
+    ) -> httpx.Response:
         """Send one pinned request to ``url`` and return the response.
 
         Raises ``ValidationError`` when the URL or a resolved address is rejected by
@@ -264,11 +237,7 @@ class HttpClient:
             response = client.request(
                 method, url, headers=_without_host(headers), content=body, follow_redirects=follow_redirects
             )
-        return HttpResponse(
-            status=_response_status(response),
-            body=response.content,
-            headers={name.lower(): value for name, value in response.headers.items()},
-        )
+        return response
 
 
 class HttpClientMixin:
@@ -302,16 +271,3 @@ def _as_os_error(exc: Exception) -> OSError:
     if isinstance(cause, OSError):
         return cause
     return OSError(str(exc))
-
-
-def _response_status(response: Any) -> int:
-    """Return the integer HTTP status from a response.
-
-    A response that carries no status is anomalous; raise rather than defaulting to
-    200, which would mask a failure as success.
-    """
-
-    status = getattr(response, "status_code", None)
-    if isinstance(status, int):
-        return status
-    raise ValueError("HTTP response carries no status code.")

@@ -13,9 +13,10 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
-from angee.integrate.http import HttpClient, HttpResponse
+from angee.integrate.http import HttpClient
 from angee.integrate_github import backend as gh
 
 
@@ -24,9 +25,9 @@ def _patch_get(monkeypatch: pytest.MonkeyPatch, fake_http_get: Any) -> None:
 
     def get(
         self: Any, url: str, *, headers: Any = None, allow_private: bool = False, timeout: int = 15
-    ) -> HttpResponse:
+    ) -> httpx.Response:
         status, body = fake_http_get(url, headers or {}, timeout=timeout)
-        return HttpResponse(status=status, body=body)
+        return httpx.Response(status, content=body)
 
     monkeypatch.setattr(HttpClient, "get", get)
 

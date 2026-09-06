@@ -11,10 +11,13 @@ never reaches up into this addon.
 from __future__ import annotations
 
 import hashlib
+import os
+import tempfile
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
+import httpx
 from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -41,7 +44,8 @@ def _materialize_url(entry: ResourceEntry) -> Path:
 
     The fetch rides the SSRF-pinned :class:`HttpClient` (public-only, redirects
     re-validated). The SSRF gate (``ValidationError``), a transport failure
-    (``OSError``), and a non-2xx response all surface as ``ResourceLoadError``.
+    (``httpx.RequestError`` or ``OSError``), and a non-2xx response all surface
+    as ``ResourceLoadError``.
     """
 
     url = entry.source_value
@@ -53,11 +57,19 @@ def _materialize_url(entry: ResourceEntry) -> Path:
         response = HttpClient().get(url, follow_redirects=True)
     except ValidationError as error:
         raise ResourceLoadError(f"{url!r}: {'; '.join(error.messages)}") from error
-    except OSError as error:
+    except (httpx.RequestError, OSError) as error:
         raise ResourceLoadError(f"{url!r}: fetch failed: {error}") from error
-    if not response.ok:
-        raise ResourceLoadError(f"{url!r}: fetch failed: HTTP {response.status}")
-    cache_path.write_bytes(response.body)
+    if not response.is_success:
+        raise ResourceLoadError(f"{url!r}: fetch failed: HTTP {response.status_code}")
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=cache_path.parent, prefix=f".{cache_path.name}.", delete=False) as output:
+            temporary_path = Path(output.name)
+            output.write(response.content)
+        os.replace(temporary_path, cache_path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
     return cache_path
 
 

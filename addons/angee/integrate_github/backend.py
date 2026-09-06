@@ -167,10 +167,13 @@ class GitHubBackend(VCSBackend):
             allow_private=allow_private,
             timeout=HTTP_TIMEOUT_SECONDS,
         )
-        if response.status == 404:
+        if response.status_code == 404:
             raise FileNotFoundError(path)
-        if not response.ok:
-            raise GitHubApiError(f"GitHub API GET {path} returned HTTP {response.status}", status=response.status)
+        if not response.is_success:
+            raise GitHubApiError(
+                f"GitHub API GET {path} returned HTTP {response.status_code}",
+                status=response.status_code,
+            )
         return response.json()
 
     @staticmethod
