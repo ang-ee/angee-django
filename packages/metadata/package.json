@@ -51,7 +51,8 @@
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepare": "pnpm run build"
   },
   "dependencies": {
     "@refinedev/core": "^5.0.12",
