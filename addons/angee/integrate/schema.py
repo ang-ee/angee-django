@@ -1255,7 +1255,7 @@ class IntegrationType(IntegrationLabelMixin, AngeeNode):
 
         actor = _session_user(info)
         exposed = _exposed_model_labels(info)
-        integrity, authorized = self.concrete_children(
+        integrity, authorized = cast(Any, self).concrete_children(
             actor=actor,
             exposed_model_labels=exposed,
         )

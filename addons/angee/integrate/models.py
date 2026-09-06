@@ -2050,9 +2050,11 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     def live_pairing(self, impl: Any) -> Any:
         """Project pairing state from durable row facts and backend identity formatting."""
 
-        progress = self.sync_progress if isinstance(self.sync_progress, Mapping) else {}
-        details = progress.get("details") if isinstance(progress.get("details"), Mapping) else {}
-        report = details.get("pairing") if isinstance(details.get("pairing"), Mapping) else {}
+        progress: Mapping[str, Any] = self.sync_progress if isinstance(self.sync_progress, Mapping) else {}
+        details_value = progress.get("details")
+        details: Mapping[str, Any] = details_value if isinstance(details_value, Mapping) else {}
+        report_value = details.get("pairing")
+        report: Mapping[str, Any] = report_value if isinstance(report_value, Mapping) else {}
         reported = PairingState.from_report(report.get("state"))
         raw_identity = self.subscription_state.get(impl.state_identity_key) or report.get("own_id") or ""
         own_id = impl.normalize_account_id(str(raw_identity))

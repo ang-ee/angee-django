@@ -9,7 +9,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 
 from django.apps import AppConfig
 from django.db.migrations import Migration
@@ -317,13 +317,15 @@ class RuntimeMigrations:
 
         if isinstance(raw, str | bytes | Mapping | set | frozenset):
             raise RuntimeError(f"{origin}: invalid Django {kind} {raw!r}")
+        if not isinstance(raw, Iterable):
+            raise RuntimeError(f"{origin}: invalid Django {kind} {raw!r}")
         try:
-            node = tuple(raw)
+            node: tuple[object, ...] = tuple(raw)
         except TypeError as error:
             raise RuntimeError(f"{origin}: invalid Django {kind} {raw!r}") from error
         if len(node) != 2 or not all(isinstance(value, str) for value in node):
             raise RuntimeError(f"{origin}: invalid Django {kind} {raw!r}")
-        return node[0], node[1]
+        return cast("tuple[str, str]", node)
 
     @staticmethod
     def _declarations(addon: AppConfig) -> Iterator[Mapping[str, Any]]:
