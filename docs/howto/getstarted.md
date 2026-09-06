@@ -289,10 +289,13 @@ To put a Claude Code agent to work on the framework itself:
    (worktrees on a `workspace/<agent>` branch) and builds its container — a
    few minutes the first time.
 4. Work with it in the **Chat** on its session page, or hands-on inside the
-   same workspace (the dev flavor ships the interactive CLI):
+   same workspace over `docker compose exec` (the dev flavor ships the
+   interactive CLI, and the image already runs as the `node` user, so no
+   `-u` is needed):
 
    ```sh
-   docker compose exec -u node -it agent-<agent-name> claude
+   # the service is agent-<workspace-slug>; the seeded agent is agent-angee-developer
+   docker compose exec -it agent-angee-developer claude
    ```
 
 Commits stay on the agent's workspace branch; publish with
