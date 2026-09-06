@@ -65,6 +65,9 @@ async function fixture() {
   const router = createRouter({ routeTree: root, history, parseSearch: parseFlatSearch, stringifySearch: stringifyFlatSearch });
   render(<RouterProvider router={router} />);
   await screen.findByText("January 2021");
+  await waitFor(() => expect(
+    (screen.getByRole("button", { name: "January 2021 records 1-20 / 292" }) as HTMLButtonElement).disabled,
+  ).toBe(false));
   return { router, lifecycle, getList };
 }
 

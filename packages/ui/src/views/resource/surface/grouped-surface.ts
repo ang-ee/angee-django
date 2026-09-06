@@ -388,6 +388,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     mergedFilter,
     sortOrder,
     footerAggregate: grandTotal.aggregate,
+    measures: queryMeasures,
     setScopePage,
     setScopePageSize,
     groupedItems,

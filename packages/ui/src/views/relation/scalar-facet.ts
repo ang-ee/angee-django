@@ -22,10 +22,8 @@ import { facetRequestSpec } from "./facet-query";
 import { useUiT } from "../../i18n";
 import type { UiTranslate } from "../../i18n";
 import {
-  resourceViewGroupToAggregateDimension,
   groupLabel,
-  hasuraGroupDimension,
-  hasuraGroupOrderForDimensions,
+  resourceViewGroupQueryProjection,
 } from "../resource/resource-view-list-body";
 import { resourceFieldGroupLabel } from "../resource/model-metadata-defaults";
 import type { ColumnDescriptor } from "../page";
@@ -197,9 +195,7 @@ function addScalarFacet(
   group: ResourceViewGroup,
   options: { labelField?: string } = {},
 ): void {
-  const identity = resourceViewGroupToAggregateDimension(group, metadata);
-  const dimension = hasuraGroupDimension(identity);
-  const orderBy = hasuraGroupOrderForDimensions([dimension]);
+  const projection = resourceViewGroupQueryProjection(group, metadata);
   const labelField = options.labelField ?? fieldName;
   const label = resourceFieldGroupLabel(labelField, metadata.fields[labelField]);
   seen.add(fieldName);
@@ -210,9 +206,9 @@ function addScalarFacet(
     group,
     spec: {
       id: fieldName,
-      dimensions: [dimension],
-      ...(orderBy ? { orderBy } : {}),
-      ...(dimension.key ? { valueKey: dimension.key } : {}),
+      dimensions: projection.dimensions,
+      ...(projection.orderBy ? { orderBy: projection.orderBy } : {}),
+      valueKey: projection.valueKey,
       pageSize: SCALAR_FACET_OPTION_LIMIT,
     },
     neutralizeFilterFields: [fieldName],

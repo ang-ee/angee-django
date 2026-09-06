@@ -55,7 +55,7 @@ describe("MessagesPage", () => {
     });
     expect(pageMocks.listProps).toMatchObject({
       resource: "messaging.Message",
-      defaultGroups: { list: { field: "channel.display_name" } },
+      defaultGroups: { list: { field: "channel" } },
     });
     const columnFields = pageMocks.columns.map((column) => column.field);
     expect(columnFields).toEqual(

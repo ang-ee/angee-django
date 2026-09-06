@@ -12,7 +12,6 @@ from strawberry import auto
 from angee.graphql.actions import authorized_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
-    aggregate_queryset,
     hasura_model_resource,
     public_pk_decoder,
 )
@@ -198,7 +197,6 @@ _SPACE_THREAD_RESOURCE = hasura_model_resource(
     delete=False,
     field_id_decode={"groups": public_pk_decoder(Group)},
     get_queryset=_space_threads,
-    get_aggregate_queryset=lambda info: aggregate_queryset(_space_threads(info)),
 )
 
 _RESOURCE_TYPES = [

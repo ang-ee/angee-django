@@ -30,6 +30,7 @@ Circle = messaging_models.Circle
 Organization = messaging_models.Organization
 Person = messaging_models.Person
 PartyHandle = messaging_models.PartyHandle
+Handle = messaging_models.Handle
 
 
 # Import after the concrete test models are registered; the source schema resolves
@@ -269,6 +270,60 @@ def test_person_hasura_insert_and_update(parties_tables: None) -> None:
         person = Person.objects.get(sqid=created["id"])
     assert person.display_name == "Ada"
     assert person.family_name == "Lovelace"
+
+
+def test_handle_aggregate_includes_unresolved_rows(parties_tables: None) -> None:
+    """Handle aggregate filters operate over the same visible row domain as lists."""
+
+    admin = _platform_admin("party-handle-aggregate-admin")
+    with system_context(reason="test.parties.handle_aggregate.seed"):
+        party = messaging_models.Party.objects.create(display_name="Resolved party", created_by_id=admin.pk)
+        Handle.objects.create(
+            party=party,
+            platform="email",
+            value="resolved@example.com",
+            normalized_value="resolved@example.com",
+            created_by_id=admin.pk,
+        )
+        Handle.objects.create(
+            platform="email",
+            value="unresolved@example.com",
+            normalized_value="unresolved@example.com",
+            created_by_id=admin.pk,
+        )
+
+    result = _data(
+        execute_schema(
+            _schema("public"),
+            """
+            query HandleAggregateDomain {
+              rows: handles(order_by: [{value: asc}]) { id value }
+              all: handles_aggregate { aggregate { count } }
+              unresolved: handles_aggregate(where: {party: {_is_null: true}}) {
+                aggregate { count }
+              }
+              groups: handles_groups(group_by: [{field: PARTY}], limit: 10) {
+                key { party_id }
+                aggregate { count }
+              }
+              groups_count: handles_groups_count(group_by: [{field: PARTY}])
+            }
+            """,
+            user=admin,
+        )
+    )
+
+    assert [row["value"] for row in result["rows"]] == [
+        "resolved@example.com",
+        "unresolved@example.com",
+    ]
+    assert result["all"]["aggregate"]["count"] == 2
+    assert result["unresolved"]["aggregate"]["count"] == 1
+    assert {
+        group["key"]["party_id"]: group["aggregate"]["count"]
+        for group in result["groups"]
+    } == {None: 1, party.sqid: 1}
+    assert result["groups_count"] == 2
 
 
 def test_circle_console_insert_establishes_private_creator_access(
