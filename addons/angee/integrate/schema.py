@@ -9,6 +9,7 @@ related row.
 
 from __future__ import annotations
 
+import enum
 from typing import Any, cast
 
 import strawberry
@@ -16,13 +17,13 @@ import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Prefetch
 from django.utils import timezone
-from rebac import PermissionDenied, system_context
+from rebac import MissingActorError, PermissionDenied, system_context
 from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
+from angee.base.identity import public_id_of
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
@@ -73,6 +74,73 @@ class ConsoleImplChoicesQuery:
         """Return registry choices for an ``ImplClassField``."""
 
         return resolve_impl_choices(model, field)
+
+
+@strawberry.enum
+class IntegrationCreateMode(enum.Enum):
+    """How the console starts creation for an integration capability."""
+
+    FORM = "FORM"
+    CONNECT = "CONNECT"
+
+
+@strawberry.type
+class IntegrationCapability:
+    """One installed, actor-creatable concrete Integration capability."""
+
+    resource: str
+    label: str
+    icon: str | None
+    create_mode: IntegrationCreateMode
+
+
+@strawberry.type
+class ConsoleIntegrationCapabilitiesQuery:
+    """Runtime integration capabilities visible to the console actor."""
+
+    @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def integration_capabilities(self, info: strawberry.Info) -> list[IntegrationCapability]:
+        """Return installed capability owners with an implemented create ingress."""
+
+        capabilities: list[IntegrationCapability] = []
+        exposed = _exposed_model_labels(info)
+        for model in Integration.concrete_child_models():
+            if model._meta.label not in exposed:
+                continue
+            raw_mode = getattr(model, "integration_create_mode", None)
+            if raw_mode not in {mode.value for mode in IntegrationCreateMode}:
+                continue
+            try:
+                model.objects.check_create()
+            except MissingActorError, PermissionDenied:
+                continue
+            capabilities.append(
+                IntegrationCapability(
+                    resource=model._meta.label,
+                    label=str(model.integration_kind_value()),
+                    icon=None,
+                    create_mode=IntegrationCreateMode(raw_mode),
+                )
+            )
+        return capabilities
+
+
+@strawberry.enum
+class ConcreteIntegrationTargetState(enum.Enum):
+    """Permission-safe resolution state for an Integration parent row."""
+
+    AVAILABLE = "AVAILABLE"
+    UNAVAILABLE = "UNAVAILABLE"
+    AMBIGUOUS = "AMBIGUOUS"
+
+
+@strawberry.type
+class ConcreteIntegrationTarget:
+    """Authorized concrete resource identity behind an Integration parent."""
+
+    state: ConcreteIntegrationTargetState
+    resource: str | None = None
+    id: str | None = None
 
 
 # --- Connection substrate: OAuth/OIDC clients, external accounts, credentials ----
@@ -433,16 +501,20 @@ def _console_credentials(info: strawberry.Info) -> Any:
 
 
 def _console_integrations(info: strawberry.Info) -> Any:
-    """Return admin-visible integrations with bridge children prefetched."""
+    """Return admin-visible integrations with authorized concrete children batched."""
 
-    del info
-    return Integration.objects.all().prefetch_related(
-        Prefetch(
-            "vcsbridge",
-            queryset=VcsBridge._base_manager.all(),
-            to_attr="_angee_prefetched_bridge",
-        )
+    actor = _session_user(info)
+    exposed = _exposed_model_labels(info)
+    return Integration.objects.all().with_concrete_children(
+        actor=actor,
+        exposed_model_labels=exposed,
     )
+
+
+def _exposed_model_labels(info: strawberry.Info) -> set[str]:
+    """Return model resources carried by this exact composed GraphQL schema."""
+
+    return {resource.model_label for resource in getattr(info.schema, "angee_resources", ())}
 
 
 _OAUTH_CLIENT_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(
@@ -1167,6 +1239,27 @@ class IntegrationType(IntegrationLabelMixin, AngeeNode):
     created_at: auto
     updated_at: auto
 
+    @strawberry.field
+    def concrete_target(self, info: strawberry.Info) -> ConcreteIntegrationTarget:
+        """Return this parent's one authorized concrete child without leaking denied rows."""
+
+        actor = _session_user(info)
+        exposed = _exposed_model_labels(info)
+        integrity, authorized = self.concrete_children(
+            actor=actor,
+            exposed_model_labels=exposed,
+        )
+        if len(integrity) == 1 and len(authorized) == 1:
+            child = authorized[0]
+            return ConcreteIntegrationTarget(
+                state=ConcreteIntegrationTargetState.AVAILABLE,
+                resource=child._meta.label,
+                id=str(public_id_of(child)),
+            )
+        if len(integrity) > 1 and len(authorized) == len(integrity):
+            return ConcreteIntegrationTarget(state=ConcreteIntegrationTargetState.AMBIGUOUS)
+        return ConcreteIntegrationTarget(state=ConcreteIntegrationTargetState.UNAVAILABLE)
+
     @strawberry_django.field(only=["id"])
     def bridge(self) -> VcsBridgeType | None:
         """Return this integration's VCS child row when present."""
@@ -1859,6 +1952,7 @@ schemas = {
         # where its models do.
         "query": [
             ConsoleImplChoicesQuery,
+            ConsoleIntegrationCapabilitiesQuery,
             _OAUTH_CLIENT_RESOURCE.query,
             _EXTERNAL_ACCOUNT_RESOURCE.query,
             _CREDENTIAL_RESOURCE.query,

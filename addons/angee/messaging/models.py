@@ -880,6 +880,7 @@ class Channel(Bridge):
 
     runtime = True
     extends = "integrate.Integration"
+    integration_create_mode = "CONNECT"
     integration_kind_label = "Channel"
     live_impl_field = "backend_class"
 
@@ -2063,7 +2064,8 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
             return ""
         handle_model = apps.get_model("parties", "Handle")
         return (
-            handle_model.objects.with_actor(actor).with_sender_name()
+            handle_model.objects.with_actor(actor)
+            .with_sender_name()
             .filter(pk=self.sender_id)
             .values_list("_sender_name", flat=True)
             .first()
@@ -2083,7 +2085,8 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         # expression independently scopes its related records, including when
         # the parent was loaded through record-gated chatter or elevated code.
         return (
-            type(self)._base_manager.filter(pk=self.pk)
+            type(self)
+            ._base_manager.filter(pk=self.pk)
             .annotate(_thread_title=type(self).objects.with_actor(actor).thread_title_expression())
             .values_list("_thread_title", flat=True)
             .first()
@@ -2100,7 +2103,8 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         if self.channel_id is None or actor is None:
             return ""
         return (
-            type(self)._base_manager.filter(pk=self.pk)
+            type(self)
+            ._base_manager.filter(pk=self.pk)
             .annotate(_channel_vendor_name=type(self).objects.with_actor(actor).channel_vendor_name_expression())
             .values_list("_channel_vendor_name", flat=True)
             .first()

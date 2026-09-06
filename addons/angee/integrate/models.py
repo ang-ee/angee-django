@@ -34,7 +34,7 @@ from django.contrib.auth import get_user_model
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import IntegrityError, connections, models, transaction
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from django.utils import timezone
 from django.utils.module_loading import import_string
 from django.utils.text import capfirst
@@ -1392,6 +1392,29 @@ class IntegrationQuerySet(AngeeQuerySet[Any]):
             .order_by("pk")
         )
 
+    def with_concrete_children(self, *, actor: Any, exposed_model_labels: set[str]) -> Any:
+        """Prefetch installed and actor-readable concrete children in fixed queries."""
+
+        prefetches: list[Prefetch] = []
+        for child_model in _integration_child_models(cast(type[Integration], self.model)):
+            accessor = self.model.concrete_child_accessor(child_model)
+            prefetches.append(
+                Prefetch(
+                    accessor,
+                    queryset=child_model.objects.sudo(reason="integrate.integration.child_integrity"),
+                    to_attr=self.model.concrete_child_cache_attr(child_model, authorized=False),
+                )
+            )
+            if child_model._meta.label in exposed_model_labels:
+                prefetches.append(
+                    Prefetch(
+                        accessor,
+                        queryset=child_model.objects.with_actor(actor),
+                        to_attr=self.model.concrete_child_cache_attr(child_model, authorized=True),
+                    )
+                )
+        return self.prefetch_related(*prefetches)
+
 
 class IntegrationManager(AngeeManager.from_queryset(IntegrationQuerySet)):  # type: ignore[misc]
     """Manager factories for invariants that span Integration and its impl row."""
@@ -1492,6 +1515,83 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     display_name = models.CharField(max_length=255, blank=True, default="")
     kind = models.CharField(max_length=80, db_index=True, default=integration_kind_label)
     """Human integration type/kind label, denormalized for server-side grouping."""
+
+    @classmethod
+    def check(cls, **kwargs: Any) -> list[Any]:
+        """Reject concrete descendants whose native parent path cannot be routed."""
+
+        errors = super().check(**kwargs)
+        for child_model in _integration_child_models(cls):
+            if child_model._meta.parents.get(cls) is None:
+                errors.append(
+                    checks.Error(
+                        f"{child_model._meta.label} is an indirect Integration descendant.",
+                        hint="Declare routed integration capabilities as direct Integration MTI children.",
+                        obj=child_model,
+                        id="integrate.E004",
+                    )
+                )
+        return errors
+
+    @classmethod
+    def concrete_child_models(cls) -> tuple[type[Integration], ...]:
+        """Return installed concrete descendants in stable model-label order."""
+
+        return _integration_child_models(cls)
+
+    @classmethod
+    def concrete_child_accessor(cls, child_model: type[Integration]) -> str:
+        """Return the native reverse accessor for one direct concrete child."""
+
+        parent_link = child_model._meta.parents.get(cls)
+        if parent_link is None:
+            raise ImproperlyConfigured(
+                f"{child_model._meta.label} is an indirect Integration descendant; "
+                "concrete-target routing requires a direct capability owner."
+            )
+        return str(parent_link.remote_field.get_accessor_name())
+
+    @classmethod
+    def concrete_child_cache_attr(cls, child_model: type[Integration], *, authorized: bool) -> str:
+        """Return the private per-query cache name for one concrete child type."""
+
+        scope = "authorized" if authorized else "integrity"
+        return f"_angee_integration_child_{scope}_{child_model._meta.app_label}_{child_model._meta.model_name}"
+
+    def _concrete_child(self, model: type[Integration], *, actor: Any, authorized: bool) -> Integration | None:
+        """Return one child from this row's collection cache or scoped storage."""
+
+        cache_name = type(self).concrete_child_cache_attr(model, authorized=authorized)
+        if hasattr(self, cache_name):
+            value = getattr(self, cache_name)
+            if isinstance(value, list | tuple):
+                return value[0] if value else None
+            return cast(Integration | None, value)
+        queryset = (
+            model.objects.with_actor(actor)
+            if authorized
+            else model.objects.sudo(reason="integrate.integration.child_integrity")
+        )
+        return cast(Integration | None, queryset.filter(pk=self.pk).first())
+
+    def concrete_children(
+        self, *, actor: Any, exposed_model_labels: set[str]
+    ) -> tuple[list[Integration], list[Integration]]:
+        """Return installed and actor-readable child rows without leaking denied siblings."""
+
+        integrity: list[Integration] = []
+        authorized: list[Integration] = []
+        for child_model in type(self).concrete_child_models():
+            child = self._concrete_child(child_model, actor=actor, authorized=False)
+            if child is None:
+                continue
+            integrity.append(child)
+            if child_model._meta.label in exposed_model_labels:
+                visible = self._concrete_child(child_model, actor=actor, authorized=True)
+                if visible is not None:
+                    authorized.append(visible)
+        return integrity, authorized
+
     vendor = models.ForeignKey("integrate.Vendor", on_delete=models.PROTECT, related_name="integrations")
     impl_class = ImplClassField(
         base_class=IntegrationImpl,
@@ -2303,6 +2403,7 @@ class VcsBridge(Bridge):
 
     runtime = True
     extends = "integrate.Integration"
+    integration_create_mode = "FORM"
     integration_kind_label = "VCS bridge"
 
     backend_class = ImplClassField(

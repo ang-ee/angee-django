@@ -21,9 +21,10 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
-from django.db import IntegrityError
+from django.db import IntegrityError, connection
 from django.db.models.signals import post_save
 from django.test import RequestFactory
+from django.test.utils import CaptureQueriesContext
 from rebac import app_settings, system_context
 from rebac.roles import grant
 
@@ -51,6 +52,7 @@ from tests.conftest import (
 from tests.conftest import (
     result_data as _data,
 )
+from tests.test_agents import InferenceProvider
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
 from tests.test_messaging import MESSAGING_TEST_MODELS
 
@@ -100,6 +102,98 @@ def test_integration_node_resolves_nested_relations(
         "owner": {"username": "conn-node-owner"},
         "account": None,
     }
+
+
+def test_integration_capabilities_are_native_creatable_children(
+    integrate_console_tables: None,
+) -> None:
+    """Runtime capabilities expose only installed children with a real create ingress."""
+
+    admin = _platform_admin("integration-capabilities-admin")
+    rows = _data(
+        _execute(
+            _schema(),
+            "query { integration_capabilities { resource label icon create_mode } }",
+            user=admin,
+        )
+    )["integration_capabilities"]
+    modes = {row["resource"]: row["create_mode"] for row in rows}
+    assert modes["integrate.VcsBridge"] == "FORM"
+    assert "agents.InferenceProvider" not in modes
+    assert "messaging.Channel" not in modes
+    assert "posts.Feed" not in modes
+
+
+def test_integration_concrete_target_keeps_parent_only_rows_unavailable(
+    integrate_console_tables: None,
+) -> None:
+    """Parent-only legacy rows remain visible without a guessed child target."""
+
+    admin = _platform_admin("integration-target-admin")
+    parent = make_integration("target-parent")
+    child = make_integration("target-vcs", model=VcsBridge)
+    rows = _data(
+        _execute(
+            _schema(),
+            "query { integrations(limit: 20) { id concrete_target { state resource id } } }",
+            user=admin,
+        )
+    )["integrations"]
+    targets = {row["id"]: row["concrete_target"] for row in rows}
+    assert targets[_public_id(parent)] == {"state": "UNAVAILABLE", "resource": None, "id": None}
+    assert targets[_public_id(child)] == {
+        "state": "AVAILABLE",
+        "resource": "integrate.VcsBridge",
+        "id": _public_id(child),
+    }
+
+
+def test_concrete_target_fails_closed_for_unexposed_and_ambiguous_children(
+    integrate_console_tables: None,
+) -> None:
+    """Real hidden and sibling child rows never disclose an arbitrary target."""
+
+    admin = _platform_admin("integration-target-closed-admin")
+    hidden = make_integration("target-hidden", model=InferenceProvider, backend_class="manual")
+    sibling_parent = make_integration("target-sibling", model=InferenceProvider, backend_class="manual")
+    VcsBridge(integration_ptr_id=sibling_parent.pk, backend_class="local").save_base(raw=True, force_insert=True)
+    rows = _data(
+        _execute(
+            _schema(),
+            "query { integrations(limit: 20) { id concrete_target { state resource id } } }",
+            user=admin,
+        )
+    )["integrations"]
+    targets = {row["id"]: row["concrete_target"] for row in rows}
+    assert targets[_public_id(hidden)] == {"state": "UNAVAILABLE", "resource": None, "id": None}
+    # One exposed and one hidden sibling collapses to UNAVAILABLE so the hidden
+    # capability is not revealed and the exposed sibling is never chosen.
+    assert targets[_public_id(sibling_parent)] == {"state": "UNAVAILABLE", "resource": None, "id": None}
+
+
+def test_concrete_target_list_query_cost_is_bounded_by_child_types(
+    integrate_console_tables: None,
+) -> None:
+    """Adding parent rows does not add one concrete-child query per row."""
+
+    admin = _platform_admin("integration-target-budget-admin")
+    parent = make_integration("target-budget-parent")
+    make_integration("target-budget-one", model=VcsBridge)
+    hidden = make_integration("target-budget-hidden", model=InferenceProvider, backend_class="manual")
+    schema = _schema()
+    query = "query { integrations(limit: 20) { id concrete_target { state resource id } } }"
+    with CaptureQueriesContext(connection) as one:
+        first = _data(_execute(schema, query, user=admin))["integrations"]
+    first_targets = {row["id"]: row["concrete_target"]["state"] for row in first}
+    assert first_targets[_public_id(parent)] == "UNAVAILABLE"
+    assert first_targets[_public_id(hidden)] == "UNAVAILABLE"
+    assert "AVAILABLE" in first_targets.values()
+    for index in range(4):
+        make_integration(f"target-budget-more-{index}", model=VcsBridge)
+    with CaptureQueriesContext(connection) as many:
+        many_rows = _data(_execute(schema, query, user=admin))["integrations"]
+    assert sum(row["concrete_target"]["state"] == "AVAILABLE" for row in many_rows) == 5
+    assert len(many) <= len(one) + 1
 
 
 def test_integration_groups_aggregate_runs_with_rebac_scope(
@@ -155,10 +249,7 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
 
     schemas = _schemas()
     console_schema = schemas.build("console")
-    metadata = {
-        item.model_label: item
-        for item in console_schema.angee_resources
-    }["integrate.Integration"]
+    metadata = {item.model_label: item for item in console_schema.angee_resources}["integrate.Integration"]
 
     assert schemas.resources("console") == console_schema.angee_resources
     assert metadata.roots.list_name == "integrations"
@@ -169,10 +260,24 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert metadata.roots.update_name == "update_integrations_by_pk"
     assert metadata.roots.delete_name == "delete_integrations_by_pk"
     assert metadata.filter_fields == (
-        "id", "display_name", "vendor", "kind", "impl_class", "lifecycle", "runtime_status", "updated_at",
+        "id",
+        "display_name",
+        "vendor",
+        "kind",
+        "impl_class",
+        "lifecycle",
+        "runtime_status",
+        "updated_at",
     )
     assert metadata.order_fields == (
-        "display_name", "vendor", "kind", "impl_class", "lifecycle", "runtime_status", "created_at", "updated_at",
+        "display_name",
+        "vendor",
+        "kind",
+        "impl_class",
+        "lifecycle",
+        "runtime_status",
+        "created_at",
+        "updated_at",
     )
     assert metadata.aggregate_fields == ("id",)
     assert metadata.group_by_fields == (
@@ -203,10 +308,7 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert metadata.relation_axes[0].label_axis == "vendor__display_name"
     assert metadata.group_aliases == ()
     serialized = console_schema._schema.extensions["angee"]["resources"]
-    integration = {
-        item["modelLabel"]: item
-        for item in serialized
-    }["integrate.Integration"]
+    integration = {item["modelLabel"]: item for item in serialized}["integrate.Integration"]
     assert integration["schemaName"] == "console"
     assert integration["roots"]["list"] == "integrations"
     assert integration["roots"]["detail"] == "integrations_by_pk"
@@ -462,18 +564,21 @@ def test_integration_update_delete_are_admin_only(
     # Hasura create is still REBAC-gated; the deliberately bogus relation ids
     # only need to prove a plain user cannot create through the generic root.
     owner_id = str(conn.owner.sqid)
-    assert _execute(
-        console_schema,
-        """
+    assert (
+        _execute(
+            console_schema,
+            """
         mutation CreateIntegration($owner: ID!) {
           insert_integrations_one(object: {owner: $owner, vendor: $owner, credential: $owner}) {
             lifecycle
           }
         }
         """,
-        {"owner": owner_id},
-        user=plain,
-    ).errors is not None
+            {"owner": owner_id},
+            user=plain,
+        ).errors
+        is not None
+    )
 
     integration_id = _public_id(conn)
     update_integration = """
@@ -487,9 +592,9 @@ def test_integration_update_delete_are_admin_only(
 
     assert _execute(console_schema, update_integration, {"id": integration_id}, user=plain).errors is not None
 
-    updated = _data(
-        _execute(console_schema, update_integration, {"id": integration_id}, user=admin)
-    )["update_integrations_by_pk"]
+    updated = _data(_execute(console_schema, update_integration, {"id": integration_id}, user=admin))[
+        "update_integrations_by_pk"
+    ]
     assert updated == {"account": None, "vendor": {"slug": "conn-crud"}}
 
     delete_integration = """
@@ -502,9 +607,9 @@ def test_integration_update_delete_are_admin_only(
 
     assert _execute(console_schema, delete_integration, {"id": integration_id}, user=plain).errors is not None
 
-    deleted = _data(
-        _execute(console_schema, delete_integration, {"id": integration_id}, user=admin)
-    )["delete_integrations_by_pk"]
+    deleted = _data(_execute(console_schema, delete_integration, {"id": integration_id}, user=admin))[
+        "delete_integrations_by_pk"
+    ]
     assert deleted["id"] == integration_id
     with system_context(reason="test.integrate.integration_crud.after_delete"):
         assert not Integration.objects.filter(pk=conn.pk).exists()
@@ -588,9 +693,10 @@ def test_webhook_crud_secret_write_only(
     admin = _platform_admin("webhook-admin")
     owner = User.objects.create_user(username="webhook-owner", email="owner@example.com")
     # ``createWebhookSubscription`` is admin gated before owner-id resolution.
-    assert _execute(
-        console_schema,
-        """
+    assert (
+        _execute(
+            console_schema,
+            """
         mutation CreateWebhook($owner: ID!) {
           insert_webhook_subscriptions_one(
             object: {owner: $owner, target_url: "https://hooks.example/x", secret: "s"}
@@ -599,9 +705,11 @@ def test_webhook_crud_secret_write_only(
           }
         }
         """,
-        {"owner": str(owner.sqid)},
-        user=plain,
-    ).errors is not None
+            {"owner": str(owner.sqid)},
+            user=plain,
+        ).errors
+        is not None
+    )
     with system_context(reason="test.integrate.webhook_crud.create"):
         subscription = WebhookSubscription.objects.create(
             owner=owner,
@@ -659,9 +767,9 @@ def test_webhook_crud_secret_write_only(
 
     assert _execute(console_schema, delete_webhook, {"id": subscription_id}, user=plain).errors is not None
 
-    deleted = _data(
-        _execute(console_schema, delete_webhook, {"id": subscription_id}, user=admin)
-    )["delete_webhook_subscriptions_by_pk"]
+    deleted = _data(_execute(console_schema, delete_webhook, {"id": subscription_id}, user=admin))[
+        "delete_webhook_subscriptions_by_pk"
+    ]
     assert deleted["id"] == subscription_id
     with system_context(reason="test.integrate.webhook_crud.after_delete"):
         assert not WebhookSubscription.objects.filter(pk=subscription.pk).exists()
@@ -732,9 +840,9 @@ def test_create_integration_from_credential_is_authenticated_user_owned(
 
     assert _execute(console_schema, mutation, {"credential": credential_id}, user=other).errors is not None
 
-    created = _data(
-        _execute(console_schema, mutation, {"credential": credential_id}, user=owner)
-    )["create_integration_from_credential"]
+    created = _data(_execute(console_schema, mutation, {"credential": credential_id}, user=owner))[
+        "create_integration_from_credential"
+    ]
 
     assert created["vendor"] == {"slug": "anthropic"}
     assert created["owner"] == {"username": "credential-owner"}
@@ -781,11 +889,14 @@ def test_connect_integration_reuses_existing_row_with_enum_impl_class(
         }
 
     with system_context(reason="test.integrate.connect_enum.verify"):
-        assert Integration.objects.filter(
-            owner=conn.owner,
-            vendor=conn.vendor,
-            impl_class="none",
-        ).count() == 1
+        assert (
+            Integration.objects.filter(
+                owner=conn.owner,
+                vendor=conn.vendor,
+                impl_class="none",
+            ).count()
+            == 1
+        )
 
 
 def test_integration_disconnected_factory_is_database_unique(
@@ -1239,10 +1350,7 @@ def integrate_console_tables(transactional_db: Any) -> Iterator[None]:
     del transactional_db
     connection_models = tuple(
         dict.fromkeys(
-            MESSAGING_TEST_MODELS
-            + POSTS_TEST_MODELS
-            + (VcsBridge, WebhookSubscription)
-            + AGENTS_GRAPHQL_MODELS
+            MESSAGING_TEST_MODELS + POSTS_TEST_MODELS + (VcsBridge, WebhookSubscription) + AGENTS_GRAPHQL_MODELS
         )
     )
     _create_connection_tables(connection_models)
