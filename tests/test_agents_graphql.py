@@ -615,7 +615,7 @@ def test_update_inference_provider_backend_is_create_only(agents_console_tables:
 
 
 def test_connect_inference_provider_uses_provider_backend_oauth_client(agents_console_tables: None) -> None:
-    """Provider connect resolves OAuth from provider.backend, not Integration.impl."""
+    """Provider connect resolves OAuth from provider.backend."""
 
     del agents_console_tables
     provider = _provider("agt-provider-connect", backend_class="anthropic", name="Anthropic")

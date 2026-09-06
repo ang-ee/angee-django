@@ -1061,7 +1061,11 @@ def test_provision_defers_checks_only_across_the_schema_identity_transition() ->
 
 @pytest.mark.django_db
 def test_provision_plan_can_cross_an_old_persisted_rebac_identity() -> None:
-    """An old persisted field target fails checks until the identity migration runs."""
+    """An old persisted field target fails rebac checks until its identity migrates.
+
+    The bare test host cannot import every addon schema, so this test names the
+    rebac check tag rather than running every registered check.
+    """
 
     from rebac.models import SchemaRelation
 
@@ -1076,7 +1080,7 @@ def test_provision_plan_can_cross_an_old_persisted_rebac_identity() -> None:
     source.save(update_fields=["allowed_subjects"])
 
     with pytest.raises(SystemCheckError, match=r"rebac\.E009"):
-        call_command("check", verbosity=0)
+        call_command("check", "--tag", "rebac", verbosity=0)
 
     plan = Command._provision_plan(_provision_options())
     assert plan[1:6] == [

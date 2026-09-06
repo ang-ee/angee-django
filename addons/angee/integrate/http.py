@@ -243,10 +243,9 @@ class HttpClient:
 class HttpClientMixin:
     """Gives an integration backend the shared SSRF-pinned client as ``self.http``.
 
-    Compose it into a backend that makes outbound calls (alongside its
-    ``BridgeImpl`` / ``Client`` base) so it calls ``self.http.get(url, headers=…)``
-    rather than opening its own connection. HTTP stays opt-in this way — an
-    implementation that does no I/O carries no client.
+    Compose it into a backend that makes outbound calls so it calls
+    ``self.http.get(url, headers=…)`` rather than opening its own connection.
+    HTTP stays opt-in this way — an implementation that does no I/O carries no client.
     """
 
     @cached_property

@@ -2,9 +2,9 @@
 
 Runs check-free (``requires_system_checks = []``) because its whole job is to clear
 the stale ``Schema*`` rows that would otherwise fail ``rebac.E009`` and block every
-checked command. The build lifecycle runs it before ``makemigrations`` so rebuilds
-after addon removal or REBAC definition changes stay green; the prune itself lives
-in :mod:`angee.platform.permissions`.
+checked command. The provision lifecycle runs it after ``migrate`` and before
+permission sync, once identity migrations have preserved moved rows. The prune
+itself lives in :mod:`angee.platform.permissions`.
 """
 
 from __future__ import annotations

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
@@ -728,6 +729,71 @@ def test_unexpected_graphql_errors_hide_exception_details(caplog: pytest.LogCapt
     assert expected.errors is not None
     assert expected.errors[0].message == "Choose another value."
     assert expected.errors[0].extensions == {"code": "BAD_USER_INPUT"}
+
+
+def test_variable_coercion_errors_preserve_client_details_without_logging(caplog: pytest.LogCaptureFixture) -> None:
+    """Request coercion retains graphql-core diagnostics without logging input values."""
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def echo(self, value: int) -> int:
+            return value
+
+    schema = GraphQLSchemas([addon(public={"query": [Query]})]).build("public")
+    invalid_value = "not-an-int-secret"
+
+    result = schema.execute_sync(
+        "query Q($value: Int!) { echo(value: $value) }",
+        variable_values={"value": invalid_value},
+    )
+
+    assert result.errors is not None
+    assert result.errors[0].formatted == {
+        "message": (
+            "Variable '$value' got invalid value 'not-an-int-secret'; "
+            "Int cannot represent non-integer value: 'not-an-int-secret'"
+        ),
+        "locations": [{"line": 1, "column": 9}],
+        "extensions": {"code": "BAD_USER_INPUT"},
+    }
+    assert "Unexpected" not in caplog.text
+    assert invalid_value not in caplog.text
+
+
+def test_unexpected_graphql_errors_log_frames_without_exception_values(caplog: pytest.LogCaptureFixture) -> None:
+    """Resolver failures log their class, path and frames without exception values."""
+
+    secret = "secret-token-xyz"
+
+    def raise_provider_failure() -> str:
+        raise RuntimeError(secret)
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def failure(self) -> str:
+            return raise_provider_failure()
+
+    schema = GraphQLSchemas([addon(public={"query": [Query]})]).build("public")
+
+    result = schema.execute_sync("{ failure }")
+
+    assert result.errors is not None
+    assert result.errors[0].message == "An unexpected error occurred."
+    assert result.errors[0].extensions == {"code": "INTERNAL"}
+    assert result.errors[0].original_error is None
+    records = [
+        record for record in caplog.records if record.name == "angee.graphql.schema" and record.levelno == logging.ERROR
+    ]
+    assert len(records) == 1
+    diagnostic = records[0].getMessage()
+    assert "RuntimeError" in diagnostic
+    assert "['failure']" in diagnostic
+    assert __file__ in diagnostic
+    assert "in raise_provider_failure" in diagnostic
+    assert "raise RuntimeError(secret)" in diagnostic
+    assert secret not in caplog.text
 
 
 def test_graphql_identity_exports_public_node() -> None:

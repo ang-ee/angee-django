@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import traceback
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, cast
@@ -85,11 +86,18 @@ class AngeeSchema(strawberry.Schema):
     ) -> None:
         """Attach GraphQL error codes before Strawberry logs errors."""
 
+        errors_to_log: list[GraphQLError] = []
         for error in errors:
+            if error.path is None and isinstance(error.original_error, GraphQLError):
+                # graphql-core's request coercion errors echo submitted values.
+                # Preserve them for the client without passing them to logging.
+                error.extensions = {"code": "BAD_USER_INPUT"}
+                continue
             self._apply_rebac_code(error)
             self._apply_validation_error(error)
             self._sanitize_unexpected_error(error)
-        super().process_errors(errors, execution_context)
+            errors_to_log.append(error)
+        super().process_errors(errors_to_log, execution_context)
 
     @staticmethod
     def _sanitize_unexpected_error(error: GraphQLError) -> None:
@@ -109,11 +117,16 @@ class AngeeSchema(strawberry.Schema):
                     {key: extensions[key] for key in ("validationErrors", "formErrors") if key in extensions}
                 )
             return
-        logger.error("Unexpected GraphQL resolver error (%s).", type(original).__name__)
+        logger.error(
+            "Unexpected GraphQL resolver error (%s) at path %s.\n%s",
+            type(original).__name__,
+            error.path,
+            "".join(traceback.format_tb(original.__traceback__)),
+        )
         error.message = _INTERNAL_ERROR_MESSAGE
         error.extensions = {"code": "INTERNAL"}
         # Strawberry logs ``original_error`` with its traceback. Detach it after
-        # recording the safe exception class so secrets in exception values do
+        # recording its class, path and frames so secrets in exception values do
         # not merely move from the response into ordinary application logs.
         error.original_error = None
 

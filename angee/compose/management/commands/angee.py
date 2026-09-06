@@ -110,10 +110,10 @@ class Command(BaseCommand):
         1. Wait for the default database to accept connections (in-process).
         2. ``angee build`` — emit the concrete runtime and materialize applicable
            addon-owned migrations onto each downstream app's current leaf.
-        3. ``makemigrations --skip-checks`` — the composer owns app discovery;
-           checks are deferred while migrations reconcile persisted identities with
-           the newly emitted model graph.
-        4. ``migrate --noinput --skip-checks`` for the same bounded transition.
+        3. ``makemigrations --skip-checks`` — every provision defers system checks
+           until migrations and permission sync have reconciled persisted state
+           with the newly emitted model graph.
+        4. ``migrate --noinput --skip-checks`` with checks deferred on every provision.
         5. ``reconcile_permissions`` — prune stale package-managed REBAC schema
            only after identity migrations have preserved moved rows.
         6. ``rebac sync --yes`` (``--force-overwrite`` when ``--force-rebac``).
