@@ -89,6 +89,7 @@ _LEDGER_RESOURCE = hasura_model_resource(
     id_decode=lambda value: value,
     id_column="id",
     model_label="resources.Resource",
+    public_id_field="id",
 )
 
 

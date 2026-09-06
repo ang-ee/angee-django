@@ -135,9 +135,7 @@ def finalize_data_resources(
         native_items = [item for item in contributions if item.native_resource is not None]
         native_resource = native_items[0].native_resource if native_items else None
         if any(item.native_resource is not native_resource for item in native_items[1:]):
-            raise ImproperlyConfigured(
-                f"resource metadata for {model_label} has multiple native resource owners."
-            )
+            raise ImproperlyConfigured(f"resource metadata for {model_label} has multiple native resource owners.")
         native_roots = data_contract.DataResourceRoots()
         native_type_names = data_contract.DataResourceTypeNames()
         create_fields: tuple[str, ...] = ()
@@ -188,28 +186,16 @@ def finalize_data_resources(
                 group_by_spec=resource_type_name(native_resource.group_by_spec_type),
                 group_order=resource_type_name(native_resource.group_order_type),
                 having=resource_type_name(native_resource.having_type),
-                create_input=(
-                    resource_type_name(native_resource.insert_input_type) if create_name else None
-                ),
-                update_input=(
-                    resource_type_name(native_resource.set_input_type)
-                    if update_name or save_name
-                    else None
-                ),
+                create_input=(resource_type_name(native_resource.insert_input_type) if create_name else None),
+                update_input=(resource_type_name(native_resource.set_input_type) if update_name or save_name else None),
             )
             create_fields = native_resource.insertable_fields if create_name else ()
-            update_fields = (
-                native_resource.updatable_fields if update_name or save_name else ()
-            )
-            lines_declaration = _single_policy_value(
-                model_label, contributions, "lines_declaration"
-            )
+            update_fields = native_resource.updatable_fields if update_name or save_name else ()
+            lines_declaration = _single_policy_value(model_label, contributions, "lines_declaration")
             if lines_declaration is not None:
                 from angee.graphql.data.hasura import HasuraLines, _line_metadata
 
-                lines = _line_metadata(
-                    cast(HasuraLines, lines_declaration), native_resource, schema
-                )
+                lines = _line_metadata(cast(HasuraLines, lines_declaration), native_resource, schema)
         roots = _merge_description_values(
             model_label,
             contributions,
@@ -224,9 +210,7 @@ def finalize_data_resources(
             data_contract.DataResourceTypeNames,
             initial=native_type_names,
         )
-        roots, type_names, final_capabilities = final_schema_references(
-            schema, roots, type_names
-        )
+        roots, type_names, final_capabilities = final_schema_references(schema, roots, type_names)
         subtitle = _merge_subtitle_contributions(model_label, contributions)
         metadata = _finalize_data_resource(
             model=first.model,
@@ -249,12 +233,9 @@ def finalize_data_resources(
             subtitle=subtitle,
             public_id_field=cast(
                 str,
-                _single_policy_value(model_label, contributions, "public_id_field")
-                or PUBLIC_ID_FIELD_NAME,
+                _single_policy_value(model_label, contributions, "public_id_field") or PUBLIC_ID_FIELD_NAME,
             ),
-            row_model=cast(
-                str, _single_policy_value(model_label, contributions, "row_model") or "server"
-            ),
+            row_model=cast(str, _single_policy_value(model_label, contributions, "row_model") or "server"),
             graphql_schema=schema,
             contributors=tuple(dict.fromkeys(item.origin for item in contributions)),
         )
@@ -274,8 +255,7 @@ def _single_sequence(
     for item in active[1:]:
         if getattr(item.policy, name) != value:
             raise ImproperlyConfigured(
-                f"resource metadata for {model_label} has conflicting {name} from "
-                f"{active[0].origin} and {item.origin}."
+                f"resource metadata for {model_label} has conflicting {name} from {active[0].origin} and {item.origin}."
             )
     return cast(tuple[Any, ...], value)
 
@@ -286,9 +266,7 @@ def _single_policy_value(
     name: str,
 ) -> object | None:
     values = [
-        (getattr(item.policy, name), item.origin)
-        for item in contributions
-        if getattr(item.policy, name) is not None
+        (getattr(item.policy, name), item.origin) for item in contributions if getattr(item.policy, name) is not None
     ]
     if not values:
         return None
@@ -355,8 +333,7 @@ def _final_group_by_fields(
     return tuple(
         name
         for name in accepted
-        if (dimension := dimensions_by_field.get(name)) is not None
-        and dimension.input in final_inputs
+        if (dimension := dimensions_by_field.get(name)) is not None and dimension.input in final_inputs
     )
 
 
@@ -461,15 +438,9 @@ def _finalize_data_resource(
         relation_axes = _relation_axes(model, group_by_fields)
     if model is not None and order_fields and not default_sort:
         default_sort = _default_sort(model, order_fields)
-    filter_fields = final_input_policy_fields(
-        graphql_schema, type_names.filter, accepted=filter_fields
-    )
-    order_fields = final_input_policy_fields(
-        graphql_schema, type_names.order, accepted=order_fields
-    )
-    aggregate_fields = final_aggregate_wire_fields(
-        graphql_schema, type_names.aggregate, accepted=aggregate_fields
-    )
+    filter_fields = final_input_policy_fields(graphql_schema, type_names.filter, accepted=filter_fields)
+    order_fields = final_input_policy_fields(graphql_schema, type_names.order, accepted=order_fields)
+    aggregate_fields = final_aggregate_wire_fields(graphql_schema, type_names.aggregate, accepted=aggregate_fields)
     group_by_fields = _final_group_by_fields(
         graphql_schema,
         type_names.group_by_spec,
@@ -491,13 +462,9 @@ def _finalize_data_resource(
         relation_axes = tuple(
             dataclasses.replace(
                 axis,
-                field=final_wire_field_names(
-                    graphql_schema, type_names.node, (axis.field,)
-                )[0],
+                field=final_wire_field_names(graphql_schema, type_names.node, (axis.field,))[0],
                 label_axis=(
-                    final_wire_field_names(
-                        graphql_schema, type_names.node, (axis.label_axis,)
-                    )[0]
+                    final_wire_field_names(graphql_schema, type_names.node, (axis.label_axis,))[0]
                     if axis.label_axis is not None
                     else None
                 ),
@@ -561,6 +528,14 @@ def _finalize_data_resource(
         ),
     )
     active_fields = require_unique_resource_fields(exposed_model_label, generated_fields)
+    projected_public_id_field = _projected_public_id_field(
+        graphql_schema=graphql_schema,
+        node_name=type_names.node,
+        resource_label=exposed_model_label,
+        declared=public_id_field,
+        fields=active_fields,
+        required=bool({"list", "detail"} & set(capabilities)),
+    )
     record_representation = _record_representation_field(active_fields)
     active_subtitle = _resource_subtitle(
         model=model,
@@ -576,7 +551,7 @@ def _finalize_data_resource(
         resource_type=model_resource_type(model) if model is not None else None,
         app_label=app_label,
         model_name=model_name,
-        public_id_field=public_id_field,
+        public_id_field=projected_public_id_field,
         roots=roots,
         type_names=type_names,
         contributors=contributors,
@@ -602,6 +577,45 @@ def _finalize_data_resource(
         relation_axes=relation_axes,
         group_aliases=group_aliases,
         lines=lines,
+    )
+
+
+def _projected_public_id_field(
+    *,
+    graphql_schema: GraphQLSchema,
+    node_name: str | None,
+    resource_label: str,
+    declared: str,
+    fields: tuple[data_contract.DataResourceFieldMetadata, ...],
+    required: bool,
+) -> str:
+    """Resolve stored identity policy to the final node's public-ID selection field."""
+
+    if node_name is None:
+        return declared
+    mapped = final_wire_field_names(graphql_schema, node_name, (declared,))[0]
+    if any(field.name == mapped and field.readable for field in fields):
+        return mapped
+
+    node = graphql_schema.get_type(node_name)
+    interfaces = getattr(node, "interfaces", ())
+    identity_fields = tuple(
+        name
+        for interface in interfaces
+        if getattr(interface, "name", None) == "Node"
+        for name, graphql_field in interface.fields.items()
+        if getattr(get_named_type(graphql_field.type), "name", None) == "ID"
+    )
+    if len(identity_fields) == 1 and any(
+        field.name == identity_fields[0] and field.readable for field in fields
+    ):
+        return identity_fields[0]
+
+    if not required:
+        return declared
+    raise ImproperlyConfigured(
+        f"resource metadata for {resource_label} could not project public id field {declared!r} "
+        f"onto final node {node_name!r}."
     )
 
 
@@ -764,14 +778,8 @@ def relation_group_by_fields(
         if related_surface is not None:
             projected_names = resource_string_field_names(related_surface)
             candidates = tuple(
-                candidate
-                for candidate in _PREFERRED_DISPLAY_FIELDS
-                if candidate in projected_names
-            ) + tuple(
-                candidate
-                for candidate in projected_names
-                if candidate not in _PREFERRED_DISPLAY_FIELDS
-            )
+                candidate for candidate in _PREFERRED_DISPLAY_FIELDS if candidate in projected_names
+            ) + tuple(candidate for candidate in projected_names if candidate not in _PREFERRED_DISPLAY_FIELDS)
         else:
             # Donor-contributed and scalar-id relation axes carry no node
             # surface; fall back to the preferred display names over the
@@ -813,16 +821,8 @@ def _impl_fields(
 
     if model is None:
         return ()
-    impl_names = {
-        field.name for field in model._meta.get_fields() if isinstance(field, ImplClassField)
-    }
-    return tuple(
-        sorted(
-            field.name
-            for field in fields
-            if field.readable and field.model_field_name in impl_names
-        )
-    )
+    impl_names = {field.name for field in model._meta.get_fields() if isinstance(field, ImplClassField)}
+    return tuple(sorted(field.name for field in fields if field.readable and field.model_field_name in impl_names))
 
 
 def _default_sort(

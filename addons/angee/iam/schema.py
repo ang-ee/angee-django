@@ -80,6 +80,7 @@ Group = DjangoGroup
 GROUP_PUBLIC_IDENTITY = SqidPublicIdentity(prefix="grp_", min_length=8)
 """Public data identity for Django auth groups exposed by IAM."""
 
+
 def _preference_object(user: Any) -> JSON:
     """Return a safe UI preference object for user projections."""
 
@@ -628,6 +629,7 @@ _REBAC_RELATIONSHIP_RESOURCE = hasura_model_resource(
     id_decode=lambda value: value,
     id_column="id",
     model_label="iam.Relationship",
+    public_id_field="id",
     # The group axes (resource_type/subject_type/relation) are denormalized
     # *display* strings on the node, not RelationshipRegistry columns, so there
     # is no server _groups over them. Like the original authored page, fetch the

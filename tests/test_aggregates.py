@@ -236,6 +236,16 @@ def _finalize_data_resource(
         types=[] if node_type is None else [node_type],
         config=hasura_config(),
     )
+    if "public_id_field" not in kwargs and node_type is not None and not issubclass(node_type, AngeeNode):
+        model = kwargs.get("model")
+        for field in node_type.__strawberry_definition__.fields:
+            python_name = field.python_name
+            try:
+                model._meta.get_field(python_name)
+            except AttributeError, FieldDoesNotExist:
+                continue
+            kwargs["public_id_field"] = python_name
+            break
     return _project_final_data_resource(
         graphql_schema=schema._schema,
         type_names=type_names,
@@ -591,7 +601,6 @@ def test_relation_label_candidates_require_native_string_fields() -> None:
     assert resource_string_field_names(CandidateType) == ("capture_payload_hash",)
 
 
-
 def test_final_metadata_includes_only_allowlisted_input_only_fields() -> None:
     """An accepted write-only input is described once without gaining read access."""
 
@@ -635,9 +644,7 @@ def test_final_metadata_includes_only_allowlisted_input_only_fields() -> None:
     assert fields["word_count"].groupable is True
     assert fields["word_count"].creatable is True
     assert fields["word_count"].updatable is True
-    assert metadata_module.readable_model_field_names(schema.angee_resources[0]) == frozenset(
-        {"id", "name"}
-    )
+    assert metadata_module.readable_model_field_names(schema.angee_resources[0]) == frozenset({"id", "name"})
 
 
 def test_final_scalar_id_fk_keeps_django_relation_semantics() -> None:
@@ -679,6 +686,8 @@ def test_final_scalar_id_fk_keeps_django_relation_semantics() -> None:
     metadata = schema.angee_resources[0]
     parent = {field.name: field for field in metadata.fields}["owner"]
 
+    assert metadata.public_id_field == "id"
+    assert metadata.relation_axes[0].public_id_field == "sqid"
     assert parent.kind == "relation"
     assert parent.scalar is None
     assert parent.widget == "many2one"
@@ -686,6 +695,78 @@ def test_final_scalar_id_fk_keeps_django_relation_semantics() -> None:
     assert parent.relation_object is False
     assert metadata.relation_axes[0].field == "owner"
     assert metadata.relation_axes[0].label_axis == "owner__name"
+
+
+def test_final_custom_public_id_alias_is_metadata_identity() -> None:
+    """A non-Node surface carries its authored final identity alias without an id fallback."""
+
+    @strawberry_django.type(ResourceThing, name="CustomIdentityThingType")
+    class CustomIdentityThingType:
+        @strawberry_django.field(name="public_key", only=["sqid"])
+        def sqid(self) -> strawberry.ID:
+            return strawberry.ID(str(self.sqid))
+
+    resource = hasura_model_resource(
+        CustomIdentityThingType,
+        model=ResourceThing,
+        name="custom_identity_things",
+        public_id_field="sqid",
+        filterable=["sqid"],
+        sortable=["sqid"],
+        aggregatable=["sqid"],
+        insert=False,
+        update=False,
+        delete=False,
+        get_queryset=lambda info: ResourceThing.objects.all(),
+    )
+    schema = GraphQLSchemas(
+        [SchemaAddon({"public": {"query": [resource.query], "types": [CustomIdentityThingType, *resource.types]}})]
+    ).build("public")
+    metadata = schema.angee_resources[0]
+
+    assert metadata.public_id_field == "public_key"
+    node = schema._schema.get_type(metadata.type_names.node)
+    assert metadata.public_id_field in node.fields
+
+
+def test_readable_resource_rejects_absent_final_public_identity() -> None:
+    """List metadata cannot name a stored identity absent from its final node."""
+
+    @strawberry_django.type(ResourceThing, name="MissingIdentityThingType")
+    class MissingIdentityThingType:
+        name: auto
+
+    with pytest.raises(
+        ImproperlyConfigured,
+        match="tests.ResourceThing.*sqid.*MissingIdentityThingType",
+    ):
+        _finalize_data_resource(
+            model=ResourceThing,
+            node_type=MissingIdentityThingType,
+            roots=DataResourceRoots(list_name="missing_identity_things"),
+            type_names=DataResourceTypeNames(),
+            capabilities=("list",),
+            public_id_field="sqid",
+        )
+
+
+def test_readable_resource_rejects_ambiguous_final_public_identity() -> None:
+    """A missing direct identity alias cannot guess between multiple final ID fields."""
+
+    @strawberry_django.type(ResourceThing, name="AmbiguousIdentityThingType")
+    class AmbiguousIdentityThingType:
+        first: strawberry.ID
+        second: strawberry.ID
+
+    with pytest.raises(ImproperlyConfigured, match="tests.ResourceThing.*sqid.*AmbiguousIdentityThingType"):
+        _finalize_data_resource(
+            model=ResourceThing,
+            node_type=AmbiguousIdentityThingType,
+            roots=DataResourceRoots(list_name="ambiguous_identity_things"),
+            type_names=DataResourceTypeNames(),
+            capabilities=("list",),
+            public_id_field="sqid",
+        )
 
 
 def test_final_alias_keeps_model_source_for_readable_publisher_fields() -> None:
@@ -746,9 +827,7 @@ def test_final_input_projection_maps_aliases_defaults_and_author_allowlist() -> 
 
     save.__annotations__["data"] = FinalWritePolicyInput
     save.__annotations__["return"] = bool
-    FinalInputMutation = strawberry.type(
-        type("FinalInputMutation", (), {"save": strawberry.mutation(resolver=save)})
-    )
+    FinalInputMutation = strawberry.type(type("FinalInputMutation", (), {"save": strawberry.mutation(resolver=save)}))
     schema = strawberry.Schema(query=FinalInputQuery, mutation=FinalInputMutation)._schema
     accepted = metadata_module.final_input_wire_fields(
         schema,
@@ -1153,6 +1232,7 @@ def test_data_resource_metadata_marks_public_id_field_as_id_scalar() -> None:
     )
     fields = {field.name: field for field in resource.fields}
 
+    assert resource.public_id_field == "id"
     assert fields["id"].kind == "scalar"
     assert fields["id"].scalar == "ID"
     assert fields["id"].widget is None

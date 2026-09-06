@@ -53,10 +53,7 @@ def test_public_resource_metadata_declares_people_surface() -> None:
     """The composed public schema reports Person's Hasura resource contract."""
 
     schema = _schema("public")
-    metadata = {
-        item.model_label: item
-        for item in schema.angee_resources
-    }["parties.Person"]
+    metadata = {item.model_label: item for item in schema.angee_resources}["parties.Person"]
 
     assert metadata.roots.list_name == "people"
     assert metadata.roots.detail_name == "people_by_pk"
@@ -99,13 +96,12 @@ def test_public_resource_metadata_declares_people_surface() -> None:
     assert metadata.relation_axes[0].model_label == "parties.Folder"
     assert metadata.relation_axes[0].public_id_field == "sqid"
     assert metadata.relation_axes[0].label_axis == "folder__name"
+    assert metadata.public_id_field == "id"
 
     serialized = schema._schema.extensions["angee"]["resources"]
-    person = {
-        item["modelLabel"]: item
-        for item in serialized
-    }["parties.Person"]
+    person = {item["modelLabel"]: item for item in serialized}["parties.Person"]
     assert person["schemaName"] == "public"
+    assert person["publicIdField"] == "id"
     assert person["roots"]["list"] == "people"
     assert person["roots"]["detail"] == "people_by_pk"
     assert person["roots"]["aggregate"] == "people_aggregate"
@@ -130,8 +126,7 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         "created_at": ("CREATED_AT", "created_at", "column", "DateTime"),
     }
     created_at_extractions = {
-        extraction["name"]: extraction
-        for extraction in group_dimensions["created_at"]["extractions"]
+        extraction["name"]: extraction for extraction in group_dimensions["created_at"]["extractions"]
     }
     assert created_at_extractions["month"] == {
         "name": "month",
@@ -319,10 +314,10 @@ def test_handle_aggregate_includes_unresolved_rows(parties_tables: None) -> None
     ]
     assert result["all"]["aggregate"]["count"] == 2
     assert result["unresolved"]["aggregate"]["count"] == 1
-    assert {
-        group["key"]["party_id"]: group["aggregate"]["count"]
-        for group in result["groups"]
-    } == {None: 1, party.sqid: 1}
+    assert {group["key"]["party_id"]: group["aggregate"]["count"] for group in result["groups"]} == {
+        None: 1,
+        party.sqid: 1,
+    }
     assert result["groups_count"] == 2
 
 
@@ -387,10 +382,7 @@ def parties_tables(transactional_db: Any) -> Iterator[None]:
 
 
 def _schema(name: str) -> Any:
-    parts = {
-        key: tuple(parties_schema.schemas[name].get(key, ()))
-        for key in SCHEMA_PART_KEYS
-    }
+    parts = {key: tuple(parties_schema.schemas[name].get(key, ())) for key in SCHEMA_PART_KEYS}
     return GraphQLSchemas([SchemaAddon({name: parts})]).build(name)
 
 
