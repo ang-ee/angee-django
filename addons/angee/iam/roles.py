@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import base64
+import json
 from dataclasses import dataclass
 from typing import Any, cast
 
 from django.contrib.auth import get_user_model
-from django.db.models import Exists, OuterRef, QuerySet, Subquery, TextField
-from django.db.models.functions import Cast
+from django.db.models import QuerySet, Subquery
 from django.http import HttpRequest
 from pydantic import BaseModel
-from rebac import ObjectRef, app_settings, subject_id_attr, system_context
+from rebac import ObjectRef, RelationshipTuple, app_settings, system_context
 from rebac import backend as rebac_backend
+from rebac.actors import to_subject_ref
 from rebac.models import active_relationship_model
+from rebac.relationships import delete_relationship
 from rebac.roles import ROLE_RELATION
 from rebac.schema import Definition, Schema, permission_object_sources, permission_sources
 
@@ -62,6 +65,7 @@ class IAMGrantRow(BaseModel):
     role: str
     role_name: str
     namespace: str
+    caveat_name: str
 
     @classmethod
     def from_relationships(
@@ -85,7 +89,14 @@ class IAMGrantRow(BaseModel):
             role = role_ref(resource_type, resource_id)
             grants.append(
                 cls(
-                    id=f"{principal_ref}:{role}",
+                    id=grant_public_id(
+                        resource_type=resource_type,
+                        resource_id=resource_id,
+                        subject_type=subject_type,
+                        subject_id=subject_id,
+                        optional_subject_relation=str(row.optional_subject_relation),
+                        caveat_name=str(row.caveat_name),
+                    ),
                     principal_id=subject_id,
                     principal_type=subject_type,
                     principal_ref=principal_ref,
@@ -93,6 +104,7 @@ class IAMGrantRow(BaseModel):
                     role=role,
                     role_name=resource_id,
                     namespace=role_namespace(resource_type),
+                    caveat_name=str(row.caveat_name),
                 )
             )
         return grants
@@ -135,9 +147,13 @@ class OverviewInfo:
             role_rows = IAMRoleRow.from_relationships(permission_hub_role_rows(limit=None))
             grant_rows = permission_hub_grant_rows(limit=None)
             privileged_rows = _privileged_grant_rows(grant_rows)
-            unassigned_queryset = unassigned_user_queryset()
+            people = get_user_model()._default_manager.all().people()
+            unassigned_queryset = people.without_direct_roles(
+                grant_rows,
+                schema_role_resource_types(),
+            ).ordered_people()
             return cls(
-                user_count=_people_queryset(get_user_model()).count(),
+                user_count=people.count(),
                 role_count=len(role_rows),
                 grant_count=grant_rows.count(),
                 relationship_count=relationship_rows(limit=None).count(),
@@ -171,6 +187,58 @@ def role_ref(resource_type: str, resource_id: str) -> str:
     """Return the canonical role object ref string."""
 
     return f"{resource_type}:{resource_id}"
+
+
+def grant_public_id(
+    *,
+    resource_type: str,
+    resource_id: str,
+    subject_type: str,
+    subject_id: str,
+    optional_subject_relation: str = "",
+    caveat_name: str = "",
+) -> str:
+    """Return a stable public ID for one native role-membership tuple.
+
+    The historical uncaveated direct-user spelling remains stable. Tuple shapes
+    requiring extra identity use a versioned, unambiguous encoding of the native
+    relationship key.
+    """
+
+    principal_ref = f"{subject_type}:{subject_id}"
+    role = role_ref(resource_type, resource_id)
+    if not optional_subject_relation and not caveat_name:
+        return f"{principal_ref}:{role}"
+    key = (resource_type, resource_id, ROLE_RELATION, subject_type, subject_id, optional_subject_relation, caveat_name)
+    encoded = base64.urlsafe_b64encode(json.dumps(key, separators=(",", ":")).encode()).decode().rstrip("=")
+    return f"grant_v1_{encoded}"
+
+
+def revoke_grant(*, principal: Any, role: ObjectRef, caveat_name: str = "") -> bool:
+    """Delete exactly the selected native role-membership tuple."""
+
+    subject = to_subject_ref(principal)
+    relationships = active_relationship_model().objects
+    lookup = {
+        "resource_type": role.resource_type,
+        "resource_id": role.resource_id,
+        "relation": ROLE_RELATION,
+        "subject_type": subject.subject_type,
+        "subject_id": subject.subject_id,
+        "optional_subject_relation": subject.optional_relation,
+        "caveat_name": caveat_name,
+    }
+    if not relationships.filter(**lookup).exists():
+        return False
+    delete_relationship(
+        RelationshipTuple(
+            resource=role,
+            relation=ROLE_RELATION,
+            subject=subject,
+            caveat_name=caveat_name,
+        )
+    )
+    return True
 
 
 def validate_role(value: str) -> ObjectRef:
@@ -304,85 +372,6 @@ def overview_namespaces(
         )
         for namespace, count in sorted(counts.items())
     ]
-
-
-def unassigned_user_queryset() -> QuerySet[Any]:
-    """Return users without direct role grants."""
-
-    user_model = get_user_model()
-    user_queryset = _people_queryset(user_model)
-    subject_lookup = user_subject_lookup(user_model)
-    if subject_lookup == "sqid":
-        # Materialized: the sqid field decodes lookup values in Python, so the
-        # id set cannot ride a SQL subquery.
-        subject_ids = tuple(
-            dict.fromkeys(
-                str(subject_id)
-                for subject_id in permission_hub_grant_rows(limit=None).values_list("subject_id", flat=True)
-                if subject_id
-            )
-        )
-        assigned_user_pks = user_model._default_manager.filter(sqid__in=subject_ids).values("pk")
-        return cast(
-            QuerySet[Any],
-            user_queryset.exclude(pk__in=Subquery(assigned_user_pks)).order_by(*user_ordering(user_model)),
-        )
-
-    # REBAC stores subject ids as text (``str(<attr>)`` — see the sqid branch
-    # above and rebac's own actor resolution). The correlated attribute may be an
-    # integer column (the default ``REBAC_USER_ID_ATTR="pk"`` resolves to the
-    # bigint pk), so cast it to text before the subquery compares it against the
-    # varchar subject id — otherwise registry storage correlates
-    # ``subject_fk.resource_id`` (varchar) to the bigint pk and Postgres rejects
-    # ``character varying = bigint``.
-    user_queryset = user_queryset.annotate(
-        _iam_subject_id=Cast(subject_lookup, output_field=TextField()),
-    )
-    assigned_exists = active_relationship_model().objects.filter(
-        resource_type__in=schema_role_resource_types(),
-        relation=ROLE_RELATION,
-        subject_type=app_settings.REBAC_USER_TYPE,
-        subject_id=OuterRef("_iam_subject_id"),
-        optional_subject_relation="",
-    )
-    return cast(
-        QuerySet[Any],
-        user_queryset.annotate(_iam_has_role=Exists(assigned_exists))
-        .filter(_iam_has_role=False)
-        .order_by(*user_ordering(user_model)),
-    )
-
-
-def _people_queryset(user_model: type[Any]) -> QuerySet[Any]:
-    """Return the user rows intended for people-facing IAM list surfaces."""
-
-    return cast(QuerySet[Any], user_model._default_manager.all().people())
-
-
-def user_subject_lookup(user_model: type[Any] | None = None) -> str:
-    """Return the User field lookup used by REBAC actor subject ids."""
-
-    model = user_model or get_user_model()
-    attribute = subject_id_attr(model)
-    if attribute == "pk":
-        pk = model._meta.pk
-        return pk.name if pk is not None else "pk"
-    return attribute
-
-
-def user_ordering(user_model: type[Any] | None = None) -> tuple[str, ...]:
-    """Return deterministic ordering for IAM overview user previews."""
-
-    model = user_model or get_user_model()
-    concrete_fields = {field.name for field in model._meta.fields}
-    fields: list[str] = []
-    username_field = str(getattr(model, "USERNAME_FIELD", ""))
-    if username_field in concrete_fields:
-        fields.append(username_field)
-    pk = model._meta.pk
-    if pk is not None and pk.name not in fields:
-        fields.append(pk.name)
-    return tuple(fields or ("pk",))
 
 
 def privileged_role_refs() -> set[str]:

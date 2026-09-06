@@ -13,20 +13,21 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Self, cast
 
+from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
+from django.contrib.auth.models import UnicodeUsernameValidator
+from django.db import models, transaction
+from django.db.models import Exists, OuterRef, Q, Subquery, TextField
+from django.db.models.functions import Cast
+from django.utils import timezone
+from rebac import app_settings, current_actor, subject_id_attr, system_context
+from rebac.models import active_relationship_model
+from rebac.permissions_mixin import RebacPermissionsMixin
+from rebac.roles import ROLE_RELATION, grant, revoke
+
 from angee.base.fields import StateField
 from angee.base.identity import instance_from_public_id
 from angee.base.mixins import SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
-from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
-from django.contrib.auth.models import UnicodeUsernameValidator
-from django.db import models, transaction
-from django.db.models import Q
-from django.utils import timezone
-from rebac import app_settings, current_actor, system_context
-from rebac.permissions_mixin import RebacPermissionsMixin
-from rebac.roles import grant, revoke
-
-from angee.iam.roles import user_ordering
 
 VISIBLE_PEOPLE_DEFAULT_LIMIT = 20
 """Default page size for member-facing people surfaces."""
@@ -54,6 +55,61 @@ class UserQuerySet(AngeeQuerySet[Any]):
         """Return active human user rows."""
 
         return cast(Self, self.people().filter(is_active=True))
+
+    def search_people(self, search: str) -> Self:
+        """Filter people by the fields exposed by the IAM picker."""
+
+        term = search.strip()
+        if not term:
+            return cast(Self, self)
+        return cast(
+            Self,
+            self.filter(
+                Q(username__icontains=term)
+                | Q(first_name__icontains=term)
+                | Q(last_name__icontains=term)
+                | Q(email__icontains=term)
+            ),
+        )
+
+    def ordered_people(self) -> Self:
+        """Apply deterministic ordering using the swappable user's native fields."""
+
+        concrete_fields = {field.name for field in self.model._meta.fields}
+        fields: list[str] = []
+        username_field = str(getattr(self.model, "USERNAME_FIELD", ""))
+        if username_field in concrete_fields:
+            fields.append(username_field)
+        pk = self.model._meta.pk
+        if pk is not None and pk.name not in fields:
+            fields.append(pk.name)
+        return cast(Self, self.order_by(*(fields or ["pk"])))
+
+    def without_direct_roles(self, grant_rows: Any, role_resource_types: set[str]) -> Self:
+        """Return people without direct role memberships in the installed schema."""
+
+        attribute = subject_id_attr(self.model)
+        subject_lookup = self.model._meta.pk.name if attribute == "pk" and self.model._meta.pk else attribute
+        if subject_lookup == "sqid":
+            subject_ids = tuple(
+                dict.fromkeys(
+                    str(subject_id)
+                    for subject_id in grant_rows.values_list("subject_id", flat=True)
+                    if subject_id
+                )
+            )
+            assigned_user_pks = self.model._default_manager.filter(sqid__in=subject_ids).values("pk")
+            return cast(Self, self.exclude(pk__in=Subquery(assigned_user_pks)))
+
+        users = self.annotate(_iam_subject_id=Cast(subject_lookup, output_field=TextField()))
+        assigned = active_relationship_model().objects.filter(
+            resource_type__in=role_resource_types,
+            relation=ROLE_RELATION,
+            subject_type=app_settings.REBAC_USER_TYPE,
+            subject_id=OuterRef("_iam_subject_id"),
+            optional_subject_relation="",
+        )
+        return cast(Self, users.annotate(_iam_has_role=Exists(assigned)).filter(_iam_has_role=False))
 
 
 class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  # type: ignore[misc]
@@ -142,16 +198,8 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         """Return actor-readable active people after search, ordering, and cap."""
 
         bounded = max(1, min(int(limit), VISIBLE_PEOPLE_MAX_LIMIT))
-        queryset = self.with_actor(actor).active_people()
-        term = search.strip()
-        if term:
-            queryset = queryset.filter(
-                Q(username__icontains=term)
-                | Q(first_name__icontains=term)
-                | Q(last_name__icontains=term)
-                | Q(email__icontains=term)
-            )
-        return list(queryset.order_by(*user_ordering(self.model))[:bounded])
+        queryset = self.with_actor(actor).active_people().search_people(search).ordered_people()
+        return list(queryset[:bounded])
 
     def visible_person_from_public_id(self, actor: Any, public_id: str) -> Any | None:
         """Resolve one public user id against the same actor-scoped rows as the picker."""

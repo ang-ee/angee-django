@@ -69,12 +69,14 @@ describe("IAM grants page", () => {
       role: "angee/role:writer",
       role_name: "Writer",
       namespace: "angee",
+      caveat_name: "business-hours",
     };
     expect(revoke?.document).toBe(IamRevokeRole);
     expect(revoke).toMatchObject({ kind: "authored" });
     expect(revoke?.variables(row)).toEqual({
       principal_id: "usr_1",
       role: "angee/role:writer",
+      caveat_name: "business-hours",
     });
     expect(revoke?.succeeded({ revoke_role: true })).toBe(true);
     expect(revoke?.succeeded({ revoke_role: false })).toBe(false);

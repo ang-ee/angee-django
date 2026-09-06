@@ -87,8 +87,8 @@ export const IamRebacSchema = graphql(`
 export const IAM_ROLE_MUTATION_INVALIDATES = ["iam.Grant", "iam.Relationship"] as const;
 
 export const IamRevokeRole = graphql(`
-  mutation IamRevokeRole($principal_id: String!, $role: String!) {
-    revoke_role(principal_id: $principal_id, role: $role)
+  mutation IamRevokeRole($principal_id: String!, $role: String!, $caveat_name: String! = "") {
+    revoke_role(principal_id: $principal_id, role: $role, caveat_name: $caveat_name)
   }
 `);
 

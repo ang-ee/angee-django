@@ -14,7 +14,7 @@ import { useIamT } from "../i18n";
 // The `iam.Grant` Hasura resource row (`hasura_pydantic_resource`,
 // `addons/angee/iam/schema.py`): direct user role-grant tuples, fetched +
 // grouped client-side by ListView's client row model. The revoke stays an
-// authored single-row mutation (`revoke_role(principal_id, role)`) rendered as a
+// authored single-row mutation (`revoke_role(principal_id, role, caveat_name)`) rendered as a
 // per-row action column.
 interface GrantResourceRow extends Record<string, unknown> {
   id: string;
@@ -24,6 +24,7 @@ interface GrantResourceRow extends Record<string, unknown> {
   role: string;
   role_name: string;
   namespace: string;
+  caveat_name: string;
 }
 
 export function GrantsPage(): ReactElement {
@@ -52,6 +53,7 @@ export function GrantsPage(): ReactElement {
             <Code truncate tone="muted">
               {row.role}
             </Code>
+            {row.caveat_name ? <Code truncate tone="muted">{row.caveat_name}</Code> : null}
           </div>
         ),
       },
@@ -73,6 +75,7 @@ export function GrantsPage(): ReactElement {
         variables: (row: GrantResourceRow) => ({
           principal_id: row.principal_id,
           role: row.role,
+          caveat_name: row.caveat_name,
         }),
         succeeded: (result) => result?.revoke_role === true,
         invalidateModels: IAM_ROLE_MUTATION_INVALIDATES,

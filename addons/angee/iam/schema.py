@@ -26,9 +26,6 @@ from rebac.roles import (
     grant as rebac_grant,
 )
 from rebac.roles import (
-    revoke as rebac_revoke,
-)
-from rebac.roles import (
     roles_of as rebac_roles_of,
 )
 from rebac.schema import Definition, Permission, Relation, Schema, render_allowed_subject
@@ -54,6 +51,7 @@ from angee.iam.roles import (
 from angee.iam.roles import (
     IAMGrantRow,
     IAMRoleRow,
+    revoke_grant,
 )
 from angee.iam.roles import (
     iam_overview as _iam_overview_owner,
@@ -789,8 +787,8 @@ class IAMPermissionHubMutation:
             return True
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def revoke_role(self, principal_id: str, role: str) -> bool:
-        """Revoke a role from one user principal."""
+    def revoke_role(self, principal_id: str, role: str, caveat_name: str = "") -> bool:
+        """Revoke the selected caveated or uncaveated role tuple."""
 
         role_ref = _validate_role(role)
         principal = user_principal(principal_id)
@@ -798,7 +796,7 @@ class IAMPermissionHubMutation:
             system_context(reason="iam.graphql.permission_hub.revoke_role"),
             transaction.atomic(),
         ):
-            return bool(rebac_revoke(actor=principal, role=role_ref))
+            return revoke_grant(principal=principal, role=role_ref, caveat_name=caveat_name)
 
 
 schemas = {
