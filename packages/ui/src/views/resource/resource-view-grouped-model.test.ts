@@ -240,9 +240,15 @@ describe("buildGroupedRenderModel", () => {
     ["loading", undefined, "skeleton", undefined],
     [
       "error",
-      result([], { error: Object.assign(new Error("Broken"), { statusCode: 500 }) }),
+      result([], {
+        error: Object.assign(new Error("query variables secret=group-canary"), {
+          request: { variables: { secret: "group-canary" } },
+          response: { status: 500 },
+          statusCode: 500,
+        }),
+      }),
       "status",
-      "Broken",
+      "Request failed.",
     ],
     ["empty", result([]), "status", "No subgroups"],
   ] as const)(

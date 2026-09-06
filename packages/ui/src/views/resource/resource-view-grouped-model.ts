@@ -29,6 +29,7 @@ import {
   type ResourceViewGroup,
 } from "./resource-view-model";
 import type { UiTranslate } from "../../i18n";
+import { errorFromUnknown } from "../../data/errors";
 
 /** Leaf record page size inside a server-grouped bucket. */
 const GROUPED_LEAF_PAGE_SIZE = 20;
@@ -125,7 +126,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
         kind: "status",
         itemKey: `leaf-error:${bucketKey}`,
         depth,
-        message: leaf.error.message,
+        message: errorFromUnknown(leaf.error)?.message ?? "Request failed.",
         tone: "danger",
       });
     } else if ((!leaf || leaf.fetching) && rows.length === 0) {
@@ -204,7 +205,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
             kind: "status",
             itemKey: `error:${levelScopeKey}`,
             depth,
-            message: result.error.message,
+            message: errorFromUnknown(result.error)?.message ?? "Request failed.",
             tone: "danger",
           });
         } else if (!result || result.fetching) {
