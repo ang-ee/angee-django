@@ -35,9 +35,9 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/.venv \
 # `docker stop` shuts the ASGI server down cleanly. git: the composed stack's
 # addon dependency group pulls the pinned ang-ee/strawberry fork — git is needed
 # both to bake that closure and for the mounted-source `uv sync` at container
-# start. No compiler, no node here (Vite is a separate image); the framework's
-# own wheels ship manylinux binaries — only the dev-facing `final` target below
-# adds a toolchain, for the composed addon closure's sdist-only deps.
+# start. No compiler, no node here (Vite is a separate image): the framework's
+# wheels and the composed addon closure both resolve to manylinux binaries, and
+# the only sdist left in that closure (pyaes, pure Python) builds without one.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libmagic1 tini ca-certificates git gosu \
     && rm -rf /var/lib/apt/lists/*
@@ -66,13 +66,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # --- final: the lean base + the baked venv (git inherited for the dev uv sync) --
 FROM base AS final
 # The dev image's contract is a mounted-source `uv sync` of the composed host's
-# FULL addon closure at container start — which includes sdist-only deps (the
-# matrix bridge's python-olm builds libolm via cmake). The toolchain therefore
-# belongs to this target alone; the derived `runtime` image builds from `deps`
-# and stays compiler-free.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential cmake \
-    && rm -rf /var/lib/apt/lists/*
+# FULL addon closure at container start. That closure is wheel-only (see the
+# base stage note), so this target stays as compiler-free as `base` — the
+# build-essential/cmake layer that the Matrix bridge's python-olm once needed is
+# gone with it.
 COPY --from=deps --chown=angee:angee /opt/.venv /opt/.venv
 USER root
 ENTRYPOINT ["tini", "--", "/usr/local/bin/angee-django-entrypoint"]

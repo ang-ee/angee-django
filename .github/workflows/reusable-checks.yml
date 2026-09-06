@@ -110,9 +110,6 @@ jobs:
           ref: ${{ github.repository == 'ang-ee/angee-messaging-bridges' && github.sha || inputs.bridges-ref }}
           path: stack/workspaces/src/angee-messaging-bridges
           token: ${{ secrets.BRIDGES_TOKEN || github.token }}
-      - name: Install the opt-in Matrix bridge's native dependency
-        if: ${{ inputs.addons-profile == 'full' }}
-        run: sudo apt-get update && sudo apt-get install -y libolm-dev
       - name: Install the angee CLI (the public install path)
         run: curl -fsSL https://raw.githubusercontent.com/ang-ee/angee-operator/main/scripts/install.sh | ANGEE_VERSION=${{ inputs.angee-version }} sh
       - uses: astral-sh/setup-uv@v6
