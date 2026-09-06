@@ -1,9 +1,4 @@
-"""Integration implementation descriptors.
-
-An ``Integration`` row stores the registry key for integration-level behaviour.
-Concrete addons contribute subclasses through ``ANGEE_INTEGRATION_IMPLS``; persisted
-domain state belongs on real child models, not on descriptor-owned companion rows.
-"""
+"""Implementation descriptors owned by concrete integration capabilities."""
 
 from __future__ import annotations
 
@@ -51,13 +46,6 @@ class IntegrationImpl(ImplBase):
             reason="integrate.graphql.connect_integration.oauth_client",
             vendor_slug=vendor_slug,
         )
-
-
-class NullIntegrationImpl(IntegrationImpl):
-    """Neutral implementation for a row that has chosen none."""
-
-    key = "none"
-    label = "None"
 
 
 class BridgeImpl(IntegrationImpl):

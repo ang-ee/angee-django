@@ -285,6 +285,7 @@ class ImplClassField(TextChoicesField):
         self.base_class = base_class
         self.registry_setting = registry_setting
         self.create_only = create_only
+        self._historical_default = kwargs.get("default")
         kwargs.setdefault("max_length", 100)
         super().__init__(choices_enum=self._build_enum(), **kwargs)
 
@@ -378,7 +379,10 @@ class ImplClassField(TextChoicesField):
         keys = sorted(self._registry())
         if not keys:
             if self.base_class is None:
-                return cast("type[models.TextChoices]", models.TextChoices(self._enum_name(), ()))
+                default = self._historical_default
+                if isinstance(default, str) and default:
+                    members = [(default.upper(), (default, default))]
+                    return cast("type[models.TextChoices]", models.TextChoices(self._enum_name(), members))
             raise ImproperlyConfigured(
                 f"ImplClassField registry settings.{self.registry_setting} is empty; an addon must "
                 "contribute at least one impl (e.g. a noop/null-object default) before the field is built."

@@ -25,15 +25,6 @@ SETTINGS = {
     "ANGEE_OAUTH_PROVIDER_TYPES": {
         "generic_oauth2": "angee.integrate.oauth.providers.GenericOAuth2",
     },
-    # The ``Integration.impl_class`` registry: each key a parent-only
-    # ``Integration`` row may name → the dotted path of its integration-level
-    # behavior. ``none`` is the neutral null-object implementation
-    # (``ImplClassField`` requires a non-empty registry). Concrete child models
-    # own their domain backend field/registry (e.g. ``VcsBridge.backend_class``).
-    # See ``angee.base.impl.ImplClassField``.
-    "ANGEE_INTEGRATION_IMPLS": {
-        "none": "angee.integrate.impl.NullIntegrationImpl",
-    },
     # Networked resource manifests belong to integrate's outbound HTTP owner; the
     # resources addon reads the settings registry lazily when entries materialize.
     "ANGEE_RESOURCE_SOURCE_CLASSES.url": "angee.integrate.resource_source.url_source",

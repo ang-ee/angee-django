@@ -1443,11 +1443,6 @@ class IntegrationQuerySet(AngeeQuerySet[Any]):
 class IntegrationManager(AngeeManager.from_queryset(IntegrationQuerySet)):  # type: ignore[misc]
     """Manager factories for invariants that span Integration and its impl row."""
 
-    def impl_class_for_key(self, key: str) -> type[IntegrationImpl]:
-        """Return the implementation class registered for ``key`` on this model."""
-
-        return cast(type[IntegrationImpl], self.model.resolve_impl_class("impl_class", key))
-
     def sync_kinds(self) -> int:
         """Backfill parent rows with the concrete integration kind they materialize."""
 
@@ -1468,8 +1463,8 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     The first-class "what we're connected to and what runs over it": it draws a
     ``credential`` (and optionally an ``account``) from the connection substrate to
     authenticate, points at a catalogue ``vendor``, and stores the implementation
-    key that owns integration-level behavior. Domain-specific state and config live
-    on concrete child models.
+    capability. Domain-specific behavior, state, and config live on concrete child
+    models.
     """
 
     runtime = True
@@ -1570,7 +1565,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         fields = [
             field
             for field in self._meta.get_fields()
-            if isinstance(field, ImplClassField) and field.name != "impl_class"
+            if isinstance(field, ImplClassField)
         ]
         if len(fields) != 1:
             raise ImproperlyConfigured(
@@ -1580,13 +1575,6 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         return impl_class(self)
 
     vendor = models.ForeignKey("integrate.Vendor", on_delete=models.PROTECT, related_name="integrations")
-    impl_class = ImplClassField(
-        base_class=IntegrationImpl,
-        registry_setting="ANGEE_INTEGRATION_IMPLS",
-        default="none",
-        create_only=True,
-    )
-    """Registry key for the implementation this integration runs."""
     # PROTECT: a present credential is the integration's authentication. It may
     # belong to a principal other than ``owner`` (an org/app-install credential), so
     # deleting a credential still in use is refused rather than silently breaking
@@ -1650,13 +1638,6 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         ordering = ("-updated_at",)
         rebac_resource_type = "integrate/integration"
         rebac_id_attr = "sqid"
-        constraints = (
-            models.UniqueConstraint(
-                fields=("owner", "vendor", "impl_class"),
-                condition=Q(kind="Integration"),
-                name="uniq_integrate_parent_owner_vendor_impl",
-            ),
-        )
 
     def __str__(self) -> str:
         """Return a stable vendor-qualified integration label."""
@@ -1704,13 +1685,6 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         vendor = getattr(self, "vendor", None)
         label = str(getattr(vendor, "display_name", "") or getattr(vendor, "slug", "") or "integration")
         return f"{label} ({self.lifecycle})"
-
-    @property
-    def impl(self) -> IntegrationImpl:
-        """Return this row's integration-level implementation."""
-
-        impl_class = cast(type[IntegrationImpl], self.resolve_impl("impl_class"))
-        return impl_class(self)
 
     @transition(
         lifecycle,
@@ -1900,7 +1874,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         LIVE = "live", "Live"
         STOPPED = "stopped", "Stopped"
 
-    live_impl_field: ClassVar[str] = "impl_class"
+    live_impl_field: ClassVar[str]
     """Name the ImplClassField that selects this bridge's runtime implementation."""
 
     config = models.JSONField(default=dict, blank=True)

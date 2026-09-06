@@ -7,9 +7,10 @@ import importlib.util
 import pytest
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
+from django.test import override_settings
 from pydantic import BaseModel, Field
 
-from angee.base.impl import ImplBase, ImplChoice
+from angee.base.impl import ImplBase, ImplChoice, ImplClassField
 from tests.conftest import Integration, OAuthClient
 
 
@@ -80,12 +81,29 @@ def test_impl_owner_public_import_contract() -> None:
         assert importlib.util.find_spec(f"angee.base.{legacy_module}") is None
 
 
+@override_settings(ANGEE_EMPTY_IMPLS={})
+def test_historical_impl_field_reconstructs_without_removed_registry() -> None:
+    """Serialized migration fields retain their stored default after their registry is removed."""
+
+    with pytest.raises(ImproperlyConfigured, match="registry .* is empty"):
+        ImplClassField(
+            base_class=ImplBase,
+            registry_setting="ANGEE_EMPTY_IMPLS",
+            default="none",
+        )
+
+    historical = ImplClassField(registry_setting="ANGEE_EMPTY_IMPLS", default="none")
+    _, _, args, kwargs = historical.deconstruct()
+    reconstructed = ImplClassField(*args, **kwargs)
+
+    assert reconstructed.base_class is None
+    assert reconstructed.get_default() == "none"
+    assert reconstructed.deconstruct()[3]["registry_setting"] == "ANGEE_EMPTY_IMPLS"
+
+
 def test_model_impl_field_is_the_public_declared_accessor() -> None:
     """Models expose their impl field through the declared public seam."""
 
-    from angee.base.impl import ImplClassField  # noqa: PLC0415
-
-    assert isinstance(Integration.impl_field("impl_class"), ImplClassField)
     with pytest.raises(FieldDoesNotExist, match="Integration.lifecycle is not an ImplClassField"):
         Integration.impl_field("lifecycle")
     assert not hasattr(Integration, "_impl_field")

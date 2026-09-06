@@ -46,7 +46,6 @@ from angee.iam.permissions import session_user as _session_user
 from angee.iam.schema import UserType
 from angee.integrate import connect as _connect
 from angee.integrate.credentials import handler_for
-from angee.integrate.impl import IntegrationImpl
 from angee.integrate.models import Bridge, IntegrationLifecycle
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
@@ -675,12 +674,6 @@ def _credential_material(data: CredentialInput) -> dict[str, str]:
     return material
 
 
-def _integration_impl_class(impl_class: str) -> type[IntegrationImpl]:
-    """Return the configured implementation class for one integration key."""
-
-    return cast(type[IntegrationImpl], Integration.objects.impl_class_for_key(impl_class))
-
-
 def integration_create_attrs(
     data: Any,
     *,
@@ -1238,7 +1231,6 @@ class IntegrationType(IntegrationLabelMixin, AngeeNode):
     account: ExternalAccountType | None
     owner: UserType
     kind: auto
-    impl_class: auto
     lifecycle: auto
     runtime_status: auto
     last_used_at: auto
@@ -1283,28 +1275,6 @@ class IntegrationType(IntegrationLabelMixin, AngeeNode):
             bridge = VcsBridge._base_manager.filter(pk=cast(Any, self).pk).first()
         return cast("VcsBridgeType | None", bridge)
 
-    @strawberry_django.field(only=["impl_class"], description="Implementation")
-    def impl_category(self) -> str:
-        """Return this integration implementation's board grouping category.
-
-        Reads the class-level metadata off the resolved impl class — no instance,
-        no child model fetch — so a board/list render does not N+1 over child models.
-        """
-
-        impl_class = _integration_impl_class(cast(Any, self).impl_class)
-        return str(getattr(impl_class, "category", "") or "none")
-
-    @strawberry_django.field(only=["impl_class"])
-    def impl_label(self) -> str:
-        """Return this integration implementation's human label."""
-
-        impl_class = _integration_impl_class(cast(Any, self).impl_class)
-        display_label = getattr(impl_class, "display_label", None)
-        if callable(display_label):
-            return str(display_label())
-        return str(getattr(impl_class, "label", "") or cast(Any, self).impl_class)
-
-
 @strawberry_django.type(Integration)
 class ConnectedIntegrationType(IntegrationLabelMixin, AngeeNode):
     """Public projection of a current-user integration connection."""
@@ -1314,7 +1284,6 @@ class ConnectedIntegrationType(IntegrationLabelMixin, AngeeNode):
     account: ConnectedExternalAccountType | None
     owner: UserType
     kind: auto
-    impl_class: auto
     lifecycle: auto
     runtime_status: auto
     last_used_at: auto
@@ -1360,19 +1329,18 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
     IntegrationType,
     model=Integration,
     name="integrations",
-    filterable=["id", "display_name", "vendor", "kind", "impl_class", "lifecycle", "runtime_status", "updated_at"],
+    filterable=["id", "display_name", "vendor", "kind", "lifecycle", "runtime_status", "updated_at"],
     sortable=[
         "display_name",
         "vendor",
         "kind",
-        "impl_class",
         "lifecycle",
         "runtime_status",
         "created_at",
         "updated_at",
     ],
     aggregatable=["id"],
-    groupable=["kind", "impl_class", "vendor", "vendor__display_name", "lifecycle", "runtime_status"],
+    groupable=["kind", "vendor", "vendor__display_name", "lifecycle", "runtime_status"],
     updatable=["vendor", "credential", "account", "owner"],
     insert=False,
     field_id_decode={
@@ -1943,8 +1911,8 @@ schemas = {
         ],
     },
     "console": {
-        # The impl-picker lookup (Integration.impl_class / VcsBridge.backend_class /
-        # OAuthClient.provider_type live here); a generic framework query contributed
+        # Concrete impl-picker lookups (VcsBridge.backend_class /
+        # OAuthClient.provider_type) live here; a generic framework query contributed
         # where its models do.
         "query": [
             ConsoleImplChoicesQuery,

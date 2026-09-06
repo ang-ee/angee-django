@@ -286,7 +286,7 @@ def make_integration(
     ``material`` pick the credential kind (default a static token); pass
     ``kind=CredentialKind.OAUTH`` for an OAuth-backed integration. ``model`` may
     be a concrete MTI child such as ``VcsBridge``; VCS child rows choose
-    ``backend_class`` while parent-only integrations choose ``impl_class``.
+    ``backend_class`` while parent-only integrations have no selector.
     """
 
     if material is None:
@@ -311,8 +311,6 @@ def make_integration(
         field_names = {field.name for field in model._meta.fields}
         if "backend_class" in field_names:
             values["backend_class"] = backend_class or ("local" if impl_class == "none" else impl_class)
-        else:
-            values["impl_class"] = impl_class
         return model.objects.create(**values)
 
 

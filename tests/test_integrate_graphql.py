@@ -15,13 +15,12 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Iterator
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connection
 from django.db.models.signals import post_save
@@ -217,7 +216,7 @@ def test_integration_groups_aggregate_runs_with_rebac_scope(
             """
             query IntegrationGroups($groupBy: [GROUP_BY_SPEC!]!) {
               integrations_groups(group_by: $groupBy, limit: 10) {
-                key { vendor_id vendor__display_name kind impl_class }
+                key { vendor_id vendor__display_name kind }
                 aggregate { count }
               }
             }
@@ -227,7 +226,6 @@ def test_integration_groups_aggregate_runs_with_rebac_scope(
                     {"field": "VENDOR"},
                     {"field": "VENDOR__DISPLAY_NAME"},
                     {"field": "KIND"},
-                    {"field": "IMPL_CLASS"},
                 ],
             },
             user=admin,
@@ -239,7 +237,6 @@ def test_integration_groups_aggregate_runs_with_rebac_scope(
                 "vendor_id": vendor_id,
                 "vendor__display_name": "Conn-Groups",
                 "kind": "Integration",
-                "impl_class": "NONE",
             },
             "aggregate": {"count": 1},
         }
@@ -266,7 +263,6 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         "display_name",
         "vendor",
         "kind",
-        "impl_class",
         "lifecycle",
         "runtime_status",
         "updated_at",
@@ -275,7 +271,6 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         "display_name",
         "vendor",
         "kind",
-        "impl_class",
         "lifecycle",
         "runtime_status",
         "created_at",
@@ -284,7 +279,6 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert metadata.aggregate_fields == ("id",)
     assert metadata.group_by_fields == (
         "kind",
-        "impl_class",
         "vendor",
         "vendor__display_name",
         "lifecycle",
@@ -295,7 +289,6 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         for dimension in metadata.group_dimensions
     } == {
         "kind": ("KIND", "kind", "column", None),
-        "impl_class": ("IMPL_CLASS", "impl_class", "column", None),
         "vendor": ("VENDOR", "vendor_id", "relation", "ID"),
         "vendor__display_name": ("VENDOR__DISPLAY_NAME", "vendor__display_name", "column", None),
         "lifecycle": ("LIFECYCLE", "lifecycle", "column", None),
@@ -334,7 +327,6 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     ]
     assert integration["groupByFields"] == [
         "kind",
-        "impl_class",
         "vendor",
         "vendor__display_name",
         "lifecycle",
@@ -350,7 +342,6 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         for dimension in integration["groupDimensions"]
     } == {
         "kind": ("KIND", "kind", "column", None),
-        "impl_class": ("IMPL_CLASS", "impl_class", "column", None),
         "vendor": ("VENDOR", "vendor_id", "relation", "ID"),
         "vendor__display_name": ("VENDOR__DISPLAY_NAME", "vendor__display_name", "column", None),
         "lifecycle": ("LIFECYCLE", "lifecycle", "column", None),
@@ -374,8 +365,6 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert kind_field["sortable"] is True
     assert kind_field["groupable"] is True
     assert kind_field["updatable"] is False
-    impl_field = {field["name"]: field for field in integration["fields"]}["impl_class"]
-    assert impl_field["values"] == [{"value": "NONE", "description": "None"}]
     lifecycle_field = {field["name"]: field for field in integration["fields"]}["lifecycle"]
     assert lifecycle_field["kind"] == "enum"
     assert lifecycle_field["widget"] == "select"
@@ -403,12 +392,12 @@ def test_resource_metadata_names_the_impl_columns_it_projects() -> None:
 
     schema = _schema()
     resources = {item.model_label: item for item in schema.angee_resources}
-    assert resources["integrate.Integration"].impl_fields == ("impl_class",)
+    assert resources["integrate.Integration"].impl_fields == ()
     assert resources["integrate.VcsBridge"].impl_fields == ("backend_class",)
     assert resources["integrate.Vendor"].impl_fields == ()
 
     wire = {item["modelLabel"]: item for item in schema._schema.extensions["angee"]["resources"]}
-    assert wire["integrate.Integration"]["implFields"] == ["impl_class"]
+    assert wire["integrate.Integration"]["implFields"] == []
     assert wire["integrate.Vendor"]["implFields"] == []
 
 
@@ -420,7 +409,7 @@ def test_impl_choices_are_admin_only(integrate_console_tables: None) -> None:
     admin = _platform_admin("impl-choices-admin")
     query = """
         query {
-          impl_choices(model: "integrate.Integration", field: "implClass") {
+          impl_choices(model: "integrate.VcsBridge", field: "backendClass") {
             key
           }
         }
@@ -428,7 +417,7 @@ def test_impl_choices_are_admin_only(integrate_console_tables: None) -> None:
 
     assert _execute(console_schema, query, user=plain).errors is not None
     result = _data(_execute(console_schema, query, user=admin))["impl_choices"]
-    assert {"key": "none"} in result
+    assert {"key": "stub"} in result
 
     vcs_result = _data(
         _execute(
@@ -478,30 +467,6 @@ def test_impl_choices_are_admin_only(integrate_console_tables: None) -> None:
     }
 
 
-def test_update_integration_rejects_impl_class_patch(integrate_console_tables: None) -> None:
-    """The implementation discriminator is create-time only."""
-
-    admin = _platform_admin("impl-patch-admin")
-    conn = make_integration("impl-patch")
-    console_schema = _schema()
-
-    result = _execute(
-        console_schema,
-        """
-        mutation UpdateIntegration($id: String!) {
-          update_integrations_by_pk(pk_columns: {id: $id}, _set: {impl_class: "stub"}) {
-            lifecycle
-          }
-        }
-        """,
-        {"id": _public_id(conn)},
-        user=admin,
-    )
-
-    assert result.errors is not None
-    assert "impl_class" in result.errors[0].message
-
-
 def test_vcs_bridge_child_creation_creates_parent_identity(integrate_console_tables: None) -> None:
     """Creating an MTI child creates the Integration parent identity row."""
 
@@ -519,8 +484,6 @@ def test_vcs_bridge_child_creation_creates_parent_identity(integrate_console_tab
             {"api_key": "x"},
         )
         vendor = Vendor.objects.create(slug="vcs-child", display_name="VCS Child")
-        assert Integration.impl_key_for("impl_class", "", default="none") == "none"
-        assert Integration.impl_key_for("impl_class", "   ", default="none") == "none"
         assert VcsBridge.impl_key_for("backend_class", "STUB", default="local") == "stub"
         bridge = VcsBridge.objects.create(
             vendor=vendor,
@@ -532,7 +495,6 @@ def test_vcs_bridge_child_creation_creates_parent_identity(integrate_console_tab
         )
         integration = Integration.objects.get(pk=bridge.pk)
 
-        assert integration.impl_class == "none"
         assert integration.kind == "VCS bridge"
         assert bridge.backend_class == "stub"
         assert str(integration.lifecycle) == "disconnected"
@@ -1294,47 +1256,6 @@ def test_non_create_only_impl_field_remains_editable(integrate_console_tables: N
         client.save(update_fields={"provider_type", "updated_at"})
         client.refresh_from_db()
     assert client.provider_type == second
-
-
-def test_parent_impl_axis_preflight_accepts_rows_and_rejects_custom_or_sibling_state(
-    integrate_console_tables: None,
-) -> None:
-    """The destructive S4 gate preserves parent-only rows and aborts on ambiguous data."""
-
-    module = importlib.import_module("angee.integrate.runtime_migrations.integration_parent_impl_axis")
-    bridge = make_integration("parent-axis-child", backend_class="stub", model=VcsBridge)
-    parent_only = make_integration("parent-axis-parent")
-    historical = SimpleNamespace(
-        get_model=lambda app_label, model_name: Integration,
-        get_models=lambda: (Integration, VcsBridge),
-    )
-    editor = SimpleNamespace(connection=connection)
-
-    module.preflight_parent_impl_axis(historical, editor)
-    with system_context(reason="test.integrate.parent_axis.custom"):
-        Integration.objects.filter(pk=parent_only.pk).update(impl_class="custom")
-    with pytest.raises(ImproperlyConfigured, match="explicit mappings.*custom"):
-        module.preflight_parent_impl_axis(historical, editor)
-    with system_context(reason="test.integrate.parent_axis.restore"):
-        Integration.objects.filter(pk=parent_only.pk).update(impl_class="none")
-
-    class SiblingRows:
-        def using(self, alias: str) -> SiblingRows:
-            return self
-
-        def values_list(self, field: str, *, flat: bool) -> list[int]:
-            return [bridge.pk]
-
-    sibling = SimpleNamespace(
-        _meta=SimpleNamespace(
-            label="external.SecondChild",
-            parents={Integration: SimpleNamespace(attname="integration_ptr_id")},
-        ),
-        _base_manager=SiblingRows(),
-    )
-    historical.get_models = lambda: (Integration, VcsBridge, sibling)
-    with pytest.raises(ImproperlyConfigured, match="multiple concrete children"):
-        module.preflight_parent_impl_axis(historical, editor)
 
 
 def test_update_vcs_bridge_rejects_unknown_backend_class(

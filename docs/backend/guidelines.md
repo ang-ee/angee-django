@@ -921,11 +921,15 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   `registry_setting`** — the key→path mapping (e.g. `ANGEE_STORAGE_BACKEND_CLASSES`)
   is supplied by the owning addon's `autoconfig`, so every settings module that
   installs the addon must carry a **non-empty** mapping, including a bare module
-  that skips the composer (`tests/settings.py` declares storage, integration,
-  VCS, inference, and OAuth provider registries explicitly). An empty
+  that skips the composer (`tests/settings.py` declares storage, VCS, inference,
+  and OAuth provider registries explicitly). An empty
   registry raises `ImproperlyConfigured` at import — give the addon a
   noop/null-object default so the set is never empty. The column stores the key
-  (`local`), never a dotted path.
+  (`local`), never a dotted path. The one bounded exception is a deconstructed
+  historical migration field: migrations intentionally omit `base_class`, so it
+  may reconstruct its declared default after the registry has been removed. This
+  exists only to replay and remove old columns; active model fields still require
+  a typed base and a non-empty registry.
 - **Implementation subclasses must replace every inherited semantic default that changes.**
   See `ImplBase.effective_defaults()` for the merge contract. An OpenAI-compatible
   backend that omits its own `name` and `vendor` silently creates an OpenAI provider row.

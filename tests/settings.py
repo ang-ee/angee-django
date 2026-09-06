@@ -136,9 +136,6 @@ ANGEE_STORAGE_MOUNT_BACKEND_CLASSES = {
     "local_folder": "angee.storage_integrate.mounts.LocalFolderMountBackend",
     "iphone_backup": "angee.storage_integrate_iphone.mounts.IphoneBackupMountBackend",
 }
-ANGEE_INTEGRATION_IMPLS = {
-    "none": "angee.integrate.impl.NullIntegrationImpl",
-}
 ANGEE_RESOURCE_SOURCE_CLASSES = {
     "path": "angee.resources.sources.path_source",
     "url": "angee.integrate.resource_source.url_source",

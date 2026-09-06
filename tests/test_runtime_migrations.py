@@ -14,6 +14,7 @@ from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.state import ModelState, ProjectState
 
 from angee.base.fields import StateField
+from angee.base.impl import ImplClassField
 from angee.compose.migrations import RuntimeMigrations
 from tests.conftest import make_addon, write_addon_manifest
 
@@ -1285,3 +1286,70 @@ def test_validated_plan_render_uses_the_hashed_source_snapshot(runtime_migration
     rendered = materializer._render(plan)
     assert rendered.startswith(expected)
     assert not rendered.startswith("changed after planning")
+
+
+def test_integration_parent_impl_axis_migration_recognizes_exact_state() -> None:
+    """The S4 migration is append-only over exact old/new shapes."""
+
+    from tests.conftest import Integration
+
+    module = importlib.import_module("angee.integrate.runtime_migrations.integration_parent_impl_axis")
+    old = ProjectState()
+    old.add_model(ModelState.from_model(Integration))
+    old.models["integrate", "integration"].fields["impl_class"] = ImplClassField(
+        registry_setting="ANGEE_INTEGRATION_IMPLS",
+        default="none",
+    )
+    old.models["integrate", "integration"].options["constraints"] = [
+        models.UniqueConstraint(
+            fields=("owner", "vendor", "impl_class"),
+            condition=models.Q(kind="Integration"),
+            name=module.CONSTRAINT_NAME,
+        )
+    ]
+
+    assert module.applies(old) is True
+    migrated = module.Migration("probe", "integrate").mutate_state(old)
+    assert module.applies(migrated) is False
+    assert "impl_class" not in migrated.models["integrate", "integration"].fields
+    assert module.CONSTRAINT_NAME not in {
+        constraint.name for constraint in migrated.models["integrate", "integration"].options["constraints"]
+    }
+    assert module.applies(ProjectState()) is False
+
+
+def test_integration_parent_impl_axis_migration_rejects_partial_shapes() -> None:
+    """Field-only, constraint-only, and altered old constraints fail closed."""
+
+    from tests.conftest import Integration
+
+    module = importlib.import_module("angee.integrate.runtime_migrations.integration_parent_impl_axis")
+    old = ProjectState()
+    old.add_model(ModelState.from_model(Integration))
+    old.models["integrate", "integration"].fields["impl_class"] = ImplClassField(
+        registry_setting="ANGEE_INTEGRATION_IMPLS",
+        default="none",
+    )
+    old.models["integrate", "integration"].options["constraints"] = [
+        models.UniqueConstraint(
+            fields=("owner", "vendor", "impl_class"),
+            condition=models.Q(kind="Integration"),
+            name=module.CONSTRAINT_NAME,
+        )
+    ]
+    field_only = old.clone()
+    field_only.models["integrate", "integration"].options["constraints"] = []
+    constraint_only = old.clone()
+    constraint_only.models["integrate", "integration"].fields.pop("impl_class")
+    altered = old.clone()
+    altered.models["integrate", "integration"].options["constraints"] = [
+        models.UniqueConstraint(
+            fields=("owner", "vendor"),
+            condition=models.Q(kind="Integration"),
+            name=module.CONSTRAINT_NAME,
+        )
+    ]
+
+    for state in (field_only, constraint_only, altered):
+        with pytest.raises(ImproperlyConfigured, match="partial Integration transition"):
+            module.applies(state)
