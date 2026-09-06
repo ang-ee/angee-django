@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
+import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -11,7 +13,7 @@ from urllib import parse
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError, connection, connections, transaction
 from django.test.utils import override_settings
 from django.utils import timezone
 from rebac import system_context, to_object_ref, to_subject_ref
@@ -22,6 +24,34 @@ from angee.integrate.models import AccountStatus
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import TOKEN_EXCHANGE_FAILED, OAuthFlowError
 from tests.conftest import Credential, ExternalAccount, Integration, OAuthClient, Vendor, _create_missing_tables
+
+
+def _ensure_fresh_in_process(
+    credential_pk: int,
+    start: Any,
+    results: Any,
+) -> None:
+    """Race one real database refresh transaction from a separate process."""
+
+    import django
+
+    django.setup()
+
+    def refresh_once(self: Any, *, refresh_token: str) -> dict[str, Any]:
+        results.put(("refresh", refresh_token))
+        time.sleep(0.3)
+        return {"access_token": "process-fresh", "refresh_token": "process-rotated", "expires_in": 7200}
+
+    OAuthClientProtocol.refresh_token = refresh_once
+    try:
+        with system_context(reason="test cross-process credential refresh"):
+            credential = Credential.objects.sudo(reason="test cross-process credential load").get(pk=credential_pk)
+            if not start.wait(timeout=10):
+                raise TimeoutError("credential refresh race did not start")
+            credential.ensure_fresh()
+            results.put(("result", credential.secret_value()))
+    finally:
+        connections.close_all()
 
 
 def test_oauth_client_blank_client_id_means_needs_client() -> None:
@@ -632,6 +662,59 @@ def test_ensure_fresh_renews_an_expiring_oauth_credential(monkeypatch: pytest.Mo
 
 
 @pytest.mark.django_db(transaction=True)
+def test_ensure_fresh_serializes_two_processes_on_postgresql() -> None:
+    """Two consumers issue one refresh and both adopt its persisted token."""
+
+    if connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL row-lock behavior")
+    created_models = _create_missing_tables()
+    processes: list[multiprocessing.Process] = []
+    results: Any | None = None
+    try:
+        user = get_user_model().objects.create_user(username="refresh-process", email="process@example.com")
+        call_command("rebac", "sync", verbosity=0)
+        credential = _expiring_oauth_credential(
+            user,
+            slug="refresh-process",
+            material={"access_token": "old", "refresh_token": "process-old", "expires_in": 3600},
+        )
+        connections.close_all()
+        context = multiprocessing.get_context("fork")
+        start = context.Event()
+        results = context.Queue()
+        processes = [
+            context.Process(target=_ensure_fresh_in_process, args=(credential.pk, start, results)) for _ in range(2)
+        ]
+        for process in processes:
+            process.start()
+        start.set()
+        for process in processes:
+            process.join(timeout=15)
+            assert process.exitcode == 0
+
+        events = [results.get(timeout=5) for _ in range(3)]
+        assert events.count(("refresh", "process-old")) == 1
+        assert events.count(("result", "process-fresh")) == 2
+        reloaded = Credential.objects.sudo(reason="test cross-process credential verify").get(pk=credential.pk)
+        assert reloaded.reveal()["refresh_token"] == "process-rotated"
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=5)
+            if process.pid is not None and process.exitcode is None:
+                process.join(timeout=1)
+        if results is not None:
+            results.close()
+            results.join_thread()
+        _drop_models(created_models)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.skipif(connection.vendor != "sqlite", reason="SQLite locking floor")
 def test_ensure_fresh_does_not_call_select_for_update_on_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
     """SQLite is the documented floor; refresh locking degrades to a plain read there."""
 
@@ -671,6 +754,7 @@ def test_ensure_fresh_does_not_call_select_for_update_on_sqlite(monkeypatch: pyt
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.skipif(connection.vendor != "sqlite", reason="SQLite locking floor")
 def test_connect_from_credential_does_not_call_select_for_update_on_sqlite(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

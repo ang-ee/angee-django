@@ -165,8 +165,12 @@ class PostgresAdvisoryLockBackend:
                     SELECT 1
                     FROM pg_locks
                     WHERE locktype = 'advisory'
+                      AND database = (
+                          SELECT oid FROM pg_database WHERE datname = current_database()
+                      )
                       AND classid = %s
                       AND objid = %s
+                      AND objsubid = 2
                       AND granted
                 )
                 """,

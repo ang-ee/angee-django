@@ -869,9 +869,10 @@ def test_ensure_bridge_sessions_latches_runtime_error_until_resume(
     assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 1}
 
 
-def test_live_backend_holds_account_lock_key() -> None:
+def test_live_backend_holds_account_lock_key(settings: Any) -> None:
     """The account-scoped lock namespace follows the backend key."""
 
+    settings.ANGEE_TASK_LOCK_BACKEND = "angee.jobs.locks.LocalLockBackend"
     bridge = Channel()
     assert bridge.live_account_lock_key("fake_live", "account-1").name == "angee:fake_live-account:account-1"
     with bridge.live_account_lock("fake_live", "account-1") as acquired:
