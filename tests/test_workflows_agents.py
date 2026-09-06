@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -55,6 +56,34 @@ from tests.workflows import (
 
 User = get_user_model()
 pytest_plugins = ("tests.workflows",)
+
+
+def test_journal_serialization_uses_native_values_and_rejects_ambiguous_inputs() -> None:
+    """The journal boundary has a deterministic native JSON contract."""
+
+    from angee.workflows_agents.steps import _journal_jsonable
+
+    assert _journal_jsonable(
+        {
+            "when": datetime(2026, 9, 6, 12, 30, tzinfo=UTC),
+            "amount": Decimal("1.25"),
+            "payload": b"hello",
+            "nested": (True, None),
+        }
+    ) == {
+        "when": "2026-09-06T12:30:00Z",
+        "amount": "1.25",
+        "payload": "hello",
+        "nested": [True, None],
+    }
+    with pytest.raises(TypeError, match="string keys"):
+        _journal_jsonable({1: "integer key"})
+    with pytest.raises(TypeError, match="unordered sets"):
+        _journal_jsonable({"values": {1, 2}})
+    with pytest.raises(Exception, match="Unable to serialize unknown type"):
+        _journal_jsonable({"opaque": object()})
+    with pytest.raises(ValueError, match="Out of range float values"):
+        _journal_jsonable({"value": float("nan")})
 
 
 @pytest.fixture()
@@ -153,6 +182,46 @@ def test_agent_step_renders_template_and_journals_bounded_io(
     assert len(encoded_output.encode("utf-8")) <= AGENT_STEP_JOURNAL_MAX_BYTES
     assert AGENT_STEP_TRUNCATION_MARKER in encoded_output
     assert "workflow-subject" in encoded_output
+
+
+def test_agent_step_serialization_failure_becomes_a_persisted_failed_outcome(
+    workflows_agents_tables: None,
+    no_workflow_queue: None,
+    stub_chats: list[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unsupported success data records its serialization error without masking it."""
+
+    del workflows_agents_tables, no_workflow_queue, stub_chats
+    from angee.workflows_agents import steps
+
+    subject = User.objects.create_user(username="workflow-serialization-subject")
+    model = _inference_model("stub-serialization")
+    workflow = workflow_with_steps(
+        name="Workflow serialization failure",
+        steps=(
+            {
+                "key": "agent",
+                "step_class": "agent",
+                "config": {
+                    "provider": model.provider.sqid,
+                    "model": model.name,
+                    "prompt_template": "Serialize this.",
+                },
+            },
+        ),
+        edges=(),
+    )
+    monkeypatch.setattr(steps, "_success_summary", lambda **kwargs: {"opaque": object()})
+
+    run = start_run(workflow, subject=subject)
+    advance_once(run)
+    execute_started(run)
+
+    row = step_run_for(run, "agent")
+    assert row.outcome == "failed"
+    assert row.output["error"]["type"] == "PydanticSerializationError"
+    assert "Unable to serialize unknown type" in row.output["error"]["message"]
 
 
 def test_agent_step_debits_token_usage_into_run_budget_spent(

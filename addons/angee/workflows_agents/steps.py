@@ -671,11 +671,11 @@ def _is_retryable_provider_error(error: Exception) -> bool:
 def _bounded_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
     """Return ``summary`` capped to ``AGENT_STEP_JOURNAL_MAX_BYTES`` when encoded."""
 
-    safe = _json_safe(summary)
+    safe = _journal_jsonable(summary)
     if _json_size(safe) <= AGENT_STEP_JOURNAL_MAX_BYTES:
         return safe
 
-    text = json.dumps(safe, sort_keys=True, default=str, ensure_ascii=False, separators=(",", ":"))
+    text = json.dumps(safe, sort_keys=True, allow_nan=False, ensure_ascii=False, separators=(",", ":"))
     wrapper: dict[str, Any] = {
         "truncated": True,
         "limit_bytes": AGENT_STEP_JOURNAL_MAX_BYTES,
@@ -692,16 +692,34 @@ def _bounded_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
 def _json_size(value: Any) -> int:
     """Return the UTF-8 JSON byte size for ``value``."""
 
-    return len(json.dumps(value, sort_keys=True, default=str, ensure_ascii=False).encode("utf-8"))
+    return len(json.dumps(value, sort_keys=True, allow_nan=False, ensure_ascii=False).encode("utf-8"))
 
 
-def _json_safe(value: Any) -> Any:
-    """Return a value suitable for JSONField storage."""
+def _journal_jsonable(value: Any) -> Any:
+    """Serialize supported journal values through Pydantic's native JSON owner.
+
+    Persisted mappings must already use JSON string keys. Sets are rejected
+    because their order is not stable, and opaque Python objects are rejected by
+    ``to_jsonable_python`` instead of being persisted through arbitrary ``str``.
+    """
+
+    _validate_journal_input(value)
+    result = to_jsonable_python(value)
+    # Match Django's strict JSON encoder contract for non-finite floats.
+    json.dumps(result, allow_nan=False)
+    return result
+
+
+def _validate_journal_input(value: Any) -> None:
+    """Reject ambiguous mapping keys and unordered collections before serialization."""
 
     if isinstance(value, Mapping):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, list | tuple):
-        return [_json_safe(item) for item in value]
-    if value is None or isinstance(value, str | int | float | bool):
-        return value
-    return str(value)
+        if any(not isinstance(key, str) for key in value):
+            raise TypeError("Agent step journal mappings require string keys.")
+        for item in value.values():
+            _validate_journal_input(item)
+    elif isinstance(value, list | tuple):
+        for item in value:
+            _validate_journal_input(item)
+    elif isinstance(value, set | frozenset):
+        raise TypeError("Agent step journals do not accept unordered sets.")
