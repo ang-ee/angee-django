@@ -236,7 +236,7 @@ class OAuthClientProtocol:
             # non-JSON 4xx (the documented Anthropic/CDN 403/429 block page) surfaces as
             # a ValueError, and a transport failure as httpx.HTTPError — both map to the
             # stable OAuthFlowError seam, like the JSON-shim and _get_json paths.
-            self._log_token_failure("transport_error", {"error": str(exc)})
+            self._log_token_failure(f"transport_error:{type(exc).__name__}", None)
             raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400) from exc
         finally:
             session.close()
@@ -308,16 +308,14 @@ class OAuthClientProtocol:
         return httpx.Client(headers=dict(OUTBOUND_HEADERS), **_outbound_kwargs(self._transport))
 
     def _log_token_failure(self, status: object, body: Any) -> None:
-        """Log a redacted token-request failure against the client label."""
+        """Log bounded token-request metadata without provider-controlled values."""
 
-        client_label = str(
-            getattr(self.oauth_client, "slug", "") or getattr(self.oauth_client, "client_id", "") or "unknown"
-        )
+        del body
+        client_label = str(getattr(self.oauth_client, "slug", "") or "unknown")
         logger.warning(
-            "OAuth token request failed for %s: status=%s body=%r",
+            "OAuth token request failed for %s: status=%s",
             client_label,
             status,
-            _safe_error_body(body),
         )
 
     def _authorize_query(
@@ -433,9 +431,7 @@ def _token_response_identity_claims(response: Mapping[str, Any]) -> dict[str, An
     """Return allow-listed, non-secret identity mappings from a token response."""
 
     return {
-        key: dict(value)
-        for key in _TOKEN_RESPONSE_IDENTITY_KEYS
-        if isinstance((value := response.get(key)), Mapping)
+        key: dict(value) for key in _TOKEN_RESPONSE_IDENTITY_KEYS if isinstance((value := response.get(key)), Mapping)
     }
 
 
@@ -446,25 +442,3 @@ def _response_body(response: httpx.Response) -> Any:
         return response.json()
     except ValueError:
         return response.text
-
-
-def _safe_error_body(value: Any) -> Any:
-    """Return a provider error body with obvious credential fields redacted."""
-
-    if isinstance(value, Mapping):
-        redacted_keys = {
-            "access_token",
-            "refresh_token",
-            "id_token",
-            "token",
-            "code",
-            "code_verifier",
-            "client_secret",
-        }
-        return {
-            str(key): "[redacted]" if str(key).lower() in redacted_keys else _safe_error_body(item)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_safe_error_body(item) for item in value]
-    return value

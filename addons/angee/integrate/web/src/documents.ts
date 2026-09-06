@@ -38,12 +38,14 @@ export const ConnectOAuthResultFields = graphql(`
 
 export const ConnectIntegration = graphql(`
   mutation ConnectIntegration(
-    $integrationId: ID!
+    $resource: String!
+    $id: ID!
     $redirectUri: String!
     $next: String!
   ) {
     connect_integration(
-      integration_id: $integrationId
+      resource: $resource
+      id: $id
       redirect_uri: $redirectUri
       next: $next
     ) {

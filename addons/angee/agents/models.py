@@ -168,6 +168,7 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
         base_class=InferenceBackend,
         registry_setting="ANGEE_INFERENCE_BACKEND_CLASSES",
         default="manual",
+        create_only=True,
     )
     """Registry key for the inference backend this provider uses."""
     name = models.CharField(max_length=128)

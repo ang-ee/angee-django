@@ -58,6 +58,7 @@ class Mount(Bridge):
         base_class=MountBackend,
         registry_setting="ANGEE_STORAGE_MOUNT_BACKEND_CLASSES",
         default="local_folder",
+        create_only=True,
     )
     drive = models.ForeignKey(
         "storage.Drive",

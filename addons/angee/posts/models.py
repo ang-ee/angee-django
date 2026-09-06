@@ -64,6 +64,7 @@ class Feed(Bridge):
         base_class=FeedBackend,
         registry_setting="ANGEE_POSTS_FEED_BACKEND_CLASSES",
         default="manual",
+        create_only=True,
     )
     """Registry key for the feed backend bound to this feed."""
 

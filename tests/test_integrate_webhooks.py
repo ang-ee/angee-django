@@ -364,7 +364,7 @@ def test_deliver_event_failure_increments_consecutive_failures(
     assert subscription.consecutive_failures == 5
     assert subscription.last_delivery_at is not None
     assert subscription.last_delivery_status == ""
-    assert "ConnectionRefusedError" in subscription.last_error
+    assert subscription.last_error == "Webhook delivery failed."
 
 
 @pytest.mark.django_db(transaction=True)
@@ -429,7 +429,7 @@ def test_deliver_event_rejects_unsafe_resolved_target_without_connecting(
     assert result == {"delivered": 0, "errors": 1}
     assert subscription.consecutive_failures == 1
     assert subscription.last_delivery_status == ""
-    assert "URL host resolves to an address that is not allowed." in subscription.last_error
+    assert subscription.last_error == "Webhook target is invalid."
 
 
 @pytest.mark.django_db(transaction=True)
@@ -464,7 +464,7 @@ def test_deliver_event_redirect_response_fails_without_following(
     assert posts[0]["url"] == "https://hooks-redirect.example.test/events"
     assert subscription.consecutive_failures == 3
     assert subscription.last_delivery_status == "302"
-    assert "HTTP 302" in subscription.last_error
+    assert subscription.last_error == "Webhook returned HTTP 302."
 
 
 @pytest.mark.django_db(transaction=True)

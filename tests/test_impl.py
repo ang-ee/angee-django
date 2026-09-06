@@ -5,8 +5,9 @@ from __future__ import annotations
 import importlib.util
 
 import pytest
-from django.core.exceptions import FieldDoesNotExist
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
+from pydantic import BaseModel, Field
 
 from angee.base.impl import ImplBase, ImplChoice
 from tests.conftest import Integration, OAuthClient
@@ -44,6 +45,16 @@ class _ConfigBase(ImplBase):
 class _ConfigRefined(_ConfigBase):
     key = "cfg_refined"
     defaults = {"authorize_params": {"port": 2, "tls": True}}
+
+
+class _ScalarConfig(BaseModel):
+    endpoint: str = Field(default="https://example.test", description="Service endpoint.")
+    retries: int
+
+
+class _TypedConfigImpl(ImplBase):
+    key = "typed"
+    config_model = _ScalarConfig
 
 
 def test_impl_owner_public_import_contract() -> None:
@@ -114,7 +125,43 @@ def test_choice_metadata_falls_back_to_titlecased_key() -> None:
         icon="",
         category="demo",
         defaults=_RefinedImpl.effective_defaults(),
+        config_schema=None,
     )
+
+
+def test_typed_config_projects_supported_scalars_and_validates_paths() -> None:
+    """The native declaration owns defaults, form metadata, and validation paths."""
+
+    assert _TypedConfigImpl.effective_defaults()["config"] == {"endpoint": "https://example.test"}
+    assert _TypedConfigImpl.config_form_spec() == {
+        "type": "object",
+        "properties": {
+            "endpoint": {
+                "type": "string",
+                "label": "Endpoint",
+                "description": "Service endpoint.",
+                "defaultValue": "https://example.test",
+            },
+            "retries": {"type": "integer", "label": "Retries"},
+        },
+        "required": ["retries"],
+    }
+
+    with pytest.raises(ValidationError, match="config.retries"):
+        _TypedConfigImpl.validate_config({"endpoint": "https://example.test"})
+
+
+def test_typed_config_rejects_constraints_the_form_wire_cannot_express() -> None:
+    """A constraint cannot silently disappear from the projected form contract."""
+
+    class ConstrainedConfig(BaseModel):
+        token: str = Field(min_length=8)
+
+    class ConstrainedImpl(ImplBase):
+        config_model = ConstrainedConfig
+
+    with pytest.raises(ImproperlyConfigured, match="unsupported constraints"):
+        ConstrainedImpl.config_form_spec()
 
 
 def test_materialize_seeds_only_unprovided_fields() -> None:

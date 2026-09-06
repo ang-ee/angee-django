@@ -14,10 +14,12 @@ from typing import Any, ClassVar, cast
 
 from django.conf import settings
 from django.core import checks
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
-from django.db import models
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
+from django.db import models, router
 from django.utils.module_loading import import_string
 from django_choices_field import TextChoicesField
+from pydantic import BaseModel
+from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
 from angee.base.fields import enum_member_for
@@ -41,6 +43,7 @@ class ImplChoice:
     icon: str
     category: str
     defaults: dict[str, Any]
+    config_schema: dict[str, Any] | None
 
 
 class ImplBase:
@@ -56,6 +59,7 @@ class ImplBase:
     icon: ClassVar[str] = ""
     category: ClassVar[str] = ""
     defaults: ClassVar[dict[str, Any]] = {}
+    config_model: ClassVar[type[BaseModel] | None] = None
 
     @classmethod
     def effective_defaults(cls) -> dict[str, Any]:
@@ -77,7 +81,27 @@ class ImplBase:
                     merged[field_name] = {**current, **value}
                 else:
                     merged[field_name] = value
+        config_defaults = cls.config_defaults()
+        if config_defaults:
+            inherited = merged.get("config")
+            merged["config"] = {
+                **(inherited if isinstance(inherited, dict) else {}),
+                **config_defaults,
+            }
         return merged
+
+    @classmethod
+    def config_defaults(cls) -> dict[str, Any]:
+        """Return non-empty config suggestions from the authoritative typed declaration."""
+
+        if cls.config_model is None:
+            return {}
+        cls.config_form_spec()
+        return {
+            name: copy.deepcopy(field.default)
+            for name, field in cls.config_model.model_fields.items()
+            if not field.is_required() and field.default not in (None, "")
+        }
 
     @classmethod
     def display_label(cls) -> str:
@@ -98,7 +122,64 @@ class ImplBase:
             icon=cls.icon,
             category=cls.category,
             defaults=cls.effective_defaults(),
+            config_schema=cls.config_form_spec(),
         )
+
+    @classmethod
+    def validate_config(cls, value: Any) -> dict[str, Any]:
+        """Validate and normalize adapter-owned JSON through its optional model."""
+
+        if cls.config_model is None:
+            return cast(dict[str, Any], value)
+        try:
+            validated = cls.config_model.model_validate(value)
+        except PydanticValidationError as error:
+            messages: dict[str, list[str]] = {}
+            for issue in error.errors(include_url=False, include_context=False, include_input=False):
+                location = ".".join(str(part) for part in issue["loc"])
+                path = f"config.{location}" if location else "config"
+                messages.setdefault(path, []).append(str(issue["msg"]))
+            raise ValidationError(messages) from None
+        return validated.model_dump(mode="json")
+
+    @classmethod
+    def config_form_spec(cls) -> dict[str, Any] | None:
+        """Project the deliberately narrow scalar config contract for forms."""
+
+        if cls.config_model is None:
+            return None
+        properties: dict[str, Any] = {}
+        required: list[str] = []
+        supported = {str: "string", int: "integer", float: "number", bool: "boolean"}
+        for name, field in cls.config_model.model_fields.items():
+            if field.alias is not None or field.validation_alias is not None or field.serialization_alias is not None:
+                raise ImproperlyConfigured(f"{cls.__name__}.config_model field {name!r} cannot declare aliases.")
+            if field.default_factory is not None:
+                raise ImproperlyConfigured(
+                    f"{cls.__name__}.config_model field {name!r} cannot declare a default factory."
+                )
+            if field.metadata:
+                raise ImproperlyConfigured(
+                    f"{cls.__name__}.config_model field {name!r} declares unsupported constraints: "
+                    f"{', '.join(type(item).__name__ for item in field.metadata)}."
+                )
+            field_type = supported.get(field.annotation)
+            if field_type is None:
+                raise ImproperlyConfigured(
+                    f"{cls.__name__}.config_model field {name!r} uses unsupported type {field.annotation!r}."
+                )
+            projected: dict[str, Any] = {
+                "type": field_type,
+                "label": field.title or name.replace("_", " ").title(),
+            }
+            if field.description:
+                projected["description"] = field.description
+            if field.is_required():
+                required.append(name)
+            elif field.default is not None:
+                projected["defaultValue"] = copy.deepcopy(field.default)
+            properties[name] = projected
+        return {"type": "object", "properties": properties, "required": required}
 
     @classmethod
     def materialize(cls, instance: models.Model, *, provided: frozenset[str] = frozenset()) -> set[str]:
@@ -189,13 +270,21 @@ class ImplClassField(TextChoicesField):
     ``TextChoices`` enum and resolves only configured, trusted paths.
     """
 
-    def __init__(self, *, base_class: type | None = None, registry_setting: str = "", **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        base_class: type | None = None,
+        registry_setting: str = "",
+        create_only: bool = False,
+        **kwargs: Any,
+    ) -> None:
         """Bind the implementation base and build the enum from the registry keys."""
 
         if base_class is not None and not isinstance(base_class, type):
             raise ImproperlyConfigured("ImplClassField base_class must be a type.")
         self.base_class = base_class
         self.registry_setting = registry_setting
+        self.create_only = create_only
         kwargs.setdefault("max_length", 100)
         super().__init__(choices_enum=self._build_enum(), **kwargs)
 
@@ -205,6 +294,8 @@ class ImplClassField(TextChoicesField):
         name, path, args, kwargs = super().deconstruct()
         kwargs.pop("choices", None)
         kwargs["registry_setting"] = self.registry_setting
+        if self.create_only:
+            kwargs["create_only"] = True
         return name, path, args, kwargs
 
     def check(self, **kwargs: Any) -> list[checks.CheckMessage]:
@@ -250,6 +341,12 @@ class ImplClassField(TextChoicesField):
                             id="angee.E004",
                         )
                     )
+                    continue
+                if issubclass(impl, ImplBase):
+                    try:
+                        impl.config_form_spec()
+                    except ImproperlyConfigured as error:
+                        errors.append(checks.Error(str(error), obj=self, id="angee.E005"))
         return errors
 
     def resolve_class(self, key: Any) -> type:
@@ -309,10 +406,11 @@ class ImplClassField(TextChoicesField):
                         icon=choice.icon,
                         category=choice.category,
                         defaults=choice.defaults,
+                        config_schema=choice.config_schema,
                     )
                 )
             else:
-                choices.append(ImplChoice(key=key, label=key, icon="", category="", defaults={}))
+                choices.append(ImplChoice(key=key, label=key, icon="", category="", defaults={}, config_schema=None))
         return choices
 
     def _registry(self) -> dict[str, str]:
@@ -335,6 +433,34 @@ class ImplDefaultsMixin(models.Model):
 
         abstract = True
 
+    @classmethod
+    def from_db(cls, db: str, field_names: list[str], values: list[Any]) -> ImplDefaultsMixin:
+        """Remember loaded impl keys so every persisted write ingress enforces immutability."""
+
+        instance = super().from_db(db, field_names, values)
+        loaded = dict(zip(field_names, values, strict=True))
+        instance._loaded_impl_keys = {
+            field.attname: loaded[field.attname]
+            for field in instance._meta.get_fields()
+            if isinstance(field, ImplClassField) and field.attname in loaded
+        }
+        return instance
+
+    def refresh_from_db(self, using: str | None = None, fields: Any = None, **kwargs: Any) -> None:
+        """Keep the immutable-key snapshot coherent when Django reloads those fields."""
+
+        super().refresh_from_db(using=using, fields=fields, **kwargs)
+        refreshed = None if fields is None else set(fields)
+        loaded = dict(getattr(self, "_loaded_impl_keys", {}))
+        for field in self._meta.get_fields():
+            if not isinstance(field, ImplClassField) or not field.create_only:
+                continue
+            if refreshed is not None and field.name not in refreshed and field.attname not in refreshed:
+                continue
+            if field.attname in self.__dict__:
+                loaded[field.attname] = self.__dict__[field.attname]
+        self._loaded_impl_keys = loaded
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Record the caller-supplied field names so create-time seeding skips them."""
 
@@ -344,7 +470,8 @@ class ImplDefaultsMixin(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Seed impl defaults for unsupplied fields on first insert, then persist."""
 
-        if self._state.adding:
+        adding = self._state.adding
+        if adding:
             provided: frozenset[str] = getattr(self, "_impl_provided_fields", frozenset())
 
             for field in self._meta.get_fields():
@@ -356,7 +483,68 @@ class ImplDefaultsMixin(models.Model):
                 impl = field.resolve_class(key)
                 if isinstance(impl, type) and issubclass(impl, ImplBase):
                     impl.materialize(self, provided=provided)
+        update_fields = kwargs.get("update_fields")
+        self.validate_impl_keys(update_fields=update_fields, using=kwargs.get("using"))
+        self.validate_impl_configs(update_fields=update_fields)
         super().save(*args, **kwargs)
+        loaded = dict(getattr(self, "_loaded_impl_keys", {}))
+        updated = None if update_fields is None else set(update_fields)
+        for field in self._meta.get_fields():
+            if not isinstance(field, ImplClassField) or field.attname not in self.__dict__:
+                continue
+            if adding or updated is None or field.name in updated or field.attname in updated:
+                loaded[field.attname] = self.__dict__[field.attname]
+        self._loaded_impl_keys = loaded
+
+    def validate_impl_keys(self, *, update_fields: Any = None, using: str | None = None) -> None:
+        """Reject persisted implementation switches at the shared model boundary."""
+
+        if self._state.adding and self.pk is None:
+            return
+        updated = None if update_fields is None else set(update_fields)
+        loaded = getattr(self, "_loaded_impl_keys", {})
+        for field in self._meta.get_fields():
+            if not isinstance(field, ImplClassField) or not field.create_only:
+                continue
+            if field.attname not in loaded:
+                if updated is not None and field.name not in updated and field.attname not in updated:
+                    continue
+                alias = using or router.db_for_write(type(self), instance=self)
+                with system_context(reason="base.impl.validate_stored_key"):
+                    stored_row = (
+                        type(self)._base_manager.using(alias)
+                        .filter(pk=self.pk)
+                        .values_list(field.attname)
+                        .first()
+                    )
+                if stored_row is None and self._state.adding:
+                    continue
+                if stored_row is None:
+                    raise ValidationError({field.name: "Stored implementation selection could not be verified."})
+                stored = stored_row[0]
+                loaded[field.attname] = stored
+            if updated is not None and field.name not in updated and field.attname not in updated:
+                continue
+            if getattr(self, field.attname) != loaded[field.attname]:
+                raise ValidationError({field.name: "Implementation selection is create-only."})
+
+    def validate_impl_configs(self, *, update_fields: Any = None) -> None:
+        """Validate every declared adapter config before any model save ingress."""
+
+        if not hasattr(self, "config"):
+            return
+        if not self._state.adding and update_fields is not None and "config" not in update_fields:
+            return
+        for field in self._meta.get_fields():
+            if not isinstance(field, ImplClassField):
+                continue
+            key = getattr(self, field.attname, None)
+            if not key:
+                continue
+            impl = field.resolve_class(key)
+            if isinstance(impl, type) and issubclass(impl, ImplBase):
+                normalized = impl.validate_config(self.config)
+                self.config = normalized
 
     def set_impl_key(self, field_name: str, value: Any, *, default: str | None = None) -> bool:
         """Assign an impl key and return whether the stored key changed."""
@@ -364,6 +552,8 @@ class ImplDefaultsMixin(models.Model):
         field = type(self).impl_field(field_name)
         key = type(self).impl_key_for(field_name, value, default=default)
         changed = key != getattr(self, field.attname)
+        if changed and field.create_only and not self._state.adding:
+            raise ValidationError({field.name: "Implementation selection is create-only."})
         setattr(self, field.attname, key)
         return changed
 

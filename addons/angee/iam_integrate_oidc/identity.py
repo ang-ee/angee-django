@@ -35,6 +35,19 @@ SESSION_AUTH_BACKEND = "angee.iam.auth.ModelBackend"
 logger = logging.getLogger(__name__)
 
 
+class IdentityFlowError(OAuthFlowError):
+    """OIDC identity failure with child-addon-owned public text."""
+
+    @property
+    def public_message(self) -> str:
+        """Return the stable identity message owned by this addon."""
+
+        return {
+            IDENTITY_RESOLUTION_FAILED: "The sign-in identity could not be resolved.",
+            "only_sign_in_method": "This is your only sign-in method.",
+        }.get(self.code, super().public_message)
+
+
 @dataclass(frozen=True, slots=True)
 class LoginCompletion:
     """Resolved user and verified claims from one completed OIDC login flow."""
@@ -184,10 +197,10 @@ class OidcIdentityResolver:
             if account is not None:
                 # A revoked/expired/disabled account or a deactivated user must not log in.
                 if account.status != AccountStatus.ACTIVE:
-                    raise OAuthFlowError(IDENTITY_RESOLUTION_FAILED, 403)
+                    raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
                 owner = Account.objects.owner_for(account)
                 if owner is None or not can_authenticate_user(owner):
-                    raise OAuthFlowError(IDENTITY_RESOLUTION_FAILED, 403)
+                    raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
                 return cast(AbstractBaseUser, owner)
 
             normalized_email = email or ""
@@ -211,8 +224,7 @@ class OidcIdentityResolver:
                     return user
 
             if self.oauth_client.create_on_login and (
-                not normalized_email
-                or (email_verified and self.oauth_client.allows_email_domain(normalized_email))
+                not normalized_email or (email_verified and self.oauth_client.allows_email_domain(normalized_email))
             ):
                 user = self._create_for_identity(normalized_email, sub, claims=claims)
                 Account.objects.link(
@@ -225,7 +237,7 @@ class OidcIdentityResolver:
                 )
                 return user
 
-        raise OAuthFlowError(IDENTITY_RESOLUTION_FAILED, 403)
+        raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
 
     def user_for_link_state(self, record: StateRecord) -> AbstractBaseUser:
         """Return the user captured when the authenticated link flow started."""
@@ -248,7 +260,7 @@ class OidcIdentityResolver:
         queryset = manager.all().people()
         matches = list(queryset.filter(email__iexact=email).order_by("pk")[:2])
         if len(matches) > 1:
-            raise OAuthFlowError(IDENTITY_RESOLUTION_FAILED, 403)
+            raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
         return cast(AbstractBaseUser | None, matches[0] if matches else None)
 
     def _create_for_identity(self, email: str, sub: str, *, claims: dict[str, Any]) -> AbstractBaseUser:
@@ -369,4 +381,4 @@ def guard_last_sign_in_disconnect(credential: Any) -> None:
     if oauth_client is None or not getattr(oauth_client, "login_enabled", False):
         return
     if is_only_oidc_sign_in(credential.user):
-        raise OAuthFlowError("only_sign_in_method", 409)
+        raise IdentityFlowError("only_sign_in_method", 409)

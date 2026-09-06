@@ -37,6 +37,7 @@ from angee.graphql.impl import ImplChoice
 from angee.graphql.impl import impl_choices as resolve_impl_choices
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
+from angee.graphql.writes import instance_for_write
 from angee.iam.identity import user_from_public_id as _user_from_public_id
 from angee.iam.identity import user_principal as _user_principal
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
@@ -713,6 +714,8 @@ def integration_create_attrs(
         "vendor": resolve_action_target(Vendor, data.vendor, reason=f"{reason}.vendor"),
         "owner": _user_from_public_id(data.owner),
     }
+    if hasattr(data, "display_name"):
+        attrs["display_name"] = data.display_name
     if credential is not None:
         attrs["credential"] = credential
     if account is not strawberry.UNSET:
@@ -737,6 +740,9 @@ def apply_integration_patch_fields(
     """
 
     provided: set[str] = set()
+    if hasattr(data, "display_name") and data.display_name is not strawberry.UNSET:
+        target.display_name = data.display_name or ""
+        provided.add("display_name")
     if data.vendor is not strawberry.UNSET:
         target.vendor = resolve_action_target(Vendor, data.vendor, reason=f"{reason}.vendor")
         provided.add("vendor")
@@ -769,40 +775,34 @@ def save_provided_fields(target: Any, provided: set[str]) -> None:
         target.save(update_fields={*provided, "updated_at"})
 
 
-def _oauth_client_for_integration(integration: Any) -> Any:
-    """Return the OAuth client this integration implementation connects through."""
+def _concrete_integration_target(info: strawberry.Info, user: Any, resource: str, id: PublicID) -> Any:
+    """Resolve one exposed concrete child through the actor's write scope."""
 
-    return integration.impl.connect_oauth_client("Integration")
+    exposed = _exposed_model_labels(info)
+    model = next(
+        (
+            child
+            for child in Integration.concrete_child_models()
+            if child._meta.label == resource and child._meta.label in exposed
+        ),
+        None,
+    )
+    if model is None:
+        raise PermissionDenied("Integration capability is unavailable.")
+    target = instance_for_write(model, id)
+    if target is None:
+        raise PermissionDenied("Integration capability is unavailable.")
+    if target.owner_id != user.pk:
+        raise PermissionDenied("Integration does not belong to the current user.")
+    return target
 
 
-def _current_user_integration(
+def _attach_completed_integration(
+    info: strawberry.Info,
+    integration_sqid: str,
     user: Any,
-    *,
-    integration_id: PublicID | None,
-    vendor_slug: str,
-    impl_class: str,
-) -> Any:
-    """Return the user's target integration, creating a disconnected row when needed."""
-
-    if integration_id is not None:
-        integration = resolve_action_target(
-            Integration,
-            integration_id,
-            reason="integrate.graphql.connect_integration",
-        )
-        if integration.owner_id != user.pk:
-            raise PermissionDenied("Integration does not belong to the current user.")
-        return integration
-
-    vendor_key = vendor_slug.strip()
-    if not (vendor_key and impl_class.strip()):
-        raise ValueError("connectIntegration requires integrationId or vendorSlug and implClass.")
-    impl_key = Integration.impl_key_for("impl_class", impl_class)
-    vendor = _vendor_by_slug(vendor_key)
-    return Integration.objects.disconnected_for(user, vendor=vendor, impl_class=impl_key)
-
-
-def _attach_completed_integration(integration_sqid: str, user: Any, credential: Any) -> None:
+    credential: Any,
+) -> None:
     """Attach a freshly connected credential to the integration named in OAuth state."""
 
     if not integration_sqid:
@@ -813,7 +813,19 @@ def _attach_completed_integration(integration_sqid: str, user: Any, credential: 
         raise OAuthFlowError(INVALID_STATE, 400)
     if credential.user_id != user.pk:
         raise PermissionDenied("Credential does not belong to the current user.")
-    integration.attach_credential(credential)
+    exposed = _exposed_model_labels(info)
+    integrity, _authorized = integration.concrete_children(
+        actor=user,
+        exposed_model_labels=exposed,
+    )
+    if len(integrity) != 1:
+        raise OAuthFlowError(INVALID_STATE, 400)
+    child = integrity[0]
+    try:
+        target = _concrete_integration_target(info, user, child._meta.label, PublicID(public_id_of(child)))
+    except (PermissionDenied, ValueError) as error:
+        raise OAuthFlowError(INVALID_STATE, 400) from error
+    target.attach_credential(credential)
 
 
 def connect_integration_target(
@@ -879,6 +891,31 @@ class ConnectionMutation:
     """Authenticated OAuth account-connect / disconnect mutations."""
 
     @strawberry.mutation
+    def connect_integration(
+        self,
+        info: strawberry.Info,
+        resource: str,
+        id: PublicID,
+        redirect_uri: str = "",
+        next: str = "/",
+    ) -> ConnectIntegrationResult:
+        """Attach OAuth to one explicit authorized concrete integration child."""
+
+        user = _session_user(info)
+        try:
+            integration = _concrete_integration_target(info, user, resource, id)
+            oauth_client = integration.capability_impl.connect_oauth_client(integration.integration_kind_value())
+            return connect_integration_target(
+                info,
+                integration,
+                oauth_client,
+                redirect_uri=redirect_uri,
+                next_path=next,
+            )
+        except OAuthFlowError as error:
+            return ConnectIntegrationResult(error=error.public_message, error_code=error.code)
+
+    @strawberry.mutation
     def connect_account_start(
         self,
         info: strawberry.Info,
@@ -931,42 +968,13 @@ class ConnectionMutation:
                 return ActionResult(ok=False, message="Set a discovery URL first.")
             try:
                 discovery = oauth_client.discover_endpoints()
-            except Exception as error:  # noqa: BLE001 — surface discovery failure to the operator
-                return ActionResult(ok=False, message=f"Discovery failed: {error}")
+            except OAuthFlowError as error:
+                return ActionResult(ok=False, message=error.public_message)
+            except Exception:  # noqa: BLE001 — provider diagnostics stay outside the action payload.
+                return ActionResult(ok=False, message="Provider discovery failed.")
             oauth_client.save()
         issuer = discovery.get("issuer") if isinstance(discovery, dict) else None
         return ActionResult(ok=True, message=f"Discovered endpoints for {issuer or 'provider'}.")
-
-    @strawberry.mutation
-    def connect_integration(
-        self,
-        info: strawberry.Info,
-        integration_id: PublicID | None = None,
-        vendor_slug: str = "",
-        impl_class: str = "",
-        redirect_uri: str = "",
-        next: str = "/",
-    ) -> ConnectIntegrationResult:
-        """Attach this user's live credential to an integration, or start OAuth."""
-
-        user = _session_user(info)
-        try:
-            integration = _current_user_integration(
-                user,
-                integration_id=integration_id,
-                vendor_slug=vendor_slug,
-                impl_class=impl_class,
-            )
-            oauth_client = _oauth_client_for_integration(integration)
-            return connect_integration_target(
-                info,
-                integration,
-                oauth_client,
-                redirect_uri=redirect_uri,
-                next_path=next,
-            )
-        except OAuthFlowError as error:
-            return ConnectIntegrationResult(error=error.public_message, error_code=error.code)
 
     @strawberry.mutation
     def connect_account_complete(
@@ -988,7 +996,7 @@ class ConnectionMutation:
                 state_token=state,
                 redirect_uri=redirect_uri,
             )
-            _attach_completed_integration(result.integration_id, result.user, result.credential)
+            _attach_completed_integration(info, result.integration_id, result.user, result.credential)
         except OAuthFlowError as error:
             return ConnectAccountResult(error=error.public_message, error_code=error.code)
         return ConnectAccountResult(
@@ -1114,8 +1122,10 @@ class IntegrateCredentialMutation:
         ) as credential:
             try:
                 credential.refresh_now()
-            except (OAuthFlowError, ValueError) as error:
-                return ActionResult(ok=False, message=f"Refresh failed: {error}")
+            except OAuthFlowError as error:
+                return ActionResult(ok=False, message=error.public_message)
+            except ValueError:
+                return ActionResult(ok=False, message="The credential cannot be refreshed; reconnect it.")
         return ActionResult(ok=True, message="Token refreshed.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
@@ -1363,8 +1373,8 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
     ],
     aggregatable=["id"],
     groupable=["kind", "impl_class", "vendor", "vendor__display_name", "lifecycle", "runtime_status"],
-    insertable=["vendor", "owner", "credential", "account", "impl_class", "lifecycle"],
     updatable=["vendor", "credential", "account", "owner"],
+    insert=False,
     field_id_decode={
         "vendor": public_pk_decoder(Vendor),
         "owner": public_pk_decoder(User),
@@ -1433,40 +1443,29 @@ def _vendor_by_slug(slug: str) -> Any:
 
 @strawberry.type
 class IntegrationCredentialMutation:
-    """Self-service integration creation from connected credentials."""
+    """Credential-first attachment to an explicit concrete integration child."""
 
     @strawberry.mutation
-    def create_integration_from_credential(
+    def attach_integration_credential(
         self,
         info: strawberry.Info,
+        resource: str,
+        id: PublicID,
         credential: PublicID,
-        vendor_slug: str,
     ) -> ConnectedIntegrationType:
-        """Create or update this user's integration from a connected credential.
-
-        Self-service, not platform-admin: the authorization is *ownership of the
-        credential*. ``resolve_action_target`` reads the credential elevated, then the
-        ``user_id`` check below is the actual gate. This deliberately bypasses the
-        ``create = admin->member`` arm in ``integrate/permissions.zed`` (which
-        governs the admin-console Integration CRUD), so a credential owner can wire
-        up their own integration without an admin.
-        """
+        """Attach an owned credential without creating a neutral parent row."""
 
         user = _session_user(info)
-        oauth_credential = resolve_action_target(
+        target = _concrete_integration_target(info, user, resource, id)
+        owned_credential = resolve_action_target(
             Credential,
             credential,
-            reason="integrate.graphql.integration_from_credential.credential",
+            reason="integrate.graphql.attach_integration_credential.credential",
         )
-        if oauth_credential.user_id != user.pk:
+        if owned_credential.user_id != user.pk:
             raise PermissionDenied("Credential does not belong to the current user.")
-        vendor = _vendor_by_slug(vendor_slug)
-        integration = Integration.objects.connect_from_credential(
-            user,
-            vendor=vendor,
-            credential=oauth_credential,
-        )
-        return cast(ConnectedIntegrationType, integration)
+        target.attach_credential(owned_credential)
+        return cast(ConnectedIntegrationType, target)
 
 
 @strawberry.type
@@ -1532,8 +1531,8 @@ class IntegrationActionMutation:
                 return ActionResult(ok=False, message="No credential is attached.")
             try:
                 credential.auth_headers()
-            except Exception as error:  # noqa: BLE001 — surface any handler failure to the operator
-                return ActionResult(ok=False, message=f"Credential is not usable: {error}")
+            except Exception:  # noqa: BLE001 — handler diagnostics stay outside the action payload.
+                return ActionResult(ok=False, message="Credential is not usable.")
         return ActionResult(ok=True, message="Credential is usable.")
 
 
@@ -1589,12 +1588,11 @@ class VcsBridgeType(BridgeSyncStatusMixin, AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["backend_class", "lifecycle"])
+    @strawberry_django.field(only=["display_name", "vendor", "lifecycle"])
     def display_name(self) -> str:
         """Return a human label for the record header and relation pickers."""
 
-        bridge = cast(Any, self)
-        return f"{bridge.backend_class} ({bridge.lifecycle})"
+        return cast(Any, self).display_label
 
 
 @strawberry_django.type(Repository)
@@ -1661,6 +1659,7 @@ class VcsBridgeInput:
 
     vendor: PublicID
     owner: PublicID
+    display_name: str = ""
     credential: PublicID | None = None
     account: PublicID | None = strawberry.UNSET
     backend_class: str | None = strawberry.UNSET
@@ -1674,6 +1673,7 @@ class VcsBridgePatch:
     """Fields accepted when updating a VCS bridge child model."""
 
     id: PublicID
+    display_name: str | None = strawberry.UNSET
     vendor: PublicID | None = strawberry.UNSET
     credential: PublicID | None = strawberry.UNSET
     account: PublicID | None = strawberry.UNSET
@@ -1826,7 +1826,6 @@ class VcsBridgeUpdateMutation:
     def update_vcs_bridge(self, data: VcsBridgePatch) -> VcsBridgeType:
         """Update a VCS child row, rematerializing backend defaults on backend change."""
 
-        backend_changed = False
         with (
             action_target(
                 VcsBridge,
@@ -1835,22 +1834,19 @@ class VcsBridgeUpdateMutation:
             ) as bridge,
             transaction.atomic(),
         ):
+            if data.backend_class is not strawberry.UNSET:
+                bridge.set_impl_key("backend_class", data.backend_class, default="local")
             provided = apply_integration_patch_fields(
                 bridge,
                 data,
                 reason="integrate.graphql.vcs_bridge.update",
             )
-            if data.backend_class is not strawberry.UNSET:
-                backend_changed = bridge.set_impl_key("backend_class", data.backend_class, default="local")
-                provided.add("backend_class")
             if data.config is not strawberry.UNSET:
                 bridge.config = data.config
                 provided.add("config")
             if data.webhook_secret is not strawberry.UNSET:
                 bridge.webhook_secret = data.webhook_secret or ""
                 provided.add("webhook_secret")
-            if backend_changed:
-                provided.update(bridge.materialize_impl_defaults("backend_class", provided=frozenset(provided)))
             save_provided_fields(bridge, provided)
         return cast(VcsBridgeType, bridge)
 
@@ -1978,9 +1974,9 @@ schemas = {
             IntegrateExternalAccountMutation,
             IntegrateCredentialMutation,
             ConnectionMutation,
+            IntegrationCredentialMutation,
             VcsBridgeCreateMutation,
             VcsBridgeUpdateMutation,
-            IntegrationCredentialMutation,
             IntegrationActionMutation,
             WebhookActionMutation,
             VCSActionMutation,

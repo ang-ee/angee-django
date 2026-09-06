@@ -23,6 +23,7 @@ import json
 import logging
 import secrets
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import cache
 from typing import TYPE_CHECKING, Any, ClassVar, cast
@@ -33,7 +34,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import IntegrityError, connections, models, transaction
+from django.db import connections, models, transaction
 from django.db.models import Prefetch, Q
 from django.utils import timezone
 from django.utils.module_loading import import_string
@@ -83,6 +84,25 @@ logger = logging.getLogger(__name__)
 # use it (e.g. provisioning) gets a token with life left rather than one about to lapse.
 _OAUTH_REFRESH_MARGIN = timedelta(minutes=5)
 _UNSET = object()
+_INTEGRATION_FAILURE_MESSAGE = "Integration operation failed."
+_WEBHOOK_FAILURE_MESSAGE = "Webhook delivery failed."
+
+
+@dataclass(frozen=True, slots=True)
+class IntegrationFailure:
+    """An integration-owned, safe failure message for persisted telemetry."""
+
+    message: str
+
+
+def _safe_integration_failure(error: Exception) -> IntegrationFailure:
+    """Project one integration exception to bounded user-facing telemetry."""
+
+    if isinstance(error, OAuthFlowError):
+        return IntegrationFailure(error.public_message)
+    if isinstance(error, ValidationError):
+        return IntegrationFailure("Integration configuration is invalid.")
+    return IntegrationFailure(_INTEGRATION_FAILURE_MESSAGE)
 
 
 class AccountStatus(models.TextChoices):
@@ -1198,8 +1218,12 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
             return
         try:
             self._refresh_locked()
-        except OAuthFlowError, ValueError:
-            logger.warning("Credential %s refresh failed; using the existing token.", self.pk, exc_info=True)
+        except (OAuthFlowError, ValueError) as error:
+            logger.warning(
+                "Credential %s refresh failed (%s); using the existing token.",
+                self.pk,
+                type(error).__name__,
+            )
             self._record_refresh_failure()
 
     def refresh_now(self) -> None:
@@ -1424,59 +1448,6 @@ class IntegrationManager(AngeeManager.from_queryset(IntegrationQuerySet)):  # ty
 
         return cast(type[IntegrationImpl], self.model.resolve_impl_class("impl_class", key))
 
-    def disconnected_for(self, user: Any, *, vendor: Any, impl_class: str) -> Any:
-        """Return the user's parent row for one disconnected integration."""
-
-        with system_context(reason="integrate.integration.disconnected"):
-            integration = (
-                self.filter(
-                    owner=user,
-                    vendor=vendor,
-                    impl_class=impl_class,
-                    kind=Integration.integration_kind_label,
-                )
-                .order_by("pk")
-                .first()
-            )
-            if integration is not None:
-                return integration
-            try:
-                with transaction.atomic():
-                    return self.create(
-                        owner=user,
-                        vendor=vendor,
-                        impl_class=impl_class,
-                        kind=Integration.integration_kind_label,
-                        lifecycle=IntegrationLifecycle.DISCONNECTED,
-                    )
-            except IntegrityError:
-                return self.get(
-                    owner=user,
-                    vendor=vendor,
-                    impl_class=impl_class,
-                    kind=Integration.integration_kind_label,
-                )
-
-    def connect_from_credential(
-        self,
-        user: Any,
-        *,
-        vendor: Any,
-        credential: Any,
-        impl_class: str = "none",
-    ) -> Any:
-        """Attach ``credential`` to the user's parent row and connect it."""
-
-        integration = self.disconnected_for(user, vendor=vendor, impl_class=impl_class)
-        with system_context(reason="integrate.integration.connect_from_credential"), transaction.atomic():
-            integration = self.locked_get(pk=integration.pk)
-            account = getattr(credential, "external_account", None)
-            if str(integration.lifecycle) == str(IntegrationLifecycle.CONNECTED):
-                integration.attach_connection(credential, account=account, connect_disconnected=False)
-            else:
-                integration.connect(credential=credential, account=account)
-        return integration
-
     def sync_kinds(self) -> int:
         """Backfill parent rows with the concrete integration kind they materialize."""
 
@@ -1592,11 +1563,28 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
                     authorized.append(visible)
         return integrity, authorized
 
+    @property
+    def capability_impl(self) -> Any:
+        """Return the one implementation selected by a concrete capability child."""
+
+        fields = [
+            field
+            for field in self._meta.get_fields()
+            if isinstance(field, ImplClassField) and field.name != "impl_class"
+        ]
+        if len(fields) != 1:
+            raise ImproperlyConfigured(
+                f"{self._meta.label} must declare exactly one child implementation field; found {len(fields)}."
+            )
+        impl_class = fields[0].resolve_for(self)
+        return impl_class(self)
+
     vendor = models.ForeignKey("integrate.Vendor", on_delete=models.PROTECT, related_name="integrations")
     impl_class = ImplClassField(
         base_class=IntegrationImpl,
         registry_setting="ANGEE_INTEGRATION_IMPLS",
         default="none",
+        create_only=True,
     )
     """Registry key for the implementation this integration runs."""
     # PROTECT: a present credential is the integration's authentication. It may
@@ -1815,7 +1803,11 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         with system_context(reason="integrate.integration.attach_credential"), transaction.atomic():
             self.attach_connection(credential)
 
-    def report_status(self, status: IntegrationRuntimeStatus | str, error: str = "") -> None:
+    def report_status(
+        self,
+        status: IntegrationRuntimeStatus | str,
+        error: str | IntegrationFailure = "",
+    ) -> None:
         """Record implementation status telemetry and persist this integration.
 
         ``status`` is a runtime status, resolved by member name (``ERROR`` — the
@@ -1832,7 +1824,9 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         self.runtime_status = normalized
         self.last_used_at = reported_at
         self.last_used_status = raw_status or normalized.value
-        self.last_error = error
+        self.last_error = (
+            error.message if isinstance(error, IntegrationFailure) else (_INTEGRATION_FAILURE_MESSAGE if error else "")
+        )
         self.last_error_at = reported_at if error else None
 
         if self.pk is None:
@@ -2276,7 +2270,8 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     def record_sync_error(self, error: Exception, *, now: datetime) -> None:
         """Persist one failed scheduler sync result and error status report."""
 
-        error_message = f"{type(error).__name__}: {error}"[:500]
+        failure = _safe_integration_failure(error)
+        error_message = failure.message
         self.last_sync_status = "error"
         self.sync_stage = self.SyncStage.FAILED
         self.sync_error = error_message
@@ -2285,7 +2280,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         self.sync_progress = progress
         self.next_sync_at = self._next_sync_at(now=now)
         with transaction.atomic():
-            cast(Any, self).report_status(status=IntegrationRuntimeStatus.ERROR, error=error_message)
+            cast(Any, self).report_status(status=IntegrationRuntimeStatus.ERROR, error=failure)
             self.save(
                 update_fields=[
                     "last_sync_status",
@@ -2410,6 +2405,7 @@ class VcsBridge(Bridge):
         base_class=VCSBackend,
         registry_setting="ANGEE_VCS_BACKEND_CLASSES",
         default="local",
+        create_only=True,
     )
     """Registry key for the VCS backend bound to this bridge."""
     webhook_secret = EncryptedField(blank=True)
@@ -2974,7 +2970,11 @@ class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
         try:
             status = self.deliver(body)
         except Exception as exc:  # noqa: BLE001 — delivery failure is telemetry, not a caller exception.
-            logger.exception("Webhook delivery failed for subscription %s.", self.public_id)
+            logger.error(
+                "Webhook delivery failed for subscription %s (%s).",
+                self.public_id,
+                type(exc).__name__,
+            )
             message = self._delivery_error_message(exc)
             self.record_delivery_failure(status=self._delivery_failure_status(exc), error=message)
             return False, message
@@ -3004,9 +3004,11 @@ class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
     def _delivery_error_message(exc: Exception) -> str:
         """Return a compact telemetry message for a delivery exception."""
 
+        if isinstance(exc, WebhookDeliveryError) and exc.status:
+            return f"Webhook returned HTTP {exc.status}."
         if isinstance(exc, ValidationError):
-            return "; ".join(str(message) for message in exc.messages)
-        return f"{type(exc).__name__}: {exc}"
+            return "Webhook target is invalid."
+        return _WEBHOOK_FAILURE_MESSAGE
 
     def rotate_secret(self) -> str:
         """Generate a new signing secret, persist it, and return the plaintext once.

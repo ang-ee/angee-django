@@ -18,6 +18,8 @@ import hmac
 from typing import Any
 from urllib.parse import quote
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from angee.integrate.vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
 
 HTTP_TIMEOUT_SECONDS = 15
@@ -47,12 +49,17 @@ class GitHubBackend(VCSBackend):
     label = "GitHub"
     icon = "github"
     repository_search_scope_config_key = "github_org"
-    defaults = {
-        "vendor": "github",
-        "config": {
-            "github_api_base": DEFAULT_API_BASE,
-        },
-    }
+    defaults = {"vendor": "github"}
+
+    class Config(BaseModel):
+        """Supported non-secret GitHub API configuration."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        github_api_base: str = Field(default=DEFAULT_API_BASE, description="GitHub API base URL.")
+        github_org: str = Field(default="", description="Organization used to scope repository search.")
+
+    config_model = Config
 
     @property
     def api_base(self) -> str:

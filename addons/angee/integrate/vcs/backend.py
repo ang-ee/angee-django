@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from django.conf import settings
+from pydantic import BaseModel, ConfigDict, Field
 
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
@@ -135,13 +136,18 @@ class LocalVCSBackend(VCSBackend):
 
     key = "local"
     label = "Local checkout"
-    defaults = {
-        "config": {
-            "local_root": "../..",
-            "local_org": "local",
-            "local_default_branch": "main",
-        },
-    }
+
+    class Config(BaseModel):
+        """Supported non-secret local checkout configuration."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        local_root: str = Field(default="../..", description="Path to the checkout root.")
+        local_name: str = Field(default="", description="Repository name override.")
+        local_org: str = Field(default="local", description="Repository organization label.")
+        local_default_branch: str = Field(default="main", description="Default branch label.")
+
+    config_model = Config
 
     def ls_repos(self, *, org: str = "") -> list[RepoDescriptor]:
         """Return the single configured local repository."""

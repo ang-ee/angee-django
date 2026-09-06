@@ -5,12 +5,13 @@ from __future__ import annotations
 from typing import Any, cast
 
 import strawberry
-from angee.base.impl import ImplChoice as BaseImplChoice
-from angee.base.models import AngeeModel
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_snake_case
+
+from angee.base.impl import ImplChoice as BaseImplChoice
+from angee.base.models import AngeeModel
 
 
 @strawberry.type
@@ -22,6 +23,7 @@ class ImplChoice:
     icon: str
     category: str
     defaults: JSON
+    config_schema: JSON | None
 
 
 def impl_choices(model: str, field: str) -> list[ImplChoice]:
@@ -37,9 +39,7 @@ def impl_choices(model: str, field: str) -> list[ImplChoice]:
     try:
         model_field = cast(type[AngeeModel], django_model).impl_field(field_name)
     except AttributeError as error:
-        raise ImproperlyConfigured(
-            f"{django_model._meta.label}.{field_name} is not an ImplClassField."
-        ) from error
+        raise ImproperlyConfigured(f"{django_model._meta.label}.{field_name} is not an ImplClassField.") from error
     except FieldDoesNotExist as error:
         if str(error).endswith(" is not an ImplClassField."):
             message = f"{django_model._meta.label}.{field_name} is not an ImplClassField."
@@ -58,6 +58,7 @@ def _project_choice(choice: BaseImplChoice) -> ImplChoice:
         icon=choice.icon,
         category=choice.category,
         defaults=cast(JSON, choice.defaults),
+        config_schema=cast(JSON | None, choice.config_schema),
     )
 
 

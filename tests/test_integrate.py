@@ -83,7 +83,7 @@ def test_report_status_records_integration_telemetry() -> None:
     assert integration.lifecycle == IntegrationLifecycle.DISCONNECTED
     assert integration.runtime_status == IntegrationRuntimeStatus.ERROR
     assert integration.last_used_status == "error"
-    assert integration.last_error == "boom"
+    assert integration.last_error == "Integration operation failed."
     assert integration.last_error_at is not None
     assert integration.last_used_at is not None
 
@@ -140,4 +140,4 @@ def test_report_status_updates_unsaved_integration_in_memory() -> None:
     integration.report_status(status=IntegrationRuntimeStatus.ERROR, error="boom")
 
     assert integration.runtime_status == IntegrationRuntimeStatus.ERROR
-    assert integration.last_error == "boom"
+    assert integration.last_error == "Integration operation failed."

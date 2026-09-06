@@ -888,6 +888,7 @@ class Channel(Bridge):
         base_class=ChannelBackend,
         registry_setting="ANGEE_CHANNEL_BACKEND_CLASSES",
         default="manual",
+        create_only=True,
     )
     """Registry key for the channel backend bound to this channel."""
 

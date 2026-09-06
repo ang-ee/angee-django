@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 from django.db import connection, transaction
+from django.test import override_settings
 from django.utils import timezone
 from rebac import system_context
 
@@ -249,14 +250,14 @@ def test_enqueued_due_bridge_records_errors_on_integration_runtime_status(schedu
     assert bridge.last_sync_started_at == now
     assert bridge.last_sync_status == "error"
     assert bridge.sync_stage == Bridge.SyncStage.FAILED
-    assert bridge.sync_error == "RuntimeError: vendor unavailable"
+    assert bridge.sync_error == "Integration operation failed."
     assert bridge.sync_progress["stage"] == Bridge.SyncStage.FAILED
-    assert bridge.sync_progress["error"] == "RuntimeError: vendor unavailable"
+    assert bridge.sync_progress["error"] == "Integration operation failed."
     assert bridge.next_sync_at == now + timedelta(seconds=17)
     assert integration.lifecycle == IntegrationLifecycle.CONNECTED
     assert integration.runtime_status == IntegrationRuntimeStatus.ERROR
     assert integration.last_used_status == "error"
-    assert integration.last_error == "RuntimeError: vendor unavailable"
+    assert integration.last_error == "Integration operation failed."
     assert integration.last_error_at is not None
     assert integration.last_used_at is not None
 
@@ -330,6 +331,7 @@ def test_bridge_progress_reporter_persists_progress_payload(scheduler_tables: No
 
 
 @pytest.mark.django_db(transaction=True)
+@override_settings(ANGEE_TASK_LOCK_BACKEND="angee.jobs.locks.LocalLockBackend")
 def test_declined_sync_run_releases_its_queue_claim(scheduler_tables: None) -> None:
     """A run that cannot take the lock clears its own claim, so recovery stops.
 
@@ -439,6 +441,7 @@ def test_progress_report_during_queued_stage_keeps_the_queue_marker(scheduler_ta
 
 
 @pytest.mark.django_db(transaction=True)
+@override_settings(ANGEE_TASK_LOCK_BACKEND="angee.jobs.locks.LocalLockBackend")
 def test_bridge_is_syncing_uses_live_lock_state(scheduler_tables: None) -> None:
     """The live lock is separate from durable stage telemetry."""
 
@@ -477,6 +480,7 @@ def _cross_process_locks() -> Iterator[None]:
 
 
 @pytest.mark.django_db(transaction=True)
+@override_settings(ANGEE_TASK_LOCK_BACKEND="angee.jobs.locks.LocalLockBackend")
 def test_effective_sync_stage_reconciles_stale_records_against_the_lock(scheduler_tables: None) -> None:
     """A live-ish persisted stage without the live lock reads as FAILED.
 

@@ -559,7 +559,6 @@ class InferenceProviderUpdateMutation:
     def update_inference_provider(self, data: InferenceProviderPatch) -> InferenceProviderType:
         """Update a provider, rematerializing backend defaults when the backend changes."""
 
-        backend_changed = False
         with (
             action_target(
                 InferenceProvider,
@@ -568,15 +567,14 @@ class InferenceProviderUpdateMutation:
             ) as provider,
             transaction.atomic(),
         ):
+            if data.backend_class is not strawberry.UNSET:
+                provider.set_impl_key("backend_class", data.backend_class, default="manual")
             provided = apply_integration_patch_fields(
                 provider,
                 data,
                 reason="agents.graphql.inference_provider.update",
                 ignore_null_lifecycle=True,
             )
-            if data.backend_class is not strawberry.UNSET:
-                backend_changed = provider.set_impl_key("backend_class", data.backend_class, default="manual")
-                provided.add("backend_class")
             if data.name is not strawberry.UNSET:
                 provider.name = data.name or ""
                 provided.add("name")
@@ -586,8 +584,6 @@ class InferenceProviderUpdateMutation:
             if data.config is not strawberry.UNSET:
                 provider.config = data.config
                 provided.add("config")
-            if backend_changed:
-                provided.update(provider.materialize_impl_defaults("backend_class", provided=frozenset(provided)))
             save_provided_fields(provider, provided)
         return cast(InferenceProviderType, provider)
 

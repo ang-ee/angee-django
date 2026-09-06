@@ -331,6 +331,28 @@ def test_exchange_code_form_path_maps_non_json_error_to_oauth_flow_error() -> No
     assert exc_info.value.code == TOKEN_EXCHANGE_FAILED
 
 
+def test_token_transport_error_log_omits_request_url_and_client_id(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Token transport telemetry contains a class and slug, without request metadata."""
+
+    canary_url = "https://issuer.example/oauth/token?code=canary-code"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("failed " + canary_url, request=request)
+
+    oauth_client = _stub_oauth_client(token_endpoint=canary_url)
+    protocol = OAuthClientProtocol(oauth_client)
+    protocol._transport = httpx.MockTransport(handler)
+
+    with pytest.raises(OAuthFlowError):
+        protocol.exchange_code(code="canary-code", redirect_uri="https://app.example/callback")
+
+    assert "ConnectError" in caplog.text
+    assert "canary-code" not in caplog.text
+    assert oauth_client.client_id not in caplog.text
+
+
 def test_refresh_token_form_path_returns_renewed_material() -> None:
     """The default (form) refresh path returns the filtered token material."""
 
