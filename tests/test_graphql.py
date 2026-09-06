@@ -761,6 +761,42 @@ def test_variable_coercion_errors_preserve_client_details_without_logging(caplog
     assert invalid_value not in caplog.text
 
 
+def test_variable_coercion_preserves_custom_scalar_error_code(caplog: pytest.LogCaptureFixture) -> None:
+    """The custom scalar owns its coercion error code, including during variable parsing."""
+
+    from strawberry.schema.config import StrawberryConfig
+
+    from angee.graphql.schema import AngeeSchema
+
+    def parse_value(value: Any) -> int:
+        raise GraphQLError("Choose another value.", extensions={"code": "CUSTOM_INPUT"})
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def echo(self, value: int) -> int:
+            return value
+
+    schema = AngeeSchema(
+        query=Query,
+        config=StrawberryConfig(
+            scalar_map={int: strawberry.scalar(name="CodedInt", serialize=int, parse_value=parse_value)}
+        ),
+    )
+    invalid_value = "custom-scalar-secret"
+
+    result = schema.execute_sync(
+        "query Q($value: CodedInt!) { echo(value: $value) }",
+        variable_values={"value": invalid_value},
+    )
+
+    assert result.errors is not None
+    assert result.errors[0].path is None
+    assert result.errors[0].extensions == {"code": "CUSTOM_INPUT"}
+    assert "Choose another value." in result.errors[0].message
+    assert invalid_value not in caplog.text
+
+
 def test_unexpected_graphql_errors_log_frames_without_exception_values(caplog: pytest.LogCaptureFixture) -> None:
     """Resolver failures log their class, path and frames without exception values."""
 

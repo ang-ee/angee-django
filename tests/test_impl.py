@@ -11,7 +11,7 @@ from django.test import override_settings
 from pydantic import BaseModel, Field
 
 from angee.base.impl import ImplBase, ImplChoice, ImplClassField
-from tests.conftest import Integration, OAuthClient
+from tests.conftest import Integration, OAuthClient, VcsBridge
 
 
 class _BaseImpl(ImplBase):
@@ -145,6 +145,19 @@ def test_choice_metadata_falls_back_to_titlecased_key() -> None:
         defaults=_RefinedImpl.effective_defaults(),
         config_schema=None,
     )
+
+
+def test_config_patch_preserves_siblings_and_reports_changed_model_fields() -> None:
+    """Patches replace supplied keys, remove nulls, and leave the input object alone."""
+
+    original = {"endpoint": "https://example.test", "obsolete": True, "options": {"old": 1}}
+    bridge = VcsBridge(config=original)
+
+    assert bridge.apply_config_patch({"obsolete": None, "options": {"new": 2}}) == {"config"}
+    assert bridge.config == {"endpoint": "https://example.test", "options": {"new": 2}}
+    assert original == {"endpoint": "https://example.test", "obsolete": True, "options": {"old": 1}}
+    assert bridge.apply_config_patch({"obsolete": None, "options": {"new": 2}}) == set()
+    assert bridge.apply_config_patch({}) == set()
 
 
 def test_typed_config_projects_supported_scalars_and_validates_paths() -> None:

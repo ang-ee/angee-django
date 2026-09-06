@@ -534,6 +534,27 @@ class ImplDefaultsMixin(models.Model):
             if getattr(self, field.attname) != loaded[field.attname]:
                 raise ValidationError({field.name: "Implementation selection is create-only."})
 
+    def apply_config_patch(self, patch: Mapping[str, Any]) -> set[str]:
+        """Merge top-level config keys, removing explicit ``None`` values.
+
+        Return changed model field names for ``save(update_fields=...)``. Saving
+        still validates and normalizes the merged config through its impl.
+        """
+
+        if not isinstance(patch, Mapping):
+            raise ValidationError({"config": "Config patch must be an object."})
+        current = getattr(self, "config")
+        merged = dict(current)
+        for key, value in patch.items():
+            if value is None:
+                merged.pop(key, None)
+            else:
+                merged[key] = value
+        if merged == current:
+            return set()
+        setattr(self, "config", merged)
+        return {"config"}
+
     def validate_impl_configs(self, *, update_fields: Any = None) -> None:
         """Validate every declared adapter config before any model save ingress."""
 

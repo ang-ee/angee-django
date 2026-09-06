@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import logging
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,9 +13,12 @@ from types import ModuleType
 from typing import Any, cast
 
 from django.apps import AppConfig
+from django.apps.registry import Apps
 from django.db.migrations import Migration
 from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.loader import MigrationLoader
+from django.db.migrations.operations.models import DeleteModel
+from django.db.migrations.state import ProjectState
 
 from angee.addons import addon_manifest
 from angee.fs import write_atomic
@@ -22,6 +26,7 @@ from angee.fs import write_atomic
 MATERIALIZED_FOOTER = "# ANGEE MATERIALIZED MIGRATION - DO NOT EDIT"
 ORIGIN_ATTR = "angee_origin"
 SOURCE_SHA256_ATTR = "angee_source_sha256"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,8 +59,12 @@ class RuntimeMigrations:
         self.runtime_dir = runtime_dir
         self.labels = frozenset(labels)
 
-    def plan(self) -> tuple[RuntimeMigrationPlan, ...]:
-        """Return every applicable write after validating the complete graph."""
+    def plan(self, *, apps: Apps | None = None) -> tuple[RuntimeMigrationPlan, ...]:
+        """Plan applicable writes, guarding adopted tables against the supplied apps.
+
+        Never-applicable declarations warn after the fixed point. With a current
+        model registry, also reject autodetected drops of tables it still owns.
+        """
 
         loader = MigrationLoader(None, ignore_no_migrations=True)
         existing = self._existing_migrations(loader)
@@ -182,10 +191,22 @@ class RuntimeMigrations:
                 plans.append(plan)
                 progressed = True
 
+            pending = remaining
             if not progressed:
                 break
-            pending = remaining
             round_number += 1
+
+        skipped_origins = []
+        for addon, declaration in pending:
+            origin = f"{addon.name}:{declaration['name']}"
+            skipped_origins.append(origin)
+            logger.warning(
+                "%s (app label %s): runtime migration never became applicable; skipped",
+                origin,
+                declaration["app_label"],
+            )
+        if apps is not None:
+            self._check_autodetected_drops(loader, state, ProjectState.from_apps(apps), skipped_origins)
 
         return tuple(plans)
 
@@ -197,10 +218,10 @@ class RuntimeMigrations:
             origins = ", ".join(plan.origin for plan in plans)
             raise RuntimeError(f"pending addon runtime migration {origins}")
 
-    def materialize(self) -> tuple[Path, ...]:
-        """Copy every applicable source migration after the plan validates."""
+    def materialize(self, *, apps: Apps | None = None) -> tuple[Path, ...]:
+        """Copy applicable sources after planning and optional current-app drop checks."""
 
-        plans = self.plan()
+        plans = self.plan(apps=apps)
         rendered = tuple((plan, self._render(plan)) for plan in plans)
         for plan, source in rendered:
             write_atomic(plan.output_path, source)
@@ -208,6 +229,43 @@ class RuntimeMigrations:
         if plans:
             MigrationLoader(None, ignore_no_migrations=True)
         return tuple(plan.output_path for plan in plans)
+
+    @staticmethod
+    def _check_autodetected_drops(
+        loader: MigrationLoader,
+        from_state: ProjectState,
+        to_state: ProjectState,
+        skipped_origins: list[str],
+    ) -> None:
+        """Refuse Django model deletions whose physical tables still have owners."""
+
+        changes = MigrationAutodetector(from_state, to_state).changes(graph=loader.graph)
+        table_owners: dict[str, list[str]] = {}
+        for model in to_state.apps.get_models(include_swapped=True):
+            table_owners.setdefault(model._meta.db_table, []).append(model._meta.label_lower)
+        drops = []
+        for app_label, migrations in sorted(changes.items()):
+            for migration in migrations:
+                for operation in migration.operations:
+                    if not isinstance(operation, DeleteModel):
+                        continue
+                    model = from_state.apps.get_model(app_label, operation.name)
+                    if model._meta.proxy or not model._meta.managed or model._meta.swapped:
+                        continue
+                    table = model._meta.db_table
+                    owners = sorted(owner for owner in table_owners.get(table, ()) if owner != model._meta.label_lower)
+                    if owners:
+                        drops.append(
+                            f"{model._meta.label_lower}: DeleteModel would drop table {table!r}, "
+                            f"still owned by {', '.join(owners)}"
+                        )
+        if drops:
+            skipped = ", ".join(skipped_origins) or "none"
+            raise RuntimeError(
+                "unsafe autodetected model deletion: " + "; ".join(drops)
+                + f". Never-applicable runtime migration declarations: {skipped}. "
+                "Declare the missing consumer cutover migration before running makemigrations."
+            )
 
     @staticmethod
     def _next_number(loader: MigrationLoader, app_label: str) -> int:

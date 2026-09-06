@@ -1154,6 +1154,68 @@ def test_create_vcs_bridge_creates_child_row(
     }
 
 
+@pytest.mark.parametrize("name, expected_name", [("Renamed", "Renamed"), (None, "")])
+def test_update_vcs_bridge_merges_typed_config(
+    integrate_console_tables: None, name: str | None, expected_name: str,
+) -> None:
+    """Unsent typed options survive patches; removing an option restores its default."""
+
+    original = {
+        "local_root": "../custom-checkout",
+        "local_name": "Original",
+        "local_org": "custom-org",
+        "local_default_branch": "develop",
+    }
+    bridge = make_integration("vcs-config-patch", backend_class="local", model=VcsBridge, config=original)
+    result = _data(
+        _execute(
+            _schema(),
+            """
+            mutation UpdateConfig($id: ID!, $config: JSON!) {
+              update_vcs_bridge(data: {id: $id, config: $config}) { config }
+            }
+            """,
+            {"id": _public_id(bridge.sqid), "config": {"local_name": name}},
+            user=_platform_admin("vcs-config-patch-admin"),
+        )
+    )["update_vcs_bridge"]
+
+    expected = {**original, "local_name": expected_name}
+    assert result == {"config": expected}
+    with system_context(reason="test.integrate.vcs_config_patch.verify"):
+        bridge.refresh_from_db()
+        assert bridge.config == expected
+
+
+def test_update_vcs_bridge_rejects_unknown_config_key_after_merge(integrate_console_tables: None) -> None:
+    """Patch merging still runs the typed config's unknown-key validation on save."""
+
+    bridge = make_integration(
+        "vcs-config-patch-invalid", backend_class="local", model=VcsBridge, config={"local_org": "kept"},
+    )
+    original = dict(bridge.config)
+    result = _execute(
+        _schema(),
+        """
+        mutation InvalidConfig($id: ID!) {
+          update_vcs_bridge(data: {id: $id, config: {unknown_local_option: true}}) { id }
+        }
+        """,
+        {"id": _public_id(bridge.sqid)},
+        user=_platform_admin("vcs-config-patch-invalid-admin"),
+    )
+
+    assert result.errors is not None
+    assert result.errors[0].extensions == {
+        "code": "VALIDATION",
+        "validationErrors": {"config.unknown_local_option": ["Extra inputs are not permitted"]},
+        "formErrors": [],
+    }
+    with system_context(reason="test.integrate.vcs_config_patch_invalid.verify"):
+        bridge.refresh_from_db()
+        assert bridge.config == original
+
+
 def test_update_vcs_bridge_rejects_backend_switch(
     integrate_console_tables: None,
 ) -> None:

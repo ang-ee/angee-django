@@ -884,7 +884,8 @@ def test_runtime_build_emits_stale_sources_once_before_materializing(tmp_path: P
         return original_render()
 
     class FakeMigrations:
-        def materialize(self) -> tuple[Path, ...]:
+        def materialize(self, *, apps) -> tuple[Path, ...]:
+            assert apps is runtime_module.apps
             assert "class Resource" in (runtime.runtime_dir / "resources" / "models.py").read_text()
             calls.append("materialize")
             return ()
@@ -904,7 +905,8 @@ def test_runtime_build_materializes_without_rewriting_current_sources(tmp_path: 
     calls: list[str] = []
 
     class FakeMigrations:
-        def materialize(self) -> tuple[Path, ...]:
+        def materialize(self, *, apps) -> tuple[Path, ...]:
+            assert apps is runtime_module.apps
             calls.append("materialize")
             return ()
 

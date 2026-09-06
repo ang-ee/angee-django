@@ -560,6 +560,33 @@ def test_create_inference_provider_creates_child_row(agents_console_tables: None
         assert provider.backend_class == "manual"
 
 
+def test_update_inference_provider_merges_config_and_removes_null_keys(agents_console_tables: None) -> None:
+    """Untyped provider patches preserve unsent keys and delete explicit null values."""
+
+    provider = _provider(
+        "agt-provider-config-patch",
+        config={"endpoint": "https://example.test", "retries": 1, "obsolete": True},
+    )
+    result = _data(
+        _execute(
+            _schema(),
+            """
+            mutation UpdateConfig($id: ID!) {
+              update_inference_provider(data: {id: $id, config: {retries: 3, obsolete: null}}) { config }
+            }
+            """,
+            {"id": _public_id(provider.sqid)},
+            user=_platform_admin("agt-provider-config-patch-admin"),
+        )
+    )["update_inference_provider"]
+
+    expected = {"endpoint": "https://example.test", "retries": 3}
+    assert result == {"config": expected}
+    with system_context(reason="test.agents.provider_config_patch.verify"):
+        provider.refresh_from_db()
+        assert provider.config == expected
+
+
 def test_update_inference_provider_backend_is_create_only(agents_console_tables: None) -> None:
     """A saved provider cannot switch implementation or absorb another backend's defaults."""
 
