@@ -249,6 +249,9 @@ type PreflightFailure {
 type Query {
   health: MutationResult
   stackStatus: StackStatus
+  stackTemplateInputs: TemplateInputsResponse!
+  workspaceTemplateInputs(name: String!): TemplateInputsResponse!
+  serviceTemplateInputs(name: String!): TemplateInputsResponse!
   serviceEndpoint(name: String!): ServiceEndpoint
   ingressStatus: IngressStatus
   services(where: services_bool_exp, order_by: [services_order_by!], limit: Int, offset: Int): [ServiceState!]!
@@ -595,6 +598,11 @@ type TemplateDescriptor {
   inputs: [TemplateInputDescriptor!]!
 }
 
+type TemplateInputChoice {
+  value: String!
+  label: String!
+}
+
 type TemplateInputDescriptor {
   name: String!
   type: String
@@ -603,6 +611,22 @@ type TemplateInputDescriptor {
   generated: Boolean!
   default: String
   question: Boolean!
+  order: Int!
+  help: String
+  placeholder: String
+  secret: Boolean!
+  multiselect: Boolean!
+  choices: [TemplateInputChoice!]!
+  choicesExpr: String
+  when: String
+  validator: String
+}
+
+type TemplateInputsResponse {
+  target: String!
+  template: TemplateDescriptor!
+  recorded: [KeyValue!]!
+  unrecorded: [String!]!
 }
 
 input WorkspaceCreateInput {
