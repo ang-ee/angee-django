@@ -219,7 +219,6 @@ class DataResourceQuery:
     fields: dict[str, DataQueryField] = dataclasses.field(default_factory=dict)
     axes: dict[str, DataQueryAxis] = dataclasses.field(default_factory=dict)
     sort: DataQuerySort = dataclasses.field(default_factory=DataQuerySort)
-    paging: dict[str, int] = dataclasses.field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

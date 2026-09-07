@@ -219,16 +219,47 @@ test("datetime equality and groups compare instants without losing microseconds"
 
 test("date operands follow native calendar types without JavaScript rollover", () => {
   const query = ResourceQuery.forRows({ fields: { date: { scalar: "Date" }, time: { scalar: "DateTime" } } });
-  for (const value of ["2026-02-30", "2026-02-29", "0000-01-01", "2026-13-01"]) {
+  for (const value of ["2026-02-30", "2026-02-29", "0000-01-01", "2026-13-01", "2026-09-07\n"]) {
     expect(() => query.filterFrom({ date: value })).toThrow(/ISO date/);
     expect(() => query.filterFrom({ time: `${value}T00:00:00Z` })).toThrow(/ISO date/);
   }
   expect(() => query.filterFrom({ date: "2026-09-07T12:00:00Z" })).toThrow(/ISO date/);
+  expect(() => query.filterFrom({ time: "2026-09-07\n" })).toThrow(/ISO date/);
+  expect(() => query.filterFrom({ time: { inList: ["2026-09-07T12:34:56Z\n"] } })).toThrow(/ISO date/);
   expect(query.filterFrom({ date: "2024-02-29" })).toEqual({ date: { exact: "2024-02-29" } });
   expect(query.matches({ time: "2026-09-07T00:00:00Z" }, { time: "2026-09-07" })).toBe(true);
   expect(query.matches({ time: "2026-09-08T00:00:00Z" }, { time: "2026-09-07T24:00:00Z" })).toBe(true);
   expect(query.matches({ time: "2026-09-07T00:00:00.123456Z" }, { time: "2026-09-07T00:00:00.123456789Z" })).toBe(true);
   expect(() => query.axis("time", "month").identity({ time: "2026-02-30" })).toThrow(/invalid date/);
+});
+
+test("numeric filters reject values outside native GraphQL input domains", () => {
+  const query = ResourceQuery.forRows({ fields: { count: { scalar: "Int" }, ratio: { scalar: "Float" } } });
+  for (const value of [-(2 ** 31), 0, 2 ** 31 - 1]) {
+    expect(query.toWhere({ count: { exact: value, inList: [value] } }))
+      .toEqual({ count: { _eq: value, _in: [value] } });
+  }
+  for (const value of [-(2 ** 31) - 1, 2 ** 31, 1.5, NaN, Infinity]) {
+    for (const operand of [{ exact: value }, { inList: [value] }, { notInList: [value] }]) {
+      expect(() => query.toWhere({ count: operand })).toThrow(QueryParseError);
+    }
+  }
+  expect(query.toWhere({ ratio: { exact: Number.MAX_VALUE } })).toEqual({ ratio: { _eq: Number.MAX_VALUE } });
+  for (const value of [NaN, Infinity, -Infinity]) {
+    expect(() => query.toWhere({ ratio: { exact: value } })).toThrow(QueryParseError);
+  }
+});
+
+test("time filters validate native ISO clocks without losing offsets or precision", () => {
+  const query = ResourceQuery.forRows({ fields: { time: { scalar: "Time" } } });
+  for (const value of ["00:00", "24:00", "23:59:59.123456789", "12:34:56Z", "12:34:56+05:30:15.123456"]) {
+    expect(query.toWhere({ time: { exact: value, inList: [value] } }))
+      .toEqual({ time: { _eq: value, _in: [value] } });
+  }
+  for (const value of ["not-a-time", "25:00", "24:01", "24:00:00.001", "12:60", "12:34:60", "12:34:56+24:00", "12:34\n"]) {
+    expect(() => query.toWhere({ time: { exact: value } })).toThrow(/ISO time/);
+    expect(() => query.toWhere({ time: { inList: [value] } })).toThrow(/ISO time/);
+  }
 });
 
 test("decimal predicates and specialized sorting preserve arbitrary wire precision", () => {

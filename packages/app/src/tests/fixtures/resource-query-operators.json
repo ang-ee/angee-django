@@ -1,0 +1,1091 @@
+{
+  "sdl": "schema {\n  query: QueryScalarRoot\n}\n\ntype QueryScalarRow {\n  id: ID!\n  name: String!\n  count: Int!\n  ratio: Float!\n  amount: Decimal!\n  active: Boolean!\n  date: Date!\n  timestamp: DateTime!\n  time: Time!\n  uuid: UUID!\n  payload: JSON!\n  state: QueryState!\n  choice: QueryState!\n}\n\n\"\"\"Decimal (fixed-point)\"\"\"\nscalar Decimal\n\n\"\"\"Date (isoformat)\"\"\"\nscalar Date\n\n\"\"\"Date with time (isoformat)\"\"\"\nscalar DateTime\n\n\"\"\"Time (isoformat)\"\"\"\nscalar Time\n\nscalar UUID\n\n\"\"\"\nThe `JSON` scalar type represents JSON values as specified by [ECMA-404](https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf).\n\"\"\"\nscalar JSON @specifiedBy(url: \"https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf\")\n\nenum QueryState {\n  OPEN\n  CLOSED\n}\n\ninput query_scalars_bool_exp {\n  id: ID_comparison_exp\n  name: String_comparison_exp\n  count: Int_comparison_exp\n  ratio: Float_comparison_exp\n  amount: Decimal_comparison_exp\n  active: Boolean_comparison_exp\n  date: Date_comparison_exp\n  timestamp: DateTime_comparison_exp\n  time: Time_comparison_exp\n  uuid: String_comparison_exp\n  payload: JSON_comparison_exp\n  state: QueryStateComparison\n  choice: String_comparison_exp\n  _and: [query_scalars_bool_exp!]\n  _or: [query_scalars_bool_exp!]\n  _not: query_scalars_bool_exp\n}\n\ninput ID_comparison_exp {\n  _eq: String\n  _neq: String\n  _in: [String!]\n  _nin: [String!]\n  _is_null: Boolean\n}\n\ninput String_comparison_exp {\n  _eq: String\n  _neq: String\n  _gt: String\n  _gte: String\n  _lt: String\n  _lte: String\n  _in: [String!]\n  _nin: [String!]\n  _like: String\n  _nlike: String\n  _ilike: String\n  _nilike: String\n  _iregex: String\n  _similar: String\n  _nsimilar: String\n  _is_null: Boolean\n}\n\ninput Int_comparison_exp {\n  _eq: Int\n  _neq: Int\n  _gt: Int\n  _gte: Int\n  _lt: Int\n  _lte: Int\n  _in: [Int!]\n  _nin: [Int!]\n  _is_null: Boolean\n}\n\ninput Float_comparison_exp {\n  _eq: Float\n  _neq: Float\n  _gt: Float\n  _gte: Float\n  _lt: Float\n  _lte: Float\n  _in: [Float!]\n  _nin: [Float!]\n  _is_null: Boolean\n}\n\ninput Decimal_comparison_exp {\n  _eq: Decimal\n  _neq: Decimal\n  _gt: Decimal\n  _gte: Decimal\n  _lt: Decimal\n  _lte: Decimal\n  _in: [Decimal!]\n  _nin: [Decimal!]\n  _is_null: Boolean\n}\n\ninput Boolean_comparison_exp {\n  _eq: Boolean\n  _neq: Boolean\n  _is_null: Boolean\n}\n\ninput Date_comparison_exp {\n  _eq: Date\n  _neq: Date\n  _gt: Date\n  _gte: Date\n  _lt: Date\n  _lte: Date\n  _in: [Date!]\n  _nin: [Date!]\n  _is_null: Boolean\n}\n\ninput DateTime_comparison_exp {\n  _eq: DateTime\n  _neq: DateTime\n  _gt: DateTime\n  _gte: DateTime\n  _lt: DateTime\n  _lte: DateTime\n  _in: [DateTime!]\n  _nin: [DateTime!]\n  _is_null: Boolean\n}\n\ninput Time_comparison_exp {\n  _eq: Time\n  _neq: Time\n  _gt: Time\n  _gte: Time\n  _lt: Time\n  _lte: Time\n  _in: [Time!]\n  _nin: [Time!]\n  _is_null: Boolean\n}\n\ninput JSON_comparison_exp {\n  _eq: JSON\n  _neq: JSON\n  _contains: JSON\n  _is_null: Boolean\n}\n\ninput QueryStateComparison {\n  _eq: QueryState\n  _in: [QueryState!]\n  _is_null: Boolean\n}\n\ntype QueryScalarRoot {\n  ready: Boolean!\n}",
+  "operands": {
+    "id": "row_123",
+    "name": "50%_\\path",
+    "count": 0,
+    "ratio": 0.125,
+    "amount": "9007199254740993.000000000000000001",
+    "active": false,
+    "date": "2024-02-29",
+    "timestamp": "2026-09-07T12:34:56.123456+02:00",
+    "time": "12:34:56.123456",
+    "uuid": "12345678-1234-5678-1234-567812345678",
+    "payload": {
+      "count": 0,
+      "active": false,
+      "tags": [
+        "a"
+      ]
+    },
+    "state": "OPEN",
+    "choice": "open"
+  },
+  "times": {
+    "valid": [
+      "00:00",
+      "23:59:59.999999",
+      "12:34:56.123456789",
+      "12:34:56Z",
+      "12:34:56+02:30",
+      "12:34:56-05:00",
+      "12:34:56+05:30:15.123456",
+      "24:00",
+      "24:00:00.000000001+02:00"
+    ],
+    "invalid": [
+      "not-a-time",
+      "25:00",
+      "24:01",
+      "24:00:00.001",
+      "12:60",
+      "12:34:60",
+      "12:34:56+24:00",
+      "12:34\n"
+    ]
+  },
+  "resources": {
+    "sqlite": {
+      "schemaName": "console",
+      "modelLabel": "tests.QueryScalarRow",
+      "resourceType": null,
+      "appLabel": "tests",
+      "modelName": "QueryScalarRow",
+      "query": {
+        "identity": {
+          "field": "id"
+        },
+        "fields": {
+          "id": {
+            "kind": "scalar",
+            "scalar": "ID",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "id",
+              "operators": [
+                "exact",
+                "ne",
+                "inList",
+                "notInList",
+                "isNull"
+              ],
+              "scalar": "String",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "id",
+              "paths": [
+                "id"
+              ]
+            }
+          },
+          "name": {
+            "kind": "scalar",
+            "scalar": "String",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "name",
+              "operators": [
+                "exact",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "inList",
+                "notInList",
+                "isNull",
+                "contains",
+                "iContains",
+                "startsWith",
+                "iStartsWith",
+                "endsWith",
+                "iEndsWith",
+                "like",
+                "iLike",
+                "notLike",
+                "notILike",
+                "iRegex"
+              ],
+              "scalar": "String",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "name",
+              "paths": [
+                "name"
+              ]
+            }
+          },
+          "count": {
+            "kind": "scalar",
+            "scalar": "Int",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "count",
+              "operators": [
+                "exact",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "inList",
+                "notInList",
+                "isNull"
+              ],
+              "scalar": "Int",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "count",
+              "paths": [
+                "count"
+              ]
+            }
+          },
+          "ratio": {
+            "kind": "scalar",
+            "scalar": "Float",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "ratio",
+              "operators": [
+                "exact",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "inList",
+                "notInList",
+                "isNull"
+              ],
+              "scalar": "Float",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "ratio",
+              "paths": [
+                "ratio"
+              ]
+            }
+          },
+          "amount": {
+            "kind": "scalar",
+            "scalar": "Decimal",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "amount",
+              "operators": [
+                "exact",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "inList",
+                "notInList",
+                "isNull"
+              ],
+              "scalar": "Decimal",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "amount",
+              "paths": [
+                "amount"
+              ]
+            }
+          },
+          "active": {
+            "kind": "scalar",
+            "scalar": "Boolean",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "active",
+              "operators": [
+                "exact",
+                "ne",
+                "isNull"
+              ],
+              "scalar": "Boolean",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "active",
+              "paths": [
+                "active"
+              ]
+            }
+          },
+          "date": {
+            "kind": "scalar",
+            "scalar": "Date",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "date",
+              "operators": [
+                "exact",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "inList",
+                "notInList",
+                "isNull"
+              ],
+              "scalar": "Date",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "date",
+              "paths": [
+                "date"
+              ]
+            }
+          },
+          "timestamp": {
+            "kind": "scalar",
+            "scalar": "DateTime",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "timestamp",
+              "operators": [
+                "exact",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "inList",
+                "notInList",
+                "isNull"
+              ],
+              "scalar": "DateTime",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "timestamp",
+              "paths": [
+                "timestamp"
+              ]
+            }
+          },
+          "time": {
+            "kind": "scalar",
+            "scalar": "Time",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "time",
+              "operators": [
+                "exact",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "inList",
+                "notInList",
+                "isNull"
+              ],
+              "scalar": "Time",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "time",
+              "paths": [
+                "time"
+              ]
+            }
+          },
+          "uuid": {
+            "kind": "scalar",
+            "scalar": "UUID",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "uuid",
+              "operators": [
+                "exact",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "inList",
+                "notInList",
+                "isNull",
+                "contains",
+                "iContains",
+                "startsWith",
+                "iStartsWith",
+                "endsWith",
+                "iEndsWith",
+                "like",
+                "iLike",
+                "notLike",
+                "notILike",
+                "iRegex"
+              ],
+              "scalar": "String",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "uuid",
+              "paths": [
+                "uuid"
+              ]
+            }
+          },
+          "payload": {
+            "kind": "json",
+            "scalar": "JSON",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "payload",
+              "operators": [
+                "exact",
+                "ne",
+                "isNull"
+              ],
+              "scalar": "JSON",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "payload",
+              "paths": [
+                "payload"
+              ]
+            }
+          },
+          "state": {
+            "kind": "enum",
+            "scalar": "QueryState",
+            "values": [
+              {
+                "value": "OPEN",
+                "description": null
+              },
+              {
+                "value": "CLOSED",
+                "description": null
+              }
+            ],
+            "nullable": false,
+            "filter": {
+              "field": "state",
+              "operators": [
+                "exact",
+                "inList",
+                "isNull"
+              ],
+              "scalar": "Enum",
+              "values": [
+                {
+                  "value": "OPEN",
+                  "description": null
+                },
+                {
+                  "value": "CLOSED",
+                  "description": null
+                }
+              ],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "state",
+              "paths": [
+                "state"
+              ]
+            }
+          },
+          "choice": {
+            "kind": "enum",
+            "scalar": "QueryState",
+            "values": [
+              {
+                "value": "OPEN",
+                "description": null
+              },
+              {
+                "value": "CLOSED",
+                "description": null
+              }
+            ],
+            "nullable": false,
+            "filter": {
+              "field": "choice",
+              "operators": [
+                "exact",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "inList",
+                "notInList",
+                "isNull",
+                "contains",
+                "iContains",
+                "startsWith",
+                "iStartsWith",
+                "endsWith",
+                "iEndsWith",
+                "like",
+                "iLike",
+                "notLike",
+                "notILike",
+                "iRegex"
+              ],
+              "scalar": "String",
+              "values": [],
+              "valueMap": [
+                {
+                  "from": "OPEN",
+                  "to": "open"
+                },
+                {
+                  "from": "CLOSED",
+                  "to": "closed"
+                }
+              ]
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "choice",
+              "paths": [
+                "choice"
+              ]
+            }
+          }
+        },
+        "axes": {},
+        "sort": {
+          "default": []
+        }
+      },
+      "roots": {
+        "list": null,
+        "detail": null,
+        "aggregate": null,
+        "groups": null,
+        "groupsCount": null,
+        "create": null,
+        "update": null,
+        "save": null,
+        "delete": null,
+        "deletePreview": null,
+        "revisions": null,
+        "changes": null
+      },
+      "typeNames": {
+        "query": null,
+        "node": "QueryScalarRow",
+        "filter": "query_scalars_bool_exp",
+        "order": null,
+        "aggregate": null,
+        "grouped": null,
+        "groupKey": null,
+        "groupBySpec": null,
+        "groupOrder": null,
+        "having": null,
+        "createInput": null,
+        "updateInput": null,
+        "deletePayload": null,
+        "revision": null
+      },
+      "canonicalLabel": null,
+      "rowModel": "server",
+      "recordRepresentation": null,
+      "subtitle": null,
+      "implFields": [],
+      "capabilities": [],
+      "fields": [],
+      "aggregateFields": [],
+      "aggregateMeasures": [],
+      "defaultMeasures": [],
+      "createFields": [],
+      "updateFields": [],
+      "requiredCreateFields": [],
+      "revisionFields": [],
+      "linesResource": null
+    },
+    "postgresql": {
+      "schemaName": "console",
+      "modelLabel": "tests.QueryScalarRow",
+      "resourceType": null,
+      "appLabel": "tests",
+      "modelName": "QueryScalarRow",
+      "query": {
+        "identity": {
+          "field": "id"
+        },
+        "fields": {
+          "id": {
+            "kind": "scalar",
+            "scalar": "ID",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "id",
+              "operators": [
+                "exact",
+                "ne",
+                "inList",
+                "notInList",
+                "isNull"
+              ],
+              "scalar": "String",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "id",
+              "paths": [
+                "id"
+              ]
+            }
+          },
+          "name": {
+            "kind": "scalar",
+            "scalar": "String",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "name",
+              "operators": [
+                "exact",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "inList",
+                "notInList",
+                "isNull",
+                "contains",
+                "iContains",
+                "startsWith",
+                "iStartsWith",
+                "endsWith",
+                "iEndsWith",
+                "like",
+                "iLike",
+                "notLike",
+                "notILike",
+                "similar",
+                "notSimilar",
+                "iRegex"
+              ],
+              "scalar": "String",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "name",
+              "paths": [
+                "name"
+              ]
+            }
+          },
+          "count": {
+            "kind": "scalar",
+            "scalar": "Int",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "count",
+              "operators": [
+                "exact",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "inList",
+                "notInList",
+                "isNull"
+              ],
+              "scalar": "Int",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "count",
+              "paths": [
+                "count"
+              ]
+            }
+          },
+          "ratio": {
+            "kind": "scalar",
+            "scalar": "Float",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "ratio",
+              "operators": [
+                "exact",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "inList",
+                "notInList",
+                "isNull"
+              ],
+              "scalar": "Float",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "ratio",
+              "paths": [
+                "ratio"
+              ]
+            }
+          },
+          "amount": {
+            "kind": "scalar",
+            "scalar": "Decimal",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "amount",
+              "operators": [
+                "exact",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "inList",
+                "notInList",
+                "isNull"
+              ],
+              "scalar": "Decimal",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "amount",
+              "paths": [
+                "amount"
+              ]
+            }
+          },
+          "active": {
+            "kind": "scalar",
+            "scalar": "Boolean",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "active",
+              "operators": [
+                "exact",
+                "ne",
+                "isNull"
+              ],
+              "scalar": "Boolean",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "active",
+              "paths": [
+                "active"
+              ]
+            }
+          },
+          "date": {
+            "kind": "scalar",
+            "scalar": "Date",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "date",
+              "operators": [
+                "exact",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "inList",
+                "notInList",
+                "isNull"
+              ],
+              "scalar": "Date",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "date",
+              "paths": [
+                "date"
+              ]
+            }
+          },
+          "timestamp": {
+            "kind": "scalar",
+            "scalar": "DateTime",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "timestamp",
+              "operators": [
+                "exact",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "inList",
+                "notInList",
+                "isNull"
+              ],
+              "scalar": "DateTime",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "timestamp",
+              "paths": [
+                "timestamp"
+              ]
+            }
+          },
+          "time": {
+            "kind": "scalar",
+            "scalar": "Time",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "time",
+              "operators": [
+                "exact",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "inList",
+                "notInList",
+                "isNull"
+              ],
+              "scalar": "Time",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "time",
+              "paths": [
+                "time"
+              ]
+            }
+          },
+          "uuid": {
+            "kind": "scalar",
+            "scalar": "UUID",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "uuid",
+              "operators": [
+                "exact",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "inList",
+                "notInList",
+                "isNull",
+                "contains",
+                "iContains",
+                "startsWith",
+                "iStartsWith",
+                "endsWith",
+                "iEndsWith",
+                "like",
+                "iLike",
+                "notLike",
+                "notILike",
+                "similar",
+                "notSimilar",
+                "iRegex"
+              ],
+              "scalar": "String",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "uuid",
+              "paths": [
+                "uuid"
+              ]
+            }
+          },
+          "payload": {
+            "kind": "json",
+            "scalar": "JSON",
+            "values": [],
+            "nullable": false,
+            "filter": {
+              "field": "payload",
+              "operators": [
+                "exact",
+                "ne",
+                "isNull",
+                "jsonContains"
+              ],
+              "scalar": "JSON",
+              "values": [],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "payload",
+              "paths": [
+                "payload"
+              ]
+            }
+          },
+          "state": {
+            "kind": "enum",
+            "scalar": "QueryState",
+            "values": [
+              {
+                "value": "OPEN",
+                "description": null
+              },
+              {
+                "value": "CLOSED",
+                "description": null
+              }
+            ],
+            "nullable": false,
+            "filter": {
+              "field": "state",
+              "operators": [
+                "exact",
+                "inList",
+                "isNull"
+              ],
+              "scalar": "Enum",
+              "values": [
+                {
+                  "value": "OPEN",
+                  "description": null
+                },
+                {
+                  "value": "CLOSED",
+                  "description": null
+                }
+              ],
+              "valueMap": []
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "state",
+              "paths": [
+                "state"
+              ]
+            }
+          },
+          "choice": {
+            "kind": "enum",
+            "scalar": "QueryState",
+            "values": [
+              {
+                "value": "OPEN",
+                "description": null
+              },
+              {
+                "value": "CLOSED",
+                "description": null
+              }
+            ],
+            "nullable": false,
+            "filter": {
+              "field": "choice",
+              "operators": [
+                "exact",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "inList",
+                "notInList",
+                "isNull",
+                "contains",
+                "iContains",
+                "startsWith",
+                "iStartsWith",
+                "endsWith",
+                "iEndsWith",
+                "like",
+                "iLike",
+                "notLike",
+                "notILike",
+                "similar",
+                "notSimilar",
+                "iRegex"
+              ],
+              "scalar": "String",
+              "values": [],
+              "valueMap": [
+                {
+                  "from": "OPEN",
+                  "to": "open"
+                },
+                {
+                  "from": "CLOSED",
+                  "to": "closed"
+                }
+              ]
+            },
+            "sort": null,
+            "relation": null,
+            "row": {
+              "path": "choice",
+              "paths": [
+                "choice"
+              ]
+            }
+          }
+        },
+        "axes": {},
+        "sort": {
+          "default": []
+        }
+      },
+      "roots": {
+        "list": null,
+        "detail": null,
+        "aggregate": null,
+        "groups": null,
+        "groupsCount": null,
+        "create": null,
+        "update": null,
+        "save": null,
+        "delete": null,
+        "deletePreview": null,
+        "revisions": null,
+        "changes": null
+      },
+      "typeNames": {
+        "query": null,
+        "node": "QueryScalarRow",
+        "filter": "query_scalars_bool_exp",
+        "order": null,
+        "aggregate": null,
+        "grouped": null,
+        "groupKey": null,
+        "groupBySpec": null,
+        "groupOrder": null,
+        "having": null,
+        "createInput": null,
+        "updateInput": null,
+        "deletePayload": null,
+        "revision": null
+      },
+      "canonicalLabel": null,
+      "rowModel": "server",
+      "recordRepresentation": null,
+      "subtitle": null,
+      "implFields": [],
+      "capabilities": [],
+      "fields": [],
+      "aggregateFields": [],
+      "aggregateMeasures": [],
+      "defaultMeasures": [],
+      "createFields": [],
+      "updateFields": [],
+      "requiredCreateFields": [],
+      "revisionFields": [],
+      "linesResource": null
+    }
+  },
+  "invalidDates": {
+    "date": [
+      "2026-09-07\n"
+    ],
+    "timestamp": [
+      "2026-09-07\n",
+      "2026-09-07T12:34:56Z\n"
+    ]
+  }
+}

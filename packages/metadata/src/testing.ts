@@ -62,7 +62,7 @@ export function withTestResourceInventory(
 
 /** Explicit query fixture; callers supply executable capabilities for their case. */
 export function testResourceQuery(overrides: Partial<DataResourceQuery> = {}): DataResourceQuery {
-  return { identity: { field: "id" }, fields: {}, axes: {}, sort: { default: [] }, paging: {}, ...overrides };
+  return { identity: { field: "id" }, fields: {}, axes: {}, sort: { default: [] }, ...overrides };
 }
 
 /** A canonical string query field; override capabilities for the behavior under test. */

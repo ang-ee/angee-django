@@ -61,7 +61,6 @@ export const DataResourceQuerySchema = v.object({
   fields: v.record(v.string(), QueryFieldSchema),
   axes: v.record(v.string(), AxisSchema),
   sort: v.object({ default: v.pipe(v.array(QuerySortSchema), v.readonly()) }),
-  paging: v.object({ maxPageSize: v.nullish(v.number()), maxGroups: v.nullish(v.number()) }),
 });
 export type DataResourceQuery = v.InferOutput<typeof DataResourceQuerySchema>;
 export type QueryField = v.InferOutput<typeof QueryFieldSchema>;
