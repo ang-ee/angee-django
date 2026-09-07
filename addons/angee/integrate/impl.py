@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
@@ -70,6 +70,8 @@ class LiveBridgeImpl(BridgeImpl):
     """Base descriptor for a bridge backed by a long-lived live session task."""
 
     session_queue: ClassVar[str] = ""
+    session_isolation: ClassVar[Literal["thread", "process"]] = "thread"
+    """Use a fresh interpreter per session when the vendor can abort its host."""
     session_class: ClassVar[type[Any] | str | None] = None
     state_identity_key: ClassVar[str] = "own_id"
     transient_material_keys: ClassVar[tuple[str, ...]] = ("password",)

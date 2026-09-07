@@ -18,3 +18,12 @@ RECONCILER_INTERVAL = 60.0
 
 SESSION_START_EXPIRES = RECONCILER_INTERVAL
 """Discard an unconsumed live-session start after one reconciler tick."""
+
+WAKE_SECONDS = 20.0
+"""Upper bound between live-session desired-state / shutdown / lock checks."""
+
+STOP_JOIN_SECONDS = 30.0
+"""How long a stopping live session waits for the vendor connection to unwind."""
+
+SESSION_PROCESS_STOP_SECONDS = WAKE_SECONDS + STOP_JOIN_SECONDS + 5.0
+"""Process shutdown allows one session wake, vendor cleanup, and headroom."""

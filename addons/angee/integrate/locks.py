@@ -39,4 +39,10 @@ def bridge_is_locked(bridge: Any) -> bool:
     return task_lock_is_held(bridge_lock_key(bridge))
 
 
-__all__ = ["bridge_advisory_lock", "bridge_is_locked", "bridge_lock_key"]
+def bridge_session_is_hosted(bridge: Any) -> bool:
+    """Return whether a process host owns startup, execution, or child reaping."""
+
+    return bridge.pk is not None and task_lock_is_held(bridge.live_session_host_lock_key())
+
+
+__all__ = ["bridge_advisory_lock", "bridge_is_locked", "bridge_lock_key", "bridge_session_is_hosted"]

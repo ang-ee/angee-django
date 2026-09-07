@@ -15,23 +15,20 @@ from pathlib import Path
 from typing import Any
 
 import strawberry
-from angee.jobs.locks import task_locks_are_cross_process
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
+from angee.integrate.constants import SESSION_PROCESS_STOP_SECONDS
+from angee.integrate.constants import STOP_JOIN_SECONDS as STOP_JOIN_SECONDS
+from angee.integrate.constants import WAKE_SECONDS as WAKE_SECONDS
 from angee.integrate.locks import bridge_is_locked
-
-WAKE_SECONDS = 20.0
-"""Upper bound between live-session desired-state / shutdown / lock checks."""
+from angee.jobs.locks import task_locks_are_cross_process
 
 AWAITING_PASSWORD_WAKE_SECONDS = 1.0
 """Deliberate 1 Hz wake while awaiting a password; bounded by operator action."""
 
-STOP_JOIN_SECONDS = 30.0
-"""How long a stopping live session waits for the vendor connection to unwind."""
-
-SESSION_EXIT_TIMEOUT = WAKE_SECONDS + STOP_JOIN_SECONDS + 20.0
-"""Default destructive-reset wait: one wake, one vendor unwind, and headroom.
+SESSION_EXIT_TIMEOUT = WAKE_SECONDS + SESSION_PROCESS_STOP_SECONDS + 20.0
+"""Default destructive-reset wait: one wake, bounded child shutdown, and headroom.
 
 This bound derives from the real loop constants so a destructive reset cannot
 silently drift below the session's maximum stop and unwind time.

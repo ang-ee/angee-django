@@ -13,6 +13,7 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.db import connection
+from django.utils import timezone
 from rebac import system_context
 
 from angee.integrate.live import PairingState
@@ -32,10 +33,11 @@ LIVE_TEST_MODELS = (*MESSAGING_TEST_MODELS, Channel)
 def test_run_bridge_session_skips_actual_periodic_vcs_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     """A stale live-session delivery for a periodic VCS bridge exits cleanly."""
 
+    from angee.integrate import session_runner
     from angee.integrate import tasks as tasks_module
     from tests.conftest import VcsBridge
 
-    monkeypatch.setattr(tasks_module, "_bridge", lambda *_: VcsBridge())
+    monkeypatch.setattr(session_runner, "_bridge", lambda *_: VcsBridge())
 
     assert tasks_module.run_bridge_session("integrate_vcs.vcsbridge", 1) == {
         "ok": True,
@@ -1172,3 +1174,177 @@ def test_ensure_bridge_sessions_does_not_write_a_settled_live_row(
 
     channel.refresh_from_db()
     assert channel.updated_at == settled_at
+
+
+@pytest.mark.django_db(transaction=True)
+def test_native_session_crash_is_visible_and_retried(live_tables: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A reaped child crash preserves account health and the next beat can recover."""
+
+    from angee.integrate import session_runner
+    from angee.integrate import tasks as tasks_module
+    from angee.integrate.session_process import SessionProcessError
+
+    channel = _live_channel("fake-live-native-crash")
+    monkeypatch.setattr(FakeLiveChannelBackend, "session_isolation", "process")
+    monkeypatch.setattr(session_runner, "task_locks_are_cross_process", lambda: True)
+
+    def crash(_host: Any) -> Any:
+        assert task_lock_is_held(channel.live_session_host_lock_key())
+        assert not task_lock_is_held(channel.sync_lock_key())
+        raise SessionProcessError(2)
+
+    monkeypatch.setattr(session_runner.BridgeSessionProcess, "run", crash)
+    assert tasks_module.run_bridge_session(channel._meta.label_lower, channel.pk) == {
+        "ok": False,
+        "process_error": True,
+        "exitcode": 2,
+    }
+    channel.refresh_from_db()
+    assert channel.runtime_status == IntegrationRuntimeStatus.OK
+    assert channel.lifecycle == channel.Lifecycle.CONNECTED
+    assert channel.subscription_state["desired"] == channel.LiveState.LIVE
+    assert channel.sync_stage == channel.SyncStage.FAILED
+    assert "automatic recovery" in channel.sync_progress["message"]
+    sent: list[Any] = []
+    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: sent.append(kwargs))
+    assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 1}
+    assert len(sent) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_process_session_rejects_local_lock_backend(live_tables: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A process-local lock cannot protect a native store across child processes."""
+
+    from angee.integrate import session_runner
+    from angee.integrate import tasks as tasks_module
+
+    channel = _live_channel("fake-live-local-lock")
+    monkeypatch.setattr(FakeLiveChannelBackend, "session_isolation", "process")
+    monkeypatch.setattr(session_runner, "task_locks_are_cross_process", lambda: False)
+    with pytest.raises(ImproperlyConfigured, match="cross-process task locks"):
+        tasks_module.run_bridge_session(channel._meta.label_lower, channel.pk)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_session_host_deduplicates_startup(live_tables: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A starting host prevents a second parent and extra reconciler dispatches."""
+
+    from angee.integrate import session_runner
+    from angee.integrate import tasks as tasks_module
+    from angee.jobs.locks import task_lock
+
+    channel = _live_channel("fake-live-hosted")
+    monkeypatch.setattr(FakeLiveChannelBackend, "session_isolation", "process")
+    monkeypatch.setattr(session_runner, "task_locks_are_cross_process", lambda: True)
+    monkeypatch.setattr(tasks_module, "task_locks_are_cross_process", lambda: True)
+    with task_lock(channel.live_session_host_lock_key()) as acquired:
+        assert acquired
+        assert (
+            tasks_module.run_bridge_session(channel._meta.label_lower, channel.pk)["reason"] == "session-already-hosted"
+        )
+        assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 0}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_queued_session_revalidates_terminal_health(live_tables: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An already queued task must not reopen a session after a terminal outcome."""
+
+    from angee.integrate import tasks as tasks_module
+
+    channel = _live_channel("fake-live-stale-start")
+    with system_context(reason="test terminal live outcome"):
+        channel.record_sync_error(RuntimeError("terminal"), now=timezone.now())
+    monkeypatch.setattr(
+        FakeLiveChannelBackend, "session_class_resolved", lambda _: pytest.fail("opened terminal session")
+    )
+    assert tasks_module.run_bridge_session(channel._meta.label_lower, channel.pk)["reason"] == "runtime-error"
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("shutdown_raises", [False, True])
+def test_stalled_native_shutdown_exits_before_releasing_locks(
+    live_tables: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    shutdown_raises: bool,
+) -> None:
+    """The child process exit hook runs while account/store ownership is retained."""
+
+    from angee.integrate.session_runner import run_bridge_session_job
+
+    channel = _live_channel("fake-live-stalled-shutdown")
+    closed: list[str] = []
+    shutdown_started: list[bool] = []
+
+    class ForcedExit(BaseException):
+        pass
+
+    class StalledSession(FakeLiveSession):
+        def _build_client(self, store: Path) -> Any:
+            self._account_locks.callback(lambda: closed.append("account"))
+            return object()
+
+        def _connect(self) -> None:
+            self.events.put(("disconnected", None))
+
+        def _shutdown(self, connection: threading.Thread) -> bool:
+            assert shutdown_started == [True]
+            if shutdown_raises:
+                raise RuntimeError("native stop failed")
+            return False
+
+    def exit_child() -> Any:
+        assert task_lock_is_held(channel.sync_lock_key())
+        assert closed == []
+        raise ForcedExit()
+
+    monkeypatch.setattr(FakeLiveChannelBackend, "session_class", StalledSession)
+    with pytest.raises(ForcedExit):
+        run_bridge_session_job(
+            channel._meta.label_lower,
+            channel.pk,
+            stop_event=threading.Event(),
+            in_child=True,
+            on_shutdown=lambda: shutdown_started.append(True),
+            on_stalled_shutdown=exit_child,
+        )
+    assert closed == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("stopped", [False, True])
+def test_native_crash_report_preserves_terminal_or_stopped_row(live_tables: Any, stopped: bool) -> None:
+    """A late parent observation does not replace account errors or operator intent."""
+
+    channel = _live_channel("fake-live-late-crash-report")
+    with system_context(reason="test stop during child failure"):
+        if stopped:
+            channel.stop_live()
+        else:
+            channel.record_sync_error(RuntimeError("terminal"), now=timezone.now())
+    channel.refresh_from_db()
+    previous = channel.sync_progress.copy()
+    with bridge_advisory_lock(channel) as acquired:
+        assert acquired
+        channel.report_live_session_interrupted(exitcode=2)
+    channel.refresh_from_db()
+    assert channel.sync_progress == previous
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reconciler_warns_about_crashed_startup(
+    live_tables: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A DISCOVERING row without a session is as stale as a SYNCING row."""
+
+    from angee.integrate import tasks as tasks_module
+
+    channel = _live_channel("fake-live-crashed-startup")
+    with system_context(reason="test crashed startup"):
+        channel.sync_stage = channel.SyncStage.DISCOVERING
+        channel.save(update_fields=["sync_stage"])
+    monkeypatch.setattr(tasks_module, "task_locks_are_cross_process", lambda: True)
+    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: None)
+    assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 1}
+    assert "active stage with no running session" in caplog.text

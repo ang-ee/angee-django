@@ -13,10 +13,11 @@ import base64
 import logging
 import queue
 import threading
+from collections.abc import Callable
 from contextlib import ExitStack
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Literal, overload
+from typing import Any, Literal, NoReturn, overload
 
 import qrcode
 from django.utils import timezone
@@ -61,12 +62,24 @@ class LiveSession:
 
     session_file_name = "session.db"
 
-    def __init__(self, bridge: Any, *, reporter: BridgeProgressReporter, stop_event: threading.Event) -> None:
+    def __init__(
+        self,
+        bridge: Any,
+        *,
+        reporter: BridgeProgressReporter,
+        stop_event: threading.Event,
+        on_shutdown: Callable[[], None] | None = None,
+        on_stalled_shutdown: Callable[[], NoReturn] | None = None,
+    ) -> None:
         """Bind the session to one bridge row and its progress reporter."""
 
         self.bridge = bridge
         self.reporter = reporter
         self.stop_event = stop_event
+        self.on_shutdown = on_shutdown
+        """Notify the host before entering potentially blocking vendor cleanup."""
+        self.on_stalled_shutdown = on_stalled_shutdown
+        """A process host terminates before ownership locks release on failed cleanup."""
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.inputs: queue.Queue[str | PasswordSkipped] = queue.Queue()
         self.client: Any = None
@@ -112,9 +125,13 @@ class LiveSession:
                     raise ConnectionError(f"{self.live_impl.label} connection ended unexpectedly.")
         finally:
             self._stopping.set()
+            if self.on_shutdown is not None:
+                self.on_shutdown()
             try:
                 self.store_released = self._shutdown(connection)
             finally:
+                if not self.store_released and self.on_stalled_shutdown is not None:
+                    self.on_stalled_shutdown()
                 self._discard_inputs()
                 self._account_locks.close()
         if self.pairing == PairingState.LOGGED_OUT:

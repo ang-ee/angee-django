@@ -521,6 +521,13 @@ data through REBAC, never a queryset bypass.
 
 ## Pitfalls
 
+- **Native bridge SDKs can abort the interpreter.** Declare process isolation on
+  the owning `LiveBridgeImpl`; use the shared integration process host rather
+  than serializing selected calls in Python. The session child owns the store
+  and account locks until native cleanup completes or the process exits.
+  Infrastructure crashes stay retryable; terminal account outcomes retain their
+  existing runtime-error latch.
+
 - **Never mix `select()` with buffered `readline()` on a subprocess pipe.** A
   buffered wrapper may consume several complete records while the file descriptor
   becomes non-readable, stranding those records behind the readiness check; it

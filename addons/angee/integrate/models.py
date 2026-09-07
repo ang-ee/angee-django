@@ -2112,6 +2112,34 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
         return record_lock_key(self._meta.label_lower, self.pk, "sync")
 
+    def live_session_host_lock_key(self) -> LockKey:
+        """Deduplicate process hosts without borrowing the child's store lock."""
+
+        return record_lock_key(self._meta.label_lower, self.pk, "live-host")
+
+    def report_live_session_interrupted(self, *, exitcode: int | None) -> None:
+        """Report a reaped child failure while keeping automatic recovery eligible.
+
+        The caller holds the bridge lock after the child exits. Native crashes
+        are host failures, not evidence that the account needs fresh credentials.
+        Terminal session outcomes and a concurrent operator stop remain intact.
+        """
+
+        with transaction.atomic():
+            row = type(self).objects.sudo(reason="integrate.live.interrupted").lock_if_supported().get(pk=self.pk)
+            if (
+                row.lifecycle != row.Lifecycle.CONNECTED
+                or row.runtime_status != IntegrationRuntimeStatus.OK
+                or row.subscription_state.get("desired") != row.LiveState.LIVE
+            ):
+                return
+            with bridge_progress_context(row) as reporter:
+                reporter.report(
+                    row.SyncStage.FAILED,
+                    message="The live session process stopped unexpectedly; automatic recovery will retry.",
+                    details={"session": {"state": "interrupted", "exitcode": exitcode}},
+                )
+
     def _sync_marker(self, **values: Any) -> dict[str, Any]:
         """Return ``sync_progress`` with this run's marker keys set, others kept.
 
