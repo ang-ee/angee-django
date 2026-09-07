@@ -11,6 +11,8 @@ import {
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { functionalUpdate, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState } from "@tanstack/react-table";
 import { stableSerialize } from "@angee/refine";
+import { Filter, ResourceQuery, useModelMetadata } from "@angee/metadata";
+import { validateResourceViewState } from "./model/state";
 import { normaliseGroupStack } from "./model/search";
 import { normalisePageSize } from "./page-size";
 
@@ -68,6 +70,7 @@ export interface ResourceViewContextValue {
   setSorting: OnChangeFn<SortingState>;
   setRowSelection: OnChangeFn<RowSelectionState>;
   setFilter: (filter: ResourceViewFilter) => void;
+  resetQuery: () => void;
   setGroup: (group: ResourceViewGroup | null) => void;
   setGroupStack: (groupStack: readonly ResourceViewGroup[]) => void;
   toggleSelectedId: (id: string, selected?: boolean) => void;
@@ -172,16 +175,24 @@ function RouteResourceViewProvider({
     () => resourceViewSearchToState(search, initialState),
     [search, initialState],
   );
-  const state = useMemo(() => ({ ...queryState, rowSelection }), [queryState, rowSelection]);
+  const [failedTransition, setFailedTransition] = useState<{ search: unknown; error: Error } | null>(null);
+  const transitionError = failedTransition && failedTransition.search === search ? failedTransition.error : null;
+  const state = useMemo(() => ({ ...queryState, rowSelection, queryError: transitionError ?? queryState.queryError }), [queryState, rowSelection, transitionError]);
   const updateState = useCallback<OnChangeFn<ResourceViewState>>((updater) => {
+    const next = functionalUpdate(updater, { ...queryState, rowSelection });
+    if (next.queryError) {
+      setFailedTransition({ search, error: next.queryError });
+      return;
+    }
+    setFailedTransition(null);
     void navigate({
-      search: (current) => mergeResourceViewSearch(
-        current,
-        resourceViewStateToSearch(functionalUpdate(updater, resourceViewSearchToState(current, initialState)), initialState),
-      ),
+      search: (current) => {
+        const updated = functionalUpdate(updater, resourceViewSearchToState(current, initialState));
+        return updated.queryError ? current : mergeResourceViewSearch(current, resourceViewStateToSearch(updated, initialState));
+      },
       replace: true,
     });
-  }, [initialState, navigate]);
+  }, [initialState, navigate, queryState, rowSelection, search]);
   const value = useResourceViewContextValue({ updateState, setRowSelection, resource, state });
 
   return (
@@ -213,13 +224,17 @@ function useResourceViewContextValue({
   updateState,
   setRowSelection,
   resource,
-  state,
+  state: sourceState,
 }: {
   updateState: OnChangeFn<ResourceViewState>;
   setRowSelection: OnChangeFn<RowSelectionState>;
   resource: string | undefined;
   state: ResourceViewState;
 }): ResourceViewContextValue {
+  const metadata = useModelMetadata(resource ?? "");
+  const state = useMemo(() => metadata
+    ? validateResourceViewState(sourceState, ResourceQuery.from(metadata)) : sourceState,
+  [metadata, sourceState]);
   const { savedFavorites, saveFavorite } = useResourceViewFavorites(resource, state);
   // Query facts belong to ResourceView; an external Router change must discard
   // old group interaction state before any newly mounted surface starts reads.
@@ -288,7 +303,8 @@ function useResourceViewContextValue({
     setRowSelection,
     setPage: (page: number) => setPagination((current) => ({ ...current, pageIndex: page - 1 })),
     setPageSize: (pageSize: number) => setPagination((current) => ({ ...current, pageSize })),
-    setFilter: (filter: ResourceViewFilter) => resetScope((current) => ({ ...current, filter })),
+    setFilter: (filter: ResourceViewFilter) => resetScope((current) => ({ ...current, filter, queryError: null })),
+    resetQuery: () => resetScope((current) => ({ ...current, filter: {}, sorting: [], group: null, groupStack: [], queryError: null })),
     setGroup: (group: ResourceViewGroup | null) => setGroupStack(group ? [group] : []),
     setGroupStack,
     toggleSelectedId: (id: string, selected?: boolean) => setRowSelection((current) => ({ ...current, [id]: selected ?? !current[id] })),
@@ -296,10 +312,13 @@ function useResourceViewContextValue({
     setView: (view: ResourceViewKind) => updateState((current) => ({ ...current, view })),
     setMode: (mode: CalendarViewMode) => updateState((current) => ({ ...current, mode })),
     setAnchor: (anchor: string) => updateState((current) => ({ ...current, anchor })),
-    applyFavorite: (favorite: ResourceViewFavorite) => resetScope((current) => ({
-      ...current,
-      ...createResourceViewState({ ...favorite, sort: favorite.sort ?? null, mode: current.mode, anchor: current.anchor }),
-    })),
+    applyFavorite: (favorite: ResourceViewFavorite) => resetScope((current) => {
+      try {
+        return { ...current, ...createResourceViewState({ ...favorite, filter: Filter.from(favorite.filter).value, groupStack: normaliseGroupStack(favorite.groupStack ?? []), sort: favorite.sort ?? null, mode: current.mode, anchor: current.anchor }), queryError: null };
+      } catch (error) {
+        return { ...current, queryError: error instanceof Error ? error : new Error("Invalid saved query.") };
+      }
+    }),
   }), [state, activeGroups.paginationByScope, activeGroups.expansion, setPaginationByScope, setGroupExpansion, savedFavorites, saveFavorite, setPagination, setSorting, setRowSelection, resetScope, setGroupStack, clearSelectedIds, updateState]);
 }
 

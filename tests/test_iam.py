@@ -189,19 +189,19 @@ def test_overview_requires_swappable_user_people_scope(monkeypatch: pytest.Monke
 
     from angee.iam import roles
 
-    class QuerySet:
+    class MissingPeopleScope:
         pass
 
     class Manager:
-        def all(self) -> QuerySet:
-            return QuerySet()
+        def all(self) -> MissingPeopleScope:
+            return MissingPeopleScope()
 
     class UserModel:
         _default_manager = Manager()
 
     monkeypatch.setattr(roles, "get_user_model", lambda: UserModel)
 
-    with pytest.raises(AttributeError, match="'QuerySet' object has no attribute 'people'"):
+    with pytest.raises(AttributeError, match="people"):
         roles.OverviewInfo.build(peek_limit=1)
 
 

@@ -5,7 +5,7 @@ import { Refine, type DataProvider, type GetListParams } from "@refinedev/core";
 import { QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import { ModelMetadataProvider, schemaFieldMetadataFromDataResources, type ModelMetadata } from "@angee/metadata";
-import { testDataResource } from "@angee/metadata/testing";
+import { testDataResource, testResourceQuery, testQueryField } from "@angee/metadata/testing";
 import { ToastProvider } from "@angee/ui/feedback/index";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "@angee/ui/views/resource-view-context";
 import { resourceViewFavoritesFromJson, todayCalendarAnchor, type ResourceListOrder, type ResourceViewInitialState } from "@angee/ui/views/resource-view-model";
@@ -13,7 +13,12 @@ import { useResourceViewSurface, type ResourceViewSurface } from "@angee/ui/view
 import { afterEach, expect, test, vi } from "vitest";
 import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
 
-const resource = testDataResource("notes.Note", { orderFields: ["title", "updated_at"], recordRepresentation: "title" });
+const resource = testDataResource("notes.Note", {
+  roots: { aggregate: "notes_aggregate" }, typeNames: { filter: "notes_bool_exp", order: "notes_order_by" },
+  query: testResourceQuery({ identity: { field: "id" }, fields: { "title": testQueryField("title", { scalar: "String", filter: { field: "title", scalar: "String", values: [], operators: ["exact", "inList", "isNull", "iContains"] }, sort: { field: "title" } }),
+          "updated_at": testQueryField("updated_at", { scalar: "String", filter: null, sort: { field: "updated_at" } }),
+          "id": testQueryField("id", { scalar: "ID", filter: null }) }, axes: {}, sort: { default: [] } }),
+  recordRepresentation: "title" });
 const metadata = schemaFieldMetadataFromDataResources([resource]);
 const model: ModelMetadata = { ...metadata.labels!["notes.Note"]!, fields: { id: { name: "id", kind: "scalar" }, title: { name: "title", kind: "scalar" }, updated_at: { name: "updated_at", kind: "scalar" } } };
 const columns = [{ field: "title", sortable: true }, { field: "updated_at", sortable: true }];
@@ -72,7 +77,7 @@ test("native Table controls Refine requests and Router search without a second t
     expect(f.view().state.pagination.pageIndex).toBe(0);
   }
   await act(async () => f.view().setFilter({ title: { iContains: "alpha" } }));
-  await waitFor(() => expect(f.calls.at(-1)?.filters).toEqual([{ field: "title", operator: "contains", value: "alpha" }]));
+  await waitFor(() => expect(f.calls.at(-1)?.meta?.gqlVariables?.where).toEqual({ title: { _ilike: "%alpha%" } }));
   await act(async () => f.view().setFilter({}));
   expect(f.view().state.filter).toEqual({});
   await act(async () => f.surface().list.refetch());
@@ -94,7 +99,7 @@ test("unknown totals retain disabled next/last controls despite native unknown p
 test("a Notes descending declaration can clear and cycle without restoring the default", async () => {
   const order = { updated_at: "DESC" } as const;
   const f = await fixture({ initialPath: "/?keep=external", order });
-  expect(f.calls.at(-1)?.sorters).toEqual([{ field: "updated_at", order: "desc" }]);
+  expect(f.calls.at(-1)?.meta?.gqlVariables?.order_by).toEqual({ updated_at: "desc" });
 
   for (const expected of [false, "asc", "desc", false] as const) {
     await act(async () => f.surface().table.getColumn("updated_at")!.toggleSorting());
@@ -108,7 +113,7 @@ test("a Notes descending declaration can clear and cycle without restoring the d
 
 test("an explicit URL sort takes precedence over a Notes descending declaration", async () => {
   const f = await fixture({ initialPath: "/?sort=title:asc&keep=external", order: { updated_at: "DESC" } });
-  expect(f.calls.at(-1)?.sorters).toEqual([{ field: "title", order: "asc" }]);
+  expect(f.calls.at(-1)?.meta?.gqlVariables?.order_by).toEqual({ title: "asc" });
   expect(f.surface().table.getColumn("title")!.getIsSorted()).toBe("asc");
 });
 

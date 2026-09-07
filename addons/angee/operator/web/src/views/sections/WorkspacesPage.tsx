@@ -1,4 +1,5 @@
 import { Button, Glyph, cn, RowsListView, Skeleton, textRoleVariants, type ListColumn } from "@angee/ui";
+import { ResourceQuery } from "@angee/metadata";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
@@ -21,6 +22,10 @@ import { WorkspaceCreateDialog } from "./WorkspaceCreateDialog";
 
 type WorkspaceRowData = DaemonRow<WorkspaceRef>;
 type WorkspaceSourceRowData = DaemonRow<WorkspaceSourceStatus>;
+const workspaceSourceRowsQuery = ResourceQuery.forRows({ fields: {
+  slot: { scalar: "String" }, state: { scalar: "String" },
+  branch: { scalar: "String" }, path: { scalar: "String" },
+} });
 
 export interface WorkspacesPageProps {
   /** Restrict the list to these workspace names; omit to show every workspace. */
@@ -211,6 +216,7 @@ export function WorkspaceSources({
         </h4>
       ) : null}
       <RowsListView<WorkspaceSourceRowData>
+        query={workspaceSourceRowsQuery}
         rows={rows}
         columns={columns}
         emptyContent={emptyContent ?? t("workspaceSources.empty")}

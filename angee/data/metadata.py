@@ -16,30 +16,27 @@ from django.db import models
 __all__ = [
     "DataAggregateMeasureMetadata",
     "DataDefaultSortMetadata",
-    "DataGroupAliasMetadata",
-    "DataGroupBucketFilterMetadata",
-    "DataGroupBucketFilterValueMapMetadata",
-    "DataGroupDimensionMetadata",
-    "DataGroupExtractionMetadata",
     "DataLinesMetadata",
-    "DataRelationAxisMetadata",
+    "DataQueryAxis",
+    "DataQueryDrill",
+    "DataQueryExtraction",
+    "DataQueryField",
+    "DataQueryFilter",
+    "DataQueryIdentity",
+    "DataQueryOrder",
+    "DataQueryRelation",
+    "DataQueryServerAxis",
+    "DataQuerySort",
+    "DataQueryValueMap",
     "DataResourceEnumValueMetadata",
     "DataResourceFieldMetadata",
     "DataResourceMetadata",
+    "DataResourceQuery",
     "DataResourceRoots",
     "DataResourceSubtitleMetadata",
     "DataResourceTypeNames",
     "serialize_data_resources",
 ]
-
-@dataclass(frozen=True, slots=True)
-class DataRelationAxisMetadata:
-    """Metadata for a relation group axis and its public identity lookup."""
-
-    field: str
-    model_label: str
-    public_id_field: str
-    label_axis: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,17 +57,13 @@ class DataResourceFieldMetadata:
     values: tuple[DataResourceEnumValueMetadata, ...] = ()
     widget: str | None = None
     readable: bool = True
-    filterable: bool = False
-    sortable: bool = False
     aggregatable: bool = False
-    groupable: bool = False
     creatable: bool = False
     updatable: bool = False
     required_on_create: bool = False
     archivable: bool = False
     currency_field: str | None = None
     relation_model_label: str | None = None
-    relation_label_axis: str | None = None
     relation_object: bool = False
     """Whether a ``relation`` field is projected as a nested selectable object.
 
@@ -87,58 +80,146 @@ class DataResourceFieldMetadata:
 
 
 @dataclass(frozen=True, slots=True)
-class DataGroupAliasMetadata:
-    """Metadata for a display field that groups through another aggregate axis."""
-
-    field: str
-    aggregate_field: str
-    aggregate_key: str
-
-
-@dataclass(frozen=True, slots=True)
-class DataGroupBucketFilterValueMapMetadata:
-    """One backend-owned group bucket value rewrite for drill-down filters."""
+class DataQueryValueMap:
+    """One backend-owned enum bucket rewrite into an accepted filter value."""
 
     from_value: Any = dataclasses.field(metadata={"wire": "from"})
     to_value: Any = dataclasses.field(metadata={"wire": "to"})
 
 
 @dataclass(frozen=True, slots=True)
-class DataGroupBucketFilterMetadata:
-    """Backend-owned predicate metadata for drilling into one group bucket."""
+class DataQueryDrill:
+    """An executable bucket predicate; absence means a summary-only axis.
+
+    JSON path nulls are values, whereas SQL null buckets use ``isNull``. A
+    range is half-open and its boundaries come from the aggregate owner.
+    """
 
     kind: str
     field: str
-    value_key: str | None = None
+    value_key: str
     range_key: str | None = None
-    lookup: str | None = None
-    null_lookup: str | None = "isNull"
+    json_path: str | None = None
     value_transform: str | None = None
-    value_map: tuple[DataGroupBucketFilterValueMapMetadata, ...] = ()
+    value_map: tuple[DataQueryValueMap, ...] = ()
+    null_mode: str = "isNull"
 
 
 @dataclass(frozen=True, slots=True)
-class DataGroupExtractionMetadata:
-    """One extraction supported by a group dimension, such as month or day."""
+class DataQueryExtraction:
+    """One aggregate-owned date extraction and its optional drill capability."""
 
     name: str
     input: str
     key: str
     range_key: str | None = None
-    filter: DataGroupBucketFilterMetadata | None = None
+    drill: DataQueryDrill | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class DataGroupDimensionMetadata:
-    """Backend-owned grouped bucket dimension metadata."""
+class DataQueryServerAxis:
+    """Aggregate input and result names, independent of row selection paths."""
 
-    field: str
     input: str
     key: str
+    label_input: str | None = None
+    label_key: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DataQueryAxis:
+    """One group identity shared by server and client row models.
+
+    Row paths are final selectable fields, absent for aggregate-only axes.
+    ``server`` is absent for bounded client row-model axes.
+    """
+
+    field: str
     kind: str = "column"
+    identity_path: str | None = None
+    label_path: str | None = None
+    paths: tuple[str, ...] = ()
+    server: DataQueryServerAxis | None = None
+    extractions: tuple[DataQueryExtraction, ...] = ()
+    drill: DataQueryDrill | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DataQueryIdentity:
+    """The final selection field carrying public row identity."""
+
+    field: str
+
+
+@dataclass(frozen=True, slots=True)
+class DataQueryFilter:
+    """A final bool-exp field and its executable canonical operators."""
+
+    field: str
+    operators: tuple[str, ...]
+    scalar: str
+    values: tuple[DataResourceEnumValueMetadata, ...] = ()
+    value_map: tuple[DataQueryValueMap, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DataQueryOrder:
+    """A final order input field."""
+
+    field: str
+
+
+@dataclass(frozen=True, slots=True)
+class DataQueryRelation:
+    """Public relation identity and label selections on this resource."""
+
+    model: str
+    identity_path: str | None
+    label_path: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DataQueryRow:
+    """A semantic row accessor and the final GraphQL paths needed to read it."""
+
+    path: str
+    paths: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DataQueryField:
+    """A final readable or queryable field and its executable capabilities."""
+
+    kind: str
     scalar: str | None = None
-    filter: DataGroupBucketFilterMetadata | None = None
-    extractions: tuple[DataGroupExtractionMetadata, ...] = ()
+    values: tuple[DataResourceEnumValueMetadata, ...] = ()
+    nullable: bool = True
+    filter: DataQueryFilter | None = None
+    sort: DataQueryOrder | None = None
+    relation: DataQueryRelation | None = None
+    row: DataQueryRow | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DataQuerySort:
+    """The resource's declared default ordering."""
+
+    default: tuple[DataDefaultSortMetadata, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DataResourceQuery:
+    """Complete query vocabulary finalized once from the exposed schema.
+
+    Consumers validate intent and project native transport and row-model state.
+    Identity, capabilities and group predicates have no parallel wire owners.
+    """
+
+    identity: DataQueryIdentity
+    fields: dict[str, DataQueryField] = dataclasses.field(default_factory=dict)
+    axes: dict[str, DataQueryAxis] = dataclasses.field(default_factory=dict)
+    sort: DataQuerySort = dataclasses.field(default_factory=DataQuerySort)
+    paging: dict[str, int] = dataclasses.field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +276,7 @@ class DataResourceRoots:
     revisions_name: str | None = dataclasses.field(default=None, metadata={"wire": "revisions"})
     changes_name: str | None = dataclasses.field(default=None, metadata={"wire": "changes"})
 
+
 @dataclass(frozen=True, slots=True)
 class DataResourceTypeNames:
     """GraphQL type names owned or referenced by one data resource."""
@@ -214,6 +296,7 @@ class DataResourceTypeNames:
     delete_payload: str | None = None
     revision: str | None = None
 
+
 @dataclass(frozen=True, slots=True)
 class DataResourceSubtitleMetadata:
     """Declared dotted selection paths for a resource record's subtitle facts.
@@ -227,6 +310,7 @@ class DataResourceSubtitleMetadata:
     updated: str | None = None
     word_count: str | None = None
 
+
 @dataclass(frozen=True, slots=True)
 class DataResourceMetadata:
     """Internal metadata for one Angee model data resource."""
@@ -236,7 +320,7 @@ class DataResourceMetadata:
     resource_type: str | None
     app_label: str
     model_name: str
-    public_id_field: str
+    query: DataResourceQuery
     roots: DataResourceRoots
     type_names: DataResourceTypeNames
     contributors: tuple[str, ...] = dataclasses.field(
@@ -252,20 +336,13 @@ class DataResourceMetadata:
     impl_fields: tuple[str, ...] = ()
     capabilities: tuple[str, ...] = ()
     fields: tuple[DataResourceFieldMetadata, ...] = ()
-    filter_fields: tuple[str, ...] = ()
-    order_fields: tuple[str, ...] = ()
     aggregate_fields: tuple[str, ...] = ()
-    group_by_fields: tuple[str, ...] = ()
-    group_dimensions: tuple[DataGroupDimensionMetadata, ...] = ()
     aggregate_measures: tuple[DataAggregateMeasureMetadata, ...] = ()
     default_measures: tuple[DataAggregateMeasureMetadata, ...] = ()
-    default_sort: tuple[DataDefaultSortMetadata, ...] = ()
     create_fields: tuple[str, ...] = ()
     update_fields: tuple[str, ...] = ()
     required_create_fields: tuple[str, ...] = ()
     revision_fields: tuple[str, ...] = ()
-    relation_axes: tuple[DataRelationAxisMetadata, ...] = ()
-    group_aliases: tuple[DataGroupAliasMetadata, ...] = ()
     lines: DataLinesMetadata | None = dataclasses.field(default=None, metadata={"wire": "linesResource"})
 
     def as_wire(self, *, schema_name: str) -> dict[str, object]:
@@ -308,6 +385,8 @@ def _wire_value(value: object) -> object:
 
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         return _wire_dataclass(value)
+    if isinstance(value, dict):
+        return {key: _wire_value(item) for key, item in value.items()}
     if isinstance(value, (tuple, list)):
         return [_wire_value(item) for item in value]
     return value

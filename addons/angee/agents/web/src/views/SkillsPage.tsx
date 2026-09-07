@@ -12,7 +12,7 @@ export function SkillsPage(): React.ReactElement {
   return (
     <ResourceList resource={MODEL} placement="inline" hideCreate>
       <List resource={MODEL}>
-        <Facet field="source" label={t("facet.source")} labelField="path" />
+        <Facet field="source" label={t("facet.source")} />
         <Column field="name" />
         <Column field="description" />
         <Column field="path" />

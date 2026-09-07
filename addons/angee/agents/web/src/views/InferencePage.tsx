@@ -30,7 +30,7 @@ export function InferenceProvidersPage(): React.ReactElement {
       }
     >
       <List resource={PROVIDER_MODEL}>
-        <Facet field="vendor" label={t("facet.vendor")} labelField="display_name" />
+        <Facet field="vendor" label={t("facet.vendor")} />
         <Column field="name" />
         <Column field="backend_class" />
         <Column field="lifecycle" widget="statusBadge" />
@@ -156,7 +156,7 @@ export function InferenceModelsPage(): React.ReactElement {
         resource={MODEL_MODEL}
         defaultGroups={defaultGroups}
       >
-        <Facet field="provider" label={t("inference.provider")} labelField="name" />
+        <Facet field="provider" label={t("inference.provider")} />
         <Column field="name" />
         <Column field="provider.name" header={t("inference.provider")} />
         <Column field="display_name" />

@@ -12,7 +12,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from angee.data.metadata import DataResourceFieldMetadata, DataResourceMetadata
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
@@ -22,6 +21,7 @@ from graphql import GraphQLInputObjectType, GraphQLList, GraphQLNonNull
 from rebac.field_visibility import gated_read_fields
 from strawberry.utils.str_converters import to_snake_case
 
+from angee.data.metadata import DataResourceFieldMetadata, DataResourceMetadata
 from angee.graphql.schema import GraphQLSchemas
 from angee.mcp.graphql import GraphQLTool, register_graphql_tools
 from mcp.types import ToolAnnotations
@@ -198,7 +198,10 @@ def _resource_projections(
     search = tuple(
         field.name
         for field in readable
-        if field.filterable and field.scalar == "String" and field.name != resource.public_id_field
+        if resource.query.fields.get(field.name) is not None
+        and resource.query.fields[field.name].filter is not None
+        and field.scalar == "String"
+        and field.name != resource.query.identity.field
     )
     return summary, detail, search
 
@@ -234,7 +237,7 @@ def _is_summary_field(resource: DataResourceMetadata, field: DataResourceFieldMe
 def _with_public_id(resource: DataResourceMetadata, fields: tuple[str, ...]) -> tuple[str, ...]:
     """Expose the resource public id as the compiler-owned ``sqid`` name exactly once."""
 
-    projected = tuple("sqid" if name == resource.public_id_field else name for name in fields)
+    projected = tuple("sqid" if name == resource.query.identity.field else name for name in fields)
     return projected if "sqid" in projected else ("sqid", *projected)
 
 

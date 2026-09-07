@@ -1,11 +1,12 @@
 import type { ReactNode } from "react";
-import { filterFieldType as metadataFilterFieldType, isDateField, supportsChoiceFacet as metadataSupportsChoiceFacet, type ModelFieldMetadata, type ModelMetadata, type Row } from "@angee/metadata";
+import { filterFieldType as metadataFilterFieldType, isDateField, supportsChoiceFacet as metadataSupportsChoiceFacet, type ResourceQuery, type ModelFieldMetadata, type ModelMetadata, type Row } from "@angee/metadata";
+import { queryForColumns } from "../resource-query";
 import { statusLabel } from "../../../lib/labels";
 import type { ResourceToolbarFilterField, ResourceToolbarFilterOption } from "../../../toolbars";
 import { DEFAULT_TEXT_FILTER_FIELD } from "../resource-view-model";
 import { readPath } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
-import { enumOptions, fieldLabel } from "../model-metadata-defaults";
+import { fieldLabel } from "../model-metadata-defaults";
 export function buildFilterOptions<TRow extends Row>(
   columns: readonly ColumnDescriptor<TRow>[],
   rows: readonly TRow[],
@@ -44,27 +45,32 @@ export function buildFilterFields<TRow extends Row>(
   columns: readonly ColumnDescriptor<TRow>[],
   rows: readonly TRow[],
   metadata: ModelMetadata | null,
+  suppliedQuery?: ResourceQuery,
 ): readonly ResourceToolbarFilterField[] {
+  const query = suppliedQuery ?? queryForColumns(columns, metadata);
   const fields: ResourceToolbarFilterField[] = [];
   const seen = new Set<string>();
   const addField = (
     fieldName: string,
     column: ColumnDescriptor<TRow> | undefined,
   ) => {
-    if (seen.has(fieldName) || !filterAllowedByResource(fieldName, metadata)) {
+    const capability = query.fields[fieldName]?.filter;
+    if (seen.has(fieldName) || !capability?.operators.length) {
       return;
     }
     const field = metadata?.fields[fieldName];
-    const filterType = filterFieldType(fieldName, column, field);
+    const filterType = capability.values.length ? "selection" : filterFieldType(fieldName, column, field ?? query.fields[fieldName]);
+    const operators = [...capability.operators, ...(capability.operators.includes("isNull") ? ["isNotNull" as const] : [])];
     if (!filterType) return;
     seen.add(fieldName);
     if (filterType === "selection") {
-      const options = enumOptions(field);
+      const options = capability.values.map(({ value, description }) => ({ value, label: description ?? statusLabel(value) }));
       fields.push({
         id: fieldName,
         field: fieldName,
         label: fieldLabel(fieldName, field, column?.header),
         type: "selection",
+        operators,
         options: options.length > 0
           ? options
           : metadata === null && column
@@ -81,12 +87,13 @@ export function buildFilterFields<TRow extends Row>(
       field: fieldName,
       label: fieldLabel(fieldName, field, column?.header),
       type: filterType,
+      operators,
     });
   };
   for (const column of columns) {
     addField(column.field, column);
   }
-  for (const fieldName of metadata?.resource?.filterFields ?? []) {
+  for (const fieldName of Object.keys(query.fields)) {
     addField(fieldName, undefined);
   }
   return fields;
@@ -95,7 +102,7 @@ export function buildFilterFields<TRow extends Row>(
 function filterFieldType<TRow extends Row>(
   fieldName: string,
   column: ColumnDescriptor<TRow> | undefined,
-  field: ModelFieldMetadata | undefined,
+  field: Parameters<typeof metadataFilterFieldType>[1],
 ): ResourceToolbarFilterField["type"] | null {
   if (fieldName === DEFAULT_TEXT_FILTER_FIELD) return "text";
   return metadataFilterFieldType(fieldName, field, {
@@ -103,14 +110,6 @@ function filterFieldType<TRow extends Row>(
     hasTone: Boolean(column?.tone),
     allowStatusFallback: Boolean(column),
   });
-}
-
-function filterAllowedByResource(
-  fieldName: string,
-  metadata: ModelMetadata | null,
-): boolean {
-  const filterFields = metadata?.resource?.filterFields;
-  return !filterFields || filterFields.includes(fieldName);
 }
 
 export function dateGroupType(

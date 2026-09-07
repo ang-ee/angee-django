@@ -1,9 +1,9 @@
 import type {
-  DataResourceRelationAxisMetadata,
   DataResourceMetadata,
   ModelMetadata,
   SchemaFieldMetadata,
 } from "./artifact";
+import type { DataResourceQuery } from "./query-schema";
 import { modelLabelSegment } from "./naming";
 
 /** Minimal generated-resource fixture shared by framework package tests. */
@@ -21,7 +21,6 @@ export function testDataResource(
     modelLabel,
     appLabel: separator < 0 ? "" : modelLabel.slice(0, separator),
     modelName,
-    publicIdField: "id",
     roots: {
       list,
       detail: `${list}_by_pk`,
@@ -33,11 +32,8 @@ export function testDataResource(
     typeNames: { node: `${segment}Type`, ...typeNames },
     capabilities: ["list", "detail", "create", "update", "delete"],
     fields: [],
-    filterFields: [],
-    orderFields: [],
+    query: testResourceQuery(),
     aggregateFields: [],
-    groupByFields: [],
-    relationAxes: [],
     ...rest,
   };
 }
@@ -48,26 +44,44 @@ export function testDataResource(
  */
 export function withTestResourceInventory(
   metadata: {
-    types: Readonly<Record<
-      string,
-      Omit<ModelMetadata, "relationAxes"> & {
-        relationAxes?: Readonly<Record<string, DataResourceRelationAxisMetadata>>;
-      }
-    >>;
+    types: Readonly<Record<string, ModelMetadata>>;
   },
 ): SchemaFieldMetadata {
   const types: Record<string, ModelMetadata> = {};
   const labels: Record<string, ModelMetadata> = {};
   const resources: DataResourceMetadata[] = [];
   for (const model of Object.values(metadata.types)) {
-    const relationAxes = model.relationAxes ?? Object.fromEntries(
-      model.resource.relationAxes.map((axis) => [axis.field, axis]),
-    );
-    const indexed: ModelMetadata = { ...model, relationAxes };
+    const indexed: ModelMetadata = model;
     resources.push(indexed.resource);
     labels[indexed.resource.modelLabel] = indexed;
     const nodeName = indexed.resource.typeNames.node;
     if (nodeName) types[nodeName] = indexed;
   }
   return { types, labels, resources };
+}
+
+/** Explicit query fixture; callers supply executable capabilities for their case. */
+export function testResourceQuery(overrides: Partial<DataResourceQuery> = {}): DataResourceQuery {
+  return { identity: { field: "id" }, fields: {}, axes: {}, sort: { default: [] }, paging: {}, ...overrides };
+}
+
+/** A canonical string query field; override capabilities for the behavior under test. */
+export function testQueryField(
+  name: string,
+  overrides: Partial<import("./query-schema").QueryField> = {},
+): import("./query-schema").QueryField {
+  return {
+    kind: "scalar", scalar: "String", values: [], nullable: true,
+    row: { path: name, paths: [name] },
+    filter: { field: name, scalar: "String", values: [], operators: ["exact", "inList", "isNull"] },
+    ...overrides,
+  };
+}
+
+/** An explicit client axis; server input and result names must be supplied. */
+export function testQueryAxis(
+  field: string,
+  overrides: Partial<import("./query-schema").QueryAxis> = {},
+): import("./query-schema").QueryAxis {
+  return { field, kind: "column", identityPath: field, paths: [field], extractions: [], ...overrides };
 }

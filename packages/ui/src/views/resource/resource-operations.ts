@@ -90,7 +90,14 @@ export function listBatchTarget(
   resource: DataResourceMetadata | null,
 ): ListBatchTarget | null {
   if (!resource) return null;
+  const { list: root, aggregate: aggregateRoot } = resource.roots;
+  const { filter: filterType, order: orderType } = resource.typeNames;
+  if (!root || !aggregateRoot || !filterType || !orderType) return null;
   return {
+    root,
+    aggregateRoot,
+    filterType,
+    orderType,
     dataProviderName: resource.schemaName,
     resourceIdentifier: refineResourceIdentifier(resource),
     resourceName: refineResourceName(resource),

@@ -11,6 +11,7 @@ import {
 } from "@testing-library/react";
 import {
   ModelMetadataProvider,
+  ResourceQuery,
   schemaFieldMetadataFromDataResources,
 } from "@angee/metadata";
 import type { TypedDocumentNode } from "@angee/refine";
@@ -224,20 +225,16 @@ const TEST_METADATA = schemaFieldMetadataFromDataResources([
     modelLabel: "test.Row",
     appLabel: "test",
     modelName: "row",
-    publicIdField: "id",
     roots: { list: "test_rows", aggregate: "test_rows_aggregate" },
-    typeNames: { node: "TestRowType" },
+    typeNames: { node: "TestRowType", filter: "TestRowBoolExp", order: "TestRowOrderBy" },
     recordRepresentation: "name",
     capabilities: ["list", "aggregate"],
     fields: [
       field("id", "ID"),
       field("name", "String"),
     ],
-    filterFields: ["id", "name"],
-    orderFields: ["name"],
+    query: ResourceQuery.forRows({ fields: { id: { scalar: "ID" }, name: { scalar: "String" } } }).contract,
     aggregateFields: ["id", "name"],
-    groupByFields: [],
-    relationAxes: [],
   },
 ]);
 
@@ -247,10 +244,7 @@ function field(name: string, scalar: string) {
     kind: "scalar" as const,
     scalar,
     readable: true,
-    filterable: true,
-    sortable: true,
     aggregatable: true,
-    groupable: false,
     nullable: false,
     creatable: true,
     updatable: true,

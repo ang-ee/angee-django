@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Refine, type DataProvider, type GetListParams } from "@refinedev/core";
 import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
-import { testDataResource } from "@angee/metadata/testing";
+import { testDataResource, testResourceQuery, testQueryField } from "@angee/metadata/testing";
 import { parseRecordNavigationScope, type ListViewNavigationScope } from "@angee/ui";
 import { createRouteHref } from "@angee/ui/runtime";
 import {
@@ -305,15 +305,24 @@ import {
 import storage from "../index";
 import { StoragePage } from "./StoragePage";
 
-const fileResource = testDataResource("storage.File");
+const fileResource = testDataResource("storage.File", {
+  query: testResourceQuery({ fields: {
+    id: testQueryField("id", { scalar: "ID" }),
+    drive: testQueryField("drive", { scalar: "ID", filter: { field: "drive", scalar: "ID", values: [], operators: ["exact"] } }),
+    folder: testQueryField("folder", { scalar: "ID", filter: { field: "folder", scalar: "ID", values: [], operators: ["exact", "isNull"] } }),
+    is_trashed: testQueryField("is_trashed", { scalar: "Boolean", filter: { field: "is_trashed", scalar: "Boolean", values: [], operators: ["exact"] } }),
+    updated_at: testQueryField("updated_at", { scalar: "DateTime", filter: null, sort: { field: "updated_at" } }),
+  } }),
+  typeNames: { filter: "files_bool_exp", order: "files_order_by" },
+  roots: { aggregate: "files_aggregate" },
+});
 const metadata = schemaFieldMetadataFromDataResources([fileResource]);
 const provider = {
   getApiUrl: () => "test://files",
-  getList: async ({ filters = [], pagination }: GetListParams) => {
-    const rows = storageData.files.filter((row) => filters.every((filter) =>
-      "field" in filter && filter.operator === "eq"
-        ? row[filter.field as keyof typeof row] === filter.value
-        : true,
+  getList: async ({ meta, pagination }: GetListParams) => {
+    const where = (meta?.gqlVariables?.where ?? {}) as Record<string, { _eq?: unknown }>;
+    const rows = storageData.files.filter((row) => Object.entries(where).every(([field, comparison]) =>
+      !("_eq" in comparison) || row[field as keyof typeof row] === comparison._eq,
     )).sort((left, right) => right.updated_at.localeCompare(left.updated_at));
     const size = pagination?.pageSize ?? 50;
     const start = ((pagination?.currentPage ?? 1) - 1) * size;

@@ -1,17 +1,15 @@
 import * as React from "react";
 import { type Row as TableRowModel } from "@tanstack/react-table";
-import type { AggregateBucket, GroupDimension as HasuraGroupDimension, GroupOrder } from "@angee/refine";
-import type { ModelMetadata, Row } from "@angee/metadata";
-import { groupDimensionForField, groupDimensionForGroup, groupExtractionForGroup, relationFilterForRelation } from "@angee/metadata";
-import { format, startOfISOWeek } from "date-fns";
+import type { AggregateBucket } from "@angee/refine";
+import { ResourceQuery, type GroupAxis, type ModelMetadata, type Row } from "@angee/metadata";
+import { format } from "date-fns";
 import { Glyph } from "../../../chrome/Glyph";
 import { useUiT, type UiTranslate } from "../../../i18n";
-import { statusLabel } from "../../../lib/labels";
 import { TableCell, TableRow } from "../../../ui/table";
-import { dateFromUnknown } from "../../../widgets/date-format";
 import type { ResourceViewGroup } from "../resource-view-model";
 import { enumValueLabel } from "./cell-utils";
-import type { GroupByDimension } from "./types";
+import { queryForColumns } from "../resource-query";
+import type { ColumnDescriptor } from "../../page";
 export function GroupHeader<TRow extends Row>({
   row,
   colSpan,
@@ -74,10 +72,22 @@ export function GroupHeader<TRow extends Row>({
   );
 }
 
-/**
- * The display label of a TanStack grouped row — the one owner. TanStack groups
- * on the locale-stable `groupKey`; only this render boundary translates it.
- */
+/** Resolve declared grouping through the same semantic owner for resource and local rows. */
+export function tableGroupAxes<TRow extends object>(
+  groups: readonly ResourceViewGroup[],
+  metadata: ModelMetadata | null | undefined,
+  columns: readonly ColumnDescriptor<TRow>[] = [],
+  suppliedQuery?: ResourceQuery,
+): readonly GroupAxis[] {
+  const query = suppliedQuery ?? queryForColumns(columns, metadata, groups);
+  return groups.map((group) => query.group(group));
+}
+
+export interface GroupingColumnMeta<TRow extends Row> {
+  groupLabel?: (row: TRow, emptyValueLabel: string, t: UiTranslate) => string;
+}
+
+/** The native grouping column carries the presentation accessor for its axis. */
 export function groupedRowLabel<TRow extends Row>(
   row: TableRowModel<TRow>,
   groupStack: readonly ResourceViewGroup[],
@@ -85,101 +95,14 @@ export function groupedRowLabel<TRow extends Row>(
   t: UiTranslate,
 ): string {
   const columnId = row.groupingColumnId;
+  const cell = row.getAllCells().find((candidate) => candidate.column.id === columnId);
+  const meta = cell?.column.columnDef.meta as GroupingColumnMeta<TRow> | undefined;
+  const original = row.getLeafRows()[0]?.original ?? row.original;
+  if (meta?.groupLabel) return meta.groupLabel(original, emptyValueLabel, t);
   const value = columnId ? row.getGroupingValue(columnId) : undefined;
-  const group = groupStack.find((candidate) => candidate.field === columnId)
-    ?? groupStack[row.depth];
-  if (!group) return value == null || value === "" ? emptyValueLabel : String(value);
-  return groupLabelFromKey(value, group, emptyValueLabel, t);
-}
-
-export function resourceViewGroupToAggregateDimension(
-  group: ResourceViewGroup,
-  metadata: ModelMetadata | null,
-): GroupByDimension {
-  const dimension = groupDimensionForGroup(group, metadata);
-  const extraction = groupExtractionForGroup(dimension, group);
-  return {
-    field: dimension.input,
-    key: extraction?.key ?? dimension.key,
-    ...(extraction ? { granularity: extraction.input } : {}),
-    ...(extraction?.rangeKey ? { rangeKey: extraction.rangeKey } : {}),
-  };
-}
-
-export function hasuraGroupDimension(
-  dimension: GroupByDimension,
-): HasuraGroupDimension {
-  return {
-    input: dimension.field,
-    key: dimension.key ?? dimension.field,
-    ...(dimension.granularity ? { granularity: dimension.granularity } : {}),
-    ...(dimension.rangeKey ? { rangeKey: dimension.rangeKey } : {}),
-  };
-}
-
-export function hasuraGroupOrderForDimensions(
-  dimensions: readonly HasuraGroupDimension[],
-): readonly GroupOrder[] | undefined {
-  const dimension = dimensions.length > 1
-    ? dimensions[dimensions.length - 1]
-    : dimensions[0];
-  const field = dimension?.key ?? dimension?.input;
-  return field ? [{ field, direction: "ASC", nulls: "LAST" }] : undefined;
-}
-
-/**
- * Resolve a resource-view group into the complete server query projection.
- * Relation groups retain their stable identity dimension while carrying the
- * optional display-label dimension alongside it.
- */
-export function resourceViewGroupQueryProjection(
-  group: ResourceViewGroup,
-  metadata: ModelMetadata | null,
-): {
-  dimension: GroupByDimension;
-  dimensions: readonly HasuraGroupDimension[];
-  orderBy?: readonly GroupOrder[];
-  valueKey: string;
-  labelKey?: string;
-} {
-  const dimension = resourceViewGroupToAggregateDimension(group, metadata);
-  const identity = hasuraGroupDimension(dimension);
-  const labelSpec = groupLabelDimension(group, metadata);
-  const label = labelSpec ? hasuraGroupDimension(labelSpec) : null;
-  const dimensions = label ? [identity, label] : [identity];
-  const orderBy = hasuraGroupOrderForDimensions(dimensions);
-  return {
-    dimension,
-    dimensions,
-    ...(orderBy ? { orderBy } : {}),
-    valueKey: identity.key ?? identity.input,
-    ...(label ? { labelKey: label.key ?? label.input } : {}),
-  };
-}
-
-/**
- * The extra group-by dimension that carries a relation group's display label —
- * the same bucket grouped by `<relation>__<label>` so the related record's name
- * rides along with its id (Odoo's `(id, display_name)`). `null` when the model
- * registers no label axis for the relation, in which case the group labels by id.
- */
-export function groupLabelDimension(
-  group: ResourceViewGroup,
-  metadata: ModelMetadata | null,
-): GroupByDimension | null {
-  const labelKey = groupLabelKey(group, metadata);
-  if (!labelKey) return null;
-  const dimension = groupDimensionForField(labelKey, metadata);
-  return { field: dimension.input, key: dimension.key };
-}
-
-function groupLabelKey(
-  group: ResourceViewGroup,
-  metadata: ModelMetadata | null,
-): string | undefined {
-  const field = group.aggregateField;
-  if (!field) return undefined;
-  return relationFilterForRelation(field, metadata)?.labelKey;
+  const group = groupStack[row.depth];
+  return group ? groupLabel(value, group, null, emptyValueLabel, t)
+    : value == null || value === "" ? emptyValueLabel : String(value);
 }
 
 export function bucketValueLabels(
@@ -190,56 +113,19 @@ export function bucketValueLabels(
   t: UiTranslate,
   emptyRelationLabel?: (field: string) => string,
 ): string[] {
+  if (!metadata) throw new Error("Resource metadata is required for grouped buckets.");
+  const query = ResourceQuery.from(metadata);
   return groupStack.map((group) => {
-    const labelKey = groupLabelKey(group, metadata);
-    if (labelKey) {
-      const label = bucket.key?.[groupDimensionForField(labelKey, metadata).key];
-      if (label != null && label !== "") return String(label);
-      return emptyRelationLabel?.(group.aggregateField ?? group.field)
-        ?? emptyValueLabel;
+    const axis = query.group(group);
+    const label = axis.bucketLabel(bucket);
+    if (axis.declaration.kind === "relation") {
+      return label == null || label === "" ? emptyRelationLabel?.(group.field) ?? emptyValueLabel : String(label);
     }
-    const dimension = resourceViewGroupToAggregateDimension(group, metadata);
-    const value = bucket.key?.[dimension.key ?? dimension.field];
-    return groupLabel(value, group, metadata, emptyValueLabel, t);
+    return groupLabel(label, group, metadata, emptyValueLabel, t);
   });
 }
 
-const EMPTY_GROUP_KEY = "__angee_empty_group__";
-
-export function groupKey(
-  value: unknown,
-  group: ResourceViewGroup,
-  metadata: ModelMetadata | null,
-): string {
-  if (value == null) return EMPTY_GROUP_KEY;
-  const enumLabel = typeof value === "string"
-    ? enumLabelFromMetadata(metadata, group.field, value)
-    : null;
-  if (enumLabel) return enumLabel;
-  const date = dateFromUnknown(value);
-  if (!date) {
-    if (typeof value !== "string") return String(value);
-    // Only an enum-typed field's raw member name gets prettified; free-text
-    // values (mailbox names, relation labels) must render verbatim — title-casing
-    // mangles them ("CATC" -> "Catc", "B.V." -> "B V"). Gate on the field KIND,
-    // not the values list — an enum whose values projected empty still prettifies.
-    const isEnumField = metadata?.fields[group.field]?.kind === "enum";
-    return isEnumField ? statusLabel(value) : value;
-  }
-  if (group.granularity === "year") return String(date.getFullYear());
-  if (group.granularity === "quarter") {
-    const quarter = Math.floor(date.getMonth() / 3) + 1;
-    return `${date.getFullYear()}-Q${quarter}`;
-  }
-  if (group.granularity === "month") {
-    return format(date, "yyyy-MM");
-  }
-  if (group.granularity === "week") {
-    return format(startOfISOWeek(date), "yyyy-MM-dd");
-  }
-  return format(date, "yyyy-MM-dd");
-}
-
+/** Localized presentation only; identity and bucket extraction belong to GroupAxis. */
 export function groupLabel(
   value: unknown,
   group: ResourceViewGroup,
@@ -247,12 +133,14 @@ export function groupLabel(
   emptyValueLabel: string,
   t: UiTranslate,
 ): string {
-  return groupLabelFromKey(
-    groupKey(value, group, metadata),
-    group,
-    emptyValueLabel,
-    t,
-  );
+  if (value == null || value === "") return emptyValueLabel;
+  if (typeof value === "string" && metadata?.fields[group.field]?.kind === "enum") {
+    return enumLabelFromMetadata(metadata, group.field, value) ?? value;
+  }
+  const dateField = metadata?.fields[group.field];
+  const isDate = dateField?.scalar === "Date" || dateField?.scalar === "DateTime";
+  if (!group.granularity && !isDate) return String(value);
+  return groupLabelFromKey(value, group, emptyValueLabel, t);
 }
 
 function groupLabelFromKey(
@@ -261,7 +149,7 @@ function groupLabelFromKey(
   emptyValueLabel: string,
   t: UiTranslate,
 ): string {
-  if (value == null || value === "" || value === EMPTY_GROUP_KEY) return emptyValueLabel;
+  if (value == null || value === "") return emptyValueLabel;
   const key = String(value);
   if (group.granularity === "quarter") {
     const match = /^(\d{4})-Q([1-4])$/.exec(key);
@@ -305,15 +193,9 @@ function enumLabelFromMetadata(
 ): string | null {
   const fieldMetadata = metadata?.fields[field];
   const values = fieldMetadata?.values ?? [];
-  const normalized = normalizeEnumValue(value);
   const option = values.find(
     (candidate) =>
-      candidate.value === value
-      || normalizeEnumValue(candidate.value) === normalized,
+      candidate.value === value,
   );
   return option ? enumValueLabel(option) : null;
-}
-
-function normalizeEnumValue(value: string): string {
-  return value.trim().replace(/[\s-]+/g, "_").toLowerCase();
 }

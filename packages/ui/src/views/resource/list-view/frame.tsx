@@ -1,5 +1,5 @@
 import * as React from "react";
-import { isClientRowModel, modelMetadataForLabel, useModelMetadata, useSchemaFieldMetadata } from "@angee/metadata";
+import { ResourceQuery, isClientRowModel, modelMetadataForLabel, useModelMetadata, useSchemaFieldMetadata } from "@angee/metadata";
 import type { Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { useValueStable } from "../../../lib/use-value-stable";
@@ -19,6 +19,9 @@ import { initialResourceSorting } from "../resource-view-codecs";
 import { useRowActionsSurface } from "../RowActions";
 import { isBoardFoldField, isBoardRankField, ListViewContent } from "./content";
 import { ClientSurfaceBody, GroupedServerSurfaceBody, ServerSurfaceBody } from "./surface-adapters";
+import { ResourceQueryError } from "../ResourceQueryError";
+import { validateResourceViewState } from "../model/state";
+import { ErrorBanner } from "../../../fragments/ErrorBanner";
 export function ListView<TRow extends Row = Row>(
   props: ListViewProps<TRow>,
 ): React.ReactElement {
@@ -31,23 +34,53 @@ function ListViewFrame<TRow extends Row = Row>(
   const resourceView = useResourceViewMaybe();
   const modelMetadata = useModelMetadata(props.resource);
   const scope = props.scope ?? "inherit";
-  const initialState = React.useMemo(
-    () => ({
-      pageSize: props.pageSize,
-      view: props.defaultView,
-      sorting: initialResourceSorting(modelMetadata, props.order),
-    }),
+  const initial = React.useMemo(
+    () => {
+      try {
+        return { state: { pageSize: props.pageSize, view: props.defaultView, sorting: initialResourceSorting(modelMetadata, props.order) }, error: null };
+      } catch (error) {
+        return { state: {}, error: error instanceof Error ? error : new Error("Invalid declared query.") };
+      }
+    },
     [props.defaultView, props.pageSize, props.order, modelMetadata],
   );
+  if (initial.error) return <ErrorBanner description={initial.error.message} />;
   return withResourceViewScope({
     ambient: resourceView,
     resource: props.resource,
     scope,
-    initialState,
+    initialState: initial.state,
     children: (scopedResourceView) => (
-      <ListViewBody {...props} resourceView={scopedResourceView} />
+      <ValidatedListViewBody {...props} resourceView={scopedResourceView} />
     ),
   });
+}
+
+function ValidatedListViewBody<TRow extends Row>(props: ListViewProps<TRow> & { resourceView: ResourceViewContextValue }): React.ReactElement {
+  const metadata = useModelMetadata(props.resource);
+  let error = props.resourceView.state.queryError;
+  if (!error && metadata) {
+    try {
+      const query = ResourceQuery.from(metadata);
+      error = validateResourceViewState(props.resourceView.state, query).queryError;
+      query.toWhere(props.baseFilter, props.resourceView.state.filter);
+      const group = props.resourceView.state.view === "board" && props.laneSource
+        ? { field: props.laneSource.field }
+        : defaultGroupForView(props.defaultGroup, props.defaultGroups, props.resourceView.state.view);
+      if (group) query.group(group);
+      const groups = query.groupsFrom(props.resourceView.state.groupStack);
+      const effectiveGroups = props.resourceView.state.view === "board" && props.laneSource && group
+        ? [group] : groups.length > 0 ? groups : group ? [group] : [];
+      if (effectiveGroups.length > 0) {
+        if (props.resourceView.state.view === "list" && !isClientRowModel(metadata.resource)) {
+          query.toGroupBy(effectiveGroups);
+        } else {
+          query.selection(effectiveGroups);
+        }
+      }
+    } catch (cause) { error = cause instanceof Error ? cause : new Error("Invalid resource query."); }
+  }
+  return error ? <ResourceQueryError error={error} onReset={props.resourceView.resetQuery} /> : <ListViewBody {...props} />;
 }
 
 function ListViewBody<TRow extends Row = Row>({

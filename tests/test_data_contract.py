@@ -1,8 +1,10 @@
 """Tests for the data-surface description contract without GraphQL producers."""
 
 from angee.data.metadata import (
+    DataQueryIdentity,
     DataResourceFieldMetadata,
     DataResourceMetadata,
+    DataResourceQuery,
     DataResourceRoots,
     DataResourceSubtitleMetadata,
     DataResourceTypeNames,
@@ -14,9 +16,7 @@ from angee.data.metadata import (
 def test_final_resource_description_serializes_without_projection_types() -> None:
     """The sole final neutral description retains its historical wire envelope."""
 
-    title_field = DataResourceFieldMetadata(
-        name="title", kind="scalar", scalar="String", sortable=True, filterable=True
-    )
+    title_field = DataResourceFieldMetadata(name="title", kind="scalar", scalar="String")
     status_field = DataResourceFieldMetadata(
         name="status",
         kind="enum",
@@ -29,7 +29,7 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
         resource_type=None,
         app_label="catalog",
         model_name="item",
-        public_id_field="id",
+        query=DataResourceQuery(identity=DataQueryIdentity("id")),
         roots=DataResourceRoots(list_name="catalog_items", detail_name="catalog_item"),
         type_names=DataResourceTypeNames(node="CatalogItem", filter="catalog_items_bool_exp"),
         contributors=("CatalogItemQuery", "CatalogItemMutation"),
@@ -41,7 +41,7 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
     [wire] = serialize_data_resources((final,), schema_name="console")
     assert wire["schemaName"] == "console"
     assert wire["modelLabel"] == "catalog.item"
-    assert wire["publicIdField"] == "id"
+    assert wire["query"]["identity"]["field"] == "id"
     assert wire["resourceType"] is None
     assert wire["canonicalLabel"] is None
     assert wire["roots"] == {

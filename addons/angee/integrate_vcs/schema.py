@@ -152,7 +152,10 @@ class VcsBridgePatch:
     owner: PublicID | None = strawberry.UNSET
     backend_class: str | None = strawberry.UNSET
     lifecycle: str | None = strawberry.UNSET
-    config: JSON | None = strawberry.UNSET
+    config: JSON | None = strawberry.field(
+        default=strawberry.UNSET,
+        description="Merge supplied config keys with existing config; null removes a key.",
+    )
     webhook_secret: str | None = strawberry.UNSET
 
 
@@ -296,7 +299,7 @@ class VcsBridgeUpdateMutation:
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def update_vcs_bridge(self, data: VcsBridgePatch) -> VcsBridgeType:
-        """Update a VCS child row, rematerializing backend defaults on backend change."""
+        """Update a VCS child row, merging supplied config keys."""
 
         with (
             action_target(
@@ -314,8 +317,7 @@ class VcsBridgeUpdateMutation:
                 reason="integrate.graphql.vcs_bridge.update",
             )
             if data.config is not strawberry.UNSET:
-                bridge.config = data.config
-                provided.add("config")
+                provided.update(bridge.apply_config_patch(data.config))
             if data.webhook_secret is not strawberry.UNSET:
                 bridge.webhook_secret = data.webhook_secret or ""
                 provided.add("webhook_secret")

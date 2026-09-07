@@ -22,7 +22,7 @@ export function VcsBridgesPage(): React.ReactElement {
   return (
     <ResourceList resource={MODEL} form={vcsBridgeForm} placement="inline" routed>
       <List resource={MODEL}>
-        <Facet field="vendor" label={t("col.vendor")} labelField="display_name" />
+        <Facet field="vendor" label={t("col.vendor")} />
         <Column field="display_name" />
         <Column field="backend_class" header={t("vcs.backendClass")} />
         <Column field="lifecycle" header={t("col.lifecycle")} widget="statusBadge" />

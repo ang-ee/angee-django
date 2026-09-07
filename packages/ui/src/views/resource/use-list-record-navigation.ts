@@ -6,7 +6,6 @@ import { useResourceListQuery } from "./surface/resource-list-query";
 import type { RecordNavigation } from "./RecordPager";
 import type { ListViewNavigationScope, ResourceListSnapshot } from "./resource-view-surface";
 
-const ID_FIELDS = ["id"];
 interface PendingRecordNavigation {
   recordId: string;
   binding: string;
@@ -45,6 +44,9 @@ export function useListRecordNavigation<TRow extends Row>({
 }: UseListRecordNavigationOptions): UseListRecordNavigationResult<TRow> {
   const model = useModelMetadata(resource);
   const view = useResourceViewMaybe();
+  const dataResource = model?.resource;
+  const readId = React.useCallback((row: Row | null | undefined) => rowPublicId(row, dataResource), [dataResource]);
+  const idFields = React.useMemo(() => [dataResource?.query.identity.field ?? "id"], [dataResource?.query.identity.field]);
   const localQueryScope = stableSerialize([view?.state.filter, view?.state.sorting, view?.state.groupStack, view?.state.pagination.pageSize, view?.state.view]);
   const binding = `${resource}:${model?.resource?.schemaName ?? ""}`;
   const [captured, setCaptured] = React.useState<{ binding: string; scope: ListViewNavigationScope | null } | null>(null);
@@ -55,8 +57,8 @@ export function useListRecordNavigation<TRow extends Row>({
   const navigationScope = isClientRowModel(model?.resource) ? null : controlledScope === undefined ? captured?.binding === binding ? captured.scope : null : controlledScope;
   const localSnapshot = local?.binding === binding && (controlledScope === undefined || isClientRowModel(model?.resource)) ? local.snapshot : null;
   const scopeIdentity = stableSerialize(navigationScope);
-  const current = useResourceListQuery({ resource: model?.resource, scope: navigationScope, fields: ID_FIELDS, enabled: Boolean(recordId) });
-  const target = useResourceListQuery({ resource: model?.resource, scope: pending?.scope ?? null, fields: ID_FIELDS, enabled: Boolean(recordId && pending?.recordId === recordId && pending.binding === binding && pending.sourceScope === scopeIdentity) });
+  const current = useResourceListQuery({ resource: model?.resource, scope: navigationScope, fields: idFields, enabled: Boolean(recordId) });
+  const target = useResourceListQuery({ resource: model?.resource, scope: pending?.scope ?? null, fields: idFields, enabled: Boolean(recordId && pending?.recordId === recordId && pending.binding === binding && pending.sourceScope === scopeIdentity) });
 
   const onListStateChange = React.useCallback((state: ResourceListSnapshot<TRow>) => {
     if (state.navigationScope) {
@@ -68,14 +70,14 @@ export function useListRecordNavigation<TRow extends Row>({
       scopeRef.current = null;
       if (!recordId) setCaptured((previous) => previous?.scope ? { binding, scope: null } : previous);
       setLocal((previous) => {
-        const snapshot = previous?.binding === binding && state.fetching && !state.rows.some((row) => rowPublicId(row) === recordId)
-          && previous.snapshot.rows.some((row) => rowPublicId(row) === recordId)
+        const snapshot = previous?.binding === binding && state.fetching && !state.rows.some((row) => readId(row) === recordId)
+          && previous.snapshot.rows.some((row) => readId(row) === recordId)
           ? { ...previous.snapshot, fetching: true }
           : state;
         return previous?.binding === binding && stableSerialize(previous.snapshot) === stableSerialize(snapshot) ? previous : { binding, snapshot };
       });
     }
-  }, [binding, recordId]);
+  }, [binding, recordId, readId]);
   const selectRecord = React.useCallback((id: string, scope?: ListViewNavigationScope) => {
     const next = scope ?? (scopeRef.current?.binding === binding ? scopeRef.current.scope : null) ?? navigationScope;
     setCaptured({ binding, scope: next });
@@ -87,18 +89,18 @@ export function useListRecordNavigation<TRow extends Row>({
     if (pending.recordId !== recordId || pending.binding !== binding || pending.sourceScope !== scopeIdentity || target.query.isError) { setPending(null); return; }
     if (target.query.isFetching || !target.query.isSuccess) return;
     const row = pending.edge === "first" ? target.result.data[0] : target.result.data.at(-1);
-    const id = rowPublicId(row);
+    const id = readId(row);
     setPending(null);
     if (id) selectRecord(id, pending.scope);
-  }, [binding, pending, recordId, scopeIdentity, selectRecord, target.query.isError, target.query.isFetching, target.query.isSuccess, target.result.data]);
+  }, [binding, pending, recordId, readId, scopeIdentity, selectRecord, target.query.isError, target.query.isFetching, target.query.isSuccess, target.result.data]);
   React.useEffect(() => {
     if (!localEdge) return;
     if (localEdge.recordId !== recordId || localEdge.binding !== binding || localEdge.sourceScope !== localQueryScope || localSnapshot?.error) { setLocalEdge(null); return; }
     if (!localSnapshot || localSnapshot.fetching || localSnapshot.page !== localEdge.page) return;
-    const id = rowPublicId(localEdge.edge === "first" ? localSnapshot.rows[0] : localSnapshot.rows.at(-1));
+    const id = readId(localEdge.edge === "first" ? localSnapshot.rows[0] : localSnapshot.rows.at(-1));
     setLocalEdge(null);
     if (id) onSelect?.(id);
-  }, [binding, localEdge, localQueryScope, localSnapshot, onSelect, recordId]);
+  }, [binding, localEdge, localQueryScope, localSnapshot, onSelect, recordId, readId]);
 
   let navigation: RecordNavigation | null = null;
   const rows = navigationScope ? current.result.data : localSnapshot?.rows;
@@ -106,14 +108,14 @@ export function useListRecordNavigation<TRow extends Row>({
   const page = navigationScope?.page ?? localSnapshot?.page ?? 1;
   const pageSize = navigationScope?.pageSize ?? localSnapshot?.pageSize ?? 1;
   const failed = navigationScope ? current.query.isError : Boolean(localSnapshot?.error);
-  const index = recordId && rows ? rows.findIndex((row) => rowPublicId(row) === recordId) : -1;
+  const index = recordId && rows ? rows.findIndex((row) => readId(row) === recordId) : -1;
   if (recordId && (navigationScope || localSnapshot) && !failed) {
     const position = index < 0 ? undefined : (page - 1) * pageSize + index + 1;
     navigation = { current: position, total };
     const ready = index >= 0 && onSelect && !pending && !localEdge && !(navigationScope ? current.query.isFetching : localSnapshot?.fetching);
     if (ready) {
       const move = (direction: -1 | 1) => {
-        const id = rowPublicId(rows?.[index + direction]);
+        const id = readId(rows?.[index + direction]);
         if (id) { selectRecord(id, navigationScope ?? undefined); return; }
         const nextPage = page + direction;
         const edge = direction < 0 ? "last" : "first";

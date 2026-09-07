@@ -3,39 +3,62 @@ import * as React from "react";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { Refine, type DataProvider, type GetListParams } from "@refinedev/core";
 import { QueryClient } from "@tanstack/react-query";
-import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
-import { testDataResource } from "@angee/metadata/testing";
+import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type DataResourceMetadata, type Row } from "@angee/metadata";
+import { testDataResource, testResourceQuery } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
 import type { ResourceListSnapshot, ListViewNavigationScope } from "./resource-view-surface";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
 import { useListRecordNavigation } from "./use-list-record-navigation";
+import { useResourceListQuery } from "./surface/resource-list-query";
 
-const resource = testDataResource("notes.Note");
+const resource = testDataResource("notes.Note", {
+  roots: { aggregate: "notes_aggregate" },
+  typeNames: { filter: "NoteBoolExp", order: "NoteOrderBy" },
+  query: testResourceQuery({ fields: {
+    id: { kind: "scalar", scalar: "ID", values: [], nullable: false },
+    title: { kind: "scalar", scalar: "String", values: [], nullable: true, filter: { field: "title", scalar: "String", values: [], operators: ["exact", "iContains"] } },
+    status: { kind: "scalar", scalar: "String", values: [], nullable: true, filter: { field: "status", scalar: "String", values: [], operators: ["exact"] } },
+    updated_at: { kind: "scalar", scalar: "DateTime", values: [], nullable: true, filter: { field: "updated_at", scalar: "DateTime", values: [], operators: ["gte", "lt"] }, sort: { field: "updated_at" } },
+    "author.display_name": { kind: "scalar", scalar: "String", values: [], nullable: true, sort: { field: "author.display_name" } },
+  } }),
+});
 const scope: ListViewNavigationScope = { filter: { AND: [{ title: { iContains: "needle" } }, { status: { exact: "active" } }] }, order: { updated_at: "DESC" }, page: 1, pageSize: 2 };
 const clients: QueryClient[] = [];
 afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
-function fixture({ initialScope = scope, initialId = "b", total = 4, getPage }: { initialScope?: ListViewNavigationScope | null; initialId?: string | null; total?: number; getPage?: (page: number) => Promise<{ id: string }[]> } = {}) {
+function fixture({ initialScope = scope, initialId = "b", total = 4, getPage, dataResource = resource }: { dataResource?: DataResourceMetadata; initialScope?: ListViewNavigationScope | null; initialId?: string | null; total?: number; getPage?: (page: number) => Promise<Row[]> } = {}) {
   const getList = vi.fn(async (params: GetListParams) => ({ data: await (getPage?.(params.pagination!.currentPage!) ?? Promise.resolve(params.pagination?.currentPage === 2 ? [{ id: "c" }, { id: "d" }] : [{ id: "a" }, { id: "b" }])), ...(total >= 0 ? { total } : {}) }));
   const provider = { getApiUrl: () => "test://notes", getList, getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as DataProvider;
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   clients.push(client);
   const onSelect = vi.fn();
-  const wrapper = ({ children }: { children: React.ReactNode }) => <Refine resources={[...refineResourcesFromDataResources([resource, testDataResource("notes.Other")])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource, testDataResource("notes.Other")])}>{children}</ModelMetadataProvider></Refine>;
+  const wrapper = ({ children }: { children: React.ReactNode }) => <Refine resources={[...refineResourcesFromDataResources([dataResource, testDataResource("notes.Other")])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([dataResource, testDataResource("notes.Other")])}>{children}</ModelMetadataProvider></Refine>;
   const hook = renderHook(() => {
     const [id, setId] = React.useState(initialId);
     const [context, setContext] = React.useState(initialScope);
-    const navigation = useListRecordNavigation<{ id: string }>({ resource: "notes.Note", recordId: id, navigationScope: context, onSelect: (next, nextScope) => { onSelect(next, nextScope); setId(next); setContext(nextScope ?? null); } });
+    const navigation = useListRecordNavigation<Row>({ resource: "notes.Note", recordId: id, navigationScope: context, onSelect: (next, nextScope) => { onSelect(next, nextScope); setId(next); setContext(nextScope ?? null); } });
     return { ...navigation, id, setId, setContext };
   }, { wrapper });
   return { ...hook, getList, onSelect, client, wrapper };
 }
+
+test("record navigation selects and reads the declared custom identity across page edges", async () => {
+  const dataResource = { ...resource, query: { ...resource.query, identity: { field: "public_key" } } };
+  const f = fixture({ dataResource, getPage: async (page) => page === 2
+    ? [{ public_key: "c" }, { public_key: "d" }] : [{ public_key: "a" }, { public_key: "b" }] });
+  await waitFor(() => expect(f.result.current.navigation?.current).toBe(2));
+  expect(f.getList.mock.calls[0]?.[0].meta?.fields).toEqual(["public_key"]);
+  act(() => f.result.current.navigation?.onNext?.());
+  await waitFor(() => expect(f.result.current.id).toBe("c"));
+  expect(f.result.current.navigation?.current).toBe(3);
+  expect(f.getList.mock.calls[1]?.[0].meta?.fields).toEqual(["public_key"]);
+});
 
 test("native Refine pages the clicked leaf without changing its filter/order or selecting early", async () => {
   let release!: (rows: { id: string }[]) => void;
   const pendingPage = new Promise<{ id: string }[]>((resolve) => { release = resolve; });
   const f = fixture({ getPage: async (page) => page === 2 ? pendingPage : [{ id: "a" }, { id: "b" }] });
   await waitFor(() => expect(f.result.current.navigation?.current).toBe(2));
-  expect(f.getList.mock.calls[0]?.[0]).toMatchObject({ resource: "notes", pagination: { currentPage: 1, pageSize: 2 }, sorters: [{ field: "updated_at", order: "desc" }], filters: [{ operator: "and", value: [{ field: "title", operator: "contains", value: "needle" }, { field: "status", operator: "eq", value: "active" }] }], meta: { fields: ["id"] } });
+  expect(f.getList.mock.calls[0]?.[0]).toMatchObject({ resource: "notes", pagination: { currentPage: 1, pageSize: 2 }, sorters: [], filters: [], meta: { fields: ["id"], gqlVariables: { where: { _and: [{ title: { _ilike: "%needle%" } }, { status: { _eq: "active" } }] }, order_by: { updated_at: "desc" } } } });
   act(() => f.result.current.navigation?.onNext?.());
   await waitFor(() => expect(f.getList).toHaveBeenCalledTimes(2));
   expect(f.result.current.id).toBe("b");
@@ -69,6 +92,19 @@ test("a direct or invalid context performs no broad fallback list query", async 
   await waitFor(() => expect(f.result.current.navigation?.current).toBe(2));
   act(() => f.result.current.setContext(null));
   expect(f.result.current.navigation).toBeNull();
+});
+
+test("invalid query scopes expose an error state and cannot refetch an unfiltered list", async () => {
+  const f = fixture({ initialScope: null });
+  const query = renderHook(() => useResourceListQuery({
+    resource, scope: { ...scope, filter: { missing: { exact: "bad" } } }, fields: ["id"],
+  }), { wrapper: f.wrapper });
+  expect(query.result.current.query.error?.message).toBe("filter.missing: unknown or non-filterable field");
+  expect(query.result.current.query.isError).toBe(true);
+  expect(query.result.current.query.isSuccess).toBe(false);
+  expect(query.result.current.result.data).toEqual([]);
+  await act(async () => { await query.result.current.query.refetch(); });
+  expect(f.getList).not.toHaveBeenCalled();
 });
 
 test("refresh removal disables neighbors without scanning unrelated pages", async () => {

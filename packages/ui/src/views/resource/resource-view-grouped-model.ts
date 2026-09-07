@@ -1,12 +1,9 @@
-import type { ModelMetadata, Row } from "@angee/metadata";
+import { ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import type { PaginationState, Row as TableRowModel } from "@tanstack/react-table";
 import {
-  crudFiltersFromFilterRecord,
-  hasuraWhereFromCrudFilters,
   stableSerialize,
   type AggregateBucket,
   type AngeeListBatchEntry,
-  type AngeeListBatchScope,
   type GroupByBatchScope,
   type GroupByRequestOptions,
   type GroupByResult,
@@ -14,9 +11,7 @@ import {
 } from "@angee/refine";
 
 import {
-  bucketFilterForGroup,
   bucketValueLabels,
-  resourceViewGroupQueryProjection,
   type GroupedListItem,
   type GroupedListPager,
   type GroupedRecordNav,
@@ -53,9 +48,18 @@ export interface GroupedRenderParams {
   t: UiTranslate;
 }
 
+/** Semantic leaf scope; the surface projects it once before transport. */
+export interface GroupedLeafScope {
+  key: string;
+  filter: ResourceViewFilter;
+  order: ResourceListOrder | undefined;
+  page: number;
+  pageSize: number;
+}
+
 export interface GroupedRenderModel<TRow extends Row> {
   groupScopes: GroupByBatchScope[];
-  leafScopes: AngeeListBatchScope[];
+  leafScopes: GroupedLeafScope[];
   items: GroupedListItem<TRow>[];
   rootResult: UseAngeeGroupByResult | undefined;
 }
@@ -89,9 +93,10 @@ export function buildGroupedRenderModel<TRow extends Row>(
     t,
   } = params;
   const groupScopes: GroupByBatchScope[] = [];
-  const leafScopes: AngeeListBatchScope[] = [];
+  const leafScopes: GroupedLeafScope[] = [];
   const items: GroupedListItem<TRow>[] = [];
   let rootResult: UseAngeeGroupByResult | undefined;
+  const resourceQuery = modelMetadata ? ResourceQuery.from(modelMetadata) : null;
 
   const emitLeaf = (
     bucketKey: string,
@@ -165,12 +170,12 @@ export function buildGroupedRenderModel<TRow extends Row>(
   ): GroupedListPager | undefined => {
     const axisGroup = groupStack[depth];
     if (!axisGroup) return;
-    const projection = resourceViewGroupQueryProjection(axisGroup, modelMetadata);
-    const levelWhere = hasuraWhereFromCrudFilters(
-      crudFiltersFromFilterRecord(parentFilter),
-    );
+    if (!resourceQuery) throw new Error("Resource metadata is required for server grouping.");
+    const axis = resourceQuery.group(axisGroup);
+    const projection = axis.groupBy();
+    const levelWhere = resourceQuery.toWhere(parentFilter);
     const levelScopeKey = stableSerialize({
-      axis: projection.dimension,
+      axis: axis.spec,
       filter: parentFilter ?? null,
     });
     const pagination = paginationByScope[levelScopeKey];
@@ -230,7 +235,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
 
     const isLeafLevel = depth === groupStack.length - 1;
     for (const bucket of result.buckets) {
-      const bucketFilter = bucketFilterForGroup(bucket, axisGroup, modelMetadata);
+      const bucketFilter = axis.drill(bucket);
       const expandable = bucketFilter !== undefined;
       const bucketKey = stableSerialize({
         scope: levelScopeKey,

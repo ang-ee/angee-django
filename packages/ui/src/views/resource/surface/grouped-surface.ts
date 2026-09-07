@@ -1,8 +1,8 @@
 import * as React from "react";
-import { type Row } from "@angee/metadata";
+import { ResourceQuery, type Row } from "@angee/metadata";
 import { getCoreRowModel, useReactTable, type ColumnDef, type Row as TableRowModel } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { MAX_PAGE_SIZE, clampPageSize, crudFiltersFromFilterRecord, hasuraWhereFromCrudFilters, stableSerialize, useAngeeAggregate, useAngeeGroupByBatch, useAngeeListBatch, type GroupByBatchScope } from "@angee/refine";
+import { MAX_PAGE_SIZE, clampPageSize, stableSerialize, useAngeeAggregate, useAngeeGroupByBatch, useAngeeListBatch, type GroupByBatchScope } from "@angee/refine";
 import type { ResourceViewGroupExpansion } from "../resource-view-context";
 import { useUiT } from "../../../i18n";
 import { type ResourceListOrder } from "../resource-view-model";
@@ -50,6 +50,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     resourceView,
     modelMetadata,
     laneSource,
+    groupStack: EMPTY_ARRAY,
   });
   const leafOrder = React.useMemo<ResourceListOrder | undefined>(
     () => sortOrder ?? order,
@@ -85,8 +86,8 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     [measures, modelMetadata],
   );
   const where = React.useMemo(
-    () => hasuraWhereFromCrudFilters(crudFiltersFromFilterRecord(mergedFilter)),
-    [mergedFilter],
+    () => ResourceQuery.from(dataResource).toWhere(mergedFilter),
+    [dataResource, mergedFilter],
   );
   const grandTotal = useAngeeAggregate(aggregateOperation.target, {
     document: aggregateOperation.document,
@@ -224,7 +225,13 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   }, [desiredGroupScopes]);
 
   // Every expanded leaf bucket's record page, batched into one request round.
-  const leafResults = useAngeeListBatch(listTarget, leafScopes, {
+  const leafRequests = React.useMemo(() => {
+    const query = ResourceQuery.from(dataResource);
+    return leafScopes.map(({ filter, order, ...scope }) => ({
+      ...scope, where: query.toWhere(filter), orderBy: query.toOrderBy(order),
+    }));
+  }, [dataResource, leafScopes]);
+  const leafResults = useAngeeListBatch(listTarget, leafRequests, {
     fields: requestedFields,
     enabled: leafScopes.length > 0,
   });
@@ -270,7 +277,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     manualSorting: true,
     enableMultiSort: false,
     getCoreRowModel: getCoreRowModel(),
-    getRowId: modelRowId,
+    getRowId: (row, index) => modelRowId(row, index, dataResource),
     autoResetPageIndex: false,
     autoResetExpanded: false,
   });

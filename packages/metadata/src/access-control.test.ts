@@ -4,6 +4,7 @@ import {
   capabilityForRefineAction,
   createAngeeAccessControlProvider,
 } from "./access-control";
+import { testResourceQuery } from "./testing";
 import type { DataResourceMetadata } from "./metadata";
 import type { AngeeRefineResource } from "./resources";
 
@@ -65,7 +66,7 @@ function resource(): AngeeRefineResource {
     modelLabel: "notes.Note",
     appLabel: "notes",
     modelName: "Note",
-    publicIdField: "id",
+
     roots: {
       list: "notes",
       detail: "notes_by_pk",
@@ -73,11 +74,12 @@ function resource(): AngeeRefineResource {
     },
     typeNames: {},
     capabilities: ["list", "detail", "create"],
-    filterFields: [],
-    orderFields: [],
+
+
+    query: testResourceQuery(),
     aggregateFields: [],
-    groupByFields: [],
-    relationAxes: [],
+
+
   };
   return {
     name: "notes",

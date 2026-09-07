@@ -7,6 +7,8 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { ResourceQuery } from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
 import type {
   DataResourceFieldMetadata,
   DataResourceMetadata,
@@ -28,7 +30,7 @@ import {
 import type { ColumnDescriptor } from "../page";
 
 const tableMocks = vi.hoisted(() => ({
-  activeFilters: [] as unknown[][],
+  activeFilters: [] as unknown[],
   rows: [
     { id: "note_1", title: "First", status: "active" },
   ] as Row[],
@@ -57,9 +59,9 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   };
   return {
     ...actual,
-    useList: ({ resource, filters, pagination }: { resource?: string; filters?: unknown[]; pagination?: { pageSize?: number } }) => {
+    useList: ({ resource, meta, pagination }: { resource?: string; meta?: { gqlVariables?: { where?: unknown } }; pagination?: { pageSize?: number } }) => {
       if (resource === "notes") {
-        tableMocks.activeFilters.push(filters ?? []);
+        tableMocks.activeFilters.push(meta?.gqlVariables?.where ?? {});
         if (pagination?.pageSize !== undefined) tableMocks.pageSizes.push(pagination.pageSize);
       }
       return {
@@ -198,14 +200,12 @@ describe("useResourceViewSurface", () => {
       </ToastProvider>,
     );
 
-    expect(tableMocks.activeFilters.at(-1)).toEqual([
-      { field: "status", operator: "eq", value: "active" },
-    ]);
+    expect(tableMocks.activeFilters.at(-1)).toEqual({ status: { _eq: "active" } });
 
     fireEvent.click(screen.getByRole("button", { name: "clear filter" }));
 
     await waitFor(() => {
-      expect(tableMocks.activeFilters.at(-1)).toEqual([]);
+      expect(tableMocks.activeFilters.at(-1)).toEqual({});
     });
   });
 
@@ -377,48 +377,22 @@ const STATUS_FIELD: ModelFieldMetadata = {
   name: "status",
   kind: "scalar",
   scalar: "String",
-  filterable: true,
 };
 
-const NOTE_RESOURCE: DataResourceMetadata = {
-  schemaName: "console",
-  modelLabel: "notes.Note",
-  appLabel: "notes",
-  modelName: "note",
-  publicIdField: "id",
-  roots: { list: "notes", groups: "notes_groups" },
-  typeNames: { node: "NoteType" },
-  recordRepresentation: "title",
-  capabilities: ["list"],
-  fields: [
-    resourceField(ID_FIELD, { filterable: true, aggregatable: true }),
-    resourceField(TITLE_FIELD),
-    resourceField(STATUS_FIELD, { filterable: true }),
-  ],
-  filterFields: ["status"],
-  orderFields: [],
-  aggregateFields: [],
-  groupByFields: ["status", "title"],
-  groupDimensions: [
-    {
-      field: "title", input: "title", key: "title", kind: "column", scalar: "String",
-      filter: { kind: "equality", field: "title", valueKey: "title" },
-    },
-    {
-      field: "status",
-      input: "status",
-      key: "status",
-      kind: "column",
-      scalar: "String",
-      filter: {
-        kind: "equality",
-        field: "status",
-        valueKey: "status",
-      },
-    },
-  ],
-  relationAxes: [],
-};
+const NOTE_QUERY = ResourceQuery.forRows({ fields: {
+  id: { scalar: "ID" }, title: { scalar: "String" }, status: { scalar: "String" },
+  drive: { scalar: "ID" }, is_trashed: { scalar: "Boolean" },
+} }).contract;
+for (const field of ["title", "status"]) {
+  NOTE_QUERY.axes[field]!.server = { input: field, key: field };
+  NOTE_QUERY.axes[field]!.drill = { kind: "value", field, valueKey: field, nullMode: "isNull", valueMap: [] };
+}
+const NOTE_RESOURCE: DataResourceMetadata = testDataResource("notes.Note", {
+  roots: { list: "notes", aggregate: "notes_aggregate", groups: "notes_groups" },
+  typeNames: { node: "NoteType", filter: "NoteBoolExp", order: "NoteOrderBy" },
+  recordRepresentation: "title", query: NOTE_QUERY,
+  fields: [resourceField(ID_FIELD, { aggregatable: true }), resourceField(TITLE_FIELD), resourceField(STATUS_FIELD)],
+});
 
 const NOTE_METADATA: ModelMetadata = {
   fields: {
@@ -427,7 +401,6 @@ const NOTE_METADATA: ModelMetadata = {
     status: STATUS_FIELD,
   },
   resource: NOTE_RESOURCE,
-  relationAxes: {},
 };
 
 const CLIENT_NOTE_METADATA: ModelMetadata = {
@@ -444,10 +417,7 @@ function resourceField(
     kind: field.kind,
     ...(field.scalar ? { scalar: field.scalar } : {}),
     readable: true,
-    filterable: false,
-    sortable: false,
     aggregatable: false,
-    groupable: false,
     creatable: false,
     updatable: false,
     requiredOnCreate: false,

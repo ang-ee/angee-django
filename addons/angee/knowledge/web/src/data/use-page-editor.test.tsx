@@ -13,7 +13,7 @@ import { afterEach,
 import {
   ModelMetadataProvider,
 } from "@angee/metadata";
-import { withTestResourceInventory } from "@angee/metadata/testing";
+import { withTestResourceInventory, testResourceQuery, testQueryField } from "@angee/metadata/testing";
 import type {
   SchemaFieldMetadata,
 } from "@angee/metadata";
@@ -223,11 +223,14 @@ const PAGE_METADATA: SchemaFieldMetadata = withTestResourceInventory({
         title: { name: "title", kind: "scalar", scalar: "String" },
       },
       resource: {
+        query: testResourceQuery({ identity: { field: "id" }, fields: { "title": testQueryField("title", { scalar: "String", kind: "scalar", filter: null, sort: { field: "title" } }),
+                "id": testQueryField("id", { scalar: "ID", filter: null }) }, axes: {}, sort: { default: [] } }),
+
         schemaName: "console",
         modelLabel: "knowledge.Page",
         appLabel: "knowledge",
         modelName: "Page",
-        publicIdField: "id",
+
         roots: {
           detail: "page",
           list: "pages",
@@ -239,11 +242,11 @@ const PAGE_METADATA: SchemaFieldMetadata = withTestResourceInventory({
           order: "PageOrder",
         },
         capabilities: ["detail", "list", "update"],
-        filterFields: [],
-        orderFields: ["title"],
+
+
         aggregateFields: [],
-        groupByFields: [],
-        relationAxes: [],
+
+
       },
     },
   },

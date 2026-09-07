@@ -1,6 +1,6 @@
 import * as React from "react";
-import { MAX_PAGE_SIZE, crudFiltersFromFilterRecord, hasuraWhereFromCrudFilters, useAngeeAggregate } from "@angee/refine";
-import { useModelMetadata } from "@angee/metadata";
+import { MAX_PAGE_SIZE, useAngeeAggregate } from "@angee/refine";
+import { ResourceQuery, useModelMetadata } from "@angee/metadata";
 import type { ModelFieldMetadata, Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { BoardView } from "../BoardView";
@@ -187,7 +187,7 @@ export function ListViewContent<TRow extends Row = Row>({
             ? bulkActions(surface.selectedIds, resourceView.clearSelectedIds)
             : undefined,
       }}
-      error={groupedListMode ? null : surface.list.error}
+      error={surface.list.error}
       loadingFooter={
         !groupedListMode
         && resourceView.state.view !== "board"
@@ -352,8 +352,8 @@ function FlatListBodyWithAggregate<TRow extends Row>({
   const dataResource = requireDataResource(resource, modelMetadata);
   const aggregateOperation = useAggregateOperation(dataResource);
   const where = React.useMemo(
-    () => hasuraWhereFromCrudFilters(crudFiltersFromFilterRecord(filter)),
-    [filter],
+    () => ResourceQuery.from(dataResource).toWhere(filter),
+    [filter, dataResource],
   );
   const queryMeasures = React.useMemo(
     () => hasuraMeasuresFromGroupMeasures(measures, modelMetadata),

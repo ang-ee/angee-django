@@ -43,7 +43,7 @@ import {
 import type {
   SchemaFieldMetadata,
 } from "@angee/metadata";
-import { withTestResourceInventory } from "@angee/metadata/testing";
+import { withTestResourceInventory, testResourceQuery, testQueryField } from "@angee/metadata/testing";
 
 import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
 import { ModalsHost, ToastProvider } from "@angee/ui/feedback/index";
@@ -152,10 +152,6 @@ vi.mock("@refinedev/core", async (importOriginal) => {
     useInvalidate: () => vi.fn(async () => undefined),
   };
 });
-
-
-
-
 
 const columns = [
   { field: "title", header: "Title" },
@@ -526,11 +522,14 @@ const TEST_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
         title: { name: "title", kind: "scalar", scalar: "String" },
       },
       resource: {
+        query: testResourceQuery({ identity: { field: "id" }, fields: { "title": testQueryField("title", { scalar: "String", kind: "scalar", filter: null, sort: { field: "title" } }),
+                "id": testQueryField("id", { scalar: "ID", filter: null }) }, axes: {}, sort: { default: [] } }),
+
         schemaName: "console",
         modelLabel: "notes.Note",
         appLabel: "notes",
         modelName: "Note",
-        publicIdField: "id",
+
         recordRepresentation: "title",
         roots: {
           list: "notes",
@@ -547,11 +546,9 @@ const TEST_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
           aggregate: "NoteAggregate",
         },
         capabilities: ["list", "aggregate", "detail", "create", "update", "delete"],
-        filterFields: [],
-        orderFields: ["title"],
+
         aggregateFields: ["id"],
-        groupByFields: [],
-        relationAxes: [],
+
       },
     },
   },

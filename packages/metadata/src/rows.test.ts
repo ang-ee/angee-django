@@ -21,7 +21,7 @@ describe("rowPublicId", () => {
     expect(
       rowPublicId(
         { id: "db_1", public_id: "nte_123", title: "A" },
-        { publicIdField: "public_id" },
+        { query: { identity: { field: "public_id" } } },
       ),
     ).toBe("nte_123");
   });

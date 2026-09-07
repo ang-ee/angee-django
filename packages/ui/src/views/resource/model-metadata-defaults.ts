@@ -1,13 +1,11 @@
 import type {
   ModelMetadata,
-  ModelRelationFilterMetadata,
   SchemaFieldMetadata,
 } from "@angee/metadata";
 import {
   defaultWidgetForModelField,
   isToOneRelationField,
   modelMetadataForLabel,
-  relationFilterForRelation,
   relationModelLabelForField,
   relationRepresentationForPath,
 } from "@angee/metadata";
@@ -29,8 +27,6 @@ export interface RelationFieldInfo {
   labelField: string;
   /** A create mutation exists for the related model. */
   canCreate: boolean;
-  /** Filter shape accepted by the current model's filter input for this relation. */
-  filter?: ModelRelationFilterMetadata;
 }
 
 // Server-owned fields a create form never edits. These are GraphQL wire field
@@ -137,11 +133,8 @@ function resolveRelationTarget(
   if (!related?.resource.roots.list) return null;
   return {
     resource: related.resource.modelLabel,
-    labelField: related.resource.recordRepresentation ?? related.resource.publicIdField,
+    labelField: related.resource.recordRepresentation ?? related.resource.query.identity.field,
     canCreate: Boolean(related.resource.roots.create),
-    ...(modelMetadata
-      ? { filter: relationFilterForRelation(field.name, modelMetadata) }
-      : {}),
   };
 }
 
@@ -159,7 +152,7 @@ export function relationFieldInfoForResource(
   if (!model?.resource.roots.list) return null;
   return {
     resource,
-    labelField: model.resource.recordRepresentation ?? model.resource.publicIdField,
+    labelField: model.resource.recordRepresentation ?? model.resource.query.identity.field,
     canCreate: Boolean(model.resource.roots.create),
   };
 }

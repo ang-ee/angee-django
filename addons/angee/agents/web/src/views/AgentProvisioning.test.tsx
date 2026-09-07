@@ -18,7 +18,7 @@ import {
 import type {
   SchemaFieldMetadata,
 } from "@angee/metadata";
-import { withTestResourceInventory } from "@angee/metadata/testing";
+import { withTestResourceInventory, testResourceQuery, testQueryField } from "@angee/metadata/testing";
 
 import { enAgentsMessages } from "../i18n";
 import { AgentProvisioning } from "./AgentProvisioning";
@@ -185,11 +185,13 @@ const AGENT_METADATA: SchemaFieldMetadata = withTestResourceInventory({
     AgentType: {
       fields: {},
       resource: {
+        query: testResourceQuery({ identity: { field: "id" }, fields: { "id": testQueryField("id", { scalar: "ID", filter: null }) }, axes: {}, sort: { default: [] } }),
+
         schemaName: "console",
         modelLabel: "agents.Agent",
         appLabel: "agents",
         modelName: "Agent",
-        publicIdField: "id",
+
         roots: { detail: "agent", list: "agents" },
         typeNames: {
           node: "AgentType",
@@ -197,11 +199,11 @@ const AGENT_METADATA: SchemaFieldMetadata = withTestResourceInventory({
           order: "AgentOrder",
         },
         capabilities: ["detail", "list"],
-        filterFields: [],
-        orderFields: [],
+
+
         aggregateFields: [],
-        groupByFields: [],
-        relationAxes: [],
+
+
       },
     },
   },

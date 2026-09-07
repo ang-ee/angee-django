@@ -11,7 +11,7 @@ function repositoryList(
 ): React.ReactElement {
   return (
     <List resource={MODEL}>
-      <Facet field="vcs_bridge" label={t("col.vcsBridge")} labelField="display_name" />
+      <Facet field="vcs_bridge" label={t("col.vcsBridge")} />
       <Column field="org" />
       <Column field="name" />
       <Column field="visibility" widget="statusBadge" />

@@ -89,7 +89,7 @@ export function RunsPage(): React.ReactElement {
       recordTabs={recordTabs}
     >
       <List resource={RUN_MODEL} defaultGroup={{ field: "status" }}>
-        <Facet field="workflow" label={t("col.workflow")} labelField="name" />
+        <Facet field="workflow" label={t("col.workflow")} />
         <Column field="workflow.name" header={t("col.workflow")} />
         <Column field="status" widget="statusBadge" />
         <Column field="steps_taken" />

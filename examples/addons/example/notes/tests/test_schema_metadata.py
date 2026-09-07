@@ -52,45 +52,35 @@ class NotesSchemaMetadataTests(SimpleTestCase):
         self.assertEqual(note["typeNames"]["order"], "notes_order_by")
         self.assertEqual(note["typeNames"]["aggregate"], "notes_aggregate")
         self.assertEqual(note["typeNames"]["grouped"], "notes_group")
-        self.assertEqual(note["typeNames"]["groupKey"], "NoteTypeGroupKey")
-        self.assertEqual(note["typeNames"]["groupBySpec"], "NoteTypeGroupBySpec")
-        self.assertEqual(note["typeNames"]["groupOrder"], "NoteTypeGroupOrder")
-        self.assertEqual(note["typeNames"]["having"], "NoteTypeHaving")
+        self.assertEqual(note["typeNames"]["groupKey"], "notesGroupKey")
+        self.assertEqual(note["typeNames"]["groupBySpec"], "notesGroupBySpec")
+        self.assertEqual(note["typeNames"]["groupOrder"], "notesGroupOrder")
+        self.assertEqual(note["typeNames"]["having"], "notesHaving")
         self.assertEqual(note["typeNames"]["createInput"], "notes_insert_input")
         self.assertEqual(note["typeNames"]["updateInput"], "notes_set_input")
+        query = note["query"]
+        group_dimensions = query["axes"]
         self.assertEqual(
             {
-                dimension["field"]: (
-                    dimension["input"],
-                    dimension["key"],
-                    dimension["kind"],
-                    dimension["scalar"],
-                )
-                for dimension in note["groupDimensions"]
+                name: (axis["server"]["input"], axis["server"]["key"], axis["kind"])
+                for name, axis in group_dimensions.items()
             },
             {
-                "status": ("STATUS", "status", "column", None),
-                "tags": ("TAGS", "tags", "column", "JSON"),
-                "updated_at": ("UPDATED_AT", "updated_at", "column", "DateTime"),
+                "status": ("STATUS", "status", "column"),
+                "tags": ("TAGS", "tags", "column"),
+                "updated_at": ("UPDATED_AT", "updated_at", "date"),
             },
         )
-        updated_at = {
-            dimension["field"]: dimension
-            for dimension in note["groupDimensions"]
-        }["updated_at"]
-        group_dimensions = {
-            dimension["field"]: dimension
-            for dimension in note["groupDimensions"]
-        }
+        updated_at = group_dimensions["updated_at"]
         self.assertEqual(
-            group_dimensions["status"]["filter"],
+            group_dimensions["status"]["drill"],
             {
-                "kind": "equality",
+                "kind": "value",
                 "field": "status",
                 "valueKey": "status",
                 "rangeKey": None,
-                "lookup": None,
-                "nullLookup": "isNull",
+                "jsonPath": None,
+                "nullMode": "isNull",
                 "valueTransform": None,
                 "valueMap": [
                     {"from": "DRAFT", "to": "draft"},
@@ -101,14 +91,14 @@ class NotesSchemaMetadataTests(SimpleTestCase):
             },
         )
         self.assertEqual(
-            group_dimensions["tags"]["filter"],
+            group_dimensions["tags"]["drill"],
             {
-                "kind": "equality",
+                "kind": "value",
                 "field": "tags",
                 "valueKey": "tags",
                 "rangeKey": None,
-                "lookup": "exact",
-                "nullLookup": "isNull",
+                "jsonPath": None,
+                "nullMode": "isNull",
                 "valueTransform": "json",
                 "valueMap": [],
             },
@@ -125,13 +115,13 @@ class NotesSchemaMetadataTests(SimpleTestCase):
                     "input": "YEAR",
                     "key": "updated_at_year",
                     "rangeKey": "updated_at_year_range",
-                    "filter": {
+                    "drill": {
                         "kind": "range",
                         "field": "updated_at",
                         "valueKey": "updated_at_year",
                         "rangeKey": "updated_at_year_range",
-                        "lookup": None,
-                        "nullLookup": "isNull",
+                        "jsonPath": None,
+                        "nullMode": "isNull",
                         "valueTransform": None,
                         "valueMap": [],
                     },
@@ -141,13 +131,13 @@ class NotesSchemaMetadataTests(SimpleTestCase):
                     "input": "MONTH",
                     "key": "updated_at_month",
                     "rangeKey": "updated_at_month_range",
-                    "filter": {
+                    "drill": {
                         "kind": "range",
                         "field": "updated_at",
                         "valueKey": "updated_at_month",
                         "rangeKey": "updated_at_month_range",
-                        "lookup": None,
-                        "nullLookup": "isNull",
+                        "jsonPath": None,
+                        "nullMode": "isNull",
                         "valueTransform": None,
                         "valueMap": [],
                     },
@@ -165,7 +155,7 @@ class NotesSchemaMetadataTests(SimpleTestCase):
         )
         self.assertEqual(note["defaultMeasures"], [{"op": "count", "field": None, "input": None}])
         self.assertEqual(
-            note["defaultSort"],
+            query["sort"]["default"],
             [
                 {"field": "updated_at", "direction": "DESC"},
                 {"field": "title", "direction": "ASC"},
@@ -188,8 +178,6 @@ class NotesSchemaMetadataTests(SimpleTestCase):
                     "kind",
                     "scalar",
                     "readable",
-                    "filterable",
-                    "sortable",
                     "creatable",
                     "updatable",
                     "requiredOnCreate",
@@ -199,12 +187,12 @@ class NotesSchemaMetadataTests(SimpleTestCase):
                 "kind": "scalar",
                 "scalar": "String",
                 "readable": True,
-                "filterable": True,
-                "sortable": True,
                 "creatable": True,
                 "updatable": True,
                 "requiredOnCreate": True,
             },
         )
+        self.assertIn("exact", query["fields"]["title"]["filter"]["operators"])
+        self.assertEqual(query["fields"]["title"]["sort"]["field"], "title")
         self.assertFalse(fields["word_count"]["creatable"])
         self.assertFalse(fields["word_count"]["updatable"])

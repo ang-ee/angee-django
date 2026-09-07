@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -312,7 +313,7 @@ def test_materialize_copies_complete_source_and_attaches_current_leaf(runtime_mi
     assert "old_name" not in state.models["resources", "legacy"].fields
 
 
-def test_applies_false_writes_nothing(runtime_migration_probe) -> None:
+def test_applies_false_writes_nothing(runtime_migration_probe, caplog) -> None:
     materializer, _, source_path, runtime_dir, _ = runtime_migration_probe
     source_path.write_text(
         source_path.read_text(encoding="utf-8").replace(
@@ -322,8 +323,123 @@ def test_applies_false_writes_nothing(runtime_migration_probe) -> None:
     )
     importlib.invalidate_caches()
 
-    assert materializer.materialize() == ()
+    current_apps = MigrationLoader(None, ignore_no_migrations=True).project_state().apps
+    with caplog.at_level(logging.WARNING, logger="angee.compose.migrations"):
+        assert materializer.materialize(apps=current_apps) == ()
     assert not (runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py").exists()
+    assert caplog.record_tuples == [
+        (
+            "angee.compose.migrations",
+            logging.WARNING,
+            "example.demo:rename_legacy (app label resources): runtime migration never became applicable; skipped",
+        ),
+    ]
+
+
+@pytest.mark.parametrize("consumer_cutover", [False, True])
+def test_adopted_table_drop_requires_consumer_cutover(
+    runtime_migration_probe, monkeypatch, settings, caplog, consumer_cutover: bool
+) -> None:
+    """Source FK changes cannot replace the migration that releases old state."""
+
+    _, addon, _, runtime_dir, source_root = runtime_migration_probe
+    _write_module(runtime_dir / "integrate_vcs" / "__init__.py")
+    _write_module(runtime_dir / "integrate_vcs" / "migrations" / "__init__.py")
+    monkeypatch.setitem(settings.MIGRATION_MODULES, "integrate_vcs", f"{runtime_dir.name}.integrate_vcs.migrations")
+    _write_module(
+        runtime_dir / "resources" / "migrations" / "0002_consumer.py",
+        """from django.db import migrations, models
+class Migration(migrations.Migration):
+    dependencies = [("resources", "0001_legacy")]
+    operations = [migrations.CreateModel(name="Consumer", fields=[
+        ("id", models.AutoField(primary_key=True)),
+        ("legacy", models.ForeignKey("resources.Legacy", on_delete=models.CASCADE)),
+    ])]
+""",
+    )
+    _write_module(
+        source_root / "adopt_legacy.py",
+        """from django.db import migrations, models
+def applies(state):
+    return ("integrate_vcs", "legacy") not in state.models
+class Migration(migrations.Migration):
+    dependencies = [("resources", "__latest__")]
+    operations = [migrations.SeparateDatabaseAndState(state_operations=[
+        migrations.CreateModel(name="Legacy", fields=[
+            ("id", models.AutoField(primary_key=True)),
+            ("old_name", models.CharField(max_length=100)),
+        ], options={"db_table": "resources_legacy"}),
+    ])]
+""",
+    )
+    _write_module(
+        source_root / "delete_legacy.py",
+        """from django.db import migrations
+def applies(state):
+    return (
+        ("resources", "legacy") in state.models
+        and ("integrate_vcs", "legacy") in state.models
+        and state.models["resources", "consumer"].fields["legacy"].remote_field.model.lower() == "integrate_vcs.legacy"
+    )
+class Migration(migrations.Migration):
+    dependencies = [("integrate_vcs", "__latest__")]
+    operations = [migrations.SeparateDatabaseAndState(state_operations=[migrations.DeleteModel(name="Legacy")])]
+""",
+    )
+    declarations = [
+        dict(name="delete_legacy", app_label="resources", module="delete_legacy"),
+        dict(name="adopt_legacy", app_label="integrate_vcs", module="adopt_legacy"),
+    ]
+    if consumer_cutover:
+        _write_module(
+            source_root / "consumer_cutover.py",
+            """from django.db import migrations, models
+def applies(state):
+    return (
+        ("integrate_vcs", "legacy") in state.models
+        and state.models["resources", "consumer"].fields["legacy"].remote_field.model.lower() == "resources.legacy"
+    )
+class Migration(migrations.Migration):
+    dependencies = [("integrate_vcs", "__latest__")]
+    operations = [migrations.SeparateDatabaseAndState(state_operations=[migrations.AlterField(
+        model_name="consumer", name="legacy",
+        field=models.ForeignKey("integrate_vcs.Legacy", on_delete=models.CASCADE),
+    )])]
+""",
+        )
+        declarations.append(dict(name="consumer_cutover", app_label="resources", module="consumer_cutover"))
+    write_addon_manifest(addon, migrations=tuple(declarations))
+    importlib.invalidate_caches()
+    materializer = RuntimeMigrations((addon,), runtime_dir=runtime_dir, labels=("resources", "integrate_vcs"))
+
+    current = MigrationLoader(None, ignore_no_migrations=True).project_state()
+    adopted = current.models["resources", "legacy"].clone()
+    adopted.app_label = "integrate_vcs"
+    adopted.options["db_table"] = "resources_legacy"
+    current.add_model(adopted)
+    current.alter_field(
+        "resources", "consumer", "legacy",
+        models.ForeignKey("integrate_vcs.Legacy", on_delete=models.CASCADE),
+        preserve_default=True,
+    )
+    current.remove_model("resources", "legacy")
+
+    if consumer_cutover:
+        written = materializer.materialize(apps=current.apps)
+        assert [path.name for path in written] == [
+            "0001_adopt_legacy.py", "0003_consumer_cutover.py", "0004_delete_legacy.py",
+        ]
+        assert materializer.materialize(apps=current.apps) == ()
+        materializer.check()
+        assert not caplog.records
+    else:
+        with pytest.raises(RuntimeError) as error:
+            materializer.materialize(apps=current.apps)
+        assert "resources.legacy: DeleteModel" in str(error.value)
+        assert "table 'resources_legacy', still owned by integrate_vcs.legacy" in str(error.value)
+        assert "Never-applicable runtime migration declarations: example.demo:delete_legacy" in str(error.value)
+        assert "cutover migration" in str(error.value)
+        assert not (runtime_dir / "integrate_vcs" / "migrations" / "0001_adopt_legacy.py").exists()
 
 
 def test_applicable_declarations_are_planned_sequentially(runtime_migration_probe) -> None:

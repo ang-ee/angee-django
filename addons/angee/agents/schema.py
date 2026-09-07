@@ -286,7 +286,10 @@ class InferenceProviderPatch:
     lifecycle: str | None = strawberry.UNSET
     name: str | None = strawberry.UNSET
     base_url: str | None = strawberry.UNSET
-    config: JSON | None = strawberry.UNSET
+    config: JSON | None = strawberry.field(
+        default=strawberry.UNSET,
+        description="Merge supplied config keys with existing config; null removes a key.",
+    )
 
 
 _AGENT_RESOURCE = hasura_model_resource(
@@ -557,7 +560,7 @@ class InferenceProviderUpdateMutation:
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def update_inference_provider(self, data: InferenceProviderPatch) -> InferenceProviderType:
-        """Update a provider, rematerializing backend defaults when the backend changes."""
+        """Update a provider, merging supplied config keys."""
 
         with (
             action_target(
@@ -582,8 +585,7 @@ class InferenceProviderUpdateMutation:
                 provider.base_url = data.base_url or ""
                 provided.add("base_url")
             if data.config is not strawberry.UNSET:
-                provider.config = data.config
-                provided.add("config")
+                provided.update(provider.apply_config_patch(data.config))
             save_provided_fields(provider, provided)
         return cast(InferenceProviderType, provider)
 

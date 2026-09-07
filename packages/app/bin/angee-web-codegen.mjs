@@ -604,7 +604,7 @@ function groupFields(resources) {
       ]
         .filter(([, value]) => typeof value !== "string" || value === "")
         .map(([field]) => field);
-      if (keyFields.length === 0) missing.push("groupDimensions");
+      if (keyFields.length === 0) missing.push("query.axes");
       if (missing.length > 0) {
         const resourceName =
           typeof modelLabel === "string" && modelLabel !== ""
@@ -827,8 +827,10 @@ function revisionDocument(root, fields) {
 function groupKeyFields(resource) {
   const seen = new Set();
   const fields = [];
-  for (const dimension of resource?.groupDimensions ?? []) {
-    addGroupKeyField(fields, seen, dimension?.key, false);
+  for (const dimension of Object.values(resource?.query?.axes ?? {})) {
+    if (!dimension.server) continue;
+    addGroupKeyField(fields, seen, dimension.server.key, false);
+    addGroupKeyField(fields, seen, dimension.server.labelKey, false);
     for (const extraction of dimension?.extractions ?? []) {
       addGroupKeyField(fields, seen, extraction?.key, false);
       addGroupKeyField(fields, seen, extraction?.rangeKey, true);

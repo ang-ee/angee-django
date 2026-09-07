@@ -2,13 +2,11 @@ import { favoriteFromResourceView } from "./model/favorites";
 import {
   useCallback,
   useMemo,
-  useRef,
 } from "react";
 import * as v from "valibot";
 import {
   canonicalModelLabelOrNull,
   useSchemaFieldMetadata,
-  type DataResourceMetadata,
 } from "@angee/metadata";
 
 import {
@@ -16,7 +14,6 @@ import {
   type RuntimeUserPreferences,
 } from "../../runtime";
 import {
-  resourceViewFavoritesFromJson,
   resourceViewFavoritesFromUnknown,
   type ResourceViewFavorite,
   type ResourceViewState,
@@ -36,11 +33,6 @@ interface ResourceViewFavoritesPreferences {
 interface ResourceViewFavoritesSlice {
   document: ResourceViewFavoritesPreferences;
   writable: boolean;
-}
-
-interface LegacyFavoritesImport {
-  apply: (slice: ResourceViewFavoritesSlice) => ResourceViewFavoritesSlice;
-  complete: () => void;
 }
 
 const EMPTY_FAVORITES_DOCUMENT: ResourceViewFavoritesPreferences = {
@@ -95,7 +87,6 @@ export function useResourceViewFavorites(
     readResourceViewFavoritesSlice,
     writeResourceViewFavoritesSlice,
   );
-  const legacyImport = useRef<LegacyFavoritesImport | null>(null);
   const savedFavorites = canonicalModel
     ? favoritesSlice.document.models[canonicalModel] ?? EMPTY_FAVORITES
     : EMPTY_FAVORITES;
@@ -106,23 +97,10 @@ export function useResourceViewFavorites(
       const trimmed = label.trim();
       if (!writable || !canonicalModel || !trimmed) return;
       const favorite = favoriteFromResourceView(state, trimmed, savedFavorites);
-      const migration = legacyImport.current ??= createLegacyFavoritesImport(
-        metadata.resources ?? [],
-      );
-      void updateFavorites((current) =>
-        appendResourceViewFavorite(
-          migration.apply(current),
-          canonicalModel,
-          favorite,
-        )
-      ).then(
-        () => migration.complete(),
-        () => undefined,
-      );
+      void updateFavorites((current) => appendResourceViewFavorite(current, canonicalModel, favorite)).catch(() => undefined);
     },
     [
       canonicalModel,
-      metadata.resources,
       savedFavorites,
       state,
       updateFavorites,
@@ -173,8 +151,7 @@ export function readResourceViewFavoritesSlice(
   const document = v.safeParse(ResourceViewFavoritesPreferencesSchema, raw);
   if (!document.success) return EMPTY_FAVORITES_SLICE;
   // A version-matched document never loses siblings to one bad entry: each
-  // model's list drops only its malformed favorites (the same recovery the
-  // legacy import uses), so the next save cannot wipe healthy models.
+  // model's list drops only its malformed favorites, so the next save cannot wipe healthy models.
   const models: Record<string, readonly ResourceViewFavorite[]> = {};
   for (const [model, favorites] of Object.entries(document.output.models)) {
     const kept = resourceViewFavoritesFromUnknown(favorites);
@@ -197,85 +174,6 @@ function writeResourceViewFavoritesSlice(
   };
 }
 
-// Legacy* removal marker: delete this migration block after one release with
-// server-backed favorites; successful import removes every legacy storage key.
-const LEGACY_FAVORITES_PREFIX = "angee:resource-view:";
-const LEGACY_FAVORITES_SUFFIX = ":favorites";
-
-function createLegacyFavoritesImport(
-  resources: readonly DataResourceMetadata[],
-): LegacyFavoritesImport {
-  const { keys, models } = readLegacyFavorites(resources);
-  let completed = false;
-  return {
-    apply(slice) {
-      if (completed || !slice.writable) return slice;
-      return {
-        writable: true,
-        document: {
-          version: RESOURCE_VIEW_FAVORITES_VERSION,
-          models: mergeFavoriteModels(slice.document.models, models),
-        },
-      };
-    },
-    complete() {
-      if (completed) return;
-      removeLegacyFavorites(keys);
-      completed = true;
-    },
-  };
-}
-
-function readLegacyFavorites(
-  resources: readonly DataResourceMetadata[],
-): {
-  keys: readonly string[];
-  models: Readonly<Record<string, readonly ResourceViewFavorite[]>>;
-} {
-  const storage = favoriteStorage();
-  if (!storage) return { keys: [], models: {} };
-  const keys: string[] = [];
-  const models: Record<string, readonly ResourceViewFavorite[]> = {};
-  try {
-    for (let index = 0; index < storage.length; index += 1) {
-      const key = storage.key(index);
-      if (
-        !key?.startsWith(LEGACY_FAVORITES_PREFIX)
-        || !key.endsWith(LEGACY_FAVORITES_SUFFIX)
-      ) {
-        continue;
-      }
-      const spelling = key.slice(
-        LEGACY_FAVORITES_PREFIX.length,
-        -LEGACY_FAVORITES_SUFFIX.length,
-      );
-      const modelLabel = canonicalModelLabelOrNull(
-        resources,
-        spelling,
-        "legacy resource-view favorites import",
-      );
-      if (!modelLabel) continue;
-      const favorites = resourceViewFavoritesFromJson(storage.getItem(key));
-      models[modelLabel] = mergeFavorites(models[modelLabel], favorites);
-      keys.push(key);
-    }
-  } catch {
-    return { keys: [], models: {} };
-  }
-  return { keys, models };
-}
-
-function mergeFavoriteModels(
-  stored: Readonly<Record<string, readonly ResourceViewFavorite[]>>,
-  imported: Readonly<Record<string, readonly ResourceViewFavorite[]>>,
-): Record<string, readonly ResourceViewFavorite[]> {
-  const models: Record<string, readonly ResourceViewFavorite[]> = { ...stored };
-  for (const [modelLabel, favorites] of Object.entries(imported)) {
-    models[modelLabel] = mergeFavorites(models[modelLabel], favorites);
-  }
-  return models;
-}
-
 function mergeFavorites(
   left: readonly ResourceViewFavorite[] | undefined,
   right: readonly ResourceViewFavorite[],
@@ -285,23 +183,4 @@ function mergeFavorites(
     if (!merged.has(favorite.id)) merged.set(favorite.id, favorite);
   }
   return [...merged.values()];
-}
-
-function removeLegacyFavorites(keys: readonly string[]): void {
-  const storage = favoriteStorage();
-  if (!storage) return;
-  try {
-    for (const key of keys) storage.removeItem(key);
-  } catch {
-    // A successful server write remains authoritative when storage is blocked.
-  }
-}
-
-function favoriteStorage(): Storage | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.localStorage ?? null;
-  } catch {
-    return null;
-  }
 }

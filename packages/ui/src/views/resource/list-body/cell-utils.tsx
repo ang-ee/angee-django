@@ -205,7 +205,7 @@ function columnMeta<TRow extends Row>(
   label?: React.ReactNode;
   field?: string;
   aggregate?: ColumnAggregate;
-  groupingOnly?: boolean;
+  queryOnly?: boolean;
 } {
   return (
     column.meta as
@@ -214,32 +214,28 @@ function columnMeta<TRow extends Row>(
           label?: React.ReactNode;
           field?: string;
           aggregate?: ColumnAggregate;
-          groupingOnly?: boolean;
+          queryOnly?: boolean;
         }
       | undefined
   ) ?? {};
 }
 
-/** A grouping-accessor column that exists only to feed TanStack grouping. */
-export function isGroupingOnlyColumn<TRow extends Row>(
+/** A native accessor column for query behavior outside the declared display columns. */
+export function isQueryOnlyColumn<TRow extends Row>(
   column: ColumnDef<TRow>,
 ): boolean {
-  return columnMeta(column).groupingOnly === true;
+  return columnMeta(column).queryOnly === true;
 }
 
-/** Merge visibility=false for every grouping-only column into ``previous``.
-
-    A grouping accessor exists only to feed TanStack grouping; without this the
-    axis renders as an empty data column with a raw-path header beside the
-    declared columns. Returns ``previous`` unchanged when nothing new appeared. */
-export function withGroupingOnlyColumnsHidden<TRow extends Row>(
+/** Keep native grouping/sorting accessors out of rendering and the display chooser. */
+export function withQueryOnlyColumnsHidden<TRow extends Row>(
   columns: readonly ColumnDef<TRow>[],
   previous: Record<string, boolean>,
 ): Record<string, boolean> {
   let next: Record<string, boolean> | null = null;
   for (const column of columns) {
     const id = column.id;
-    if (!id || !isGroupingOnlyColumn(column)) continue;
+    if (!id || !isQueryOnlyColumn(column)) continue;
     if (previous[id] === false) continue;
     next = next ?? { ...previous };
     next[id] = false;

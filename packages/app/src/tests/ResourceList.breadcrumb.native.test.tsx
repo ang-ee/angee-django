@@ -5,7 +5,7 @@ import { Refine, type DataProvider, type GetListParams } from "@refinedev/core";
 import { QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory, createRootRoute, createRouter, Outlet, RouterProvider } from "@tanstack/react-router";
 import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
-import { testDataResource } from "@angee/metadata/testing";
+import { testDataResource, testResourceQuery, testQueryField, testQueryAxis } from "@angee/metadata/testing";
 import { OperationDocumentsProvider, tanStackRouterProvider } from "@angee/refine";
 import { Breadcrumb, BreadcrumbLabelProvider } from "@angee/ui/chrome/index";
 import { ModalsHost, ToastProvider } from "@angee/ui/feedback/index";
@@ -16,15 +16,16 @@ import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
 import type { BaseAddonRoute } from "../define-base-addon";
 
 const resource = testDataResource("notes.Note", {
-  roots: { groups: "notes_groups" }, recordRepresentation: "title",
-  groupByFields: ["updated_at"], orderFields: ["title", "updated_at"],
+  query: testResourceQuery({ identity: { field: "id" }, fields: { "title": testQueryField("title", { scalar: "String", filter: { field: "title", scalar: "String", values: [], operators: ["exact", "inList", "isNull", "iContains"] }, sort: { field: "title" } }),
+          "updated_at": testQueryField("updated_at", { scalar: "DateTime", filter: { field: "updated_at", scalar: "DateTime", values: [], operators: ["exact", "inList", "isNull", "gte", "lt"] }, sort: { field: "updated_at" } }),
+          "id": testQueryField("id", { scalar: "ID", filter: null }) }, axes: { "updated_at": testQueryAxis("updated_at", { kind: "date", identityPath: "updated_at", paths: ["updated_at"], server: { input: "UPDATED_AT", key: "updated_at" }, extractions: [{ name: "month", input: "MONTH", key: "updated_at_month", rangeKey: "updated_at_month_range", drill: { kind: "range", field: "updated_at", valueKey: "updated_at_month", rangeKey: "updated_at_month_range", nullMode: "isNull", valueMap: [] } }], drill: { kind: "value", field: "updated_at", valueKey: "updated_at", nullMode: "isNull", valueMap: [] } }) }, sort: { default: [] } }),
+
+  roots: { groups: "notes_groups", aggregate: "notes_aggregate" }, typeNames: { filter: "notes_bool_exp", order: "notes_order_by" }, recordRepresentation: "title",
+
   fields: ["id", "title", "updated_at"].map((name) => ({ name, kind: "scalar", scalar: name === "updated_at" ? "DateTime" : "String",
-    readable: true, filterable: true, sortable: name !== "id", aggregatable: false, groupable: name === "updated_at",
+    readable: true,   aggregatable: false,
     creatable: false, updatable: name === "title", requiredOnCreate: false })),
-  groupDimensions: [{ field: "updated_at", input: "UPDATED_AT", key: "updated_at", kind: "column", scalar: "DateTime",
-    filter: { kind: "equality", field: "updated_at", valueKey: "updated_at" },
-    extractions: [{ name: "month", input: "MONTH", key: "updated_at_month", rangeKey: "updated_at_month_range",
-      filter: { kind: "range", field: "updated_at", valueKey: "updated_at_month", rangeKey: "updated_at_month_range" } }] }],
+
 });
 const rows = Array.from({ length: 292 }, (_, index) => ({ id: `note-${index + 1}`, title: `Note ${index + 1}`, updated_at: "2021-01-12T00:00:00Z" }));
 const clients: QueryClient[] = [];
@@ -92,5 +93,5 @@ test("generated native record routes return through Breadcrumb to the same group
   expect(f.lifecycle).toEqual({ mounts: 1, unmounts: 0 });
   await screen.findByText("51-100 / 292");
   expect(f.getList.mock.calls.at(-1)?.[0].pagination).toMatchObject({ currentPage: 2, pageSize: 50 });
-  expect(f.getList.mock.calls.at(-1)?.[0].filters).toContainEqual({ field: "title", operator: "contains", value: "Note" });
+  expect(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toMatchObject({ title: { _ilike: "%Note%" } });
 });

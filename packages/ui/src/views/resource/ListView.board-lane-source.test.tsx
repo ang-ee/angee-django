@@ -3,6 +3,7 @@
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import {
   ModelMetadataProvider,
+  ResourceQuery,
   schemaFieldMetadataFromDataResources,
   type SchemaFieldMetadata,
   type Row,
@@ -162,8 +163,6 @@ describe("ListView board laneSource", () => {
       expect(harness.boardProps?.resourceView.state.groupStack).toEqual([
         {
           field: "stage",
-          aggregateField: "stage",
-          aggregateKey: "stage",
         },
       ]);
     });
@@ -188,7 +187,7 @@ describe("ListView board laneSource", () => {
     expect(lastTableOption()).toMatchObject({
       meta: {
         fields: expect.arrayContaining([
-          "id", "name", { customer: ["sqid", "name"] }, { stage: ["id"] },
+          "id", "name", { customer: ["id", "name"] }, { stage: ["id", "name"] },
         ]),
       },
     });
@@ -283,7 +282,7 @@ describe("ListView board laneSource", () => {
   });
 
   test("keeps the derived board lanes when no laneSource is declared", async () => {
-    harness.tableRows = [{ id: "led_1", name: "Upgrade", stage: "New" }];
+    harness.tableRows = [{ id: "led_1", name: "Upgrade", stage: { id: "New", name: "New" } }];
     renderLeadBoard({ laneSource: undefined });
 
     await waitFor(() => {
@@ -509,15 +508,22 @@ function leadMetadata(
     stageWritable?: boolean;
   } = {},
 ): SchemaFieldMetadata {
+  const leadQuery = ResourceQuery.forRows({ fields: {
+    id: { scalar: "ID" }, name: { scalar: "String" }, sort_order: { scalar: "Float" },
+    stage: { kind: "relation", identityPath: "stage.id", labelPath: "stage.name" },
+    customer: { kind: "relation", identityPath: "customer.id", labelPath: "customer.name" },
+  } }).contract;
+  leadQuery.fields.stage!.relation = { model: "crm.Stage", identityPath: "stage.id", labelPath: "stage.name" };
+  leadQuery.fields.customer!.relation = { model: "crm.Customer", identityPath: "customer.id", labelPath: "customer.name" };
+  leadQuery.axes.stage!.server = { input: "stage", key: "stage" };
   return schemaFieldMetadataFromDataResources([
     {
       schemaName: "console",
       modelLabel: "crm.Lead",
       appLabel: "crm",
       modelName: "lead",
-      publicIdField: "sqid",
-      roots: { list: "crmLeads", update: "updateCrmLead" },
-      typeNames: { node: "LeadType" },
+      roots: { list: "crmLeads", aggregate: "crmLeads_aggregate", update: "updateCrmLead" },
+      typeNames: { node: "LeadType", filter: "LeadBoolExp", order: "LeadOrderBy" },
       recordRepresentation: "name",
       capabilities: ["list", "update"],
       fields: [
@@ -528,7 +534,6 @@ function leadMetadata(
           kind: "relation",
           relationModelLabel: "crm.Stage",
           relationObject: true,
-          groupable: true,
           nullable: stageNullable,
           updatable: stageWritable,
         }),
@@ -538,29 +543,15 @@ function leadMetadata(
           relationObject: true,
         }),
       ],
-      filterFields: ["id", "name", "stage"],
-      orderFields: ["name"],
+      query: leadQuery,
       aggregateFields: ["id"],
-      groupByFields: ["stage"],
-      updateFields: stageWritable
-        ? ["name", "stage", "sort_order"]
-        : ["name", "sort_order"],
-      groupDimensions: [{ field: "stage", input: "stage", key: "stage", kind: "relation" }],
-      relationAxes: [
-        {
-          field: "stage",
-          modelLabel: "crm.Stage",
-          publicIdField: "sqid",
-          labelAxis: "stage__name",
-        },
-      ],
+      updateFields: stageWritable ? ["name", "stage", "sort_order"] : ["name", "sort_order"],
     },
     {
       schemaName: "console",
       modelLabel: "crm.Stage",
       appLabel: "crm",
       modelName: "stage",
-      publicIdField: "sqid",
       roots: { list: "crmStages" },
       typeNames: { node: "StageType" },
       recordRepresentation: "name",
@@ -571,18 +562,14 @@ function leadMetadata(
         field("code", { scalar: "String" }),
         field("fold", { scalar: "Boolean", updatable: false }),
       ],
-      filterFields: ["id", "name", "code"],
-      orderFields: ["position", "id"],
+      query: ResourceQuery.forRows({ fields: { id: { scalar: "ID" }, name: { scalar: "String" }, code: { scalar: "String" }, fold: { scalar: "Boolean" }, position: { scalar: "Int" }, pipeline: { scalar: "ID" } } }).contract,
       aggregateFields: ["id"],
-      groupByFields: [],
-      relationAxes: [],
     },
     {
       schemaName: "console",
       modelLabel: "crm.Customer",
       appLabel: "crm",
       modelName: "customer",
-      publicIdField: "sqid",
       roots: { list: "crmCustomers" },
       typeNames: { node: "CustomerType" },
       recordRepresentation: "name",
@@ -591,11 +578,8 @@ function leadMetadata(
         field("id", { scalar: "ID", updatable: false }),
         field("name", { scalar: "String" }),
       ],
-      filterFields: ["id", "name"],
-      orderFields: ["name"],
+      query: ResourceQuery.forRows({ fields: { id: { scalar: "ID" }, name: { scalar: "String" } } }).contract,
       aggregateFields: ["id"],
-      groupByFields: [],
-      relationAxes: [],
     },
   ]);
 }
@@ -607,7 +591,6 @@ function field(
     scalar: string;
     relationModelLabel: string;
     relationObject: boolean;
-    groupable: boolean;
     nullable: boolean;
     updatable: boolean;
   }> = {},
@@ -624,10 +607,7 @@ function field(
       ? { relationObject: overrides.relationObject }
       : {}),
     readable: true,
-    filterable: true,
-    sortable: false,
     aggregatable: name === "id",
-    groupable: overrides.groupable ?? false,
     nullable: overrides.nullable ?? false,
     creatable: true,
     updatable: overrides.updatable ?? true,

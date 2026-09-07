@@ -91,7 +91,7 @@ class AngeeSchema(strawberry.Schema):
             if error.path is None and isinstance(error.original_error, GraphQLError):
                 # graphql-core's request coercion errors echo submitted values.
                 # Preserve them for the client without passing them to logging.
-                error.extensions = {"code": "BAD_USER_INPUT"}
+                error.extensions = {"code": (error.extensions or {}).get("code", "BAD_USER_INPUT")}
                 continue
             self._apply_rebac_code(error)
             self._apply_validation_error(error)

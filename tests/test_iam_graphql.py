@@ -1362,7 +1362,7 @@ def test_external_account_final_metadata_owns_enum_and_relation_axis() -> None:
     resources = {item.model_label: item for item in _schema("console").angee_resources}
     external_account = resources[ExternalAccount._meta.label]
     fields = {field.name: field for field in external_account.fields}
-    axes = {axis.field: axis for axis in external_account.relation_axes}
+    axes = external_account.query.axes
 
     assert fields["status"].kind == "enum"
     assert [(value.value, value.description) for value in fields["status"].values] == [
@@ -1370,8 +1370,8 @@ def test_external_account_final_metadata_owns_enum_and_relation_axis() -> None:
         ("EXPIRED", "Expired"),
         ("REVOKED", "Revoked"),
     ]
-    assert axes["oauth_client"].model_label == OAuthClient._meta.label
-    assert axes["oauth_client"].label_axis == "oauth_client__display_name"
+    assert external_account.query.fields["oauth_client"].relation.model == OAuthClient._meta.label
+    assert axes["oauth_client"].server.label_key == "oauth_client__display_name"
 
 
 def test_scalar_id_to_one_relation_preserves_django_relation_semantics() -> None:

@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@angee/app": "workspace:*",
+    "@angee/metadata": "workspace:*",
     "@angee/refine": "workspace:*",
     "@angee/ui": "workspace:*",
     "graphql-ws": "^5.16.2",

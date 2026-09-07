@@ -1,9 +1,10 @@
 import { format } from "date-fns";
 import { stableSerialize } from "@angee/refine";
-import { dedupeBy } from "../../../lib/dedupe";
-import { CALENDAR_ANCHOR_FORMAT, defaultResourceViewPageSize, CALENDAR_VIEW_MODES, RESOURCE_VIEW_GROUP_GRANULARITIES, RESOURCE_VIEW_KINDS } from "./capabilities";
-import type { CalendarViewMode, ResourceViewGroupGranularity, ResourceViewKind } from "./capabilities";
-import { Filter, resourceViewFilterFromUnknown } from "./filter";
+import { CALENDAR_ANCHOR_FORMAT, defaultResourceViewPageSize, CALENDAR_VIEW_MODES, RESOURCE_VIEW_KINDS } from "./capabilities";
+import type { CalendarViewMode, ResourceViewKind } from "./capabilities";
+import { Filter, isResourceViewFilter } from "./filter";
+import { QueryParseError, GroupSpecsSchema } from "@angee/metadata";
+import * as v from "valibot";
 import type { ResourceViewFilter, ResourceViewGroup, ResourceViewInitialState, ResourceViewSort } from "./filter";
 import { createResourceViewState, type ResourceViewState } from "./state";
 import { normalisePageSize } from "../page-size";
@@ -64,39 +65,41 @@ export function resourceViewSearchToState(
   initial: ResourceViewInitialState = {},
 ): ResourceViewState {
   const base = createResourceViewState(initial);
-  const sort = parseSearchSort(search.sort);
-  const group = parseSearchGroup(search.group);
-  const then = parseSearchGroupStack(search.then);
-  const thenCleared = isClearedSearchValue(search.then);
-  const groupStack = isClearedSearchValue(search.group)
-    ? []
-    : group || then || thenCleared
-      ? normaliseGroupStack([...(group ? [group] : []), ...(thenCleared ? [] : (then ?? []))])
-      : base.groupStack;
-  const page = parseSearchInteger(search.page);
-  return {
-    ...base,
-    pagination: {
-      pageIndex: page === null ? base.pagination.pageIndex : Math.max(0, Math.floor(page) - 1),
-      pageSize: normalisePageSize(parseSearchInteger(search.pageSize) ?? base.pagination.pageSize),
-    },
-    sorting: isClearedSearchValue(search.sort) ? [] : sort ? [{ id: sort.field, desc: sort.dir === "desc" }] : base.sorting,
-    filter: isClearedSearchValue(search.filter) ? {} : parseSearchFilter(search.filter) ?? base.filter,
-    group: groupStack[0] ?? null,
-    groupStack,
-    view: parseSearchView(search.view) ?? base.view,
-    mode: parseSearchMode(search.mode) ?? base.mode,
-    anchor: parseSearchAnchor(search.anchor) ?? base.anchor,
-  };
+  try {
+    const sort = parseSearchSort(search.sort);
+    const group = parseSearchGroup(search.group);
+    const then = parseSearchGroupStack(search.then);
+    const thenCleared = isClearedSearchValue(search.then);
+    const groupStack = isClearedSearchValue(search.group)
+      ? []
+      : group || then || thenCleared
+        ? normaliseGroupStack([...(group ? [group] : []), ...(thenCleared ? [] : (then ?? []))])
+        : base.groupStack;
+    const page = parseSearchInteger(search.page);
+    return {
+      ...base,
+      pagination: {
+        pageIndex: page === null ? base.pagination.pageIndex : Math.max(0, Math.floor(page) - 1),
+        pageSize: normalisePageSize(parseSearchInteger(search.pageSize) ?? base.pagination.pageSize),
+      },
+      sorting: isClearedSearchValue(search.sort) ? [] : sort ? [{ id: sort.field, desc: sort.dir === "desc" }] : base.sorting,
+      filter: isClearedSearchValue(search.filter) ? {} : parseSearchFilter(search.filter) ?? base.filter,
+      group: groupStack[0] ?? null,
+      groupStack,
+      view: parseSearchView(search.view) ?? base.view,
+      mode: parseSearchMode(search.mode) ?? base.mode,
+      anchor: parseSearchAnchor(search.anchor) ?? base.anchor,
+    };
+  } catch (error) {
+    return { ...base, queryError: error instanceof Error ? error : new QueryParseError("query", "invalid query state") };
+  }
 }
 
-export function normaliseGroupStack(groups: readonly ResourceViewGroup[]): readonly ResourceViewGroup[] {
-  return dedupeBy(groups.map((group) => ({
-    field: group.field,
-    ...(group.aggregateField ? { aggregateField: group.aggregateField } : {}),
-    ...(group.aggregateKey ? { aggregateKey: group.aggregateKey } : {}),
-    ...(group.granularity ? { granularity: group.granularity } : {}),
-  })), serializeResourceViewGroup);
+export function normaliseGroupStack(groups: unknown): readonly ResourceViewGroup[] {
+  const parsed = v.parse(GroupSpecsSchema, groups);
+  const keys = parsed.map(serializeResourceViewGroup);
+  if (new Set(keys).size !== keys.length) throw new QueryParseError("groups", "duplicate group axis");
+  return parsed;
 }
 
 export function mergeResourceViewSearch(
@@ -129,28 +132,32 @@ export function isClearedSearchValue(value: unknown): boolean {
 }
 
 export function parseSearchSort(value: unknown): ResourceViewSort | null {
-  if (typeof value !== "string") return null;
+  if (value == null) return null;
+  if (typeof value !== "string") throw new QueryParseError("sort", "expected a string");
   return parseResourceViewSort(value);
 }
 
 export function parseSearchFilter(value: unknown): ResourceViewFilter | null {
-  if (typeof value !== "string" || value === "") return null;
-  try {
-    return resourceViewFilterFromUnknown(JSON.parse(value));
-  } catch {
-    return null;
-  }
+  if (value == null || value === "") return null;
+  if (typeof value !== "string") throw new QueryParseError("filter", "expected JSON text");
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); }
+  catch { throw new QueryParseError("filter", "expected valid JSON"); }
+  if (!isResourceViewFilter(parsed)) throw new QueryParseError("filter", "expected a filter object");
+  return parsed;
 }
 
 export function parseSearchGroup(value: unknown): ResourceViewGroup | null {
-  if (typeof value !== "string") return null;
+  if (value == null) return null;
+  if (typeof value !== "string") throw new QueryParseError("group", "expected a string");
   return parseResourceViewGroup(value);
 }
 
 export function parseSearchGroupStack(
   value: unknown,
 ): readonly ResourceViewGroup[] | null {
-  if (typeof value !== "string") return null;
+  if (value == null) return null;
+  if (typeof value !== "string") throw new QueryParseError("then", "expected a string");
   return parseResourceViewGroupStack(value);
 }
 
@@ -179,8 +186,8 @@ export function todayCalendarAnchor(): string {
 
 function parseResourceViewSort(value: string): ResourceViewSort | null {
   const [field, dir, extra] = value.split(":");
-  if (!field || extra !== undefined) return null;
-  if (dir !== "asc" && dir !== "desc") return null;
+  if (!value) return null;
+  if (!field || extra !== undefined || (dir !== "asc" && dir !== "desc")) throw new QueryParseError("sort", "expected field:asc or field:desc");
   return { field, dir };
 }
 
@@ -189,51 +196,22 @@ export function serializeResourceViewSort(sort: ResourceViewSort): string {
 }
 
 function parseResourceViewGroup(value: string): ResourceViewGroup | null {
-  const [fieldPart, granularity, extra] = value.split(":");
-  if (!fieldPart || extra !== undefined) return null;
-  const group = parseResourceViewGroupFields(fieldPart);
-  if (!group) return null;
-  const { field, aggregateField, aggregateKey } = group;
-  if (granularity === undefined || granularity === "") {
-    return {
-      field,
-      ...(aggregateField ? { aggregateField } : {}),
-      ...(aggregateKey ? { aggregateKey } : {}),
-    };
+  if (!value) return null;
+  const [field, granularity, extra] = value.split(":");
+  if (!field || !/^[_A-Za-z][_0-9A-Za-z]*(?:\.[_A-Za-z][_0-9A-Za-z]*)*$/.test(field) || extra !== undefined || granularity === "") {
+    throw new QueryParseError("group", "expected field or field:granularity");
   }
-  if (!isGroupGranularity(granularity)) return null;
-  return {
-    field,
-    ...(aggregateField ? { aggregateField } : {}),
-    ...(aggregateKey ? { aggregateKey } : {}),
-    granularity,
-  };
-}
-
-function parseResourceViewGroupFields(value: string): Pick<
-  ResourceViewGroup,
-  "field" | "aggregateField" | "aggregateKey"
-> | null {
-  const parts = value.split("~");
-  if (parts.length === 1) return parts[0] ? { field: parts[0] } : null;
-  const [field, aggregateField, aggregateKey, extra] = parts;
-  if (!field || !aggregateField || !aggregateKey || extra !== undefined) {
-    return null;
-  }
-  return { field, aggregateField, aggregateKey };
+  return { field, ...(granularity ? { granularity } : {}) };
 }
 
 export function serializeResourceViewGroup(group: ResourceViewGroup): string {
-  const field = group.aggregateField || group.aggregateKey
-    ? `${group.field}~${group.aggregateField ?? group.field}~${group.aggregateKey ?? group.field}`
-    : group.field;
-  return group.granularity ? `${field}:${group.granularity}` : field;
+  return group.granularity ? `${group.field}:${group.granularity}` : group.field;
 }
 
 function parseResourceViewGroupStack(value: string): readonly ResourceViewGroup[] | null {
   if (!value) return [];
   const groups = value.split(",").map(parseResourceViewGroup);
-  if (groups.some((group) => group === null)) return null;
+  if (groups.some((group) => group === null)) throw new QueryParseError("then", "expected a comma-separated group stack");
   return normaliseGroupStack(groups as ResourceViewGroup[]);
 }
 
@@ -248,15 +226,7 @@ export function resourceViewGroupsEqual(
   right: ResourceViewGroup,
 ): boolean {
   return left.field === right.field
-    && left.aggregateField === right.aggregateField
-    && left.aggregateKey === right.aggregateKey
     && left.granularity === right.granularity;
-}
-
-function isGroupGranularity(value: string): value is ResourceViewGroupGranularity {
-  return RESOURCE_VIEW_GROUP_GRANULARITIES.includes(
-    value as ResourceViewGroupGranularity,
-  );
 }
 
 function isResourceViewKind(value: string): value is ResourceViewKind {

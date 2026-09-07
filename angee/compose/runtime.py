@@ -177,7 +177,7 @@ class Runtime:
         if tree.drift():
             self._emit(tree)
         dependency_result = self.addon_dependency_group.write()
-        self.runtime_migrations().materialize()
+        self.runtime_migrations().materialize(apps=apps)
         return dependency_result
 
     def import_generated_models(self) -> None:

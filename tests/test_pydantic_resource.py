@@ -51,7 +51,7 @@ def test_pydantic_resource_metadata_is_hasura_backed() -> None:
     assert meta.roots.list_name == "platform_addons"  # frontend -> useList
     assert meta.roots.aggregate_name == "platform_addons_aggregate"
     # The advertised identity field matches the by-pk addressing column.
-    assert meta.public_id_field == "id"
+    assert meta.query.identity.field == "id"
 
 
 def test_pydantic_resource_list_filter_sort_count() -> None:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import dataclasses
 import enum
-import json
 import warnings
 from collections.abc import Iterator
 from decimal import Decimal
@@ -23,8 +22,8 @@ from strawberry_django_hasura import hasura_config
 from angee.base.models import AngeeDataModel
 from angee.data.metadata import (
     DataAggregateMeasureMetadata,
-    DataGroupBucketFilterMetadata,
-    DataGroupDimensionMetadata,
+    DataQueryDrill,
+    DataQueryServerAxis,
     DataResourceFieldMetadata,
     DataResourceRoots,
     DataResourceSubtitleMetadata,
@@ -33,7 +32,7 @@ from angee.data.metadata import (
 from angee.graphql.data import hasura_model_resource, public_pk_decoder
 from angee.graphql.data import metadata as metadata_module
 from angee.graphql.data.hasura import (
-    _hasura_group_dimensions,
+    _hasura_query_axes,
     _measure_ops_for_field,
     _relation_filter_decoders,
     _relation_group_key_encoders,
@@ -391,13 +390,13 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
         "update",
         "delete",
     )
-    assert metadata.filter_fields == ("id", "name", "word_count")
-    assert metadata.order_fields == ("word_count", "name")
+    assert {name for name, field in metadata.query.fields.items() if field.filter} == {"id", "word_count", "name"}
+    assert {name for name, field in metadata.query.fields.items() if field.sort} == {"word_count", "name"}
     assert metadata.aggregate_fields == ("id", "word_count")
-    assert metadata.group_by_fields == ("name",)
-    assert metadata.group_dimensions[0].field == "name"
-    assert metadata.group_dimensions[0].input == "NAME"
-    assert metadata.group_dimensions[0].key == "name"
+    assert set(metadata.query.axes) == {"name"}
+    assert next(iter(metadata.query.axes.values())).field == "name"
+    assert next(iter(metadata.query.axes.values())).server.input == "NAME"
+    assert next(iter(metadata.query.axes.values())).server.key == "name"
     assert metadata.aggregate_measures == (
         DataAggregateMeasureMetadata(op="sum", field="word_count", input="word_count"),
         DataAggregateMeasureMetadata(op="avg", field="word_count", input="word_count"),
@@ -405,7 +404,7 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
         DataAggregateMeasureMetadata(op="max", field="word_count", input="word_count"),
     )
     assert metadata.default_measures[0].op == "count"
-    assert [(sort.field, sort.direction) for sort in metadata.default_sort] == [
+    assert [(sort.field, sort.direction) for sort in metadata.query.sort.default] == [
         ("word_count", "DESC"),
         ("name", "ASC"),
     ]
@@ -417,8 +416,8 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
         updated="updated_at",
         word_count="word_count",
     )
-    assert fields["word_count"].filterable is True
-    assert fields["word_count"].sortable is True
+    assert metadata.query.fields["word_count"].filter is not None
+    assert metadata.query.fields["word_count"].sort is not None
     assert fields["word_count"].aggregatable is True
     assert fields["word_count"].creatable is True
     assert fields["word_count"].updatable is True
@@ -634,14 +633,15 @@ def test_final_metadata_includes_only_allowlisted_input_only_fields() -> None:
             )
         ]
     ).build("public")
-    fields = {field.name: field for field in schema.angee_resources[0].fields}
+    metadata = schema.angee_resources[0]
+    fields = {field.name: field for field in metadata.fields}
 
     assert fields["name"].readable is True
     assert fields["word_count"].readable is False
-    assert fields["word_count"].filterable is True
-    assert fields["word_count"].sortable is True
+    assert metadata.query.fields["word_count"].filter is not None
+    assert metadata.query.fields["word_count"].sort is not None
     assert fields["word_count"].aggregatable is True
-    assert fields["word_count"].groupable is True
+    assert "word_count" in metadata.query.axes
     assert fields["word_count"].creatable is True
     assert fields["word_count"].updatable is True
     assert metadata_module.readable_model_field_names(schema.angee_resources[0]) == frozenset({"id", "name"})
@@ -686,15 +686,15 @@ def test_final_scalar_id_fk_keeps_django_relation_semantics() -> None:
     metadata = schema.angee_resources[0]
     parent = {field.name: field for field in metadata.fields}["owner"]
 
-    assert metadata.public_id_field == "id"
-    assert metadata.relation_axes[0].public_id_field == "sqid"
+    assert metadata.query.identity.field == "id"
+    assert metadata.query.fields["owner"].relation.identity_path == "owner"
     assert parent.kind == "relation"
     assert parent.scalar is None
     assert parent.widget == "many2one"
     assert parent.relation_model_label == "tests.ResourceParent"
     assert parent.relation_object is False
-    assert metadata.relation_axes[0].field == "owner"
-    assert metadata.relation_axes[0].label_axis == "owner__name"
+    assert metadata.query.axes["owner"].field == "owner"
+    assert metadata.query.axes["owner"].server.label_key == "parent__name"
 
 
 def test_final_custom_public_id_alias_is_metadata_identity() -> None:
@@ -724,9 +724,9 @@ def test_final_custom_public_id_alias_is_metadata_identity() -> None:
     ).build("public")
     metadata = schema.angee_resources[0]
 
-    assert metadata.public_id_field == "public_key"
+    assert metadata.query.identity.field == "public_key"
     node = schema._schema.get_type(metadata.type_names.node)
-    assert metadata.public_id_field in node.fields
+    assert metadata.query.identity.field in node.fields
 
 
 def test_readable_resource_rejects_absent_final_public_identity() -> None:
@@ -804,8 +804,8 @@ def test_final_alias_keeps_model_source_for_readable_publisher_fields() -> None:
     display_name = {field.name: field for field in metadata.fields}["display_name"]
 
     assert display_name.model_field_name == "name"
-    assert metadata.filter_fields == ("id", "name")
-    assert metadata.order_fields == ("name",)
+    assert {name for name, field in metadata.query.fields.items() if field.filter} == {"id", "display_name"}
+    assert {name for name, field in metadata.query.fields.items() if field.sort} == {"display_name"}
     assert metadata_module.readable_model_field_names(metadata) >= {"name"}
 
 
@@ -884,41 +884,26 @@ def test_hasura_nested_relation_group_dimension_matches_group_key_contract() -> 
         ]
     ).build("public")
     metadata = schema.angee_resources[0]
-    nested = {dimension.field: dimension for dimension in metadata.group_dimensions}["child__parent"]
+    nested = metadata.query.axes["child.parent"]
     group_key = schema._schema.get_type(metadata.type_names.group_key)
 
-    assert nested == DataGroupDimensionMetadata(
-        field="child__parent",
-        input="CHILD__PARENT",
-        key="child__parent_id",
-        kind="relation",
-        scalar="ID",
-        filter=DataGroupBucketFilterMetadata(
-            kind="equality",
-            field="child__parent",
-            value_key="child__parent_id",
-            lookup="sqid",
-        ),
-    )
+    assert nested.field == "child.parent"
+    assert nested.kind == "relation"
+    assert nested.server == DataQueryServerAxis(input="CHILD__PARENT", key="child__parent_id")
+    assert nested.drill == DataQueryDrill(kind="identity", field="child.parent", value_key="child__parent_id")
     assert group_key is not None
-    assert nested.key in group_key.fields  # type: ignore[attr-defined]
+    assert nested.server.key in group_key.fields  # type: ignore[attr-defined]
     # The relation label fallback resolves the related model's preferred
     # display column even without a node surface (donor/scalar-id axes).
-    assert metadata.relation_axes[0].label_axis == "child__name"
+    assert metadata.query.axes["child"].server.label_key == "child__name"
 
 
-def test_hasura_single_level_relation_group_metadata_is_byte_identical() -> None:
-    """The established direct-FK dimension payload stays byte-identical."""
+def test_hasura_relation_axis_has_one_server_identity_and_drill() -> None:
+    """One axis carries the aggregate alias and public-ID drill intent."""
 
-    dimension = _hasura_group_dimensions(ResourceChild, ("parent",), ("parent",))[0]
-    payload = json.dumps(dataclasses.asdict(dimension), separators=(",", ":"), sort_keys=True).encode()
-
-    assert payload == (
-        b'{"extractions":[],"field":"parent","filter":{"field":"parent","kind":"equality",'
-        b'"lookup":"sqid","null_lookup":"isNull","range_key":null,"value_key":"parent_id",'
-        b'"value_map":[],"value_transform":null},"input":"PARENT","key":"parent_id",'
-        b'"kind":"relation","scalar":"ID"}'
-    )
+    axis = _hasura_query_axes(ResourceChild, ("parent",), ("parent",))[0]
+    assert axis.server == DataQueryServerAxis(input="PARENT", key="parent_id")
+    assert axis.drill == DataQueryDrill(kind="identity", field="parent", value_key="parent_id")
 
 
 def test_hasura_model_resource_groups_json_path_axes() -> None:
@@ -965,23 +950,12 @@ def test_hasura_model_resource_groups_json_path_axes() -> None:
     ).build("public")
     metadata = schema.angee_resources[0]
 
-    assert metadata.group_by_fields == ("metadata.mailbox",)
-    assert metadata.group_dimensions == (
-        DataGroupDimensionMetadata(
-            field="metadata.mailbox",
-            input="METADATA__MAILBOX",
-            key="metadata__mailbox",
-            kind="json",
-            filter=DataGroupBucketFilterMetadata(
-                kind="equality",
-                field="metadata",
-                value_key="metadata__mailbox",
-                lookup="jsonContains",
-                null_lookup=None,
-                value_transform="jsonObject:mailbox",
-            ),
-        ),
-    )
+    assert set(metadata.query.axes) == {"metadata.mailbox"}
+    axis = metadata.query.axes["metadata.mailbox"]
+    assert axis.kind == "json"
+    assert axis.server == DataQueryServerAxis(input="METADATA__MAILBOX", key="metadata__mailbox")
+    assert axis.drill is None  # The JSON root is not filterable on this surface.
+    assert axis.identity_path is None  # Nor is the JSON root selectable.
     assert "METADATA__MAILBOX" in schema.as_str()
     assert "metadata__mailbox: String" in schema.as_str()
 
@@ -1161,10 +1135,7 @@ def test_data_resource_metadata_rejects_duplicate_field_metadata() -> None:
                     name="name",
                     kind="scalar",
                     readable=True,
-                    filterable=False,
-                    sortable=False,
                     aggregatable=False,
-                    groupable=False,
                     creatable=False,
                     updatable=False,
                     required_on_create=False,
@@ -1173,10 +1144,7 @@ def test_data_resource_metadata_rejects_duplicate_field_metadata() -> None:
                     name="name",
                     kind="scalar",
                     readable=True,
-                    filterable=False,
-                    sortable=False,
                     aggregatable=False,
-                    groupable=False,
                     creatable=False,
                     updatable=False,
                     required_on_create=False,
@@ -1232,7 +1200,7 @@ def test_data_resource_metadata_marks_public_id_field_as_id_scalar() -> None:
     )
     fields = {field.name: field for field in resource.fields}
 
-    assert resource.public_id_field == "id"
+    assert resource.query.identity.field == "id"
     assert fields["id"].kind == "scalar"
     assert fields["id"].scalar == "ID"
     assert fields["id"].widget is None
@@ -1356,7 +1324,7 @@ def test_data_resource_metadata_marks_plain_relation_targets() -> None:
     assert fields["parent"].kind == "relation"
     assert fields["parent"].widget == "many2one"
     assert fields["parent"].relation_model_label == "tests.ResourceParent"
-    assert fields["parent"].relation_label_axis is None
+    assert resource.query.fields["parent"].relation.identity_path is None
 
 
 @pytest.mark.parametrize(

@@ -49,7 +49,7 @@ import {
 import {
   type SchemaFieldMetadata,
 } from "@angee/metadata";
-import { withTestResourceInventory } from "@angee/metadata/testing";
+import { withTestResourceInventory, testResourceQuery, testQueryField } from "@angee/metadata/testing";
 
 import { baseIcons } from "@angee/ui/chrome/icon-registry";
 import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
@@ -98,8 +98,6 @@ vi.mock("@refinedev/core", async (importOriginal) => {
     useInvalidate: () => vi.fn(async () => undefined),
   };
 });
-
-
 
 const columns = [
   { field: "title", header: "Title" },
@@ -332,11 +330,14 @@ function NoDeleteMetadata({ children }: { children: ReactNode }): ReactElement {
               title: { name: "title", kind: "scalar", scalar: "String" },
             },
             resource: {
+              query: testResourceQuery({ identity: { field: "id" }, fields: { "title": testQueryField("title", { scalar: "String", kind: "scalar", filter: null, sort: { field: "title" } }),
+                      "id": testQueryField("id", { scalar: "ID", filter: null }) }, axes: {}, sort: { default: [] } }),
+
               schemaName: "console",
               modelLabel: "sales.Sale",
               appLabel: "sales",
               modelName: "Sale",
-              publicIdField: "id",
+
               roots: {
                 list: "sales",
                 detail: "sale",
@@ -349,11 +350,9 @@ function NoDeleteMetadata({ children }: { children: ReactNode }): ReactElement {
                 aggregate: "SaleAggregate",
               },
               capabilities: ["list", "aggregate"],
-              filterFields: [],
-              orderFields: ["title"],
+
               aggregateFields: ["id"],
-              groupByFields: [],
-              relationAxes: [],
+
             },
           },
         },
@@ -371,11 +370,14 @@ const SALE_METADATA: SchemaFieldMetadata = withTestResourceInventory({
         title: { name: "title", kind: "scalar", scalar: "String" },
       },
       resource: {
+        query: testResourceQuery({ identity: { field: "id" }, fields: { "title": testQueryField("title", { scalar: "String", kind: "scalar", filter: null, sort: { field: "title" } }),
+                "id": testQueryField("id", { scalar: "ID", filter: null }) }, axes: {}, sort: { default: [] } }),
+
         schemaName: "console",
         modelLabel: "sales.Sale",
         appLabel: "sales",
         modelName: "Sale",
-        publicIdField: "id",
+
         roots: {
           list: "sales",
           detail: "sale",
@@ -391,11 +393,9 @@ const SALE_METADATA: SchemaFieldMetadata = withTestResourceInventory({
           deletePayload: "SaleDeletePreview",
         },
         capabilities: ["list", "aggregate", "delete"],
-        filterFields: [],
-        orderFields: ["title"],
+
         aggregateFields: ["id"],
-        groupByFields: [],
-        relationAxes: [],
+
       },
     },
   },

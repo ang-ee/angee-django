@@ -1,5 +1,4 @@
-import { rowPublicId, type DataResourceDefaultSortMetadata, type ModelMetadata, type Row } from "@angee/metadata";
-import { refineSortersFromAngeeOrder } from "@angee/refine";
+import { isClientRowModel, rowPublicId, type DataResourceMetadata, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import type {
   GroupingState,
   Row as TableRowModel,
@@ -10,6 +9,7 @@ import type {
 import type { ColumnDescriptor } from "../page";
 import {
   groupedRowLabel,
+  tableGroupAxes,
   type RowGroup,
 } from "./resource-view-list-body";
 import type {
@@ -17,6 +17,7 @@ import type {
   ResourceViewGroup,
 } from "./resource-view-model";
 import type { UiTranslate } from "../../i18n";
+import { queryForColumns } from "./resource-query";
 
 interface LaneFieldSource {
   field: string;
@@ -29,6 +30,7 @@ export function requestedFieldPaths<TRow extends Row>(
   extraFields: readonly string[] | undefined,
   modelMetadata: ModelMetadata | null | undefined,
   laneSource: LaneFieldSource | null | undefined = null,
+  groups: readonly ResourceViewGroup[] = [],
 ): readonly string[] {
   // Render-only columns are not real GraphQL fields. When metadata is present,
   // keep only paths whose head belongs to the resource.
@@ -37,35 +39,40 @@ export function requestedFieldPaths<TRow extends Row>(
     known && known.length > 0
       ? new Set(known.map((field) => field.name))
       : null;
-  const paths = new Set<string>(["id"]);
+  const query = queryForColumns(columns, modelMetadata, groups);
+  const paths = new Set<string>([query.contract.identity.field]);
   for (const column of columns) {
-    for (const path of column.selectionPaths ?? [column.field]) {
+    const selections = column.selectionPaths ?? query.fields[column.field]?.row?.paths ?? [column.field];
+    for (const path of selections) {
       const head = path.split(".", 1)[0] ?? path;
       if (knownNames === null || knownNames.has(head)) paths.add(path);
     }
   }
   for (const extra of extraFields ?? []) paths.add(extra);
-  if (laneSource) {
-    paths.add(
-      laneSource.fieldMetadata.relationObject === true
-        ? `${laneSource.field}.id`
-        : laneSource.field,
-    );
-    if (laneSource.rankField) paths.add(laneSource.rankField);
+  const requiredGroups = laneSource && !groups.some((group) => group.field === laneSource.field)
+    ? [...groups, { field: laneSource.field }] : groups;
+  for (const axis of tableGroupAxes(requiredGroups, modelMetadata, columns)) {
+    // Server summary axes may have no row projection. Their declared paths are
+    // sufficient here; client grouping validates its identity when it is used.
+    for (const path of axis.declaration.paths) paths.add(path);
+  }
+  if (laneSource?.rankField) paths.add(laneSource.rankField);
+  if (modelMetadata && isClientRowModel(modelMetadata.resource)) {
+    for (const path of query.clientSelection()) paths.add(path);
   }
   return [...paths];
 }
 
-export function modelRowId<TRow extends Row>(row: TRow, index: number): string {
-  return rowPublicId(row) ?? String(index);
+export function modelRowId<TRow extends Row>(row: TRow, index: number, resource?: Pick<DataResourceMetadata, "query"> | null): string {
+  return rowPublicId(row, resource) ?? String(index);
 }
 
 export function defaultResourceOrder(
   modelMetadata: ModelMetadata | null | undefined,
 ): ResourceListOrder | undefined {
-  const sorts = modelMetadata?.resource?.defaultSort;
+  const sorts = modelMetadata?.resource.query.sort.default;
   if (!sorts?.length) return undefined;
-  return Object.fromEntries(sorts.map((sort) => [sort.field, defaultSortDirection(sort)]));
+  return Object.fromEntries(sorts.map((sort) => [sort.field, sort.direction]));
 }
 
 /** Seed the native initial sorting at a declaring list's provider boundary. */
@@ -74,24 +81,18 @@ export function initialResourceSorting(
   order?: ResourceListOrder,
 ): SortingState | undefined {
   const declared = order ?? defaultResourceOrder(modelMetadata);
-  return declared === undefined ? undefined
-    : (refineSortersFromAngeeOrder(declared) ?? []).map(({ field, order }) => ({ id: field, desc: order === "desc" }));
+  if (declared === undefined) return undefined;
+  const query = queryForColumns(Object.keys(declared).map((field) => ({ field })), modelMetadata);
+  return query.sortFrom(declared).map(({ field, direction }) => ({ id: field, desc: direction === "DESC" }));
 }
 
-function defaultSortDirection(
-  sort: DataResourceDefaultSortMetadata,
-): "ASC" | "DESC" {
-  return sort.direction.toUpperCase() === "DESC" ? "DESC" : "ASC";
-}
-
-export function stringRowId<TRow extends Row & { id: string }>(row: TRow): string {
-  return row.id;
-}
-
-export function groupingStateFromResourceGroups(
+export function groupingStateFromResourceGroups<TRow extends object>(
   groupStack: readonly ResourceViewGroup[],
+  metadata?: ModelMetadata | null,
+  columns: readonly ColumnDescriptor<TRow>[] = [],
+  query?: ResourceQuery,
 ): GroupingState {
-  return groupStack.map((group) => group.field);
+  return tableGroupAxes(groupStack, metadata, columns, query).map((axis) => axis.id);
 }
 
 export function idsFromRowSelectionState(

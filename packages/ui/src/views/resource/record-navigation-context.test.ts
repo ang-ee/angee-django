@@ -1,7 +1,17 @@
 import { expect, test } from "vitest";
-import { testDataResource } from "@angee/metadata/testing";
+import { testDataResource, testResourceQuery } from "@angee/metadata/testing";
 import { parseRecordNavigationScope, recordNavigationHref, recordNavigationSearch } from "./record-navigation-context";
-const resource = testDataResource("notes.Note");
+const resource = testDataResource("notes.Note", {
+  roots: { aggregate: "notes_aggregate" },
+  typeNames: { filter: "NoteBoolExp", order: "NoteOrderBy" },
+  query: testResourceQuery({ fields: {
+    id: { kind: "scalar", scalar: "ID", values: [], nullable: false },
+    title: { kind: "scalar", scalar: "String", values: [], nullable: true, filter: { field: "title", scalar: "String", values: [], operators: ["exact", "iContains"] } },
+    status: { kind: "scalar", scalar: "String", values: [], nullable: true, filter: { field: "status", scalar: "String", values: [], operators: ["exact"] } },
+    updated_at: { kind: "scalar", scalar: "DateTime", values: [], nullable: true, filter: { field: "updated_at", scalar: "DateTime", values: [], operators: ["gte", "lt"] }, sort: { field: "updated_at" } },
+    "author.display_name": { kind: "scalar", scalar: "String", values: [], nullable: true, sort: { field: "author.display_name" } },
+  } }),
+});
 import type { ListViewNavigationScope } from "./resource-view-surface";
 const scope: ListViewNavigationScope = { filter: { AND: [{ title: { iContains: "draft" } }, { updated_at: { gte: "2026-09-01", lt: "2026-10-01" } }] }, order: { updated_at: "DESC" }, page: 2, pageSize: 20 };
 
@@ -22,7 +32,7 @@ test("portable context keeps parent query and clicked leaf facts, without record
 
 test.each([
   { ...scope, page: 0 }, { ...scope, pageSize: 101 }, { ...scope, page: Number.MAX_SAFE_INTEGER + 1 },
-  { ...scope, filter: [] }, { ...scope, filter: { NOT: { status: { exact: "hidden" } } } },
+  { ...scope, filter: [] }, { ...scope, filter: { NOT: { absent: { exact: "hidden" } } } },
   { ...scope, filter: { title: { mystery: "ignored" } } }, { ...scope, order: { updated_at: "sideways" } },
   { ...scope, order: { author: { name: "ASC" } } }, { ...scope, rows: [{ id: "hidden" }] },
 ])("rejects invalid or unsupported complete context: %j", (invalid) => {

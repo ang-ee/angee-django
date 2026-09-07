@@ -84,10 +84,7 @@ MESSAGING_GRAPHQL_MODELS = (
 # test uses, plus the messaging Channel.
 CHANNEL_PURGE_MODELS = tuple(
     dict.fromkeys(
-        MESSAGING_GRAPHQL_MODELS
-        + POSTS_TEST_MODELS
-        + (VcsBridge, WebhookSubscription)
-        + AGENTS_GRAPHQL_MODELS
+        MESSAGING_GRAPHQL_MODELS + POSTS_TEST_MODELS + (VcsBridge, WebhookSubscription) + AGENTS_GRAPHQL_MODELS
     )
 )
 
@@ -101,19 +98,14 @@ class SudoHandleQuery:
         """Return sudo-loaded handles to exercise nested relation re-gating."""
 
         with system_context(reason="test.messaging.sudo_handles"):
-            return list(
-                messaging_models.Handle._base_manager.select_related("party").order_by("value")
-            )
+            return list(messaging_models.Handle._base_manager.select_related("party").order_by("value"))
 
 
 def test_console_resource_metadata_declares_message_surface() -> None:
     """The composed console schema reports Message's Hasura resource contract."""
 
     schema = _schema()
-    metadata = {
-        item.model_label: item
-        for item in schema.angee_resources
-    }["messaging.Message"]
+    metadata = {item.model_label: item for item in schema.angee_resources}["messaging.Message"]
 
     assert metadata.roots.list_name == "messages"
     assert metadata.roots.detail_name == "messages_by_pk"
@@ -122,64 +114,57 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     assert metadata.roots.create_name is None
     assert metadata.roots.update_name == "update_messages_by_pk"
     assert metadata.roots.delete_name == "delete_messages_by_pk"
-    assert metadata.filter_fields == (
-        "id",
-        "status",
-        "message_type",
-        "subtype",
+    assert {name for name, field in metadata.query.fields.items() if field.filter} == {
         "platform",
+        "created_at",
+        "id",
+        "sent_at",
+        "thread",
+        "sender",
         "direction",
-        "thread",
-        "channel",
-        "sender",
-        "sent_at",
-        # The transcript's keyset "load older" cursors on (sent_at, created_at).
-        "created_at",
-    )
-    assert metadata.order_fields == (
-        "sent_at",
-        "received_at",
-        "created_at",
-        "id",
-        "title",
-        "sender_name",
-        "thread_title",
-        "channel_vendor_name",
-        "status",
-    )
-    assert metadata.aggregate_fields == ("id",)
-    assert metadata.group_by_fields == (
-        "thread",
-        "thread__title__text",
-        "sender",
-        "sender__display_name",
-        "channel",
-        "channel__display_name",
         "status",
         "message_type",
+        "channel",
         "subtype",
-        "subtype__key",
-        "platform",
-        "metadata.mailbox",
+    }
+    assert {name for name, field in metadata.query.fields.items() if field.sort} == {
+        "thread_title",
+        "created_at",
+        "id",
         "sent_at",
-    )
+        "channel_vendor_name",
+        "title",
+        "status",
+        "received_at",
+        "sender_name",
+    }
+    assert metadata.aggregate_fields == ("id",)
+    assert set(metadata.query.axes) == {
+        "platform",
+        "sent_at",
+        "thread",
+        "sender",
+        "status",
+        "metadata.mailbox",
+        "message_type",
+        "channel",
+        "subtype",
+    }
     assert metadata.update_fields == ("status",)
     assert metadata.capabilities == ("list", "detail", "aggregate", "groups", "update", "delete", "changes")
     assert {
-        axis.field: (axis.model_label, axis.public_id_field, axis.label_axis)
-        for axis in metadata.relation_axes
+        name: (metadata.query.fields[name].relation.model, axis.server.label_key)
+        for name, axis in metadata.query.axes.items()
+        if axis.kind == "relation"
     } == {
-        "thread": ("messaging.Thread", "sqid", "thread__title__text"),
-        "sender": ("parties.Handle", "sqid", "sender__display_name"),
-        "channel": ("integrate.Integration", "sqid", "channel__display_name"),
-        "subtype": ("messaging.MessageSubtype", "sqid", "subtype__key"),
+        "thread": ("messaging.Thread", "thread__title__text"),
+        "sender": ("parties.Handle", "sender__display_name"),
+        "channel": ("integrate.Integration", "channel__display_name"),
+        "subtype": ("messaging.MessageSubtype", "subtype__key"),
     }
 
     serialized = schema._schema.extensions["angee"]["resources"]
-    message = {
-        item["modelLabel"]: item
-        for item in serialized
-    }["messaging.Message"]
+    message = {item["modelLabel"]: item for item in serialized}["messaging.Message"]
     assert message["roots"]["detail"] == "messages_by_pk"
     assert message["roots"]["aggregate"] == "messages_aggregate"
     assert message["roots"]["groups"] == "messages_groups"
@@ -190,44 +175,21 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     assert message["roots"]["changes"] == "messageChanged"
     assert message["typeNames"]["filter"] == "messages_bool_exp"
     assert message["typeNames"]["order"] == "messages_order_by"
-    assert message["groupByFields"] == [
-        "thread",
-        "thread__title__text",
-        "sender",
-        "sender__display_name",
-        "channel",
-        "channel__display_name",
-        "status",
-        "message_type",
-        "subtype",
-        "subtype__key",
-        "platform",
-        "metadata.mailbox",
-        "sent_at",
-    ]
-    mailbox_dimension = {dimension["field"]: dimension for dimension in message["groupDimensions"]}["metadata.mailbox"]
-    assert mailbox_dimension["input"] == "METADATA__MAILBOX"
-    assert mailbox_dimension["key"] == "metadata__mailbox"
+    assert set(message["query"]["axes"]) == set(metadata.query.axes)
+    mailbox_dimension = message["query"]["axes"]["metadata.mailbox"]
+    assert mailbox_dimension["server"]["input"] == "METADATA__MAILBOX"
+    assert mailbox_dimension["server"]["key"] == "metadata__mailbox"
     assert mailbox_dimension["kind"] == "json"
-    assert mailbox_dimension["filter"] == {
-        "kind": "equality",
-        "field": "metadata",
-        "valueKey": "metadata__mailbox",
-        "rangeKey": None,
-        "lookup": "jsonContains",
-        "nullLookup": None,
-        "valueTransform": "jsonObject:mailbox",
-        "valueMap": [],
-    }
+    # The source does not declare metadata filterable: this axis is a summary.
+    assert mailbox_dimension["drill"] is None
     assert message["updateFields"] == ["status"]
     status_field = {field["name"]: field for field in message["fields"]}["status"]
-    assert status_field["filterable"] is True
-    assert status_field["groupable"] is True
+    assert message["query"]["fields"]["status"]["filter"] is not None
+    assert "status" in message["query"]["axes"]
     assert status_field["updatable"] is True
     for name in ("sender_name", "thread_title", "channel_vendor_name"):
-        field = {field["name"]: field for field in message["fields"]}[name]
-        assert field["sortable"] is True
-        assert field["filterable"] is False
+        assert message["query"]["fields"][name]["sort"] is not None
+        assert message["query"]["fields"][name]["filter"] is None
 
 
 def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> None:
@@ -242,7 +204,7 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
     assert thread.roots.delete_name == "delete_threads_by_pk"
     assert thread.create_fields == ()
     assert thread.update_fields == ("visibility",)
-    assert thread.group_by_fields == ("channel", "channel__display_name", "modality", "visibility", "last_message_at")
+    assert set(thread.query.axes) == {"last_message_at", "modality", "visibility", "channel"}
 
     channel = resources["messaging.Channel"]
     assert channel.roots.list_name == "channels"
@@ -374,6 +336,52 @@ def test_message_parts_projection_returns_depth_first_order(messaging_graphql_ta
     ]
     assert _part_projection(generic_parts) == expected
     assert _part_projection(record_parts) == expected
+
+
+def test_inbox_labels_coexist_with_guarded_relation_selections(messaging_graphql_tables: None) -> None:
+    """Board relation identities and inbox labels use the same authorized rows."""
+
+    admin = _platform_admin("msg-board-label-admin")
+    reader = User.objects.create_user(username="msg-board-label-reader")
+    _thread, message = _seed_thread_and_message(admin)
+    with system_context(reason="test.messaging.board.labels.seed"):
+        channel = make_integration("board-label-vendor", model=Channel, backend_class="manual")
+        channel_owner = channel.owner
+        message.channel = channel
+        message.save(update_fields=("channel", "updated_at"))
+    _grant(message, "reader", reader)
+    _grant(message, "reader", channel_owner)
+    document = """
+        query InboxLabels($id: String!) {
+          messages(where: {id: {_eq: $id}}, order_by: {channel_vendor_name: asc}) {
+            id thread_title channel_vendor_name
+            thread { id title { text } }
+            channel { id display_name }
+          }
+        }
+    """
+    schema = _schema()
+    visible = _data(execute_schema(schema, document, {"id": message.sqid}, request=_request(admin)))["messages"]
+    assert visible[0]["thread_title"] == "Original"
+    assert visible[0]["thread"]["title"]["text"] == "Original"
+    assert visible[0]["channel_vendor_name"] == "Board-Label-Vendor"
+    assert visible[0]["channel"]["id"] == channel.sqid
+    # Owning the Integration grants no Vendor read. Both hops stay scoped.
+    assert Integration.objects.with_actor(channel_owner).filter(pk=channel.pk).exists()
+    for subject in (reader, channel_owner):
+        hidden = _data(
+            execute_schema(
+                schema,
+                """
+                query HiddenLabels($id: String!) {
+                  messages(where: {id: {_eq: $id}}) { id thread_title channel_vendor_name }
+                }
+                """,
+                {"id": message.sqid},
+                request=_request(subject),
+            )
+        )["messages"]
+        assert hidden == [{"id": message.sqid, "thread_title": "", "channel_vendor_name": ""}]
 
 
 def test_message_sender_and_participant_expose_resolved_party(messaging_graphql_tables: None) -> None:
@@ -1821,10 +1829,7 @@ def test_record_chatter_fetches_message_windows(messaging_graphql_tables: None) 
     admin = _platform_admin("msg-window-admin")
     with system_context(reason="test.messaging.record_window.seed"):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case 516")
-        messages = [
-            ticket.message_post(f"Window message {index}")
-            for index in range(1, 6)
-        ]
+        messages = [ticket.message_post(f"Window message {index}") for index in range(1, 6)]
     schema = _schema()
 
     def fetch(
@@ -1918,9 +1923,7 @@ def test_record_chatter_orders_interleaved_backfilled_email(messaging_graphql_ta
         # A backfilled email arrives last (highest pk) but was sent between #2 and #3.
         backfilled = ticket.message_post("Backfilled email")
         for index, message in enumerate(messages, start=1):
-            messaging_models.Message.objects.filter(pk=message.pk).update(
-                sent_at=base + timedelta(minutes=index)
-            )
+            messaging_models.Message.objects.filter(pk=message.pk).update(sent_at=base + timedelta(minutes=index))
         messaging_models.Message.objects.filter(pk=backfilled.pk).update(
             sent_at=base + timedelta(minutes=2, seconds=30)
         )
@@ -2010,8 +2013,7 @@ def test_record_thread_projects_edit_and_delete_capability(messaging_graphql_tab
 
     assert payload["error_code"] is None
     capabilities = {
-        message["message_type"]: (message["can_edit"], message["can_delete"])
-        for message in payload["messages"]
+        message["message_type"]: (message["can_edit"], message["can_delete"]) for message in payload["messages"]
     }
     # A plain comment is editable and deletable; a tracked message is deletable
     # (post access) but never editable (the mail edit rule blocks it).
@@ -2628,10 +2630,7 @@ def test_record_chatter_follow_toggle(messaging_graphql_tables: None) -> None:
 
     assert record_thread["error_code"] is None
     assert record_thread["self_follower"] == followed["follower"]
-    subtype_options = {
-        option["key"]: option
-        for option in record_thread["subtypes"]
-    }
+    subtype_options = {option["key"]: option for option in record_thread["subtypes"]}
     assert subtype_options["comment"] == {
         "key": "comment",
         "name": "Comment",
@@ -2922,14 +2921,7 @@ def _schema_with_sudo_handle_query() -> Any:
         for module in (iam_schema, integrate_schema, parties_schema, messaging_schema)
     ]
     addons.append(
-        SchemaAddon(
-            {
-                "console": {
-                    key: (SudoHandleQuery,) if key == "query" else ()
-                    for key in SCHEMA_PART_KEYS
-                }
-            }
-        )
+        SchemaAddon({"console": {key: (SudoHandleQuery,) if key == "query" else () for key in SCHEMA_PART_KEYS}})
     )
     return GraphQLSchemas(addons).build("console")
 
@@ -3302,9 +3294,9 @@ def test_generic_delete_excludes_record_thread_from_its_creator(messaging_graphq
     assert record_result.errors is not None
     assert (record_result.data or {}).get("delete_threads_by_pk") is None
 
-    inbox_deleted = _data(
-        execute_schema(schema, delete, {"id": inbox_thread.sqid}, request=_request(creator))
-    )["delete_threads_by_pk"]
+    inbox_deleted = _data(execute_schema(schema, delete, {"id": inbox_thread.sqid}, request=_request(creator)))[
+        "delete_threads_by_pk"
+    ]
     assert inbox_deleted == {"id": inbox_thread.sqid}
 
     with system_context(reason="test.messaging.delete_isolation.verify"):
@@ -3393,9 +3385,7 @@ def test_record_chatter_rows_opt_out_of_change_broadcasts(messaging_graphql_tabl
     record_thread = record_message.thread
 
     with system_context(reason="test.messaging.changes.verify"):
-        orphan = messaging_models.Message.objects.create(
-            preview="Orphan", status="synced", created_by_id=admin.pk
-        )
+        orphan = messaging_models.Message.objects.create(preview="Orphan", status="synced", created_by_id=admin.pk)
         # Channel inbox rows broadcast; record-attached chatter does not.
         assert channel_thread.broadcasts_changes() is True
         assert channel_message.broadcasts_changes() is True
@@ -3633,9 +3623,7 @@ def test_delete_channel_preview_total_matches_real_deleted_rows(channel_purge_ta
         messaging_models.Participant._base_manager.create(message=msg1, handle=handle, created_by_id=owner_id)
         messaging_models.Participant._base_manager.create(thread=thread2, handle=handle, created_by_id=owner_id)
         # Thread-rooted CASCADE children: a bare follower and a delivery notification.
-        messaging_models.ThreadFollower._base_manager.create(
-            thread=thread1, user_id=owner_id, created_by_id=owner_id
-        )
+        messaging_models.ThreadFollower._base_manager.create(thread=thread1, user_id=owner_id, created_by_id=owner_id)
         messaging_models.ThreadNotification._base_manager.create(
             thread=thread1, message=msg1, user_id=owner_id, created_by_id=owner_id
         )
@@ -3724,9 +3712,7 @@ def test_from_counts_ignores_target_type_to_avoid_double_counting_root(messaging
     plain = DeletePreview.from_counts(channel, {messaging_models.Thread: 2})
     assert guarded.total_deleted_count == plain.total_deleted_count
     channel_counts = {
-        group.label: group.count
-        for group in guarded.deleted
-        if group.label == str(Channel._meta.verbose_name_plural)
+        group.label: group.count for group in guarded.deleted if group.label == str(Channel._meta.verbose_name_plural)
     }
     # The root counts once, not 1 + the bogus 5.
     assert channel_counts[str(Channel._meta.verbose_name_plural)] == 1

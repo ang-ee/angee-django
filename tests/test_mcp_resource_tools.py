@@ -27,8 +27,12 @@ from graphql import (
 
 from angee.addons import addon_manifest
 from angee.data.metadata import (
+    DataQueryField,
+    DataQueryFilter,
+    DataQueryIdentity,
     DataResourceFieldMetadata,
     DataResourceMetadata,
+    DataResourceQuery,
     DataResourceRoots,
     DataResourceTypeNames,
 )
@@ -84,14 +88,12 @@ def _resource(name: str) -> DataResourceMetadata:
             kind="scalar",
             scalar="String",
             readable=True,
-            filterable=True,
         ),
         DataResourceFieldMetadata(
             name="body",
             kind="scalar",
             scalar="String",
             readable=True,
-            filterable=True,
         ),
         DataResourceFieldMetadata(name="secret", kind="scalar", scalar="String", readable=True),
         DataResourceFieldMetadata(name="optional_secret", kind="scalar", scalar="String", readable=True),
@@ -102,12 +104,19 @@ def _resource(name: str) -> DataResourceMetadata:
         resource_type=f"tests/{name}",
         app_label="agents",
         model_name=name,
-        public_id_field="id",
+        query=DataResourceQuery(
+            identity=DataQueryIdentity("id"),
+            fields={
+                name: DataQueryField(
+                    kind="scalar", scalar="String", filter=DataQueryFilter(name, ("iContains",), "String")
+                )
+                for name in ("title", "body")
+            },
+        ),
         roots=DataResourceRoots(list_name=name, detail_name=f"{name}_by_pk"),
         type_names=DataResourceTypeNames(node="ResourceToolProbe"),
         capabilities=("list", "detail"),
         fields=fields,
-        filter_fields=("title", "body"),
     )
 
 

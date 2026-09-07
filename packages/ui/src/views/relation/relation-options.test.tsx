@@ -1,3 +1,4 @@
+import { testResourceQuery } from "@angee/metadata/testing";
 // @vitest-environment happy-dom
 
 import {
@@ -140,7 +141,7 @@ const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([
     modelLabel: "integrate.Vendor",
     appLabel: "integrate",
     modelName: "vendor",
-    publicIdField: "sqid",
+    query: testResourceQuery(),
     roots: { list: "vendors" },
     typeNames: { node: "VendorType" },
     capabilities: ["list"],
@@ -150,10 +151,10 @@ const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([
         kind: "scalar",
         scalar: "ID",
         readable: true,
-        filterable: true,
-        sortable: false,
+
+
         aggregatable: true,
-        groupable: false,
+
         creatable: false,
         updatable: false,
         requiredOnCreate: false,
@@ -163,27 +164,27 @@ const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([
         kind: "scalar",
         scalar: "String",
         readable: true,
-        filterable: true,
-        sortable: true,
+
+
         aggregatable: false,
-        groupable: false,
+
         creatable: true,
         updatable: true,
         requiredOnCreate: true,
       },
     ],
-    filterFields: ["id", "display_name"],
-    orderFields: ["display_name"],
+
+
     aggregateFields: ["id"],
-    groupByFields: [],
-    relationAxes: [],
+
+
   },
   {
     schemaName: "console",
     modelLabel: "crm.Stage",
     appLabel: "crm",
     modelName: "stage",
-    publicIdField: "sqid",
+    query: testResourceQuery(),
     roots: { list: "stages" },
     typeNames: { node: "StageType" },
     recordRepresentation: "name",
@@ -194,10 +195,10 @@ const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([
         kind: "scalar",
         scalar: "ID",
         readable: true,
-        filterable: true,
-        sortable: false,
+
+
         aggregatable: true,
-        groupable: false,
+
         creatable: false,
         updatable: false,
         requiredOnCreate: false,
@@ -207,19 +208,19 @@ const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([
         kind: "scalar",
         scalar: "String",
         readable: true,
-        filterable: true,
-        sortable: true,
+
+
         aggregatable: false,
-        groupable: false,
+
         creatable: true,
         updatable: true,
         requiredOnCreate: true,
       },
     ],
-    filterFields: ["id", "name"],
-    orderFields: ["position", "id"],
+
+
     aggregateFields: ["id"],
-    groupByFields: [],
-    relationAxes: [],
+
+
   },
 ]);

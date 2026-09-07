@@ -1,4 +1,5 @@
 import * as React from "react";
+import type { ResourceQuery } from "@angee/metadata";
 
 import type { DndPayload } from "../../lib/dnd";
 import { useUiT } from "../../i18n";
@@ -15,6 +16,9 @@ import {
   type ResourceViewContextValue,
 } from "./resource-view-context";
 import type { ResourceViewGroup } from "./resource-view-model";
+import { validateResourceViewState } from "./model/state";
+import { filterForTextSearch, queryForColumns } from "./resource-query";
+import { ResourceQueryError } from "./ResourceQueryError";
 import {
   useRowsResourceViewSurface,
   type ResourceListSnapshot,
@@ -38,6 +42,8 @@ import {
 
 export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   rows: readonly TRow[];
+  /** Explicit local query fields, including relations and fields outside display columns. */
+  query?: ResourceQuery;
   columns: readonly ListColumn<TRow>[];
   filterOptions?: readonly ResourceToolbarFilterOption[];
   customFilterFields?: readonly ResourceToolbarFilterField[];
@@ -100,13 +106,36 @@ export function RowsListView<TRow extends StringIdRow = StringIdRow>(
     scope,
     initialState,
     children: (scopedResourceView) => (
-      <RowsListViewBody {...props} resourceView={scopedResourceView} />
+      <ValidatedRowsListView {...props} resourceView={scopedResourceView} />
     ),
   });
 }
 
+function ValidatedRowsListView<TRow extends StringIdRow>(
+  props: RowsListViewProps<TRow> & { resourceView: ResourceViewContextValue },
+): React.ReactElement {
+  const query = React.useMemo(
+    () => props.query ?? queryForColumns(props.columns, null, props.defaultGroup ? [props.defaultGroup] : []),
+    [props.query, props.columns, props.defaultGroup],
+  );
+  let state = props.resourceView.state;
+  try {
+    if (props.defaultGroup) query.group(props.defaultGroup);
+    state = validateResourceViewState({
+      ...state,
+      filter: filterForTextSearch(query, state.filter, "title", props.columns.map(({ field }) => field)),
+    }, query);
+  } catch (error) {
+    state = { ...state, queryError: error instanceof Error ? error : new Error("Invalid query.") };
+  }
+  return state.queryError
+    ? <ResourceQueryError error={state.queryError} onReset={props.resourceView.resetQuery} />
+    : <RowsListViewBody {...props} />;
+}
+
 function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   rows,
+  query,
   columns,
   filterOptions: explicitFilterOptions,
   customFilterFields: explicitCustomFilterFields,
@@ -142,6 +171,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
 
   const surface = useRowsResourceViewSurface({
     rows,
+    query,
     columns,
     resourceView,
     groupStack: effectiveGroupStack,
@@ -151,6 +181,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   });
   const toolbarInputs = useResourceViewToolbarInputs({
     columns,
+    query,
     rows: surface.sourceRows,
     modelMetadata: null,
     resourceView,

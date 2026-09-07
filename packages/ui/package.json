@@ -263,10 +263,6 @@
       "types": "./src/views/relation/enum-options.ts",
       "import": "./src/views/relation/enum-options.ts"
     },
-    "./views/facet-query": {
-      "types": "./src/views/relation/facet-query.ts",
-      "import": "./src/views/relation/facet-query.ts"
-    },
     "./views/form-view-surface": {
       "types": "./src/views/form/form-view-surface.ts",
       "import": "./src/views/form/form-view-surface.ts"
@@ -605,10 +601,6 @@
       "./views/enum-options": {
         "types": "./dist/views/relation/enum-options.d.ts",
         "default": "./dist/views/relation/enum-options.js"
-      },
-      "./views/facet-query": {
-        "types": "./dist/views/relation/facet-query.d.ts",
-        "default": "./dist/views/relation/facet-query.js"
       },
       "./views/form-view-surface": {
         "types": "./dist/views/form/form-view-surface.d.ts",

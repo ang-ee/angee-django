@@ -2,9 +2,8 @@
 
 import { renderHook } from "@testing-library/react";
 import type { ResourceFacetOption } from "@angee/refine";
-import type {
-  ModelMetadata,
-} from "@angee/metadata";
+import { ResourceQuery, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { scalarFacetDeclarations, useScalarFacets } from "./scalar-facet";
@@ -145,16 +144,14 @@ describe("useScalarFacets", () => {
     ]);
   });
 
-  test("reuses scalar group aliases for bucket queries and labels", () => {
+  test("uses the canonical scalar axis without a display alias", () => {
     expect(scalarFacetDeclarations([], INTEGRATION_METADATA)).toEqual([
       {
         id: "implClass",
         field: "implClass",
-        label: "Impl Category",
+        label: "Impl Class",
         group: {
-          field: "implCategory",
-          aggregateField: "implClass",
-          aggregateKey: "implClass",
+          field: "implClass",
         },
         spec: {
           id: "implClass",
@@ -162,120 +159,38 @@ describe("useScalarFacets", () => {
           orderBy: [{ field: "implClass", direction: "ASC", nulls: "LAST" }],
           valueKey: "implClass",
           pageSize: 200,
+          where: {},
         },
-        neutralizeFilterFields: ["implClass"],
       },
     ]);
   });
 });
 
-const NOTE_METADATA: ModelMetadata = {
-  fields: {
-    title: { name: "title", kind: "scalar", scalar: "String" },
-    status: {
-      name: "status",
-      kind: "enum",
-      values: [
-        { value: "DRAFT", description: "Draft" },
-        { value: "ACTIVE", description: "Active" },
-      ],
-    },
-    source: { name: "source", kind: "scalar", scalar: "String" },
-    wordCount: { name: "wordCount", kind: "scalar", scalar: "Int" },
-    updatedAt: { name: "updatedAt", kind: "scalar", scalar: "DateTime" },
-  },
-  resource: {
-    schemaName: "public",
-    modelLabel: "notes.Note",
-    appLabel: "notes",
-    modelName: "note",
-    publicIdField: "sqid",
-    roots: { groups: "notes_groups" },
-    typeNames: { node: "NoteType" },
-    capabilities: ["list", "filter", "groups"],
-    filterFields: ["title", "status", "source", "wordCount", "updatedAt"],
-    orderFields: [],
-    aggregateFields: ["id", "wordCount"],
-    groupByFields: ["status", "source", "wordCount", "updatedAt"],
-    groupDimensions: [
-      {
-        field: "status",
-        input: "STATUS",
-        key: "status",
-        kind: "column",
-      },
-      {
-        field: "source",
-        input: "SOURCE",
-        key: "source",
-        kind: "column",
-        scalar: "String",
-      },
-      {
-        field: "wordCount",
-        input: "WORD_COUNT",
-        key: "wordCount",
-        kind: "column",
-        scalar: "Int",
-      },
-      {
-        field: "updatedAt",
-        input: "UPDATED_AT",
-        key: "updatedAt",
-        kind: "column",
-        scalar: "DateTime",
-      },
-    ],
-    relationAxes: [],
-  },
-  relationAxes: {},
-};
-
-const INTEGRATION_METADATA: ModelMetadata = {
-  fields: {
-    implCategory: {
-      name: "implCategory",
-      kind: "scalar",
-      scalar: "String",
-    },
-    implClass: {
-      name: "implClass",
-      kind: "enum",
-      values: [{ value: "NONE", description: "None" }],
-    },
-  },
-  resource: {
-    schemaName: "console",
-    modelLabel: "integrate.Integration",
-    appLabel: "integrate",
-    modelName: "integration",
-    publicIdField: "sqid",
-    roots: {},
-    typeNames: { node: "IntegrationType" },
-    capabilities: ["list", "filter", "groups"],
-    filterFields: ["implClass"],
-    orderFields: [],
-    aggregateFields: ["id"],
-    groupByFields: ["implClass"],
-    groupDimensions: [
-      {
-        field: "implClass",
-        input: "IMPL_CLASS",
-        key: "implClass",
-        kind: "column",
-      },
-    ],
-    relationAxes: [],
-    groupAliases: [
-      {
-        field: "implCategory",
-        aggregateField: "implClass",
-        aggregateKey: "implClass",
-      },
-    ],
-  },
-  relationAxes: {},
-};
+const noteQuery = ResourceQuery.forRows({ fields: {
+  title: { scalar: "String" }, status: { kind: "enum", values: [{ value: "DRAFT", description: "Draft" }, { value: "ACTIVE", description: "Active" }] },
+  source: { scalar: "String" }, wordCount: { scalar: "Int" }, updatedAt: { scalar: "DateTime" },
+} }).contract;
+for (const field of ["status", "source", "wordCount", "updatedAt"]) {
+  noteQuery.axes[field]!.server = { input: field === "wordCount" ? "WORD_COUNT" : field === "updatedAt" ? "UPDATED_AT" : field.toUpperCase(), key: field };
+  noteQuery.axes[field]!.drill = { kind: "value", field, valueKey: field, nullMode: "isNull", valueMap: [] };
+}
+const NOTE_METADATA = schemaFieldMetadataFromDataResources([testDataResource("notes.Note", {
+  schemaName: "public", roots: { groups: "notes_groups" }, query: noteQuery,
+  fields: Object.entries(noteQuery.fields).map(([name, field]) => ({ name,
+    kind: field.kind === "enum" ? "enum" : "scalar", scalar: field.scalar, values: field.values,
+    readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,
+  })),
+})]).labels["notes.Note"]!;
+const integrationQuery = ResourceQuery.forRows({ fields: {
+  implCategory: { scalar: "String" }, implClass: { kind: "enum", values: [{ value: "NONE", description: "None" }] },
+} }).contract;
+integrationQuery.axes.implClass!.server = { input: "IMPL_CLASS", key: "implClass" };
+integrationQuery.axes.implClass!.drill = { kind: "value", field: "implClass", valueKey: "implClass", nullMode: "isNull", valueMap: [] };
+const INTEGRATION_METADATA = schemaFieldMetadataFromDataResources([testDataResource("integrate.Integration", {
+  query: integrationQuery,
+  fields: [{ name: "implClass", kind: "enum", values: integrationQuery.fields.implClass!.values,
+    readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }],
+})]).labels["integrate.Integration"]!;
 
 function resourceFacets(
   facets: Record<string, readonly ResourceFacetOption[]>,

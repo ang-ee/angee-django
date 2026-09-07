@@ -275,7 +275,6 @@ def make_integration(
     *,
     kind: Any = CredentialKind.STATIC_TOKEN,
     material: dict[str, Any] | None = None,
-    impl_class: str = "none",
     backend_class: str | None = None,
     model: type[Any] = Integration,
     **attrs: Any,
@@ -310,7 +309,7 @@ def make_integration(
         }
         field_names = {field.name for field in model._meta.fields}
         if "backend_class" in field_names:
-            values["backend_class"] = backend_class or ("local" if impl_class == "none" else impl_class)
+            values["backend_class"] = backend_class or "local"
         return model.objects.create(**values)
 
 

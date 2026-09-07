@@ -1,3 +1,4 @@
+import { testResourceQuery, testQueryField, testQueryAxis } from "@angee/metadata/testing";
 import { useMemo, useState, type ReactElement } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import type {
@@ -70,11 +71,17 @@ const metadata = {
   angee: {
     resources: [
       {
+        query: testResourceQuery({ identity: { field: "id" }, fields: { "id": testQueryField("id", { scalar: "ID", filter: { field: "id", scalar: "ID", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull"] } }),
+                "title": testQueryField("title", { scalar: "String", filter: { field: "title", scalar: "String", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull", "contains", "iContains", "startsWith", "iStartsWith", "endsWith", "iEndsWith", "gt", "gte", "lt", "lte"] }, sort: { field: "title" } }),
+                "priority": testQueryField("priority", { scalar: "String", filter: null }),
+                "stage": testQueryField("stage", { scalar: "ID", kind: "relation", filter: { field: "stage", scalar: "ID", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull"] }, relation: { model: "pm.Stage", identityPath: "stage.id", labelPath: "stage.name" }, row: { path: "stage.id", paths: ["stage.id"] } }),
+                "sort_order": testQueryField("sort_order", { scalar: "Float", filter: null, sort: { field: "sort_order" } }) }, axes: { "stage": testQueryAxis("stage", { kind: "relation", identityPath: "stage.id", paths: ["stage.id", "stage.name"], labelPath: "stage.name", server: { input: "stage", key: "stage" }, extractions: [], drill: null }) }, sort: { default: [] } }),
+
         schemaName: "public",
         modelLabel: "pm.Task",
         appLabel: "pm",
         modelName: "Task",
-        publicIdField: "id",
+
         roots: {
           list: "tasks",
           detail: "tasks_by_pk",
@@ -91,31 +98,25 @@ const metadata = {
           relationField("stage", "pm.Stage"),
           scalarField("sort_order", "Float", { writable: true }),
         ],
-        filterFields: ["id", "title", "stage"],
-        orderFields: ["sort_order", "title"],
+
         aggregateFields: ["id"],
-        groupByFields: ["stage"],
-        groupDimensions: [
-          { field: "stage", input: "stage", key: "stage", kind: "relation" },
-        ],
+
         createFields: ["title", "priority", "stage", "sort_order"],
         updateFields: ["title", "priority", "stage", "sort_order"],
         requiredCreateFields: ["title"],
-        relationAxes: [
-          {
-            field: "stage",
-            modelLabel: "pm.Stage",
-            publicIdField: "id",
-            labelAxis: "stage__name",
-          },
-        ],
+
       },
       {
+        query: testResourceQuery({ identity: { field: "id" }, fields: { "id": testQueryField("id", { scalar: "ID", filter: { field: "id", scalar: "ID", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull"] }, sort: { field: "id" } }),
+                "name": testQueryField("name", { scalar: "String", filter: { field: "name", scalar: "String", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull", "contains", "iContains", "startsWith", "iStartsWith", "endsWith", "iEndsWith", "gt", "gte", "lt", "lte"] } }),
+                "position": testQueryField("position", { scalar: "Float", filter: null, sort: { field: "position" } }),
+                "fold": testQueryField("fold", { scalar: "Boolean", filter: null }) }, axes: {}, sort: { default: [{ field: "position", direction: "ASC" }] } }),
+
         schemaName: "public",
         modelLabel: "pm.Stage",
         appLabel: "pm",
         modelName: "Stage",
-        publicIdField: "id",
+
         roots: { list: "stages" },
         typeNames: { node: "StageType" },
         recordRepresentation: "name",
@@ -126,12 +127,9 @@ const metadata = {
           scalarField("position", "Float"),
           scalarField("fold", "Boolean"),
         ],
-        filterFields: ["id", "name"],
-        orderFields: ["position", "id"],
+
         aggregateFields: ["id"],
-        groupByFields: [],
-        defaultSort: [{ field: "position", direction: "ASC" }],
-        relationAxes: [],
+
       },
     ],
   },
@@ -320,10 +318,9 @@ function scalarField(
     kind: "scalar",
     scalar,
     readable: true,
-    filterable: true,
-    sortable: true,
+
     aggregatable: name === "id",
-    groupable: false,
+
     creatable: options.writable === true,
     updatable: options.writable === true,
     requiredOnCreate: false,
@@ -341,10 +338,9 @@ function relationField(
     relationModelLabel,
     relationObject: true,
     readable: true,
-    filterable: true,
-    sortable: false,
+
     aggregatable: false,
-    groupable: true,
+
     creatable: true,
     updatable: true,
     requiredOnCreate: false,

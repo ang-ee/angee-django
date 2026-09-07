@@ -1,3 +1,4 @@
+import { testResourceQuery } from "@angee/metadata/testing";
 // @vitest-environment happy-dom
 
 import type {
@@ -2869,10 +2870,10 @@ function saleLineField(
     kind: "scalar",
     scalar,
     readable: true,
-    filterable: false,
-    sortable: false,
+
+
     aggregatable: false,
-    groupable: false,
+
     creatable: true,
     updatable: true,
     requiredOnCreate: false,
@@ -2890,7 +2891,7 @@ const SALES_METADATA: TestSchemaMetadata = {
         modelLabel: "demo.SaleDoc",
         appLabel: "demo",
         modelName: "SaleDoc",
-        publicIdField: "id",
+        query: testResourceQuery(),
         recordRepresentation: "title",
         roots: {
           list: "sale_docs",
@@ -2901,11 +2902,11 @@ const SALES_METADATA: TestSchemaMetadata = {
         typeNames: { node: "SaleDocType", updateInput: "sale_docs_set_input" },
         capabilities: ["list", "detail", "update", "save"],
         fields: [saleLineField("title", "String", { requiredOnCreate: true })],
-        filterFields: [],
-        orderFields: [],
+
+
         aggregateFields: [],
-        groupByFields: [],
-        relationAxes: [],
+
+
         linesResource: {
           field: "lines",
           modelLabel: "demo.SaleLine",
@@ -3013,7 +3014,7 @@ function defaultModel(typeName: string, modelLabel: string): ModelMetadata {
   return {
     fields: {},
     resource: defaultResource(typeName, modelLabel),
-    relationAxes: {},
+
   };
 }
 
@@ -3025,7 +3026,7 @@ function defaultResource(typeName: string, modelLabel: string): DataResourceMeta
     modelLabel,
     appLabel: modelLabel.includes(".") ? modelLabel.split(".")[0] ?? "" : "",
     modelName,
-    publicIdField: "id",
+    query: testResourceQuery(),
     roots: {
       list,
       detail: `${list}_by_pk`,
@@ -3036,11 +3037,11 @@ function defaultResource(typeName: string, modelLabel: string): DataResourceMeta
     typeNames: { node: typeName },
     capabilities: ["list", "detail", "create", "update", "delete"],
     fields: [],
-    filterFields: [],
-    orderFields: [],
+
+
     aggregateFields: [],
-    groupByFields: [],
-    relationAxes: [],
+
+
   };
 }
 

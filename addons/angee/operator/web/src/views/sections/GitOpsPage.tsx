@@ -1,4 +1,5 @@
 import { MetricStrip, RowsListView, textRoleVariants, type ResourceToolbarGroupOption, type ListColumn, type MetricTileValue } from "@angee/ui";
+import { ResourceQuery } from "@angee/metadata";
 import { useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
@@ -23,6 +24,10 @@ const SUMMARY_TILES: readonly SummaryTile[] = [
 ];
 
 type GitOpsRow = DaemonRow<GitOpsLink>;
+const gitOpsRowsQuery = ResourceQuery.forRows({ fields: {
+  source: { scalar: "String" }, workspace: { scalar: "String" }, slot: { scalar: "String" },
+  state: { scalar: "String" }, branch: { scalar: "String" }, pushed: { scalar: "Boolean" },
+} });
 
 /** GitOps page: a read-only topology summary above the per-link drift list. */
 export function GitOpsPage(): ReactNode {
@@ -96,6 +101,7 @@ export function GitOpsPage(): ReactNode {
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       {gitOps ? <GitOpsSummary summary={gitOps.summary} /> : null}
       <RowsListView<GitOpsRow>
+        query={gitOpsRowsQuery}
         rows={rows}
         columns={columns}
         groupOptions={groupOptions}
