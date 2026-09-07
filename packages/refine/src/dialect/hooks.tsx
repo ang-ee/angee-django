@@ -45,7 +45,8 @@ import {
   useOperationDocuments,
 } from "../operation-documents";
 import { useActiveDataProviderName } from "./data-provider-context";
-import { invalidateAuthoredQueries } from "../query-invalidation";
+import { authoredQueryMeta, invalidateAuthoredQueries } from "../query-invalidation";
+import { useAuthoredLiveInterest } from "./authored-hooks";
 import { stableKey, useStableArray } from "../stable-deps";
 
 type Row = Record<string, unknown>;
@@ -101,6 +102,8 @@ export interface AngeeListBatchScope {
 }
 
 export interface AngeeListBatchEntry {
+  /** Refetch this active native record page. */
+  refetch: () => void;
   rows: readonly Row[];
   total: number | undefined;
   fetching: boolean;
@@ -288,6 +291,9 @@ function useGroupByRequestBatch(
   const { document, enabled = true } = options;
   const canQuery = enabled && target !== null;
   const activeScopes = canQuery ? scopes : EMPTY_GROUP_BY_SCOPES;
+  const models = useStableArray(target?.modelLabel ? [target.modelLabel] : []);
+  // Group discovery remains live even when every lane is collapsed or summary-only.
+  useAuthoredLiveInterest(canQuery && activeScopes.length > 0, models);
   const scopesKey = stableKey(activeScopes);
   const dataProvider = useDataProvider();
   const requests = useMemo(() => {
@@ -324,6 +330,7 @@ function useGroupByRequestBatch(
         return response.data;
       },
       enabled: canQuery,
+      meta: authoredQueryMeta(models),
     })),
   });
   return useMemo(
@@ -454,6 +461,7 @@ export function useAngeeListBatch(
           return [
             scope.key,
             {
+              refetch: () => { void query?.refetch(); },
               rows: (data?.data ?? []) as readonly Row[],
               total: data?.total,
               fetching: query?.isFetching ?? false,

@@ -6,6 +6,7 @@ import { type ModelMetadata, type Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { Glyph } from "../../../chrome/Glyph";
 import { cn } from "../../../lib/cn";
+import type { Tone } from "../../../lib/tones";
 import { CountBadge } from "../../../ui/badge";
 import { Button } from "../../../ui/button";
 import { CollapsibleIcon, CollapsiblePanel, CollapsibleRoot, CollapsibleTrigger } from "../../../ui/collapsible";
@@ -114,7 +115,6 @@ export function BoardLane<TRow extends Row>({
   onCreateInLane?: (laneId: string | null, rank?: number) => void;
   renderCard?: (row: TRow) => React.ReactNode;
 }): React.ReactElement {
-  const headingId = React.useId();
   const t = useUiT();
   const tone = laneDotTone(group, groupStack, columns);
   const { setNodeRef, isOver } = useDroppable({
@@ -161,49 +161,67 @@ export function BoardLane<TRow extends Row>({
     </div>
   );
   return (
-    <section
+    <BoardLaneFrame
       ref={dragEnabled ? setNodeRef : undefined}
-      aria-labelledby={headingId}
+      label={group.label ?? t("list.allRecords")}
+      count={group.rows.length}
+      tone={tone}
+      collapsed={collapsed}
+      onCollapsedChange={onCollapsedChange}
       className={cn(
-        "flex w-[300px] flex-none flex-col rounded-[10px] border border-border-subtle bg-inset",
         dragEnabled && "transition-colors",
         isOver && group.dropDisabled !== true && "border-border-focus bg-brand-soft/25",
       )}
     >
-      <CollapsibleRoot
-        variant="flush"
-        open={!collapsed}
-        onOpenChange={(open) => onCollapsedChange(!open)}
-      >
-        {/* The lane title stays a level-3 heading with label-only content —
-            the shipped board contract. The fold trigger is the chevron
-            beside it (a heading may not live inside a button). */}
+      {sortable ? (
+        <SortableContext items={group.rows.map((row) => row.id)} strategy={verticalListSortingStrategy}>
+          {cards}
+        </SortableContext>
+      ) : cards}
+    </BoardLaneFrame>
+  );
+}
+
+/** Shared lane chrome; the collection surface owns counts, contents and expansion. */
+export function BoardLaneFrame({
+  label, count, tone, collapsed, onCollapsedChange, children, className, nested = false, ref,
+}: {
+  label: string;
+  count: number;
+  tone?: Tone;
+  collapsed: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
+  children?: React.ReactNode;
+  className?: string;
+  nested?: boolean;
+  ref?: React.Ref<HTMLElement>;
+}): React.ReactElement {
+  const headingId = React.useId();
+  return (
+    <section
+      ref={ref}
+      aria-labelledby={headingId}
+      className={cn(
+        "flex min-w-0 flex-col rounded-[10px] border border-border-subtle bg-inset",
+        nested ? "w-full" : "w-[300px] flex-none",
+        className,
+      )}
+    >
+      <CollapsibleRoot variant="flush" open={!collapsed} onOpenChange={(open) => onCollapsedChange?.(!open)}>
+        {/* The heading stays separate from its fold button for native semantics. */}
         <div className="sticky top-0 z-10 flex items-center gap-1 rounded-t-[10px] bg-inset px-2 pt-2 pb-1">
-          <CollapsibleTrigger
-            aria-labelledby={headingId}
-            className="rounded-6 text-fg"
-          >
-            <CollapsibleIcon />
-          </CollapsibleTrigger>
+          {onCollapsedChange ? (
+            <CollapsibleTrigger aria-labelledby={headingId} className="rounded-6 text-fg">
+              <CollapsibleIcon />
+            </CollapsibleTrigger>
+          ) : null}
           {tone ? <StatusDot tone={tone} /> : null}
-          <h3
-            id={headingId}
-            className="min-w-0 flex-1 truncate text-13 font-semibold text-fg"
-          >
-            {group.label ?? t("list.allRecords")}
+          <h3 id={headingId} className="min-w-0 flex-1 truncate text-13 font-semibold text-fg">
+            {label}
           </h3>
-          <CountBadge value={group.rows.length} />
+          <CountBadge value={count} />
         </div>
-        <CollapsiblePanel>
-          {sortable ? (
-            <SortableContext
-              items={group.rows.map((row) => row.id)}
-              strategy={verticalListSortingStrategy}
-            >
-              {cards}
-            </SortableContext>
-          ) : cards}
-        </CollapsiblePanel>
+        <CollapsiblePanel>{children}</CollapsiblePanel>
       </CollapsibleRoot>
     </section>
   );

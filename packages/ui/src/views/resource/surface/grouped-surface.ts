@@ -15,13 +15,13 @@ import { listResultFromPageState, useResourceRowsSnapshot, useResourceViewQueryF
 import { EMPTY_ARRAY, EMPTY_EXPANDED_KEYS, EMPTY_LEAF_RESULTS } from "./types";
 import type { GroupedResourceViewSurface, ResourceListResult, UseResourceViewSurfaceProps } from "./types";
 /**
- * The server-grouped list surface: the one owner of a folded group view's render
+ * The server-grouped collection surface: the owner of a folded group view's render
  * model. It emits a single measured `listItems` stream (per-level `_groups`
  * headers, the leaf record rows of expanded buckets, and the per-group pagers)
  * driving the same `useVirtualizer` the flat list uses, batches every `_groups`
  * level into one `useAngeeGroupByBatch` and every expanded leaf into one
  * `useAngeeListBatch`, and exposes per-group pagination via `setScopePage`. The
- * thin {@link GroupedListBody} composes this surface; it no longer fetches.
+ * thin list and board bodies compose this surface; neither fetches.
  */
 export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   resource,
@@ -350,13 +350,18 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       resourceView.setPage(rootPageCount);
     }
   }, [resourceView.setPage, rootPage, rootPageCount, rootResult]);
+  const refetch = React.useCallback(() => {
+    for (const result of groupByResults.values()) result.refetch();
+    for (const result of leafResults.values()) result.refetch();
+    if (measures.length > 0) grandTotal.refetch();
+  }, [groupByResults, leafResults, measures.length, grandTotal.refetch]);
   const list = React.useMemo<ResourceListResult>(
     () =>
       listResultFromPageState({
         resourceView,
         error: rootResult?.error ?? null,
         fetching: rootResult ? rootResult.fetching : true,
-        refetch: () => rootResult?.refetch(),
+        refetch,
         rows: EMPTY_ARRAY,
         total: rootTotal,
         page: rootPage,
@@ -367,6 +372,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     [
       resourceView,
       rootResult,
+      refetch,
       rootPage,
       rootPageCount,
       rootTotal,

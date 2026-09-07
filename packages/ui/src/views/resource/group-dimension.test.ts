@@ -47,7 +47,10 @@ describe("resource query grouping projections", () => {
     expect(query.axis("party").groupBy()).toEqual({
       dimensions: [{ input: "PARTY", key: "partyId" }, { input: "PARTY__DISPLAY_NAME", key: "party_DisplayName" }],
       valueKey: "partyId", labelKey: "party_DisplayName",
-      orderBy: [{ field: "party_DisplayName", direction: "ASC", nulls: "LAST" }],
+      orderBy: [
+        { field: "party_DisplayName", direction: "ASC", nulls: "LAST" },
+        { field: "partyId", direction: "ASC", nulls: "LAST" },
+      ],
     });
   });
   test("rejects stale aliases and unknown axes at the boundary", () => {

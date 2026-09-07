@@ -72,7 +72,9 @@ function ValidatedListViewBody<TRow extends Row>(props: ListViewProps<TRow> & { 
       const effectiveGroups = props.resourceView.state.view === "board" && props.laneSource && group
         ? [group] : groups.length > 0 ? groups : group ? [group] : [];
       if (effectiveGroups.length > 0) {
-        if (props.resourceView.state.view === "list" && !isClientRowModel(metadata.resource)) {
+        if (!isClientRowModel(metadata.resource)
+          && (props.resourceView.state.view === "list"
+            || (props.resourceView.state.view === "board" && !props.laneSource))) {
           query.toGroupBy(effectiveGroups);
         } else {
           query.selection(effectiveGroups);
@@ -227,8 +229,9 @@ function ListViewBody<TRow extends Row = Row>({
   // TanStack row models — never the server _groups/GroupedListBody path (the
   // aggregate it would query does not exist).
   const clientRowModel = isClientRowModel(modelMetadata?.resource);
-  const groupedListMode =
-    resourceView.state.view === "list"
+  const serverGroupedMode =
+    (resourceView.state.view === "list"
+      || (resourceView.state.view === "board" && !resolvedLaneSource))
     && effectiveGroupStack.length > 0
     && !clientRowModel;
   const surfaceProps: UseResourceViewSurfaceProps<TRow> = {
@@ -242,7 +245,7 @@ function ListViewBody<TRow extends Row = Row>({
     groupStack: effectiveGroupStack,
     defaultExpandedGroups,
     laneSource: resolvedLaneSource,
-    enabled: !groupedListMode,
+    enabled: !serverGroupedMode,
     onListStateChange,
   };
   const content = (
@@ -258,7 +261,7 @@ function ListViewBody<TRow extends Row = Row>({
       effectiveGroupStack={effectiveGroupStack}
       boardGroupingPinned={boardGroupingPinned}
       clientRowModel={clientRowModel}
-      groupedListMode={groupedListMode}
+      serverGroupedMode={serverGroupedMode}
       declaredFacets={declaredFacets}
       scalarFacets={scalarFacets}
       explicitGroupOptions={explicitGroupOptions}
@@ -306,7 +309,7 @@ function ListViewBody<TRow extends Row = Row>({
   if (clientRowModel) {
     return <ClientSurfaceBody<TRow> surfaceProps={surfaceProps}>{content}</ClientSurfaceBody>;
   }
-  if (groupedListMode) {
+  if (serverGroupedMode) {
     return <GroupedServerSurfaceBody<TRow> surfaceProps={surfaceProps}>{content}</GroupedServerSurfaceBody>;
   }
   return <ServerSurfaceBody<TRow> surfaceProps={surfaceProps}>{content}</ServerSurfaceBody>;
