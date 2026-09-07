@@ -17,15 +17,12 @@ import {
 import { type Virtualizer } from "@tanstack/react-virtual";
 import {
   type AggregateBucket,
-  MAX_PAGE_SIZE,
 } from "@angee/refine";
 import { Glyph } from "../../chrome/Glyph";
 import { useUiT, type UiTranslate } from "../../i18n";
 import { cn } from "../../lib/cn";
 import type { DndPayload } from "../../lib/dnd";
 import { CountBadge } from "../../ui/badge";
-import { Pager } from "../../ui/pager";
-import { PAGE_SIZE_OPTIONS } from "./page-size";
 import {
   Table,
   TableBody,
@@ -54,16 +51,14 @@ import {
   measureValue,
   useVirtualWindow,
   type GroupedListItem,
-  type GroupedListPager,
   type GroupedRecordNav,
   type GroupMeasure,
   type VisibleFieldOption,
 } from "./resource-view-list-body";
 import type { ListEmptyContent } from "./resource-view-types";
 
-function formatPagerNumber(value: number): string {
-  return value.toLocaleString();
-}
+import { GroupedScopePager } from "./GroupedScopePager";
+import { snapshotFromNav } from "./grouped-navigation";
 
 export interface GroupedListBodyProps<TRow extends Row> {
   table: TableModel<TRow>;
@@ -134,20 +129,9 @@ export function GroupedListBody<TRow extends Row>({
     listItems.length,
     (index) => estimateGroupedItemSize(listItems[index]),
   );
-  const recordNavByRowId = React.useMemo(() => {
-    const map = new Map<string, GroupedRecordNav>();
-    for (const item of listItems) {
-      if (item.kind === "record") map.set(item.row.id, item.nav);
-    }
-    return map;
-  }, [listItems]);
   const handleRecordOpen = React.useCallback(
-    (row: TRow) => {
-      const nav = recordNavByRowId.get(String(row.id));
-      if (!nav) return;
-      onListStateChange?.(snapshotFromNav<TRow>(nav));
-    },
-    [onListStateChange, recordNavByRowId],
+    (nav: GroupedRecordNav) => onListStateChange?.(snapshotFromNav<TRow>(nav)),
+    [onListStateChange],
   );
 
   return (
@@ -269,7 +253,7 @@ interface GroupedItemRowProps<TRow extends Row> {
   renderRowActions?: (row: TRow) => React.ReactNode;
   onRowClick?: (row: TRow) => void;
   draggableRow?: (row: TRow) => DndPayload | null;
-  onRecordOpen: (row: TRow) => void;
+  onRecordOpen: (nav: GroupedRecordNav) => void;
   onToggleGroup: (key: string) => void;
   onPageChange: (key: string, page: number) => void;
   onPageSizeChange: (key: string, pageSize: number) => void;
@@ -321,7 +305,7 @@ function GroupedItemRow<TRow extends Row>({
           rowHref={rowHref ? (row) => rowHref(row, item.nav) : undefined}
           onRowClick={onRowClick}
           draggableRow={draggableRow}
-          onRecordOpen={onRecordOpen}
+          onRecordOpen={() => onRecordOpen(item.nav)}
           renderRowActions={renderRowActions}
         />
       );
@@ -380,7 +364,7 @@ function GroupedHeaderRow<TRow extends Row>({
     </span>
   );
   const pager = item.pager ? (
-    <GroupedHeaderPager pager={item.pager} label={label} onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} t={t} />
+    <GroupedScopePager pager={item.pager} label={label} onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} t={t} />
   ) : null;
   const toggle = (): void => {
     if (expandable) onToggle(bucketKey);
@@ -466,52 +450,6 @@ function GroupedHeaderRow<TRow extends Row>({
   );
 }
 
-function GroupedHeaderPager({
-  pager,
-  label,
-  onPageChange,
-  onPageSizeChange,
-  t,
-}: {
-  pager: GroupedListPager;
-  label: string;
-  onPageChange: (key: string, page: number) => void;
-  onPageSizeChange: (key: string, pageSize: number) => void;
-  t: UiTranslate;
-}): React.ReactElement {
-  const { pageKey, page, pageSize, total, unit, pending } = pager;
-  const navLabel = t(
-    unit === "groups" ? "list.pagerSubject.groups" : "list.pagerSubject.records",
-    { label },
-  );
-  return (
-    <nav
-      aria-label={navLabel}
-      aria-busy={pending}
-      onClick={(event) => event.stopPropagation()}
-      className={cn(textRoleVariants({ role: "meta" }), "flex shrink-0 items-center justify-end gap-2 whitespace-nowrap font-normal")}
-    >
-      <Pager
-        page={page}
-        pageSize={pageSize}
-        total={total}
-        hasPrev={!pending && page > 1}
-        hasNext={!pending && total !== undefined && page * pageSize < total}
-        onPageChange={(next) => onPageChange(pageKey, next)}
-        unit={unit === "groups" ? "groups" : undefined}
-        subject={navLabel}
-        disabled={pending}
-        pageSizeOptions={PAGE_SIZE_OPTIONS}
-        maxPageSize={MAX_PAGE_SIZE}
-        onPageSizeChange={(size) => onPageSizeChange(pageKey, size)}
-        previousLabel={t("pager.previousSubject", { subject: navLabel })}
-        nextLabel={t("pager.nextSubject", { subject: navLabel })}
-        formatNumber={formatPagerNumber}
-      />
-    </nav>
-  );
-}
-
 function GroupedStatusRow<TRow extends Row>({
   item,
   colSpan,
@@ -533,29 +471,6 @@ function GroupedStatusRow<TRow extends Row>({
       </TableCell>
     </TableRow>
   );
-}
-
-function snapshotFromNav<TRow extends Row>(
-  nav: GroupedRecordNav,
-): ResourceListSnapshot<TRow> {
-  const pageCount =
-    nav.total === undefined ? undefined : Math.max(1, Math.ceil(nav.total / nav.pageSize));
-  return {
-    rows: nav.rows as readonly TRow[],
-    total: nav.total,
-    page: nav.page,
-    pageSize: nav.pageSize,
-    pageCount,
-    hasNext: pageCount !== undefined && nav.page < pageCount,
-    hasPrev: nav.page > 1,
-    fetching: nav.fetching,
-    navigationScope: {
-      filter: nav.filter,
-      order: nav.order,
-      page: nav.page,
-      pageSize: nav.pageSize,
-    },
-  };
 }
 
 function depthIndentStyle(depth: number): React.CSSProperties | undefined {

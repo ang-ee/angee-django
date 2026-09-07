@@ -163,7 +163,7 @@ describe("buildGroupedRenderModel", () => {
     const failed = buildGroupedRenderModel<Row>(
       results,
       new Map([[header.bucketKey, {
-        rows: [], total: undefined, fetching: false,
+        rows: [], total: undefined, fetching: false, refetch: vi.fn(),
         error: Object.assign(new Error(`variables secret=${secret}`), {
           request: { variables: { secret } }, response: { status: 500 },
         }),

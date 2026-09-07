@@ -109,7 +109,7 @@ export function useResourceViewToolbarInputs<TRow extends Row>({
     () => mergeGroupOptions(groupOptions, contributedGroupOptions),
     [contributedGroupOptions, groupOptions],
   );
-  const serverGrouping = Boolean(modelMetadata && !isClientRowModel(modelMetadata.resource) && resourceView.state.view === "list");
+  const serverGrouping = Boolean(modelMetadata && !isClientRowModel(modelMetadata.resource) && (resourceView.state.view === "list" || resourceView.state.view === "board"));
   const resolvedGroupOptions = React.useMemo(
     () => {
       const options = explicitGroupOptionsReplaceInferred && groupOptions !== undefined

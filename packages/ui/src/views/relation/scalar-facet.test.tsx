@@ -30,7 +30,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
   };
 });
 
-const GROUPS_TARGET = { dataProviderName: "public", root: "notes_groups" };
+const GROUPS_TARGET = { dataProviderName: "public", root: "notes_groups", modelLabel: "notes.Note" };
 
 beforeEach(() => {
   dataMocks.facets.mockReset();

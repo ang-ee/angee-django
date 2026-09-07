@@ -190,7 +190,8 @@ function BoardRows<TRow extends Row>({
     return <ListEmpty className="px-3 py-8">{emptyContent}</ListEmpty>;
   }
   // Kanban is most useful with an active group axis; with no group-by applied a single lane is shown.
-  // The board renders the current page only (bounded by the page-size cap, MAX_PAGE_SIZE), grouped into lanes; no row virtualization is used here.
+  // Local rows and explicitly declared workflow lanes use this bounded row page.
+  // Server group discovery and per-lane record pages render through GroupedBoardBody.
   const board = (
     <div className={BOARD_SCROLL_SURFACE_CLASS}>
       {leaves.map((group) => (

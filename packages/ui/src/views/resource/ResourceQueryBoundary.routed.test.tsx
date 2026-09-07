@@ -22,7 +22,8 @@ const resource = testDataResource("notes.Note", {
 const clients: QueryClient[] = [];
 afterEach(() => { cleanup(); clients.splice(0).forEach((client) => client.clear()); });
 
-function fixture() {
+function fixture({ rowModel = "server" }: { rowModel?: "server" | "client" } = {}) {
+  const activeResource = { ...resource, rowModel };
   const getList = vi.fn(async (_params: GetListParams) => ({ data: [{ id: "1", title: "Kept note" }], total: 1 }));
   const provider = { getApiUrl: () => "test://query", getList, getOne: vi.fn(), create: vi.fn(),
     update: vi.fn(), deleteOne: vi.fn() } as DataProvider;
@@ -37,9 +38,9 @@ function fixture() {
   const route = createRoute({ getParentRoute: () => root, path: "/", component: () =>
     <ResourceViewProvider resource={resource.modelLabel}><Records /></ResourceViewProvider> });
   const router = createRouter({ routeTree: root.addChildren([route]), history: createMemoryHistory({ initialEntries: ["/"] }) });
-  render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }}
+  render(<Refine resources={[...refineResourcesFromDataResources([activeResource])]} dataProvider={{ default: provider, console: provider }}
     options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
-    <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}><ToastProvider>
+    <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([activeResource])}><ToastProvider>
       <RouterProvider router={router} />
     </ToastProvider></ModelMetadataProvider>
   </Refine>);
@@ -77,9 +78,11 @@ test("two immediate route updates retain both the first filter and the following
   }));
 });
 
-test("a client-only axis in a server list gives a repairable query error before group reads", async () => {
+test.each(["list", "board"] as const)("a client-only axis in a server %s gives a repairable query error before group reads", async (view) => {
   const f = fixture();
   expect(await screen.findByText("Kept note")).toBeTruthy();
+  act(() => f.view.setView(view));
+  await waitFor(() => expect(f.view.state.view).toBe(view));
   const requests = f.getList.mock.calls.length;
   act(() => f.view.setGroup({ field: "title" }));
   expect(await screen.findByText(/does not support server grouping/)).toBeTruthy();
@@ -89,15 +92,15 @@ test("a client-only axis in a server list gives a repairable query error before 
   expect(await screen.findByText("Kept note")).toBeTruthy();
 });
 
-test("group choices follow the current view's server or local grouping capability", async () => {
-  const f = fixture();
+test.each(["server", "client"] as const)("list and board group choices follow the resource's %s grouping capability", async (rowModel) => {
+  const f = fixture({ rowModel });
   expect(await screen.findByText("Kept note")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Filter and group" }));
-  expect(screen.queryByRole("button", { name: "Title" })).toBeNull();
+  expect(Boolean(screen.queryByRole("button", { name: "Title" }))).toBe(rowModel === "client");
 
   act(() => f.view.setView("board"));
   await waitFor(() => expect(f.view.state.view).toBe("board"));
   const trigger = await screen.findByRole("button", { name: "Filter and group" });
   if (trigger.getAttribute("aria-expanded") !== "true") fireEvent.click(trigger);
-  expect(await screen.findByRole("button", { name: "Title" })).toBeTruthy();
+  expect(Boolean(screen.queryByRole("button", { name: "Title" }))).toBe(rowModel === "client");
 });

@@ -168,6 +168,8 @@ export interface CustomGraphQLMutationRequest {
 export interface CustomGraphQLOperationTarget {
   dataProviderName: string;
   root: string;
+  /** Canonical model whose live changes invalidate resource group reads. */
+  modelLabel?: string;
 }
 
 export function aggregateRequest(

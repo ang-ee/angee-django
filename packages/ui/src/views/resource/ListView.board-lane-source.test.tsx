@@ -281,9 +281,9 @@ describe("ListView board laneSource", () => {
     });
   });
 
-  test("keeps the derived board lanes when no laneSource is declared", async () => {
+  test("keeps native client grouping when no laneSource is declared for a bounded resource", async () => {
     harness.tableRows = [{ id: "led_1", name: "Upgrade", stage: { id: "New", name: "New" } }];
-    renderLeadBoard({ laneSource: undefined });
+    renderLeadBoard({ laneSource: undefined, metadata: leadMetadata({ rowModel: "client" }) });
 
     await waitFor(() => {
       expect(harness.boardProps?.groups.map((group) => group.key)).toEqual([
@@ -300,7 +300,7 @@ describe("ListView board laneSource", () => {
   });
 
   test("enables drag only when a laneSource is declared and the group field is writable", async () => {
-    renderLeadBoard({ laneSource: undefined });
+    renderLeadBoard({ laneSource: undefined, metadata: leadMetadata({ rowModel: "client" }) });
     await waitFor(() => expect(harness.boardProps).not.toBeNull());
     expect(harness.boardProps?.dragEnabled).toBe(false);
     expect(harness.boardProps?.onCardMove).toBeUndefined();
@@ -503,9 +503,11 @@ function leadMetadata(
   {
     stageNullable = true,
     stageWritable = true,
+    rowModel = "server",
   }: {
     stageNullable?: boolean;
     stageWritable?: boolean;
+    rowModel?: "client" | "server";
   } = {},
 ): SchemaFieldMetadata {
   const leadQuery = ResourceQuery.forRows({ fields: {
@@ -522,6 +524,7 @@ function leadMetadata(
       modelLabel: "crm.Lead",
       appLabel: "crm",
       modelName: "lead",
+      rowModel,
       roots: { list: "crmLeads", aggregate: "crmLeads_aggregate", update: "updateCrmLead" },
       typeNames: { node: "LeadType", filter: "LeadBoolExp", order: "LeadOrderBy" },
       recordRepresentation: "name",

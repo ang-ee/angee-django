@@ -77,6 +77,7 @@ export class RelationRepresentationError extends Error {
 export interface DataResourceOperationTarget {
   dataProviderName: string;
   root: string;
+  modelLabel: string;
 }
 
 export function isClientRowModel(
@@ -93,7 +94,7 @@ export function resourceOperationTarget(
   if (!value) {
     throw new Error(`Resource "${resource.modelLabel}" does not expose ${root}.`);
   }
-  return { dataProviderName: resource.schemaName, root: value };
+  return { dataProviderName: resource.schemaName, root: value, modelLabel: resource.modelLabel };
 }
 
 export function schemaFieldMetadataFromAngeeSchemaMetadata(

@@ -39,6 +39,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
 });
 
 const GROUPS_TARGET = {
+  modelLabel: "agents.InferenceModel",
   dataProviderName: "console",
   root: "inference_models_groups",
 };
@@ -73,6 +74,10 @@ describe("useRelationFacets", () => {
           ],
           orderBy: [{
             field: "provider_Name",
+            direction: "ASC",
+            nulls: "LAST",
+          }, {
+            field: "providerId",
             direction: "ASC",
             nulls: "LAST",
           }],
@@ -134,6 +139,10 @@ describe("useRelationFacets", () => {
           ],
           orderBy: [{
             field: "provider_Name",
+            direction: "ASC",
+            nulls: "LAST",
+          }, {
+            field: "providerId",
             direction: "ASC",
             nulls: "LAST",
           }],

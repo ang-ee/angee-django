@@ -44,4 +44,17 @@ dependent reads. Bounded local collections use `ResourceQuery.forRows` with
 explicit field declarations and pass that query to `RowsListView` when the
 visible columns do not describe all queryable fields.
 
+## Grouped boards
+
+For a server resource, selecting a group in the card view discovers groups across
+all matching records. The toolbar pages through groups; each lane shows its total
+record count and has an independent record pager. Switching between grouped list
+and card views preserves the same group and record scopes. No addon-specific
+fetching is needed.
+
+Explicit `laneSource` boards use the declared relation catalogue to include empty
+lanes and support lane creation and drag ordering; their record window remains
+the toolbar's record page. Bounded client resources and `RowsListView` group the
+loaded collection through TanStack Table.
+
 [React documentation](https://docs.angee.ai/react/) · [Package reference](https://docs.angee.ai/react/reference/ui/)

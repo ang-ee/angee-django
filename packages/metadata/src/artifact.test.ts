@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { defineAngeeSchemaMetadata } from "./artifact";
+import { defineAngeeSchemaMetadata, resourceOperationTarget } from "./artifact";
 import { testDataResource } from "./testing";
 
 describe("generated subtitle metadata", () => {
@@ -84,5 +84,13 @@ describe("generated resource wire contract", () => {
     expect(defineAngeeSchemaMetadata({})).toEqual({});
     expect(defineAngeeSchemaMetadata({ angee: {} })).toEqual({ angee: {} });
     expect(defineAngeeSchemaMetadata({ angee: null })).toEqual({ angee: null });
+  });
+});
+
+
+test("resource operation targets retain the canonical live model identity", () => {
+  const resource = testDataResource("messaging.Message", { roots: { groups: "messages_groups" } });
+  expect(resourceOperationTarget(resource, "groups")).toEqual({
+    dataProviderName: "console", root: "messages_groups", modelLabel: "messaging.Message",
   });
 });

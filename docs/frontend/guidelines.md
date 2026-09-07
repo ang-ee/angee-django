@@ -330,6 +330,14 @@ history uses native Query pages with domain-owned
   composes `List` over `storage.File` with drive/folder base filters and
   server-side folder grouping because a drive can contain hundreds of thousands
   of rows.
+- **Card presentation does not change the query boundary.** An ordinary grouped
+  board over a server resource uses the same server groups, exact counts and
+  per-group record pages as the grouped list. Deriving its lanes from a flat
+  record page hides groups that have no records on that page. The shared grouped
+  surface owns discovery and paging; board components render its results.
+  Explicit `laneSource` boards retain their relation-catalogue contract for empty
+  lanes, drag ordering and lane creation; bounded local collections keep native
+  client grouping.
 - **Resolve resource queries before adapting them to a library.** Use the
   resource's `ResourceQuery` for allowed comparisons, group identities, drill
   predicates and required selections. Hand-building a resource view's Hasura

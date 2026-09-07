@@ -378,7 +378,9 @@ export class GroupAxis {
       ...(this.extraction?.rangeKey ? { rangeKey: this.extraction.rangeKey } : {}),
     };
     const label = server.labelInput && server.labelKey ? { input: server.labelInput, key: server.labelKey } : undefined;
-    return { dimensions: label ? [identity, label] : [identity], valueKey: identity.key, ...(label ? { labelKey: label.key } : {}), orderBy: [{ field: label?.key ?? identity.key, direction: "ASC", nulls: "LAST" }] };
+    // Labels are not unique: identity breaks ties so bucket pages remain stable.
+    const order = label ? [label, identity] : [identity];
+    return { dimensions: label ? [identity, label] : [identity], valueKey: identity.key, ...(label ? { labelKey: label.key } : {}), orderBy: order.map(({ key }) => ({ field: key, direction: "ASC", nulls: "LAST" })) };
   }
   bucketIdentity(bucket: GroupBucket): FilterPrimitive {
     const key = this.groupBy().valueKey;

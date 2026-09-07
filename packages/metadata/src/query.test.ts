@@ -37,7 +37,10 @@ describe("ResourceQuery", () => {
     expect(query.selection([{ field: "channel" }])).toEqual(["channel.id", "channel.display_name"]);
     expect(axis.groupBy()).toEqual({
       dimensions: [{ input: "CHANNEL", key: "channel_id" }, { input: "CHANNEL__DISPLAY_NAME", key: "channel__display_name" }],
-      valueKey: "channel_id", labelKey: "channel__display_name", orderBy: [{ field: "channel__display_name", direction: "ASC", nulls: "LAST" }],
+      valueKey: "channel_id", labelKey: "channel__display_name", orderBy: [
+        { field: "channel__display_name", direction: "ASC", nulls: "LAST" },
+        { field: "channel_id", direction: "ASC", nulls: "LAST" },
+      ],
     });
     expect(query.toWhere(axis.drill({ key: { channel_id: "chn_a" } }))).toEqual({ channel: { _eq: "chn_a" } });
     expect(axis.drill({ key: { channel_id: null } })).toEqual({ channel: { isNull: true } });

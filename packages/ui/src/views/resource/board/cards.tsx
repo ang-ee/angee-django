@@ -21,6 +21,7 @@ interface BoardRowCardProps<TRow extends Row> {
   row: TableRowModel<TRow>;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
+  onRecordOpen?: (row: TRow) => void;
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
   cardActionContext: CardActionContext;
   dragEnabled: boolean;
@@ -96,6 +97,7 @@ function BoardRowCardContent<TRow extends Row>({
   row,
   rowHref,
   onRowClick,
+  onRecordOpen,
   cardActions,
   cardActionContext,
   dragEnabled,
@@ -138,6 +140,7 @@ function BoardRowCardContent<TRow extends Row>({
           <BoardCardFrame
             href={href}
             onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+            onRecordOpen={onRecordOpen ? () => onRecordOpen(row.original) : undefined}
           >
             {renderCard ? (
               renderCard(row.original)
@@ -219,10 +222,12 @@ function DefaultBoardCardBody<TRow extends Row>({
 function BoardCardFrame({
   href,
   onClick,
+  onRecordOpen,
   children,
 }: {
   href?: string;
   onClick?: () => void;
+  onRecordOpen?: () => void;
   children: React.ReactNode;
 }): React.ReactElement {
   const navigate = useNavigate();
@@ -240,9 +245,10 @@ function BoardCardFrame({
         return;
       }
       event.preventDefault();
+      onRecordOpen?.();
       void navigate({ to: href });
     },
-    [href, navigate],
+    [href, navigate, onRecordOpen],
   );
   if (href) {
     return (
@@ -256,7 +262,7 @@ function BoardCardFrame({
       <button
         type="button"
         className={BOARD_CARD_SHELL_CLASS}
-        onClick={onClick}
+        onClick={() => { onRecordOpen?.(); onClick(); }}
       >
         {children}
       </button>
