@@ -148,6 +148,15 @@ tier (`master`, `install`, `demo`). Addons list resource files in their
 a GraphQL schema contribution for the frontend data-view layer. It is a UI/API
 surface, not an import file.
 
+**Resource query** — the executable query contract of a data resource. The
+backend finalizes `DataResourceQuery` against the composed schema; frontend
+`ResourceQuery` resolves filters, selections, ordering and group axes from it.
+Explicit local row declarations use the same contract and semantics.
+
+**Group axis** — one query dimension with a stable bucket identity, optional
+display label, required row selections and optional server grouping and drill
+projections. Labels describe buckets; identities distinguish them.
+
 **REBAC resource** — an authorization object (`ObjectRef`) in the
 `django-zed-rebac` schema. It names what an actor can read/write; it is separate
 from resource files and GraphQL data resources.

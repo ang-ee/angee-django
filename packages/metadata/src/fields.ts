@@ -1,41 +1,26 @@
 import {
-  isClientRowModel,
   relationModelLabelForField,
   type DataResourceMetadata,
   type ModelFieldMetadata,
   type ModelMetadata,
 } from "./artifact";
-import { resourceFieldPathToSnake } from "./naming";
+import type { QueryField } from "./query-schema";
 
-/**
- * A to-one relation the node projects as a bare `ID` rather than a nested object.
- * Final metadata keeps relation semantics in `kind: "relation"` and records the
- * executable GraphQL shape as `relationObject: false`; older wire producers may
- * still describe the same leaf as a scalar `ID` with a canonical relation target.
- */
+/** A to-one relation explicitly projected by the node as a scalar identity. */
 export function isScalarIdRelation(
   field: ModelFieldMetadata,
   model?: ModelMetadata | null,
 ): boolean {
-  if (!relationModelLabelForField(field, model)) return false;
-  return (field.kind === "relation" && field.relationObject === false)
-    || (field.kind === "scalar" && field.scalar === "ID");
+  return field.kind === "relation" && field.relationObject === false
+    && relationModelLabelForField(field, model) !== undefined;
 }
 
-/**
- * Is this field a to-one relation, whichever way the node projects it?
- *
- * The projection is a wire detail — an object sub-selection or a bare `ID` leaf.
- * Both shapes name the same related model, carry the same relation filter, and
- * group by the same identity axis. The scalar branch below remains for older
- * metadata whose coarse kind predates the finalized relation classifier.
- */
+/** Final field metadata owns relation classification for both projection shapes. */
 export function isToOneRelationField(
   field: ModelFieldMetadata | undefined,
-  model?: ModelMetadata | null,
+  _model?: ModelMetadata | null,
 ): boolean {
-  if (!field) return false;
-  return field.kind === "relation" || isScalarIdRelation(field, model);
+  return field?.kind === "relation";
 }
 
 const SCALAR_WIDGET: Readonly<Record<string, string>> = {
@@ -58,7 +43,7 @@ export type ResourceFilterFieldType =
 
 export interface ChoiceFacetSupport {
   fieldName: string;
-  field?: ModelFieldMetadata;
+  field?: Pick<QueryField, "kind" | "scalar">;
   hasOptions?: boolean;
   hasTone?: boolean;
   allowStatusFallback?: boolean;
@@ -84,7 +69,7 @@ export function defaultWidgetForModelField(
 
 export function filterFieldType(
   fieldName: string,
-  field: ModelFieldMetadata | undefined,
+  field: Pick<QueryField, "kind" | "scalar"> | undefined,
   support: Omit<ChoiceFacetSupport, "fieldName" | "field"> = {},
 ): ResourceFilterFieldType | null {
   if (field?.kind === "enum") return "selection";
@@ -134,7 +119,7 @@ function looksLikeDateField(fieldName: string): boolean {
 
 /** Resolve date semantics from declared metadata, with a name fallback only when absent. */
 export function isDateField(
-  field: ModelFieldMetadata | undefined,
+  field: Pick<QueryField, "kind" | "scalar"> | undefined,
   fieldName: string,
 ): boolean {
   if (field) {
@@ -144,19 +129,10 @@ export function isDateField(
   return looksLikeDateField(fieldName);
 }
 
-/**
- * Resolve a displayed field path to an explicitly declared server order field.
- * Hasura order inputs use flat Django paths; nested display accessors stay dotted
- * in Table and map only when metadata declares that exact path. Local rows have
- * no server order-input restriction. Absent resource metadata preserves authored
- * local table behavior rather than inventing a schema capability.
- */
+/** Resolve an authored display path through its declared query sort capability. */
 export function resourceOrderFieldForPath(
   path: string,
   resource: DataResourceMetadata | null | undefined,
 ): string | null {
-  if (!resource || isClientRowModel(resource)) return path;
-  if (resource.orderFields.includes(path)) return path;
-  const normalized = resourceFieldPathToSnake(path.replaceAll(".", "__"));
-  return resource.orderFields.find((field) => resourceFieldPathToSnake(field) === normalized) ?? null;
+  return resource ? resource.query.fields[path]?.sort?.field ?? null : path;
 }

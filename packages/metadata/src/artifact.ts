@@ -3,7 +3,6 @@ import type {
   DataResourceFieldMetadata,
   DataResourceLinesMetadata,
   DataResourceMetadata,
-  DataResourceRelationAxisMetadata,
   DataResourceRootMetadata,
 } from "./artifact-schema.js";
 
@@ -11,16 +10,9 @@ export { defineAngeeSchemaMetadata } from "./artifact-schema.js";
 export type {
   AngeeSchemaMetadata,
   DataResourceAggregateMeasureMetadata,
-  DataResourceDefaultSortMetadata,
   DataResourceFieldMetadata,
-  DataResourceGroupAliasMetadata,
-  DataResourceGroupBucketFilterMetadata,
-  DataResourceGroupBucketFilterValueMapMetadata,
-  DataResourceGroupDimensionMetadata,
-  DataResourceGroupExtractionMetadata,
   DataResourceLinesMetadata,
   DataResourceMetadata,
-  DataResourceRelationAxisMetadata,
   DataResourceRootMetadata,
   DataResourceSubtitleMetadata,
   DataResourceTypeMetadata,
@@ -29,16 +21,6 @@ export type {
 } from "./artifact-schema.js";
 
 import { canonicalModelLabelOrNull } from "./canonical-model-label.js";
-
-export type ModelRelationFilterMode = "lookup" | "id";
-
-export interface ModelRelationFilterMetadata {
-  field: string;
-  mode: ModelRelationFilterMode;
-  lookup?: string;
-  aggregateKey?: string;
-  labelKey?: string;
-}
 
 /**
  * Presentation-facing field reference. Required wire flags stay owned and
@@ -54,28 +36,23 @@ export type ModelFieldMetadata =
     | "widget"
     | "currencyField"
     | "readable"
-    | "filterable"
-    | "sortable"
     | "aggregatable"
-    | "groupable"
     | "creatable"
     | "updatable"
     | "requiredOnCreate"
     | "nullable"
     | "relationModelLabel"
-    | "relationLabelAxis"
     | "relationObject"
   >>;
 
 /**
  * A schema-scoped index over one parsed resource. The values in `fields` and
- * `relationAxes` are the original parsed objects; derived presentation and
+ * query are the original parsed objects; derived presentation and
  * selection facts are resolved on demand by the helpers below.
  */
 export interface ModelMetadata {
   resource: DataResourceMetadata;
   fields: Readonly<Record<string, ModelFieldMetadata>>;
-  relationAxes: Readonly<Record<string, DataResourceRelationAxisMetadata>>;
 }
 
 export interface SchemaFieldMetadata {
@@ -145,16 +122,7 @@ export function schemaFieldMetadataFromDataResources(
       }
       fields[field.name] = field;
     }
-    const relationAxes: Record<string, DataResourceRelationAxisMetadata> = {};
-    for (const axis of resource.relationAxes) {
-      if (relationAxes[axis.field]) {
-        throw new Error(
-          `Resource "${resource.modelLabel}" declares duplicate relation axis "${axis.field}".`,
-        );
-      }
-      relationAxes[axis.field] = axis;
-    }
-    const model: ModelMetadata = { resource, fields, relationAxes };
+    const model: ModelMetadata = { resource, fields };
     labels[resource.modelLabel] = model;
     const nodeName = resource.typeNames.node;
     if (nodeName) {
@@ -179,30 +147,18 @@ export function modelMetadataForLabel(
   return canonicalLabel ? metadata.labels[canonicalLabel] ?? null : null;
 }
 
-/** The canonical relation target label owned by the field or its relation axis. */
+/** The final projected field owns its relation target. */
 export function relationModelLabelForField(
   field: ModelFieldMetadata,
   model?: ModelMetadata | null,
 ): string | undefined {
-  return field.relationModelLabel ?? relationAxisForField(field.name, model)?.modelLabel;
-}
-
-export function relationAxisForField(
-  fieldName: string,
-  model?: ModelMetadata | null,
-): DataResourceRelationAxisMetadata | undefined {
-  if (!model) return undefined;
-  return model.relationAxes[fieldName]
-    ?? model.relationAxes[snakeFieldName(fieldName)]
-    ?? Object.values(model.relationAxes).find(
-      (axis) => snakeFieldName(axis.field) === snakeFieldName(fieldName),
-    );
+  return field.relationModelLabel ?? model?.resource.query.fields[field.name]?.relation?.model;
 }
 
 /**
  * Resolve a dotted field path when its terminal field is an object relation.
  * Explicit continuation through an unindexed GraphQL object stays structural;
- * metadata is required only when Angee must infer a relation terminal label.
+ * final query relation paths own all inferred object selections.
  */
 export function relationRepresentationForPath(
   path: string,
@@ -217,11 +173,20 @@ export function relationRepresentationForPath(
     const terminal = index === segments.length - 1;
     if (terminal) {
       if (!hasRelationObjectSelection(field, current)) return null;
-      return relationRepresentationSelection(
-        path,
-        relationModelLabelForField(field, current),
-        metadata,
-      );
+      const relation = current.resource.query.fields[segment]?.relation;
+      const displayPath = relation?.labelPath ?? relation?.identityPath;
+      if (!relation || !displayPath) {
+        throw new RelationRepresentationError(`Relation field "${path}" has no finalized selectable representation.`);
+      }
+      const prefix = segments.slice(0, index).join(".");
+      const qualify = (value: string) => prefix ? `${prefix}.${value}` : value;
+      return {
+        selectionPaths: [...new Set([
+          ...(relation.identityPath ? [qualify(relation.identityPath)] : []),
+          qualify(displayPath),
+        ])],
+        displayPath: qualify(displayPath),
+      };
     }
     if (!hasRelationObjectSelection(field, current)) return null;
     const targetLabel = relationModelLabelForField(field, current);
@@ -239,7 +204,7 @@ export function resourceReadSelectionPaths(
   metadata: SchemaFieldMetadata,
   excludeField?: string | null,
 ): readonly string[] {
-  const paths = new Set<string>([model.resource.publicIdField]);
+  const paths = new Set<string>([model.resource.query.identity.field]);
   for (const field of Object.values(model.fields)) {
     if (!field.readable || field.name === excludeField || paths.has(field.name)) continue;
     const relation = relationRepresentationForPath(field.name, model, metadata);
@@ -321,9 +286,9 @@ function representationSelection(
     );
   }
   const nextVisited = new Set(visited).add(modelLabel);
-  const idPath = `${prefix}.${model.resource.publicIdField}`;
+  const idPath = `${prefix}.${model.resource.query.identity.field}`;
   const representation = model.resource.recordRepresentation;
-  if (!representation || representation === model.resource.publicIdField) {
+  if (!representation || representation === model.resource.query.identity.field) {
     return { selectionPaths: [idPath], displayPath: idPath };
   }
   const nested = relationRepresentationForRepresentation(
@@ -392,7 +357,8 @@ function hasRelationObjectSelection(
 ): boolean {
   if (field.kind !== "relation") return false;
   if (field.relationObject != null) return field.relationObject;
-  return relationAxisForField(field.name, model) !== undefined;
+  const relation = model?.resource.query.fields[field.name]?.relation;
+  return relation != null && relation.identityPath !== field.name;
 }
 
 function requiredRelationTarget(
@@ -407,51 +373,4 @@ function requiredRelationTarget(
     );
   }
   return target;
-}
-
-function relationFilterForAxis(
-  axis: DataResourceRelationAxisMetadata,
-  resource: DataResourceMetadata,
-  fieldName?: string,
-): ModelRelationFilterMetadata | undefined {
-  const names = fieldName && fieldName !== axis.field ? [axis.field, fieldName] : [axis.field];
-  const filterField = firstIncluded(resource.filterFields, [
-    ...names,
-    ...names.map((name) => `${name}_id`),
-    ...names.map((name) => `${name}Id`),
-  ]);
-  if (!filterField) return undefined;
-  const identityDimension = resource.groupDimensions?.find(
-    (dimension) => names.includes(dimension.field) || names.includes(dimension.key),
-  );
-  return {
-    field: filterField,
-    mode: "lookup",
-    lookup: axis.publicIdField,
-    ...(identityDimension?.key ? { aggregateKey: identityDimension.key } : {}),
-    ...(axis.labelAxis ? { labelKey: axis.labelAxis } : {}),
-  };
-}
-
-/** Derived relation filter for a projected field or an axis-only relation. */
-export function relationFilterForRelation(
-  relationField: string,
-  metadata: ModelMetadata | null,
-): ModelRelationFilterMetadata | undefined {
-  if (!metadata) return undefined;
-  const axis = relationAxisForField(relationField, metadata);
-  return axis
-    ? relationFilterForAxis(axis, metadata.resource, relationField)
-    : undefined;
-}
-
-function firstIncluded(
-  values: readonly string[],
-  candidates: readonly string[],
-): string | undefined {
-  return candidates.find((candidate) => values.includes(candidate));
-}
-
-function snakeFieldName(value: string): string {
-  return value.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
 }

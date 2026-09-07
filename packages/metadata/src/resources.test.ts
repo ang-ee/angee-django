@@ -6,9 +6,9 @@ import {
 } from "./resources";
 import {
   modelMetadataForLabel,
-  relationFilterForRelation,
   schemaFieldMetadataFromDataResources,
 } from "./metadata";
+import { testResourceQuery } from "./testing";
 import type { DataResourceMetadata } from "./metadata";
 
 describe("refine resource metadata", () => {
@@ -69,38 +69,29 @@ describe("refine resource metadata", () => {
     expect(modelMetadataForLabel(metadata, "Addon")?.resource).toBe(computed);
   });
 
-  test("keeps original field and axis references when the node name is omitted", () => {
+  test("keeps original field and query references when the node name is omitted", () => {
     const field = {
       name: "owner",
       kind: "relation",
       readable: true,
-      filterable: true,
-      sortable: false,
       aggregatable: false,
-      groupable: false,
       creatable: false,
       updatable: false,
       requiredOnCreate: false,
       relationModelLabel: "accounts.User",
       relationObject: true,
     } as const;
-    const axis = {
-      field: "owner",
-      modelLabel: "accounts.User",
-      publicIdField: "id",
-    } as const;
     const withoutNode: DataResourceMetadata = {
       ...resource(),
       typeNames: {},
       fields: [field],
-      relationAxes: [axis],
     };
     const metadata = schemaFieldMetadataFromDataResources([withoutNode]);
     const indexed = metadata.labels["notes.Note"]!;
 
     expect(metadata.types).toEqual({});
     expect(indexed.fields.owner).toBe(field);
-    expect(indexed.relationAxes.owner).toBe(axis);
+    expect(indexed.resource.query).toBe(withoutNode.query);
   });
 
   test("an ambiguous legacy bare label degrades to null with a development warning", () => {
@@ -218,7 +209,7 @@ function resource(): DataResourceMetadata {
     modelLabel: "notes.Note",
     appLabel: "notes",
     modelName: "Note",
-    publicIdField: "id",
+
     roots: {
       list: "notes",
       detail: "notes_by_pk",
@@ -232,85 +223,8 @@ function resource(): DataResourceMetadata {
     },
     typeNames: {},
     capabilities: ["list", "detail", "create", "update", "delete"],
-    filterFields: ["status"],
-    orderFields: ["updated_at"],
+    query: testResourceQuery(),
     aggregateFields: ["id"],
-    groupByFields: ["status"],
-    relationAxes: [],
+
   };
 }
-
-describe("relation contract, whichever way the node projects the FK", () => {
-  // `drive` is a to-one relation the node projects as a bare `ID` scalar;
-  // `oauth_client` is one the node does not project at all (a curated node shows
-  // derived `provider_*` columns instead). Both are declared relation axes.
-  const relationResource = (): DataResourceMetadata => ({
-    ...resource(),
-    modelLabel: "storage.File",
-    typeNames: { node: "FileType" },
-    filterFields: ["drive", "oauth_client"],
-    groupByFields: ["drive", "drive__name", "oauth_client", "oauth_client__display_name"],
-    fields: [
-      {
-        name: "drive",
-        kind: "scalar",
-        scalar: "ID",
-        relationModelLabel: "storage.Drive",
-        relationLabelAxis: "drive__name",
-        relationObject: false,
-        readable: true,
-        filterable: true,
-        groupable: true,
-        sortable: false,
-        aggregatable: false,
-        creatable: false,
-        updatable: false,
-        archivable: false,
-        requiredOnCreate: false,
-        values: [],
-      },
-    ] as unknown as DataResourceMetadata["fields"],
-    groupDimensions: [
-      { field: "drive", input: "DRIVE", key: "drive_id", kind: "relation", scalar: "ID" },
-      { field: "drive__name", input: "DRIVE__NAME", key: "drive__name", kind: "column", scalar: "String" },
-      { field: "oauth_client", input: "OAUTH_CLIENT", key: "oauth_client_id", kind: "relation", scalar: "ID" },
-    ] as unknown as DataResourceMetadata["groupDimensions"],
-    relationAxes: [
-      { field: "drive", modelLabel: "storage.Drive", publicIdField: "sqid", labelAxis: "drive__name" },
-      { field: "oauth_client", modelLabel: "integrate.OAuthClient", publicIdField: "sqid", labelAxis: "oauth_client__display_name" },
-    ],
-  });
-
-  test("a relation projected as a bare ID scalar still carries its relation filter", () => {
-    const metadata = schemaFieldMetadataFromDataResources([relationResource()]);
-    const model = modelMetadataForLabel(metadata, "storage.File");
-    expect(relationFilterForRelation("drive", model)).toEqual({
-      field: "drive",
-      mode: "lookup",
-      lookup: "sqid",
-      aggregateKey: "drive_id",
-      labelKey: "drive__name",
-    });
-  });
-
-  test("a relation the node never projects still resolves through its axis", () => {
-    const metadata = schemaFieldMetadataFromDataResources([relationResource()]);
-    const model = modelMetadataForLabel(metadata, "storage.File");
-    // No node field exists for it at all...
-    expect(model?.fields.oauth_client).toBeUndefined();
-    // ...but the axis still owns the identity and the label.
-    expect(relationFilterForRelation("oauth_client", model)).toEqual({
-      field: "oauth_client",
-      mode: "lookup",
-      lookup: "sqid",
-      aggregateKey: "oauth_client_id",
-      labelKey: "oauth_client__display_name",
-    });
-  });
-
-  test("a field no axis names gets no relation filter", () => {
-    const metadata = schemaFieldMetadataFromDataResources([relationResource()]);
-    const model = modelMetadataForLabel(metadata, "storage.File");
-    expect(relationFilterForRelation("status", model)).toBeUndefined();
-  });
-});

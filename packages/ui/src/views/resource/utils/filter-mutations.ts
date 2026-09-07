@@ -1,4 +1,4 @@
-import { isClientRowModel, type ModelMetadata } from "@angee/metadata";
+import { ResourceQuery, type ModelMetadata } from "@angee/metadata";
 import type { ResourceToolbarCustomFilter, ResourceToolbarCustomFilterChip, ResourceToolbarFilterField, ResourceToolbarFilterOption, ResourceToolbarGroupOption } from "../../../toolbars";
 import { DEFAULT_TEXT_FILTER_FIELD, Filter, isLookupOperator, type ResourceViewFilter, type ResourceViewLookup } from "../resource-view-model";
 import { fieldLabel } from "../model-metadata-defaults";
@@ -28,53 +28,37 @@ export function nextFacetFilter(
   return Filter.from(filter).toggleFacet(facet);
 }
 
-/**
- * The field the free-text search box reads/writes — the model's title field
- * (``recordRepresentation``, e.g. ``display_name``), falling back to the generic
- * ``title`` when unknown.
- *
- * A **server** resource sends the search term as a Hasura ``where`` on this
- * field, so it must be one the resource declares filterable; otherwise the query
- * is rejected (the resource simply never declared its title field filterable). A
- * **client** row model filters in-memory, so any field is fine. When the title
- * field is not server-filterable, fall back to the first filterable text field
- * so free-text search degrades to a working field instead of 500-ing.
- */
+/** The declared text comparison field used by the search control. */
 export function resolveTextFilterField(
   metadata: ModelMetadata | null | undefined,
-): string {
-  const rep = metadata?.resource.recordRepresentation ?? DEFAULT_TEXT_FILTER_FIELD;
-  const resource = metadata?.resource;
-  if (!resource || isClientRowModel(resource) || resource.filterFields.includes(rep)) {
-    return rep;
-  }
-  const fields = metadata?.fields ?? {};
-  const fallback = resource.filterFields.find(
-    (name) => fields[name]?.kind === "scalar" && fields[name]?.scalar === "String",
-  );
-  return fallback ?? rep;
+): string | null {
+  if (!metadata) return DEFAULT_TEXT_FILTER_FIELD;
+  const query = ResourceQuery.from(metadata);
+  const preferred = metadata.resource.recordRepresentation;
+  if (preferred && query.fields[preferred]?.filter?.operators.includes("iContains")) return preferred;
+  return Object.keys(query.fields).find((name) => query.fields[name]?.filter?.operators.includes("iContains")) ?? null;
 }
 
 export function textFilterValue(
   filter: ResourceViewFilter,
-  field: string = DEFAULT_TEXT_FILTER_FIELD,
+  field: string | null = DEFAULT_TEXT_FILTER_FIELD,
 ): string {
-  return Filter.from(filter).textTerm(field);
+  return field ? Filter.from(filter).textTerm(field) : "";
 }
 
 export function nextTextFilter(
   filter: ResourceViewFilter,
   value: string,
-  field: string = DEFAULT_TEXT_FILTER_FIELD,
+  field: string | null = DEFAULT_TEXT_FILTER_FIELD,
 ): ResourceViewFilter {
-  return Filter.from(filter).withTextTerm(value, field);
+  return field ? Filter.from(filter).withTextTerm(value, field) : filter;
 }
 
 export function customFilterChipsFor(
   filter: ResourceViewFilter,
   filterOptions: readonly ResourceToolbarFilterOption[],
   fields: readonly ResourceToolbarFilterField[],
-  textField: string = DEFAULT_TEXT_FILTER_FIELD,
+  textField: string | null = DEFAULT_TEXT_FILTER_FIELD,
 ): readonly ResourceToolbarCustomFilterChip[] {
   const chips: ResourceToolbarCustomFilterChip[] = [];
   const fieldLabels = new Map(
@@ -155,5 +139,14 @@ export function mergeFilterFields(
   explicit: readonly ResourceToolbarFilterField[] | undefined,
   inferred: readonly ResourceToolbarFilterField[],
 ): readonly ResourceToolbarFilterField[] {
-  return mergeById(explicit, inferred);
+  const inherited = new Map(inferred.map((field) => [field.field ?? field.id, field]));
+  return mergeById(explicit, inferred).flatMap((field) => {
+    const base = inherited.get(field.field ?? field.id);
+    if (!base) return [field];
+    const operators = base.operators === undefined ? field.operators
+      : field.operators === undefined ? base.operators
+      : field.operators.filter((operator) => base.operators!.includes(operator));
+    if (operators?.length === 0) return [];
+    return [{ ...base, ...field, ...(operators ? { operators } : {}) }];
+  });
 }

@@ -1,4 +1,5 @@
 import { Badge, Code, type ResourceToolbarGroupOption, type ListColumn } from "@angee/ui";
+import { ResourceQuery } from "@angee/metadata";
 import { useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
@@ -7,6 +8,9 @@ import { daemonRows, type DaemonRow } from "../parts/daemon-rows";
 import { OperatorRowsList } from "../parts/operator-rows";
 
 type TemplateRow = DaemonRow<TemplateDescriptor>;
+const templateRowsQuery = ResourceQuery.forRows({ fields: {
+  name: { scalar: "String" }, kind: { scalar: "String" }, path: { scalar: "String" },
+} });
 
 const MAX_INPUT_CHIPS = 6;
 
@@ -55,6 +59,7 @@ export function TemplatesPage(): ReactNode {
 
   return (
     <OperatorRowsList<TemplateRow>
+      query={templateRowsQuery}
       sections={{ templates: true }}
       selectRows={(snapshot) =>
         daemonRows(snapshot.templates, (template) => template.ref)

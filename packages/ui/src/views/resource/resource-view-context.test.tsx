@@ -28,6 +28,7 @@ import {
   RESOURCE_VIEW_FAVORITES_PREFERENCES_KEY,
   RESOURCE_VIEW_FAVORITES_VERSION,
 } from "./resource-view-favorites";
+import { resourceViewFavoritesFromUnknown } from "./model/favorites";
 
 const METADATA = schemaFieldMetadataFromDataResources([
   testDataResource("notes.Note"),
@@ -69,6 +70,18 @@ describe("ResourceViewProvider favorites", () => {
     window.localStorage.clear();
   });
 
+  test("an obsolete saved query stays visible, blocks the view, and can be reset", () => {
+    const captured = captureRef();
+    const raw = { id: "favorite:old", label: "Old grouping", groupStack: [{ field: "channel", aggregateKey: "channel_id" }] };
+    renderFavoriteHarness({ captured, resource: "notes.Note", preferences: favoritesPreferences({ "notes.Note": [raw] }) });
+    expect(captured.current?.savedFavorites[0]).toEqual(raw);
+    act(() => captured.current?.applyFavorite(resourceViewFavoritesFromUnknown([raw])[0]!));
+    expect(captured.current?.state.queryError).toBeInstanceOf(Error);
+    act(() => captured.current?.resetQuery());
+    expect(captured.current?.state.queryError).toBeNull();
+    expect(captured.current?.state.groupStack).toEqual([]);
+  });
+
   test("reads versioned server favorites by canonical model label", () => {
     const captured = captureRef();
     renderFavoriteHarness({
@@ -76,8 +89,7 @@ describe("ResourceViewProvider favorites", () => {
       resource: "Note",
       preferences: favoritesPreferences({
         "notes.Note": [{ id: "favorite:server", label: "Server" }],
-        "tasks.Task": [{ id: "favorite:task", label: "Task" }],
-      }),
+        }),
     });
 
     expect(captured.current?.savedFavorites).toEqual([
@@ -140,7 +152,7 @@ describe("ResourceViewProvider favorites", () => {
     expect(captured.current?.saveFavorite).toBeUndefined();
   });
 
-  test("imports every legacy model once on the first authenticated write", async () => {
+  test("saves server favorites without importing obsolete local storage", async () => {
     window.localStorage.setItem(
       legacyStorageKey("Note"),
       JSON.stringify([{ id: "favorite:legacy", label: "Legacy" }]),
@@ -169,13 +181,11 @@ describe("ResourceViewProvider favorites", () => {
     expect(committed).toEqual(favoritesPreferences({
       "notes.Note": [
         { id: "favorite:server", label: "Server" },
-        { id: "favorite:legacy", label: "Legacy" },
         expect.objectContaining({ id: "favorite:new", label: "New" }),
       ],
-      "tasks.Task": [{ id: "favorite:task", label: "Task" }],
     }));
-    expect(window.localStorage.getItem(legacyStorageKey("Note"))).toBeNull();
-    expect(window.localStorage.getItem(legacyStorageKey("Task"))).toBeNull();
+    expect(window.localStorage.getItem(legacyStorageKey("Note"))).not.toBeNull();
+    expect(window.localStorage.getItem(legacyStorageKey("Task"))).not.toBeNull();
 
     window.localStorage.setItem(
       legacyStorageKey("Note"),
@@ -188,7 +198,6 @@ describe("ResourceViewProvider favorites", () => {
     };
     expect(document.models["notes.Note"]?.map(({ label }) => label)).toEqual([
       "Server",
-      "Legacy",
       "New",
       "Second",
     ]);
@@ -216,7 +225,6 @@ describe("ResourceViewProvider favorites", () => {
     act(() => captured.current?.saveFavorite?.("Optimistic"));
     expect(captured.current?.savedFavorites.map(({ label }) => label)).toEqual([
       "Retained",
-      "Legacy",
       "Optimistic",
     ]);
     await waitFor(() => {

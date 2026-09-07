@@ -97,7 +97,7 @@ describe("page element markers", () => {
   test("parse relation facet markers", () => {
     const facets = parsePageFacets(
       <>
-        <Facet field="provider" label="Provider" labelField="name" />
+        <Facet field="provider" label="Provider" />
         <Column field="title" />
       </>,
     );
@@ -106,7 +106,6 @@ describe("page element markers", () => {
       {
         field: "provider",
         label: "Provider",
-        labelField: "name",
       },
     ]);
   });

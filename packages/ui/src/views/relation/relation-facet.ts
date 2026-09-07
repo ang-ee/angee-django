@@ -1,290 +1,68 @@
 import * as React from "react";
-import {
-  useAngeeFacets,
-} from "@angee/refine";
-import type {
-  FacetRequestSpec,
-  } from "@angee/refine";
-import {
-  useModelMetadata,
-} from "@angee/metadata";
-import {
-  useSchemaFieldMetadata,
-  type ModelMetadata,
-  type ModelRelationFilterMetadata,
-  type ModelRelationFilterMode,
-  type SchemaFieldMetadata,
-} from "@angee/metadata";
-
-import type {
-  ResourceToolbarFilterField,
-  ResourceToolbarFilterOption,
-  ResourceToolbarGroupOption,
-} from "../../toolbars";
-import type { ResourceViewFilter, ResourceViewGroup } from "../resource/resource-view-model";
-import { facetRequestSpec } from "./facet-query";
-import {
-  resourceViewGroupQueryProjection,
-} from "../resource/resource-view-list-body";
-import {
-  resourceFieldGroupLabel,
-  relationFieldInfo,
-  type RelationFieldInfo,
-} from "../resource/model-metadata-defaults";
+import { useAngeeFacets } from "@angee/refine";
+import { ResourceQuery, useModelMetadata, type GroupAxis } from "@angee/metadata";
+import type { ResourceToolbarFilterField, ResourceToolbarFilterOption, ResourceToolbarGroupOption } from "../../toolbars";
+import type { ResourceViewFilter } from "../resource/resource-view-model";
+import { resourceFieldGroupLabel } from "../resource/model-metadata-defaults";
 import type { FacetDescriptor } from "../page";
 import { useGroupOperation } from "../resource/resource-operations";
 
 const RELATION_FACET_OPTION_LIMIT = 200;
-const EMPTY_FILTER_OPTIONS: readonly ResourceToolbarFilterOption[] = [];
-const EMPTY_FILTER_FIELDS: readonly ResourceToolbarFilterField[] = [];
-const EMPTY_GROUP_OPTIONS: readonly ResourceToolbarGroupOption[] = [];
-const EMPTY_FACET_SPECS: readonly FacetRequestSpec[] = [];
-const EMPTY_RELATION_FACET_OPTIONS: readonly RelationFacetOptions[] = [];
-const EMPTY_DECLARED_RELATION_FACETS: RelationFacets = {
-  filters: EMPTY_FILTER_OPTIONS,
-  filterFields: EMPTY_FILTER_FIELDS,
-  groupOptions: EMPTY_GROUP_OPTIONS,
-};
+const EMPTY_OPTIONS: readonly FacetDescriptor[] = [];
 
 export type RelationFacetOptions = FacetDescriptor;
-
 export interface RelationFacets {
   filters: readonly ResourceToolbarFilterOption[];
   filterFields: readonly ResourceToolbarFilterField[];
   groupOptions: readonly ResourceToolbarGroupOption[];
 }
-
 interface DeclaredRelationFacet {
-  id: string;
+  field: string;
   label: React.ReactNode;
-  filter: ModelRelationFilterMetadata;
+  axis: GroupAxis;
+  pageSize: number;
   groupOption?: ResourceToolbarGroupOption;
-  spec?: FacetRequestSpec;
 }
 
-/** Build declared relation facets in one GraphQL facet query for a model list. */
+/** Relation choices and bucket predicates share the resource query's axis. */
 export function useRelationFacets(
   resource: string,
-  options: readonly RelationFacetOptions[] | undefined =
-    EMPTY_RELATION_FACET_OPTIONS,
+  options: readonly RelationFacetOptions[] | undefined = EMPTY_OPTIONS,
   activeFilter?: ResourceViewFilter,
 ): RelationFacets {
-  const schemaMetadata = useSchemaFieldMetadata();
-  const modelMetadata = useModelMetadata(resource);
-  const facetOptions = options ?? EMPTY_RELATION_FACET_OPTIONS;
-  const facets = React.useMemo(
-    () => relationFacetDeclarations(facetOptions, modelMetadata, schemaMetadata),
-    [facetOptions, modelMetadata, schemaMetadata],
-  );
-  const dataResource = modelMetadata?.resource ?? null;
-  const groupOperation = useGroupOperation(dataResource);
-  const facetSpecs = React.useMemo(
-    () =>
-      facets.flatMap((facet) =>
-        facet.spec
-          ? [facetRequestSpec(facet.spec, activeFilter, [facet.filter.field])]
-          : []),
-    [activeFilter, facets],
-  );
-  const facetQuery = useAngeeFacets(groupOperation.target, {
-    document: groupOperation.document,
-    facets: facetSpecs,
-    enabled: dataResource !== null && facetSpecs.length > 0,
+  const metadata = useModelMetadata(resource);
+  const query = React.useMemo(() => metadata ? ResourceQuery.from(metadata) : null, [metadata]);
+  const facets = React.useMemo<readonly DeclaredRelationFacet[]>(() => {
+    if (!query) return [];
+    const seen = new Set<string>();
+    return (options ?? EMPTY_OPTIONS).flatMap((option) => {
+      const { field } = option;
+      if (seen.has(field) || !query.fields[field]?.filter || !query.axes[field]?.server || !query.axes[field]?.drill) return [];
+      seen.add(field);
+      const axis = query.axis(field);
+      const label = option.label ?? resourceFieldGroupLabel(field, metadata?.fields[field]);
+      const group = option.group === false ? null : query.group(option.group ?? { field }).spec;
+      return [{ field, label, axis, pageSize: option.pageSize ?? RELATION_FACET_OPTION_LIMIT,
+        ...(group ? { groupOption: { id: field, label, group } } : {}),
+      }];
+    });
+  }, [options, query, metadata]);
+  const groupOperation = useGroupOperation(metadata?.resource ?? null);
+  const facetSpecs = React.useMemo(() => facets.map((facet) => ({
+    id: facet.field, ...query!.toFacet(facet.field, activeFilter), pageSize: facet.pageSize,
+  })), [activeFilter, facets, query]);
+  const result = useAngeeFacets(groupOperation.target, {
+    document: groupOperation.document, facets: facetSpecs, enabled: facetSpecs.length > 0,
   });
-  const filters = React.useMemo<readonly ResourceToolbarFilterOption[]>(
-    () =>
-      facets.flatMap((facet) => {
-        const result = facetQuery.facets[facet.id];
-        return (result?.options ?? []).map((option) => ({
-          id: `${facet.filter.field}:${option.value}`,
-          label: option.label,
-          chipLabel: option.label,
-          filter: relationFacetFilter(facet.filter, option.value),
-        }));
-      }),
-    [facetQuery.facets, facets],
-  );
-  const filterFields = React.useMemo<readonly ResourceToolbarFilterField[]>(
-    () =>
-      facets.flatMap((facet) => {
-        const result = facetQuery.facets[facet.id];
-        if (
-          facet.filter.mode !== "lookup"
-          || !isToolbarLookup(facet.filter.lookup)
-        ) {
-          return [];
-        }
-        return [{
-          id: facet.filter.field,
-          field: facet.filter.field,
-          label: facet.label,
-          type: "selection",
-          options: (result?.options ?? []).map((option) => ({
-            value: option.value,
-            label: option.label,
-          })),
-        }];
-      }),
-    [facetQuery.facets, facets],
-  );
-  const groupOptions = React.useMemo<readonly ResourceToolbarGroupOption[]>(
-    () =>
-      facets.flatMap((facet) => facet.groupOption ? [facet.groupOption] : []),
-    [facets],
-  );
-
-  return React.useMemo(
-    () =>
-      facets.length > 0
-        ? { filters, filterFields, groupOptions }
-        : EMPTY_DECLARED_RELATION_FACETS,
-    [facets.length, filterFields, filters, groupOptions],
-  );
-}
-
-function isToolbarLookup(lookup: string | undefined): boolean {
-  return lookup === undefined || lookup === "exact" || lookup === "inList";
-}
-
-function relationFacetDeclarations(
-  options: readonly RelationFacetOptions[],
-  modelMetadata: ModelMetadata | null,
-  schemaMetadata: SchemaFieldMetadata,
-): readonly DeclaredRelationFacet[] {
-  const facets: DeclaredRelationFacet[] = [];
-  const seen = new Set<string>();
-  for (const option of options) {
-    const facet = relationFacetDeclaration(option, modelMetadata, schemaMetadata);
-    if (!facet || seen.has(facet.id)) continue;
-    seen.add(facet.id);
-    facets.push(facet);
-  }
-  return facets;
-}
-
-function relationFacetDeclaration(
-  options: RelationFacetOptions,
-  modelMetadata: ModelMetadata | null,
-  schemaMetadata: SchemaFieldMetadata,
-): DeclaredRelationFacet | null {
-  const {
-    aggregateKey: optionAggregateKey,
-    field,
-    filterField: optionFilterField,
-    filterMode: optionFilterMode,
-    group,
-    label: optionLabel,
-    labelField: optionLabelField,
-    pageSize = RELATION_FACET_OPTION_LIMIT,
-  } = options;
-  const relation = relationFieldInfo(field, modelMetadata, schemaMetadata);
-  if (!relation) return null;
-  const filter = relationFilterConfig(relation.filter, {
-    field: optionFilterField,
-    mode: optionFilterMode,
-  });
-  if (!filter) return null;
-  const aggregateKey = optionAggregateKey ?? filter.aggregateKey;
-  const label =
-    optionLabel ?? resourceFieldGroupLabel(field, modelMetadata?.fields[field]);
-  const groupOption = relationGroupOption({
-    aggregateKey,
-    field,
-    group,
-    labelField: optionLabelField,
-    relation,
-    label,
-  });
-  const [spec] = relationFacetSpecs(groupOption?.group, modelMetadata, {
-    id: filter.field,
-    pageSize,
-  });
-  return {
-    id: filter.field,
-    label,
-    filter,
-    ...(groupOption ? { groupOption } : {}),
-    ...(spec ? { spec } : {}),
-  };
-}
-
-function relationFilterConfig(
-  metadata: ModelRelationFilterMetadata | undefined,
-  override: {
-    field: string | undefined;
-    mode: ModelRelationFilterMode | undefined;
-  },
-): ModelRelationFilterMetadata | undefined {
-  if (!override.field) return metadata;
-  const sameField = override.field === metadata?.field;
-  return {
-    field: override.field,
-    mode: override.mode ?? metadata?.mode ?? "lookup",
-    lookup: sameField ? metadata?.lookup : "exact",
-    ...(metadata?.aggregateKey ? { aggregateKey: metadata.aggregateKey } : {}),
-  };
-}
-
-function relationFacetFilter(
-  filter: ModelRelationFilterMetadata,
-  value: string,
-): ResourceViewFilter {
-  if (filter.mode === "id") return { [filter.field]: value };
-  const lookup = filter.lookup ?? "exact";
-  return {
-    [filter.field]: {
-      [lookup]: lookup === "inList" ? [value] : value,
-    },
-  };
-}
-
-function relationFacetSpecs(
-  group: ResourceViewGroup | undefined,
-  metadata: ModelMetadata | null,
-  options: {
-    id: string | undefined;
-    pageSize: number;
-  },
-): readonly FacetRequestSpec[] {
-  if (!group || !options.id) return EMPTY_FACET_SPECS;
-  const projection = resourceViewGroupQueryProjection(group, metadata);
-  return [{
-    id: options.id,
-    dimensions: projection.dimensions,
-    ...(projection.orderBy ? { orderBy: projection.orderBy } : {}),
-    valueKey: projection.valueKey,
-    ...(projection.labelKey ? { labelKey: projection.labelKey } : {}),
-    pageSize: options.pageSize,
-  }];
-}
-
-function relationGroupOption({
-  aggregateKey,
-  field,
-  group,
-  label,
-  labelField,
-  relation,
-}: {
-  aggregateKey: string | undefined;
-  field: string;
-  group: ResourceViewGroup | false | undefined;
-  label: React.ReactNode;
-  labelField: string | undefined;
-  relation: RelationFieldInfo | null;
-}): ResourceToolbarGroupOption | undefined {
-  if (!relation || group === false) return undefined;
-  const resolvedGroup = group;
-  if (!resolvedGroup && !aggregateKey) return undefined;
-  const defaultGroup = {
-    field: `${field}.${labelField ?? relation.labelField}`,
-    aggregateField: field,
-    aggregateKey: aggregateKey ?? field,
-  };
-  const optionGroup = resolvedGroup ?? defaultGroup;
-  return {
-    id: optionGroup.field,
-    label,
-    group: optionGroup,
-  };
+  return React.useMemo(() => ({
+    filters: facets.flatMap((facet) => (result.facets[facet.field]?.options ?? []).flatMap((option) => {
+      const filter = facet.axis.drill({ key: option.key });
+      return filter ? [{ id: `${facet.field}:${option.value}`, label: option.label, chipLabel: option.label, filter }] : [];
+    })),
+    filterFields: facets.map((facet) => ({
+      id: facet.field, field: facet.field, label: facet.label, type: "selection" as const,
+      options: (result.facets[facet.field]?.options ?? []).map((option) => ({ value: option.value, label: option.label })),
+    })),
+    groupOptions: facets.flatMap((facet) => facet.groupOption ? [facet.groupOption] : []),
+  }), [facets, result.facets]);
 }

@@ -1,3 +1,4 @@
+import { testResourceQuery, testQueryField, testQueryAxis } from "@angee/metadata/testing";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import type {
   AngeeSchemaMetadata,
@@ -135,11 +136,21 @@ const metadata = {
   angee: {
     resources: [
       {
+        query: testResourceQuery({ identity: { field: "id" }, fields: { "id": testQueryField("id", { scalar: "ID", filter: { field: "id", scalar: "ID", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull"] } }),
+                "title": testQueryField("title", { scalar: "String", filter: { field: "title", scalar: "String", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull", "contains", "iContains", "startsWith", "iStartsWith", "endsWith", "iEndsWith", "gt", "gte", "lt", "lte"] }, sort: { field: "title" } }),
+                "body": testQueryField("body", { scalar: "String", filter: null }),
+                "status": testQueryField("status", { scalar: "String", kind: "enum", values: ["PLANNED", "ACTIVE", "ON_HOLD", "DONE", "CANCELED"].map((value) => ({ value })), filter: { field: "status", scalar: "String", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull", "contains", "iContains", "startsWith", "iStartsWith", "endsWith", "iEndsWith", "gt", "gte", "lt", "lte"] }, sort: { field: "status" } }),
+                "lead": testQueryField("lead", { scalar: "ID", kind: "relation", filter: { field: "lead", scalar: "ID", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull"] }, relation: { model: "iam.User", identityPath: "lead", labelPath: "lead.username" }, row: { path: "lead", paths: ["lead"] } }),
+                "start_date": testQueryField("start_date", { scalar: "Date", filter: null }),
+                "target_date": testQueryField("target_date", { scalar: "Date", filter: null, sort: { field: "target_date" } }),
+                "updated_at": testQueryField("updated_at", { scalar: "DateTime", filter: null, sort: { field: "updated_at" } }) }, axes: { "status": testQueryAxis("status", { kind: "column", identityPath: "status", paths: ["status"], server: { input: "status", key: "status" }, extractions: [], drill: null }),
+                "lead": testQueryAxis("lead", { kind: "relation", identityPath: "lead", paths: ["lead", "lead.username"], labelPath: "lead.username", server: { input: "lead", key: "lead" }, extractions: [], drill: null }) }, sort: { default: [] } }),
+
         schemaName: "public",
         modelLabel: "projects.Project",
         appLabel: "projects",
         modelName: "Project",
-        publicIdField: "id",
+
         roots: {
           list: "projects",
           detail: "projects_by_pk",
@@ -158,30 +169,30 @@ const metadata = {
           scalarField("target_date", "Date", true),
           scalarField("updated_at", "DateTime"),
         ],
-        filterFields: ["id", "title", "status", "lead"],
-        orderFields: ["title", "status", "target_date", "updated_at"],
+
         aggregateFields: ["id"],
-        groupByFields: ["status", "lead"],
-        groupDimensions: [
-          { field: "status", input: "status", key: "status", kind: "column", scalar: "String" },
-          { field: "lead", input: "lead", key: "lead", kind: "relation" },
-        ],
+
         updateFields: ["title", "body", "lead", "start_date", "target_date"],
-        relationAxes: [
-          {
-            field: "lead",
-            modelLabel: "iam.User",
-            publicIdField: "id",
-            labelAxis: "lead__username",
-          },
-        ],
+
       },
       {
+        query: testResourceQuery({ identity: { field: "id" }, fields: { "id": testQueryField("id", { scalar: "ID", filter: { field: "id", scalar: "ID", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull"] } }),
+                "title": testQueryField("title", { scalar: "String", filter: null }),
+                "project": testQueryField("project", { scalar: "ID", kind: "relation", filter: { field: "project", scalar: "ID", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull"] }, sort: { field: "project" }, relation: { model: "projects.Project", identityPath: "project.id", labelPath: "project.title" }, row: { path: "project.id", paths: ["project.id"] } }),
+                "status": testQueryField("status", { scalar: "String", kind: "enum", values: ["OPEN", "DONE", "DROPPED"].map((value) => ({ value })), filter: { field: "status", scalar: "String", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull", "contains", "iContains", "startsWith", "iStartsWith", "endsWith", "iEndsWith", "gt", "gte", "lt", "lte"] }, sort: { field: "status" } }),
+                "assignee": testQueryField("assignee", { scalar: "ID", kind: "relation", filter: { field: "assignee", scalar: "ID", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull"] }, relation: { model: "iam.User", identityPath: "assignee", labelPath: "assignee.username" }, row: { path: "assignee", paths: ["assignee"] } }),
+                "priority": testQueryField("priority", { scalar: "String", kind: "enum", values: ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"].map((value) => ({ value })), filter: null, sort: { field: "priority" } }),
+                "due_date": testQueryField("due_date", { scalar: "Date", filter: null, sort: { field: "due_date" } }),
+                "sort_order": testQueryField("sort_order", { scalar: "Float", filter: null, sort: { field: "sort_order" } }),
+                "sub_sort_order": testQueryField("sub_sort_order", { scalar: "Float", filter: null, sort: { field: "sub_sort_order" } }) }, axes: { "project": testQueryAxis("project", { kind: "relation", identityPath: "project.id", paths: ["project.id", "project.title"], labelPath: "project.title", server: { input: "project", key: "project" }, extractions: [], drill: null }),
+                "status": testQueryAxis("status", { kind: "column", identityPath: "status", paths: ["status"], server: { input: "status", key: "status" }, extractions: [], drill: null }),
+                "assignee": testQueryAxis("assignee", { kind: "relation", identityPath: "assignee", paths: ["assignee", "assignee.username"], labelPath: "assignee.username", server: { input: "assignee", key: "assignee" }, extractions: [], drill: null }) }, sort: { default: [] } }),
+
         schemaName: "public",
         modelLabel: "projects.Task",
         appLabel: "projects",
         modelName: "Task",
-        publicIdField: "id",
+
         roots: {
           list: "project_tasks",
           detail: "project_tasks_by_pk",
@@ -202,22 +213,9 @@ const metadata = {
           scalarField("sort_order", "Float", true),
           scalarField("sub_sort_order", "Float", true),
         ],
-        filterFields: ["id", "project", "status", "assignee"],
-        orderFields: [
-          "project",
-          "status",
-          "priority",
-          "due_date",
-          "sort_order",
-          "sub_sort_order",
-        ],
+
         aggregateFields: ["id", "sort_order", "sub_sort_order"],
-        groupByFields: ["project", "status", "assignee"],
-        groupDimensions: [
-          { field: "project", input: "project", key: "project", kind: "relation" },
-          { field: "status", input: "status", key: "status", kind: "column", scalar: "String" },
-          { field: "assignee", input: "assignee", key: "assignee", kind: "relation" },
-        ],
+
         createFields: [
           "title",
           "project",
@@ -237,37 +235,25 @@ const metadata = {
           "sub_sort_order",
         ],
         requiredCreateFields: ["title"],
-        relationAxes: [
-          {
-            field: "project",
-            modelLabel: "projects.Project",
-            publicIdField: "id",
-            labelAxis: "project__title",
-          },
-          {
-            field: "assignee",
-            modelLabel: "iam.User",
-            publicIdField: "id",
-            labelAxis: "assignee__username",
-          },
-        ],
+
       },
       {
+        query: testResourceQuery({ identity: { field: "id" }, fields: { "id": testQueryField("id", { scalar: "ID", filter: { field: "id", scalar: "ID", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull"] } }),
+                "username": testQueryField("username", { scalar: "String", filter: { field: "username", scalar: "String", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull", "contains", "iContains", "startsWith", "iStartsWith", "endsWith", "iEndsWith", "gt", "gte", "lt", "lte"] }, sort: { field: "username" } }) }, axes: {}, sort: { default: [] } }),
+
         schemaName: "public",
         modelLabel: "iam.User",
         appLabel: "iam",
         modelName: "User",
-        publicIdField: "id",
+
         roots: { list: "users" },
         typeNames: { node: "UserType" },
         recordRepresentation: "username",
         capabilities: ["list"],
         fields: [scalarField("id", "ID"), scalarField("username", "String")],
-        filterFields: ["id", "username"],
-        orderFields: ["username"],
+
         aggregateFields: ["id"],
-        groupByFields: [],
-        relationAxes: [],
+
       },
     ],
   },
@@ -438,10 +424,9 @@ function scalarField(
     kind: "scalar",
     scalar,
     readable: true,
-    filterable: true,
-    sortable: true,
+
     aggregatable: name === "id",
-    groupable: false,
+
     creatable: writable,
     updatable: writable,
     requiredOnCreate: false,
@@ -460,10 +445,9 @@ function enumField(
     values: values.map((value) => ({ value })),
     widget: "select",
     readable: true,
-    filterable: true,
-    sortable: true,
+
     aggregatable: false,
-    groupable: true,
+
     creatable: writable,
     updatable: writable,
     requiredOnCreate: false,
@@ -481,10 +465,9 @@ function relationField(
     relationModelLabel,
     relationObject: true,
     readable: true,
-    filterable: true,
-    sortable: false,
+
     aggregatable: false,
-    groupable: true,
+
     creatable: true,
     updatable: true,
     requiredOnCreate: false,
@@ -504,10 +487,9 @@ function scalarIdRelationField(
     relationModelLabel,
     relationObject: false,
     readable: true,
-    filterable: true,
-    sortable: false,
+
     aggregatable: false,
-    groupable: true,
+
     creatable: true,
     updatable: true,
     requiredOnCreate: false,

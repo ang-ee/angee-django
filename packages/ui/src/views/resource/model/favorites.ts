@@ -1,15 +1,16 @@
 import * as v from "valibot";
-import { RESOURCE_VIEW_GROUP_GRANULARITIES, RESOURCE_VIEW_KINDS, RESOURCE_VIEW_SORT_DIRECTIONS } from "./capabilities";
+import { RESOURCE_VIEW_KINDS, RESOURCE_VIEW_SORT_DIRECTIONS } from "./capabilities";
 import type { ResourceViewKind } from "./capabilities";
-import { Filter, isResourceViewFilter } from "./filter";
-import type { ResourceViewFilter, ResourceViewGroup, ResourceViewSort } from "./filter";
+import { Filter } from "./filter";
+import type { ResourceViewSort } from "./filter";
 export interface ResourceViewFavorite {
   id: string;
   label: string;
   pageSize?: number;
   sort?: ResourceViewSort | null;
-  filter?: ResourceViewFilter;
-  groupStack?: readonly ResourceViewGroup[];
+  /** Opaque persisted intent; parsed by its query owner when applied. */
+  filter?: unknown;
+  groupStack?: unknown;
   view?: ResourceViewKind;
 }
 
@@ -18,21 +19,14 @@ const ResourceViewSortSchema = v.object({
   dir: v.picklist(RESOURCE_VIEW_SORT_DIRECTIONS),
 });
 
-const ResourceViewGroupSchema = v.object({
-  field: v.string(),
-  aggregateField: v.optional(v.string()),
-  aggregateKey: v.optional(v.string()),
-  granularity: v.optional(v.picklist(RESOURCE_VIEW_GROUP_GRANULARITIES)),
-});
-
 /** Parse boundary for one favorite stored inside the opaque preferences JSON. */
 export const ResourceViewFavoriteSchema = v.object({
   id: v.string(),
   label: v.string(),
   pageSize: v.optional(v.pipe(v.number(), v.finite())),
   sort: v.optional(v.nullable(ResourceViewSortSchema)),
-  filter: v.optional(v.custom<ResourceViewFilter>(isResourceViewFilter)),
-  groupStack: v.optional(v.array(ResourceViewGroupSchema)),
+  filter: v.optional(v.unknown()),
+  groupStack: v.optional(v.unknown()),
   view: v.optional(v.picklist(RESOURCE_VIEW_KINDS)),
 });
 

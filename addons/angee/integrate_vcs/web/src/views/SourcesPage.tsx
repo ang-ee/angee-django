@@ -9,7 +9,7 @@ const MODEL = "integrate_vcs.Source";
 function sourceList(t: ReturnType<typeof useIntegrateVcsT>): React.ReactElement {
   return (
     <List resource={MODEL}>
-      <Facet field="repository" label={t("col.repository")} labelField="name" />
+      <Facet field="repository" label={t("col.repository")} />
       <Column field="kind" />
       <Column field="ref" />
       <Column field="path" />

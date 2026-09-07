@@ -11,7 +11,7 @@ import type {
   DataResourceFieldMetadata,
   DataResourceLinesMetadata,
 } from "./artifact";
-import { testDataResource } from "./testing";
+import { testDataResource, testResourceQuery, testQueryField } from "./testing";
 
 function field(
   name: string,
@@ -22,10 +22,7 @@ function field(
     name,
     kind,
     readable: true,
-    filterable: false,
-    sortable: false,
     aggregatable: false,
-    groupable: false,
     creatable: true,
     updatable: true,
     requiredOnCreate: false,
@@ -112,21 +109,16 @@ describe("relationRepresentationForPath", () => {
     fields: [field("name", "scalar", { scalar: "String" })],
   });
   const project = testDataResource("projects.Project", {
+    query: testResourceQuery({ fields: { product: testQueryField("product", { relation: { model: "catalog.Product", identityPath: "product.id", labelPath: "product.name" } }) } }),
     fields: [
       field("product", "relation", {
         relationModelLabel: "catalog.Product",
         relationObject: true,
       }),
     ],
-    relationAxes: [
-      {
-        field: "product",
-        modelLabel: "catalog.Product",
-        publicIdField: "id",
-      },
-    ],
   });
   const initiative = testDataResource("projects.Initiative", {
+    query: testResourceQuery({ fields: { project: testQueryField("project", { relation: { model: "projects.Project", identityPath: "project.id", labelPath: null } }) } }),
     fields: [
       field("project", "relation", {
         relationModelLabel: "projects.Project",
@@ -172,35 +164,27 @@ describe("relationRepresentationForPath", () => {
     ).toBeNull();
   });
 
-  test("fails by name when an inferred relation terminal target is missing", () => {
+  test("uses finalized paths without requiring the target resource inventory", () => {
     const missing = schemaFieldMetadataFromDataResources([initiative]);
-    expect(() =>
-      relationRepresentationForPath(
-        "project",
-        missing.labels["projects.Initiative"]!,
-        missing,
-      )
-    ).toThrow(
-      'Relation field "project" targets missing resource metadata "projects.Project".',
-    );
+    expect(relationRepresentationForPath("project", missing.labels["projects.Initiative"]!, missing)).toEqual({
+      selectionPaths: ["project.id"], displayPath: "project.id",
+    });
   });
 
-  test("fails when the target representation is undeclared", () => {
-    const brokenProject = testDataResource("projects.Project", {
-      recordRepresentation: "title",
-      fields: [],
+  test("does not guess a public identity absent from the actual relation projection", () => {
+    const labelOnly = testDataResource("projects.Initiative", {
+      fields: initiative.fields,
+      query: testResourceQuery({ fields: { project: testQueryField("project", { relation: { model: "projects.Project", identityPath: null, labelPath: "project.title" } }) } }),
     });
-    const broken = schemaFieldMetadataFromDataResources([initiative, brokenProject]);
-    expect(() =>
-      relationRepresentationForPath(
-        "project",
-        broken.labels["projects.Initiative"]!,
-        broken,
-      )
-    ).toThrow(
-      'Record representation "title" is not declared on "projects.Project".',
-    );
+    const schema = schemaFieldMetadataFromDataResources([labelOnly]);
+    expect(relationRepresentationForPath("project", schema.labels["projects.Initiative"]!, schema)).toEqual({ selectionPaths: ["project.title"], displayPath: "project.title" });
   });
+
+  test("fails when a relation has no finalized selectable representation", () => {
+    const broken = schemaFieldMetadataFromDataResources([{ ...initiative, query: testResourceQuery() }]);
+    expect(() => relationRepresentationForPath("project", broken.labels["projects.Initiative"]!, broken)).toThrow(/no finalized selectable representation/);
+  });
+
 });
 
 describe("resourceReadSelectionPaths", () => {
@@ -212,11 +196,6 @@ describe("resourceReadSelectionPaths", () => {
           relationObject: false,
         }),
       ],
-      relationAxes: [{
-        field: "ownerId",
-        modelLabel: "accounts.User",
-        publicIdField: "id",
-      }],
     });
     const schema = schemaFieldMetadataFromDataResources([account]);
 

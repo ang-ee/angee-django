@@ -1,20 +1,21 @@
 import * as React from "react";
-import { type ModelMetadata, type Row } from "@angee/metadata";
+import { type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { getCoreRowModel, getExpandedRowModel, getFilteredRowModel, getGroupedRowModel, getPaginationRowModel, getSortedRowModel, useReactTable, type ColumnDef, type ExpandedState, type FilterFn, type Table as TableModel, type VisibilityState } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useUiT } from "../../../i18n";
 import type { ResourceViewContextValue } from "../resource-view-context";
 import { type ResourceViewFilter, type ResourceViewGroup } from "../resource-view-model";
-import { GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT, isGroupingOnlyColumn, tableColumnLabel, type VisibleFieldOption } from "../resource-view-list-body";
+import { GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT, isQueryOnlyColumn, tableColumnLabel, type VisibleFieldOption } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
 import { rowGroupsFromLaneSource, type BoardLaneState } from "../resource-view-board-lanes";
 import { idsFromRowSelectionState, leafTableRows, rowGroupsFromTableRows } from "../resource-view-codecs";
-import { resourceViewFilterFn, type LocalFilterState } from "../resource-view-client-filter";
+import { filterForTextSearch, queryForColumns } from "../resource-query";
 import { useResourceViewTableState } from "./table-state";
 import { EMPTY_ARRAY, EMPTY_BOARD_PLACEMENTS } from "./types";
 import type { FlatResourceViewPresentationSurface, ResourceViewPresentationSurface } from "./types";
 export function useResourceViewPresentationSurface<TRow extends Row>({
   rows,
+  query: suppliedQuery,
   columns,
   resourceView,
   modelMetadata,
@@ -26,6 +27,7 @@ export function useResourceViewPresentationSurface<TRow extends Row>({
   textSearchFields,
 }: {
   rows: readonly TRow[];
+  query?: ResourceQuery;
   columns: readonly ColumnDescriptor<TRow>[];
   resourceView: ResourceViewContextValue;
   modelMetadata?: ModelMetadata | null;
@@ -42,7 +44,9 @@ export function useResourceViewPresentationSurface<TRow extends Row>({
     columns,
     resourceView,
     modelMetadata,
-    groupStack: rowGroupStack,
+    groupStack: boardLaneState?.source ? EMPTY_ARRAY : rowGroupStack,
+    clientOperations: true,
+    query: suppliedQuery,
   });
   const {
     tableColumns,
@@ -57,13 +61,17 @@ export function useResourceViewPresentationSurface<TRow extends Row>({
     handleSortingChange,
     handleRowSelectionChange,
   } = tableState;
-  const globalFilter = React.useMemo<LocalFilterState>(
-    () => ({
-      filter,
-      textSearchField,
-      textSearchFields,
-    }),
-    [filter, textSearchField, textSearchFields],
+  const query = React.useMemo(
+    () => suppliedQuery ?? queryForColumns(columns, modelMetadata, rowGroupStack),
+    [suppliedQuery, columns, modelMetadata, rowGroupStack],
+  );
+  const globalFilter = React.useMemo(
+    () => filterForTextSearch(query, filter, textSearchField, textSearchFields),
+    [query, filter, textSearchField, textSearchFields],
+  );
+  const globalFilterFn = React.useCallback<FilterFn<TRow>>(
+    (row, _columnId, value) => query.matches(row.original, value),
+    [query],
   );
   const table = useReactTable<TRow>({
     data: rows as TRow[],
@@ -90,7 +98,8 @@ export function useResourceViewPresentationSurface<TRow extends Row>({
     getExpandedRowModel: getExpandedRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    globalFilterFn: resourceViewFilterFn as FilterFn<TRow>,
+    globalFilterFn,
+    getColumnCanGlobalFilter: () => true,
     getRowId,
     // Pagination/sort/filter/grouping are owned by the resource-view (URL) state, not the
     // table. Without this, TanStack Table auto-resets its own page index whenever the
@@ -100,10 +109,10 @@ export function useResourceViewPresentationSurface<TRow extends Row>({
     autoResetPageIndex: false,
     autoResetExpanded: false,
   });
-  const pageCount = table.getPageCount();
+  const pageCount = Math.max(1, table.getPageCount());
   React.useEffect(() => {
     if ((resourceView.state.pagination.pageIndex + 1) > pageCount) {
-      resourceView.setPage(Math.max(1, pageCount));
+      resourceView.setPage(pageCount);
     }
   }, [pageCount, resourceView.setPage, (resourceView.state.pagination.pageIndex + 1)]);
   return useResourceViewPresentationSurfaceFromTable({
@@ -140,6 +149,7 @@ export function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
   } = useResourceViewTableChrome(table, columnVisibility);
 
   const rowModels = table.getRowModel().rows;
+  const groupedRowModels = table.getPreExpandedRowModel().rows;
   const tableRowSelection = table.getState().rowSelection;
   const selectedIds = React.useMemo(
     () => idsFromRowSelectionState(tableRowSelection),
@@ -170,12 +180,12 @@ export function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
               t("list.unknownValue"),
             )
         : rowGroupsFromTableRows(
-            table.getGroupedRowModel().rows,
+            groupedRowModels,
             rowGroupStack,
             t("list.emptyValue"),
             t,
           ),
-    [table, rowGroupStack, rows, boardLaneState, t],
+    [rowModels, groupedRowModels, rowGroupStack, boardLaneState, t],
   );
   const tableScrollRef = React.useRef<HTMLDivElement | null>(null);
   const rowVirtualizer = useVirtualizer({
@@ -224,12 +234,12 @@ export function useResourceViewTableChrome<TRow extends Row>(
 > {
   const visibleColumnCount = table
     .getVisibleLeafColumns()
-    .filter((column) => !isGroupingOnlyColumn(column.columnDef)).length;
+    .filter((column) => !isQueryOnlyColumn(column.columnDef)).length;
   const visibleFields = React.useMemo<readonly VisibleFieldOption[]>(
     () => {
       const chooserColumns = table
         .getAllLeafColumns()
-        .filter((column) => !isGroupingOnlyColumn(column.columnDef));
+        .filter((column) => !isQueryOnlyColumn(column.columnDef));
       const visibleCount = chooserColumns.filter((column) =>
         column.getIsVisible(),
       ).length;

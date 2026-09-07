@@ -5,7 +5,7 @@ import { Refine, type DataProvider } from "@refinedev/core";
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from "@tanstack/react-router";
 import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type Row } from "@angee/metadata";
 import { OperationDocumentsProvider } from "@angee/refine";
-import { testDataResource } from "@angee/metadata/testing";
+import { testDataResource, testResourceQuery, testQueryField } from "@angee/metadata/testing";
 import { parseFlatSearch, stringifyFlatSearch } from "@angee/app";
 import { installTestLocalStorage } from "@angee/app/testing";
 import { AppRuntimeProvider, ConsoleLayout, ModalsHost, ToastProvider, baseIcons, createRouteHref, defaultWidgets, recordNavigationSearch } from "@angee/ui";
@@ -16,10 +16,18 @@ import { StorageBackends, StorageDrives, StorageFileById, StorageFolderRoots } f
 import { StoragePage } from "./StoragePage";
 
 const fileResource = testDataResource("storage.File", {
-  recordRepresentation: "title", updateFields: ["title"], roots: { deletePreview: "delete_files_preview" },
+  query: testResourceQuery({ fields: {
+    id: testQueryField("id", { scalar: "ID" }),
+    drive: testQueryField("drive", { scalar: "ID", filter: { field: "drive", scalar: "ID", values: [], operators: ["exact"] } }),
+    folder: testQueryField("folder", { scalar: "ID", filter: { field: "folder", scalar: "ID", values: [], operators: ["exact", "isNull"] } }),
+    is_trashed: testQueryField("is_trashed", { scalar: "Boolean", filter: { field: "is_trashed", scalar: "Boolean", values: [], operators: ["exact"] } }),
+    updated_at: testQueryField("updated_at", { scalar: "DateTime", filter: null, sort: { field: "updated_at" } }),
+  } }),
+  typeNames: { filter: "files_bool_exp", order: "files_order_by" },
+  recordRepresentation: "title", updateFields: ["title"], roots: { deletePreview: "delete_files_preview", aggregate: "files_aggregate" },
   fields: ["title", "filename", "created_by_label", "upload_state", "created_at", "updated_at"].map((name) => ({
-    name, kind: "scalar", scalar: "String", readable: true, filterable: false,
-    sortable: false, aggregatable: false, groupable: false, creatable: false,
+    name, kind: "scalar", scalar: "String", readable: true,
+    aggregatable: false, creatable: false,
     updatable: name === "title", requiredOnCreate: false,
   })),
 });

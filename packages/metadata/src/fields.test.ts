@@ -1,4 +1,4 @@
-import { testDataResource } from "./testing";
+import { testDataResource, testResourceQuery } from "./testing";
 import { resourceOrderFieldForPath } from "./fields";
 import { describe, expect, test } from "vitest";
 
@@ -50,18 +50,12 @@ describe("field metadata helpers", () => {
     expect(filterFieldType("published_at", stringField)).toBe("text");
   });
 
-  test("recognizes finalized and legacy scalar-ID relation projections", () => {
+  test("recognizes finalized scalar-ID relation projections", () => {
     expect(isScalarIdRelation(resourceField({
       name: "owner",
       kind: "relation",
       relationModelLabel: "accounts.User",
       relationObject: false,
-    }))).toBe(true);
-    expect(isScalarIdRelation(resourceField({
-      name: "owner",
-      kind: "scalar",
-      scalar: "ID",
-      relationModelLabel: "accounts.User",
     }))).toBe(true);
     expect(isScalarIdRelation(resourceField({
       name: "owner",
@@ -124,10 +118,7 @@ function resourceField(
 ): DataResourceFieldMetadata {
   return {
     readable: true,
-    filterable: false,
-    sortable: false,
     aggregatable: false,
-    groupable: false,
     creatable: false,
     updatable: false,
     requiredOnCreate: false,
@@ -137,13 +128,15 @@ function resourceField(
 
 
 test("server order fields map display paths only to declared wire keys", () => {
-  const resource = testDataResource("messaging.Message", { orderFields: ["sent_at", "thread__title__text", "oauth_client__is_enabled"] });
+  const resource = testDataResource("messaging.Message", { query: testResourceQuery({ fields: {
+    sent_at: { kind: "scalar", scalar: "DateTime", values: [], nullable: true, sort: { field: "sent_at" } },
+    "thread.title.text": { kind: "scalar", scalar: "String", values: [], nullable: true, sort: { field: "thread__title__text" } },
+  } }) });
   expect(resourceOrderFieldForPath("sent_at", resource)).toBe("sent_at");
-  expect(resourceOrderFieldForPath("sentAt", resource)).toBe("sent_at");
+  expect(resourceOrderFieldForPath("sentAt", resource)).toBeNull();
   expect(resourceOrderFieldForPath("thread.title.text", resource)).toBe("thread__title__text");
-  expect(resourceOrderFieldForPath("oauthClient_IsEnabled", resource)).toBe("oauth_client__is_enabled");
   expect(resourceOrderFieldForPath("sender.party.display_name", resource)).toBeNull();
   expect(resourceOrderFieldForPath("thread.title.unknown", resource)).toBeNull();
-  expect(resourceOrderFieldForPath("title", { ...resource, rowModel: "client" })).toBe("title");
+  expect(resourceOrderFieldForPath("title", { ...resource, rowModel: "client" })).toBeNull();
   expect(resourceOrderFieldForPath("title", undefined)).toBe("title");
 });

@@ -330,6 +330,13 @@ history uses native Query pages with domain-owned
   composes `List` over `storage.File` with drive/folder base filters and
   server-side folder grouping because a drive can contain hundreds of thousands
   of rows.
+- **Resolve resource queries before adapting them to a library.** Use the
+  resource's query contract for allowed comparisons, group identities, drill
+  predicates and required selections. A display label never identifies a
+  relation bucket. Invalid URL or favorite query state must block dependent
+  reads and offer recovery; dropping invalid constraints silently broadens the
+  user's query. Regression tests must exercise native providers and table
+  accessors, including grouping fields absent from visible columns.
 - A recipe's icon-button size keys are `iconSm`/`iconMd`/`iconLg` (one spelling
   across recipes). A default `size` is a visual contract — do not flip it without a
   requester (differing defaults like `Switch`/`ToggleGroup` `sm` vs `Toggle` `md`

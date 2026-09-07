@@ -5,7 +5,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { flexRender } from "@tanstack/react-table";
 import { createAngeeHasuraDataProvider } from "@angee/refine";
 import { refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type ModelMetadata } from "@angee/metadata";
-import { testDataResource } from "@angee/metadata/testing";
+import { testDataResource, testResourceQuery, testQueryField } from "@angee/metadata/testing";
 import { ResourceViewProvider, useResourceView } from "@angee/ui/views/resource-view-context";
 import { useResourceViewSurface, type ResourceViewSurface } from "@angee/ui/views/resource-view-surface";
 import { ToastProvider } from "@angee/ui/feedback/index";
@@ -13,8 +13,13 @@ import { afterEach, expect, test, vi } from "vitest";
 
 const clients: QueryClient[] = [];
 afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
-async function fixture(initialSort = "thread__title__text") {
-  const resource = testDataResource("messaging.Message", { orderFields: ["sent_at", "thread__title__text"] });
+async function fixture(initialSort = "thread.title.text") {
+  const resource = testDataResource("messaging.Message", {
+    roots: { aggregate: "messages_aggregate" }, typeNames: { filter: "messages_bool_exp", order: "messages_order_by" },
+    query: testResourceQuery({ identity: { field: "id" }, fields: { "sent_at": testQueryField("sent_at", { scalar: "String", filter: null, sort: { field: "sent_at" } }),
+            "thread.title.text": testQueryField("thread.title.text", { scalar: "String", filter: null, sort: { field: "thread__title__text" } }),
+            "id": testQueryField("id", { scalar: "ID", filter: null }) }, axes: {}, sort: { default: [] } }),
+  });
   const model: ModelMetadata = schemaFieldMetadataFromDataResources([resource]).labels![resource.modelLabel]!;
   const bodies: { query: string; variables: Record<string, unknown> }[] = [];
   const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -38,7 +43,7 @@ async function fixture(initialSort = "thread__title__text") {
     return <>{surface.table.getHeaderGroups()[0]!.headers.map((header) => <div key={header.id}>{flexRender(header.column.columnDef.header, header.getContext())}</div>)}<output>{surface.list.error?.message}</output></>;
   }
   render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}><ToastProvider><ResourceViewProvider scope="local" initialState={{ sorting: [{ id: initialSort, desc: true }] }}><Probe /></ResourceViewProvider></ToastProvider></Refine>);
-  await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
+  await waitFor(() => expect(bodies.length > 0 || surface.list.error != null).toBe(true));
   return { bodies, surface: () => surface };
 }
 
@@ -58,12 +63,6 @@ test("native Table keeps dotted display IDs while Refine sends declared flat ord
   expect(f.bodies.some(({ variables }) => variables.order_by && "thread" in (variables.order_by as object))).toBe(false);
 });
 
-test("unknown active URL sorts reach a bounded native query error rather than disappearing or falling back", async () => {
-  const f = await fixture("unsupported");
-  expect(f.bodies[0]?.variables.order_by).toEqual({ unsupported: "desc" });
-  await waitFor(() => expect(f.surface().list.error?.message).toBe("Request failed."));
-  expect(screen.getByText("Sent").closest("button")).not.toBeNull();
-  await act(async () => fireEvent.click(screen.getByText("Sent")));
-  await waitFor(() => expect(f.surface().list.error).toBeNull());
-  expect(f.bodies.at(-1)?.variables.order_by).toEqual({ sent_at: "asc" });
+test("unknown active URL sorts fail at the query boundary before transport", async () => {
+  await expect(fixture("unsupported")).rejects.toThrow('field "unsupported" cannot be sorted');
 });

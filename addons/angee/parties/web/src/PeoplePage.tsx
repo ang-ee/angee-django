@@ -423,7 +423,7 @@ export function PeoplePage(): React.ReactElement {
         draggableRow={personDragPayload}
       >
         <List resource={MODEL}>
-          <Facet field="folder" label={t("person.folder")} labelField="name" />
+          <Facet field="folder" label={t("person.folder")} />
           <Column field="display_name" />
           <Column field="circle_names" header={t("people.circles.heading")} />
           <Column field="folder.name" header={t("person.folder")} />

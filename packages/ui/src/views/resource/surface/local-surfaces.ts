@@ -1,11 +1,10 @@
 import * as React from "react";
 import { refineResourceName, type Row } from "@angee/metadata";
-import { useList, type HttpError, type MetaQuery } from "@refinedev/core";
-import { refineFieldsFromPaths } from "@angee/refine";
+import { useResourceListQuery } from "./resource-list-query";
 import { errorFromUnknown } from "../../../data/errors";
 import { DEFAULT_TEXT_FILTER_FIELD } from "../resource-view-model";
 import { useBoardLaneState } from "../resource-view-board-lanes";
-import { leafTableRows, modelRowId, stringRowId } from "../resource-view-codecs";
+import { leafTableRows, modelRowId } from "../resource-view-codecs";
 import { useResourceViewPresentationSurface } from "./presentation";
 import { CLIENT_ROW_MODEL_FETCH_CAP } from "./resource-surface";
 import { listResultFromTable, useResourceRowsSnapshot, useResourceViewQueryFacts } from "./table-state";
@@ -36,26 +35,17 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
     resourceView,
     modelMetadata,
     laneSource,
+    groupStack,
     includeDeclaredOrder: false,
   });
   const dataResource = modelMetadata?.resource ?? null;
   const resourceName = dataResource ? refineResourceName(dataResource) : "__angee_disabled__";
-  const listMeta = React.useMemo<MetaQuery>(
-    () => ({ fields: refineFieldsFromPaths(requestedFields) }),
-    [requestedFields],
-  );
   const active = enabled && Boolean(dataResource);
-
-  const run = useList<RowRecord, HttpError>({
-    resource: resourceName,
-    dataProviderName: dataResource?.schemaName,
-    pagination: {
-      mode: "server",
-      currentPage: 1,
-      pageSize: CLIENT_ROW_MODEL_FETCH_CAP,
-    },
-    meta: listMeta,
-    queryOptions: { enabled: active },
+  const run = useResourceListQuery({
+    resource: dataResource,
+    scope: { filter: undefined, order: {}, page: 1, pageSize: CLIENT_ROW_MODEL_FETCH_CAP },
+    fields: requestedFields,
+    enabled: active,
   });
   const allRows = React.useMemo(
     () => (run.result.data ?? []) as readonly RowRecord[] as readonly TRow[],
@@ -98,7 +88,7 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
     modelMetadata,
     groupStack,
     boardLaneState,
-    getRowId: modelRowId,
+    getRowId: (row, index) => modelRowId(row, index, dataResource),
     filter: mergedFilter,
   });
   const pageRows = React.useMemo(
@@ -144,6 +134,7 @@ export function useRowsResourceViewSurface<
   TRow extends StringIdRow = StringIdRow,
 >({
   rows,
+  query,
   columns,
   resourceView,
   modelMetadata = null,
@@ -158,6 +149,7 @@ export function useRowsResourceViewSurface<
   );
   const presentation = useResourceViewPresentationSurface({
     rows,
+    query,
     columns,
     resourceView,
     filter: resourceView.state.filter,
@@ -165,7 +157,7 @@ export function useRowsResourceViewSurface<
     textSearchFields,
     modelMetadata,
     groupStack,
-    getRowId: stringRowId,
+    getRowId: (row, index) => modelRowId(row, index, query ? { query: query.contract } : modelMetadata?.resource),
   });
   const pageRows = React.useMemo(
     () => leafTableRows(presentation.rowModels).map((row) => row.original),

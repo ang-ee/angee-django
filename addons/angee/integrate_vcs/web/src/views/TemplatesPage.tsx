@@ -15,7 +15,7 @@ const TEMPLATE_KIND_OPTIONS = [
 function templateList(t: ReturnType<typeof useIntegrateVcsT>): React.ReactElement {
   return (
     <List resource={TEMPLATE_MODEL} pageSize={50}>
-      <Facet field="source" label={t("col.source")} labelField="path" />
+      <Facet field="source" label={t("col.source")} />
       <Column field="kind" />
       <Column field="name" />
       <Column field="path" />
@@ -30,7 +30,7 @@ function templateSourceList(
 ): React.ReactElement {
   return (
     <List resource={SOURCE_MODEL} pageSize={50}>
-      <Facet field="repository" label={t("col.repository")} labelField="name" />
+      <Facet field="repository" label={t("col.repository")} />
       <Column field="repository.name" header={t("col.repository")} />
       <Column field="path" />
       <Column field="ref" />

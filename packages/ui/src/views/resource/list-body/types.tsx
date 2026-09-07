@@ -1,20 +1,9 @@
 import * as React from "react";
 import { type Row as TableRowModel } from "@tanstack/react-table";
 import type { AggregateBucket, AggregateMeasure } from "@angee/refine";
-import type { ModelMetadata, Row } from "@angee/metadata";
-import { bucketFilterForGroup as metadataBucketFilterForGroup } from "@angee/metadata";
-import type { ResourceListOrder, ResourceViewFilter, ResourceViewGroup } from "../resource-view-model";
+import type { Row } from "@angee/metadata";
+import type { ResourceListOrder, ResourceViewFilter } from "../resource-view-model";
 import type { ColumnDescriptor, PageColumnAlign } from "../../page";
-export function bucketFilterForGroup(
-  bucket: AggregateBucket,
-  group: ResourceViewGroup | undefined,
-  metadata: ModelMetadata | null,
-): ResourceViewFilter | undefined {
-  return metadataBucketFilterForGroup(bucket, group, metadata) as
-    | ResourceViewFilter
-    | undefined;
-}
-
 export type ColumnAlign = PageColumnAlign;
 export type ListColumn<TRow extends Row = Row> = ColumnDescriptor<TRow>;
 

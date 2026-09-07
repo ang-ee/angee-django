@@ -19,7 +19,9 @@ from angee.data.field_classification import is_to_one_relation, model_field_scal
 from angee.graphql.access import is_gated_read_axis
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.final_schema import final_schema_references
+from angee.graphql.data.query import ResourceQueryProjection
 from angee.graphql.data.resource_fields import (
+    PREFERRED_DISPLAY_FIELDS,
     final_aggregate_wire_fields,
     final_input_only_resource_fields,
     final_input_policy_fields,
@@ -39,7 +41,7 @@ from angee.graphql.introspection import (
     FieldPathError,
     require_field_for_path,
 )
-from graphql import GraphQLEnumType, GraphQLSchema, get_named_type
+from graphql import GraphQLSchema, get_named_type
 
 __all__ = [
     "attach_data_resource_contribution",
@@ -65,11 +67,11 @@ class DataResourcePolicy:
     order_fields: tuple[str, ...] | None = None
     aggregate_fields: tuple[str, ...] | None = None
     group_by_fields: tuple[str, ...] | None = None
-    group_dimensions: tuple[data_contract.DataGroupDimensionMetadata, ...] | None = None
+    query_axes: tuple[data_contract.DataQueryAxis, ...] | None = None
+    filter_operators: tuple[str, ...] | None = None
     aggregate_measures: tuple[data_contract.DataAggregateMeasureMetadata, ...] | None = None
     default_measures: tuple[data_contract.DataAggregateMeasureMetadata, ...] | None = None
     revision_fields: tuple[str, ...] | None = None
-    group_aliases: tuple[data_contract.DataGroupAliasMetadata, ...] | None = None
     lines_declaration: object | None = None
     subtitle: data_contract.DataResourceSubtitleMetadata | None = None
     public_id_field: str | None = None
@@ -123,6 +125,17 @@ def finalize_data_resources(
         for contribution in data_resource_contributions(surface):
             by_label.setdefault(contribution.model_label, []).append(contribution)
 
+    identity_policies: dict[str, str] = {}
+    for model_label, contributions in by_label.items():
+        declared = _single_policy_value(model_label, contributions, "public_id_field") or PUBLIC_ID_FIELD_NAME
+        for contribution in contributions:
+            node_name = (
+                resource_type_name(contribution.native_resource.node_type)
+                if contribution.native_resource is not None
+                else contribution.type_names.node
+            )
+            if node_name:
+                identity_policies[node_name] = str(declared)
     finalized: list[data_contract.DataResourceMetadata] = []
     for model_label, contributions in by_label.items():
         first = contributions[0]
@@ -222,13 +235,13 @@ def finalize_data_resources(
             order_fields=_single_sequence(model_label, contributions, "order_fields"),
             aggregate_fields=_single_sequence(model_label, contributions, "aggregate_fields"),
             group_by_fields=_single_sequence(model_label, contributions, "group_by_fields"),
-            group_dimensions=_single_sequence(model_label, contributions, "group_dimensions"),
+            query_axes=_single_sequence(model_label, contributions, "query_axes"),
+            filter_operators=_single_sequence(model_label, contributions, "filter_operators"),
             aggregate_measures=_single_sequence(model_label, contributions, "aggregate_measures"),
             default_measures=_single_sequence(model_label, contributions, "default_measures"),
             create_fields=create_fields,
             update_fields=update_fields,
             revision_fields=_single_sequence(model_label, contributions, "revision_fields"),
-            group_aliases=_single_sequence(model_label, contributions, "group_aliases"),
             lines=lines,
             subtitle=subtitle,
             public_id_field=cast(
@@ -237,6 +250,7 @@ def finalize_data_resources(
             ),
             row_model=cast(str, _single_policy_value(model_label, contributions, "row_model") or "server"),
             graphql_schema=schema,
+            identity_policies=identity_policies,
             contributors=tuple(dict.fromkeys(item.origin for item in contributions)),
         )
         finalized.append(metadata)
@@ -313,30 +327,6 @@ def _merge_description_values(
     return description_type(**values)
 
 
-def _final_group_by_fields(
-    schema: GraphQLSchema,
-    group_by_spec_name: str | None,
-    *,
-    accepted: tuple[str, ...],
-    dimensions: tuple[data_contract.DataGroupDimensionMetadata, ...],
-) -> tuple[str, ...]:
-    """Keep authored group axes accepted by the final native group input."""
-
-    group_by_spec = schema.get_type(group_by_spec_name) if group_by_spec_name else None
-    fields = getattr(group_by_spec, "fields", None)
-    field_input = fields.get("field") if isinstance(fields, dict) else None
-    enum_type = get_named_type(field_input.type) if field_input is not None else None
-    if not isinstance(enum_type, GraphQLEnumType):
-        return ()
-    final_inputs = set(enum_type.values)
-    dimensions_by_field = {dimension.field: dimension for dimension in dimensions}
-    return tuple(
-        name
-        for name in accepted
-        if (dimension := dimensions_by_field.get(name)) is not None and dimension.input in final_inputs
-    )
-
-
 def _merge_subtitle_contributions(
     model_label: str,
     contributions: list[DataResourceContribution],
@@ -394,21 +384,21 @@ def _finalize_data_resource(
     order_fields: tuple[str, ...] = (),
     aggregate_fields: tuple[str, ...] = (),
     group_by_fields: tuple[str, ...] = (),
-    group_dimensions: tuple[data_contract.DataGroupDimensionMetadata, ...] = (),
+    query_axes: tuple[data_contract.DataQueryAxis, ...] = (),
+    filter_operators: tuple[str, ...] = (),
     aggregate_measures: tuple[data_contract.DataAggregateMeasureMetadata, ...] = (),
     default_measures: tuple[data_contract.DataAggregateMeasureMetadata, ...] = (),
     default_sort: tuple[data_contract.DataDefaultSortMetadata, ...] = (),
     create_fields: tuple[str, ...] = (),
     update_fields: tuple[str, ...] = (),
     revision_fields: tuple[str, ...] = (),
-    relation_axes: tuple[data_contract.DataRelationAxisMetadata, ...] = (),
-    group_aliases: tuple[data_contract.DataGroupAliasMetadata, ...] = (),
     lines: data_contract.DataLinesMetadata | None = None,
     subtitle: data_contract.DataResourceSubtitleMetadata | None = None,
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
     row_model: str = "server",
     contributors: tuple[str, ...] = (),
+    identity_policies: dict[str, str] | None = None,
 ) -> data_contract.DataResourceMetadata:
     """Build one final neutral resource description.
 
@@ -434,19 +424,12 @@ def _finalize_data_resource(
     order_fields = _require_unique(exposed_model_label, "order field", order_fields)
     aggregate_fields = _require_unique(exposed_model_label, "aggregate field", aggregate_fields)
     group_by_fields = _require_unique(exposed_model_label, "group axis", group_by_fields)
-    if model is not None and roots.group_name is not None and not relation_axes:
-        relation_axes = _relation_axes(model, group_by_fields)
+    label_axes = _relation_label_axes(model, group_by_fields) if model is not None else {}
     if model is not None and order_fields and not default_sort:
         default_sort = _default_sort(model, order_fields)
     filter_fields = final_input_policy_fields(graphql_schema, type_names.filter, accepted=filter_fields)
     order_fields = final_input_policy_fields(graphql_schema, type_names.order, accepted=order_fields)
     aggregate_fields = final_aggregate_wire_fields(graphql_schema, type_names.aggregate, accepted=aggregate_fields)
-    group_by_fields = _final_group_by_fields(
-        graphql_schema,
-        type_names.group_by_spec,
-        accepted=group_by_fields,
-        dimensions=group_dimensions,
-    )
     default_sort = tuple(
         dataclasses.replace(item, field=mapped[0])
         for item in default_sort
@@ -458,19 +441,6 @@ def _finalize_data_resource(
             )
         )
     )
-    if type_names.node is not None:
-        relation_axes = tuple(
-            dataclasses.replace(
-                axis,
-                field=final_wire_field_names(graphql_schema, type_names.node, (axis.field,))[0],
-                label_axis=(
-                    final_wire_field_names(graphql_schema, type_names.node, (axis.label_axis,))[0]
-                    if axis.label_axis is not None
-                    else None
-                ),
-            )
-            for axis in relation_axes
-        )
     active_create_fields = final_input_wire_fields(
         graphql_schema,
         type_names.create_input,
@@ -500,14 +470,10 @@ def _finalize_data_resource(
             graphql_schema,
             type_names.node,
             model,
-            filter_fields=filter_fields,
-            order_fields=order_fields,
             aggregate_fields=aggregate_fields,
-            group_by_fields=group_by_fields,
             create_fields=active_create_fields,
             update_fields=active_update_fields,
             required_create_fields=active_required_create_fields,
-            relation_axes=relation_axes,
         )
     generated_fields = (
         *generated_fields,
@@ -516,14 +482,10 @@ def _finalize_data_resource(
             create_input_name=type_names.create_input,
             update_input_name=type_names.update_input,
             model=model,
-            filter_fields=filter_fields,
-            order_fields=order_fields,
             aggregate_fields=aggregate_fields,
-            group_by_fields=group_by_fields,
             create_fields=active_create_fields,
             update_fields=active_update_fields,
             required_create_fields=active_required_create_fields,
-            relation_axes=relation_axes,
             readable_fields=generated_fields,
         ),
     )
@@ -551,7 +513,21 @@ def _finalize_data_resource(
         resource_type=model_resource_type(model) if model is not None else None,
         app_label=app_label,
         model_name=model_name,
-        public_id_field=projected_public_id_field,
+        query=ResourceQueryProjection(
+            schema=graphql_schema,
+            types=type_names,
+            fields=active_fields,
+            identity=projected_public_id_field,
+            filter_fields=filter_fields,
+            order_fields=order_fields,
+            axes=tuple(axis for axis in query_axes if axis.field in group_by_fields),
+            label_axes=label_axes,
+            default_sort=default_sort,
+            row_model=row_model,
+            filter_operators=filter_operators,
+            model=model,
+            identity_policies=identity_policies,
+        ).build(),
         roots=roots,
         type_names=type_names,
         contributors=contributors,
@@ -562,20 +538,13 @@ def _finalize_data_resource(
         impl_fields=_impl_fields(model, active_fields),
         capabilities=capabilities,
         fields=active_fields,
-        filter_fields=filter_fields,
-        order_fields=order_fields,
         aggregate_fields=aggregate_fields,
-        group_by_fields=group_by_fields,
-        group_dimensions=group_dimensions,
         aggregate_measures=aggregate_measures,
         default_measures=default_measures,
-        default_sort=default_sort,
         create_fields=active_create_fields,
         update_fields=active_update_fields,
         required_create_fields=active_required_create_fields,
         revision_fields=revision_fields,
-        relation_axes=relation_axes,
-        group_aliases=group_aliases,
         lines=lines,
     )
 
@@ -606,9 +575,7 @@ def _projected_public_id_field(
         for name, graphql_field in interface.fields.items()
         if getattr(get_named_type(graphql_field.type), "name", None) == "ID"
     )
-    if len(identity_fields) == 1 and any(
-        field.name == identity_fields[0] and field.readable for field in fields
-    ):
+    if len(identity_fields) == 1 and any(field.name == identity_fields[0] and field.readable for field in fields):
         return identity_fields[0]
 
     if not required:
@@ -709,28 +676,12 @@ def _record_representation_field(fields: tuple[data_contract.DataResourceFieldMe
     return next(iter(_record_representation_fields(fields)), None)
 
 
-#: Backend-owned display-field precedence, shared by record representation and
-#: the relation group-label fallback.
-_PREFERRED_DISPLAY_FIELDS: tuple[str, ...] = (
-    "title",
-    "name",
-    "displayName",
-    "display_name",
-    "fullName",
-    "full_name",
-    "label",
-    "username",
-    "email",
-    "slug",
-)
-
-
 def _record_representation_fields(
     fields: tuple[data_contract.DataResourceFieldMetadata, ...],
 ) -> tuple[str, ...]:
     """Return display-scalar candidates in backend-owned precedence order."""
 
-    preferred = _PREFERRED_DISPLAY_FIELDS
+    preferred = PREFERRED_DISPLAY_FIELDS
     by_name = {field.name: field for field in fields}
     candidates = [candidate for candidate in preferred if _is_display_scalar(by_name.get(candidate))]
     candidates.extend(field.name for field in fields if field.name not in preferred and _is_display_scalar(field))
@@ -778,14 +729,14 @@ def relation_group_by_fields(
         if related_surface is not None:
             projected_names = resource_string_field_names(related_surface)
             candidates = tuple(
-                candidate for candidate in _PREFERRED_DISPLAY_FIELDS if candidate in projected_names
-            ) + tuple(candidate for candidate in projected_names if candidate not in _PREFERRED_DISPLAY_FIELDS)
+                candidate for candidate in PREFERRED_DISPLAY_FIELDS if candidate in projected_names
+            ) + tuple(candidate for candidate in projected_names if candidate not in PREFERRED_DISPLAY_FIELDS)
         else:
             # Donor-contributed and scalar-id relation axes carry no node
             # surface; fall back to the preferred display names over the
             # related Django model. The concrete-String and gated-read checks
             # below still bound what may enter the group key.
-            candidates = _PREFERRED_DISPLAY_FIELDS
+            candidates = PREFERRED_DISPLAY_FIELDS
         for candidate in candidates:
             try:
                 model_field = related_model._meta.get_field(candidate)
@@ -864,38 +815,6 @@ def _default_sort(
             )
         )
     return tuple(sorts)
-
-
-def _relation_axes(
-    model: type[models.Model],
-    group_by_fields: tuple[str, ...],
-) -> tuple[data_contract.DataRelationAxisMetadata, ...]:
-    """Return direct FK group axes with their related model and optional label axis."""
-
-    label_axes = _relation_label_axes(model, group_by_fields)
-    relation_axes: list[data_contract.DataRelationAxisMetadata] = []
-    for path in group_by_fields:
-        if "__" in path:
-            continue
-        try:
-            field = model._meta.get_field(path)
-        except FieldDoesNotExist:
-            continue
-        if not is_to_one_relation(field):
-            continue
-        remote_field = getattr(field, "remote_field", None)
-        related_model = getattr(remote_field, "model", None)
-        if related_model is None:
-            continue
-        relation_axes.append(
-            data_contract.DataRelationAxisMetadata(
-                field=path,
-                model_label=related_model._meta.label,
-                public_id_field=PUBLIC_ID_FIELD_NAME,
-                label_axis=label_axes.get(path),
-            )
-        )
-    return tuple(relation_axes)
 
 
 def _relation_label_axes(

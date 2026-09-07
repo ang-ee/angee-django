@@ -186,14 +186,6 @@ function facetDescriptor(props: FacetProps): FacetDescriptor {
   return cachedDescriptor(facetDescriptorCache, props, () => ({
     field: props.field,
     ...(props.label !== undefined ? { label: props.label } : {}),
-    ...(props.filterField !== undefined
-      ? { filterField: props.filterField }
-      : {}),
-    ...(props.filterMode !== undefined ? { filterMode: props.filterMode } : {}),
-    ...(props.aggregateKey !== undefined
-      ? { aggregateKey: props.aggregateKey }
-      : {}),
-    ...(props.labelField !== undefined ? { labelField: props.labelField } : {}),
     ...(props.pageSize !== undefined ? { pageSize: props.pageSize } : {}),
     ...(props.group !== undefined ? { group: props.group } : {}),
   }));

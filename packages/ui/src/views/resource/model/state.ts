@@ -1,4 +1,5 @@
 import type { PaginationState, RowSelectionState, SortingState } from "@tanstack/react-table";
+import type { ResourceQuery } from "@angee/metadata";
 import { DEFAULT_CALENDAR_VIEW_MODE, DEFAULT_RESOURCE_VIEW_PAGE_SIZE, type CalendarViewMode, type ResourceViewKind } from "./capabilities";
 import { Filter, type ResourceViewFilter, type ResourceViewGroup, type ResourceViewInitialState } from "./filter";
 import { normaliseGroupStack, todayCalendarAnchor } from "./search";
@@ -11,6 +12,8 @@ export interface ResourceViewState {
   sorting?: SortingState;
   rowSelection: RowSelectionState;
   filter: ResourceViewFilter;
+  /** Failed boundary validation prevents dependent reads until state is repaired. */
+  queryError?: Error | null;
   group: ResourceViewGroup | null;
   groupStack: readonly ResourceViewGroup[];
   view: ResourceViewKind;
@@ -37,4 +40,17 @@ export function createResourceViewState(initial: ResourceViewInitialState = {}):
     mode: initial.mode ?? DEFAULT_CALENDAR_VIEW_MODE,
     anchor: initial.anchor ?? todayCalendarAnchor(),
   };
+}
+
+/** Validate native view query facts through their resource owner before reads. */
+export function validateResourceViewState(state: ResourceViewState, query: ResourceQuery): ResourceViewState {
+  if (state.queryError) return state;
+  try {
+    const filter = query.filterFrom(state.filter);
+    const groupStack = query.groupsFrom(state.groupStack).map((axis) => axis.spec);
+    query.sortFrom(state.sorting?.map(({ id, desc }) => ({ field: id, direction: desc ? "DESC" : "ASC" })));
+    return { ...state, filter, groupStack, group: groupStack[0] ?? null };
+  } catch (error) {
+    return { ...state, queryError: error instanceof Error ? error : new Error("Invalid query state.") };
+  }
 }

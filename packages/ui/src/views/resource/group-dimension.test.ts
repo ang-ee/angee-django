@@ -1,592 +1,125 @@
 // @vitest-environment happy-dom
-
 import { describe, expect, test } from "vitest";
-
-import type {
-  ModelMetadata,
-} from "@angee/metadata";
-
-import {
-  bucketFilterForGroup,
-  bucketValueLabels,
-  groupLabel,
-  groupKey,
-  resourceViewGroupQueryProjection,
-  resourceViewGroupToAggregateDimension,
-  groupLabelDimension,
-} from "./resource-view-list-body";
-import { resolveResourceViewGroup, validResourceViewGroupStack } from "./resource-view-utils";
+import { ResourceQuery, schemaFieldMetadataFromDataResources, type DataResourceFieldMetadata } from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
+import { bucketValueLabels, groupLabel, tableGroupAxes } from "./resource-view-list-body";
 
 const TEST_T = (key: string, vars?: Record<string, unknown>): string => {
   if (key === "list.quarter") return `Q${vars?.quarter} ${vars?.year}`;
   if (key === "list.weekOf") return `Week of ${vars?.date}`;
   return key;
 };
+const contract = ResourceQuery.forRows({ fields: {
+  status: { scalar: "String" }, party: { kind: "relation", identityPath: "party.id", labelPath: "party.display_name" },
+  createdAt: { scalar: "DateTime" }, metadata: { kind: "json", scalar: "JSON" },
+  "metadata.mailbox": { scalar: "String" }, nestedOwner: { scalar: "String" },
+} }).contract;
+contract.axes.status!.server = { input: "SERVER_STATUS", key: "serverStatus" };
+contract.axes.status!.drill = { kind: "value", field: "status", valueKey: "serverStatus", nullMode: "isNull",
+  valueMap: [{ from: "IN_REVIEW", to: "in_review" }] };
+contract.axes.party!.server = { input: "PARTY", key: "partyId", labelInput: "PARTY__DISPLAY_NAME", labelKey: "party_DisplayName" };
+contract.axes.party!.drill = { kind: "identity", field: "party", valueKey: "partyId", nullMode: "isNull", valueMap: [] };
+contract.axes.createdAt!.server = { input: "CREATED_AT", key: "createdAt" };
+contract.axes.createdAt!.extractions = contract.axes.createdAt!.extractions.map((extraction) => ({ ...extraction,
+  key: `createdAt${extraction.name}`, rangeKey: `createdAt${extraction.name}Range`,
+  drill: { kind: "range", field: "createdAt", valueKey: `createdAt${extraction.name}`, rangeKey: `createdAt${extraction.name}Range`, nullMode: "isNull", valueMap: [] },
+}));
+contract.axes.metadata!.server = { input: "METADATA", key: "metadata" };
+contract.axes.metadata!.drill = { kind: "value", field: "metadata", valueKey: "metadata", valueTransform: "json", nullMode: "value", valueMap: [] };
+contract.fields.metadata!.filter = { ...contract.fields.metadata!.filter!, operators: ["exact", "jsonContains", "isNull"] };
+contract.axes["metadata.mailbox"]!.server = { input: "METADATA__MAILBOX", key: "metadata__mailbox" };
+contract.axes["metadata.mailbox"] = { ...contract.axes["metadata.mailbox"]!, paths: ["metadata"] };
+contract.axes["metadata.mailbox"]!.drill = { kind: "json", field: "metadata", valueKey: "metadata__mailbox", jsonPath: "mailbox", nullMode: "value", valueMap: [] };
+contract.axes.nestedOwner!.server = { input: "NESTED_OWNER", key: "nestedOwner" };
+const fields: DataResourceFieldMetadata[] = Object.entries(contract.fields).map(([name, field]) => ({
+  name, kind: field.kind === "json" || field.kind === "object" ? "scalar" : field.kind, scalar: field.scalar, readable: true, aggregatable: false,
+  creatable: false, updatable: false, requiredOnCreate: false,
+}));
+const metadata = schemaFieldMetadataFromDataResources([testDataResource("test.Row", { fields, query: contract })]).labels["test.Row"]!;
+const query = ResourceQuery.from(metadata);
 
-// A model whose resource artifact owns group dimensions, including a relation
-// label axis for `party__display_name`.
-const GROUP_METADATA = {
-  fields: {
-    status: {
-      name: "status",
-      kind: "enum",
-      values: [{ value: "ACTIVE" }, { value: "IN_REVIEW" }],
-    },
-    party: {
-      name: "party",
-      kind: "relation",
-      relationModelLabel: "parties.Party",
-    },
-  },
-  resource: {
-    filterFields: ["party"],
-    groupDimensions: [
-      {
-        field: "status",
-        input: "SERVER_STATUS",
-        key: "serverStatus",
-        kind: "column",
-        scalar: "String",
-        filter: {
-          kind: "equality",
-          field: "status",
-          valueKey: "serverStatus",
-          valueMap: [
-            { from: "ACTIVE", to: "active" },
-            { from: "IN_REVIEW", to: "in_review" },
-          ],
-        },
-      },
-      {
-        field: "createdAt",
-        input: "CREATED_AT",
-        key: "createdAt",
-        kind: "column",
-        scalar: "DateTime",
-        filter: {
-          kind: "equality",
-          field: "createdAt",
-          valueKey: "createdAt",
-        },
-        extractions: [
-          {
-            name: "month",
-            input: "MONTH",
-            key: "createdAtMonth",
-            rangeKey: "createdAtMonthRange",
-            filter: {
-              kind: "range",
-              field: "createdAt",
-              valueKey: "createdAtMonth",
-              rangeKey: "createdAtMonthRange",
-            },
-          },
-        ],
-      },
-      {
-        field: "oauthClient_IsEnabled",
-        input: "OAUTH_CLIENT__IS_ENABLED",
-        key: "oauthClient_IsEnabled",
-        kind: "column",
-        scalar: "Boolean",
-      },
-      {
-        field: "vendor",
-        input: "VENDOR",
-        key: "vendorId",
-        kind: "relation",
-        scalar: "ID",
-        filter: {
-          kind: "equality",
-          field: "vendor",
-          valueKey: "vendorId",
-          lookup: "id",
-        },
-      },
-      {
-        field: "party",
-        input: "PARTY",
-        key: "partyId",
-        kind: "relation",
-        scalar: "ID",
-        filter: {
-          kind: "equality",
-          field: "party",
-          valueKey: "partyId",
-          lookup: "id",
-        },
-      },
-      {
-        field: "party_DisplayName",
-        input: "PARTY__DISPLAY_NAME",
-        key: "party_DisplayName",
-        kind: "column",
-        scalar: "String",
-      },
-      {
-        field: "metadata",
-        input: "METADATA",
-        key: "metadata",
-        kind: "column",
-        scalar: "JSON",
-        filter: {
-          kind: "equality",
-          field: "metadata",
-          valueKey: "metadata",
-          lookup: "exact",
-          valueTransform: "json",
-        },
-      },
-      {
-        field: "metadata.mailbox",
-        input: "METADATA__MAILBOX",
-        key: "metadata__mailbox",
-        kind: "json",
-        scalar: "String",
-        filter: {
-          kind: "equality",
-          field: "metadata",
-          valueKey: "metadata__mailbox",
-          lookup: "jsonContains",
-          valueTransform: "jsonObject:mailbox",
-        },
-      },
-    ],
-    relationAxes: [
-      {
-        field: "party",
-        modelLabel: "parties.Party",
-        publicIdField: "id",
-        labelAxis: "party_DisplayName",
-      },
-    ],
-  },
-  relationAxes: {
-    party: {
-      field: "party",
-      modelLabel: "parties.Party",
-      publicIdField: "id",
-      labelAxis: "party_DisplayName",
-    },
-  },
-} as unknown as ModelMetadata;
-
-const PARTY_GROUP = {
-  field: "party.display_name",
-  aggregateField: "party",
-  aggregateKey: "partyId",
-};
-
-const HASURA_SNAKE_METADATA = {
-  fields: {},
-  resource: {
-    filterFields: ["updated_at"],
-    groupByFields: ["updated_at"],
-    groupDimensions: [
-      {
-        field: "updated_at",
-        input: "UPDATED_AT",
-        key: "updated_at",
-        kind: "column",
-        scalar: "DateTime",
-        filter: {
-          kind: "equality",
-          field: "updated_at",
-          valueKey: "updated_at",
-        },
-        extractions: [
-          {
-            name: "month",
-            input: "MONTH",
-            key: "updated_at_month",
-            rangeKey: "updated_at_month_range",
-            filter: {
-              kind: "range",
-              field: "updated_at",
-              valueKey: "updated_at_month",
-              rangeKey: "updated_at_month_range",
-            },
-          },
-        ],
-      },
-    ],
-  },
-  relationAxes: {},
-} as unknown as ModelMetadata;
-
-describe("resourceViewGroupToAggregateDimension", () => {
-  test("uses backend group dimension metadata verbatim", () => {
-    expect(resourceViewGroupToAggregateDimension({ field: "status" }, GROUP_METADATA)).toEqual({
-      field: "SERVER_STATUS",
-      key: "serverStatus",
+describe("resource query grouping projections", () => {
+  test("uses declared wire inputs and keys without spelling inference", () => {
+    expect(query.axis("status").groupBy()).toEqual({
+      dimensions: [{ input: "SERVER_STATUS", key: "serverStatus" }], valueKey: "serverStatus",
+      orderBy: [{ field: "serverStatus", direction: "ASC", nulls: "LAST" }],
     });
-  });
-
-  test("uses backend metadata for camelCase field dimensions", () => {
-    expect(resourceViewGroupToAggregateDimension({ field: "createdAt" }, GROUP_METADATA)).toEqual({
-      field: "CREATED_AT",
-      key: "createdAt",
-    });
-  });
-
-  test("round-trips a to-one relation-path axis (camel key ↔ __ enum)", () => {
-    // `oauthClient_IsEnabled` is Strawberry's camel form of the Django path
-    // `oauth_client__is_enabled`; the group key reads the camel field while the
-    // backend groupable-field enum is the double-underscore SNAKE_UPPER form.
-    expect(
-      resourceViewGroupToAggregateDimension(
-        { field: "oauthClient_IsEnabled" },
-        GROUP_METADATA,
-      ),
-    ).toEqual({
-      field: "OAUTH_CLIENT__IS_ENABLED",
-      key: "oauthClient_IsEnabled",
-    });
-  });
-
-  test("can group on one row field while querying a different aggregate axis", () => {
-    expect(
-      resourceViewGroupToAggregateDimension({
-        field: "vendor.displayName",
-        aggregateField: "vendor",
-        aggregateKey: "vendorId",
-      }, GROUP_METADATA),
-    ).toEqual({
-      field: "VENDOR",
-      key: "vendorId",
-    });
-  });
-
-  test("carries granularity through, uppercased", () => {
-    expect(
-      resourceViewGroupToAggregateDimension({
-        field: "createdAt",
-        granularity: "month",
-      }, GROUP_METADATA),
-    ).toEqual({
-      field: "CREATED_AT",
-      key: "createdAtMonth",
-      granularity: "MONTH",
-      rangeKey: "createdAtMonthRange",
-    });
-  });
-
-  test("accepts camel-case date groups for Hasura snake-case dimensions", () => {
-    const group = { field: "updatedAt", granularity: "month" as const };
-
-    expect(validResourceViewGroupStack([group], HASURA_SNAKE_METADATA)).toEqual([
-      { field: "updated_at", granularity: "month" },
-    ]);
-    expect(resourceViewGroupToAggregateDimension(group, HASURA_SNAKE_METADATA)).toEqual({
-      field: "UPDATED_AT",
-      key: "updated_at_month",
-      granularity: "MONTH",
-      rangeKey: "updated_at_month_range",
-    });
-    expect(
-      bucketFilterForGroup(
-        {
-          key: {
-            updated_at_month: "2026-02-01 00:00:00+00:00",
-            updated_at_month_range: {
-              from: "2026-02-01 00:00:00+00:00",
-              to: "2026-03-01 00:00:00+00:00",
-            },
-          },
-          count: 2,
-        },
-        group,
-        HASURA_SNAKE_METADATA,
-      ),
-    ).toEqual({
-      updated_at: {
-        gte: "2026-02-01T00:00:00.000Z",
-        lt: "2026-03-01T00:00:00.000Z",
-      },
-    });
-  });
-
-  test("rejects a stale aggregate alias when its display field is gone", () => {
-    const group = {
-      field: "implLabel",
-      aggregateField: "implClass",
-      aggregateKey: "implClass",
-    };
-    const metadata = {
-      fields: {
-        implClass: { name: "implClass", kind: "enum" },
-      },
-      resource: {
-        groupByFields: ["implClass"],
-        groupDimensions: [
-          {
-            field: "implClass",
-            input: "IMPL_CLASS",
-            key: "implClass",
-            kind: "column",
-          },
-        ],
-      },
-    } as unknown as ModelMetadata;
-
-    expect(validResourceViewGroupStack([group], metadata)).toEqual([]);
-  });
-
-  test("fails fast when a grouped axis is not in resource metadata", () => {
-    expect(() =>
-      resourceViewGroupToAggregateDimension({ field: "missing" }, GROUP_METADATA)
-    ).toThrow('group dimension "missing"');
-  });
-});
-
-describe("relation group display label (Odoo (id, display_name))", () => {
-  test("canonical relation groups and legacy label-path URLs share one query projection", () => {
-    const canonical = resolveResourceViewGroup({ field: "party" }, GROUP_METADATA);
-    const legacy = resolveResourceViewGroup(
-      { field: "party.display_name" },
-      GROUP_METADATA,
-    );
-
-    expect(canonical).toEqual({
-      field: "party",
-      aggregateField: "party",
-      aggregateKey: "partyId",
-    });
-    expect(legacy).toEqual(PARTY_GROUP);
-    const expectedProjection = {
-      dimension: { field: "PARTY", key: "partyId" },
-      dimensions: [
-        { input: "PARTY", key: "partyId" },
-        { input: "PARTY__DISPLAY_NAME", key: "party_DisplayName" },
-      ],
+    expect(query.axis("party").groupBy()).toEqual({
+      dimensions: [{ input: "PARTY", key: "partyId" }, { input: "PARTY__DISPLAY_NAME", key: "party_DisplayName" }],
+      valueKey: "partyId", labelKey: "party_DisplayName",
       orderBy: [{ field: "party_DisplayName", direction: "ASC", nulls: "LAST" }],
-      valueKey: "partyId",
-      labelKey: "party_DisplayName",
-    };
-    expect(resourceViewGroupQueryProjection(canonical, GROUP_METADATA)).toEqual(expectedProjection);
-    expect(resourceViewGroupQueryProjection(legacy, GROUP_METADATA)).toEqual(expectedProjection);
-    expect(bucketValueLabels(
-      { key: { partyId: "1", party_DisplayName: "Same" }, count: 1 },
-      [canonical],
-      GROUP_METADATA,
-      "No value",
-      TEST_T,
-    )).toEqual(["Same"]);
+    });
   });
-
-  test("duplicate relation labels preserve distinct identity keys and filters", () => {
+  test("rejects stale aliases and unknown axes at the boundary", () => {
+    expect(() => query.groupsFrom([{ field: "party.display_name" }])).toThrow("unknown group axis");
+    expect(() => query.groupsFrom([{ field: "party", aggregateKey: "partyId" }])).toThrow();
+    expect(() => query.group({ field: "missing" })).toThrow("unknown group axis");
+  });
+  test("date extraction carries the native key and range", () => {
+    expect(query.axis("createdAt", "month").groupBy()).toMatchObject({
+      dimensions: [{ input: "CREATED_AT", key: "createdAtmonth", granularity: "MONTH", rangeKey: "createdAtmonthRange" }],
+      valueKey: "createdAtmonth", orderBy: [{ field: "createdAtmonth", direction: "ASC", nulls: "LAST" }],
+    });
+  });
+  test("duplicate relation names preserve identities and independent predicates", () => {
     const first = { key: { partyId: "1", party_DisplayName: "Same" }, count: 1 };
     const second = { key: { partyId: "2", party_DisplayName: "Same" }, count: 1 };
-
-    expect(bucketValueLabels(first, [PARTY_GROUP], GROUP_METADATA, "No value", TEST_T)).toEqual(["Same"]);
-    expect(bucketValueLabels(second, [PARTY_GROUP], GROUP_METADATA, "No value", TEST_T)).toEqual(["Same"]);
-    expect(bucketFilterForGroup(first, PARTY_GROUP, GROUP_METADATA)).toEqual({ party: { id: "1" } });
-    expect(bucketFilterForGroup(second, PARTY_GROUP, GROUP_METADATA)).toEqual({ party: { id: "2" } });
+    expect(bucketValueLabels(first, [{ field: "party" }], metadata, "No value", TEST_T)).toEqual(["Same"]);
+    expect(bucketValueLabels(second, [{ field: "party" }], metadata, "No value", TEST_T)).toEqual(["Same"]);
+    expect(query.toWhere(query.axis("party").drill(first))).toEqual({ party: { _eq: "1" } });
+    expect(query.toWhere(query.axis("party").drill(second))).toEqual({ party: { _eq: "2" } });
   });
-
-  test("groupLabelDimension carries the registered label axis", () => {
-    expect(groupLabelDimension(PARTY_GROUP, GROUP_METADATA)).toEqual({
-      field: "PARTY__DISPLAY_NAME",
-      key: "party_DisplayName",
-    });
-  });
-
-  test("groupLabelDimension is null without a label axis", () => {
-    expect(groupLabelDimension(PARTY_GROUP, null)).toBeNull();
-    expect(groupLabelDimension({ field: "status" }, GROUP_METADATA)).toBeNull();
-  });
-
-  test("bucketValueLabels renders the carried name, not the raw id", () => {
-    const bucket = { key: { partyId: "4422", party_DisplayName: "PRG Iva" }, count: 1 };
-    expect(bucketValueLabels(bucket, [PARTY_GROUP], GROUP_METADATA, "No value", TEST_T)).toEqual([
-      "PRG Iva",
-    ]);
-  });
-
-  test("bucketValueLabels names an empty relation instead of falling back to its id", () => {
-    const bucket = { key: { partyId: null, party_DisplayName: null }, count: 1 };
-    expect(
-      bucketValueLabels(
-        bucket,
-        [PARTY_GROUP],
-        GROUP_METADATA,
-        "No value",
-        TEST_T,
-        (field) => `No ${field}`,
-      ),
-    ).toEqual(["No party"]);
-  });
-
-  test("bucketValueLabels needs resource metadata for grouped buckets", () => {
-    const bucket = { key: { partyId: "pty_abc", party_DisplayName: "PRG Iva" }, count: 1 };
-    expect(() => bucketValueLabels(bucket, [PARTY_GROUP], null, "No value", TEST_T)).toThrow(
-      'group dimension "party"',
-    );
+  test("null relation labels use the bounded empty relation copy", () => {
+    expect(bucketValueLabels({ key: { partyId: null, party_DisplayName: null }, count: 1 }, [{ field: "party" }], metadata,
+      "No value", TEST_T, (field) => `No ${field}`)).toEqual(["No party"]);
+    expect(() => bucketValueLabels({ key: {}, count: 1 }, [{ field: "party" }], null, "No value", TEST_T)).toThrow("Resource metadata");
   });
 });
 
-describe("translated date bucket labels", () => {
-  test("query projection owns extracted date keys and ordering", () => {
-    expect(
-      resourceViewGroupQueryProjection(
-        { field: "createdAt", granularity: "month" },
-        GROUP_METADATA,
-      ),
-    ).toEqual({
-      dimension: {
-        field: "CREATED_AT",
-        key: "createdAtMonth",
-        granularity: "MONTH",
-        rangeKey: "createdAtMonthRange",
-      },
-      dimensions: [{
-        input: "CREATED_AT",
-        key: "createdAtMonth",
-        granularity: "MONTH",
-        rangeKey: "createdAtMonthRange",
-      }],
-      orderBy: [{ field: "createdAtMonth", direction: "ASC", nulls: "LAST" }],
-      valueKey: "createdAtMonth",
-    });
+describe("localized labels over stable identities", () => {
+  test.each([["quarter", "2026-Q3"], ["month", "2026-08"], ["week", "2026-08-17"]])("%s is computed once by the axis", (granularity, identity) => {
+    expect(query.axis("createdAt", granularity).identity({ createdAt: "2026-08-22T12:00:00Z" })).toBe(identity);
   });
-
-  test("keeps quarter, month, and ISO-week identities locale-independent", () => {
-    expect(
-      groupKey(
-        "2026-08-22T12:00:00Z",
-        { field: "createdAt", granularity: "quarter" },
-        GROUP_METADATA,
-      ),
-    ).toBe("2026-Q3");
-    expect(
-      groupKey(
-        "2026-08-22T12:00:00Z",
-        { field: "createdAt", granularity: "month" },
-        GROUP_METADATA,
-      ),
-    ).toBe("2026-08");
-    expect(
-      groupKey(
-        "2026-08-22T12:00:00Z",
-        { field: "createdAt", granularity: "week" },
-        GROUP_METADATA,
-      ),
-    ).toBe("2026-08-17");
+  test("client and server date values use the same localized renderer", () => {
+    const group = { field: "createdAt", granularity: "quarter" };
+    const alternateT = (key: string, vars?: Record<string, unknown>) => key === "list.quarter" ? `${vars?.year} trimestre ${vars?.quarter}` : key;
+    const key = query.group(group).identity({ createdAt: "2026-08-22T12:00:00Z" });
+    expect(groupLabel(key, group, metadata, "None", TEST_T)).toBe("Q3 2026");
+    expect(groupLabel(key, group, metadata, "None", alternateT)).toBe("2026 trimestre 3");
+    expect(bucketValueLabels({ key: { createdAtmonth: "2026-02-01 00:00:00+00:00" }, count: 1 },
+      [{ field: "createdAt", granularity: "month" }], metadata, "None", TEST_T)).toEqual(["February 2026"]);
   });
-
-  test("translates date identities only when rendering their labels", () => {
-    const quarterGroup = { field: "createdAt", granularity: "quarter" } as const;
-    const alternateT = (key: string, vars?: Record<string, unknown>): string =>
-      key === "list.quarter" ? `${vars?.year} trimestre ${vars?.quarter}` : key;
-
-    expect(groupLabel("2026-08-22T12:00:00Z", quarterGroup, GROUP_METADATA, "None", TEST_T))
-      .toBe("Q3 2026");
-    expect(groupLabel("2026-08-22T12:00:00Z", quarterGroup, GROUP_METADATA, "None", alternateT))
-      .toBe("2026 trimestre 3");
-    expect(
-      groupLabel(
-        "2026-08-22T12:00:00Z",
-        { field: "createdAt", granularity: "week" },
-        GROUP_METADATA,
-        "None",
-        TEST_T,
-      ),
-    ).toBe("Week of August 17, 2026");
+  test("date-like relation labels and scalar text stay verbatim", () => {
+    expect(groupLabel("2026-09", { field: "party" }, metadata, "None", TEST_T)).toBe("2026-09");
+    expect(groupLabel("CATC", { field: "party" }, metadata, "None", TEST_T)).toBe("CATC");
+  });
+  test("declared local rows use the same semantic axis without server dimensions", () => {
+    const [axis] = tableGroupAxes([{ field: "createdAt", granularity: "month" }], null, [{ field: "createdAt" }]);
+    expect(axis!.identity({ createdAt: "2026-09-01T00:00:00Z" })).toBe("2026-09");
+    expect(() => axis!.groupBy()).toThrow("does not support server grouping");
   });
 });
 
-describe("bucketFilterForGroup", () => {
-  test("uses backend-authored date range filters", () => {
-    expect(
-      bucketFilterForGroup(
-        {
-          key: {
-            createdAtMonth: "2026-02-01 00:00:00+00:00",
-            createdAtMonthRange: {
-              from: "2026-02-01 00:00:00+00:00",
-              to: "2026-03-01 00:00:00+00:00",
-            },
-          },
-          count: 2,
-        },
-        { field: "createdAt", granularity: "month" },
-        GROUP_METADATA,
-      ),
-    ).toEqual({
-      createdAt: {
-        gte: "2026-02-01T00:00:00.000Z",
-        lt: "2026-03-01T00:00:00.000Z",
-      },
-    });
+describe("bucket predicates", () => {
+  test("date ranges remain half-open and normalize upstream date spelling", () => {
+    expect(query.axis("createdAt", "month").drill({ key: { createdAtmonth: "2026-02-01 00:00:00+00:00", createdAtmonthRange: {
+      from: "2026-02-01 00:00:00+00:00", to: "2026-03-01 00:00:00+00:00",
+    } } })).toEqual({ createdAt: { gte: "2026-02-01T00:00:00.000Z", lt: "2026-03-01T00:00:00.000Z" } });
   });
-
-  test("keeps empty date buckets expandable as null filters", () => {
-    expect(
-      bucketFilterForGroup(
-        { key: { createdAtMonth: "" }, count: 1 },
-        { field: "createdAt", granularity: "month" },
-        GROUP_METADATA,
-      ),
-    ).toEqual({ createdAt: { isNull: true } });
+  test("empty dates drill to isNull", () => {
+    expect(query.axis("createdAt", "month").drill({ key: { createdAtmonth: "" } })).toEqual({ createdAt: { isNull: true } });
   });
-
-  test("parses structured JSON bucket values for exact bucket drill-down", () => {
-    expect(
-      bucketFilterForGroup(
-        { key: { metadata: "{\"kind\":\"note\",\"flags\":[\"pinned\"]}" }, count: 1 },
-        { field: "metadata" },
-        GROUP_METADATA,
-      ),
-    ).toEqual({
-      metadata: { exact: { kind: "note", flags: ["pinned"] } },
-    });
+  test("structured JSON and declared JSON paths retain their exact predicates", () => {
+    expect(query.axis("metadata").drill({ key: { metadata: '{"kind":"note","flags":["pinned"]}' } }))
+      .toEqual({ metadata: { exact: { kind: "note", flags: ["pinned"] } } });
+    expect(query.axis("metadata.mailbox").drill({ key: { metadata__mailbox: "Sent Messages" } }))
+      .toEqual({ metadata: { jsonContains: { mailbox: "Sent Messages" } } });
+    expect(query.axis("metadata.mailbox").selection).toEqual(["metadata"]);
   });
-
-  test("wraps JSON path bucket values in a JSON contains filter", () => {
-    expect(
-      bucketFilterForGroup(
-        { key: { metadata__mailbox: "Sent Messages" }, count: 1 },
-        { field: "metadata.mailbox" },
-        GROUP_METADATA,
-      ),
-    ).toEqual({
-      metadata: { jsonContains: { mailbox: "Sent Messages" } },
-    });
+  test("the contract maps bucket values to filter values", () => {
+    expect(query.axis("status").drill({ key: { serverStatus: "IN_REVIEW" } })).toEqual({ status: { exact: "in_review" } });
   });
-
-  test("normalizes enum key buckets to write-side filter values", () => {
-    expect(
-      bucketFilterForGroup(
-        { key: { serverStatus: "IN_REVIEW" }, count: 1 },
-        { field: "status" },
-        GROUP_METADATA,
-      ),
-    ).toEqual({ status: "in_review" });
-  });
-
-  test("returns no drill-down filter when metadata omits the bucket filter", () => {
-    const metadata = {
-      ...GROUP_METADATA,
-      resource: {
-        ...GROUP_METADATA.resource,
-        groupDimensions: [
-          {
-            field: "unfiltered",
-            input: "UNFILTERED",
-            key: "unfiltered",
-            kind: "column",
-            scalar: "String",
-          },
-        ],
-      },
-    } as unknown as ModelMetadata;
-
-    expect(
-      bucketFilterForGroup(
-        { key: { unfiltered: "x" }, count: 1 },
-        { field: "unfiltered" },
-        metadata,
-      )
-    ).toBeUndefined();
+  test("server-only summary groups can have no drilldown", () => {
+    expect(query.axis("nestedOwner").drill({ key: { nestedOwner: "Summary" } })).toBeUndefined();
   });
 });

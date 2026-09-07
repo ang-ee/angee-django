@@ -4,7 +4,7 @@ import { Refine, type DataProvider, type GetListParams } from "@refinedev/core";
 import { QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
-import { testDataResource } from "@angee/metadata/testing";
+import { testDataResource, testResourceQuery } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
 import { routeSearchString } from "../../runtime/route-href";
 import { RoutedRecordController } from "./resource-routing";
@@ -13,7 +13,17 @@ import { RecordPager } from "./RecordPager";
 import type { ResourceRecordController } from "./ResourceList";
 import type { ListViewNavigationScope } from "./resource-view-surface";
 
-const resource = testDataResource("notes.Note");
+const resource = testDataResource("notes.Note", {
+  roots: { aggregate: "notes_aggregate" },
+  typeNames: { filter: "NoteBoolExp", order: "NoteOrderBy" },
+  query: testResourceQuery({ fields: {
+    id: { kind: "scalar", scalar: "ID", values: [], nullable: false },
+    title: { kind: "scalar", scalar: "String", values: [], nullable: true, filter: { field: "title", scalar: "String", values: [], operators: ["exact", "iContains"] } },
+    status: { kind: "scalar", scalar: "String", values: [], nullable: true, filter: { field: "status", scalar: "String", values: [], operators: ["exact"] } },
+    updated_at: { kind: "scalar", scalar: "DateTime", values: [], nullable: true, filter: { field: "updated_at", scalar: "DateTime", values: [], operators: ["gte", "lt"] }, sort: { field: "updated_at" } },
+    "author.display_name": { kind: "scalar", scalar: "String", values: [], nullable: true, sort: { field: "author.display_name" } },
+  } }),
+});
 const scope: ListViewNavigationScope = { filter: { title: { iContains: "draft" }, updated_at: { gte: "2026-09-01", lt: "2026-10-01" } }, order: { updated_at: "DESC" }, page: 1, pageSize: 2 };
 const clients: QueryClient[] = [];
 afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
@@ -54,7 +64,7 @@ test("copied record links restore native query navigation, page edges preserve t
   fireEvent.click(screen.getByRole("button", { name: "Next record" }));
   await waitFor(() => expect(screen.getByTestId("record").textContent).toBe("c"));
   expect(f.router.state.location.search).toMatchObject({ group: "updated_at:month", page: "3", keep: "external" });
-  expect(f.getList.mock.calls.at(-1)?.[0]).toMatchObject({ pagination: { currentPage: 2, pageSize: 2 }, sorters: [{ field: "updated_at", order: "desc" }], filters: [{ field: "title", operator: "contains", value: "draft" }, { field: "updated_at", operator: "gte", value: "2026-09-01" }, { field: "updated_at", operator: "lt", value: "2026-10-01" }] });
+  expect(f.getList.mock.calls.at(-1)?.[0]).toMatchObject({ pagination: { currentPage: 2, pageSize: 2 }, sorters: [], filters: [], meta: { gqlVariables: { where: { title: { _ilike: "%draft%" }, updated_at: { _gte: "2026-09-01", _lt: "2026-10-01" } }, order_by: { updated_at: "desc" } } } });
   await act(async () => { fireEvent.click(screen.getByText("Close")); });
   await waitFor(() => expect(f.router.state.location.pathname).toBe("/notes"));
   expect(f.router.state.location.search).toEqual({ group: "updated_at:month", page: "3", keep: "external" });

@@ -1,6 +1,6 @@
 import * as React from "react";
 import type { ReactElement, ReactNode } from "react";
-import { ANGEE_TEXT_FILTER_LOOKUP_OPERATORS } from "@angee/refine";
+import type { FilterValue } from "@angee/metadata";
 import { useDebouncedCallback } from "use-debounce";
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
@@ -33,7 +33,6 @@ import type {
   ResourceViewLookupOperator,
 } from "../views/resource/resource-view-model";
 import {
-  RESOURCE_VIEW_GROUP_GRANULARITIES,
   resourceViewGroupsEqual,
   resourceViewKindCapabilities,
 } from "../views/resource/resource-view-model";
@@ -146,7 +145,7 @@ export interface ResourceToolbarFilterField {
 export interface ResourceToolbarCustomFilter {
   field: string;
   operator: ResourceToolbarCustomFilterOperator;
-  value?: string | number | boolean;
+  value?: FilterValue;
   type?: ResourceToolbarFilterFieldType;
 }
 
@@ -388,6 +387,7 @@ function FilterPicker({
   const [customOperator, setCustomOperator] =
     React.useState<ResourceToolbarCustomFilterOperator>("contains");
   const [customValue, setCustomValue] = React.useState("");
+  const [customValueError, setCustomValueError] = React.useState<string>();
   const selectedCustomField =
     customFilterFields.find((field) => field.id === customFieldId)
     ?? customFilterFields[0];
@@ -421,10 +421,20 @@ function FilterPicker({
   function addCustomFilter() {
     if (!selectedCustomField || !onCustomFilterAdd) return;
     const needsValue = customFilterNeedsValue(effectiveCustomOperator);
-    const value = needsValue
-      ? coerceFilterValue(selectedCustomField, customValue)
-      : undefined;
-    if (needsValue && value === undefined) return;
+    let value: FilterValue | undefined;
+    try {
+      value = needsValue
+        ? coerceFilterValue(selectedCustomField, customValue, effectiveCustomOperator)
+        : undefined;
+    } catch {
+      setCustomValueError(t("resourceToolbar.invalidJson"));
+      return;
+    }
+    if (needsValue && value === undefined) {
+      setCustomValueError(t("resourceToolbar.invalidValue"));
+      return;
+    }
+    setCustomValueError(undefined);
     onCustomFilterAdd({
       field: selectedCustomField.field ?? selectedCustomField.id,
       operator: effectiveCustomOperator,
@@ -488,7 +498,7 @@ function FilterPicker({
             onRemove={() => onCustomFilterRemove?.(chip.id)}
           />
         ))}
-        <input
+        {onFilterTextChange && <input
           type="search"
           value={draftFilterText}
           placeholder={t("resourceToolbar.filterPlaceholder")}
@@ -509,7 +519,7 @@ function FilterPicker({
               commitFilterText.flush();
             }
           }}
-        />
+        />}
         <PopoverTrigger
           className="grid size-6 shrink-0 place-content-center rounded-6 text-fg-muted outline-none transition-colors hover:bg-sheet hover:text-fg focus-visible:focus-ring"
           aria-label={
@@ -574,15 +584,17 @@ function FilterPicker({
                   fieldId={selectedCustomField?.id ?? ""}
                   operator={effectiveCustomOperator}
                   value={customValue}
+                  error={customValueError}
                   onField={(id) => {
                     const nextField = customFilterFields.find((field) =>
                       field.id === id);
                     setCustomFieldId(id);
                     setCustomOperator(defaultOperator(nextField));
                     setCustomValue("");
+                    setCustomValueError(undefined);
                   }}
-                  onOperator={setCustomOperator}
-                  onValue={setCustomValue}
+                  onOperator={(operator) => { setCustomOperator(operator); setCustomValueError(undefined); }}
+                  onValue={(value) => { setCustomValue(value); setCustomValueError(undefined); }}
                   onAdd={addCustomFilter}
                 />
               ) : null}
@@ -761,6 +773,7 @@ function CustomFilterEditor({
   fieldId,
   operator,
   value,
+  error,
   onField,
   onOperator,
   onValue,
@@ -771,6 +784,7 @@ function CustomFilterEditor({
   fieldId: string;
   operator: ResourceToolbarCustomFilterOperator;
   value: string;
+  error?: string;
   onField: (id: string) => void;
   onOperator: (operator: ResourceToolbarCustomFilterOperator) => void;
   onValue: (value: string) => void;
@@ -809,32 +823,33 @@ function CustomFilterEditor({
                 onOperator(next as ResourceToolbarCustomFilterOperator)}
             />
             {needsValue ? (
-              field?.options ? (
+              (field?.options || field?.type === "boolean") && !structuredFilterOperand(operator) ? (
                 <Select
                   size="sm"
                   value={value}
                   className="min-w-0 flex-1"
                   aria-label={t("resourceToolbar.filterValue")}
                   placeholder={t("resourceToolbar.value")}
-                  options={field.options.map((option) => ({
-                    value: option.value,
-                    label: option.label,
-                  }))}
+                  options={field.type === "boolean"
+                    ? [{ value: "true", label: t("list.yes") }, { value: "false", label: t("list.no") }]
+                    : field.options ?? []}
                   onValueChange={onValue}
                 />
               ) : (
                 <Input
                   size="sm"
-                  type={filterInputType(field)}
+                  type={structuredFilterOperand(operator) ? "text" : filterInputType(field)}
                   value={value}
                   placeholder={t("resourceToolbar.value")}
                   aria-label={t("resourceToolbar.filterValue")}
+                  aria-invalid={Boolean(error)}
                   className="min-w-0 flex-1"
                   onChange={(event) => onValue(event.currentTarget.value)}
                 />
               )
             ) : null}
           </div>
+          {error ? <p role="alert" className="text-xs text-danger-text">{error}</p> : null}
           <Button
             type="button"
             size="sm"
@@ -869,7 +884,7 @@ function CustomGroupEditor({
   onAdd: () => void;
 }): ReactElement {
   const t = useUiT();
-  const granularities = option?.granularities ?? RESOURCE_VIEW_GROUP_GRANULARITIES;
+  const granularities = option?.granularities ?? [];
   return (
     <div className="mt-2 grid gap-2 rounded-6 border border-border-subtle bg-sheet p-2 shadow-xs">
       {options.length === 0 ? (
@@ -924,7 +939,7 @@ function GroupOptionButton({
   onGroupStackChange?: (groups: readonly ResourceViewGroup[]) => void;
 }): ReactElement {
   const active = groups.some((group) => group.field === option.group.field);
-  const granularities = option.granularities ?? RESOURCE_VIEW_GROUP_GRANULARITIES;
+  const granularities = option.granularities ?? [];
   const selectedGranularities = new Set(
     groups
       .filter((group) => group.field === option.group.field && group.granularity)
@@ -1048,42 +1063,10 @@ function resourceViewGroupLabel(group: ResourceViewGroup): string {
   return group.granularity ? `${field} · ${titleCase(group.granularity)}` : field;
 }
 
-const TEXT_FILTER_OPERATORS: readonly ResourceToolbarCustomFilterOperator[] = [
-  ...ANGEE_TEXT_FILTER_LOOKUP_OPERATORS,
-  "isNotNull",
-];
-
-const COMPARISON_FILTER_OPERATORS: readonly ResourceToolbarCustomFilterOperator[] = [
-  "exact",
-  "gt",
-  "gte",
-  "lt",
-  "lte",
-  "isNull",
-  "isNotNull",
-];
-
-const EXACT_FILTER_OPERATORS: readonly ResourceToolbarCustomFilterOperator[] = [
-  "exact",
-  "isNull",
-  "isNotNull",
-];
-
 function operatorsForField(
   field: ResourceToolbarFilterField | undefined,
 ): readonly ResourceToolbarCustomFilterOperator[] {
-  if (field?.operators) return field.operators;
-  if (
-    field?.type === "number" ||
-    field?.type === "date" ||
-    field?.type === "datetime"
-  ) {
-    return COMPARISON_FILTER_OPERATORS;
-  }
-  if (field?.type === "selection" || field?.type === "boolean") {
-    return EXACT_FILTER_OPERATORS;
-  }
-  return TEXT_FILTER_OPERATORS;
+  return field?.operators ?? ["exact"];
 }
 
 function defaultOperator(
@@ -1117,15 +1100,24 @@ function filterInputType(field: ResourceToolbarFilterField | undefined): string 
 function coerceFilterValue(
   field: ResourceToolbarFilterField,
   value: string,
-): string | number | boolean | undefined {
+  operator: ResourceToolbarCustomFilterOperator,
+): FilterValue | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
+  if (structuredFilterOperand(operator)) {
+    return JSON.parse(trimmed) as FilterValue;
+  }
   if (field.type === "number") {
     const number = Number(trimmed);
     return Number.isFinite(number) ? number : undefined;
   }
   if (field.type === "boolean") {
-    return ["1", "true", "yes", "on"].includes(trimmed.toLowerCase());
+    return trimmed === "true" ? true : trimmed === "false" ? false : undefined;
   }
   return trimmed;
+}
+
+/** Multi-value and JSON operands are authored as JSON, then checked by ResourceQuery. */
+function structuredFilterOperand(operator: ResourceToolbarCustomFilterOperator): boolean {
+  return ["inList", "notInList", "hasKeysAny", "hasKeysAll", "jsonContains", "jsonContainedIn"].includes(operator);
 }

@@ -4,4 +4,9 @@
 
 Install: `pnpm add @angee/refine`
 
+Resource lists pass their compiled query through `listQueryMeta`, which binds
+the predicate and order to the stock Hasura provider's document override.
+This package owns transport and native selections; resource capability and
+query validation belong to `@angee/metadata`.
+
 [React documentation](https://docs.angee.ai/react/) · [Package reference](https://docs.angee.ai/react/reference/refine/)

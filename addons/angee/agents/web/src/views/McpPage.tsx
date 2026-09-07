@@ -38,7 +38,7 @@ export function McpToolsPage(): React.ReactElement {
   return (
     <ResourceList resource={TOOL_MODEL} placement="inline" routed>
       <List resource={TOOL_MODEL}>
-        <Facet field="server" label={t("facet.server")} labelField="name" />
+        <Facet field="server" label={t("facet.server")} />
         <Column field="name" />
         <Column field="enabled" />
         <Column field="updated_at" />

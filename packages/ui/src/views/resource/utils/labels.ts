@@ -61,6 +61,23 @@ export function filterOperatorLabel(
   operator: ResourceViewLookupOperator | ResourceToolbarCustomFilterOperator,
 ): string {
   switch (operator) {
+    case "ne": return "is not";
+    case "notInList": return "is not one of";
+    case "like": return "matches pattern";
+    case "iLike": return "matches pattern (ignore case)";
+    case "notLike": return "does not match pattern";
+    case "notILike": return "does not match pattern (ignore case)";
+    case "similar": return "is similar to pattern";
+    case "notSimilar": return "is not similar to pattern";
+    case "regex": return "matches regular expression";
+    case "iRegex": return "matches regular expression (ignore case)";
+    case "notRegex": return "does not match regular expression";
+    case "notIRegex": return "does not match regular expression (ignore case)";
+    case "jsonContains": return "contains JSON";
+    case "jsonContainedIn": return "is contained in JSON";
+    case "hasKey": return "has key";
+    case "hasKeysAny": return "has any keys";
+    case "hasKeysAll": return "has all keys";
     case "exact":
       return "is";
     case "inList":

@@ -43,17 +43,6 @@ export function useResourceViewGroupState({
     () => validResourceViewGroupStack(resourceView.state.groupStack, modelMetadata),
     [modelMetadata, resourceView.state.groupStack],
   );
-  const hasInvalidGroupStack = !resourceViewGroupStacksEqual(
-    resourceView.state.groupStack,
-    validCurrentGroupStack,
-  );
-  // A non-empty valid subset is a spelling/stack repair owned by this view
-  // (for example camel-case URL state canonicalized to snake_case metadata).
-  // No valid groups means the shared bare URL value belongs to another sibling
-  // data view; render this view's default locally without writing the foreign
-  // value back and starting a group-param ping-pong.
-  const hasCanonicalizableGroupStack =
-    hasInvalidGroupStack && validCurrentGroupStack.length > 0;
   // The previous applied default is transition memory: reading it here is
   // required to distinguish a newly-declared default from one the user cleared.
   // Converting this to render state would add a second reconciliation render and
@@ -69,11 +58,10 @@ export function useResourceViewGroupState({
   const effectiveGroupStack = React.useMemo(() => {
     if (pinned && validDefaultGroupStack.length > 0) return validDefaultGroupStack;
     if (validCurrentGroupStack.length > 0) return validCurrentGroupStack;
-    if (hasInvalidGroupStack || defaultGroupPending) return validDefaultGroupStack;
+    if (defaultGroupPending) return validDefaultGroupStack;
     return resourceView.state.groupStack;
   }, [
     defaultGroupPending,
-    hasInvalidGroupStack,
     pinned,
     resourceView.state.groupStack,
     validCurrentGroupStack,
@@ -126,29 +114,5 @@ export function useResourceViewGroupState({
     resourceView.setGroup,
     resourceView.state.group,
   ]);
-  React.useEffect(() => {
-    if (!hasCanonicalizableGroupStack) return;
-    if (resourceViewGroupStacksEqual(
-      resourceView.state.groupStack,
-      effectiveGroupStack,
-    )) return;
-    resourceView.setGroupStack(effectiveGroupStack);
-  }, [
-    effectiveGroupStack,
-    hasCanonicalizableGroupStack,
-    resourceView.setGroupStack,
-    resourceView.state.groupStack,
-  ]);
   return effectiveGroupStack;
-}
-
-function resourceViewGroupStacksEqual(
-  left: readonly ResourceViewGroup[],
-  right: readonly ResourceViewGroup[],
-): boolean {
-  return left.length === right.length
-    && left.every((group, index) => {
-      const other = right[index];
-      return other !== undefined && resourceViewGroupsEqual(group, other);
-    });
 }

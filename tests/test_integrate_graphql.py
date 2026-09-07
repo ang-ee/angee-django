@@ -259,55 +259,48 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert metadata.roots.create_name is None
     assert metadata.roots.update_name == "update_integrations_by_pk"
     assert metadata.roots.delete_name == "delete_integrations_by_pk"
-    assert metadata.filter_fields == (
+    assert {name for name, field in metadata.query.fields.items() if field.filter} == {
+        "display_name",
+        "runtime_status",
+        "lifecycle",
         "id",
-        "display_name",
-        "vendor",
         "kind",
-        "lifecycle",
-        "runtime_status",
+        "vendor",
         "updated_at",
-    )
-    assert metadata.order_fields == (
+    }
+    assert {name for name, field in metadata.query.fields.items() if field.sort} == {
         "display_name",
-        "vendor",
-        "kind",
-        "lifecycle",
         "runtime_status",
+        "lifecycle",
         "created_at",
-        "updated_at",
-    )
-    assert metadata.aggregate_fields == ("id",)
-    assert metadata.group_by_fields == (
         "kind",
         "vendor",
-        "vendor__display_name",
-        "lifecycle",
-        "runtime_status",
-    )
+        "updated_at",
+    }
+    assert metadata.aggregate_fields == ("id",)
+    assert set(metadata.query.axes) == {"runtime_status", "lifecycle", "vendor", "kind"}
     assert {
-        dimension.field: (dimension.input, dimension.key, dimension.kind, dimension.scalar)
-        for dimension in metadata.group_dimensions
+        dimension.field: (dimension.server.input, dimension.server.key, dimension.kind)
+        for dimension in metadata.query.axes.values()
     } == {
-        "kind": ("KIND", "kind", "column", None),
-        "vendor": ("VENDOR", "vendor_id", "relation", "ID"),
-        "vendor__display_name": ("VENDOR__DISPLAY_NAME", "vendor__display_name", "column", None),
-        "lifecycle": ("LIFECYCLE", "lifecycle", "column", None),
-        "runtime_status": ("RUNTIME_STATUS", "runtime_status", "column", None),
+        "kind": ("KIND", "kind", "column"),
+        "vendor": ("VENDOR", "vendor_id", "relation"),
+        "lifecycle": ("LIFECYCLE", "lifecycle", "column"),
+        "runtime_status": ("RUNTIME_STATUS", "runtime_status", "column"),
     }
     assert metadata.default_measures[0].op == "count"
     assert metadata.aggregate_measures == ()
     assert metadata.capabilities == ("list", "detail", "aggregate", "groups", "update", "delete", "changes")
-    assert metadata.relation_axes[0].field == "vendor"
-    assert metadata.relation_axes[0].model_label == "integrate.Vendor"
-    assert metadata.relation_axes[0].public_id_field == "sqid"
-    assert metadata.relation_axes[0].label_axis == "vendor__display_name"
-    assert metadata.public_id_field == "id"
-    assert metadata.group_aliases == ()
+    assert metadata.query.axes["vendor"].field == "vendor"
+    assert metadata.query.fields["vendor"].relation.model == "integrate.Vendor"
+    assert metadata.query.fields["vendor"].relation.identity_path == "vendor.id"
+    assert metadata.query.axes["vendor"].server.label_key == "vendor__display_name"
+    assert metadata.query.identity.field == "id"
+    assert not hasattr(metadata, "group_aliases")
     serialized = console_schema._schema.extensions["angee"]["resources"]
     integration = {item["modelLabel"]: item for item in serialized}["integrate.Integration"]
     assert integration["schemaName"] == "console"
-    assert integration["publicIdField"] == "id"
+    assert integration["query"]["identity"]["field"] == "id"
     assert integration["roots"]["list"] == "integrations"
     assert integration["roots"]["detail"] == "integrations_by_pk"
     assert integration["roots"]["aggregate"] == "integrations_aggregate"
@@ -326,60 +319,54 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         "delete",
         "changes",
     ]
-    assert integration["groupByFields"] == [
+    assert list(integration["query"]["axes"]) == [
         "kind",
         "vendor",
-        "vendor__display_name",
         "lifecycle",
         "runtime_status",
     ]
     assert {
         dimension["field"]: (
-            dimension["input"],
-            dimension["key"],
+            dimension["server"]["input"],
+            dimension["server"]["key"],
             dimension["kind"],
-            dimension["scalar"],
         )
-        for dimension in integration["groupDimensions"]
+        for dimension in integration["query"]["axes"].values()
     } == {
-        "kind": ("KIND", "kind", "column", None),
-        "vendor": ("VENDOR", "vendor_id", "relation", "ID"),
-        "vendor__display_name": ("VENDOR__DISPLAY_NAME", "vendor__display_name", "column", None),
-        "lifecycle": ("LIFECYCLE", "lifecycle", "column", None),
-        "runtime_status": ("RUNTIME_STATUS", "runtime_status", "column", None),
+        "kind": ("KIND", "kind", "column"),
+        "vendor": ("VENDOR", "vendor_id", "relation"),
+        "lifecycle": ("LIFECYCLE", "lifecycle", "column"),
+        "runtime_status": ("RUNTIME_STATUS", "runtime_status", "column"),
     }
     assert integration["defaultMeasures"] == [{"op": "count", "field": None, "input": None}]
     assert integration["aggregateMeasures"] == []
-    assert integration["relationAxes"] == [
-        {
-            "field": "vendor",
-            "modelLabel": "integrate.Vendor",
-            "publicIdField": "sqid",
-            "labelAxis": "vendor__display_name",
-        }
-    ]
-    assert integration["groupAliases"] == []
+    assert integration["query"]["fields"]["vendor"]["relation"] == {
+        "model": "integrate.Vendor",
+        "identityPath": "vendor.id",
+        "labelPath": "vendor.display_name",
+    }
+    assert "groupAliases" not in integration
     assert integration["updateFields"] == ["vendor", "credential", "account", "owner"]
     kind_field = {field["name"]: field for field in integration["fields"]}["kind"]
     assert kind_field["kind"] == "scalar"
-    assert kind_field["filterable"] is True
-    assert kind_field["sortable"] is True
-    assert kind_field["groupable"] is True
+    assert integration["query"]["fields"]["kind"]["filter"] is not None
+    assert integration["query"]["fields"]["kind"]["sort"] is not None
+    assert "kind" in integration["query"]["axes"]
     assert kind_field["updatable"] is False
     lifecycle_field = {field["name"]: field for field in integration["fields"]}["lifecycle"]
     assert lifecycle_field["kind"] == "enum"
     assert lifecycle_field["widget"] == "select"
     assert lifecycle_field["readable"] is True
-    assert lifecycle_field["filterable"] is True
-    assert lifecycle_field["sortable"] is True
-    assert lifecycle_field["groupable"] is True
+    assert integration["query"]["fields"]["lifecycle"]["filter"] is not None
+    assert integration["query"]["fields"]["lifecycle"]["sort"] is not None
+    assert "lifecycle" in integration["query"]["axes"]
     assert lifecycle_field["updatable"] is False
     runtime_status_field = {field["name"]: field for field in integration["fields"]}["runtime_status"]
     assert runtime_status_field["kind"] == "enum"
     assert runtime_status_field["readable"] is True
-    assert runtime_status_field["filterable"] is True
-    assert runtime_status_field["sortable"] is True
-    assert runtime_status_field["groupable"] is True
+    assert integration["query"]["fields"]["runtime_status"]["filter"] is not None
+    assert integration["query"]["fields"]["runtime_status"]["sort"] is not None
+    assert "runtime_status" in integration["query"]["axes"]
     assert runtime_status_field["updatable"] is False
 
 
@@ -1156,7 +1143,9 @@ def test_create_vcs_bridge_creates_child_row(
 
 @pytest.mark.parametrize("name, expected_name", [("Renamed", "Renamed"), (None, "")])
 def test_update_vcs_bridge_merges_typed_config(
-    integrate_console_tables: None, name: str | None, expected_name: str,
+    integrate_console_tables: None,
+    name: str | None,
+    expected_name: str,
 ) -> None:
     """Unsent typed options survive patches; removing an option restores its default."""
 
@@ -1191,7 +1180,10 @@ def test_update_vcs_bridge_rejects_unknown_config_key_after_merge(integrate_cons
     """Patch merging still runs the typed config's unknown-key validation on save."""
 
     bridge = make_integration(
-        "vcs-config-patch-invalid", backend_class="local", model=VcsBridge, config={"local_org": "kept"},
+        "vcs-config-patch-invalid",
+        backend_class="local",
+        model=VcsBridge,
+        config={"local_org": "kept"},
     )
     original = dict(bridge.config)
     result = _execute(

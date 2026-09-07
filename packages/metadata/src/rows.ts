@@ -15,9 +15,9 @@ export function rowValueAtPath(row: Row, path: string): unknown {
 /** The public record id carried by resource rows, or null for non-record values. */
 export function rowPublicId(
   row: Row | null | undefined,
-  resource?: { publicIdField?: string | null } | null,
+  resource?: { query: { identity: { field: string } } } | null,
 ): string | null {
-  const field = resource?.publicIdField || "id";
+  const field = resource?.query.identity.field ?? "id";
   const value = row?.[field];
   return typeof value === "string" ? value : null;
 }

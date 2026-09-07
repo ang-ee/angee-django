@@ -14,6 +14,7 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
+import { ResourceQuery } from "@angee/metadata";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -43,6 +44,10 @@ const ROWS: Item[] = [
 // Only the name column is shown, so "East"/"West" appear solely as group headers
 // (never as row cells) — the assertions stay unambiguous across expand/collapse.
 const columns: readonly ListColumn<Item>[] = [{ field: "name", header: "Name" }];
+const query = ResourceQuery.forRows({ fields: {
+  name: { scalar: "String" }, region: { scalar: "String" },
+  provider: { kind: "relation", identityPath: "provider.id", labelPath: "provider.name" },
+} });
 
 function renderInRouter(ui: ReactElement, initialEntries = ["/"]): void {
   const rootRoute = createRootRoute();
@@ -68,6 +73,7 @@ describe("RowsListView grouping", () => {
   test("groups are collapsed by default and a header click expands only that group", async () => {
     renderInRouter(
       <RowsListView<Item>
+        query={query}
         rows={ROWS}
         columns={columns}
         defaultGroup={{ field: "region" }}
@@ -100,6 +106,7 @@ describe("RowsListView filters", () => {
   test("exposes caller-declared local row fields through custom filters", async () => {
     renderInRouter(
       <RowsListView<Item>
+        query={query}
         rows={ROWS}
         columns={columns}
         customFilterFields={[
@@ -108,13 +115,14 @@ describe("RowsListView filters", () => {
             field: "region",
             label: "Region",
             type: "selection",
+            operators: ["exact"],
           },
         ]}
       />,
     );
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Filter" }),
+      await screen.findByRole("button", { name: "Filter and group" }),
     );
     expect(screen.getByText("No filters")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "East" })).toBeNull();
@@ -137,8 +145,9 @@ describe("RowsListView filters", () => {
 
   test("matches relation public-id lookup filters against local row objects", async () => {
     renderInRouter(
-      <ResourceViewProvider initialState={{ filter: { provider: { sqid: "ipr_anthropic" } } }}>
+      <ResourceViewProvider initialState={{ filter: { provider: { exact: "ipr_anthropic" } } }}>
         <RowsListView<Item>
+          query={query}
           rows={[
             {
               id: "1",
@@ -164,10 +173,11 @@ describe("RowsListView filters", () => {
 
   test("standalone rows use route-owned resource-view state", async () => {
     const routeFilter = encodeURIComponent(
-      JSON.stringify({ provider: { sqid: "ipr_anthropic" } }),
+      JSON.stringify({ provider: { exact: "ipr_anthropic" } }),
     );
     renderInRouter(
       <RowsListView<Item>
+        query={query}
         rows={[
           {
             id: "1",
@@ -193,8 +203,9 @@ describe("RowsListView filters", () => {
 
   test("local scope ignores an ambient data view filter", async () => {
     renderInRouter(
-      <ResourceViewProvider initialState={{ filter: { provider: { sqid: "ipr_anthropic" } } }}>
+      <ResourceViewProvider initialState={{ filter: { provider: { exact: "ipr_anthropic" } } }}>
         <RowsListView<Item>
+          query={query}
           scope="local"
           rows={[
             {
@@ -225,6 +236,7 @@ describe("RowsListView selection", () => {
     const action = vi.fn();
     renderInRouter(
       <RowsListView<Item>
+        query={query}
         rows={ROWS}
         columns={columns}
         selectable
@@ -247,6 +259,7 @@ describe("RowsListView selection", () => {
   test("switches to gallery cards without losing row selection", async () => {
     renderInRouter(
       <RowsListView<Item>
+        query={query}
         rows={ROWS}
         columns={columns}
         selectable

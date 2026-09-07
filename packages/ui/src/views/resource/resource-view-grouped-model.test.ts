@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import type { UseAngeeGroupByResult } from "@angee/refine";
-import { schemaFieldMetadataFromDataResources, type Row } from "@angee/metadata";
+import { ResourceQuery, schemaFieldMetadataFromDataResources, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 
 import {
@@ -10,39 +10,17 @@ import {
 
 const EMPTY_LEAVES = new Map();
 const EMPTY_ROWS = new Map();
+const contract = ResourceQuery.forRows({ fields: {
+  status: { scalar: "String" }, owner: { scalar: "String" }, nestedOwner: { scalar: "String" },
+} }).contract;
+for (const field of ["status", "owner", "nestedOwner"]) {
+  contract.axes[field]!.server = { input: field, key: field };
+  if (field !== "nestedOwner") contract.axes[field]!.drill = {
+    kind: "value", field, valueKey: field, nullMode: "isNull", valueMap: [],
+  };
+}
 const TEST_METADATA = schemaFieldMetadataFromDataResources([
-  testDataResource("test.Row", {
-    groupDimensions: [
-      {
-        field: "status",
-        input: "status",
-        key: "status",
-        kind: "column",
-        filter: {
-          kind: "equality",
-          field: "status",
-          valueKey: "status",
-        },
-      },
-      {
-        field: "owner",
-        input: "owner",
-        key: "owner",
-        kind: "column",
-        filter: {
-          kind: "equality",
-          field: "owner",
-          valueKey: "owner",
-        },
-      },
-      {
-        field: "nestedOwner",
-        input: "nestedOwner",
-        key: "nestedOwner",
-        kind: "column",
-      },
-    ],
-  }),
+  testDataResource("test.Row", { query: contract }),
 ]).labels["test.Row"]!;
 
 function params(overrides: Partial<GroupedRenderParams> = {}): GroupedRenderParams {

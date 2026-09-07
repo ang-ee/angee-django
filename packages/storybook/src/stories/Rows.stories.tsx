@@ -1,3 +1,4 @@
+import { testResourceQuery, testQueryField } from "@angee/metadata/testing";
 import { useState, type ReactElement } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import type { AngeeSchemaMetadata } from "@angee/metadata";
@@ -34,11 +35,14 @@ const channelMetadata = {
   angee: {
     resources: [
       {
+        query: testResourceQuery({ identity: { field: "id" }, fields: { "id": testQueryField("id", { scalar: "ID", kind: "scalar", filter: null }),
+                "name": testQueryField("name", { scalar: "String", kind: "scalar", filter: null, sort: { field: "name" } }) }, axes: {}, sort: { default: [] } }),
+
         schemaName: "public",
         modelLabel: "messaging.Channel",
         appLabel: "messaging",
         modelName: "Channel",
-        publicIdField: "id",
+
         roots: {
           list: "channels",
           create: "insert_channels_one",
@@ -52,10 +56,9 @@ const channelMetadata = {
             kind: "scalar",
             scalar: "ID",
             readable: true,
-            filterable: true,
-            sortable: true,
+
             aggregatable: false,
-            groupable: true,
+
             creatable: false,
             updatable: false,
             requiredOnCreate: false,
@@ -65,20 +68,17 @@ const channelMetadata = {
             kind: "scalar",
             scalar: "String",
             readable: true,
-            filterable: true,
-            sortable: true,
+
             aggregatable: false,
-            groupable: true,
+
             creatable: true,
             updatable: true,
             requiredOnCreate: true,
           },
         ],
-        filterFields: [],
-        orderFields: ["name"],
+
         aggregateFields: [],
-        groupByFields: [],
-        relationAxes: [],
+
       },
     ],
   },

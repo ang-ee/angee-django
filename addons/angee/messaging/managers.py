@@ -1883,17 +1883,14 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         return self.alias(_sender_name=self.sender_name_expression())
 
     def thread_title_expression(self) -> models.Expression:
-        """Guard the to-one fragment title with native readable-thread membership."""
+        """Correlate the title from the actor-readable thread queryset."""
 
         thread_model = apps.get_model("messaging", "Thread")
         actor = self.actor() or current_actor()
         threads = thread_model.objects.with_actor(actor).scoped() if actor is not None else thread_model.objects.none()
+        title = threads.filter(pk=models.OuterRef("thread_id")).values("title__text")[:1]
         return Coalesce(
-            models.Case(
-                models.When(thread_id__in=threads.values("pk"), then=models.F("thread__title__text")),
-                default=models.Value(""),
-                output_field=models.TextField(),
-            ),
+            models.Subquery(title),
             models.Value(""),
             output_field=models.TextField(),
         )
@@ -1904,7 +1901,11 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         return self.alias(_thread_title=self.thread_title_expression())
 
     def channel_vendor_name_expression(self) -> models.Expression:
-        """Guard the to-one vendor label with readable Integration and Vendor sets."""
+        """Correlate the vendor label through readable Integration and Vendor sets.
+
+        Keep scalar projection inside the scoped subquery: the outer message
+        may also materialize its channel through ``rebac_select_related``.
+        """
 
         integration_model = apps.get_model("integrate", "Integration")
         vendor_model = apps.get_model("integrate", "Vendor")
@@ -1915,18 +1916,11 @@ class MessageQuerySet(AngeeQuerySet[Any]):
             else integration_model.objects.none()
         )
         vendors = vendor_model.objects.with_actor(actor).scoped() if actor is not None else vendor_model.objects.none()
+        vendor_name = integrations.filter(
+            pk=models.OuterRef("channel_id"), vendor_id__in=vendors.values("pk")
+        ).values("vendor__display_name")[:1]
         return Coalesce(
-            models.Case(
-                models.When(
-                    models.Q(
-                        channel_id__in=integrations.values("pk"),
-                        channel__vendor_id__in=vendors.values("pk"),
-                    ),
-                    then=models.F("channel__vendor__display_name"),
-                ),
-                default=models.Value(""),
-                output_field=models.TextField(),
-            ),
+            models.Subquery(vendor_name),
             models.Value(""),
             output_field=models.TextField(),
         )

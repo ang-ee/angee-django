@@ -1,4 +1,4 @@
-export { bucketFilterForGroup, estimateGroupedItemSize, ALIGN_CLASS, LIST_VIEW_SCROLL_BUDGET, TABLE_SCROLL_STYLE, GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT, GROUP_HEADER_HEIGHT, SKELETON_ROW_HEIGHT, GROUP_STATUS_HEIGHT } from "./list-body/types";
+export { estimateGroupedItemSize, ALIGN_CLASS, LIST_VIEW_SCROLL_BUDGET, TABLE_SCROLL_STYLE, GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT, GROUP_HEADER_HEIGHT, SKELETON_ROW_HEIGHT, GROUP_STATUS_HEIGHT } from "./list-body/types";
 export type { ColumnAlign, ListColumn, VisibleFieldOption, GroupByDimension, RowGroup, GroupMeasure, GroupedListPager, GroupedRecordNav, GroupedListItem } from "./list-body/types";
 export { SelectionBar, FlatListBody, MeasureFooter, RowActionsHeader, ListHeaderCell, VisibleFieldsMenu } from "./list-body/table-pieces";
 export type { FlatListBodyProps } from "./list-body/table-pieces";
@@ -6,6 +6,6 @@ export { buildColumns, ListCellContent } from "./list-body/columns";
 export type { BuildColumnsOptions } from "./list-body/columns";
 export { RecordRow } from "./list-body/rows";
 export { VirtualPaddingRow, useVirtualWindow } from "./list-body/virtualization";
-export { groupedRowLabel, resourceViewGroupToAggregateDimension, hasuraGroupDimension, hasuraGroupOrderForDimensions, groupLabelDimension, resourceViewGroupQueryProjection, bucketValueLabels, groupKey, groupLabel } from "./list-body/grouping";
-export { cellContent, tableColumnLabel, ariaSortForColumn, readPath, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, measureValue, formatMeasure, alignOf, isGroupingOnlyColumn, withGroupingOnlyColumnsHidden, groupFieldLabel, enumValueLabel } from "./list-body/cell-utils";
+export { groupedRowLabel, tableGroupAxes, bucketValueLabels, groupLabel } from "./list-body/grouping";
+export { cellContent, tableColumnLabel, ariaSortForColumn, readPath, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, measureValue, formatMeasure, alignOf, isQueryOnlyColumn, withQueryOnlyColumnsHidden, groupFieldLabel, enumValueLabel } from "./list-body/cell-utils";
 export { ListLoadingFooter, ListSkeletonRows, ListEmpty } from "./list-body/loading";

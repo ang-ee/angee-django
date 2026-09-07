@@ -11,7 +11,6 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import {
   createResourceViewState,
-  Filter,
   RESOURCE_VIEW_KINDS,
   RESOURCE_VIEW_KIND_CAPABILITIES,
   availableResourceViewKinds,
@@ -196,168 +195,12 @@ describe("resource-view model", () => {
     expect(favoriteFromResourceView(state, "   ").id).toBe("favorite:search");
   });
 
-  test("round-trips groups with explicit aggregate axes", () => {
-    const state = createResourceViewState({
-      groupStack: [
-        {
-          field: "vendor.displayName",
-          aggregateField: "vendor",
-          aggregateKey: "vendorId",
-        },
-      ],
-    });
-
+  test("round-trips canonical relation groups and rejects retired URL triples", () => {
+    const state = createResourceViewState({ groupStack: [{ field: "vendor" }] });
     const search = resourceViewStateToSearch(state);
-
-    expect(search.group).toBe("vendor.displayName~vendor~vendorId");
-    expect(resourceViewSearchToState(search).group).toEqual({
-      field: "vendor.displayName",
-      aggregateField: "vendor",
-      aggregateKey: "vendorId",
-    });
-  });
-
-  test("toggles lookup facets as exact/in-list lookups", () => {
-    const selected = Filter.from({}).toggleFacet({
-      field: "providerId",
-      value: "provider-a",
-      mode: "lookup",
-    });
-    const expanded = Filter.from(selected).toggleFacet({
-      field: "providerId",
-      value: "provider-b",
-      mode: "lookup",
-    });
-
-    expect(selected).toEqual({ providerId: { exact: "provider-a" } });
-    expect(expanded).toEqual({ providerId: { inList: ["provider-a", "provider-b"] } });
-    expect(Filter.from(expanded).facetValues({
-      field: "providerId",
-      value: "provider-a",
-      mode: "lookup",
-    })).toEqual(["provider-a", "provider-b"]);
-  });
-
-  test("toggles public-id relation facets as single lookup filters", () => {
-    const facet = Filter.facetFromFilter({
-      provider: { sqid: "provider-a" },
-    });
-
-    expect(facet).toEqual({
-      field: "provider",
-      value: "provider-a",
-      mode: "lookup",
-      lookup: "sqid",
-    });
-
-    const selected = Filter.from({}).toggleFacet(facet!);
-    const replaced = Filter.from(selected).toggleFacet({
-      ...facet!,
-      value: "provider-b",
-    });
-    const cleared = Filter.from(replaced).toggleFacet({
-      ...facet!,
-      value: "provider-b",
-    });
-
-    expect(selected).toEqual({ provider: { sqid: "provider-a" } });
-    expect(Filter.from(selected).facetValues(facet!)).toEqual(["provider-a"]);
-    expect(replaced).toEqual({ provider: { sqid: "provider-b" } });
-    expect(cleared).toEqual({});
-  });
-
-  test("toggles direct id facets as scalar filters", () => {
-    const facet = {
-      field: "publisher",
-      value: "publisher-a",
-      mode: "id" as const,
-    };
-    const selected = Filter.from({}).toggleFacet(facet);
-    const cleared = Filter.from(selected).toggleFacet(facet);
-
-    expect(selected).toEqual({ publisher: "publisher-a" });
-    expect(Filter.from(selected).facetValues(facet)).toEqual(["publisher-a"]);
-    expect(cleared).toEqual({});
-  });
-
-  test("combines filters without duplicating equivalent constraints", () => {
-    const filter = Filter.combine(
-      { status: { exact: "ACTIVE" } },
-      { status: { exact: "ACTIVE" }, owner: { sqid: "usr_1" } },
-    );
-
-    expect(filter).toEqual({
-      status: { exact: "ACTIVE" },
-      owner: { sqid: "usr_1" },
-    });
-  });
-
-  test("returns no optional filter when both sides are empty", () => {
-    expect(Filter.combineOptional(undefined, {})).toBeUndefined();
-  });
-
-  test("keeps optional conflicting filters under object-shaped AND", () => {
-    expect(Filter.combineOptional(
-      { status: { exact: "ACTIVE" } },
-      { status: { exact: "DRAFT" } },
-    )).toEqual({
-      status: { exact: "ACTIVE" },
-      AND: { status: { exact: "DRAFT" } },
-    });
-  });
-
-  test("keeps conflicting filter constraints under object-shaped AND", () => {
-    const filter = Filter.combine(
-      { updatedAt: { gte: "2026-01-01" } },
-      { updatedAt: { exact: "2026-01-20" }, status: { exact: "ACTIVE" } },
-    );
-
-    expect(Array.isArray(filter.AND)).toBe(false);
-    expect(filter).toEqual({
-      updatedAt: { gte: "2026-01-01" },
-      status: { exact: "ACTIVE" },
-      AND: { updatedAt: { exact: "2026-01-20" } },
-    });
-  });
-
-  test("combines conflicts into an existing AND branch", () => {
-    const filter = Filter.combine(
-      {
-        updatedAt: { gte: "2026-01-01" },
-        AND: { updatedAt: { lte: "2026-01-31" } },
-      },
-      { updatedAt: { exact: "2026-01-20" } },
-    );
-
-    expect(filter).toEqual({
-      updatedAt: { gte: "2026-01-01" },
-      AND: {
-        updatedAt: { lte: "2026-01-31" },
-        AND: { updatedAt: { exact: "2026-01-20" } },
-      },
-    });
-  });
-
-  test("removes facet fields from nested filter controls", () => {
-    const filter = Filter.from({
-      provider: { sqid: "provider-a" },
-      status: { exact: "ACTIVE" },
-      AND: {
-        provider: { sqid: "provider-b" },
-        title: { iContains: "launch" },
-      },
-      OR: [
-        { provider: { sqid: "provider-c" } },
-        { status: { exact: "ARCHIVED" } },
-      ],
-      not: { provider: { sqid: "provider-d" } },
-    }).withoutFields(["provider"]);
-
-    expect(filter).toEqual({
-      status: { exact: "ACTIVE" },
-      AND: { title: { iContains: "launch" } },
-      OR: [{ status: { exact: "ARCHIVED" } }],
-    });
+    expect(search.group).toBe("vendor");
+    expect(resourceViewSearchToState(search).group).toEqual({ field: "vendor" });
+    expect(resourceViewSearchToState({ group: "vendor.displayName~vendor~vendorId" }).queryError?.message).toMatch(/group/);
   });
 
   test("resets page and clears selection when query scope changes", () => {

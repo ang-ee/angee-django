@@ -1,45 +1,63 @@
 import * as React from "react";
-import { type Column as TableColumn, type ColumnDef } from "@tanstack/react-table";
-import { resourceOrderFieldForPath, type ModelMetadata, type Row } from "@angee/metadata";
+import { type Column as TableColumn, type ColumnDef, type Row as TableRow } from "@tanstack/react-table";
+import { resourceOrderFieldForPath, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { Glyph } from "../../../chrome/Glyph";
 import { useUiT } from "../../../i18n";
 import { useResolvedWidget } from "../../../widgets";
 import type { ResourceViewGroup } from "../resource-view-model";
 import type { ColumnDescriptor } from "../../page";
 import { cellContent, columnLabelText, groupFieldLabel, readPath } from "./cell-utils";
-import { groupKey } from "./grouping";
+import { groupLabel, tableGroupAxes } from "./grouping";
+import { queryForColumns } from "../resource-query";
 export interface BuildColumnsOptions {
   groupStack?: readonly ResourceViewGroup[];
   metadata?: ModelMetadata | null;
+  clientOperations?: boolean;
+  query?: ResourceQuery;
 }
 
 export function buildColumns<TRow extends Row>(
   columns: readonly ColumnDescriptor<TRow>[],
   options: BuildColumnsOptions,
 ): ColumnDef<TRow>[] {
-  // TanStack grouping requires a column def per grouping id; a group axis that
-  // is not a display column gets a grouping-only accessor column (never
-  // rendered, hidden from the column chooser via `meta.groupingOnly`).
-  const groupOnlyColumns: ColumnDef<TRow>[] = (options.groupStack ?? [])
-    .filter((group) => !columns.some((column) => column.field === group.field))
-    .map((group) => ({
-      id: group.field,
-      accessorFn: (row: TRow) => readPath(row, group.field),
-      getGroupingValue: (row: TRow) =>
-        groupKey(
-          readPath(row, group.field),
-          group,
-          options.metadata ?? null,
-        ),
-      enableHiding: false,
-      meta: {
-        align: "left",
-        label: groupFieldLabel(group.field),
-        field: group.field,
-        groupingOnly: true,
-      },
-    }));
-  return [...displayColumns(columns, options), ...groupOnlyColumns];
+  const axes = tableGroupAxes(options.groupStack ?? [], options.metadata, columns, options.query);
+  const definitions = displayColumns(columns, options);
+  if (options.clientOperations) {
+    const query = options.query ?? queryForColumns(columns, options.metadata, options.groupStack);
+    for (const [field, capability] of Object.entries(query.fields)) {
+      if (!capability.sort) continue;
+      let definition = definitions.find((column) => column.id === field);
+      if (!definition) {
+        definition = { id: field, enableHiding: false,
+          meta: { field, label: groupFieldLabel(field), queryOnly: true } };
+        definitions.push(definition);
+      }
+      const compare = query.comparator(field);
+      Object.assign(definition, {
+        accessorFn: (row: TRow) => query.value(field, row),
+        ...(compare ? { sortingFn: (left: TableRow<TRow>, right: TableRow<TRow>) => compare(left.original, right.original) } : {}),
+      });
+    }
+  }
+  for (const axis of axes) {
+    let definition = definitions.find((column) => column.id === axis.id);
+    if (!definition) {
+      definition = {
+        id: axis.id,
+        accessorFn: (row: TRow) => axis.identity(row),
+        enableHiding: false,
+        meta: { align: "left", label: groupFieldLabel(axis.field), field: axis.field, queryOnly: true },
+      };
+      definitions.push(definition);
+    }
+    definition.getGroupingValue = (row: TRow) => axis.identity(row);
+    definition.meta = {
+      ...definition.meta,
+      groupLabel: (row: TRow, emptyValueLabel: string, t: Parameters<typeof groupLabel>[4]) =>
+        groupLabel(axis.label(row), axis.spec, options.metadata ?? null, emptyValueLabel, t),
+    };
+  }
+  return definitions;
 }
 
 function displayColumns<TRow extends Row>(
@@ -49,16 +67,9 @@ function displayColumns<TRow extends Row>(
   return columns.map((column) => ({
     id: column.field,
     accessorFn: (row) => readPath(row, column.field),
-    getGroupingValue: (row) => {
-      const group = options.groupStack?.find((item) => item.field === column.field);
-      if (!group) return readPath(row, column.field);
-      return groupKey(
-        readPath(row, column.field),
-        group,
-        options.metadata ?? null,
-      );
-    },
-    enableSorting: column.sortable !== false && resourceOrderFieldForPath(column.field, options.metadata?.resource) !== null,
+    enableSorting: column.sortable !== false && (options.query
+      ? Boolean(options.query.fields[column.field]?.sort)
+      : resourceOrderFieldForPath(column.field, options.metadata?.resource) !== null),
     sortDescFirst: false,
     header: ({ column: tableColumn }) => {
       const label = column.header ?? column.field;

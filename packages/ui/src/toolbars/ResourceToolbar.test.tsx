@@ -31,7 +31,7 @@ function viewControls(
 }
 
 function renderToolbar(props: Partial<ResourceToolbarProps>): void {
-  render(<ResourceToolbar pager={PAGER} onViewChange={vi.fn()} {...props} />);
+  render(<ResourceToolbar pager={PAGER} onFilterTextChange={vi.fn()} onViewChange={vi.fn()} {...props} />);
 }
 
 afterEach(cleanup);

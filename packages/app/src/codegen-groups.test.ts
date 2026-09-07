@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, test } from "vitest";
 import type { DataResourceFieldMetadata } from "@angee/metadata";
-import { testDataResource } from "@angee/metadata/testing";
+import { testDataResource, testResourceQuery, testQueryField, testQueryAxis } from "@angee/metadata/testing";
 
 const roots: string[] = [];
 
@@ -174,6 +174,9 @@ const METADATA = {
   angee: {
     resources: [
       testDataResource("notes.Note", {
+        query: testResourceQuery({ identity: { field: "id" }, fields: { "id": testQueryField("id", { scalar: "ID", filter: null }),
+                "status": testQueryField("status", { scalar: "String", filter: null }) }, axes: { "status": testQueryAxis("status", { kind: "column", identityPath: "status", paths: ["status"], server: { input: "status", key: "status" }, extractions: [], drill: null }) }, sort: { default: [] } }),
+
         roots: {
           groups: "notes_groups",
           groupsCount: "notes_groups_count",
@@ -184,12 +187,7 @@ const METADATA = {
           groupOrder: "NoteGroupOrder",
           having: "NoteHaving",
         },
-        groupDimensions: [{
-          field: "status",
-          input: "status",
-          key: "status",
-          kind: "scalar",
-        }],
+
         aggregateMeasures: [],
       }),
     ],
@@ -200,6 +198,9 @@ const SAVE_METADATA = {
   angee: {
     resources: [
       testDataResource("sales.Order", {
+        query: testResourceQuery({ identity: { field: "id" }, fields: { "owner": testQueryField("owner", { scalar: "ID", kind: "relation", filter: null, relation: { model: "accounts.User", identityPath: "owner" }, row: { path: "owner", paths: ["owner"] } }),
+                "id": testQueryField("id", { scalar: "ID", filter: null }) }, axes: {}, sort: { default: [] } }),
+
         roots: { save: "order_save" },
         fields: [
           resourceField({
@@ -210,11 +211,7 @@ const SAVE_METADATA = {
             relationObject: false,
           }),
         ],
-        relationAxes: [{
-          field: "owner",
-          modelLabel: "accounts.User",
-          publicIdField: "id",
-        }],
+
         linesResource: {
           field: "lines",
           modelLabel: "sales.OrderLine",
@@ -265,10 +262,9 @@ function baseResourceField() {
     name: "field",
     kind: "scalar" as const,
     readable: false,
-    filterable: false,
-    sortable: false,
+
     aggregatable: false,
-    groupable: false,
+
     creatable: false,
     updatable: false,
     requiredOnCreate: false,

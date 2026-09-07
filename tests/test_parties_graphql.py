@@ -62,28 +62,28 @@ def test_public_resource_metadata_declares_people_surface() -> None:
     assert metadata.roots.create_name == "insert_people_one"
     assert metadata.roots.update_name == "update_people_by_pk"
     assert metadata.roots.delete_name is None
-    assert metadata.filter_fields == (
-        "id",
+    assert {name for name, field in metadata.query.fields.items() if field.filter} == {
         "display_name",
-        "given_name",
-        "family_name",
         "nickname",
-        "folder",
-        "birthday",
-        "anniversary",
         "created_at",
-        "updated_at",
-    )
-    assert metadata.order_fields == (
-        "display_name",
+        "id",
+        "family_name",
+        "birthday",
+        "folder",
         "given_name",
+        "updated_at",
+        "anniversary",
+    }
+    assert {name for name, field in metadata.query.fields.items() if field.sort} == {
+        "display_name",
+        "created_at",
         "family_name",
         "folder",
-        "created_at",
+        "given_name",
         "updated_at",
-    )
+    }
     assert metadata.aggregate_fields == ("id",)
-    assert metadata.group_by_fields == ("folder", "folder__name", "created_at")
+    assert set(metadata.query.axes) == {"folder", "created_at"}
     assert metadata.capabilities == (
         "list",
         "detail",
@@ -92,16 +92,16 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         "create",
         "update",
     )
-    assert metadata.relation_axes[0].field == "folder"
-    assert metadata.relation_axes[0].model_label == "parties.Folder"
-    assert metadata.relation_axes[0].public_id_field == "sqid"
-    assert metadata.relation_axes[0].label_axis == "folder__name"
-    assert metadata.public_id_field == "id"
+    assert metadata.query.axes["folder"].field == "folder"
+    assert metadata.query.fields["folder"].relation.model == "parties.Folder"
+    assert metadata.query.fields["folder"].relation.identity_path == "folder.id"
+    assert metadata.query.axes["folder"].server.label_key == "folder__name"
+    assert metadata.query.identity.field == "id"
 
     serialized = schema._schema.extensions["angee"]["resources"]
     person = {item["modelLabel"]: item for item in serialized}["parties.Person"]
     assert person["schemaName"] == "public"
-    assert person["publicIdField"] == "id"
+    assert person["query"]["identity"]["field"] == "id"
     assert person["roots"]["list"] == "people"
     assert person["roots"]["detail"] == "people_by_pk"
     assert person["roots"]["aggregate"] == "people_aggregate"
@@ -110,20 +110,18 @@ def test_public_resource_metadata_declares_people_surface() -> None:
     assert person["roots"]["create"] == "insert_people_one"
     assert person["roots"]["update"] == "update_people_by_pk"
     assert person["roots"]["delete"] is None
-    assert person["groupByFields"] == ["folder", "folder__name", "created_at"]
-    group_dimensions = {dimension["field"]: dimension for dimension in person["groupDimensions"]}
+    assert list(person["query"]["axes"]) == ["folder", "created_at"]
+    group_dimensions = person["query"]["axes"]
     assert {
         field: (
-            dimension["input"],
-            dimension["key"],
+            dimension["server"]["input"],
+            dimension["server"]["key"],
             dimension["kind"],
-            dimension["scalar"],
         )
         for field, dimension in group_dimensions.items()
     } == {
-        "folder": ("FOLDER", "folder_id", "relation", "ID"),
-        "folder__name": ("FOLDER__NAME", "folder__name", "column", None),
-        "created_at": ("CREATED_AT", "created_at", "column", "DateTime"),
+        "folder": ("FOLDER", "folder_id", "relation"),
+        "created_at": ("CREATED_AT", "created_at", "date"),
     }
     created_at_extractions = {
         extraction["name"]: extraction for extraction in group_dimensions["created_at"]["extractions"]
@@ -133,13 +131,13 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         "input": "MONTH",
         "key": "created_at_month",
         "rangeKey": "created_at_month_range",
-        "filter": {
+        "drill": {
             "kind": "range",
             "field": "created_at",
             "valueKey": "created_at_month",
             "rangeKey": "created_at_month_range",
-            "lookup": None,
-            "nullLookup": "isNull",
+            "jsonPath": None,
+            "nullMode": "isNull",
             "valueTransform": None,
             "valueMap": [],
         },
@@ -171,20 +169,17 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         "birthday",
         "anniversary",
     ]
-    assert person["relationAxes"] == [
-        {
-            "field": "folder",
-            "modelLabel": "parties.Folder",
-            "publicIdField": "sqid",
-            "labelAxis": "folder__name",
-        }
-    ]
+    assert person["query"]["fields"]["folder"]["relation"] == {
+        "model": "parties.Folder",
+        "identityPath": "folder.id",
+        "labelPath": "folder.name",
+    }
     folder_field = {field["name"]: field for field in person["fields"]}["folder"]
     assert folder_field["kind"] == "relation"
     assert folder_field["widget"] == "many2one"
     assert folder_field["readable"] is True
     assert folder_field["relationModelLabel"] == "parties.Folder"
-    assert folder_field["relationLabelAxis"] == "folder__name"
+    assert person["query"]["fields"]["folder"]["relation"]["labelPath"] == "folder.name"
     display_name_field = {field["name"]: field for field in person["fields"]}["display_name"]
     assert display_name_field["creatable"] is True
     assert display_name_field["updatable"] is True
@@ -202,7 +197,12 @@ def test_public_resource_metadata_converts_related_parties_surfaces() -> None:
     assert address.roots.create_name == "insert_addresses_one"
     assert address.roots.update_name == "update_addresses_by_pk"
     assert address.roots.delete_name == "delete_addresses_by_pk"
-    assert address.filter_fields == ("id", "party", "label", "created_at")
+    assert {name for name, field in address.query.fields.items() if field.filter} == {
+        "id",
+        "party",
+        "label",
+        "created_at",
+    }
     assert address.create_fields[0] == "party"
 
     relationship = resources["parties.Relationship"]

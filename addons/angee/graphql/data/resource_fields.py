@@ -41,6 +41,22 @@ from graphql import (
     get_named_type,
 )
 
+#: Backend-owned display-field precedence, shared by record representation and
+#: the relation group-label fallback.
+PREFERRED_DISPLAY_FIELDS: tuple[str, ...] = (
+    "title",
+    "name",
+    "displayName",
+    "display_name",
+    "fullName",
+    "full_name",
+    "label",
+    "username",
+    "email",
+    "slug",
+)
+
+
 # The schema is built with ``hasura_config()`` (``angee/graphql/schema.py``); its
 # ``SnakeNameConverter`` owns the python-name -> wire-name rule, keeping snake_case
 # verbatim unless a field pins an explicit ``graphql_name``. The metadata the
@@ -95,11 +111,7 @@ def resource_relation_surface(surface: type | None, name: str) -> type | None:
         related_surface, is_list = _selection_surface(value)
     except NotImplementedError:
         return None
-    if (
-        is_list
-        or not isinstance(related_surface, type)
-        or get_object_definition(related_surface) is None
-    ):
+    if is_list or not isinstance(related_surface, type) or get_object_definition(related_surface) is None:
         return None
     return related_surface
 
@@ -129,20 +141,15 @@ def resource_string_field_names(surface: type | None) -> tuple[str, ...]:
     return tuple(names)
 
 
-
 def final_resource_fields(
     schema: GraphQLSchema,
     node_name: str,
     model: type[models.Model] | None,
     *,
-    filter_fields: tuple[str, ...],
-    order_fields: tuple[str, ...],
     aggregate_fields: tuple[str, ...],
-    group_by_fields: tuple[str, ...],
     create_fields: tuple[str, ...],
     update_fields: tuple[str, ...],
     required_create_fields: tuple[str, ...],
-    relation_axes: tuple[data_contract.DataRelationAxisMetadata, ...],
 ) -> tuple[data_contract.DataResourceFieldMetadata, ...]:
     """Project fields from the composed schema's final node map.
 
@@ -153,22 +160,15 @@ def final_resource_fields(
 
     node = schema.get_type(node_name)
     if not isinstance(node, GraphQLObjectType):
-        raise ImproperlyConfigured(
-            f"resource metadata node type {node_name!r} is absent from the composed schema."
-        )
-    filterable = set(filter_fields)
-    sortable = set(order_fields)
+        raise ImproperlyConfigured(f"resource metadata node type {node_name!r} is absent from the composed schema.")
     aggregatable = set(aggregate_fields)
-    groupable = set(group_by_fields)
     creatable = set(create_fields)
     updatable = set(update_fields)
     required_on_create = set(required_create_fields)
-    relation_by_field = {axis.field: axis for axis in relation_axes}
     projected: list[data_contract.DataResourceFieldMetadata] = []
     for name, graphql_field in node.fields.items():
         source = (graphql_field.extensions or {}).get("strawberry-definition")
         python_name = str(getattr(source, "python_name", None) or name)
-        axis = relation_by_field.get(name) or relation_by_field.get(python_name)
         model_field = _model_field_or_none(model, python_name)
         named = get_named_type(graphql_field.type)
         is_list = _graphql_type_is_list(graphql_field.type)
@@ -176,7 +176,6 @@ def final_resource_fields(
         is_object = isinstance(named, GraphQLObjectType)
         kind = resource_field_kind(
             model_field,
-            has_relation_axis=axis is not None,
             is_list=is_list,
             is_enum=is_enum,
             is_object=is_object,
@@ -190,20 +189,13 @@ def final_resource_fields(
                 scalar=scalar,
                 values=values,
                 widget=_projected_widget(model_field, kind, scalar),
-                filterable=name in filterable or python_name in filterable,
-                sortable=name in sortable or python_name in sortable,
                 aggregatable=name in aggregatable or python_name in aggregatable,
-                groupable=name in groupable or python_name in groupable,
                 creatable=name in creatable or python_name in creatable,
                 updatable=name in updatable or python_name in updatable,
                 required_on_create=name in required_on_create or python_name in required_on_create,
                 archivable=is_archive_field(model_field),
                 currency_field=money_currency_field(model_field),
-                relation_model_label=(
-                    _relation_model_label(model_field, axis)
-                    or _graphql_relation_model_label(named)
-                ),
-                relation_label_axis=axis.label_axis if axis is not None else None,
+                relation_model_label=(_relation_model_label(model_field) or _graphql_relation_model_label(named)),
                 relation_object=kind == "relation" and is_object,
                 model_field_name=python_name if model_field is not None else None,
             )
@@ -217,29 +209,19 @@ def final_input_only_resource_fields(
     create_input_name: str | None,
     update_input_name: str | None,
     model: type[models.Model] | None,
-    filter_fields: tuple[str, ...],
-    order_fields: tuple[str, ...],
     aggregate_fields: tuple[str, ...],
-    group_by_fields: tuple[str, ...],
     create_fields: tuple[str, ...],
     update_fields: tuple[str, ...],
     required_create_fields: tuple[str, ...],
-    relation_axes: tuple[data_contract.DataRelationAxisMetadata, ...],
     readable_fields: tuple[data_contract.DataResourceFieldMetadata, ...],
 ) -> tuple[data_contract.DataResourceFieldMetadata, ...]:
     """Project accepted final input fields absent from the readable node."""
 
-    filterable = set(filter_fields)
-    sortable = set(order_fields)
     aggregatable = set(aggregate_fields)
-    groupable = set(group_by_fields)
     create = set(create_fields)
     update = set(update_fields)
     required = set(required_create_fields)
-    relation_by_field = {axis.field: axis for axis in relation_axes}
-    readable_sources = {
-        field.model_field_name or field.name for field in readable_fields
-    }
+    readable_sources = {field.model_field_name or field.name for field in readable_fields}
     candidates: dict[str, tuple[str, Any]] = {}
     for type_name, accepted in (
         (create_input_name, create),
@@ -259,7 +241,6 @@ def final_input_only_resource_fields(
     for name, (python_name, graphql_field) in candidates.items():
         if python_name in readable_sources:
             continue
-        axis = relation_by_field.get(name) or relation_by_field.get(python_name)
         model_field = _model_field_or_none(model, python_name)
         named = get_named_type(graphql_field.type)
         is_list = _graphql_type_is_list(graphql_field.type)
@@ -280,17 +261,13 @@ def final_input_only_resource_fields(
                 values=_graphql_enum_values(model_field, named) if kind == "enum" else (),
                 widget=_projected_widget(model_field, kind, scalar),
                 readable=False,
-                filterable=name in filterable or python_name in filterable,
-                sortable=name in sortable or python_name in sortable,
                 aggregatable=name in aggregatable or python_name in aggregatable,
-                groupable=name in groupable or python_name in groupable,
                 creatable=name in create,
                 updatable=name in update,
                 required_on_create=name in required,
                 archivable=is_archive_field(model_field),
                 currency_field=money_currency_field(model_field),
-                relation_model_label=_relation_model_label(model_field, axis),
-                relation_label_axis=axis.label_axis if axis is not None else None,
+                relation_model_label=_relation_model_label(model_field),
                 relation_object=False,
                 model_field_name=python_name if model_field is not None else None,
             )
@@ -401,9 +378,7 @@ def final_input_wire_fields(
     input_type = schema.get_type(input_name)
     fields = getattr(input_type, "fields", None)
     if not isinstance(fields, dict):
-        raise ImproperlyConfigured(
-            f"resource metadata input type {input_name!r} is absent from the composed schema."
-        )
+        raise ImproperlyConfigured(f"resource metadata input type {input_name!r} is absent from the composed schema.")
     excluded = set(exclude)
     by_source: dict[str, str] = {}
     for wire_name, input_field in fields.items():
@@ -411,9 +386,7 @@ def final_input_wire_fields(
         python_name = str(getattr(source, "python_name", None) or wire_name)
         by_source[python_name] = wire_name
     return tuple(
-        wire_name
-        for name in accepted
-        if (wire_name := by_source.get(name)) is not None and wire_name not in excluded
+        wire_name for name in accepted if (wire_name := by_source.get(name)) is not None and wire_name not in excluded
     )
 
 
@@ -436,9 +409,7 @@ def final_required_input_wire_fields(
     return tuple(
         name
         for name in accepted
-        if name in fields
-        and isinstance(fields[name].type, GraphQLNonNull)
-        and fields[name].default_value is Undefined
+        if name in fields and isinstance(fields[name].type, GraphQLNonNull) and fields[name].default_value is Undefined
     )
 
 
@@ -492,14 +463,12 @@ def _graphql_scalar(value: object, *, kind: str, field_name: str, node_name: str
         if kind == "list":
             return None
         raise ImproperlyConfigured(
-            f"resource metadata for {node_name} cannot classify GraphQL scalar for "
-            f"field {field_name!r}."
+            f"resource metadata for {node_name} cannot classify GraphQL scalar for field {field_name!r}."
         )
     scalar = value.name
     if scalar not in _RESOURCE_FIELD_SCALARS:
         raise ImproperlyConfigured(
-            f"resource metadata for {node_name} cannot classify GraphQL scalar for "
-            f"field {field_name!r} ({scalar})."
+            f"resource metadata for {node_name} cannot classify GraphQL scalar for field {field_name!r} ({scalar})."
         )
     return scalar
 
@@ -599,10 +568,7 @@ def _projected_widget(field: models.Field[Any, Any] | None, kind: str, scalar: s
 
 def _relation_model_label(
     field: models.Field[Any, Any] | None,
-    relation_axis: data_contract.DataRelationAxisMetadata | None,
 ) -> str | None:
-    if relation_axis is not None:
-        return relation_axis.model_label
     if field is None or not field.is_relation:
         return None
     remote_field = getattr(field, "remote_field", None)

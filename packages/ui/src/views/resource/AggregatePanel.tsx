@@ -15,7 +15,6 @@ import { CountBadge } from "../../ui/badge";
 import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
 import { textRoleVariants } from "../../ui/text";
 import {
-  hasuraGroupDimension,
   type GroupByDimension,
 } from "./resource-view-list-body";
 import {
@@ -62,7 +61,10 @@ export function AggregatePanel({
   const aggregateOperation = useAggregateOperation(dataResource);
   const groupOperation = useGroupOperation(dataResource);
   const groupDimensions = React.useMemo(
-    () => dimensions.map(hasuraGroupDimension),
+    () => dimensions.map(({ field, key, granularity, rangeKey }) => ({
+      input: field, key: key ?? field,
+      ...(granularity ? { granularity } : {}), ...(rangeKey ? { rangeKey } : {}),
+    })),
     [dimensions],
   );
   const group = useAngeeGroupBy(groupOperation.target, {

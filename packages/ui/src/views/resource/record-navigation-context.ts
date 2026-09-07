@@ -1,5 +1,5 @@
-import { isClientRowModel, type DataResourceMetadata } from "@angee/metadata";
-import { MAX_PAGE_SIZE, crudFiltersFromFilterRecord } from "@angee/refine";
+import { ResourceQuery, isClientRowModel, type DataResourceMetadata } from "@angee/metadata";
+import { MAX_PAGE_SIZE } from "@angee/refine";
 import { routeSearchString } from "../../runtime/route-href";
 import * as v from "valibot";
 import { isResourceViewFilter } from "./model/filter";
@@ -30,7 +30,9 @@ export function parseRecordNavigationScope(
   try {
     const parsed = v.safeParse(contextSchema, JSON.parse(value));
     if (!parsed.success || parsed.output.model !== resource.modelLabel || parsed.output.schema !== resource.schemaName) return null;
-    crudFiltersFromFilterRecord(parsed.output.scope.filter, { strict: true });
+    const query = ResourceQuery.from(resource);
+    query.filterFrom(parsed.output.scope.filter);
+    query.sortFrom(parsed.output.scope.order);
     return { filter: parsed.output.scope.filter, order: parsed.output.scope.order, page: parsed.output.scope.page, pageSize: parsed.output.scope.pageSize };
   } catch {
     return null;

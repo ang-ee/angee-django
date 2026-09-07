@@ -46,7 +46,7 @@ export function TasksPage(): React.ReactElement {
         order={{ sort_order: "ASC" }}
         rowActions={rowActions}
       >
-        <Facet field="project" label={t("common.project")} labelField="title" />
+        <Facet field="project" label={t("common.project")} />
         <Facet field="assignee" label={t("common.assignee")} />
         <Column field="title" />
         <Column field="project.title" header={t("common.project")} />

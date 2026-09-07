@@ -1,3 +1,4 @@
+import { ResourceQuery } from "@angee/metadata";
 // @vitest-environment happy-dom
 
 // Stage F1: a client row-model resource (rowModel:"client") fetches once and
@@ -108,11 +109,13 @@ const ADDON_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
         kind: { name: "kind", kind: "scalar", scalar: "String" },
       },
       resource: {
+        query: ResourceQuery.forRows({ fields: { id: { scalar: "ID" }, label: { scalar: "String" }, namespace: { scalar: "String" }, kind: { scalar: "String" } } }).contract,
+
         schemaName: "console",
         modelLabel: "platform.Addon",
         appLabel: "platform",
         modelName: "addon",
-        publicIdField: "id",
+
         recordRepresentation: "label",
         rowModel: "client",
         roots: {
@@ -126,11 +129,9 @@ const ADDON_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
           order: "platform_addons_order_by",
         },
         capabilities: ["list", "detail", "aggregate"],
-        filterFields: ["label", "namespace", "kind"],
-        orderFields: ["label", "namespace", "kind"],
+
         aggregateFields: [],
-        groupByFields: [],
-        relationAxes: [],
+
       },
     },
   },

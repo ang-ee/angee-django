@@ -1,4 +1,5 @@
 import { textRoleVariants, type ListColumn } from "@angee/ui";
+import { ResourceQuery } from "@angee/metadata";
 import { useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
@@ -9,6 +10,11 @@ import { OperatorRowsList } from "../parts/operator-rows";
 import { StateTag } from "../parts/StateTag";
 
 type SourceRowData = DaemonRow<SourceState>;
+const sourceRowsQuery = ResourceQuery.forRows({ fields: {
+  name: { scalar: "String" }, kind: { scalar: "String" },
+  status: { scalar: "String", identityPath: "state" },
+  branch: { scalar: "String" }, dirty: { scalar: "Boolean" },
+} });
 
 /** Sources page: cached git/local sources with a drift readout. Rows open the source detail page. */
 export function SourcesPage(): ReactNode {
@@ -61,6 +67,7 @@ export function SourcesPage(): ReactNode {
 
   return (
     <OperatorRowsList<SourceRowData>
+      query={sourceRowsQuery}
       sections={{ sources: true }}
       selectRows={(snapshot) => daemonRowsByName(snapshot.sources)}
       columns={columns}

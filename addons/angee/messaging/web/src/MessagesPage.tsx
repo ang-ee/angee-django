@@ -158,7 +158,7 @@ export function MessagesPage(): React.ReactElement {
         resource={MODEL}
         defaultGroups={DEFAULT_GROUPS}
       >
-        <Facet field="channel" label={t("messages.channel")} labelField="display_name" />
+        <Facet field="channel" label={t("messages.channel")} />
         <Column field="title" header={t("messages.title")} />
         <Column
           field="sender_name"

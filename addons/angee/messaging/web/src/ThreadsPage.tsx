@@ -32,7 +32,7 @@ export function ThreadsPage(): React.ReactElement {
   return (
     <ResourceList resource={MODEL} placement="inline" routed hideCreate recordTabs={recordTabs}>
       <List resource={MODEL}>
-        <Facet field="channel" label={t("threads.channel")} labelField="display_name" />
+        <Facet field="channel" label={t("threads.channel")} />
         <Column field="title.text" header={t("threads.title")} />
         <Column field="channel.vendor.display_name" header={t("threads.channelType")} />
         <Column field="modality" />

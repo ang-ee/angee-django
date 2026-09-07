@@ -1,5 +1,6 @@
 import * as React from "react";
-import type { ModelMetadata, Row } from "@angee/metadata";
+import { isClientRowModel, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
+import { queryForColumns } from "./resource-query";
 
 import type {
   ResourceToolbarCustomFilterChip,
@@ -29,6 +30,7 @@ import {
 } from "./resource-view-utils";
 
 export interface UseResourceViewToolbarInputsProps<TRow extends Row> {
+  query?: ResourceQuery;
   columns: readonly ColumnDescriptor<TRow>[];
   rows: readonly TRow[];
   modelMetadata: ModelMetadata | null;
@@ -49,7 +51,7 @@ export interface UseResourceViewToolbarInputsProps<TRow extends Row> {
   contributedFilterOptions?: readonly ResourceToolbarFilterOption[];
   customFilterFields?: readonly ResourceToolbarFilterField[];
   contributedCustomFilterFields?: readonly ResourceToolbarFilterField[];
-  textFilterField?: string;
+  textFilterField?: string | null;
   groupStack?: readonly ResourceViewGroup[];
 }
 
@@ -73,6 +75,7 @@ export function useResourceViewToolbarInputs<TRow extends Row>({
   list,
   defaultGroup,
   defaultGroups,
+  query,
   groupOptions,
   contributedGroupOptions = [],
   explicitGroupOptionsReplaceInferred = false,
@@ -94,28 +97,40 @@ export function useResourceViewToolbarInputs<TRow extends Row>({
     () => defaultGroupsForToolbar(defaultGroup, defaultGroups),
     [defaultGroup, defaultGroups],
   );
+  const resourceQuery = React.useMemo(
+    () => query ?? queryForColumns(columns, modelMetadata, toolbarDefaultGroups),
+    [query, columns, modelMetadata, toolbarDefaultGroups],
+  );
   const inferredGroups = React.useMemo(
-    () => buildGroupOptions(columns, modelMetadata, toolbarDefaultGroups),
-    [columns, modelMetadata, toolbarDefaultGroups],
+    () => buildGroupOptions(columns, modelMetadata, toolbarDefaultGroups, resourceQuery),
+    [columns, modelMetadata, toolbarDefaultGroups, resourceQuery],
   );
   const mergedContributedGroups = React.useMemo(
     () => mergeGroupOptions(groupOptions, contributedGroupOptions),
     [contributedGroupOptions, groupOptions],
   );
+  const serverGrouping = Boolean(modelMetadata && !isClientRowModel(modelMetadata.resource) && resourceView.state.view === "list");
   const resolvedGroupOptions = React.useMemo(
-    () => explicitGroupOptionsReplaceInferred && groupOptions !== undefined
-      ? groupOptions
-      : mergeGroupOptions(mergedContributedGroups, inferredGroups),
+    () => {
+      const options = explicitGroupOptionsReplaceInferred && groupOptions !== undefined
+        ? groupOptions : mergeGroupOptions(mergedContributedGroups, inferredGroups);
+      return options.filter(({ group }) => {
+        const axis = resourceQuery.axes[group.field];
+        return serverGrouping ? Boolean(axis?.server) : Boolean(axis?.identityPath);
+      });
+    },
     [
       explicitGroupOptionsReplaceInferred,
       groupOptions,
       inferredGroups,
       mergedContributedGroups,
+      resourceQuery,
+      serverGrouping,
     ],
   );
   const inferredCustomFilterFields = React.useMemo(
-    () => buildFilterFields(columns, rows, modelMetadata),
-    [columns, modelMetadata, rows],
+    () => buildFilterFields(columns, rows, modelMetadata, resourceQuery),
+    [columns, modelMetadata, rows, resourceQuery],
   );
   const inferredFilterOptions = React.useMemo(
     () => buildFilterOptions(columns, rows, inferredCustomFilterFields),

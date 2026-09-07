@@ -28,6 +28,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     resourceView,
     modelMetadata,
     laneSource,
+    groupStack,
   });
   const rowGroupStack = groupStack ?? resourceView.state.groupStack;
   const [expanded, setExpanded] = React.useState<ExpandedState>({});
@@ -36,7 +37,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     columns,
     resourceView,
     modelMetadata,
-    groupStack: rowGroupStack,
+    groupStack: laneSource && resourceView.state.view === "board" ? [] : rowGroupStack,
     sortOrder,
     maxPageSize: MAX_PAGE_SIZE,
   });
@@ -96,7 +97,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     onPaginationChange: handlePaginationChange,
     onRowSelectionChange: handleRowSelectionChange,
     onSortingChange: handleSortingChange,
-    getRowId: modelRowId,
+    getRowId: (row, index) => modelRowId(row, index, dataResource),
     enableRowSelection: (row) => !row.getIsGrouped(),
     getGroupedRowModel: getGroupedRowModel(),
     getExpandedRowModel: getExpandedRowModel(),

@@ -4,6 +4,7 @@ import { type BaseRecord } from "@refinedev/core";
 import { type ColumnDef, type Row as TableRowModel, type Table as TableModel, type VisibilityState } from "@tanstack/react-table";
 import { type Virtualizer } from "@tanstack/react-virtual";
 import { type AggregateBucket, type AngeeListBatchEntry } from "@angee/refine";
+import type { ResourceQuery } from "@angee/metadata";
 import type { ResourceViewContextValue } from "../resource-view-context";
 import { type ResourceListOrder, type ResourceViewFilter, type ResourceViewGroup } from "../resource-view-model";
 import { type GroupedListItem, type GroupMeasure, type RowGroup, type VisibleFieldOption } from "../resource-view-list-body";
@@ -54,6 +55,7 @@ export interface UseRowsResourceViewSurfaceProps<
   TRow extends StringIdRow = StringIdRow,
 > {
   rows: readonly TRow[];
+  query?: ResourceQuery;
   columns: readonly ColumnDescriptor<TRow>[];
   resourceView: ResourceViewContextValue;
   modelMetadata?: ModelMetadata | null;

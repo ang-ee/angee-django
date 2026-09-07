@@ -30,7 +30,7 @@ export interface UseResourceToolbarPropsInput
   group?: ResourceViewGroup | null;
   groupStack?: readonly ResourceViewGroup[];
   groupingEnabled?: boolean;
-  textFilterField?: string;
+  textFilterField?: string | null;
 }
 
 /** Shared toolbar command wiring for resource-backed and in-memory row lists. */
@@ -79,7 +79,7 @@ export function useResourceToolbarProps({
         resourceView.setFilter(
           nextFacetFilter(resourceView.state.filter, filterOptions, id),
         ),
-      onFilterTextChange: (value) =>
+      onFilterTextChange: textFilterField === null ? undefined : (value) =>
         resourceView.setFilter(
           nextTextFilter(resourceView.state.filter, value, textFilterField),
         ),

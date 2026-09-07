@@ -1,4 +1,5 @@
 import * as v from "valibot";
+import { DataResourceQuerySchema } from "./query-schema.js";
 
 /** The generated resource wire contract; output types come from these schemas. */
 const FieldKindSchema = v.picklist(["scalar", "enum", "relation", "list"]);
@@ -16,60 +17,17 @@ const ResourceFieldSchema = v.looseObject({
   widget: OptionalString,
   currencyField: OptionalString,
   readable: v.boolean(),
-  filterable: v.boolean(),
-  sortable: v.boolean(),
   aggregatable: v.boolean(),
-  groupable: v.boolean(),
   creatable: v.boolean(),
   updatable: v.boolean(),
   requiredOnCreate: v.boolean(),
   nullable: v.optional(v.boolean()),
   relationModelLabel: OptionalString,
-  relationLabelAxis: OptionalString,
   relationObject: v.nullish(v.boolean()),
 });
 const Fields = v.pipe(v.array(ResourceFieldSchema), v.readonly());
-const RelationAxisSchema = v.looseObject({
-  field: v.string(),
-  modelLabel: v.string(),
-  publicIdField: v.string(),
-  labelAxis: OptionalString,
-});
-const GroupAliasSchema = v.looseObject({
-  field: v.string(),
-  aggregateField: v.string(),
-  aggregateKey: v.string(),
-});
-const BucketFilterValueMapSchema = v.looseObject({ from: v.unknown(), to: v.unknown() });
-const BucketFilterSchema = v.looseObject({
-  kind: v.string(),
-  field: v.string(),
-  valueKey: OptionalString,
-  rangeKey: OptionalString,
-  lookup: OptionalString,
-  nullLookup: OptionalString,
-  valueTransform: OptionalString,
-  valueMap: v.optional(v.pipe(v.array(BucketFilterValueMapSchema), v.readonly())),
-});
-const ExtractionSchema = v.looseObject({
-  name: v.string(),
-  input: v.string(),
-  key: v.string(),
-  rangeKey: OptionalString,
-  filter: v.nullish(BucketFilterSchema),
-});
-const GroupDimensionSchema = v.looseObject({
-  field: v.string(),
-  input: v.string(),
-  key: v.string(),
-  kind: v.string(),
-  scalar: OptionalString,
-  filter: v.nullish(BucketFilterSchema),
-  extractions: v.optional(v.pipe(v.array(ExtractionSchema), v.readonly())),
-});
 const MeasureSchema = v.looseObject({ op: v.string(), field: OptionalString, input: OptionalString });
 const Measures = v.pipe(v.array(MeasureSchema), v.readonly());
-const SortSchema = v.looseObject({ field: v.string(), direction: v.string() });
 const SelectionPath = v.pipe(
   v.string("must be a string."),
   v.regex(/^[_A-Za-z][_0-9A-Za-z]*(?:\.[_A-Za-z][_0-9A-Za-z]*)*$/, "must be a dotted selection path."),
@@ -125,7 +83,6 @@ const ResourceSchema = v.looseObject({
   appLabel: v.string(),
   modelName: v.string(),
   canonicalLabel: OptionalString,
-  publicIdField: v.string(),
   roots: RootsSchema,
   typeNames: TypeNamesSchema,
   rowModel: v.optional(v.picklist(["client", "server"])),
@@ -134,20 +91,14 @@ const ResourceSchema = v.looseObject({
   implFields: v.optional(Strings),
   capabilities: Strings,
   fields: v.optional(Fields),
-  filterFields: Strings,
-  orderFields: Strings,
+  query: DataResourceQuerySchema,
   aggregateFields: Strings,
-  groupByFields: Strings,
-  groupDimensions: v.optional(v.pipe(v.array(GroupDimensionSchema), v.readonly())),
   aggregateMeasures: v.optional(Measures),
   defaultMeasures: v.optional(Measures),
-  defaultSort: v.optional(v.pipe(v.array(SortSchema), v.readonly())),
   createFields: v.optional(Strings),
   updateFields: v.optional(Strings),
   requiredCreateFields: v.optional(Strings),
   revisionFields: v.optional(Strings),
-  relationAxes: v.pipe(v.array(RelationAxisSchema), v.readonly()),
-  groupAliases: v.optional(v.pipe(v.array(GroupAliasSchema), v.readonly())),
   linesResource: v.nullish(LinesSchema),
 });
 // Anchor the resource output at the envelope boundary so published declarations
@@ -162,14 +113,7 @@ const SchemaMetadataSchema = v.looseObject({
 export type ModelFieldKind = v.InferOutput<typeof FieldKindSchema>;
 export type ModelEnumValueMetadata = v.InferOutput<typeof EnumValueSchema>;
 export type DataResourceFieldMetadata = v.InferOutput<typeof ResourceFieldSchema>;
-export type DataResourceRelationAxisMetadata = v.InferOutput<typeof RelationAxisSchema>;
-export type DataResourceGroupAliasMetadata = v.InferOutput<typeof GroupAliasSchema>;
-export type DataResourceGroupBucketFilterValueMapMetadata = v.InferOutput<typeof BucketFilterValueMapSchema>;
-export type DataResourceGroupBucketFilterMetadata = v.InferOutput<typeof BucketFilterSchema>;
-export type DataResourceGroupExtractionMetadata = v.InferOutput<typeof ExtractionSchema>;
-export type DataResourceGroupDimensionMetadata = v.InferOutput<typeof GroupDimensionSchema>;
 export type DataResourceAggregateMeasureMetadata = v.InferOutput<typeof MeasureSchema>;
-export type DataResourceDefaultSortMetadata = v.InferOutput<typeof SortSchema>;
 export type DataResourceSubtitleMetadata = v.InferOutput<typeof SubtitleSchema>;
 export type DataResourceLinesMetadata = v.InferOutput<typeof LinesSchema>;
 export type DataResourceRootMetadata = v.InferOutput<typeof RootsSchema>;
