@@ -4,9 +4,9 @@ import type { ResourceViewGroup } from "../resource/resource-view-model";
 import { PAGE_ELEMENT_SLOT } from "./types";
 
 export interface FacetProps {
-  /** Relation field on the current model, e.g. `provider`. */
+  /** Canonical relation axis on the current resource; its query owns option identity and labels. */
   field: string;
-  /** Toolbar label; defaults to the relation field name. */
+  /** Facet title in the toolbar; defaults to the field name. Does not override axis labels. */
   label?: ReactNode;
   /** Related rows fetched for the facet picker. */
   pageSize?: number;

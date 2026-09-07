@@ -31,6 +31,7 @@ from angee.data.metadata import (
     DataResourceQuery,
     DataResourceTypeNames,
 )
+from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.resource_fields import PREFERRED_DISPLAY_FIELDS, final_wire_field_names
 from angee.graphql.introspection import FieldPathError, require_field_for_path
 from graphql import (
@@ -389,7 +390,7 @@ class ResourceQueryProjection:
         identities = [
             name for name, field in node.fields.items() if getattr(get_named_type(field.type), "name", None) == "ID"
         ]
-        declared = (self.identity_policies or {}).get(node.name, "sqid")
+        declared = (self.identity_policies or {}).get(node.name, PUBLIC_ID_FIELD_NAME)
         mapped = final_wire_field_names(self.schema, node.name, (declared,))[0]
         node_identity = tuple(
             name

@@ -93,7 +93,7 @@ export class ResourceQuery {
         extractions: date ? ["year", "quarter", "month", "week", "day", "hour", "minute", "second"].map((value) => ({ name: value, input: value.toUpperCase(), key: value })) : [],
       };
     }
-    return new ResourceQuery({ identity: { field: options.identityField ?? "id" }, fields, axes, sort: { default: [] }, paging: {} });
+    return new ResourceQuery({ identity: { field: options.identityField ?? "id" }, fields, axes, sort: { default: [] } });
   }
 
   get fields(): DataResourceQuery["fields"] { return this.contract.fields; }
@@ -293,6 +293,7 @@ export class ResourceQuery {
     if (scalar === "Boolean") return typeof value === "boolean" ? value : fail(path, "expected a boolean");
     if (scalar === "Int" || scalar === "Float") {
       if (typeof value !== "number" || !Number.isFinite(value) || (scalar === "Int" && !Number.isInteger(value))) return fail(path, `expected ${scalar === "Int" ? "an integer" : "a finite number"}`);
+      if (scalar === "Int" && (value < -(2 ** 31) || value > 2 ** 31 - 1)) return fail(path, "expected a signed 32-bit integer");
       return value;
     }
     if (scalar === "Decimal") {
@@ -301,6 +302,10 @@ export class ResourceQuery {
     }
     if (scalar === "Date" || scalar === "DateTime") {
       if (typeof value !== "string" || !validCalendarDate(value, scalar)) return fail(path, "expected an ISO date");
+      return value;
+    }
+    if (scalar === "Time") {
+      if (typeof value !== "string" || !validTime(value)) return fail(path, "expected an ISO time");
       return value;
     }
     if (scalar && scalar !== "Unknown") return typeof value === "string" ? value : fail(path, "expected a string");
@@ -593,9 +598,20 @@ function jsonContains(value: unknown, operand: unknown, nested = false): boolean
   return value === operand;
 }
 
+/** Canonical ISO clock spelling, including native fractional and timezone offsets. */
+function validTime(value: string): boolean {
+  const match = /^(\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(?:Z|[+-](\d{2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?)?$/.exec(value);
+  if (!match || match[0] !== value) return false;
+  const hour = Number(match[1]), minute = Number(match[2]), second = Number(match[3] ?? 0);
+  // Python's native time parser accepts 24:00 as midnight, at microsecond precision.
+  const midnight = hour === 24 && minute === 0 && second === 0 && Number((match[4] ?? "").slice(0, 6)) === 0;
+  return (hour < 24 || midnight) && minute < 60 && second < 60
+    && Number(match[5] ?? 0) < 24 && Number(match[6] ?? 0) < 60 && Number(match[7] ?? 0) < 60;
+}
+
 function validCalendarDate(value: string, scalar: string): boolean {
   const match = /^(\d{4})-(\d{2})-(\d{2})(.*)$/.exec(value);
-  if (!match || (scalar === "Date" ? match[4] !== "" : match[4] !== "" && !match[4]!.startsWith("T"))) return false;
+  if (!match || match[0] !== value || (scalar === "Date" ? match[4] !== "" : match[4] !== "" && !match[4]!.startsWith("T"))) return false;
   const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
   const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
   const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];

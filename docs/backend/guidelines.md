@@ -210,11 +210,13 @@ Rules that follow from the layering:
   and call the owner. Command modules should not contain reusable business logic,
   import generated runtime models directly, or duplicate resource/composer/schema
   behavior.
-- Resource query capabilities must reflect the final composed schema and the
-  active execution backend. Keep output values distinct from comparison input
-  domains, and group summaries distinct from optional drill capability. Extend
-  native lookup seams for database operators; never advertise an operator that
-  the exposed comparison input or executor cannot accept.
+- Declare resource query intent once on the resource; finalize its capabilities
+  from the final composed schema and active execution backend. Relation identity
+  comes from the target resource's identity policy, never from a display label or
+  a consumer's guessed field name. Keep output values distinct from comparison
+  input domains, and group summaries distinct from optional drill capability.
+  Extend native lookup seams for database operators; never advertise an operator
+  that the exposed comparison input or executor cannot accept.
 - Vendor SDK clients are details. Keep SDK request/response quirks in the
   provider addon or backend class that owns that vendor, and map them into
   Angee-owned models/actions at the boundary. Do not let SDK field names become

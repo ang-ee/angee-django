@@ -331,12 +331,17 @@ history uses native Query pages with domain-owned
   server-side folder grouping because a drive can contain hundreds of thousands
   of rows.
 - **Resolve resource queries before adapting them to a library.** Use the
-  resource's query contract for allowed comparisons, group identities, drill
-  predicates and required selections. A display label never identifies a
-  relation bucket. Invalid URL or favorite query state must block dependent
-  reads and offer recovery; dropping invalid constraints silently broadens the
-  user's query. Regression tests must exercise native providers and table
-  accessors, including grouping fields absent from visible columns.
+  resource's `ResourceQuery` for allowed comparisons, group identities, drill
+  predicates and required selections. Hand-building a resource view's Hasura
+  `where` instead of using `ResourceQuery.toWhere` is a bug: the query owner
+  validates canonical intent and translates it to the transport. This rule does
+  not prohibit variables for separate, authored GraphQL operations. A display
+  label never identifies a relation bucket. Invalid URL or favorite query state
+  must block dependent reads and offer recovery; dropping invalid constraints
+  silently broadens the user's query. Regression tests must exercise native
+  providers and table accessors, including grouping fields absent from visible
+  columns. Public API cutover guidance lives in the
+  [`@angee/ui` migration note](../../packages/ui/README.md#resource-query-migration).
 - A recipe's icon-button size keys are `iconSm`/`iconMd`/`iconLg` (one spelling
   across recipes). A default `size` is a visual contract — do not flip it without a
   requester (differing defaults like `Switch`/`ToggleGroup` `sm` vs `Toggle` `md`

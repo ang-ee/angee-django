@@ -1,11 +1,22 @@
 """Resource query vocabulary follows final SDL and executable native owners."""
 
+import datetime
+import decimal
+import enum
+import json
+import uuid
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+import strawberry
 from django.db import models
 from django.db.backends.postgresql.base import DatabaseWrapper
-from graphql import build_schema, coerce_input_value
+from graphql import GraphQLError, build_schema, coerce_input_value, get_named_type
+from strawberry.scalars import JSON
+from strawberry_django_hasura import hasura_config
+from strawberry_django_hasura.inputs import build_bool_exp, comparison_for_python_type, host_module
 
 from angee.data.metadata import (
     DataDefaultSortMetadata,
@@ -14,6 +25,8 @@ from angee.data.metadata import (
     DataQueryExtraction,
     DataQueryServerAxis,
     DataResourceFieldMetadata,
+    DataResourceMetadata,
+    DataResourceRoots,
     DataResourceTypeNames,
 )
 from angee.graphql.data.lookups import resource_filter_lookups
@@ -252,12 +265,192 @@ def test_query_does_not_infer_relation_identity_from_an_unrelated_id_field() -> 
     assert relation.label_path == "channel.display_name"
 
 
+def test_unexposed_relation_uses_public_identity_constant(monkeypatch) -> None:
+    monkeypatch.setattr("angee.graphql.data.query.PUBLIC_ID_FIELD_NAME", "public_key")
+    schema = build_schema(
+        _SCHEMA.replace(
+            "type Channel implements Node { id: ID!, display_name: String! }",
+            "type Channel { sqid: ID!, public_key: ID!, display_name: String! }",
+        )
+    )
+    relation = replace(_projection(), schema=schema).build().fields["channel"].relation
+    assert relation.identity_path == "channel.public_key"
+
+
 class QueryPattern(models.Model):
     name = models.CharField(max_length=100)
     related = models.ManyToManyField("self")
 
     class Meta:
         app_label = "tests"
+
+
+@strawberry.enum
+class QueryState(enum.Enum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+@strawberry.input
+class QueryStateComparison:
+    """A composed enum comparison exercises input domains absent from Django choices."""
+
+    eq: QueryState | None = strawberry.field(name="_eq", default=strawberry.UNSET)
+    in_: list[QueryState] | None = strawberry.field(name="_in", default=strawberry.UNSET)
+    is_null: bool | None = strawberry.field(name="_is_null", default=strawberry.UNSET)
+
+
+@strawberry.type
+class QueryScalarRow:
+    id: strawberry.ID
+    name: str
+    count: int
+    ratio: float
+    amount: decimal.Decimal
+    active: bool
+    date: datetime.date
+    timestamp: datetime.datetime
+    time: datetime.time
+    uuid: uuid.UUID
+    payload: JSON
+    state: QueryState
+    choice: QueryState
+
+
+@strawberry.type
+class QueryScalarRoot:
+    ready: bool = True
+
+
+_SCALAR_OPERANDS = {
+    "id": "row_123",
+    "name": "50%_\\path",
+    "count": 0,
+    "ratio": 0.125,
+    "amount": "9007199254740993.000000000000000001",
+    "active": False,
+    "date": "2024-02-29",
+    "timestamp": "2026-09-07T12:34:56.123456+02:00",
+    "time": "12:34:56.123456",
+    "uuid": "12345678-1234-5678-1234-567812345678",
+    "payload": {"count": 0, "active": False, "tags": ["a"]},
+    "state": "OPEN",
+    "choice": "open",
+}
+_OPERATOR_FIXTURE = (
+    Path(__file__).resolve().parents[1] / "packages/app/src/tests/fixtures/resource-query-operators.json"
+)
+_TIME_OPERANDS = {
+    "valid": [
+        "00:00", "23:59:59.999999", "12:34:56.123456789", "12:34:56Z",
+        "12:34:56+02:30", "12:34:56-05:00", "12:34:56+05:30:15.123456",
+        "24:00", "24:00:00.000000001+02:00",
+    ],
+    "invalid": [
+        "not-a-time", "25:00", "24:01", "24:00:00.001", "12:60", "12:34:60", "12:34:56+24:00", "12:34\n",
+    ],
+}
+_INVALID_DATE_OPERANDS = {
+    "date": ["2026-09-07\n"],
+    "timestamp": ["2026-09-07\n", "2026-09-07T12:34:56Z\n"],
+}
+
+
+def _native_operator_schema():
+    """Use the installed Hasura inputs and Strawberry scalar implementations unchanged."""
+
+    comparisons = {
+        name: comparison_for_python_type(python_type)
+        for name, python_type in QueryScalarRow.__annotations__.items()
+        if name not in {"state", "choice"}
+    }
+    comparisons.update(state=QueryStateComparison, choice=comparison_for_python_type(str))
+    where = build_bool_exp("query_scalars", comparisons, host_module("query_scalars"))
+    return strawberry.Schema(
+        query=QueryScalarRoot, types=[QueryScalarRow, where], config=hasura_config()
+    )._schema
+
+
+def _native_operator_resource(schema):
+    types = DataResourceTypeNames(node="QueryScalarRow", filter="query_scalars_bool_exp")
+    query = ResourceQueryProjection(
+        schema=schema,
+        types=types,
+        fields=(),
+        identity="id",
+        filter_fields=tuple(_SCALAR_OPERANDS),
+        model=QueryPattern,
+        filter_operators=tuple(resource_filter_lookups(QueryPattern, ("name",))),
+    ).build()
+    return DataResourceMetadata(
+        model=QueryPattern,
+        model_label="tests.QueryScalarRow",
+        resource_type=None,
+        app_label="tests",
+        model_name="QueryScalarRow",
+        query=query,
+        roots=DataResourceRoots(),
+        type_names=types,
+    ).as_wire(schema_name="console")
+
+
+def test_native_operator_fixture_matches_final_schema_and_metadata(monkeypatch) -> None:
+    """JS projects this native fixture; fail here whenever its generated owners drift.
+
+    The Python and pnpm CI lanes remain independent. Regenerate this fixture
+    with these native builders, never edit its SDL or capability lists by hand.
+    """
+
+    schema = _native_operator_schema()
+    fixture = json.loads(_OPERATOR_FIXTURE.read_text())
+    from graphql import print_schema
+
+    assert fixture["sdl"] == print_schema(schema)
+    assert fixture["operands"] == _SCALAR_OPERANDS
+    assert fixture["times"] == _TIME_OPERANDS
+    assert fixture["invalidDates"] == _INVALID_DATE_OPERANDS
+    for backend in ("sqlite", "postgresql"):
+        connection = DatabaseWrapper({"ENGINE": "django.db.backends.postgresql", "NAME": "test"})
+        if backend == "sqlite":
+            from django.db.backends.sqlite3.base import DatabaseWrapper as SQLiteWrapper
+
+            connection = SQLiteWrapper({"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"})
+        monkeypatch.setattr("angee.graphql.data.query.connection", connection)
+        monkeypatch.setattr("angee.graphql.data.lookups.connection", connection)
+        assert fixture["resources"][backend] == _native_operator_resource(schema)
+
+
+def test_native_operator_samples_use_real_scalar_parsers() -> None:
+    """SDL shape checks in JS complement real native custom-scalar coercion here."""
+
+    schema = _native_operator_schema()
+    where = schema.get_type("query_scalars_bool_exp")
+    for field, value in _SCALAR_OPERANDS.items():
+        operand = get_named_type(where.fields[field].type).fields["_eq"].type
+        coerced = coerce_input_value(value, operand)
+        assert coerced is not None
+    assert coerce_input_value(_SCALAR_OPERANDS["amount"], schema.get_type("Decimal")) == decimal.Decimal(
+        "9007199254740993.000000000000000001"
+    )
+    assert coerce_input_value(_SCALAR_OPERANDS["timestamp"], schema.get_type("DateTime")).microsecond == 123456
+    for value in _TIME_OPERANDS["valid"]:
+        assert isinstance(coerce_input_value(value, schema.get_type("Time")), datetime.time)
+    for value in _TIME_OPERANDS["invalid"]:
+        with pytest.raises(GraphQLError):
+            coerce_input_value(value, schema.get_type("Time"))
+    for field, values in _INVALID_DATE_OPERANDS.items():
+        operand = get_named_type(where.fields[field].type).fields["_eq"].type
+        for value in values:
+            with pytest.raises(GraphQLError):
+                coerce_input_value(value, operand)
+    for scalar, invalid in (
+        ("Int", 1.5), ("Int", 2**31), ("Boolean", "false"),
+        ("Date", "2026-02-30"), ("DateTime", "not-a-date"),
+        ("Time", "25:00:00"), ("Decimal", "not-a-number"),
+        ("QueryState", "open"),
+    ):
+        with pytest.raises(GraphQLError):
+            coerce_input_value(invalid, schema.get_type(scalar))
 
 
 def test_postgres_similar_uses_native_lookup_with_bound_sql_pattern(monkeypatch) -> None:
