@@ -133,6 +133,7 @@ export function FormViewRecordHeader({
                 ) : titleRelation ? (
                   <div className={compact ? "min-w-0 text-base font-semibold" : TITLE_TEXT_CLASS}>
                     <RelationFieldWidget
+                      controlRef={controller.ref}
                       value={relationValueId(controller.value) || null}
                       onChange={(next) => {
                         startFieldInteraction(currentTitleField.name);
@@ -149,6 +150,7 @@ export function FormViewRecordHeader({
                   </div>
                 ) : (
                   <Input
+                    ref={controller.ref}
                     value={String(controller.value ?? "")}
                     placeholder={currentTitleField.placeholder ?? t("form.untitled")}
                     aria-label={fieldAriaLabel(currentTitleField)}
@@ -208,6 +210,7 @@ export function FormViewRecordHeader({
               name={currentStatusField.name}
               render={({ field: controller }) => (
                 <FieldDescriptorControl
+                  controlRef={controller.ref}
                   field={currentStatusField}
                   value={controller.value}
                   readOnly={fieldReadOnly(currentStatusField)}
@@ -273,6 +276,7 @@ export function FormViewOverview({
         name={field.name}
         render={({ field: controller, fieldState }) => (
           <BoundFieldRow
+            controlRef={controller.ref}
             field={field}
             relation={relation}
             selectedOption={selectedOption}
@@ -358,6 +362,7 @@ export function FormViewOverview({
             name={currentBodyField.name}
             render={({ field: controller, fieldState }) => (
               <BodyFieldControl
+                controlRef={controller.ref}
                 field={currentBodyField}
                 value={controller.value}
                 readOnly={fieldReadOnly(currentBodyField)}
@@ -511,6 +516,7 @@ function BoundFieldRow({
   serverMessages,
   onChange,
   onCommit,
+  controlRef,
 }: {
   field: FieldDescriptor;
   relation?: RelationFieldInfo;
@@ -521,6 +527,7 @@ function BoundFieldRow({
   serverMessages?: readonly string[];
   onChange: (value: unknown) => void;
   onCommit?: () => void;
+  controlRef?: (target: import("../../widgets").WidgetFocusTarget | null) => void;
 }): React.ReactElement {
   const effectiveReadOnly = Boolean(readOnly);
   const composite = Boolean(field.objectTemplate || field.itemTemplate || "rowTemplate" in field);
@@ -544,9 +551,10 @@ function BoundFieldRow({
             : EDITABLE_FIELD_CONTROL_CLASS,
         )}
       >
-      <DescriptorPresenceControl field={field} value={value} readOnly={effectiveReadOnly} onChange={onChange} onCommit={onCommit}>
+      <DescriptorPresenceControl field={field} value={value} readOnly={effectiveReadOnly} onChange={onChange} onCommit={onCommit} controlRef={controlRef}>
         {relation ? (
           <RelationFieldWidget
+            controlRef={controlRef}
             value={relationValueId(value) || null}
             onChange={onChange}
             onCommit={onCommit}
@@ -557,6 +565,7 @@ function BoundFieldRow({
           />
         ) : (
           <FieldDescriptorControl
+            controlRef={controlRef}
             field={field}
             value={value}
             messages={messages}
@@ -581,6 +590,7 @@ function BodyFieldControl({
   serverMessages,
   onChange,
   onCommit,
+  controlRef,
 }: {
   field: FieldDescriptor;
   value: unknown;
@@ -589,13 +599,15 @@ function BodyFieldControl({
   serverMessages?: readonly string[];
   onChange: (value: unknown) => void;
   onCommit?: () => void;
+  controlRef?: (target: import("../../widgets").WidgetFocusTarget | null) => void;
 }): React.ReactElement {
   const composite = Boolean(field.objectTemplate || field.itemTemplate || "rowTemplate" in field);
   const messages = [...fieldErrorMessages(errors, composite ? field.name : undefined), ...(serverMessages ?? [])];
   return (
     <FieldRoot invalid={messages.length > 0} className="grid gap-2">
-      <DescriptorPresenceControl field={field} value={value} readOnly={readOnly} onChange={onChange} onCommit={onCommit}>
+      <DescriptorPresenceControl field={field} value={value} readOnly={readOnly} onChange={onChange} onCommit={onCommit} controlRef={controlRef}>
       <FieldDescriptorControl
+        controlRef={controlRef}
         field={field}
         value={value}
         messages={messages}

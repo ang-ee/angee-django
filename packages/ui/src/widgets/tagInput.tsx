@@ -11,6 +11,7 @@ function TagInputEdit({
   onChange,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<readonly string[]>): ReactElement {
   const tags = normaliseTags(value);
   const [draft, setDraft] = useState("");
@@ -57,6 +58,7 @@ function TagInputEdit({
         </RemovableChip>
       ))}
       <input
+        ref={controlRef}
         value={draft}
         className="h-5 min-w-[7rem] flex-1 border-0 bg-transparent text-13 text-fg outline-none placeholder:text-fg-muted"
         aria-label={widgetLabel(field, "Tags")}

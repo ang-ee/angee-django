@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactElement } from "react";
+import { useMemo, useState, type ReactElement, type Ref } from "react";
 import type { CrudFilter } from "@refinedev/core";
 
 import {
@@ -33,6 +33,7 @@ export interface RelationFieldWidgetProps {
   selectedOption?: RelationOption;
   placeholder?: string;
   "aria-label"?: string;
+  controlRef?: Ref<HTMLButtonElement>;
 }
 
 /**
@@ -53,6 +54,7 @@ export function RelationFieldWidget({
   selectedOption,
   placeholder,
   "aria-label": ariaLabel,
+  controlRef,
 }: RelationFieldWidgetProps): ReactElement {
   // Latch the first popover-open so the option query fires once and stays
   // enabled (so a later relabel/refetch keeps working), but never on a
@@ -87,6 +89,7 @@ export function RelationFieldWidget({
 
   return (
     <RelationPicker
+      controlRef={controlRef}
       value={value}
       onChange={onChange}
       onCommit={onCommit}

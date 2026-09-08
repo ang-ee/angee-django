@@ -15,9 +15,11 @@ function EmailEdit({
   onCommit,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<string>): ReactElement {
   return (
     <Input
+      ref={controlRef}
       {...field?.controlProps}
       type="email"
       value={value ?? ""}
@@ -42,9 +44,11 @@ function UrlEdit({
   onCommit,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<string>): ReactElement {
   return (
     <Input
+      ref={controlRef}
       {...field?.controlProps}
       type="url"
       value={value ?? ""}
@@ -79,9 +83,11 @@ function PhoneEdit({
   onCommit,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<string>): ReactElement {
   return (
     <Input
+      ref={controlRef}
       {...field?.controlProps}
       type="tel"
       value={value ?? ""}
@@ -106,9 +112,11 @@ function PasswordEdit({
   onCommit,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<string>): ReactElement {
   return (
     <Input
+      ref={controlRef}
       {...field?.controlProps}
       type="password"
       value={value ?? ""}

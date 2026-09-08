@@ -112,6 +112,10 @@ export interface WidgetControlProps {
   maxLength?: number;
 }
 
+export interface WidgetFocusTarget {
+  focus(): void;
+}
+
 export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {
   value?: TValue | null;
   row?: TRow;
@@ -122,6 +126,8 @@ export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {
   onChange?: (value: TValue) => void;
   /** Signal that the widget's current user interaction has completed. */
   onCommit?: () => void;
+  /** The widget's actual interactive control or trigger. */
+  controlRef?: (target: WidgetFocusTarget | null) => void;
 }
 
 export interface WidgetDefinition<TValue = unknown, TRow = unknown> {

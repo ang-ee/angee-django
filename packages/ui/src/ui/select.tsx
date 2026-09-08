@@ -350,6 +350,7 @@ export type SelectProps = Omit<
     "aria-labelledby"?: string;
     id?: string;
     "aria-describedby"?: string;
+    triggerRef?: React.Ref<HTMLButtonElement>;
     onValueChange?: (
       value: string,
       eventDetails: SelectRootChangeEventDetails,
@@ -370,6 +371,7 @@ export const Select = function Select({
   "aria-labelledby": ariaLabelledBy,
   "aria-describedby": ariaDescribedBy,
   id,
+  triggerRef,
   onValueChange,
   ...props
 }: SelectProps) {
@@ -395,6 +397,7 @@ export const Select = function Select({
       {...props}
     >
       <SelectTrigger
+        ref={triggerRef}
         id={id}
         size={size}
         invalid={invalid}

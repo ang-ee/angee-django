@@ -93,6 +93,7 @@ export interface MutationDialogControlProps {
   id: string;
   value: unknown;
   readOnly: boolean;
+  controlRef?: (target: import("../../widgets").WidgetFocusTarget | null) => void;
   describedBy: string | undefined;
   /** Present when the custom control declares `controlLabelMode: "group"`. */
   labelledBy: string | undefined;
@@ -363,6 +364,7 @@ export function LabeledDescriptorField({
   showDescription = true,
   onChange,
   onCommit,
+  controlRef,
 }: {
   field: MutationDialogField & {
     rowTemplate?: readonly FormSpecFieldDescriptor[];
@@ -381,6 +383,7 @@ export function LabeledDescriptorField({
   showDescription?: boolean;
   onChange: (value: unknown) => void;
   onCommit?: () => void;
+  controlRef?: (target: import("../../widgets").WidgetFocusTarget | null) => void;
 }): React.ReactElement {
   const generatedId = React.useId();
   const controlId = `mutation-field-${generatedId}`;
@@ -410,12 +413,13 @@ export function LabeledDescriptorField({
           {field.label ?? field.name}
         </FieldLabel>
       ) : null}
-      <DescriptorPresenceControl field={field} value={value} readOnly={readOnly} onChange={onChange} onCommit={onCommit}>
+      <DescriptorPresenceControl field={field} value={value} readOnly={readOnly} onChange={onChange} onCommit={onCommit} controlRef={controlRef}>
       {field.control ? (
         field.control({
           id: controlId,
           value,
           readOnly: Boolean(readOnly),
+          controlRef,
           describedBy,
           labelledBy: groupLabel ? labelId : undefined,
           onChange,
@@ -432,6 +436,7 @@ export function LabeledDescriptorField({
           readOnly={readOnly}
           onChange={onChange}
           onCommit={onCommit}
+          controlRef={controlRef}
         />
       ) : (
         <FieldDescriptorControl
@@ -447,6 +452,7 @@ export function LabeledDescriptorField({
           }}
           onChange={onChange}
           onCommit={onCommit}
+          controlRef={controlRef}
         />
       )}
       </DescriptorPresenceControl>
@@ -478,6 +484,7 @@ function MutationDialogRelationControl({
   readOnly,
   onChange,
   onCommit,
+  controlRef,
 }: {
   controlId: string;
   describedBy?: string;
@@ -487,6 +494,7 @@ function MutationDialogRelationControl({
   readOnly?: boolean;
   onChange: (value: unknown) => void;
   onCommit?: () => void;
+  controlRef?: (target: import("../../widgets").WidgetFocusTarget | null) => void;
 }): React.ReactElement {
   const [opened, setOpened] = React.useState(false);
   const metadata = useSchemaFieldMetadata();
@@ -551,6 +559,7 @@ function MutationDialogRelationControl({
   }
   return (
     <RelationPicker
+      controlRef={controlRef}
       id={controlId}
       value={selectedValue}
       onChange={onChange}

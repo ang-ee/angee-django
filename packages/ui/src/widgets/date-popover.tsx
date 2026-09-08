@@ -1,4 +1,4 @@
-import type { ReactElement, ReactNode } from "react";
+import type { ReactElement, ReactNode, Ref } from "react";
 
 import { Glyph } from "../chrome/Glyph";
 import { Calendar } from "../ui/calendar";
@@ -27,6 +27,7 @@ export interface DatePopoverProps {
   onSelectDate: (date: Date | null) => void;
   /** Rendered under the calendar — a clear button, a time input, etc. */
   footer?: ReactNode;
+  triggerRef?: Ref<HTMLButtonElement>;
 }
 
 /**
@@ -44,10 +45,12 @@ export function DatePopover({
   onOpenChange,
   onSelectDate,
   footer,
+  triggerRef,
 }: DatePopoverProps): ReactElement {
   return (
     <PopoverRoot open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger
+        ref={triggerRef}
         className="inline-flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-6 border border-border bg-inset px-2 text-left text-13 text-fg outline-none transition-colors hover:border-border-strong focus-visible:border-border-focus focus-visible:focus-ring"
         aria-label={ariaLabel}
       >

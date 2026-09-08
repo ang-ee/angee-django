@@ -12,6 +12,7 @@ function IntegerEdit({
   onCommit,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<NumericWidgetValue>): ReactElement {
   return (
     <NumberField
@@ -20,6 +21,7 @@ function IntegerEdit({
       step={1}
       snapOnStep
       inputProps={{
+        ref: controlRef,
         ...field?.controlProps,
         "aria-label": widgetLabel(field, "Integer"),
         inputMode: "numeric",
@@ -38,6 +40,7 @@ function FloatEdit({
   onCommit,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<NumericWidgetValue>): ReactElement {
   return (
     <NumberField
@@ -45,6 +48,7 @@ function FloatEdit({
       readOnly={readOnly}
       step={0.01}
       inputProps={{
+        ref: controlRef,
         ...field?.controlProps,
         "aria-label": widgetLabel(field, "Decimal number"),
         inputMode: "decimal",

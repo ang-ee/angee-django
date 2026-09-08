@@ -69,6 +69,33 @@ describe("structured FormSpec widgets", () => {
       .toThrow('The "list" widget value must be an array.');
   });
 
+  test("focuses the first editable structured child and an empty list's Add action", () => {
+    const ObjectEdit = objectWidget.edit!;
+    const ListEdit = listWidget.edit!;
+    let focusRef = vi.fn<(target: { focus(): void } | null) => void>();
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <ObjectEdit
+        value={{ fixed: "read", editable: "write" }}
+        field={{ name: "config", objectTemplate: [
+          { name: "fixed", label: "Fixed", readOnly: true },
+          { name: "editable", label: "Editable" },
+        ] } as never}
+        controlRef={focusRef}
+      />
+    </AppRuntimeProvider>);
+    focusRef.mock.calls.at(-1)?.[0]?.focus();
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Editable" }));
+
+    cleanup();
+    focusRef = vi.fn<(target: { focus(): void } | null) => void>();
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <ListEdit value={[]} field={{ name: "items", itemTemplate: { name: "item" } } as never}
+        controlRef={focusRef} />
+    </AppRuntimeProvider>);
+    focusRef.mock.calls.at(-1)?.[0]?.focus();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Add item" }));
+  });
+
   test("retains the controlled dirty value across read-only revision rendering", async () => {
     const field = structuredFields()[0]!;
     function Harness() {

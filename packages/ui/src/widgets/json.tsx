@@ -39,6 +39,7 @@ function JsonEdit({
   onCommit,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<JsonValue>): ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const formatted = formatJson(value);
@@ -74,6 +75,7 @@ function JsonEdit({
     readOnly,
     placeholder: widgetLabel(field, "JSON"),
     extensions: JSON_EXTENSIONS,
+    controlRef,
   });
 
   return (

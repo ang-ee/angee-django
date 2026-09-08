@@ -22,6 +22,7 @@ import {
 } from "./use-form-view-save";
 import type { MutationDialogField } from "./MutationDialog";
 import type { FieldDescriptor } from "../page";
+import type { RecordTabDescriptor } from "./form-view-surface";
 
 const fields: readonly FieldDescriptor[] = [
   { name: "title", label: "Title" }, { name: "body", label: "Body" },
@@ -55,6 +56,7 @@ async function fixture(options: {
   publicView?: boolean;
   onFieldInteractionStart?: (path: string) => void;
   onFieldInteractionCommit?: (path: string) => void;
+  recordTabs?: readonly RecordTabDescriptor[];
 } = {}) {
   let record: Row = {
     id: options.id ?? "note-1",
@@ -102,6 +104,8 @@ async function fixture(options: {
             submit={options.submit}
             onFieldInteractionStart={options.onFieldInteractionStart}
             onFieldInteractionCommit={options.onFieldInteractionCommit}
+            recordTabs={options.recordTabs}
+            defaultRecordTab={options.recordTabs ? "activity" : undefined}
           />
         ) : (
           <Probe key={recordId ?? "create"} recordId={recordId} mountedFields={mountedFields} viewFields={viewFields} />
@@ -115,6 +119,43 @@ async function fixture(options: {
   }
   return { surface: () => surface, onSaved, getOne, update, client, setRecord: (next: Row) => { record = next; }, rerender: (props: Parameters<typeof Tree>[0]) => view.rerender(<Tree {...props} />) };
 }
+
+test("a record panel switches to the field tab before focusing its native control", async () => {
+  await fixture({
+    publicView: true,
+    acknowledgedSource: {
+      record: { id: "note-1", title: "First", body: "Body" },
+      values: { title: "First", body: "Body" },
+    },
+    submit: vi.fn(async (_data, context) => acknowledgeFormSubmit(
+      { id: "note-1", title: String(context.values.title), body: String(context.values.body) },
+      context.values,
+    )),
+    recordTabs: [{
+      id: "activity",
+      label: "Activity",
+      render: (context) => (
+        <>
+          <button type="button" onClick={() => context.focusField("title", { recordTabId: "overview" })}>
+            Focus title
+          </button>
+          <button type="button" onClick={() => context.focusField("note", { recordTabId: "overview" })}>
+            Focus absent value
+          </button>
+        </>
+      ),
+    }],
+  });
+
+  fireEvent.click(await screen.findByRole("button", { name: "Focus title" }));
+
+  await waitFor(() => expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe("true"));
+  expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Title" }));
+
+  fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Focus absent value" }));
+  await waitFor(() => expect(document.activeElement?.textContent).toBe("Set value"));
+});
 
 function edit(name: string, value: string) { fireEvent.change(screen.getByLabelText(name), { target: { value } }); }
 

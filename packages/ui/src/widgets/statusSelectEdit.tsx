@@ -10,9 +10,11 @@ export function StatusSelectEdit({
   onCommit,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<string>): ReactElement {
   return (
     <Select
+      triggerRef={controlRef}
       value={value ?? ""}
       options={field?.options ?? []}
       readOnly={readOnly}

@@ -55,6 +55,7 @@ export function BoundDescriptorField({
           value={controller.value}
           dialogValues={siblingValues}
           readOnly={readOnly || surface.fieldReadOnly(resolved)}
+          controlRef={controller.ref}
           messages={fieldErrorMessages(fieldState.error ? [fieldState.error] : [])}
           onCommit={() => surface.commitFieldInteraction(name)}
           onChange={(next) => {

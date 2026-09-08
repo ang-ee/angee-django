@@ -1,4 +1,4 @@
-import { lazy, useMemo, useState, type ReactElement } from "react";
+import { lazy, useMemo, useState, type ReactElement, type Ref } from "react";
 
 import { Glyph } from "../chrome/Glyph";
 import { LazyBoundary } from "../fragments/LazyBoundary";
@@ -46,6 +46,7 @@ export interface RelationFieldProps {
    * the internal open state is unaffected when this is omitted.
    */
   onOpenChange?: (open: boolean) => void;
+  triggerRef?: Ref<HTMLButtonElement>;
 }
 
 const TRIGGER_CLASS =
@@ -73,6 +74,7 @@ export function RelationField({
   id,
   onCreate,
   onOpenChange,
+  triggerRef,
 }: RelationFieldProps): ReactElement {
   const t = useUiT();
   const [open, setOpen] = useState(false);
@@ -96,6 +98,7 @@ export function RelationField({
       }}
     >
       <PopoverTrigger
+        ref={triggerRef}
         id={id}
         className={TRIGGER_CLASS}
         disabled={readOnly}

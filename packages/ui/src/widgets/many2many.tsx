@@ -18,6 +18,7 @@ export function Many2ManyEdit({
   onChange,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<readonly unknown[]>): ReactElement {
   const selected = normaliseValues(value);
   const options = field?.options ?? [];
@@ -33,6 +34,7 @@ export function Many2ManyEdit({
         onRemove={(next) => onChange?.(next)}
       />
       <Select
+        triggerRef={controlRef}
         value=""
         options={available}
         disabled={available.length === 0}

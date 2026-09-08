@@ -18,6 +18,7 @@ function DateEdit({
   onCommit,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<DateWidgetValue>): ReactElement {
   const t = useUiT();
   const [open, setOpen] = useState(false);
@@ -28,6 +29,7 @@ function DateEdit({
 
   return (
     <DatePopover
+      triggerRef={controlRef}
       selected={date}
       label={label}
       ariaLabel={widgetLabel(field, t("date.label"))}

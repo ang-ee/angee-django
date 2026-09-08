@@ -38,6 +38,7 @@ export type {
   WidgetField,
   WidgetOption,
   WidgetRenderProps,
+  WidgetFocusTarget,
 } from "./types";
 export { canonicalOptionValue, optionToken, relationValueId } from "./types";
 export { widgetLabel } from "./label";

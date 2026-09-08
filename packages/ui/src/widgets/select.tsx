@@ -16,12 +16,14 @@ function SelectEdit({
   onCommit,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<string>): ReactElement {
   const t = useUiT();
   const label = widgetLabel(field, t("select.label"));
   const selected = canonicalOptionValue(field?.options, value) ?? value ?? "";
   return (
     <Select
+      triggerRef={controlRef}
       {...field?.controlProps}
       value={selected}
       options={field?.options ?? []}

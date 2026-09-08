@@ -6,6 +6,7 @@ import {
   type WidgetDefinition,
   type WidgetField,
   type WidgetRenderProps,
+  type WidgetFocusTarget,
 } from "../../widgets";
 import {
   fieldWidgetId,
@@ -35,6 +36,7 @@ export interface FieldDescriptorControlProps {
   onChange?: (value: unknown) => void;
   onCommit?: () => void;
   controlProps?: WidgetControlProps;
+  controlRef?: (target: WidgetFocusTarget | null) => void;
 }
 
 /**
@@ -51,6 +53,7 @@ export function FieldDescriptorControl({
   onChange,
   onCommit,
   controlProps,
+  controlRef,
 }: FieldDescriptorControlProps): React.ReactElement {
   const widget = useResolvedWidget(fieldWidgetId(field)) ?? fallbackWidget();
   const Component = readOnly ? widget.read : (widget.edit ?? widget.read);
@@ -82,6 +85,7 @@ export function FieldDescriptorControl({
       readOnly={readOnly}
       onChange={onChange}
       onCommit={onCommit}
+      controlRef={controlRef}
     />
   );
 }
@@ -97,9 +101,11 @@ function fallbackWidget(): WidgetDefinition {
       onCommit,
       readOnly,
       field,
+      controlRef,
     }: WidgetRenderProps) => (
       <input
         {...field?.controlProps}
+        ref={controlRef}
         className="h-9 w-full rounded-6 border border-border bg-sheet px-3 text-13 text-fg"
         value={String(value ?? "")}
         readOnly={readOnly}

@@ -69,6 +69,10 @@ export const FORM_VIEW_OVERVIEW_TAB_ID = "overview";
 
 export type RecordPresentation = "document" | "workspace";
 
+export interface RecordFieldFocusOptions {
+  recordTabId?: string;
+}
+
 export interface OverviewTabOptions {
   label?: React.ReactNode;
   position?: "first" | "last";
@@ -78,6 +82,8 @@ export interface RecordPanelContext {
   recordId: string;
   reload: () => void;
   form: FormViewSaveSurface;
+  /** Switch tabs, then focus one registered RHF field after that tab mounts. */
+  focusField: (path: string, options?: RecordFieldFocusOptions) => void;
 }
 
 export interface RecordToolbarContext {
@@ -491,13 +497,6 @@ export function useFormViewSurface({
         : undefined,
     [save.linesActive, save.linesField, save.serverFieldErrors],
   );
-  const recordPanelContext = React.useMemo<RecordPanelContext | null>(
-    () =>
-      !isCreate && id != null
-        ? { recordId: id, reload: save.reload, form: save }
-        : null,
-    [id, isCreate, save],
-  );
   const recordToolbarContext = React.useMemo<RecordToolbarContext>(
     () => ({
       recordId: id ?? null,
@@ -521,6 +520,26 @@ export function useFormViewSurface({
   const activeRecordTab = recordTabList.some((tab) => tab.id === requestedRecordTab)
     ? requestedRecordTab
     : FORM_VIEW_OVERVIEW_TAB_ID;
+  const pendingFocusRef = React.useRef<{ path: string; recordTabId?: string } | null>(null);
+  const [focusRequest, setFocusRequest] = React.useState(0);
+  const focusField = React.useCallback((path: string, options?: RecordFieldFocusOptions) => {
+    pendingFocusRef.current = { path, ...options };
+    if (options?.recordTabId) setActiveRecordTab(options.recordTabId);
+    setFocusRequest((request) => request + 1);
+  }, []);
+  React.useEffect(() => {
+    const pending = pendingFocusRef.current;
+    if (!pending || (pending.recordTabId && pending.recordTabId !== activeRecordTab)) return;
+    pendingFocusRef.current = null;
+    save.form.setFocus(pending.path);
+  }, [activeRecordTab, focusRequest, save.form]);
+  const recordPanelContext = React.useMemo<RecordPanelContext | null>(
+    () =>
+      !isCreate && id != null
+        ? { recordId: id, reload: save.reload, form: save, focusField }
+        : null,
+    [focusField, id, isCreate, save],
+  );
 
   return {
     ...save,

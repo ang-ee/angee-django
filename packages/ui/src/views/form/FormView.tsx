@@ -54,6 +54,7 @@ export type {
   OverviewTabOptions,
   RecordPresentation,
   RecordPanelContext,
+  RecordFieldFocusOptions,
   RecordTabDescriptor,
   RecordToolbarContext,
 } from "./form-view-surface";

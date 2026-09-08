@@ -11,9 +11,11 @@ function SwitchEdit({
   onCommit,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<boolean>): ReactElement {
   return (
     <Switch
+      ref={controlRef}
       checked={Boolean(value)}
       disabled={readOnly}
       aria-label={widgetLabel(field, "Toggle")}

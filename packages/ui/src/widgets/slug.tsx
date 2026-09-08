@@ -32,9 +32,11 @@ function SlugEdit({
   onCommit,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<string>): ReactElement {
   return (
     <Input
+      ref={controlRef}
       value={value ?? ""}
       readOnly={readOnly}
       className="font-mono"

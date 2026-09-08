@@ -16,18 +16,20 @@ type StructuredWidgetField = WidgetField & {
   maxItems?: number;
 };
 
-function ObjectField({ value, field, messages = [], readOnly = false, onChange, onCommit }: WidgetRenderProps): React.ReactElement {
+function ObjectField({ value, field, messages = [], readOnly = false, onChange, onCommit, controlRef }: WidgetRenderProps): React.ReactElement {
   const template = structuredField(field).objectTemplate;
   if (!template) throw new Error('The "object" widget requires field.objectTemplate.');
   const objectValue = recordValue(value);
   const name = requiredName(field, "object");
+  const focusIndex = template.findIndex((child) => !child.readOnly);
   return (
     <fieldset id={field?.controlProps?.id} aria-labelledby={field?.controlProps?.["aria-labelledby"]} aria-describedby={field?.controlProps?.["aria-describedby"]} className="space-y-3 rounded-6 border border-border p-3">
-      {template.map((child) => {
+      {template.map((child, index) => {
         const path = `${name}.${child.name}`;
         return <LabeledDescriptorField key={child.name} field={{ ...child, name: path }}
           value={objectValue[child.name]} messages={messagesForDottedPath(messages, path)}
           readOnly={readOnly || child.readOnly}
+          controlRef={index === focusIndex ? controlRef : undefined}
           onCommit={onCommit}
           onChange={(next) => onChange?.(updatedRecord(objectValue, child.name, next))} />;
       })}
@@ -35,7 +37,7 @@ function ObjectField({ value, field, messages = [], readOnly = false, onChange, 
   );
 }
 
-function ListField({ value, field, messages = [], readOnly = false, onChange, onCommit }: WidgetRenderProps): React.ReactElement {
+function ListField({ value, field, messages = [], readOnly = false, onChange, onCommit, controlRef }: WidgetRenderProps): React.ReactElement {
   const t = useUiT();
   const descriptorField = structuredField(field);
   const item = descriptorField.itemTemplate;
@@ -52,6 +54,7 @@ function ListField({ value, field, messages = [], readOnly = false, onChange, on
           <div key={identities.current[index]} className="space-y-2 rounded-6 border border-border p-3">
             <LabeledDescriptorField field={{ ...item, name: path, label: item.label ?? t("form.list.item", { number: index + 1 }) }}
               value={entry} messages={messagesForDottedPath(messages, path)} readOnly={readOnly || item.readOnly}
+              controlRef={index === 0 ? controlRef : undefined}
               onCommit={onCommit}
               onChange={(next) => onChange?.(values.map((current, currentIndex) => currentIndex === index ? next : current))} />
             {!readOnly ? <div className="flex flex-wrap gap-1">
@@ -65,7 +68,7 @@ function ListField({ value, field, messages = [], readOnly = false, onChange, on
           </div>
         );
       })}
-      {!readOnly ? <Button type="button" size="sm" variant="secondary" disabled={descriptorField.maxItems !== undefined && values.length >= descriptorField.maxItems}
+      {!readOnly ? <Button ref={values.length === 0 ? controlRef : undefined} type="button" size="sm" variant="secondary" disabled={descriptorField.maxItems !== undefined && values.length >= descriptorField.maxItems}
         onClick={() => { identities.current.push(nextIdentity()); onChange?.([...values, initialFormSpecValue(item)]); onCommit?.(); }}>{t("form.list.add")}</Button> : null}
     </div>
   );

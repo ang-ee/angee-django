@@ -14,6 +14,7 @@ function Many2OneEdit({
   onChange,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<unknown>): ReactElement {
   const selected = relationValueId(value);
   const options = useMemo<RelationOption[]>(
@@ -26,6 +27,7 @@ function Many2OneEdit({
   );
   return (
     <RelationField
+      triggerRef={controlRef}
       {...field?.controlProps}
       value={selected}
       onChange={(next) => onChange?.(next)}

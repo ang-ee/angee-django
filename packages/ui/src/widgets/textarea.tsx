@@ -10,10 +10,12 @@ function TextareaEdit({
   onCommit,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<string>): ReactElement {
   return (
     <Textarea
       {...field?.controlProps}
+      ref={controlRef}
       value={value ?? ""}
       readOnly={readOnly}
       aria-label={widgetLabel(field, "Text")}

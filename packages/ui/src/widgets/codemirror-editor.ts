@@ -3,11 +3,14 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useImperativeHandle,
   type RefObject,
+  type Ref,
 } from "react";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, placeholder } from "@codemirror/view";
 import { basicSetup } from "codemirror";
+import type { WidgetFocusTarget } from "./types";
 
 /** Editor chrome shared by the CodeMirror-backed widgets (markdown, json). */
 export const CODEMIRROR_THEME = EditorView.theme({
@@ -49,6 +52,7 @@ export interface CodeMirrorEditorOptions {
   placeholder: string;
   /** Language + key bindings + per-widget extensions (e.g. `markdown()`, `json()`). */
   extensions: readonly Extension[];
+  controlRef?: Ref<WidgetFocusTarget>;
 }
 
 /**
@@ -64,9 +68,10 @@ export function useCodeMirrorEditor(
   host: RefObject<HTMLDivElement | null>,
   options: CodeMirrorEditorOptions,
 ): RefObject<EditorView | null> {
-  const { value, onChange, onBlur, readOnly, placeholder: placeholderText, extensions } =
+  const { value, onChange, onBlur, readOnly, placeholder: placeholderText, extensions, controlRef } =
     options;
   const viewRef = useRef<EditorView | null>(null);
+  useImperativeHandle(controlRef, () => ({ focus: () => viewRef.current?.focus() }), []);
   const onChangeRef = useRef(onChange);
   const onBlurRef = useRef(onBlur);
   const pendingRef = useRef(false);

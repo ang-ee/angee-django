@@ -10,9 +10,11 @@ function BooleanEdit({
   onCommit,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<boolean>): ReactElement {
   return (
     <Checkbox
+      ref={controlRef}
       checked={Boolean(value)}
       disabled={readOnly}
       aria-label={widgetLabel(field, "Boolean")}

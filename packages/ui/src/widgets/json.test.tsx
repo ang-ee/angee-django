@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { jsonWidget } from "./json";
 
@@ -29,6 +29,15 @@ describe("json widget", () => {
     render(<Edit value={{}} field={{ label: "Config" }} />);
 
     expect(screen.getByLabelText("Config")).toBeTruthy();
+  });
+
+  test("focus ref targets the CodeMirror editor", () => {
+    const Edit = jsonWidget.edit;
+    const focusRef = vi.fn<(target: { focus(): void } | null) => void>();
+    render(<Edit value={{}} field={{ label: "Config" }} controlRef={focusRef} />);
+    focusRef.mock.calls.at(-1)?.[0]?.focus();
+
+    expect(document.activeElement?.classList.contains("cm-content")).toBe(true);
   });
 
   test("cell renders compact json", () => {

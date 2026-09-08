@@ -68,6 +68,7 @@ function MarkdownEdit({
   onChange,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<string>): ReactElement {
   const t = useUiT();
   const [mode, setMode] = useState<MarkdownMode>("source");
@@ -79,6 +80,7 @@ function MarkdownEdit({
     readOnly,
     placeholder: String(field?.label ?? t("markdown.placeholder")),
     extensions: MARKDOWN_EXTENSIONS,
+    controlRef,
   });
 
   function runCommand(command: MarkdownCommand): void {

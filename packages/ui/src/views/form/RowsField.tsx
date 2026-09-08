@@ -53,10 +53,12 @@ export function RowsField({
   readOnly = false,
   onChange,
   onCommit,
+  controlRef,
 }: WidgetRenderProps<RowsValue>): ReactElement {
   const rows = rowsValue(value);
   const fieldName = rowsFieldName(field);
   const columns = rowTemplate(field);
+  const focusColumn = columns.find((column) => !column.readOnly);
 
   return (
     <div className="overflow-x-auto rounded-6 border border-border">
@@ -112,6 +114,7 @@ export function RowsField({
                     );
                   }}
                   onCommit={onCommit}
+                  controlRef={rowIndex === 0 && column === focusColumn ? controlRef : undefined}
                 />
               ))}
             </TableRow>
@@ -131,6 +134,7 @@ function RowsCell({
   rowIndex,
   onChange,
   onCommit,
+  controlRef,
 }: {
   column: FormSpecFieldDescriptor;
   fieldName: string;
@@ -140,6 +144,7 @@ function RowsCell({
   rowIndex: number;
   onChange: (value: unknown) => void;
   onCommit?: () => void;
+  controlRef?: (target: import("../../widgets").WidgetFocusTarget | null) => void;
 }): ReactElement {
   const cellPath = `${fieldName}.${rowIndex}.${column.name}`;
   return (
@@ -157,6 +162,7 @@ function RowsCell({
         showDescription={false}
         onChange={onChange}
         onCommit={onCommit}
+        controlRef={controlRef}
       />
     </TableCell>
   );

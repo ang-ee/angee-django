@@ -1,4 +1,4 @@
-import { createElement, useState, type ReactElement, type ReactNode } from "react";
+import { createElement, useState, type ReactElement, type ReactNode, type Ref } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { modelLabelSegment, rowPublicId, type Row } from "@angee/metadata";
 
@@ -51,6 +51,7 @@ export interface RelationEditConfig {
 }
 
 export interface RelationPickerProps {
+  controlRef?: Ref<HTMLButtonElement>;
   id?: string;
   value?: string | null;
   onChange?: (value: string) => void;
@@ -106,6 +107,7 @@ type DialogState =
  * — all without leaving the parent surface.
  */
 export function RelationPicker({
+  controlRef,
   id,
   value,
   onChange,
@@ -136,6 +138,7 @@ export function RelationPicker({
       <div className="flex min-w-0 items-center gap-1">
         <div className="min-w-0 flex-1">
           <RelationField
+            triggerRef={controlRef}
             id={id}
             value={value}
             onChange={(next) => { onChange?.(next); onCommit?.(); }}
