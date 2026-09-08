@@ -12,15 +12,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Coroutine
 from typing import Any
 
 from asgiref.sync import sync_to_async
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
+from django.db import close_old_connections
 from django.test import TransactionTestCase, override_settings
 from rebac import SubjectRef, system_context, to_subject_ref
 
+from angee.agents.models import MCPPlacement
 from angee.integrate.credentials import CredentialKind
 from angee.mcp.graphql import GraphQLTool, register_graphql_tools
 from angee.mcp.server import MOUNT_PATH, mcp_app, mcp_server
@@ -33,7 +36,7 @@ Page = apps.get_model("knowledge", "Page")
 User = get_user_model()
 
 _BEARER = "test-mcp-alice"
-_AGENT_BEARER = "test-mcp-agent"
+_AGENT_SERVER_SECRET = "test-mcp-agent"
 
 
 def _verify_bearer(bearer: str) -> SubjectRef | None:
@@ -65,6 +68,17 @@ class MCPStreamableHTTPMixin:
     """Drive the mounted StreamableHTTP app with an authenticated JSON-RPC call."""
 
     bearer = _BEARER
+
+    def _run_scenario(self, scenario: Coroutine[Any, Any, None]) -> None:
+        """Run one async scenario and close its thread-sensitive ORM connection."""
+
+        async def run_and_close() -> None:
+            try:
+                await scenario
+            finally:
+                await sync_to_async(close_old_connections)()
+
+        asyncio.run(run_and_close())
 
     async def _tool(self, name: str, arguments: dict[str, Any], *, bearer: str | None = None) -> Any:
         """Call one tool and return its structured result.
@@ -127,7 +141,10 @@ class MCPStreamableHTTPMixin:
         return captured["status"], bytes(captured["body"])
 
 
-@override_settings(ANGEE_MCP_ACTOR_VERIFIER=f"{__name__}._verify_bearer")
+@override_settings(
+    ANGEE_MCP_ACTOR_VERIFIER=f"{__name__}._verify_bearer",
+    ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER=True,
+)
 class NotesMCPServerTests(MCPStreamableHTTPMixin, TransactionTestCase):
     """The MCP server serves the notes tools over authenticated StreamableHTTP."""
 
@@ -146,12 +163,12 @@ class NotesMCPServerTests(MCPStreamableHTTPMixin, TransactionTestCase):
         """``tools/list`` advertises the tools; calls run scoped to the bearer's actor."""
 
         self.assertTrue(self.owned)
-        asyncio.run(self._scenario())
+        self._run_scenario(self._scenario())
 
     def test_missing_bearer_is_unauthorized(self) -> None:
         """A request without a bearer is rejected by FastMCP before any tool runs."""
 
-        asyncio.run(self._unauthorized())
+        self._run_scenario(self._unauthorized())
 
     async def _scenario(self) -> None:
         """Run the StreamableHTTP round trip with the app's lifespan entered."""
@@ -213,11 +230,12 @@ class NotesMCPServerTests(MCPStreamableHTTPMixin, TransactionTestCase):
             self.assertEqual(status, 401)
 
 
-@override_settings(ANGEE_MCP_ACTOR_VERIFIER="angee.agents.mcp_verifier.resolve_actor")
+@override_settings(
+    ANGEE_MCP_ACTOR_VERIFIER="angee.agents.mcp_verifier.resolve_actor",
+    ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER=True,
+)
 class AgentNotesMCPServerTests(MCPStreamableHTTPMixin, TransactionTestCase):
     """Agent bearers authenticate as agents without borrowing their owner's user identity."""
-
-    bearer = _AGENT_BEARER
 
     def setUp(self) -> None:
         """Build a provisioned agent credentialed for the process MCP server."""
@@ -232,13 +250,19 @@ class AgentNotesMCPServerTests(MCPStreamableHTTPMixin, TransactionTestCase):
                 owner,
                 kind=str(CredentialKind.STATIC_TOKEN),
                 name="agent-mcp-bearer",
-                material={"api_key": _AGENT_BEARER},
+                material={"api_key": _AGENT_SERVER_SECRET},
             )
-            server = MCPServer.objects.create(name="agent-notes", url="http://localhost/mcp", credential=credential)
+            server = MCPServer.objects.create(
+                name="agent-notes",
+                url="http://localhost/mcp",
+                credential=credential,
+                placement=MCPPlacement.INTERNAL,
+            )
             agent = Agent.objects.create(name="Notes Agent", owner=owner)
             agent.mark_provisioning()
             agent.mark_provisioned(workspace="ws-notes-agent", service="svc-notes-agent")
             agent.mcp_servers.add(server)
+            self.bearer = server.bearer_for(agent)
             self.agent_id = agent.pk
             self.agent_user_id = agent.user_id
             self.note_count = Note.objects.count()
@@ -247,12 +271,12 @@ class AgentNotesMCPServerTests(MCPStreamableHTTPMixin, TransactionTestCase):
     def test_agent_bearer_write_stamps_service_user(self) -> None:
         """A permitted agent write stamps audit FKs with the agent's service user."""
 
-        asyncio.run(self._agent_write_attribution_scenario())
+        self._run_scenario(self._agent_write_attribution_scenario())
 
     def test_agent_bearer_reaches_tools_but_notes_create_is_denied(self) -> None:
         """Agent MCP identity reaches tool bodies but the product create gate stays user-only."""
 
-        asyncio.run(self._agent_denial_scenario())
+        self._run_scenario(self._agent_denial_scenario())
         with system_context(reason="test-agent-mcp-no-orphan"):
             self.assertEqual(Note.objects.count(), self.note_count)
             self.assertFalse(Note.objects.filter(title="Agent orphan").exists())
