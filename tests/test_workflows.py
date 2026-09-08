@@ -15,10 +15,20 @@ from rebac.roles import grant
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows.models import (
     TriggerKind,
+    WorkflowPurpose,
     WorkflowStatus,
 )
 from tests.conftest import SchemaAddon, execute_schema, result_data
-from tests.workflows import Edge, Step, Trigger, Workflow, WorkflowRun
+from tests.workflows import (
+    Edge,
+    Step,
+    Trigger,
+    Workflow,
+    WorkflowRun,
+    start_run,
+    step_run_for,
+    workflow_with_steps,
+)
 
 User = get_user_model()
 pytest_plugins = ("tests.workflows",)
@@ -58,13 +68,20 @@ def _console_schema() -> Any:
     ).build("console")
 
 
-def _published_workflow(*, name: str, subject_declaration: str, owner: Any) -> tuple[Workflow, Workflow]:
+def _published_workflow(
+    *,
+    name: str,
+    subject_declaration: str,
+    owner: Any,
+    purpose: WorkflowPurpose = WorkflowPurpose.AUTOMATION,
+) -> tuple[Workflow, Workflow]:
     """Seed one actor-owned workflow lineage and publish its first version."""
 
     with system_context(reason="test workflows subject declaration definition"):
         draft = Workflow.objects.create(
             key=slugify(name),
             name=name,
+            purpose=purpose,
             subject_declaration=subject_declaration,
             created_by=owner,
             updated_by=owner,
@@ -157,6 +174,225 @@ def test_publish_copies_draft_to_immutable_version(workflow_tables: None) -> Non
         draft.key = "changed-lineage"
         with pytest.raises(ValidationError, match="immutable once assigned"):
             draft.save()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_lineage_projection_is_current_for_heads_versions_and_retirement(
+    workflow_tables: None,
+    django_assert_num_queries: Any,
+) -> None:
+    """One query projects stable lineage identity and latest publication state."""
+
+    with system_context(reason="test workflow lineage projection"):
+        head = create_workflow("Projected lineage")
+        create_entry(head)
+        first = head.publish()
+        head.subject_declaration = Workflow._meta.label_lower
+        head.save()
+        second = head.publish()
+
+        with django_assert_num_queries(1):
+            rows = list(
+                Workflow.objects.filter(pk__in=(head.pk, first.pk, second.pk))
+                .with_lineage_projection()
+                .order_by("pk")
+            )
+            assert {row._workflow_lineage_id for row in rows} == {head.pk}
+            assert {row._workflow_current_published_pk for row in rows} == {second.pk}
+            assert {row._workflow_current_published_version for row in rows} == {2}
+            assert {row._workflow_current_published_subject_declaration for row in rows} == {
+                Workflow._meta.label_lower
+            }
+            assert {row._workflow_publication_status for row in rows} == {WorkflowStatus.PUBLISHED}
+
+        second.archive()
+        retired = Workflow.objects.with_lineage_projection().get(pk=first.pk)
+        assert retired._workflow_current_published_pk is None
+        assert retired._workflow_publication_status == WorkflowStatus.ARCHIVED
+
+
+@pytest.mark.django_db(transaction=True)
+def test_graphql_projects_lineage_context_for_head_and_version(workflow_tables: None) -> None:
+    """The optimizer merges all lineage projection fields with public-id/null semantics."""
+
+    del workflow_tables
+    schema = _console_schema()
+    admin = _platform_admin("workflow-lineage-projection-admin")
+    with system_context(reason="test graphql workflow lineage projection"):
+        head = create_workflow("GraphQL projected lineage")
+        create_entry(head)
+        version = head.publish()
+
+    document = """
+      query LineageProjection($head: String!, $version: String!) {
+        head: workflows_by_pk(id: $head) {
+          lineage_id publication_status current_published_id
+          current_published_version current_published_subject_declaration
+        }
+        version: workflows_by_pk(id: $version) {
+          lineage_id publication_status current_published_id
+          current_published_version current_published_subject_declaration
+        }
+      }
+    """
+    current = result_data(
+        execute_schema(schema, document, {"head": head.sqid, "version": version.sqid}, user=admin)
+    )
+    assert current["head"] == current["version"] == {
+        "lineage_id": head.sqid,
+        "publication_status": WorkflowStatus.PUBLISHED,
+        "current_published_id": version.sqid,
+        "current_published_version": 1,
+        "current_published_subject_declaration": "",
+    }
+
+    with system_context(reason="test graphql workflow retirement"):
+        version.archive()
+    retired = result_data(
+        execute_schema(schema, document, {"head": head.sqid, "version": version.sqid}, user=admin)
+    )
+    assert retired["head"]["publication_status"] == WorkflowStatus.ARCHIVED
+    assert retired["head"]["current_published_id"] is None
+    assert retired["version"]["current_published_id"] is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_graphql_wait_fields_are_nullable_for_completed_and_legacy_rows(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """Fresh completed and legacy blank journals serialize truthful nullable wait context."""
+
+    del workflow_engine_tables, no_workflow_queue
+    schema = _console_schema()
+    admin = _platform_admin("workflow-wait-projection-admin")
+    workflow = workflow_with_steps(
+        name="Wait projection",
+        steps=({"key": "done", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    run = start_run(workflow)
+    row = step_run_for(run, "done")
+    with system_context(reason="test completed wait projection row"):
+        row.mark_started()
+        row.mark_succeeded(outcome="done")
+        run.mark_running()
+        run.mark_succeeded()
+
+    result = result_data(
+        execute_schema(
+            schema,
+            """
+              query WaitProjection($run: String!, $row: String!) {
+                run: workflow_runs_by_pk(id: $run) { origin waiting_kind next_wake_at }
+                row: workflow_step_runs_by_pk(id: $row) { status waiting_kind }
+              }
+            """,
+            {"run": run.sqid, "row": row.sqid},
+            user=admin,
+        )
+    )
+    assert result["run"] == {"origin": "MANUAL", "waiting_kind": None, "next_wake_at": None}
+    assert result["row"]["status"] == "SUCCEEDED"
+    assert result["row"]["waiting_kind"] is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_graphql_filters_workflow_runs_by_workflow_purpose(workflow_tables: None) -> None:
+    """Run resource filters expose the workflow purpose owned by the related definition."""
+
+    del workflow_tables
+    schema = _console_schema()
+    admin = _platform_admin("workflow-run-purpose-filter-admin")
+    with system_context(reason="test workflow run purpose resource filter"):
+        automation = create_workflow("Automation run filter")
+        automation.purpose = WorkflowPurpose.AUTOMATION
+        automation.save()
+        agent_session = create_workflow("Agent session run filter")
+        agent_session.purpose = WorkflowPurpose.AGENT_SESSION
+        agent_session.save()
+        automation_run = WorkflowRun.objects.create(workflow=automation)
+        WorkflowRun.objects.create(workflow=agent_session)
+
+    data = result_data(
+        execute_schema(
+            schema,
+            """
+              query RunsByPurpose($where: workflow_runs_bool_exp) {
+                workflow_runs(where: $where) { id }
+                workflow_runs_aggregate(where: $where) { aggregate { count } }
+              }
+            """,
+            {"where": {"workflow__purpose": {"_eq": WorkflowPurpose.AUTOMATION}}},
+            user=admin,
+        )
+    )
+
+    assert data["workflow_runs"] == [{"id": automation_run.sqid}]
+    assert data["workflow_runs_aggregate"]["aggregate"]["count"] == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_graphql_filters_workflow_runs_across_a_public_workflow_lineage(workflow_tables: None) -> None:
+    """A public head ID matches runs pinned to the head and all of its published revisions."""
+
+    del workflow_tables
+    schema = _console_schema()
+    admin = _platform_admin("workflow-run-lineage-filter-admin")
+    with system_context(reason="test workflow run lineage resource filter"):
+        head = create_workflow("Run lineage filter")
+        create_entry(head)
+        first = head.publish()
+        second = head.publish()
+        expected = [
+            WorkflowRun.objects.create(workflow=head),
+            WorkflowRun.objects.create(workflow=first),
+            WorkflowRun.objects.create(workflow=second),
+        ]
+        unrelated = create_workflow("Unrelated run lineage")
+        WorkflowRun.objects.create(workflow=unrelated)
+
+    where = {
+        "_or": [
+            {"workflow": {"_eq": head.sqid}},
+            {"workflow__published_from": {"_eq": head.sqid}},
+        ]
+    }
+    data = result_data(
+        execute_schema(
+            schema,
+            """
+              query RunsByLineage($where: workflow_runs_bool_exp) {
+                workflow_runs(where: $where) { id }
+                workflow_runs_aggregate(where: $where) { aggregate { count } }
+              }
+            """,
+            {"where": where},
+            user=admin,
+        )
+    )
+
+    assert {row["id"] for row in data["workflow_runs"]} == {run.sqid for run in expected}
+    assert data["workflow_runs_aggregate"]["aggregate"]["count"] == 3
+
+
+@pytest.mark.django_db(transaction=True)
+def test_purpose_is_copied_as_immutable_version_content(workflow_tables: None) -> None:
+    """Changing a head purpose affects a new publication, not history."""
+
+    with system_context(reason="test workflow purpose versions"):
+        head = create_workflow("Purpose versions")
+        create_entry(head)
+        head.purpose = WorkflowPurpose.AGENT_SESSION
+        head.save()
+        first = head.publish()
+        head.purpose = WorkflowPurpose.AUTOMATION
+        head.save()
+        second = head.publish()
+
+    first.refresh_from_db()
+    assert first.purpose == WorkflowPurpose.AGENT_SESSION
+    assert second.purpose == WorkflowPurpose.AUTOMATION
 
 
 @pytest.mark.django_db(transaction=True)
@@ -300,6 +536,12 @@ def test_workflows_for_subject_declaration_filters_resource_and_rebac(workflow_t
     _published_workflow(name="Matching", subject_declaration=Workflow._meta.label, owner=owner)
     _published_workflow(name="Any subject", subject_declaration="", owner=owner)
     _published_workflow(name="Wrong resource", subject_declaration=Step._meta.label, owner=owner)
+    _published_workflow(
+        name="Agent session",
+        subject_declaration=Workflow._meta.label,
+        owner=owner,
+        purpose=WorkflowPurpose.AGENT_SESSION,
+    )
     _published_workflow(name="Hidden matching", subject_declaration=Workflow._meta.label, owner=other_owner)
 
     query = """

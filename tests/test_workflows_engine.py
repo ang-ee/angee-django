@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -465,7 +466,12 @@ def test_timer_wait_resumes_from_wake_sweep(
 
     wait_row = step_run_for(run, "wait")
     assert wait_row.status == step_run_status.WAITING
+    assert wait_row.waiting_kind == workflow_models.WaitingKind.SCHEDULED
     assert run.wake_at == wake_at
+    with system_context(reason="test scheduled wait projection"):
+        projected = WorkflowRun.objects.annotate(**WorkflowRun.waiting_projection_annotation()).get(pk=run.pk)
+    assert projected._workflow_waiting_kind == workflow_models.WaitingKind.SCHEDULED
+    assert projected._workflow_next_wake_at == wake_at
 
     from angee.workflows import engine
 
@@ -476,6 +482,10 @@ def test_timer_wait_resumes_from_wake_sweep(
 
     assert step_run_for(run, "wait").status == step_run_status.SUCCEEDED
     assert run.status == run_status.SUCCEEDED
+    with system_context(reason="test completed wait projection"):
+        projected = WorkflowRun.objects.annotate(**WorkflowRun.waiting_projection_annotation()).get(pk=run.pk)
+    assert projected._workflow_waiting_kind == ""
+    assert projected._workflow_next_wake_at is None
 
 
 @pytest.mark.django_db(transaction=True)
@@ -852,6 +862,43 @@ def test_error_workflow_fires_once_with_failed_run_subject(
     child = children[0]
     assert child.workflow == error_version
     assert child.subject == run
+    assert child.origin == workflow_models.RunOrigin.ERROR_WORKFLOW
+
+
+@pytest.mark.django_db(transaction=True)
+def test_identity_migration_backfills_only_structurally_known_run_origins(
+    workflow_engine_tables: None,
+) -> None:
+    """Trigger and parent links recover origins while unexplained history stays unknown."""
+
+    del workflow_engine_tables
+    from django.apps import apps as django_apps
+
+    from angee.workflows.runtime_migrations.workflow_identity import backfill_structural_run_origins
+
+    version = workflow_with_steps(
+        name="Origin backfill",
+        steps=({"key": "start", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    with system_context(reason="test structural origins setup"):
+        trigger = Trigger.objects.create(workflow=version.published_from, kind=workflow_models.TriggerKind.MANUAL)
+        trigger_run = WorkflowRun.objects.create(workflow=version, trigger=trigger)
+        unexplained = WorkflowRun.objects.create(workflow=version)
+        parent_run = WorkflowRun.objects.create(workflow=version)
+        parent_step = StepRun.objects.create(run=parent_run, step=step_for(version, "start"))
+        child = WorkflowRun.objects.create(workflow=version, parent_step_run=parent_step)
+
+    editor = SimpleNamespace(connection=connection)
+    backfill_structural_run_origins(django_apps, editor)
+    backfill_structural_run_origins(django_apps, editor)
+
+    trigger_run.refresh_from_db()
+    unexplained.refresh_from_db()
+    child.refresh_from_db()
+    assert trigger_run.origin == workflow_models.RunOrigin.TRIGGER
+    assert child.origin == workflow_models.RunOrigin.ERROR_WORKFLOW
+    assert unexplained.origin == workflow_models.RunOrigin.UNKNOWN
 
 
 @pytest.mark.django_db(transaction=True)

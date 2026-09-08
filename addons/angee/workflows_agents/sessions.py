@@ -11,7 +11,7 @@ from rebac import system_context
 
 from angee.agents.models import RuntimeStatus, SessionStatus, TurnStatus
 from angee.workflows import engine
-from angee.workflows.models import RunStatus
+from angee.workflows.models import RunOrigin, RunStatus, WorkflowPurpose
 
 
 def start_session(agent: Any, *, owner: Any, context: dict[str, Any]) -> Any:
@@ -29,7 +29,7 @@ def start_session(agent: Any, *, owner: Any, context: dict[str, Any]) -> Any:
     with system_context(reason="workflows_agents.session.start"), transaction.atomic():
         workflow = (
             workflow_model.objects.current_published()
-            .filter(steps__is_entry=True, steps__step_class="agent_session")
+            .filter(key="agent_session", purpose=WorkflowPurpose.AGENT_SESSION)
             .order_by("pk")
             .first()
         )
@@ -44,7 +44,7 @@ def start_session(agent: Any, *, owner: Any, context: dict[str, Any]) -> Any:
             created_by_id=owner.pk,
             updated_by_id=owner.pk,
         )
-        engine.start(workflow, subject=session, actor=owner)
+        engine.start(workflow, subject=session, actor=owner, origin=RunOrigin.SESSION)
     return session
 
 

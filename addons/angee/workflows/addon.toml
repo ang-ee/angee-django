@@ -14,3 +14,8 @@ dependencies = [
 name = "workflow_stable_key"
 app_label = "workflows"
 module = "runtime_migrations.workflow_stable_key"
+
+[[migrations]]
+name = "workflow_identity"
+app_label = "workflows"
+module = "runtime_migrations.workflow_identity"

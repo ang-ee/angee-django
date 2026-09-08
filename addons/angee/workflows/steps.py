@@ -19,13 +19,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, ClassVar, Self
+from typing import Any, ClassVar, Literal, Self
 
-from angee.base.impl import ImplBase
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rebac import system_context
+
+from angee.base.impl import ImplBase
 
 GATE_POLICIES = frozenset({"one_done", "all_success", "majority", "sequential"})
 """Seat aggregation policies supported by the built-in gate step."""
@@ -78,6 +79,7 @@ class StepResult:
     until: datetime | None = None
     resume_state: dict[str, Any] | None = None
     decisions: tuple[DecisionSpec, ...] = ()
+    waiting_kind: Literal["scheduled", "approval", "external"] | str = ""
 
     @classmethod
     def done(cls, output: Any = None, outcome: str = "") -> Self:
@@ -91,12 +93,13 @@ class StepResult:
         *,
         until: datetime | None = None,
         resume_state: dict[str, Any] | None = None,
+        waiting_kind: Literal["scheduled", "approval", "external"] = "scheduled",
     ) -> Self:
         """Return a durable wait result."""
 
         if until is None:
             raise ValueError("StepResult.wait requires until.")
-        return cls(kind="wait", until=until, resume_state=resume_state)
+        return cls(kind="wait", until=until, resume_state=resume_state, waiting_kind=waiting_kind)
 
     @classmethod
     def suspend(
@@ -104,10 +107,18 @@ class StepResult:
         *,
         resume_state: dict[str, Any] | None = None,
         decisions: list[DecisionSpec] | tuple[DecisionSpec, ...] = (),
+        waiting_kind: Literal["scheduled", "approval", "external"] | None = None,
     ) -> Self:
         """Return a suspended step result."""
 
-        return cls(kind="suspend", resume_state=resume_state, decisions=tuple(decisions))
+        decisions_tuple = tuple(decisions)
+        resolved_kind = waiting_kind or ("approval" if decisions_tuple else "external")
+        return cls(
+            kind="suspend",
+            resume_state=resume_state,
+            decisions=decisions_tuple,
+            waiting_kind=resolved_kind,
+        )
 
 
 class StepImpl(ImplBase):

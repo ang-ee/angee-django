@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from typing import Any, cast
 
 import strawberry
 import strawberry_django
-from angee.base.scoping import read_scoped_queryset
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models
 from strawberry import auto
 from strawberry.scalars import JSON
 
+from angee.base.scoping import read_scoped_queryset
 from angee.graphql.actions import (
     ActionResult,
     action_guard,
@@ -22,7 +23,7 @@ from angee.graphql.actions import (
     resolve_action_target,
 )
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
-from angee.graphql.ids import PublicID, instance_for_id
+from angee.graphql.ids import PublicID, instance_for_id, to_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
@@ -78,6 +79,7 @@ class WorkflowType(AngeeNode):
     key: auto
     name: auto
     description: auto
+    purpose: auto
     subject_declaration: auto
     status: auto
     version: auto
@@ -87,6 +89,36 @@ class WorkflowType(AngeeNode):
     budget: JSON
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(annotate=cast(Any, Workflow).lineage_projection_annotation())
+    def lineage_id(self) -> PublicID:
+        """Return the public id of this row's editable lineage head."""
+
+        return cast(PublicID, to_public_id(Workflow, cast(Any, self)._workflow_lineage_id))
+
+    @strawberry_django.field(annotate=cast(Any, Workflow).lineage_projection_annotation())
+    def current_published_id(self) -> PublicID | None:
+        """Return the current publication id, or null for an unpublished/retired lineage."""
+
+        return to_public_id(Workflow, cast(Any, self)._workflow_current_published_pk)
+
+    @strawberry_django.field(annotate=cast(Any, Workflow).lineage_projection_annotation())
+    def current_published_version(self) -> int | None:
+        """Return the current published version number."""
+
+        return cast(int | None, cast(Any, self)._workflow_current_published_version)
+
+    @strawberry_django.field(annotate=cast(Any, Workflow).lineage_projection_annotation())
+    def current_published_subject_declaration(self) -> str | None:
+        """Return current publication subject context, preserving a blank declaration."""
+
+        return cast(str | None, cast(Any, self)._workflow_current_published_subject_declaration)
+
+    @strawberry_django.field(annotate=cast(Any, Workflow).lineage_projection_annotation())
+    def publication_status(self) -> str:
+        """Return the lineage publication state independently of the editable head."""
+
+        return cast(str, cast(Any, self)._workflow_publication_status)
 
 
 @strawberry_django.type(Step)
@@ -135,6 +167,7 @@ class WorkflowRunType(AngeeNode):
     """Admin projection of a workflow run."""
 
     workflow: WorkflowType
+    origin: auto
     trigger: TriggerType | None
     parent_step_run: "StepRunType | None"
     status: auto
@@ -145,6 +178,18 @@ class WorkflowRunType(AngeeNode):
     error: auto
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(annotate=cast(Any, WorkflowRun).waiting_projection_annotation())
+    def waiting_kind(self) -> str | None:
+        """Return the declared runtime wait reason, when one is known."""
+
+        return cast(str, cast(Any, self)._workflow_waiting_kind) or None
+
+    @strawberry_django.field(annotate=cast(Any, WorkflowRun).waiting_projection_annotation())
+    def next_wake_at(self) -> datetime | None:
+        """Return the next genuine scheduled wake, excluding external waits."""
+
+        return cast(Any, self)._workflow_next_wake_at
 
 
 @strawberry_django.type(StepRun)
@@ -167,6 +212,12 @@ class StepRunType(AngeeNode):
     stacktrace: auto
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(only=["waiting_kind"])
+    def waiting_kind(self) -> str | None:
+        """Return a declared wait reason, or null for legacy/nonwaiting rows."""
+
+        return str(cast(Any, self).waiting_kind) or None
 
 
 @strawberry_django.type(Decision)
@@ -299,17 +350,36 @@ _WORKFLOW_RESOURCE = hasura_model_resource(
         "key",
         "name",
         "subject_declaration",
+        "purpose",
         "status",
         "version",
         "published_from",
         "error_workflow",
         "updated_at",
     ],
-    sortable=["key", "name", "status", "version", "created_at", "updated_at"],
+    sortable=["key", "name", "purpose", "status", "version", "created_at", "updated_at"],
     aggregatable=["id", "version", "max_steps"],
-    groupable=["status", "updated_at"],
-    insertable=["key", "name", "description", "subject_declaration", "error_workflow", "max_steps", "budget"],
-    updatable=["key", "name", "description", "subject_declaration", "error_workflow", "max_steps", "budget"],
+    groupable=["purpose", "status", "updated_at"],
+    insertable=[
+        "key",
+        "name",
+        "description",
+        "purpose",
+        "subject_declaration",
+        "error_workflow",
+        "max_steps",
+        "budget",
+    ],
+    updatable=[
+        "key",
+        "name",
+        "description",
+        "purpose",
+        "subject_declaration",
+        "error_workflow",
+        "max_steps",
+        "budget",
+    ],
     field_id_decode={
         "published_from": public_pk_decoder(Workflow),
         "error_workflow": public_pk_decoder(Workflow),
@@ -366,20 +436,24 @@ _WORKFLOW_RUN_RESOURCE = hasura_model_resource(
     filterable=[
         "id",
         "workflow",
+        "workflow__purpose",
+        "workflow__published_from",
         "trigger",
         "parent_step_run",
         "status",
+        "origin",
         "wake_at",
         "updated_at",
     ],
     sortable=["workflow", "status", "wake_at", "steps_taken", "created_at", "updated_at"],
     aggregatable=["id", "steps_taken"],
-    groupable=["workflow", "workflow__name", "status", "updated_at"],
+    groupable=["workflow", "workflow__name", "origin", "status", "updated_at"],
     insert=False,
     update=False,
     delete=False,
     field_id_decode={
         "workflow": public_pk_decoder(Workflow),
+        "workflow__published_from": public_pk_decoder(Workflow),
         "trigger": public_pk_decoder(Trigger),
         "parent_step_run": public_pk_decoder(StepRun),
     },
@@ -397,11 +471,12 @@ _STEP_RUN_RESOURCE = hasura_model_resource(
         "status",
         "outcome",
         "wait_until",
+        "waiting_kind",
         "updated_at",
     ],
     sortable=["run", "step", "map_index", "status", "attempt", "created_at", "updated_at"],
     aggregatable=["id", "attempt"],
-    groupable=["run", "step", "step__key", "system_kind", "status", "outcome", "updated_at"],
+    groupable=["run", "step", "step__key", "system_kind", "status", "waiting_kind", "outcome", "updated_at"],
     insert=False,
     update=False,
     delete=False,

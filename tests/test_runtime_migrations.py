@@ -867,6 +867,57 @@ def test_workflow_stable_key_migration_guards_and_preserves_constraint_state() -
     assert model_constraint.deconstruct() == constraint.deconstruct()
 
 
+def test_workflow_identity_migration_is_additive_and_matches_source_fields() -> None:
+    """The identity migration applies once and preserves exact StateField state."""
+
+    from angee.workflows.models import StepRun, Workflow, WorkflowRun
+
+    module = importlib.import_module("angee.workflows.runtime_migrations.workflow_identity")
+    legacy = ProjectState()
+    for name in ("Workflow", "WorkflowRun", "StepRun"):
+        legacy.add_model(ModelState("workflows", name, [("id", models.AutoField(primary_key=True))]))
+
+    assert module.applies(legacy) is True
+    partial = legacy.clone()
+    partial.models["workflows", "workflow"].fields["purpose"] = module.Migration.operations[0].field
+    with pytest.raises(ImproperlyConfigured, match="partial identity transition"):
+        module.applies(partial)
+    migrated = module.Migration("probe", "workflows").mutate_state(legacy)
+    assert module.applies(migrated) is False
+
+    for model_name, field_name, source_model in (
+        ("workflow", "purpose", Workflow),
+        ("workflowrun", "origin", WorkflowRun),
+        ("steprun", "waiting_kind", StepRun),
+    ):
+        migrated_field = migrated.models["workflows", model_name].fields[field_name]
+        source_field = source_model._meta.get_field(field_name)
+        assert migrated_field.deconstruct()[1:] == source_field.deconstruct()[1:]
+
+
+def test_agent_session_identity_migration_waits_for_complete_identity_state() -> None:
+    """The bridge data migration becomes applicable only after both owning apps exist."""
+
+    identity = importlib.import_module("angee.workflows.runtime_migrations.workflow_identity")
+    bridge = importlib.import_module(
+        "angee.workflows_agents.runtime_migrations.agent_session_identity"
+    )
+    legacy = ProjectState()
+    for name in ("Workflow", "WorkflowRun", "StepRun"):
+        legacy.add_model(ModelState("workflows", name, [("id", models.AutoField(primary_key=True))]))
+    assert bridge.applies(legacy) is False
+
+    migrated = identity.Migration("probe", "workflows").mutate_state(legacy)
+    assert bridge.applies(migrated) is False
+    migrated.add_model(
+        ModelState("agents", "AgentSession", [("id", models.AutoField(primary_key=True))])
+    )
+    migrated.add_model(
+        ModelState("resources", "Resource", [("id", models.AutoField(primary_key=True))])
+    )
+    assert bridge.applies(migrated) is True
+
+
 def _integration_lifecycle_state(
     choices: tuple[tuple[str, str], ...],
 ) -> ProjectState:

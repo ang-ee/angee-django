@@ -165,6 +165,8 @@ def no_workflow_queue(monkeypatch: pytest.MonkeyPatch) -> None:
 def workflow_with_steps(
     *,
     name: str = "Engine",
+    key: str = "",
+    purpose: workflow_models.WorkflowPurpose = workflow_models.WorkflowPurpose.AUTOMATION,
     subject_declaration: str = "",
     max_steps: int = 1000,
     budget: dict[str, Any] | None = None,
@@ -175,7 +177,9 @@ def workflow_with_steps(
 
     with system_context(reason="test workflows definition"):
         draft = Workflow.objects.create(
+            key=key,
             name=name,
+            purpose=purpose,
             subject_declaration=subject_declaration,
             max_steps=max_steps,
             budget=budget or {},

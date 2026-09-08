@@ -421,7 +421,7 @@ def _attempts_remaining(step_run: Any) -> bool:
 def _park_session() -> StepResult:
     """Return the far-future wait woken only by explicit event delivery."""
 
-    return StepResult.wait(until=SESSION_PARKED_UNTIL, resume_state={})
+    return StepResult.wait(until=SESSION_PARKED_UNTIL, resume_state={}, waiting_kind="external")
 
 
 def _continue_or_park(session: Any) -> StepResult:

@@ -12,3 +12,8 @@ install = [
   { path = "resources/install/100_workflows.workflow.yaml", publish = true },
   { path = "resources/install/101_workflows.step.yaml", depends_on = "resources/install/100_workflows.workflow.yaml" },
 ]
+
+[[migrations]]
+name = "agent_session_identity"
+app_label = "workflows"
+module = "runtime_migrations.agent_session_identity"

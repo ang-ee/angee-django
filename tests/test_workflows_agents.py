@@ -11,14 +11,16 @@ import json
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
+from django.apps import apps as django_apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import connection, transaction
+from django.db import connection, models, transaction
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 from pydantic_ai.messages import ModelResponse, SystemPromptPart, TextPart
@@ -46,6 +48,9 @@ from tests.test_agents import InferenceModel, _provider
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent, AgentSession, AgentTurn
 from tests.workflows import (
     WORKFLOW_RUNTIME_MODELS,
+    StepRun,
+    Workflow,
+    WorkflowRun,
     advance_once,
     execute_started,
     start_run,
@@ -91,7 +96,15 @@ def workflows_agents_tables(transactional_db: Any) -> Iterator[None]:
     """Create workflow runtime plus agent catalogue test tables."""
 
     del transactional_db
-    models = IAM_CONNECTION_TEST_MODELS + INTEGRATE_TEST_MODELS + AGENTS_GRAPHQL_MODELS + WORKFLOW_RUNTIME_MODELS
+    from tests.test_workflows_resources import WorkflowResourceLedger
+
+    models = (
+        IAM_CONNECTION_TEST_MODELS
+        + INTEGRATE_TEST_MODELS
+        + AGENTS_GRAPHQL_MODELS
+        + WORKFLOW_RUNTIME_MODELS
+        + (WorkflowResourceLedger,)
+    )
     created = _create_missing_tables(models)
     try:
         with workflow_table_setup(models):
@@ -462,6 +475,7 @@ def test_delivery_generation_closes_the_post_between_park_and_waiting_race(
     session = sessions.start_session(agent, owner=owner, context={})
     with system_context(reason="test lost wakeup run"):
         run = sessions.run_for(session)
+    assert run.origin == workflow_models.RunOrigin.SESSION
     step_run = advance_once(run)[0]
     original_run = AgentSessionStepImpl.run
     late_turns: list[Any] = []
@@ -777,12 +791,73 @@ def _session_workflow() -> Any:
     """Publish the structural workflow selected by the session service."""
 
     return workflow_with_steps(
+        key="agent_session",
         name="Agent session fixture",
+        purpose=workflow_models.WorkflowPurpose.AGENT_SESSION,
         subject_declaration="agents.agentsession",
         max_steps=100000,
         steps=({"key": "session", "step_class": "agent_session", "config": {}},),
         edges=(),
     )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_agent_session_identity_migration_backfills_only_declared_legacy_rows(
+    workflows_agents_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """The bridge migration idempotently recovers its known lineage, run, and parked wait."""
+
+    del workflows_agents_tables, no_workflow_queue
+    from angee.workflows_agents.runtime_migrations.agent_session_identity import (
+        backfill_agent_session_identity,
+    )
+    from tests.test_workflows_resources import WorkflowResourceLedger
+
+    owner, agent = _ready_session_agent("identity-backfill")
+    version = _session_workflow()
+    WorkflowResourceLedger.objects.create(
+        source_addon="angee.workflows_agents",
+        source_path="resources/install/100_workflows.workflow.yaml",
+        tier="install",
+        xref="agent_session",
+        content_hash="legacy",
+        target_model="workflows.Workflow",
+        target_id=version.published_from.sqid,
+    )
+    session = sessions.start_session(agent, owner=owner, context={})
+    with system_context(reason="test identity backfill run"):
+        run = sessions.run_for(session)
+    advance_once(run)
+    execute_started(run)
+    engine.advance(run.pk)
+    waiting = step_run_for(run, "session")
+
+    with system_context(reason="test legacy agent session identity"):
+        Workflow._base_manager.filter(
+            models.Q(pk=version.published_from_id) | models.Q(published_from_id=version.published_from_id)
+        ).update(key="", purpose=workflow_models.WorkflowPurpose.AUTOMATION)
+        WorkflowRun._base_manager.filter(pk=run.pk).update(origin=workflow_models.RunOrigin.UNKNOWN)
+        StepRun._base_manager.filter(pk=waiting.pk).update(waiting_kind="")
+
+    editor = SimpleNamespace(connection=connection)
+
+    def historical_model(app_label: str, model_name: str) -> Any:
+        if (app_label, model_name) == ("resources", "Resource"):
+            return WorkflowResourceLedger
+        return django_apps.get_model(app_label, model_name)
+
+    historical_apps = SimpleNamespace(get_model=historical_model)
+    backfill_agent_session_identity(historical_apps, editor)
+    backfill_agent_session_identity(historical_apps, editor)
+
+    version.refresh_from_db()
+    run.refresh_from_db()
+    waiting.refresh_from_db()
+    assert version.purpose == workflow_models.WorkflowPurpose.AGENT_SESSION
+    assert version.published_from.purpose == workflow_models.WorkflowPurpose.AGENT_SESSION
+    assert run.origin == workflow_models.RunOrigin.SESSION
+    assert waiting.waiting_kind == workflow_models.WaitingKind.EXTERNAL
 
 
 @pytest.mark.parametrize(

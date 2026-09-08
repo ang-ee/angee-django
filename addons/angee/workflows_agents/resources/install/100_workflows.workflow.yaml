@@ -3,6 +3,8 @@ _meta:
 rows:
   - xref: agent_session
     fields:
+      key: agent_session
+      purpose: agent_session
       name: Agent session
       description: Run one durable, multi-turn in-process agent conversation.
       subject_declaration: agents.agentsession

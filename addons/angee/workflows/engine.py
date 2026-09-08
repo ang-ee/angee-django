@@ -14,10 +14,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Literal, cast
 
-from angee.base.actors import actor_user_id
-from angee.base.identity import instance_from_public_id
-from angee.base.scoping import read_scoped_queryset
-from angee.jobs.enqueue import enqueue_task
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
@@ -33,7 +29,11 @@ from rebac.relationships import write_relationships
 from rebac.resources import to_object_ref
 from rebac.types import RelationshipTuple
 
-from angee.workflows.models import JoinRule, RunStatus, StepRunStatus, Verdict, WorkflowStatus
+from angee.base.actors import actor_user_id
+from angee.base.identity import instance_from_public_id
+from angee.base.scoping import read_scoped_queryset
+from angee.jobs.enqueue import enqueue_task
+from angee.workflows.models import JoinRule, RunOrigin, RunStatus, StepRunStatus, Verdict, WorkflowStatus
 from angee.workflows.steps import DecisionSpec, MapStep, StepResult, TransientStepError
 
 VERDICT_PENDING = cast(Verdict, Verdict.PENDING)
@@ -64,6 +64,7 @@ def start(
     trigger: Any = None,
     parent_step_run: Any = None,
     dedup_key: str | None = None,
+    origin: RunOrigin | None = None,
 ) -> Any:
     """Start the current published version after validating its subject declaration.
 
@@ -92,6 +93,7 @@ def start(
 
         attrs = {
             "workflow": version,
+            "origin": origin or _run_origin(trigger=trigger, parent_step_run=parent_step_run),
             "trigger": trigger,
             "parent_step_run": parent_step_run,
             "subject_content_type": subject_content_type,
@@ -230,7 +232,11 @@ def execute(step_run_id: int, *, now: datetime | None = None) -> dict[str, int]:
             locked.mark_succeeded(output=result.output, outcome=result.outcome)
         elif result.kind == "wait":
             wait_until = timezone.now() if locked_run.deliveries > locked.claimed_deliveries else result.until
-            locked.mark_waiting(until=wait_until, resume_state=result.resume_state)
+            locked.mark_waiting(
+                until=wait_until,
+                resume_state=result.resume_state,
+                waiting_kind=result.waiting_kind,
+            )
         elif result.kind == "suspend":
             _suspend_step_run(locked, result)
         else:
@@ -539,7 +545,7 @@ def _suspend_step_run(step_run: Any, result: StepResult) -> None:
         resume_state["_decision_ids"] = decision_ids
     if decision_schemas:
         resume_state["_decision_schemas"] = decision_schemas
-    step_run.mark_waiting(resume_state=resume_state)
+    step_run.mark_waiting(resume_state=resume_state, waiting_kind=result.waiting_kind)
 
 
 def _create_decision(step_run: Any, spec: DecisionSpec) -> Any:
@@ -1061,7 +1067,7 @@ def _expand_map_step(run: Any, step_run: Any, *, timestamp: datetime) -> None:
     if not items:
         _complete_map_step_if_ready(run, step_run)
     else:
-        step_run.mark_waiting(resume_state=state)
+        step_run.mark_waiting(resume_state=state, waiting_kind="children")
 
 
 def _complete_map_step_if_ready(run: Any, step_run: Any) -> None:
@@ -1409,7 +1415,23 @@ def _start_error_workflow(run: Any, *, failed_step_run: Any) -> None:
     lineage = getattr(run.workflow, "error_workflow", None)
     if lineage is None:
         return
-    start(lineage, subject=run, actor=None, parent_step_run=failed_step_run)
+    start(
+        lineage,
+        subject=run,
+        actor=None,
+        parent_step_run=failed_step_run,
+        origin=RunOrigin.ERROR_WORKFLOW,
+    )
+
+
+def _run_origin(*, trigger: Any, parent_step_run: Any) -> RunOrigin:
+    """Return the structurally known origin for a new engine start."""
+
+    if trigger is not None:
+        return RunOrigin.TRIGGER
+    if parent_step_run is not None:
+        return RunOrigin.ERROR_WORKFLOW
+    return RunOrigin.MANUAL
 
 
 def _is_error_workflow_run(run: Any) -> bool:

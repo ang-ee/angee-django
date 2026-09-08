@@ -52,6 +52,32 @@ class WorkflowStatus(models.TextChoices):
     ARCHIVED = "archived", "Archived"
 
 
+class WorkflowPurpose(models.TextChoices):
+    """Product purpose declared by a workflow lineage."""
+
+    AUTOMATION = "automation", "Automation"
+    AGENT_SESSION = "agent_session", "Agent session"
+
+
+class RunOrigin(models.TextChoices):
+    """Caller that created a workflow run."""
+
+    UNKNOWN = "unknown", "Unknown"
+    MANUAL = "manual", "Manual"
+    TRIGGER = "trigger", "Trigger"
+    SESSION = "session", "Session"
+    ERROR_WORKFLOW = "error_workflow", "Error workflow"
+
+
+class WaitingKind(models.TextChoices):
+    """Runtime reason a workflow step is waiting."""
+
+    SCHEDULED = "scheduled", "Scheduled"
+    APPROVAL = "approval", "Approval"
+    EXTERNAL = "external", "External input"
+    CHILDREN = "children", "Child steps"
+
+
 class JoinRule(models.TextChoices):
     """How a step with multiple incoming edges activates over upstream siblings."""
 
@@ -165,12 +191,19 @@ class WorkflowQuerySet(AngeeQuerySet[Any]):
         return cast(
             Self,
             self.current_published()
+            .filter(purpose=WorkflowPurpose.AUTOMATION)
             .filter(
                 models.Q(subject_declaration="")
                 | models.Q(subject_declaration=declaration)
             )
             .order_by("name", "version", "pk"),
         )
+
+    def with_lineage_projection(self) -> Self:
+        """Annotate lineage and current-publication context for every row."""
+
+        workflow_model = cast(type[Workflow], self.model)
+        return cast(Self, self.annotate(**workflow_model.lineage_projection_annotation()))
 
 
 class WorkflowManager(AngeeManager.from_queryset(WorkflowQuerySet)):  # type: ignore[misc]
@@ -228,6 +261,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     key = models.SlugField(max_length=100, blank=True, default="")
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True)
+    purpose = StateField(choices_enum=WorkflowPurpose, default=WorkflowPurpose.AUTOMATION)
     subject_declaration = models.CharField(max_length=200, blank=True, default="")
     status = StateField(choices_enum=WorkflowStatus, default=WorkflowStatus.DRAFT)
     version = models.PositiveIntegerField(default=0)
@@ -279,6 +313,28 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         """Return the workflow's display label."""
 
         return self.name
+
+    @classmethod
+    def lineage_projection_annotation(cls) -> dict[str, Any]:
+        """Return the ORM projection for lineage and current publication context."""
+
+        lineage = models.Q(pk=models.OuterRef("_workflow_lineage_id")) | models.Q(
+            published_from_id=models.OuterRef("_workflow_lineage_id")
+        )
+        current = cls.objects.current_published().filter(lineage)
+        latest = cls.objects.filter(lineage, status__in=_CURRENCY_STATUSES).order_by("-version", "-pk")
+        return {
+            "_workflow_lineage_id": models.functions.Coalesce("published_from_id", "pk"),
+            "_workflow_publication_status": models.functions.Coalesce(
+                models.Subquery(latest.values("status")[:1]),
+                models.Value(WorkflowStatus.DRAFT),
+            ),
+            "_workflow_current_published_pk": models.Subquery(current.values("pk")[:1]),
+            "_workflow_current_published_version": models.Subquery(current.values("version")[:1]),
+            "_workflow_current_published_subject_declaration": models.Subquery(
+                current.values("subject_declaration")[:1]
+            ),
+        }
 
     @classmethod
     def after_resource_load(
@@ -399,6 +455,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                 key=draft.key,
                 name=draft.name,
                 description=draft.description,
+                purpose=draft.purpose,
                 subject_declaration=draft.subject_declaration,
                 status=WorkflowStatus.DRAFT,
                 version=version,
@@ -465,6 +522,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             "workflow": {
                 "name": self.name,
                 "description": self.description,
+                "purpose": str(self.purpose),
                 "subject_declaration": self.subject_declaration,
                 "error_workflow_id": self.error_workflow_id,
                 "max_steps": self.max_steps,
@@ -1007,6 +1065,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
 
     sqid_prefix = "wfr_"
     workflow = models.ForeignKey("workflows.Workflow", on_delete=models.PROTECT, related_name="runs")
+    origin = StateField(choices_enum=RunOrigin, default=RunOrigin.UNKNOWN)
     trigger = models.ForeignKey(
         "workflows.Trigger",
         on_delete=models.SET_NULL,
@@ -1070,6 +1129,40 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         """Return whether this run has reached a terminal status."""
 
         return self.status in RunStatus.TERMINAL
+
+    @classmethod
+    def waiting_projection_annotation(cls) -> dict[str, Any]:
+        """Return declared active wait kind and the next genuine scheduled wake."""
+
+        step_run = cls._meta.apps.get_model("workflows", "StepRun")
+        waiting = step_run.objects.filter(run_id=models.OuterRef("pk"), status=StepRunStatus.WAITING)
+        scheduled = waiting.filter(waiting_kind=WaitingKind.SCHEDULED)
+        return {
+            "_workflow_waiting_kind": models.Case(
+                models.When(~models.Q(status=RunStatus.WAITING), then=models.Value("")),
+                models.When(
+                    models.Exists(waiting.filter(waiting_kind=WaitingKind.APPROVAL)),
+                    then=models.Value(WaitingKind.APPROVAL),
+                ),
+                models.When(
+                    models.Exists(waiting.filter(waiting_kind=WaitingKind.EXTERNAL)),
+                    then=models.Value(WaitingKind.EXTERNAL),
+                ),
+                models.When(
+                    models.Exists(waiting.filter(waiting_kind=WaitingKind.CHILDREN)),
+                    then=models.Value(WaitingKind.CHILDREN),
+                ),
+                models.When(models.Exists(scheduled), then=models.Value(WaitingKind.SCHEDULED)),
+                default=models.Value(""),
+                output_field=models.CharField(),
+            ),
+            "_workflow_next_wake_at": models.Subquery(
+                scheduled.filter(run__status=RunStatus.WAITING)
+                .order_by("wait_until", "pk")
+                .values("wait_until")[:1],
+                output_field=models.DateTimeField(),
+            ),
+        }
 
     def awaiting_decision(self) -> bool:
         """Return whether this run has an unresolved workflow decision."""
@@ -1195,6 +1288,7 @@ class StepRun(AuditMixin, AngeeDataModel):
     outcome = models.SlugField(max_length=100, blank=True, default="")
     attempt = models.PositiveIntegerField(default=0)
     wait_until = models.DateTimeField(null=True, blank=True, db_index=True)
+    waiting_kind = StateField(choices_enum=WaitingKind, blank=True, default="")
     heartbeat_at = models.DateTimeField(null=True, blank=True)
     error = models.TextField(blank=True)
     stacktrace = models.TextField(blank=True)
@@ -1257,7 +1351,8 @@ class StepRun(AuditMixin, AngeeDataModel):
 
         self.heartbeat_at = heartbeat_at
         self.claimed_deliveries = claimed_deliveries
-        self._transition_fields = {"heartbeat_at", "claimed_deliveries"}
+        self.waiting_kind = ""
+        self._transition_fields = {"heartbeat_at", "claimed_deliveries", "waiting_kind"}
 
     def record_attempt(self, *, heartbeat_at: Any = None) -> None:
         """Record one implementation invocation for this started row."""
@@ -1273,13 +1368,15 @@ class StepRun(AuditMixin, AngeeDataModel):
         *,
         until: Any = None,
         resume_state: dict[str, Any] | None = None,
+        waiting_kind: WaitingKind = WaitingKind.SCHEDULED,
     ) -> None:
         """Persist durable wait conditions for this row."""
 
         self.wait_until = until
+        self.waiting_kind = waiting_kind
         if resume_state is not None:
             self.resume_state = resume_state
-        self._transition_fields = {"wait_until", "resume_state"}
+        self._transition_fields = {"wait_until", "resume_state", "waiting_kind"}
 
     def wake(self, *, at: datetime) -> None:
         """Make this waiting journal row due without changing its state.
@@ -1310,7 +1407,8 @@ class StepRun(AuditMixin, AngeeDataModel):
         self.error = ""
         self.stacktrace = ""
         self.wait_until = None
-        self._transition_fields = {"output", "outcome", "error", "stacktrace", "wait_until"}
+        self.waiting_kind = ""
+        self._transition_fields = {"output", "outcome", "error", "stacktrace", "wait_until", "waiting_kind"}
 
     @transition(
         status,
@@ -1325,7 +1423,8 @@ class StepRun(AuditMixin, AngeeDataModel):
         self.stacktrace = stacktrace
         self.outcome = outcome
         self.wait_until = None
-        self._transition_fields = {"error", "stacktrace", "outcome", "wait_until"}
+        self.waiting_kind = ""
+        self._transition_fields = {"error", "stacktrace", "outcome", "wait_until", "waiting_kind"}
 
     @transition(
         status,
@@ -1336,6 +1435,10 @@ class StepRun(AuditMixin, AngeeDataModel):
     def mark_skipped(self) -> None:
         """Mark this row as skipped by routing or join semantics."""
 
+        self.wait_until = None
+        self.waiting_kind = ""
+        self._transition_fields = {"wait_until", "waiting_kind"}
+
     @transition(
         status,
         source=[StepRunStatus.SCHEDULED, StepRunStatus.STARTED, StepRunStatus.WAITING],
@@ -1344,6 +1447,10 @@ class StepRun(AuditMixin, AngeeDataModel):
     )
     def mark_canceled(self) -> None:
         """Mark this row as canceled."""
+
+        self.wait_until = None
+        self.waiting_kind = ""
+        self._transition_fields = {"wait_until", "waiting_kind"}
 
     @transition(
         status,
@@ -1361,6 +1468,7 @@ class StepRun(AuditMixin, AngeeDataModel):
         self.outcome = ""
         self.attempt = 0
         self.wait_until = None
+        self.waiting_kind = ""
         self.heartbeat_at = None
         self.error = ""
         self.stacktrace = ""
@@ -1372,6 +1480,7 @@ class StepRun(AuditMixin, AngeeDataModel):
             "outcome",
             "attempt",
             "wait_until",
+            "waiting_kind",
             "heartbeat_at",
             "error",
             "stacktrace",
