@@ -7,7 +7,7 @@ import type { ListComponent, ListProps } from "../List";
 import type { FormProps } from "../../form/Form";
 import type { RegisteredForm } from "../../form/registered-form";
 import { RoutedRecordController } from "../resource-routing";
-import { ResourceViewProvider, useResourceViewMaybe } from "../resource-view-context";
+import { useResourceViewMaybe, withResourceViewScope } from "../resource-view-context";
 import { initialResourceSorting } from "../resource-view-codecs";
 import { type ResourceViewDefaultGroups, type ResourceViewGroup, type ResourceViewKind } from "../resource-view-model";
 import type { ListViewNavigationScope } from "../resource-view-surface";
@@ -54,6 +54,8 @@ export interface RecordSmartButtonDescriptor {
 export interface ResourceListProps<TRow extends Row = Row> {
   /** Refine/Angee resource id, e.g. `"notes.Note"`, shared by list and form. */
   resource: string;
+  /** Use local collection state even when rendered inside another resource view. */
+  scope?: "inherit" | "local";
   /** Columns for the list. Omit when declaring a `List` child. */
   columns?: readonly ListColumn<TRow>[];
   /** Fields for the record form. Omit when declaring a `Form` child. */
@@ -181,6 +183,7 @@ export function ResourceList<TRow extends Row = Row>({
   defaultGroup,
   defaultGroups,
   children,
+  scope = "inherit",
   ...props
 }: ResourceListProps<TRow>): React.ReactElement {
   if (props.form && props.form.resource !== props.resource) {
@@ -212,41 +215,37 @@ export function ResourceList<TRow extends Row = Row>({
     }),
     [initialDefaultView, initialPageSize, initialOrder, modelMetadata],
   );
-  const content = props.routed ? (
-    <RoutedRecordController<TRow> resource={props.resource} newRecordId={REFINE_CREATE_ID}>
-      {(recordController) => (
-        <ResourceListBody
-          {...props}
-          pageSize={pageSize}
-          defaultView={defaultView}
-          defaultGroup={defaultGroup}
-          defaultGroups={defaultGroups}
-          declarations={declarations}
-          recordController={recordController}
-        />
-      )}
-    </RoutedRecordController>
-  ) : (
-    <ResourceListBody
-      {...props}
-      pageSize={pageSize}
-      defaultView={defaultView}
-      defaultGroup={defaultGroup}
-      defaultGroups={defaultGroups}
-      declarations={declarations}
-      recordController={controlledRecordController(props)}
-    />
-  );
-
-  if (resourceView) {
-    return content;
-  }
-
-  return (
-    <ResourceViewProvider initialState={initialState} resource={props.resource}>
-      {content}
-    </ResourceViewProvider>
-  );
+  return withResourceViewScope({
+    ambient: resourceView,
+    resource: props.resource,
+    scope,
+    initialState,
+    children: () => props.routed ? (
+      <RoutedRecordController<TRow> resource={props.resource} newRecordId={REFINE_CREATE_ID}>
+        {(recordController) => (
+          <ResourceListBody
+            {...props}
+            pageSize={pageSize}
+            defaultView={defaultView}
+            defaultGroup={defaultGroup}
+            defaultGroups={defaultGroups}
+            declarations={declarations}
+            recordController={recordController}
+          />
+        )}
+      </RoutedRecordController>
+    ) : (
+      <ResourceListBody
+        {...props}
+        pageSize={pageSize}
+        defaultView={defaultView}
+        defaultGroup={defaultGroup}
+        defaultGroups={defaultGroups}
+        declarations={declarations}
+        recordController={controlledRecordController(props)}
+      />
+    ),
+  });
 }
 
 /** A drawer-mode `ResourceList` with self-owned record state and inline controls. */

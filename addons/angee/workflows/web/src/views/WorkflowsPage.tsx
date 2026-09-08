@@ -16,6 +16,7 @@ import {
   LoadingPanel,
   ResourceEdit,
   ResourceList,
+  REFINE_CREATE_ID,
   SplitPane,
   SplitPaneHandle,
   SplitPanes,
@@ -360,14 +361,27 @@ function WorkflowTriggersPanel({
 }: {
   workflowId: string;
 }): React.ReactElement {
+  return <WorkflowTriggerCollection key={workflowId} workflowId={workflowId} />;
+}
+
+function WorkflowTriggerCollection({
+  workflowId,
+}: {
+  workflowId: string;
+}): React.ReactElement {
   const t = useWorkflowsT();
   const triggerKindOptions = useEnumOptions(TRIGGER_MODEL, "kind");
+  const [recordId, setRecordId] = React.useState<string | undefined>();
   return (
     <ResourceList
       resource={TRIGGER_MODEL}
+      scope="local"
       placement="inline"
       baseFilter={{ workflow: { exact: workflowId } }}
       createDefaults={{ workflow: workflowId }}
+      recordId={recordId}
+      onSelect={(id) => setRecordId(id ?? REFINE_CREATE_ID)}
+      onClose={() => setRecordId(undefined)}
     >
       <List resource={TRIGGER_MODEL}>
         <Column field="kind" />
