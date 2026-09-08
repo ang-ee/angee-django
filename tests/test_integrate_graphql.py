@@ -428,24 +428,28 @@ def test_impl_choices_are_admin_only(integrate_console_tables: None) -> None:
         "properties": {
             "local_root": {
                 "type": "string",
+                "omittable": True,
                 "label": "Local Root",
                 "description": "Path to the checkout root.",
                 "defaultValue": "../..",
             },
             "local_name": {
                 "type": "string",
+                "omittable": True,
                 "label": "Local Name",
                 "description": "Repository name override.",
                 "defaultValue": "",
             },
             "local_org": {
                 "type": "string",
+                "omittable": True,
                 "label": "Local Org",
                 "description": "Repository organization label.",
                 "defaultValue": "local",
             },
             "local_default_branch": {
                 "type": "string",
+                "omittable": True,
                 "label": "Local Default Branch",
                 "description": "Default branch label.",
                 "defaultValue": "main",

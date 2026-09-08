@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+from datetime import datetime
+from enum import Enum
+from typing import Literal
 
 import pytest
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
@@ -172,8 +175,9 @@ def test_typed_config_projects_supported_scalars_and_validates_paths() -> None:
                 "label": "Endpoint",
                 "description": "Service endpoint.",
                 "defaultValue": "https://example.test",
+                "omittable": True,
             },
-            "retries": {"type": "integer", "label": "Retries"},
+            "retries": {"type": "integer", "label": "Retries", "presenceRequired": True},
         },
         "required": ["retries"],
     }
@@ -182,17 +186,209 @@ def test_typed_config_projects_supported_scalars_and_validates_paths() -> None:
         _TypedConfigImpl.normalize_config({"endpoint": "https://example.test"})
 
 
-def test_typed_config_rejects_constraints_the_form_wire_cannot_express() -> None:
-    """A constraint cannot silently disappear from the projected form contract."""
+def test_typed_config_projects_native_input_constraints() -> None:
+    """Native string and numeric constraints survive the form projection."""
 
     class ConstrainedConfig(BaseModel):
         token: str = Field(min_length=8)
+        attempts: int = Field(ge=1, le=5)
+        names: list[str] = Field(min_length=1, max_length=3)
 
     class ConstrainedImpl(ImplBase):
         config_model = ConstrainedConfig
 
-    with pytest.raises(ImproperlyConfigured, match="unsupported constraints"):
-        ConstrainedImpl.config_form_spec()
+    spec = ConstrainedImpl.config_form_spec()
+    assert spec is not None
+    assert spec["properties"]["token"]["minLength"] == 8
+    assert spec["properties"]["attempts"]["minimum"] == 1
+    assert spec["properties"]["attempts"]["maximum"] == 5
+    assert spec["properties"]["names"]["minItems"] == 1
+    assert spec["properties"]["names"]["maxItems"] == 3
+
+
+def test_typed_config_projects_explicit_dynamic_json_and_datetime_widgets() -> None:
+    """Dynamic JSON is opt-in while Pydantic datetimes use the native picker."""
+
+    class PresentationConfig(BaseModel):
+        options: dict[str, object] = Field(json_schema_extra={"widget": "json"})
+        scheduled_at: datetime
+
+    class PresentationImpl(ImplBase):
+        config_model = PresentationConfig
+
+    spec = PresentationImpl.config_form_spec()
+    assert spec is not None
+    assert spec["properties"]["options"] == {
+        "type": "object",
+        "widget": "json",
+        "label": "Options",
+        "presenceRequired": True,
+    }
+    assert spec["properties"]["scheduled_at"] == {
+        "type": "string",
+        "widget": "datetime",
+        "label": "Scheduled At",
+        "presenceRequired": True,
+    }
+
+
+def test_typed_config_projects_nested_arrays_nullable_and_enum_contracts() -> None:
+    """Pydantic's recursive schema remains the SSOT for the supported FormSpec subset."""
+
+    class Mode(str, Enum):
+        FAST = "fast"
+        SAFE = "safe"
+
+    class Credentials(BaseModel):
+        username: str
+        note: str | None = None
+
+    class RecursiveConfig(BaseModel):
+        credentials: Credentials
+        mirrors: list[Credentials]
+        tags: list[str]
+        nullable_required: int | None
+        nullable_default: int | None = None
+        mode: Mode = Mode.SAFE
+        strategy: Literal["append", "replace"] = "append"
+        fixed: Literal["only"] = "only"
+
+    class RecursiveImpl(ImplBase):
+        config_model = RecursiveConfig
+
+    spec = RecursiveImpl.config_form_spec()
+    assert spec is not None
+    assert spec["required"] == ["credentials", "mirrors", "tags", "nullable_required"]
+    assert spec["properties"]["credentials"] == {
+        "type": "object",
+        "widget": "object",
+        "properties": {
+            "username": {"type": "string", "label": "Username", "presenceRequired": True},
+            "note": {
+                "type": "string",
+                "nullable": True,
+                "label": "Note",
+                "defaultValue": None,
+                "omittable": True,
+            },
+        },
+        "required": ["username"],
+        "label": "Credentials",
+        "presenceRequired": True,
+    }
+    assert spec["properties"]["mirrors"]["items"]["type"] == "object"
+    assert spec["properties"]["mirrors"]["widget"] == "list"
+    assert spec["properties"]["mirrors"]["items"]["widget"] == "object"
+    assert spec["properties"]["tags"]["items"] == {"type": "string"}
+    assert spec["properties"]["tags"]["widget"] == "list"
+    assert spec["properties"]["nullable_required"] == {
+        "type": "integer",
+        "nullable": True,
+        "label": "Nullable Required",
+        "presenceRequired": True,
+    }
+    assert spec["properties"]["nullable_default"] == {
+        "type": "integer",
+        "nullable": True,
+        "label": "Nullable Default",
+        "defaultValue": None,
+        "omittable": True,
+    }
+    assert "nullable_required" in spec["required"]
+    assert "nullable_default" not in spec["required"]
+    assert "defaultValue" not in spec["properties"]["nullable_required"]
+    assert spec["properties"]["nullable_default"]["defaultValue"] is None
+    assert spec["properties"]["mode"] == {
+        "type": "string",
+        "enum": ["fast", "safe"],
+        "label": "Mode",
+        "defaultValue": "safe",
+        "omittable": True,
+    }
+    assert spec["properties"]["strategy"]["enum"] == ["append", "replace"]
+    assert spec["properties"]["fixed"] == {
+        "type": "string",
+        "const": "only",
+        "enum": ["only"],
+        "label": "Fixed",
+        "defaultValue": "only",
+        "omittable": True,
+    }
+
+
+def test_typed_config_omits_default_factory_without_invoking_it() -> None:
+    """Build-time metadata never executes a dynamic Pydantic default factory."""
+
+    calls = 0
+
+    def make_generated() -> list[str]:
+        nonlocal calls
+        calls += 1
+        return ["runtime"]
+
+    class FactoryConfig(BaseModel):
+        generated: list[str] = Field(default_factory=make_generated)
+        static: list[str] = ["declared"]
+
+    class FactoryImpl(ImplBase):
+        config_model = FactoryConfig
+
+    spec = FactoryImpl.config_form_spec()
+    assert spec is not None
+    assert calls == 0
+    assert "defaultValue" not in spec["properties"]["generated"]
+    assert spec["properties"]["static"]["defaultValue"] == ["declared"]
+    assert FactoryImpl.config_defaults() == {"static": ["declared"]}
+    assert calls == 0
+
+
+@pytest.mark.parametrize(
+    ("annotation", "detail"),
+    [
+        (str | int, "union"),
+        (dict[str, str], "additionalProperties"),
+        (tuple[str, int], "prefixItems"),
+    ],
+)
+def test_typed_config_rejects_unsupported_shapes_with_exact_path(annotation: object, detail: str) -> None:
+    """A shape FormSpec cannot preserve fails at the declaring field path."""
+
+    UnsupportedConfig = type(
+        "UnsupportedConfig",
+        (BaseModel,),
+        {"__annotations__": {"payload": annotation}},
+    )
+
+    class UnsupportedImpl(ImplBase):
+        config_model = UnsupportedConfig
+
+    with pytest.raises(ImproperlyConfigured, match=rf"UnsupportedImpl.*config\.payload.*{detail}"):
+        UnsupportedImpl.config_form_spec()
+
+
+def test_typed_config_rejects_recursive_models_and_nested_aliases() -> None:
+    """References must be finite and field names must have one wire identity."""
+
+    class RecursiveNode(BaseModel):
+        child: "RecursiveNode | None" = None
+
+    class RecursiveImpl(ImplBase):
+        config_model = RecursiveNode
+
+    with pytest.raises(ImproperlyConfigured, match=r"RecursiveImpl.*config\.child.*recursive reference"):
+        RecursiveImpl.config_form_spec()
+
+    class AliasedChild(BaseModel):
+        value: str = Field(alias="wireValue")
+
+    class AliasedConfig(BaseModel):
+        child: AliasedChild
+
+    class AliasedImpl(ImplBase):
+        config_model = AliasedConfig
+
+    with pytest.raises(ImproperlyConfigured, match=r"AliasedImpl.*config\.child\.value.*aliases"):
+        AliasedImpl.config_form_spec()
 
 
 def test_materialize_seeds_only_unprovided_fields() -> None:
@@ -220,6 +416,19 @@ def test_materialize_keeps_explicit_value_equal_to_default() -> None:
     client = OAuthClient(login_enabled=False)
     changed = _BoolImpl.materialize(client, provided=frozenset({"login_enabled"}))
     assert client.login_enabled is False  # caller's explicit False survives the impl's True
+    assert changed == set()
+
+
+def test_post_construction_ingress_can_mark_explicit_fields() -> None:
+    """Structured loaders preserve values assigned after Django constructed the row."""
+
+    client = OAuthClient()
+    client.login_enabled = False
+    client.mark_impl_provided_fields({"login_enabled"})
+
+    changed = _BoolImpl.materialize(client, provided=client._impl_provided_fields)
+
+    assert client.login_enabled is False
     assert changed == set()
 
 

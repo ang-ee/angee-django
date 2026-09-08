@@ -17,6 +17,7 @@ from import_export.results import RowResult
 from import_export.utils import get_related_model
 
 from angee.base.identity import public_id_of
+from angee.base.impl import ImplDefaultsMixin
 from angee.base.models import AngeeModel
 from angee.base.serialization import json_safe
 from angee.resources.entries import ResourceEntry
@@ -143,6 +144,24 @@ class AngeeResource(resources.ModelResource):
             row_hash=self._row_hashes[xref],
         )
         self._instances[xref] = instance
+
+    def before_save_instance(
+        self,
+        instance: models.Model,
+        row: Mapping[str, Any],
+        **kwargs: Any,
+    ) -> None:
+        """Mark model fields supplied by import-export before impl defaults run."""
+
+        del kwargs
+        if not isinstance(instance, ImplDefaultsMixin):
+            return
+        imported_fields = {
+            field.attribute
+            for field in self.fields.values()
+            if not field.readonly and isinstance(field.attribute, str) and field.column_name in row
+        }
+        instance.mark_impl_provided_fields(imported_fields)
 
     def instance_for_xref(self, xref: str) -> models.Model | None:
         """Return an existing or adopted instance for a row xref."""

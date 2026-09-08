@@ -8,9 +8,9 @@ settings-backed registry resolver shared by row-owned and row-less selectors.
 from __future__ import annotations
 
 import copy
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, NoReturn, cast, get_args
 
 from django.conf import settings
 from django.core import checks
@@ -44,6 +44,182 @@ class ImplChoice:
     category: str
     defaults: dict[str, Any]
     config_schema: dict[str, Any] | None
+
+
+_SCHEMA_COMMON_KEYS = frozenset({"title", "description", "default"})
+
+
+class _ConfigFormSpecProjector:
+    """Own the bounded translation from one Pydantic schema into FormSpec."""
+
+    def __init__(self, model: type[BaseModel], *, owner: str) -> None:
+        self.owner = owner
+        self._validate_aliases(model, path="config", seen=frozenset())
+        self.schema = model.model_json_schema(by_alias=False)
+        definitions = self.schema.pop("$defs", {})
+        if not isinstance(definitions, dict):
+            self._unsupported("config", "$defs")
+        self.definitions = definitions
+
+    def form_spec(self) -> dict[str, Any]:
+        projected = self._project(self.schema, path="config", refs=())
+        if projected.get("type") != "object":
+            self._unsupported("config", "root type")
+        for key in ("label", "description", "defaultValue", "widget"):
+            projected.pop(key, None)
+        return projected
+
+    def _project(self, schema: Any, *, path: str, refs: tuple[str, ...]) -> dict[str, Any]:
+        if not isinstance(schema, dict):
+            self._unsupported(path, "non-object schema")
+        if schema.get("widget") == "json":
+            schema_type = schema.get("type")
+            return self._metadata(
+                {"type": schema_type if schema_type in {"object", "array"} else "any", "widget": "json"},
+                schema,
+            )
+        if "$ref" in schema:
+            self._reject_keywords(schema, _SCHEMA_COMMON_KEYS | {"$ref"}, path)
+            reference = schema["$ref"]
+            prefix = "#/$defs/"
+            if not isinstance(reference, str) or not reference.startswith(prefix):
+                self._unsupported(path, f"reference {reference!r}")
+            name = reference.removeprefix(prefix)
+            if name in refs:
+                self._unsupported(path, f"recursive reference {reference!r}")
+            projected = self._project(self.definitions.get(name), path=path, refs=(*refs, name))
+            projected.pop("label", None)
+            return self._metadata(projected, schema)
+
+        if "anyOf" in schema:
+            self._reject_keywords(schema, _SCHEMA_COMMON_KEYS | {"anyOf"}, path)
+            choices = schema["anyOf"]
+            if not isinstance(choices, list) or len(choices) != 2:
+                self._unsupported(path, "union")
+            concrete = [choice for choice in choices if choice != {"type": "null"}]
+            if len(concrete) != 1:
+                self._unsupported(path, "union")
+            projected = self._project(concrete[0], path=path, refs=refs)
+            projected["nullable"] = True
+            return self._metadata(projected, schema)
+
+        schema_type = schema.get("type")
+        if schema_type in {"string", "integer", "number", "boolean"}:
+            constraints = (
+                {"minLength", "maxLength"}
+                if schema_type == "string"
+                else {"minimum", "maximum"}
+                if schema_type in {"integer", "number"}
+                else set()
+            )
+            self._reject_keywords(
+                schema,
+                _SCHEMA_COMMON_KEYS | {"type", "enum", "const", "format"} | constraints,
+                path,
+            )
+            projected: dict[str, Any] = {"type": schema_type}
+            if "format" in schema:
+                if schema_type != "string" or schema["format"] != "date-time":
+                    self._unsupported(path, f"format {schema['format']!r}")
+                projected["widget"] = "datetime"
+            for constraint in constraints:
+                if constraint in schema:
+                    projected[constraint] = schema[constraint]
+            enum = schema.get("enum")
+            if "const" in schema:
+                enum = [schema["const"]]
+                projected["const"] = copy.deepcopy(schema["const"])
+            if enum is not None:
+                if not isinstance(enum, list) or not enum or not all(isinstance(value, str) for value in enum):
+                    self._unsupported(path, "non-string enum")
+                projected["enum"] = copy.deepcopy(enum)
+            return self._metadata(projected, schema)
+
+        if schema_type == "object":
+            self._reject_keywords(
+                schema,
+                _SCHEMA_COMMON_KEYS | {"type", "properties", "required", "additionalProperties"},
+                path,
+            )
+            if schema.get("additionalProperties", False) not in (False, None):
+                self._unsupported(path, "mapping/additionalProperties")
+            properties = schema.get("properties", {})
+            required = schema.get("required", [])
+            if (
+                not isinstance(properties, dict)
+                or not isinstance(required, list)
+                or not all(isinstance(name, str) for name in required)
+            ):
+                self._unsupported(path, "object properties")
+            projected_properties = {}
+            for name, field in properties.items():
+                projected = self._project(field, path=f"{path}.{name}", refs=refs)
+                projected.setdefault("label", name.replace("_", " ").title())
+                if name not in required:
+                    projected["omittable"] = True
+                else:
+                    projected["presenceRequired"] = True
+                projected_properties[name] = projected
+            return self._metadata(
+                {
+                    "type": "object",
+                    "widget": "object",
+                    "properties": projected_properties,
+                    "required": list(required),
+                },
+                schema,
+            )
+
+        if schema_type == "array":
+            self._reject_keywords(schema, _SCHEMA_COMMON_KEYS | {"type", "items", "minItems", "maxItems"}, path)
+            if "items" not in schema:
+                self._unsupported(path, "array without items")
+            return self._metadata(
+                {
+                    "type": "array",
+                    "widget": "list",
+                    "items": self._project(schema["items"], path=f"{path}[]", refs=refs),
+                    **({"minItems": schema["minItems"]} if "minItems" in schema else {}),
+                    **({"maxItems": schema["maxItems"]} if "maxItems" in schema else {}),
+                },
+                schema,
+            )
+
+        self._unsupported(path, f"type {schema_type!r}")
+
+    def _metadata(self, projected: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
+        result = dict(projected)
+        if title := schema.get("title"):
+            result["label"] = title
+        if description := schema.get("description"):
+            result["description"] = description
+        if "default" in schema:
+            result["defaultValue"] = copy.deepcopy(schema["default"])
+        return result
+
+    def _reject_keywords(self, schema: dict[str, Any], allowed: set[str] | frozenset[str], path: str) -> None:
+        unsupported = sorted(set(schema) - set(allowed))
+        if unsupported:
+            self._unsupported(path, f"keywords {', '.join(unsupported)}")
+
+    def _validate_aliases(self, model: type[BaseModel], *, path: str, seen: frozenset[type[BaseModel]]) -> None:
+        if model in seen:
+            return
+        for name, field in model.model_fields.items():
+            field_path = f"{path}.{name}"
+            if field.alias is not None or field.validation_alias is not None or field.serialization_alias is not None:
+                raise ImproperlyConfigured(f"{self.owner}.config_model field {field_path!r} cannot declare aliases.")
+            for nested in _pydantic_models_in(field.annotation):
+                self._validate_aliases(nested, path=field_path, seen=seen | {model})
+
+    def _unsupported(self, path: str, detail: str) -> NoReturn:
+        raise ImproperlyConfigured(f"{self.owner}.config_model field {path!r} uses unsupported schema: {detail}.")
+
+
+def _pydantic_models_in(annotation: Any) -> tuple[type[BaseModel], ...]:
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return (annotation,)
+    return tuple(model for argument in get_args(annotation) for model in _pydantic_models_in(argument))
 
 
 class ImplBase:
@@ -96,11 +272,12 @@ class ImplBase:
 
         if cls.config_model is None:
             return {}
-        cls.config_form_spec()
+        spec = cls.config_form_spec()
+        assert spec is not None
         return {
-            name: copy.deepcopy(field.default)
-            for name, field in cls.config_model.model_fields.items()
-            if not field.is_required() and field.default not in (None, "")
+            name: copy.deepcopy(field["defaultValue"])
+            for name, field in spec["properties"].items()
+            if field.get("defaultValue") not in (None, "")
         }
 
     @classmethod
@@ -144,42 +321,11 @@ class ImplBase:
 
     @classmethod
     def config_form_spec(cls) -> dict[str, Any] | None:
-        """Project the deliberately narrow scalar config contract for forms."""
+        """Translate Pydantic's supported JSON Schema subset into FormSpec."""
 
         if cls.config_model is None:
             return None
-        properties: dict[str, Any] = {}
-        required: list[str] = []
-        supported: dict[Any, str] = {str: "string", int: "integer", float: "number", bool: "boolean"}
-        for name, field in cls.config_model.model_fields.items():
-            if field.alias is not None or field.validation_alias is not None or field.serialization_alias is not None:
-                raise ImproperlyConfigured(f"{cls.__name__}.config_model field {name!r} cannot declare aliases.")
-            if field.default_factory is not None:
-                raise ImproperlyConfigured(
-                    f"{cls.__name__}.config_model field {name!r} cannot declare a default factory."
-                )
-            if field.metadata:
-                raise ImproperlyConfigured(
-                    f"{cls.__name__}.config_model field {name!r} declares unsupported constraints: "
-                    f"{', '.join(type(item).__name__ for item in field.metadata)}."
-                )
-            field_type = supported.get(field.annotation)
-            if field_type is None:
-                raise ImproperlyConfigured(
-                    f"{cls.__name__}.config_model field {name!r} uses unsupported type {field.annotation!r}."
-                )
-            projected: dict[str, Any] = {
-                "type": field_type,
-                "label": field.title or name.replace("_", " ").title(),
-            }
-            if field.description:
-                projected["description"] = field.description
-            if field.is_required():
-                required.append(name)
-            elif field.default is not None:
-                projected["defaultValue"] = copy.deepcopy(field.default)
-            properties[name] = projected
-        return {"type": "object", "properties": properties, "required": required}
+        return _ConfigFormSpecProjector(cls.config_model, owner=cls.__name__).form_spec()
 
     @classmethod
     def materialize(cls, instance: models.Model, *, provided: frozenset[str] = frozenset()) -> set[str]:
@@ -473,6 +619,12 @@ class ImplDefaultsMixin(models.Model):
         self._impl_provided_fields = frozenset(kwargs)
         super().__init__(*args, **kwargs)
 
+    def mark_impl_provided_fields(self, field_names: Iterable[str]) -> None:
+        """Record fields assigned after construction by a structured write ingress."""
+
+        provided = getattr(self, "_impl_provided_fields", frozenset())
+        self._impl_provided_fields = provided | frozenset(field_names)
+
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Seed impl defaults for unsupplied fields on first insert, then persist."""
 
@@ -518,10 +670,7 @@ class ImplDefaultsMixin(models.Model):
                 alias = using or router.db_for_write(type(self), instance=self)
                 with system_context(reason="base.impl.validate_stored_key"):
                     stored_row = (
-                        type(self)._base_manager.using(alias)
-                        .filter(pk=self.pk)
-                        .values_list(field.attname)
-                        .first()
+                        type(self)._base_manager.using(alias).filter(pk=self.pk).values_list(field.attname).first()
                     )
                 if stored_row is None and self._state.adding:
                     continue
@@ -569,11 +718,7 @@ class ImplDefaultsMixin(models.Model):
             if not key:
                 continue
             impl = field.resolve_class(key)
-            if (
-                isinstance(impl, type)
-                and issubclass(impl, ImplBase)
-                and impl.config_model is not None
-            ):
+            if isinstance(impl, type) and issubclass(impl, ImplBase) and impl.config_model is not None:
                 normalized = impl.normalize_config(self.config)
                 setattr(self, "config", normalized)
 
