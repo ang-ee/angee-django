@@ -82,6 +82,13 @@ test("the registered form exposes parsed settings and saves through the definiti
   fireEvent.click(screen.getByRole("button", { name: "Redo" }));
   expect((name as HTMLInputElement).value).toBe("Changed");
   expect(await screen.findByRole("button", { name: "Save" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+  expect((name as HTMLInputElement).value).toBe("Original");
+  expect(screen.getByRole("button", { name: "Undo" }).hasAttribute("disabled")).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect((name as HTMLInputElement).value).toBe("Original");
+  fireEvent.change(name, { target: { value: "Changed" } });
+  fireEvent.blur(name);
   fireEvent.click(await screen.findByRole("button", { name: "Save" }));
   await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1));
   expect(state.save.mock.calls[0]?.[0]).toMatchObject({ expectedRevision: 4, edit: { workflow: { name: "Changed" } } });

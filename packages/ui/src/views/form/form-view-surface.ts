@@ -129,6 +129,8 @@ export interface UseFormViewSurfaceProps {
   onFieldInteractionStart?: (path: string) => void;
   /** Called when that native field interaction is complete. */
   onFieldInteractionCommit?: (path: string) => void;
+  /** Called after the native form baseline has been restored. */
+  onDiscarded?: () => void;
   recordTabs?: readonly RecordTabDescriptor[];
   defaultRecordTab?: string;
   deleteAction?: RecordDeleteAction;
@@ -181,6 +183,7 @@ export function useFormViewSurface({
   createSubmit,
   onFieldInteractionStart,
   onFieldInteractionCommit,
+  onDiscarded,
   recordTabs,
   defaultRecordTab = FORM_VIEW_OVERVIEW_TAB_ID,
   deleteAction,
@@ -425,6 +428,7 @@ export function useFormViewSurface({
     createSubmit,
     onFieldInteractionStart,
     onFieldInteractionCommit,
+    onDiscarded,
     defaultSlugSource,
     t,
     readOnly,

@@ -201,6 +201,7 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
       submit={submit}
       onFieldInteractionStart={history.start}
       onFieldInteractionCommit={history.commit}
+      onDiscarded={history.reset}
       toolbarStart={(context) => {
         formSurface.current = context.form;
         return readOnly ? <Button type="button" size="sm" variant="secondary" onClick={() => {

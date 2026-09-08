@@ -117,6 +117,7 @@ export interface UseFormViewSaveProps {
   defaultSlugSource?: string;
   onFieldInteractionStart?: (path: string) => void;
   onFieldInteractionCommit?: (path: string) => void;
+  onDiscarded?: () => void;
   t: UiTranslate;
 }
 
@@ -164,6 +165,7 @@ export function useFormViewSave({
   defaultSlugSource,
   onFieldInteractionStart,
   onFieldInteractionCommit,
+  onDiscarded,
   t,
 }: UseFormViewSaveProps): FormViewSaveSurface {
   const refineResource = dataResource ? refineResourceName(dataResource) : "";
@@ -651,7 +653,8 @@ export function useFormViewSave({
   const discardChanges = React.useCallback(() => {
     reset(isCreate ? emptyValues : values, { keepDirtyValues: false, keepDirty: false });
     formIsDirtyRef.current = false;
-  }, [emptyValues, isCreate, reset, values]);
+    onDiscarded?.();
+  }, [emptyValues, isCreate, onDiscarded, reset, values]);
   const activeFieldInteractions = React.useRef(new Set<string>());
   const startFieldInteraction = React.useCallback(
     (path: string) => {
