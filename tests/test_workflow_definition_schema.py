@@ -23,6 +23,29 @@ mutation SaveDefinition($workflow: ID!, $revision: Int!, $edit: WorkflowDefiniti
 }
 """
 
+SOURCES = """
+query InputSources(
+  $workflow: ID!
+  $revision: Int!
+  $edit: WorkflowDefinitionEditInput!
+  $target: WorkflowEndpointInput!
+) {
+  workflow_input_sources(
+    workflow: $workflow
+    expected_revision: $revision
+    edit: $edit
+    target: $target
+  ) {
+    status revision current_revision
+    sources {
+      kind id client_key step_key label
+      contract { root_node_id nodes { id kind } edges { parent_node_id child_node_id kind key } }
+    }
+    diagnostics { code field detail_path id client_key }
+  }
+}
+"""
+
 
 def _draft() -> tuple[Workflow, Step]:
     with system_context(reason="test definition GraphQL setup"):
@@ -54,7 +77,13 @@ def test_definition_mutation_preserves_omission_correlates_rows_and_reports_read
             "node_creates": [
                 {
                     "client_key": client_key,
-                    "fields": {"key": "wait", "name": "Wait", "step_class": "wait", "config": {}},
+                    "fields": {
+                        "key": "wait",
+                        "name": "Wait",
+                        "step_class": "wait",
+                        "config": {},
+                        "input_binding": {"kind": "step_output"},
+                    },
                 }
             ],
             "edge_creates": [
@@ -74,10 +103,74 @@ def test_definition_mutation_preserves_omission_correlates_rows_and_reports_read
     assert payload["nodes"][0]["client_key"] == client_key
     assert payload["edges"][0]["client_key"] == "edge-client"
     assert any(item["field"] == "config.until" for item in payload["diagnostics"])
+    assert any(item["code"] == "binding_invalid" for item in payload["diagnostics"])
     with system_context(reason="test definition GraphQL result"):
         workflow.refresh_from_db()
     assert workflow.name == "Definition API"
     assert workflow.description == "Saved"
+    with system_context(reason="verify incomplete binding draft"):
+        assert workflow.steps.get(key="wait").input_binding == {"kind": "step_output"}
+
+
+def test_source_preview_uses_unsaved_topology_and_keeps_stale_baseline_separate(
+    workflow_tables: None,
+) -> None:
+    del workflow_tables
+    schema = _console_schema()
+    admin = _platform_admin("definition-source-admin")
+    workflow, entry = _draft()
+    edit = {
+        "node_creates": [
+            {"client_key": "middle", "fields": {"key": "middle", "name": "Middle", "step_class": "agent_session"}},
+            {"client_key": "target", "fields": {"key": "target", "name": "Target", "step_class": "agent_session"}},
+        ],
+        "edge_creates": [
+            {"client_key": "first", "source": {"id": entry.sqid}, "target": {"client_key": "middle"}},
+            {"client_key": "second", "source": {"client_key": "middle"}, "target": {"client_key": "target"}},
+        ],
+    }
+    variables = {
+        "workflow": workflow.sqid,
+        "revision": workflow.draft_revision,
+        "edit": edit,
+        "target": {"client_key": "target"},
+    }
+
+    preview = result_data(execute_schema(schema, SOURCES, variables, user=admin))["workflow_input_sources"]
+
+    assert preview["status"] == "SUCCESS"
+    assert preview["revision"] == workflow.draft_revision
+    assert {(item["kind"], item["step_key"], item["client_key"]) for item in preview["sources"]} == {
+        ("workflow_input", None, None),
+        ("step_output", "entry", None),
+        ("step_output", "middle", "middle"),
+    }
+    assert all(item["contract"]["root_node_id"] == 0 for item in preview["sources"])
+    with system_context(reason="verify source preview is read only"):
+        assert workflow.steps.count() == 1
+
+    stale = result_data(
+        execute_schema(schema, SOURCES, {**variables, "revision": workflow.draft_revision - 1}, user=admin)
+    )["workflow_input_sources"]
+    assert stale == {
+        "status": "STALE",
+        "revision": None,
+        "current_revision": workflow.draft_revision,
+        "sources": [],
+        "diagnostics": [],
+    }
+
+    ambiguous = result_data(
+        execute_schema(
+            schema,
+            SOURCES,
+            {**variables, "target": {"id": entry.sqid, "client_key": "target"}},
+            user=admin,
+        )
+    )["workflow_input_sources"]
+    assert ambiguous["status"] == "STRUCTURAL"
+    assert ambiguous["sources"] == []
+    assert ambiguous["diagnostics"][0]["code"] == "reference_invalid"
 
 
 def test_definition_mutation_returns_structural_and_stale_without_losing_data(workflow_tables: None) -> None:
@@ -134,7 +227,7 @@ def test_definition_snapshot_and_publish_payloads_are_typed(workflow_tables: Non
           workflow {
             id draft_revision lineage_id current_published_id current_published_version publication_status
           }
-          nodes { id key config config_errors }
+          nodes { id key config config_errors input_binding }
           edges { id source target condition }
           readiness { code field id client_key }
         }
@@ -175,7 +268,9 @@ def test_definition_snapshot_and_publish_payloads_are_typed(workflow_tables: Non
     assert snapshot["workflow"]["draft_revision"] == workflow.draft_revision
     assert snapshot["workflow"]["lineage_id"] == workflow.sqid
     assert snapshot["workflow"]["publication_status"] == "draft"
-    assert snapshot["nodes"] == [{"id": entry.sqid, "key": "entry", "config": {}, "config_errors": {}}]
+    assert snapshot["nodes"] == [
+        {"id": entry.sqid, "key": "entry", "config": {}, "config_errors": {}, "input_binding": None}
+    ]
     assert snapshot["readiness"] == []
     assert first["status"] == "SUCCESS" and first["publication_created"] is True
     assert second["status"] == "SUCCESS" and second["publication_created"] is False

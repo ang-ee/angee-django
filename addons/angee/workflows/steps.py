@@ -33,6 +33,7 @@ from rebac import system_context
 from angee.base.impl import ImplBase, ImplChoice
 from angee.workflows.attempts import AttemptResult, AttemptResultKind, DecisionSpec, JsonPresence
 from angee.workflows.configs import GateConfig, MapConfig, WaitConfig
+from angee.workflows.data_contracts import DataContract, model_data_contract
 
 _MODEL_LABEL_RE = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$")
 _OUTCOME_KEY_FIELD = models.SlugField(max_length=100)
@@ -50,6 +51,19 @@ class StepRetryPolicy:
     wait: int = 0
     linear_wait: int = 0
     exponential_wait: int = 0
+
+    def delay_for(self, retry_index: int) -> int:
+        """Return the declared delay for one positive retry-series index."""
+
+        if retry_index <= 0:
+            raise ValueError("Retry index must be positive.")
+        if self.wait:
+            return self.wait
+        if self.linear_wait:
+            return self.linear_wait * retry_index
+        if self.exponential_wait:
+            return self.exponential_wait * (2 ** (retry_index - 1))
+        return 0
 
 
 class StepEffect(str, Enum):
@@ -78,13 +92,25 @@ class StepOperation:
     choice: ImplChoice
     description: str
     selectable: bool
-    input_schema: dict[str, Any] | None
-    output_schema: dict[str, Any] | None
+    input_contract: DataContract
+    output_contract: DataContract
     outcomes: tuple[StepOutcome, ...]
     effect: StepEffect
     effect_description: str
     idempotent: bool | None
     subject_declaration: str
+
+    @property
+    def input_schema(self) -> dict[str, Any] | None:
+        """Return the compatibility schema from the Pydantic-owned contract."""
+
+        return self.input_contract.raw_schema
+
+    @property
+    def output_schema(self) -> dict[str, Any] | None:
+        """Return the compatibility schema from the Pydantic-owned contract."""
+
+        return self.output_contract.raw_schema
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +206,18 @@ class StepImpl(ImplBase):
     map_body_operation: ClassVar[bool] = False
 
     @classmethod
+    def input_contract(cls) -> DataContract:
+        """Return Pydantic's declared validation shape for operation input."""
+
+        return model_data_contract(cls.input_model, mode="validation")
+
+    @classmethod
+    def output_contract(cls) -> DataContract:
+        """Return Pydantic's declared serialization shape for operation output."""
+
+        return model_data_contract(cls.output_model, mode="serialization")
+
+    @classmethod
     def is_executable(cls, *, registered_key: str) -> bool:
         """Return whether the implementation supplies concrete runtime behavior."""
 
@@ -203,8 +241,8 @@ class StepImpl(ImplBase):
             choice=replace(choice, key=key),
             description=cls.description,
             selectable=cls.selectable,
-            input_schema=cls._model_schema(cls.input_model),
-            output_schema=cls._model_schema(cls.output_model),
+            input_contract=cls.input_contract(),
+            output_contract=cls.output_contract(),
             outcomes=cls.outcomes,
             effect=cls.effect,
             effect_description=cls.effect_description,
@@ -245,12 +283,6 @@ class StepImpl(ImplBase):
             raise ImproperlyConfigured(f"{owner} declares invalid subject label {declaration!r}.")
         if declaration and _MODEL_LABEL_RE.fullmatch(declaration) is None:
             raise ImproperlyConfigured(f"{owner} declares invalid subject label {declaration!r}.")
-
-    @staticmethod
-    def _model_schema(model: type[BaseModel] | None) -> dict[str, Any] | None:
-        """Return a Pydantic JSON schema, preserving null for a dynamic contract."""
-
-        return model.model_json_schema() if model is not None else None
 
     @classmethod
     def validate_config(cls, config: Any) -> None:

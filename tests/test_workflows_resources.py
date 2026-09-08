@@ -72,9 +72,13 @@ def test_demo_workflow_resources_publish_lineage_and_leave_trigger_disabled(
         published = list(Workflow.objects.filter(published_from=draft).order_by("version"))
         trigger = Trigger.objects.get(workflow=draft)
         current = Workflow.objects.current_published_for(draft)
+        draft_binding = draft.steps.get(key="entry").input_binding
+        published_binding = published[0].steps.get(key="entry").input_binding
     assert [row.version for row in published] == [1]
     assert current == published[0]
     assert trigger.enabled is False
+    assert draft_binding == {"kind": "workflow_input", "path": []}
+    assert published_binding == {"kind": "workflow_input", "path": []}
 
     second = WorkflowResourceLedger.objects.load_addons(
         (owner,),
@@ -183,6 +187,11 @@ def _notes_workflow_addon(tmp_path: Path) -> AppConfig:
         steps_path.read_text()
         .replace("step_class: note_validate_publication", "step_class: agent_session")
         .replace("step_class: note_publish", "step_class: agent_session")
+        .replace(
+            "      config: {}\n      is_entry: true",
+            "      config: {}\n      input_binding: {kind: workflow_input, path: []}\n      is_entry: true",
+            1,
+        )
     )
     module = ModuleType("example.notes")
     module.__file__ = str(target / "__init__.py")

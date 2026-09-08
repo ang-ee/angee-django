@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from django.core.exceptions import ValidationError
+from pydantic import BaseModel
 
 from angee.workflows.graph import GraphEdge, GraphIdentity, GraphNode, WorkflowGraph
 from angee.workflows.steps import GateStep, HandlerStep, MapStep, StepImpl, StepResult, WaitStep
@@ -29,7 +30,32 @@ class AliasedMapStep(MapStep):
     key = "map_alias"
 
 
-def node(key: str, impl: type[StepImpl], config: Any = None, *, entry: bool = False) -> GraphNode:
+class DeclaredOutput(BaseModel):
+    payload: dict[str, str]
+
+
+class DeclaredInput(BaseModel):
+    title: str
+
+
+class SourceStep(LegacyOutcomeStep):
+    key = "source_contract"
+    output_model = DeclaredOutput
+
+
+class TargetStep(LegacyOutcomeStep):
+    key = "target_contract"
+    input_model = DeclaredInput
+
+
+def node(
+    key: str,
+    impl: type[StepImpl],
+    config: Any = None,
+    *,
+    entry: bool = False,
+    binding: Any = None,
+) -> GraphNode:
     return GraphNode(
         GraphIdentity(client_key=f"node-{key}"),
         GraphIdentity(client_key="workflow-1"),
@@ -38,6 +64,8 @@ def node(key: str, impl: type[StepImpl], config: Any = None, *, entry: bool = Fa
         impl.key,
         impl,
         {} if config is None else config,
+        key.title(),
+        binding,
     )
 
 
@@ -125,6 +153,132 @@ def test_entry_executability_config_and_outcome_diagnostics_keep_exact_locations
         ]
     )
     assert "operation_not_executable" in codes(aliased_map)
+
+
+def test_binding_readiness_uses_declared_paths_ancestry_and_structured_locations() -> None:
+    valid = graph(
+        [
+            node("source", SourceStep, entry=True),
+            node("middle", LegacyOutcomeStep),
+            node(
+                "target",
+                TargetStep,
+                binding={
+                    "kind": "object",
+                    "fields": {"title": {"kind": "step_output", "step_key": "source", "path": ["payload"]}},
+                },
+            ),
+        ],
+        [edge("source", "middle"), edge("middle", "target")],
+    )
+    assert not ({"binding_source_unavailable", "binding_source_path", "binding_target_path"} & codes(valid))
+    source = next(
+        item for item in valid.input_sources(GraphIdentity(client_key="node-target")) if item.step_key == "source"
+    )
+    assert source.contract.matches_path(["payload"])
+
+    invalid = graph(
+        [
+            node("source", SourceStep, entry=True),
+            node(
+                "target",
+                TargetStep,
+                binding={
+                    "kind": "object",
+                    "fields": {"a.b": {"kind": "step_output", "step_key": "future", "path": []}},
+                },
+            ),
+            node("future", SourceStep),
+        ],
+        [edge("source", "target"), edge("target", "future")],
+    )
+    diagnostic = next(item for item in invalid.diagnostics() if item.code == "binding_source_unavailable")
+    assert diagnostic.location.field == "input_binding"
+    assert diagnostic.location.detail_path == ("fields", "a.b")
+
+    malformed = graph([node("source", SourceStep, entry=True, binding={"kind": "step_output"})])
+    assert any(item.code == "binding_invalid" and item.location.detail_path for item in malformed.diagnostics())
+
+    constructed = graph(
+        [
+            node(
+                "entry",
+                LegacyOutcomeStep,
+                entry=True,
+                binding={
+                    "kind": "object",
+                    "fields": {
+                        "dynamic.extra": {
+                            "kind": "array",
+                            "items": [{"kind": "constant", "value": 1}],
+                        }
+                    },
+                },
+            ),
+            node(
+                "declared",
+                TargetStep,
+                binding={"kind": "object", "fields": {"extra": {"kind": "constant", "value": True}}},
+            ),
+        ],
+        [edge("entry", "declared")],
+    )
+    assert not {code for code in codes(constructed) if code.startswith("binding_")}
+
+
+def test_map_binding_sources_are_owned_by_the_map_role() -> None:
+    value = graph(
+        [
+            node("before", SourceStep, entry=True),
+            node("map", MapStep, {"target_step": "body", "items": []}),
+            node("body", TargetStep, binding={"kind": "map_item", "path": []}),
+            node("after", TargetStep, binding={"kind": "map_item", "path": []}),
+        ],
+        [edge("before", "map"), edge("map", "after")],
+    )
+
+    body_sources = value.input_sources(GraphIdentity(client_key="node-body"))
+    assert {(source.kind, source.step_key) for source in body_sources} == {
+        ("workflow_input", None),
+        ("step_output", "before"),
+        ("map_item", None),
+    }
+    assert any(
+        item.code == "binding_source_unavailable" and item.location.key.client_key == "node-after"
+        for item in value.diagnostics()
+    )
+
+
+def test_source_catalogue_never_selects_self_or_collapses_duplicate_keys() -> None:
+    cycle = graph(
+        [node("left", SourceStep, entry=True), node("target", TargetStep)],
+        [edge("left", "target"), edge("target", "left")],
+    )
+    assert all(
+        source.node_identity != GraphIdentity(client_key="node-target")
+        for source in cycle.input_sources(GraphIdentity(client_key="node-target"))
+    )
+
+    duplicate = graph(
+        [
+            node("entry", SourceStep, entry=True),
+            node("same", SourceStep),
+            GraphNode(
+                GraphIdentity(client_key="node-same-2"),
+                GraphIdentity(client_key="workflow-1"),
+                "same",
+                False,
+                SourceStep.key,
+                SourceStep,
+                {},
+                "Same again",
+            ),
+            node("target", TargetStep, binding={"kind": "step_output", "step_key": "same", "path": []}),
+        ],
+        [edge("entry", "same"), edge("same", "target"), edge("entry", "target")],
+    )
+    assert "node_key_duplicate" in codes(duplicate)
+    assert "binding_source_unavailable" in codes(duplicate)
 
 
 @pytest.mark.parametrize(

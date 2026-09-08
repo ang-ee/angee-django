@@ -644,7 +644,7 @@ def test_transient_step_error_uses_configured_retry_backoff(
 
     policy = tasks._retry_policy_for_step_run(step_run)
     assert policy.max_attempts == 3
-    assert tasks._retry_countdown(policy, 1) == 7
+    assert policy.delay_for(1) == 7
     tasks._journal_retry_exhausted(step_run, exception=transient_error("try again"))
     step_run.refresh_from_db()
     assert step_run.status == step_run_status.FAILED

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -67,6 +68,7 @@ class InvocationAdmission(StrEnum):
 
     FIRST_START = "first_start"
     ALREADY_STARTED = "already_started"
+    NOT_DUE = "not_due"
     FENCED = "fenced"
 
 
@@ -149,6 +151,16 @@ class AttemptFinalization:
     recorded: bool
     applied: bool
     timer_intents: tuple[DecisionTimerIntent, ...] = ()
+    retry_intent: RetryIntent | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RetryIntent:
+    """Dispatch identity for one durable automatic-retry successor."""
+
+    attempt_id: int
+    lease_token: uuid.UUID
+    available_at: datetime
 
 
 @dataclass(frozen=True, slots=True)

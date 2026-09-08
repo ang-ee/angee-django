@@ -189,6 +189,43 @@ def test_noop_and_snapshot_share_one_revision_owner(workflow_tables: None) -> No
     assert snapshot.readiness == ()
 
 
+def test_source_preview_rejects_an_ambiguous_target_reference(workflow_tables: None) -> None:
+    del workflow_tables
+    workflow, entry, _tail, _edge = _draft()
+
+    with system_context(reason="test ambiguous preview target"):
+        with pytest.raises(DefinitionEditError, match="Target is missing or unavailable"):
+            Workflow.objects.definition_input_sources(
+                workflow,
+                expected_revision=workflow.draft_revision,
+                edit=DefinitionEdit(),
+                target=EndpointRef(existing_id=entry.pk, client_key="also-new"),
+            )
+
+
+@pytest.mark.parametrize("binding", [{"kind": {}}, {"kind": []}, {"kind": "missing"}, {}])
+def test_manager_saves_malformed_binding_discriminators_as_readiness_issues(
+    workflow_tables: None,
+    binding: dict[str, object],
+) -> None:
+    del workflow_tables
+    workflow, entry, _tail, _edge = _draft()
+
+    with system_context(reason="test malformed binding draft"):
+        result = Workflow.objects.apply_definition(
+            workflow,
+            expected_revision=workflow.draft_revision,
+            edit=DefinitionEdit(node_patches=(NodePatch(entry.pk, {"input_binding": binding}),)),
+        )
+        entry.refresh_from_db()
+
+    assert entry.input_binding == binding
+    assert any(
+        diagnostic.code == "binding_invalid" and diagnostic.location.field == "input_binding"
+        for diagnostic in result.readiness
+    )
+
+
 def test_key_swap_is_explicit_and_map_config_is_never_rewritten(workflow_tables: None) -> None:
     del workflow_tables
     workflow, entry, tail, _edge = _draft()
@@ -255,9 +292,7 @@ def test_command_honors_actor_scoping_and_snapshot_reads_immutable_versions(work
         expected_revision=bound.draft_revision,
         edit=DefinitionEdit(
             workflow={"description": "Allowed"},
-            node_creates=(
-                NodeCreate("audit-node", {"key": "audit", "name": "Audit", "step_class": "agent_session"}),
-            ),
+            node_creates=(NodeCreate("audit-node", {"key": "audit", "name": "Audit", "step_class": "agent_session"}),),
             edge_creates=(
                 EdgeCreate("audit-edge", EndpointRef(existing_id=entry.pk), EndpointRef(client_key="audit-node")),
             ),

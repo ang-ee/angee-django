@@ -10,7 +10,7 @@ from django.core.exceptions import ValidationError
 from django.db import router
 
 from angee.base.scoping import system_queryset
-from angee.workflows.graph import GraphDiagnostic, GraphIdentity, GraphLocation, WorkflowGraph
+from angee.workflows.graph import GraphDiagnostic, GraphIdentity, GraphInputSource, GraphLocation, WorkflowGraph
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +104,14 @@ class PublicationResult:
     created: bool
 
 
+@dataclass(frozen=True, slots=True)
+class DefinitionInputSources:
+    revision: int
+    target: GraphIdentity
+    sources: tuple[GraphInputSource, ...]
+    readiness: tuple[GraphDiagnostic, ...]
+
+
 class StaleDefinitionError(Exception):
     """Raised when a command does not target the locked draft revision."""
 
@@ -135,7 +143,9 @@ class WorkflowDefinitionManagerMixin:
     _WORKFLOW_FIELDS = frozenset(
         {"name", "description", "purpose", "subject_declaration", "error_workflow", "max_steps", "budget"}
     )
-    _NODE_FIELDS = frozenset({"key", "name", "step_class", "config", "join_rule", "is_entry", "position"})
+    _NODE_FIELDS = frozenset(
+        {"key", "name", "step_class", "config", "input_binding", "join_rule", "is_entry", "position"}
+    )
     _EDGE_FIELDS = frozenset({"condition"})
 
     def definition_snapshot(self, workflow: Any) -> DefinitionSnapshot:
@@ -181,6 +191,33 @@ class WorkflowDefinitionManagerMixin:
         self._validate_expected_revision(workflow, expected_revision)
         with self._definition_caller(workflow):
             return self._apply_definition(workflow, expected_revision=expected_revision, edit=edit)
+
+    def definition_input_sources(
+        self,
+        workflow: Any,
+        *,
+        expected_revision: int,
+        edit: DefinitionEdit,
+        target: EndpointRef,
+    ) -> DefinitionInputSources:
+        """Project source metadata from one unsaved definition without persisting it."""
+
+        self._validate_expected_revision(workflow, expected_revision)
+        with self._definition_caller(workflow):
+            alias = router.db_for_write(self.model, instance=workflow)
+            with self._definition_read(workflow.pk, using=alias) as locked:
+                if locked.draft_revision != expected_revision:
+                    raise StaleDefinitionError(expected=expected_revision, current=locked.draft_revision)
+                state = _DefinitionState(self, locked, edit, alias=alias, action="read")
+                state.preflight()
+                target_identity = state.target_identity(target)
+                graph = state.graph()
+                return DefinitionInputSources(
+                    locked.draft_revision,
+                    target_identity,
+                    graph.input_sources(target_identity),
+                    graph.diagnostics(),
+                )
 
     def publish_definition(self, workflow: Any, *, expected_revision: int) -> PublicationResult:
         """Publish the exact saved revision or return its identical publication."""
@@ -236,7 +273,7 @@ class WorkflowDefinitionManagerMixin:
 class _DefinitionState:
     """One proposed definition inside its manager-owned locked transaction."""
 
-    def __init__(self, manager: Any, workflow: Any, edit: DefinitionEdit, *, alias: str) -> None:
+    def __init__(self, manager: Any, workflow: Any, edit: DefinitionEdit, *, alias: str, action: str = "write") -> None:
         self.manager = manager
         self.workflow = workflow
         self.edit = edit
@@ -244,9 +281,9 @@ class _DefinitionState:
         self.step_model = workflow.steps.model
         self.edge_model = workflow.edges.model
         self.workflow_fields = dict(edit.workflow)
-        self.nodes = {row.pk: row for row in workflow.steps.with_action("write").order_by("pk")}
+        self.nodes = {row.pk: row for row in workflow.steps.with_action(action).order_by("pk")}
         self.edges = {
-            row.pk: row for row in workflow.edges.with_action("write").select_related("source", "target").order_by("pk")
+            row.pk: row for row in workflow.edges.with_action(action).select_related("source", "target").order_by("pk")
         }
         self.original_nodes = dict(self.nodes)
         self.original_edges = dict(self.edges)
@@ -273,16 +310,48 @@ class _DefinitionState:
         self._build_proposed_rows()
         self._validate_constraint_order()
         self._validate_models()
-        graph = WorkflowGraph.from_rows(
+        graph = self.graph()
+        self.diagnostics.extend(graph.structural_diagnostics())
+        if self.diagnostics:
+            raise DefinitionEditError(tuple(self.diagnostics))
+
+    def graph(self) -> WorkflowGraph:
+        """Return the one graph projection shared by preview and persistence preflight."""
+
+        return WorkflowGraph.from_rows(
             self.workflow,
             self.nodes.values(),
             self.edges.values(),
             identity=lambda row: getattr(row, "_definition_identity", GraphIdentity(existing_id=row.pk)),
             owner_identity=lambda row: GraphIdentity(existing_id=row.workflow_id),
         )
-        self.diagnostics.extend(graph.structural_diagnostics())
-        if self.diagnostics:
-            raise DefinitionEditError(tuple(self.diagnostics))
+
+    def target_identity(self, reference: EndpointRef) -> GraphIdentity:
+        exact = (reference.existing_id is None) != (reference.client_key is None)
+        if not exact:
+            raise DefinitionEditError(
+                (
+                    GraphDiagnostic(
+                        "reference_invalid",
+                        "Target is missing or unavailable.",
+                        GraphLocation("node", GraphIdentity(), "identity"),
+                    ),
+                )
+            )
+        if reference.existing_id is not None and reference.existing_id in self.nodes:
+            return GraphIdentity(existing_id=reference.existing_id)
+        if reference.client_key is not None and reference.client_key in self.created_nodes:
+            return GraphIdentity(client_key=reference.client_key)
+        identity = GraphIdentity(existing_id=reference.existing_id, client_key=reference.client_key)
+        raise DefinitionEditError(
+            (
+                GraphDiagnostic(
+                    "reference_invalid",
+                    "Target is missing or unavailable.",
+                    GraphLocation("node", identity, "identity"),
+                ),
+            )
+        )
 
     def _validate_workflow_relations(self) -> None:
         if "error_workflow" not in self.workflow_fields or self.workflow_fields["error_workflow"] is None:

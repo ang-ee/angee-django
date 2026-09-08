@@ -10,7 +10,10 @@ from graphlib import CycleError, TopologicalSorter
 from typing import Any, Literal, cast
 
 from django.core.exceptions import ImproperlyConfigured, ValidationError
+from pydantic import ValidationError as PydanticValidationError
 
+from angee.workflows.bindings import binding_error_locations, parse_binding
+from angee.workflows.data_contracts import DataContract, model_data_contract
 from angee.workflows.steps import StepImpl, validate_retry_config
 
 
@@ -35,6 +38,7 @@ class GraphLocation:
     kind: Literal["workflow", "node", "edge"]
     key: GraphIdentity
     field: str
+    detail_path: tuple[str | int, ...] = ()
 
     @property
     def path(self) -> str:
@@ -57,6 +61,17 @@ class GraphNode:
     operation_key: str
     impl: type[StepImpl] | None
     config: Any
+    name: str = ""
+    input_binding: Any = None
+
+
+@dataclass(frozen=True, slots=True)
+class GraphInputSource:
+    kind: Literal["workflow_input", "step_output", "map_item"]
+    contract: DataContract
+    node_identity: GraphIdentity | None = None
+    step_key: str | None = None
+    label: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,13 +123,15 @@ class WorkflowGraph:
                 impl = None
             nodes.append(
                 GraphNode(
-                    identity(step),
-                    owner_identity(step),
-                    str(step.key),
-                    bool(step.is_entry),
-                    str(step.step_class),
-                    impl,
-                    copy.deepcopy(step.config),
+                    identity=identity(step),
+                    workflow_identity=owner_identity(step),
+                    key=str(step.key),
+                    is_entry=bool(step.is_entry),
+                    operation_key=str(step.step_class),
+                    impl=impl,
+                    config=copy.deepcopy(step.config),
+                    name=str(getattr(step, "name", step.key)),
+                    input_binding=copy.deepcopy(getattr(step, "input_binding", None)),
                 )
             )
         graph_edges = tuple(
@@ -139,7 +156,61 @@ class WorkflowGraph:
         diagnostics.extend(map_errors)
         diagnostics.extend(self._routing(map_targets))
         diagnostics.extend(self._capacity(map_targets))
+        diagnostics.extend(self._bindings(map_targets))
         return tuple(diagnostics)
+
+    def input_sources(self, target_identity: GraphIdentity) -> tuple[GraphInputSource, ...]:
+        """Return declared sources allowed by this exact prospective graph."""
+
+        by_id = {node.identity: node for node in self.nodes}
+        unique_keys = {key for key, count in Counter(node.key for node in self.nodes).items() if count == 1}
+        target = by_id.get(target_identity)
+        if target is None:
+            return ()
+        map_targets, _ = self._maps()
+        eligible: set[GraphIdentity] = set()
+        include_map_item = False
+        owners = map_targets.get(target.identity, ())
+        if (
+            len(owners) == 1
+            and owners[0].identity != target.identity
+            and not target.is_entry
+            and not (target.impl and target.impl.map_body_operation)
+        ):
+            eligible = self._ordinary_ancestors(owners[0].identity, map_targets)
+            include_map_item = True
+        elif target.identity not in map_targets:
+            eligible = self._ordinary_ancestors(target.identity, map_targets)
+
+        sources = [
+            GraphInputSource(
+                "workflow_input",
+                model_data_contract(None, mode="validation"),
+                label="Workflow input",
+            )
+        ]
+        sources.extend(
+            GraphInputSource(
+                "step_output",
+                source.impl.output_contract() if source.impl else model_data_contract(None, mode="serialization"),
+                node_identity=source.identity,
+                step_key=source.key,
+                label=source.name,
+            )
+            for source in sorted(
+                (by_id[identity] for identity in eligible if identity in by_id and by_id[identity].key in unique_keys),
+                key=lambda node: (node.key, str(node.identity)),
+            )
+        )
+        if include_map_item:
+            sources.append(
+                GraphInputSource(
+                    "map_item",
+                    model_data_contract(None, mode="serialization"),
+                    label="Current Map item",
+                )
+            )
+        return tuple(sources)
 
     def structural_diagnostics(self) -> tuple[GraphDiagnostic, ...]:
         """Return persistence blockers without applying readiness policy."""
@@ -226,7 +297,7 @@ class WorkflowGraph:
         result: list[GraphDiagnostic] = []
         keys = Counter(node.key for node in self.nodes)
         unique = {node.key: node for node in self.nodes if keys[node.key] == 1}
-        targets: dict[str, list[GraphNode]] = defaultdict(list)
+        targets: dict[GraphIdentity, list[GraphNode]] = defaultdict(list)
         for node in self.nodes:
             target = node.impl.map_body_target(node.config) if node.impl else None
             if target is None:
@@ -315,12 +386,81 @@ class WorkflowGraph:
                     result.append(self._node(node, "map_capacity", message, "config.items"))
         return result
 
+    def _ordinary_ancestors(
+        self, target: GraphIdentity, map_targets: dict[GraphIdentity, list[GraphNode]]
+    ) -> set[GraphIdentity]:
+        bodies = set(map_targets)
+        incoming: dict[GraphIdentity, list[GraphIdentity]] = defaultdict(list)
+        for edge in self.edges:
+            if edge.source_identity not in bodies and edge.target_identity not in bodies:
+                incoming[edge.target_identity].append(edge.source_identity)
+        ancestors: set[GraphIdentity] = set()
+        pending = deque(incoming[target])
+        while pending:
+            source = pending.popleft()
+            if source not in ancestors:
+                ancestors.add(source)
+                pending.extend(incoming[source])
+        ancestors.discard(target)
+        return ancestors
+
+    def _bindings(self, map_targets: dict[GraphIdentity, list[GraphNode]]) -> list[GraphDiagnostic]:
+        result: list[GraphDiagnostic] = []
+        for node in self.nodes:
+            if node.input_binding is None or node.impl is None:
+                continue
+            try:
+                binding = parse_binding(node.input_binding)
+            except PydanticValidationError as error:
+                locations = binding_error_locations(node.input_binding, error)
+                for item, detail in zip(error.errors(include_url=False), locations, strict=True):
+                    result.append(self._binding(node, "binding_invalid", item["msg"], detail))
+                continue
+            sources = self.input_sources(node.identity)
+            by_step_key: dict[str | None, list[GraphInputSource]] = defaultdict(list)
+            for source in sources:
+                if source.kind == "step_output":
+                    by_step_key[source.step_key].append(source)
+            by_kind = {source.kind: source for source in sources if source.kind != "step_output"}
+            for visit in binding.visits():
+                reference = visit.binding.source_reference()
+                if reference is None:
+                    continue
+                if reference.kind == "step_output":
+                    matches = by_step_key.get(reference.step_key, [])
+                    selected_source = matches[0] if len(matches) == 1 else None
+                else:
+                    selected_source = by_kind.get(reference.kind)
+                if selected_source is None:
+                    result.append(
+                        self._binding(
+                            node,
+                            "binding_source_unavailable",
+                            "The referenced source is unavailable at this step.",
+                            visit.binding_path,
+                        )
+                    )
+                elif not selected_source.contract.matches_path(reference.path):
+                    result.append(
+                        self._binding(
+                            node,
+                            "binding_source_path",
+                            "The path is outside the source's declared output.",
+                            (*visit.binding_path, "path"),
+                        )
+                    )
+        return result
+
     def _workflow(self, code: str, message: str, field: str) -> GraphDiagnostic:
         return GraphDiagnostic(code, message, GraphLocation("workflow", self.identity, field))
 
     @staticmethod
     def _node(node: GraphNode, code: str, message: str, field: str) -> GraphDiagnostic:
         return GraphDiagnostic(code, message, GraphLocation("node", node.identity, field))
+
+    @staticmethod
+    def _binding(node: GraphNode, code: str, message: str, detail_path: tuple[str | int, ...]) -> GraphDiagnostic:
+        return GraphDiagnostic(code, message, GraphLocation("node", node.identity, "input_binding", detail_path))
 
     @staticmethod
     def _edge(edge: GraphEdge, code: str, message: str, field: str) -> GraphDiagnostic:

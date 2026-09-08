@@ -12,6 +12,7 @@ from angee.workflows.bindings import (
     BindingContext,
     SourceValue,
     UnavailableSource,
+    binding_error_locations,
     evaluate_binding,
     parse_binding,
 )
@@ -163,3 +164,33 @@ def test_attempt_input_constructor_remains_compatible_with_shared_presence() -> 
 def test_step_output_keys_use_the_persisted_slug_grammar(step_key: str) -> None:
     binding = parse_binding({"kind": "step_output", "step_key": step_key, "path": []})
     assert binding.step_key == step_key
+
+
+def test_parse_error_locations_remove_only_actual_union_tags() -> None:
+    raw = {
+        "kind": "object",
+        "fields": {
+            "object": {
+                "kind": "object",
+                "fields": {
+                    "fields": {"kind": "step_output", "step_key": "source", "path": [True]},
+                },
+            }
+        },
+    }
+    with pytest.raises(ValidationError) as caught:
+        parse_binding(raw)
+
+    assert set(binding_error_locations(raw, caught.value)) == {
+        ("fields", "object", "fields", "fields", "path", 0),
+    }
+
+    extra = {"kind": "constant", "value": 1, "constant": 2}
+    with pytest.raises(ValidationError) as extra_error:
+        parse_binding(extra)
+    assert binding_error_locations(extra, extra_error.value) == (("constant",),)
+
+    invalid_child = {"kind": "object", "fields": {"kind": {"kind": "missing"}}}
+    with pytest.raises(ValidationError) as child_error:
+        parse_binding(invalid_child)
+    assert binding_error_locations(invalid_child, child_error.value) == (("fields", "kind"),)

@@ -146,7 +146,7 @@ def _retry_or_journal_exhausted(task: Any, step_run_id: int, error: TransientSte
     retries = int(getattr(task.request, "retries", 0))
     if retries + 1 < policy.max_attempts:
         try:
-            raise task.retry(exc=error, countdown=_retry_countdown(policy, retries + 1))
+            raise task.retry(exc=error, countdown=policy.delay_for(retries + 1))
         except Retry:
             raise
     _journal_retry_exhausted(step_run, exception=error)
@@ -167,18 +167,6 @@ def _retry_policy_for_step_run(step_run: Any | None) -> StepRetryPolicy:
     if step_run is None or step_run.step_id is None:
         return StepRetryPolicy()
     return retry_policy_from_config(step_run.step.config)
-
-
-def _retry_countdown(policy: StepRetryPolicy, retry_number: int) -> int:
-    """Return the Celery retry countdown for one retry number."""
-
-    if policy.wait:
-        return policy.wait
-    if policy.linear_wait:
-        return policy.linear_wait * retry_number
-    if policy.exponential_wait:
-        return policy.exponential_wait * (2 ** max(retry_number - 1, 0))
-    return 0
 
 
 def _journal_retry_exhausted(step_run: Any | None, *, exception: BaseException) -> None:

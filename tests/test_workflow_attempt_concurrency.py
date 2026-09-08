@@ -7,7 +7,7 @@ from threading import Barrier
 from typing import Any
 
 import pytest
-from django.db import close_old_connections, connection, connections
+from django.db import close_old_connections, connection, connections, models
 from django.utils import timezone
 from rebac import system_context
 
@@ -127,3 +127,39 @@ def test_result_and_revocation_are_serialized_without_losing_evidence(scheduled_
     assert finalization.recorded
     assert finalization.applied != revocation.revoked
     assert revocation.already_recorded != revocation.revoked
+
+
+def test_concurrent_transient_finalization_allocates_one_successor(scheduled_step_run: StepRun) -> None:
+    with system_context(reason="configure concurrent retained retry"):
+        models.QuerySet.update(
+            scheduled_step_run.step.__class__._base_manager.filter(pk=scheduled_step_run.step_id),
+            config={"retry": {"max_attempts": 3}},
+        )
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    assert StepAttempt.objects.admit_invocation(
+        attempt.pk, lease_token=attempt.lease_token, at=timezone.now()
+    ) == InvocationAdmission.FIRST_START
+    start = Barrier(2)
+    result = AttemptResult(AttemptResultKind.TRANSIENT_ERROR, error="temporary")
+
+    def finalize() -> Any:
+        start.wait(timeout=5)
+        return StepAttempt.objects.finalize(
+            attempt.pk,
+            lease_token=attempt.lease_token,
+            result=result,
+            recorded_at=timezone.now(),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = (pool.submit(_thread, finalize), pool.submit(_thread, finalize))
+        outcomes = [future.result(timeout=10) for future in futures]
+
+    assert sorted(outcome.recorded for outcome in outcomes) == [False, True]
+    assert all(outcome.applied and outcome.retry_intent is not None for outcome in outcomes)
+    assert len({outcome.retry_intent.attempt_id for outcome in outcomes if outcome.retry_intent}) == 1
+    with system_context(reason="verify concurrent retry successor"):
+        successors = tuple(StepAttempt.objects.filter(retry_of=attempt))
+        scheduled_step_run.run.refresh_from_db()
+    assert len(successors) == 1
+    assert scheduled_step_run.run.steps_taken == 1

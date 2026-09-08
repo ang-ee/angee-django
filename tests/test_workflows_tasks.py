@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 import pytest
+from celery.exceptions import Retry
 from django.utils import timezone
 
 from angee.workflows import tasks as workflow_tasks
@@ -67,9 +68,51 @@ def test_periodic_decision_task_accepts_timestamp_keyword(
     assert workflow_tasks.sweep_workflow_decisions.name == "workflows.decisions"
 
 
-def test_retry_countdown_matches_step_policy() -> None:
-    """Celery retry countdown mirrors the static step retry policy."""
+@pytest.mark.parametrize(
+    ("policy", "retry_index", "expected"),
+    [
+        (workflow_tasks.StepRetryPolicy(max_attempts=3, wait=7), 2, 7),
+        (workflow_tasks.StepRetryPolicy(max_attempts=3, linear_wait=4), 2, 8),
+        (workflow_tasks.StepRetryPolicy(max_attempts=3, exponential_wait=4), 2, 8),
+    ],
+)
+def test_retry_delay_is_owned_by_step_policy(
+    policy: workflow_tasks.StepRetryPolicy,
+    retry_index: int,
+    expected: int,
+) -> None:
+    """Celery and retained retries share the policy-owned delay formula."""
 
-    policy = workflow_tasks.StepRetryPolicy(max_attempts=3, wait=7)
+    assert policy.delay_for(retry_index) == expected
 
-    assert workflow_tasks._retry_countdown(policy, 1) == 7
+
+def test_transient_task_retry_uses_policy_owned_countdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The compatibility task passes the policy delay to Celery unchanged."""
+
+    countdowns: list[int] = []
+
+    class Task:
+        request = type("Request", (), {"retries": 0})()
+
+        @staticmethod
+        def retry(*, exc: BaseException, countdown: int) -> Retry:
+            del exc
+            countdowns.append(countdown)
+            return Retry()
+
+    step_run = object()
+    monkeypatch.setattr(workflow_tasks, "_step_run_for_id", lambda step_run_id: step_run)
+    monkeypatch.setattr(
+        workflow_tasks,
+        "_retry_policy_for_step_run",
+        lambda value: workflow_tasks.StepRetryPolicy(max_attempts=3, wait=7),
+    )
+
+    with pytest.raises(Retry):
+        workflow_tasks._retry_or_journal_exhausted(
+            Task(),
+            1,
+            workflow_tasks.TransientStepError("try again"),
+        )
+
+    assert countdowns == [7]

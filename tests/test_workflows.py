@@ -267,16 +267,12 @@ def test_lineage_projection_is_current_for_heads_versions_and_retirement(
 
         with django_assert_num_queries(1):
             rows = list(
-                Workflow.objects.filter(pk__in=(head.pk, first.pk, second.pk))
-                .with_lineage_projection()
-                .order_by("pk")
+                Workflow.objects.filter(pk__in=(head.pk, first.pk, second.pk)).with_lineage_projection().order_by("pk")
             )
             assert {row._workflow_lineage_id for row in rows} == {head.pk}
             assert {row._workflow_current_published_pk for row in rows} == {second.pk}
             assert {row._workflow_current_published_version for row in rows} == {2}
-            assert {row._workflow_current_published_subject_declaration for row in rows} == {
-                Workflow._meta.label_lower
-            }
+            assert {row._workflow_current_published_subject_declaration for row in rows} == {Workflow._meta.label_lower}
             assert {row._workflow_publication_status for row in rows} == {WorkflowStatus.PUBLISHED}
 
         second.archive()
@@ -309,22 +305,22 @@ def test_graphql_projects_lineage_context_for_head_and_version(workflow_tables: 
         }
       }
     """
-    current = result_data(
-        execute_schema(schema, document, {"head": head.sqid, "version": version.sqid}, user=admin)
+    current = result_data(execute_schema(schema, document, {"head": head.sqid, "version": version.sqid}, user=admin))
+    assert (
+        current["head"]
+        == current["version"]
+        == {
+            "lineage_id": head.sqid,
+            "publication_status": WorkflowStatus.PUBLISHED,
+            "current_published_id": version.sqid,
+            "current_published_version": 1,
+            "current_published_subject_declaration": "",
+        }
     )
-    assert current["head"] == current["version"] == {
-        "lineage_id": head.sqid,
-        "publication_status": WorkflowStatus.PUBLISHED,
-        "current_published_id": version.sqid,
-        "current_published_version": 1,
-        "current_published_subject_declaration": "",
-    }
 
     with system_context(reason="test graphql workflow retirement"):
         version.archive()
-    retired = result_data(
-        execute_schema(schema, document, {"head": head.sqid, "version": version.sqid}, user=admin)
-    )
+    retired = result_data(execute_schema(schema, document, {"head": head.sqid, "version": version.sqid}, user=admin))
     assert retired["head"]["publication_status"] == WorkflowStatus.ARCHIVED
     assert retired["head"]["current_published_id"] is None
     assert retired["version"]["current_published_id"] is None
@@ -470,6 +466,16 @@ def test_workflow_step_operations_are_registry_derived_and_admin_only(
         workflow_step_operations {
           key label category defaults config_schema
           description selectable input_schema output_schema
+          input_contract {
+            raw_schema root_node_id
+            nodes { id kind json_type title description nullable }
+            edges { parent_node_id child_node_id kind key }
+          }
+          output_contract {
+            raw_schema root_node_id
+            nodes { id kind json_type title description nullable }
+            edges { parent_node_id child_node_id kind key }
+          }
           outcomes { key label description }
           effect effect_description idempotent subject_declaration
         }
@@ -478,9 +484,7 @@ def test_workflow_step_operations_are_registry_derived_and_admin_only(
 
     assert execute_schema(schema, query, user=plain).errors is not None
     operations = result_data(execute_schema(schema, query, user=admin))["workflow_step_operations"]
-    assert [operation["key"] for operation in operations] == sorted(
-        operation["key"] for operation in operations
-    )
+    assert [operation["key"] for operation in operations] == sorted(operation["key"] for operation in operations)
     by_key = {operation["key"]: operation for operation in operations}
 
     assert "HANDLER" in schema._schema.get_type("WorkflowStepImpl").values
@@ -495,9 +499,12 @@ def test_workflow_step_operations_are_registry_derived_and_admin_only(
     assert probe["config_schema"]["properties"]["mode"]["defaultValue"] == "safe"
     assert probe["input_schema"]["required"] == ["payload"]
     assert probe["output_schema"]["required"] == ["accepted"]
-    assert probe["outcomes"] == [
-        {"key": "accepted", "label": "Accepted", "description": "The payload was accepted."}
-    ]
+    assert probe["input_contract"]["raw_schema"] == probe["input_schema"]
+    assert probe["input_contract"]["root_node_id"] == 0
+    assert probe["input_contract"]["nodes"][0]["kind"] == "object"
+    assert probe["input_contract"]["edges"][0]["key"] == "payload"
+    assert probe["output_contract"]["raw_schema"] == probe["output_schema"]
+    assert probe["outcomes"] == [{"key": "accepted", "label": "Accepted", "description": "The payload was accepted."}]
     assert probe["effect"] == "UNKNOWN"
     assert probe["idempotent"] is None
     assert probe["subject_declaration"] == "tests.workflow"
@@ -528,8 +535,8 @@ def test_workflow_step_config_query_projects_legacy_and_preserves_invalid_raw_va
             step_class="gate",
             config={"action": "approve", "slots": [{"assignee": "auth/user:1"}]},
         )
-        models.QuerySet.update(Step._base_manager.filter(pk=step.pk),
-            config={"action": "approve", "slots": [{"assignee": "auth/user:1"}]}
+        models.QuerySet.update(
+            Step._base_manager.filter(pk=step.pk), config={"action": "approve", "slots": [{"assignee": "auth/user:1"}]}
         )
     query = """
       query StepConfig($id: String!) {
@@ -551,9 +558,7 @@ def test_workflow_step_config_query_projects_legacy_and_preserves_invalid_raw_va
         models.QuerySet.update(Step._base_manager.filter(pk=step.pk), config="invalid root")
     projected = result_data(execute_schema(_console_schema(), query, {"id": step.sqid}, user=admin))
     assert projected["workflow_steps_by_pk"]["config"] == "invalid root"
-    assert projected["workflow_steps_by_pk"]["config_errors"] == {
-        "config": ["Step config must be a JSON object."]
-    }
+    assert projected["workflow_steps_by_pk"]["config_errors"] == {"config": ["Step config must be a JSON object."]}
     step.refresh_from_db()
     assert step.config == "invalid root"
 

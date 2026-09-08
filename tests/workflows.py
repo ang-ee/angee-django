@@ -114,8 +114,17 @@ class Decision(workflow_models.Decision):
         rebac_id_attr = "sqid"
 
 
+class WorkflowDispatch(workflow_models.WorkflowDispatch):
+    """Concrete durable dispatch model for source-addon runtime tests."""
+
+    class Meta(workflow_models.WorkflowDispatch.Meta):
+        abstract = False
+        app_label = "workflows"
+        db_table = "test_workflows_dispatch"
+
+
 WORKFLOW_DEFINITION_MODELS = (Workflow, Step, Edge, Trigger)
-WORKFLOW_RUNTIME_MODELS = (*WORKFLOW_DEFINITION_MODELS, WorkflowRun, StepRun, StepAttempt, Decision)
+WORKFLOW_RUNTIME_MODELS = (*WORKFLOW_DEFINITION_MODELS, WorkflowRun, StepRun, StepAttempt, Decision, WorkflowDispatch)
 
 
 @contextmanager
@@ -201,6 +210,7 @@ def workflow_with_steps(
                 name=spec.get("name", spec["key"].replace("_", " ").title()),
                 step_class=spec.get("step_class", "handler"),
                 config=spec.get("config", {}),
+                input_binding=spec.get("input_binding"),
                 join_rule=spec.get("join_rule", workflow_models.JoinRule.ALL_SUCCESS),
                 is_entry=index == 0 if "is_entry" not in spec else spec["is_entry"],
             )

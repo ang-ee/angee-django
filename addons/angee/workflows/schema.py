@@ -31,6 +31,7 @@ from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import session_user
 from angee.workflows import engine
+from angee.workflows.data_contracts import DataContract, FlatDataContractEdge, FlatDataContractNode
 from angee.workflows.definitions import (
     DefinitionEdit,
     DefinitionEditError,
@@ -102,6 +103,62 @@ class WorkflowStepOutcome:
 
 
 @strawberry.type
+class WorkflowDataContractNode:
+    id: int
+    kind: str
+    json_type: str | None
+    title: str | None
+    description: str | None
+    nullable: bool
+
+    @classmethod
+    def from_node(cls, node: FlatDataContractNode) -> "WorkflowDataContractNode":
+        return cls(
+            id=node.id,
+            kind=node.kind,
+            json_type=node.json_type,
+            title=node.title,
+            description=node.description,
+            nullable=node.nullable,
+        )
+
+
+@strawberry.type
+class WorkflowDataContractEdge:
+    parent_node_id: int
+    child_node_id: int
+    kind: str
+    key: str | None
+
+    @classmethod
+    def from_edge(cls, edge: FlatDataContractEdge) -> "WorkflowDataContractEdge":
+        return cls(
+            parent_node_id=edge.parent_node_id,
+            child_node_id=edge.child_node_id,
+            kind=edge.kind,
+            key=edge.key,
+        )
+
+
+@strawberry.type
+class WorkflowDataContract:
+    raw_schema: JSON | None
+    root_node_id: int
+    nodes: list[WorkflowDataContractNode]
+    edges: list[WorkflowDataContractEdge]
+
+    @classmethod
+    def from_contract(cls, contract: DataContract) -> "WorkflowDataContract":
+        catalogue = contract.flat_catalogue()
+        return cls(
+            raw_schema=cast(JSON | None, contract.raw_schema),
+            root_node_id=catalogue.root_node_id,
+            nodes=[WorkflowDataContractNode.from_node(node) for node in catalogue.nodes],
+            edges=[WorkflowDataContractEdge.from_edge(edge) for edge in catalogue.edges],
+        )
+
+
+@strawberry.type
 class WorkflowStepOperation(GraphQLImplChoice):
     """Workflow-owned authoring contract for one registered step implementation."""
 
@@ -109,6 +166,8 @@ class WorkflowStepOperation(GraphQLImplChoice):
     selectable: bool
     input_schema: JSON | None
     output_schema: JSON | None
+    input_contract: WorkflowDataContract
+    output_contract: WorkflowDataContract
     outcomes: list[WorkflowStepOutcome]
     effect: WorkflowStepEffect
     effect_description: str
@@ -130,6 +189,8 @@ class WorkflowStepOperation(GraphQLImplChoice):
             selectable=operation.selectable,
             input_schema=cast(JSON | None, operation.input_schema),
             output_schema=cast(JSON | None, operation.output_schema),
+            input_contract=WorkflowDataContract.from_contract(operation.input_contract),
+            output_contract=WorkflowDataContract.from_contract(operation.output_contract),
             outcomes=[
                 WorkflowStepOutcome(
                     key=outcome.key,
@@ -241,6 +302,8 @@ class StepType(AngeeNode):
         """Return typed-config diagnostics while keeping malformed raw values repairable."""
 
         return cast(Any, self).config_projection().errors
+
+    input_binding: JSON | None
 
     join_rule: auto
     is_entry: auto
@@ -470,6 +533,7 @@ class WorkflowNodeFieldsInput:
     name: str | None = strawberry.UNSET
     step_class: str | None = strawberry.UNSET
     config: JSON | None = strawberry.UNSET
+    input_binding: JSON | None = strawberry.UNSET
     join_rule: str | None = strawberry.UNSET
     is_entry: bool | None = strawberry.UNSET
     position: JSON | None = strawberry.UNSET
@@ -542,6 +606,7 @@ class WorkflowDefinitionDiagnostic:
     client_key: str | None
     requested_id: str | None
     field: str
+    detail_path: JSON
 
 
 @strawberry.type
@@ -570,6 +635,7 @@ class WorkflowDefinitionNode:
     step_class: str
     config: JSON
     config_errors: JSON
+    input_binding: JSON | None
     join_rule: str
     is_entry: bool
     position: JSON
@@ -590,6 +656,25 @@ class WorkflowDefinitionSnapshot:
     nodes: list[WorkflowDefinitionNode]
     edges: list[WorkflowDefinitionEdge]
     readiness: list[WorkflowDefinitionDiagnostic]
+
+
+@strawberry.type
+class WorkflowInputSource:
+    kind: str
+    id: PublicID | None
+    client_key: str | None
+    step_key: str | None
+    label: str | None
+    contract: WorkflowDataContract
+
+
+@strawberry.type
+class WorkflowInputSourcesPayload:
+    status: WorkflowDefinitionStatus
+    revision: int | None = None
+    current_revision: int | None = None
+    sources: list[WorkflowInputSource] = strawberry.field(default_factory=list)
+    diagnostics: list[WorkflowDefinitionDiagnostic] = strawberry.field(default_factory=list)
 
 
 _WORKFLOW_RESOURCE = hasura_model_resource(
@@ -645,8 +730,18 @@ _STEP_RESOURCE = hasura_model_resource(
     sortable=["workflow", "key", "name", "step_class", "join_rule", "is_entry", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["workflow", "workflow__name", "step_class", "join_rule", "is_entry", "updated_at"],
-    insertable=["workflow", "key", "name", "step_class", "config", "join_rule", "is_entry", "position"],
-    updatable=["key", "name", "step_class", "config", "join_rule", "is_entry", "position"],
+    insertable=[
+        "workflow",
+        "key",
+        "name",
+        "step_class",
+        "config",
+        "input_binding",
+        "join_rule",
+        "is_entry",
+        "position",
+    ],
+    updatable=["key", "name", "step_class", "config", "input_binding", "join_rule", "is_entry", "position"],
     field_id_decode={"workflow": public_pk_decoder(Workflow)},
     write_backend=AngeeHasuraWriteBackend(Step, public_id_fields=("workflow",)),
 )
@@ -937,6 +1032,7 @@ class WorkflowDefinitionQuery:
                     step_class=row.step_class,
                     config=cast(JSON, row.config_projection().value),
                     config_errors=cast(JSON, row.config_projection().errors),
+                    input_binding=cast(JSON | None, row.input_binding),
                     join_rule=str(row.join_rule),
                     is_entry=row.is_entry,
                     position=cast(JSON, row.position),
@@ -953,6 +1049,57 @@ class WorkflowDefinitionQuery:
                 for row in snapshot.edges
             ],
             readiness=_definition_diagnostics(snapshot.readiness),
+        )
+
+    @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def workflow_input_sources(
+        self,
+        info: strawberry.Info,
+        workflow: PublicID,
+        expected_revision: int,
+        edit: WorkflowDefinitionEditInput,
+        target: WorkflowEndpointInput,
+    ) -> WorkflowInputSourcesPayload:
+        """Project sources from the caller's exact unsaved definition without persisting it."""
+
+        owner = authorized_action_target(info, Workflow, workflow, "write")
+        try:
+            result = Workflow.objects.definition_input_sources(
+                owner,
+                expected_revision=expected_revision,
+                edit=_definition_edit(owner, edit),
+                target=_endpoint_ref(owner, target),
+            )
+        except StaleDefinitionError as error:
+            return WorkflowInputSourcesPayload(
+                status=WorkflowDefinitionStatus.STALE,
+                current_revision=error.current,
+            )
+        except DefinitionEditError as error:
+            return WorkflowInputSourcesPayload(
+                status=WorkflowDefinitionStatus.STRUCTURAL,
+                revision=expected_revision,
+                diagnostics=_definition_diagnostics(error.diagnostics),
+            )
+        return WorkflowInputSourcesPayload(
+            status=WorkflowDefinitionStatus.SUCCESS,
+            revision=result.revision,
+            sources=[
+                WorkflowInputSource(
+                    kind=source.kind,
+                    id=(
+                        cast(PublicID, to_public_id(Step, source.node_identity.existing_id))
+                        if source.node_identity is not None and source.node_identity.existing_id is not None
+                        else None
+                    ),
+                    client_key=source.node_identity.client_key if source.node_identity is not None else None,
+                    step_key=source.step_key,
+                    label=source.label,
+                    contract=WorkflowDataContract.from_contract(source.contract),
+                )
+                for source in result.sources
+            ],
+            diagnostics=_definition_diagnostics(result.readiness),
         )
 
 
@@ -991,10 +1138,7 @@ def _definition_edit(workflow: Any, value: WorkflowDefinitionEditInput) -> Defin
             )
             for item in value.edge_creates or ()
         ),
-        edge_patches=tuple(
-            _edge_patch(workflow, item)
-            for item in value.edge_patches or ()
-        ),
+        edge_patches=tuple(_edge_patch(workflow, item) for item in value.edge_patches or ()),
         edge_deletes=tuple(_edge_delete(item) for item in value.edge_deletes or ()),
     )
 
@@ -1013,7 +1157,7 @@ def _definition_pk(model: type[models.Model], value: PublicID) -> int:
         if public_field is None:
             return -1
         resolved = public_field.public_id_to_value(value)
-    except (TypeError, ValueError, ValidationError):
+    except TypeError, ValueError, ValidationError:
         return -1
     return resolved if type(resolved) is int else -1
 
@@ -1068,6 +1212,7 @@ def _definition_diagnostics(values: tuple[GraphDiagnostic, ...]) -> list[Workflo
             client_key=_definition_client_identity(value),
             requested_id=value.location.key.requested_id,
             field=value.location.field,
+            detail_path=cast(JSON, list(value.location.detail_path)),
         )
         for value in values
     ]

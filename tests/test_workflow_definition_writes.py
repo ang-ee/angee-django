@@ -16,6 +16,37 @@ User = get_user_model()
 
 
 @pytest.mark.django_db(transaction=True)
+def test_input_binding_is_versioned_and_copied_with_the_definition(workflow_tables: None) -> None:
+    del workflow_tables
+    binding = {"kind": "workflow_input", "path": []}
+    with system_context(reason="test versioned input binding"):
+        workflow = Workflow.objects.create(name="Bound definition")
+        step = Step.objects.create(
+            workflow=workflow,
+            key="entry",
+            name="Entry",
+            step_class="agent_session",
+            is_entry=True,
+            input_binding=binding,
+        )
+        first = workflow.publish()
+        workflow.refresh_from_db()
+        published_revision = workflow.draft_revision
+        step.input_binding = {"kind": "constant", "value": None}
+        step.save(update_fields={"input_binding"})
+        workflow.refresh_from_db()
+        binding_revision = workflow.draft_revision
+        second = workflow.publish_if_changed()
+        first_binding = first.steps.get().input_binding
+        second_binding = second.steps.get().input_binding if second is not None else None
+
+    assert binding_revision == published_revision + 1
+    assert first_binding == binding
+    assert second is not None
+    assert second_binding == {"kind": "constant", "value": None}
+
+
+@pytest.mark.django_db(transaction=True)
 def test_definition_rows_advance_revision_once_per_locked_batch(workflow_tables: None) -> None:
     """Nested legacy row saves share one lineage revision owner."""
 

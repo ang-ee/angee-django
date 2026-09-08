@@ -4,11 +4,23 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from typing import Annotated, Literal, TypeAlias
+from typing import Annotated, Any, Literal, TypeAlias
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import validate_slug
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictInt, StrictStr, TypeAdapter, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StrictInt,
+    StrictStr,
+    TypeAdapter,
+    field_validator,
+)
+from pydantic import (
+    ValidationError as PydanticValidationError,
+)
 
 from angee.workflows.attempts import JsonPresence
 
@@ -21,6 +33,14 @@ class _Binding(BaseModel):
 
     def evaluate(self, context: "BindingContext", path: BindingPath) -> "BindingEvaluation":
         raise NotImplementedError
+
+    def visits(self, binding_path: BindingPath = (), target_path: BindingPath = ()) -> tuple["BindingVisit", ...]:
+        """Return this binding tree with exact persisted and target locations."""
+
+        return (BindingVisit(self, binding_path, target_path),)
+
+    def source_reference(self) -> "SourceReference | None":
+        return None
 
 
 class ConstantBinding(_Binding):
@@ -38,6 +58,9 @@ class WorkflowInputBinding(_Binding):
 
     def evaluate(self, context: "BindingContext", path: BindingPath) -> "BindingEvaluation":
         return context.workflow_input.evaluate(self.path, path)
+
+    def source_reference(self) -> "SourceReference":
+        return SourceReference("workflow_input", tuple(self.path))
 
 
 class StepOutputBinding(_Binding):
@@ -64,6 +87,9 @@ class StepOutputBinding(_Binding):
             )
         return source.evaluate(self.path, path)
 
+    def source_reference(self) -> "SourceReference":
+        return SourceReference("step_output", tuple(self.path), self.step_key)
+
 
 class MapItemBinding(_Binding):
     kind: Literal["map_item"]
@@ -71,6 +97,9 @@ class MapItemBinding(_Binding):
 
     def evaluate(self, context: "BindingContext", path: BindingPath) -> "BindingEvaluation":
         return context.map_item.evaluate(self.path, path)
+
+    def source_reference(self) -> "SourceReference":
+        return SourceReference("map_item", tuple(self.path))
 
 
 class ObjectBinding(_Binding):
@@ -92,6 +121,14 @@ class ObjectBinding(_Binding):
             return BindingEvaluation(None, None, tuple(diagnostics))
         return BindingEvaluation(JsonPresence(True, values), {"kind": "object", "fields": provenance}, ())
 
+    def visits(self, binding_path: BindingPath = (), target_path: BindingPath = ()) -> tuple["BindingVisit", ...]:
+        children = tuple(
+            visit
+            for key, child in self.fields.items()
+            for visit in child.visits((*binding_path, "fields", key), (*target_path, key))
+        )
+        return (BindingVisit(self, binding_path, target_path), *children)
+
 
 class ArrayBinding(_Binding):
     kind: Literal["array"]
@@ -112,6 +149,14 @@ class ArrayBinding(_Binding):
             return BindingEvaluation(None, None, tuple(diagnostics))
         return BindingEvaluation(JsonPresence(True, values), {"kind": "array", "items": provenance}, ())
 
+    def visits(self, binding_path: BindingPath = (), target_path: BindingPath = ()) -> tuple["BindingVisit", ...]:
+        children = tuple(
+            visit
+            for index, child in enumerate(self.items)
+            for visit in child.visits((*binding_path, "items", index), (*target_path, index))
+        )
+        return (BindingVisit(self, binding_path, target_path), *children)
+
 
 BindingNode: TypeAlias = Annotated[
     ConstantBinding | WorkflowInputBinding | StepOutputBinding | MapItemBinding | ObjectBinding | ArrayBinding,
@@ -119,7 +164,21 @@ BindingNode: TypeAlias = Annotated[
 ]
 ObjectBinding.model_rebuild(_types_namespace={"BindingNode": BindingNode})
 ArrayBinding.model_rebuild(_types_namespace={"BindingNode": BindingNode})
-_binding_adapter = TypeAdapter(BindingNode)
+_binding_adapter: TypeAdapter[BindingNode] = TypeAdapter(BindingNode)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceReference:
+    kind: Literal["workflow_input", "step_output", "map_item"]
+    path: BindingPath
+    step_key: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BindingVisit:
+    binding: Any
+    binding_path: BindingPath
+    target_path: BindingPath
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +266,57 @@ def parse_binding(value: JsonValue) -> BindingNode:
     """Parse the single persisted binding grammar through Pydantic."""
 
     return _binding_adapter.validate_python(value)
+
+
+def binding_error_locations(value: JsonValue, error: PydanticValidationError) -> tuple[BindingPath, ...]:
+    """Remove Pydantic union branch tags while preserving exact stored binding keys."""
+
+    return tuple(_binding_error_location(value, tuple(item["loc"])) for item in error.errors(include_url=False))
+
+
+_BINDING_KINDS = frozenset({"constant", "workflow_input", "step_output", "map_item", "object", "array"})
+
+
+def _binding_error_location(value: Any, location: tuple[Any, ...]) -> BindingPath:
+    if not isinstance(value, dict):
+        return ()
+    kind = value.get("kind")
+    if not isinstance(kind, str) or kind not in _BINDING_KINDS:
+        return ()
+    remaining = location[1:] if location and location[0] == kind else location
+    if not remaining:
+        return ()
+    field = remaining[0]
+    if not isinstance(field, (str, int)):
+        field = str(field)
+    stored: BindingPath = (field,)
+    remaining = remaining[1:]
+    if kind == "object" and field == "fields" and remaining:
+        key = remaining[0]
+        if not isinstance(key, str):
+            key = str(key)
+        child = value.get("fields", {}).get(key) if isinstance(value.get("fields"), dict) else None
+        return (*stored, key, *_binding_error_location(child, remaining[1:]))
+    if kind == "array" and field == "items" and remaining:
+        index = remaining[0]
+        items = value.get("items")
+        child = items[index] if isinstance(index, int) and isinstance(items, list) and 0 <= index < len(items) else None
+        return (
+            *stored,
+            index if isinstance(index, int) else str(index),
+            *_binding_error_location(child, remaining[1:]),
+        )
+    current = value.get(field) if isinstance(field, str) else None
+    for part in remaining:
+        if isinstance(current, dict) and isinstance(part, str) and part in current:
+            stored = (*stored, part)
+            current = current[part]
+        elif isinstance(current, list) and isinstance(part, int) and 0 <= part < len(current):
+            stored = (*stored, part)
+            current = current[part]
+        else:
+            break
+    return stored
 
 
 def evaluate_binding(binding: BindingNode, context: BindingContext) -> BindingEvaluation:

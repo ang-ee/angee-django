@@ -35,6 +35,14 @@ pytest_plugins = ("tests.workflows",)
 User = get_user_model()
 
 
+def _set_retry_config(step_run: StepRun, retry: object) -> None:
+    with system_context(reason="configure retained retry test"):
+        models.QuerySet.update(
+            type(step_run.step).objects.filter(pk=step_run.step_id),
+            config={"retry": retry},
+        )
+
+
 def test_step_result_converts_to_retained_envelope_without_inventing_null_presence() -> None:
     until = timezone.now() + timedelta(minutes=5)
     decision = DecisionSpec(
@@ -812,3 +820,352 @@ def test_returned_wait_deadline_is_retained_when_effective_wait_is_already_due(
     assert attempt.result_requested_until == requested
     assert attempt.checkpoint_present and attempt.checkpoint is None
     assert scheduled_step_run.wait_until == recorded
+
+
+@pytest.mark.django_db(transaction=True)
+def test_transient_result_allocates_one_due_fenced_successor_without_logical_charge(
+    scheduled_step_run: StepRun,
+) -> None:
+    _set_retry_config(scheduled_step_run, {"max_attempts": 3, "backoff": {"linear_wait": 10}})
+    attempt_input = AttemptInput(present=True, value=None, provenance={"source": "constant"})
+    attempt = StepAttempt.objects.claim(
+        scheduled_step_run,
+        input=attempt_input,
+        claimed_at=timezone.now(),
+    ).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+    recorded_at = timezone.now()
+    transient = AttemptResult(
+        AttemptResultKind.TRANSIENT_ERROR,
+        error="temporary",
+        stacktrace="physical stack",
+    )
+
+    finalized = StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=transient,
+        recorded_at=recorded_at,
+    )
+    assert finalized.recorded and finalized.applied and finalized.retry_intent is not None
+    with system_context(reason="verify retained retry successor"):
+        attempt.refresh_from_db()
+        scheduled_step_run.refresh_from_db()
+        scheduled_step_run.run.refresh_from_db()
+        successor = StepAttempt.objects.get(pk=finalized.retry_intent.attempt_id)
+
+    assert successor.retry_of_id == attempt.pk
+    assert successor.retry_index == 1
+    assert successor.ordinal == attempt.ordinal + 1 == scheduled_step_run.attempt
+    assert successor.available_at == recorded_at + timedelta(seconds=10)
+    assert successor.effect_key == attempt.effect_key
+    assert successor.effect_generation == attempt.effect_generation
+    assert successor.input_present and successor.input is None
+    assert successor.input_provenance == attempt.input_provenance
+    assert successor.lease_token != attempt.lease_token
+    assert scheduled_step_run.current_attempt_id == successor.pk
+    assert scheduled_step_run.status == StepRunStatus.STARTED
+    assert scheduled_step_run.run.steps_taken == 1
+    assert StepAttempt.objects.admit_invocation(
+        successor.pk,
+        lease_token=successor.lease_token,
+        at=successor.available_at - timedelta(microseconds=1),
+    ) == InvocationAdmission.NOT_DUE
+    assert StepAttempt.objects.admit_invocation(
+        successor.pk,
+        lease_token=successor.lease_token,
+        at=successor.available_at,
+    ) == InvocationAdmission.FIRST_START
+
+    StepAttempt.objects.finalize(
+        successor.pk,
+        lease_token=successor.lease_token,
+        result=AttemptResult(AttemptResultKind.DONE, output_present=True, output={"ok": True}),
+        recorded_at=successor.available_at,
+    )
+    repeated = StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=transient,
+        recorded_at=recorded_at + timedelta(minutes=1),
+    )
+    assert not repeated.recorded and repeated.applied
+    assert repeated.retry_intent == finalized.retry_intent
+
+
+@pytest.mark.django_db(transaction=True)
+def test_exhausted_transient_result_projects_physical_failure_without_successor(
+    scheduled_step_run: StepRun,
+) -> None:
+    _set_retry_config(scheduled_step_run, {"max_attempts": 1})
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+
+    finalized = StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=AttemptResult(
+            AttemptResultKind.TRANSIENT_ERROR,
+            error="still unavailable",
+            stacktrace="physical stack",
+        ),
+        recorded_at=timezone.now(),
+    )
+    with system_context(reason="verify exhausted retained retry"):
+        attempt.refresh_from_db()
+        scheduled_step_run.refresh_from_db()
+
+    assert finalized.recorded and finalized.applied and finalized.retry_intent is None
+    assert attempt.error == "still unavailable"
+    assert attempt.stacktrace == "physical stack"
+    assert attempt.orchestration_error == ""
+    assert scheduled_step_run.status == StepRunStatus.FAILED
+    assert scheduled_step_run.error == "still unavailable"
+    with system_context(reason="verify no exhausted successor"):
+        assert StepAttempt.objects.filter(retry_of=attempt).count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_invalid_retry_policy_retains_physical_and_orchestration_errors_separately(
+    scheduled_step_run: StepRun,
+) -> None:
+    _set_retry_config(scheduled_step_run, {"max_attempts": "invalid"})
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+
+    finalized = StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=AttemptResult(AttemptResultKind.TRANSIENT_ERROR, error="network failed"),
+        recorded_at=timezone.now(),
+    )
+    with system_context(reason="verify invalid retry policy"):
+        attempt.refresh_from_db()
+        scheduled_step_run.refresh_from_db()
+
+    assert finalized.recorded and finalized.applied and finalized.retry_intent is None
+    assert attempt.error == "network failed"
+    assert "max_attempts" in attempt.orchestration_error
+    assert scheduled_step_run.status == StepRunStatus.FAILED
+    assert scheduled_step_run.error == "network failed"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_retry_deadline_overflow_is_retained_as_expected_policy_failure(
+    scheduled_step_run: StepRun,
+) -> None:
+    _set_retry_config(
+        scheduled_step_run,
+        {"max_attempts": 2, "backoff": {"exponential_wait": 10**100}},
+    )
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+
+    finalized = StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=AttemptResult(AttemptResultKind.TRANSIENT_ERROR, error="physical timeout"),
+        recorded_at=timezone.now(),
+    )
+    with system_context(reason="verify retry deadline overflow"):
+        attempt.refresh_from_db()
+        scheduled_step_run.refresh_from_db()
+
+    assert finalized.recorded and finalized.applied and finalized.retry_intent is None
+    assert attempt.error == "physical timeout"
+    assert "Retry policy could not schedule a successor" in attempt.orchestration_error
+    assert scheduled_step_run.status == StepRunStatus.FAILED
+    with system_context(reason="verify no overflow retry successor"):
+        assert StepAttempt.objects.filter(retry_of=attempt).count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_unexpected_retry_allocation_failure_rolls_back_physical_result(
+    scheduled_step_run: StepRun,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_retry_config(scheduled_step_run, {"max_attempts": 2})
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+
+    def fail_allocation(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise RuntimeError("storage failed")
+
+    monkeypatch.setattr(StepAttempt.objects, "_allocate_retry_locked", fail_allocation)
+    with pytest.raises(RuntimeError, match="storage failed"):
+        StepAttempt.objects.finalize(
+            attempt.pk,
+            lease_token=attempt.lease_token,
+            result=AttemptResult(AttemptResultKind.TRANSIENT_ERROR, error="physical error"),
+            recorded_at=timezone.now(),
+        )
+    with system_context(reason="verify unexpected retry rollback"):
+        attempt.refresh_from_db()
+        scheduled_step_run.refresh_from_db()
+    assert attempt.result_recorded_at is None
+    assert attempt.error is None
+    assert attempt.orchestration_error == ""
+    assert scheduled_step_run.status == StepRunStatus.STARTED
+
+
+@pytest.mark.parametrize("bypass", ("earlier_save", "unrelated_save", "collection_update"))
+@pytest.mark.django_db(transaction=True)
+def test_attempt_save_capability_cannot_mutate_other_evidence_from_signal(
+    scheduled_step_run: StepRun,
+    bypass: str,
+) -> None:
+    _set_retry_config(scheduled_step_run, {"max_attempts": 2})
+    earlier = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(earlier.pk, lease_token=earlier.lease_token, at=timezone.now())
+    StepAttempt.objects.finalize(
+        earlier.pk,
+        lease_token=earlier.lease_token,
+        result=AttemptResult(
+            AttemptResultKind.WAIT,
+            requested_until=timezone.now() + timedelta(minutes=1),
+            waiting_kind="scheduled",
+        ),
+        recorded_at=timezone.now(),
+    )
+    current = StepAttempt.objects.claim(
+        scheduled_step_run,
+        cause=AttemptCause.CONTINUATION,
+        claimed_at=timezone.now(),
+    ).attempt
+    StepAttempt.objects.admit_invocation(current.pk, lease_token=current.lease_token, at=timezone.now())
+
+    other_workflow = workflow_with_steps(
+        name="Other attempt owner",
+        steps=({"key": "other", "step_class": "agent_session"},),
+        edges=(),
+    )
+    with system_context(reason="create unrelated retained attempt"):
+        other_run = WorkflowRun.objects.create(workflow=other_workflow, status=RunStatus.RUNNING)
+        other_step_run = StepRun.objects.create(run=other_run, step=other_workflow.steps.get(key="other"))
+    unrelated = StepAttempt.objects.claim(other_step_run, claimed_at=timezone.now()).attempt
+    original_earlier_error = earlier.error
+    original_unrelated_claimed_at = unrelated.claimed_at
+
+    def attempt_bypass(**kwargs: object) -> None:
+        if bypass == "earlier_save":
+            earlier.error = "rewritten"
+            earlier.save(update_fields=["error", "updated_at"])
+        elif bypass == "unrelated_save":
+            unrelated.claimed_at = timezone.now() + timedelta(days=1)
+            unrelated.save(update_fields=["claimed_at", "updated_at"])
+        else:
+            StepAttempt.objects.filter(pk=earlier.pk).update(error="rewritten")
+
+    post_save.connect(attempt_bypass, sender=StepAttempt, weak=False)
+    try:
+        with pytest.raises(TypeError, match="Step attempts"):
+            StepAttempt.objects.finalize(
+                current.pk,
+                lease_token=current.lease_token,
+                result=AttemptResult(AttemptResultKind.TRANSIENT_ERROR, error="retry me"),
+                recorded_at=timezone.now(),
+            )
+    finally:
+        post_save.disconnect(attempt_bypass, sender=StepAttempt)
+
+    with system_context(reason="verify attempt signal bypass rollback"):
+        earlier.refresh_from_db()
+        unrelated.refresh_from_db()
+        current.refresh_from_db()
+        assert StepAttempt.objects.filter(retry_of=current).count() == 0
+    assert earlier.error == original_earlier_error
+    assert unrelated.claimed_at == original_unrelated_claimed_at
+    assert current.result_recorded_at is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_revoked_transient_result_is_late_evidence_without_successor(
+    scheduled_step_run: StepRun,
+) -> None:
+    _set_retry_config(scheduled_step_run, {"max_attempts": 3})
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+    StepAttempt.objects.revoke(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        reason=LeaseRevocationReason.HEARTBEAT_LOST,
+        at=timezone.now(),
+    )
+
+    finalized = StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=AttemptResult(AttemptResultKind.TRANSIENT_ERROR, error="late transient"),
+        recorded_at=timezone.now(),
+    )
+
+    assert finalized.recorded and not finalized.applied and finalized.retry_intent is None
+    with system_context(reason="verify no late transient successor"):
+        assert StepAttempt.objects.filter(retry_of=attempt).count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_continuation_starts_a_fresh_retry_series_without_charging_automatic_successor(
+    scheduled_step_run: StepRun,
+) -> None:
+    _set_retry_config(scheduled_step_run, {"max_attempts": 2})
+    first = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(first.pk, lease_token=first.lease_token, at=timezone.now())
+    StepAttempt.objects.finalize(
+        first.pk,
+        lease_token=first.lease_token,
+        result=AttemptResult(
+            AttemptResultKind.WAIT,
+            requested_until=timezone.now() + timedelta(minutes=1),
+            waiting_kind="scheduled",
+        ),
+        recorded_at=timezone.now(),
+    )
+    with system_context(reason="refresh continuation source"):
+        scheduled_step_run.refresh_from_db()
+    continuation = StepAttempt.objects.claim(
+        scheduled_step_run,
+        cause=AttemptCause.CONTINUATION,
+        claimed_at=timezone.now(),
+    ).attempt
+    assert continuation.retry_index == 0 and continuation.retry_of_id is None
+    StepAttempt.objects.admit_invocation(
+        continuation.pk,
+        lease_token=continuation.lease_token,
+        at=timezone.now(),
+    )
+
+    finalized = StepAttempt.objects.finalize(
+        continuation.pk,
+        lease_token=continuation.lease_token,
+        result=AttemptResult(AttemptResultKind.TRANSIENT_ERROR, error="retry continuation"),
+        recorded_at=timezone.now(),
+    )
+    assert finalized.retry_intent is not None
+    with system_context(reason="verify continuation retry series"):
+        successor = StepAttempt.objects.get(pk=finalized.retry_intent.attempt_id)
+        scheduled_step_run.run.refresh_from_db()
+    assert successor.retry_index == 1
+    assert successor.retry_of_id == continuation.pk
+    assert scheduled_step_run.run.steps_taken == 2
+
+
+@pytest.mark.django_db(transaction=True)
+def test_terminal_run_retains_transient_result_without_successor(scheduled_step_run: StepRun) -> None:
+    _set_retry_config(scheduled_step_run, {"max_attempts": 3})
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+    with system_context(reason="terminal retained retry fence"):
+        scheduled_step_run.run.mark_failed("stopped")
+
+    finalized = StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=AttemptResult(AttemptResultKind.TRANSIENT_ERROR, error="after terminal"),
+        recorded_at=timezone.now(),
+    )
+
+    assert finalized.recorded and not finalized.applied and finalized.retry_intent is None
+    with system_context(reason="verify no terminal transient successor"):
+        assert StepAttempt.objects.filter(retry_of=attempt).count() == 0
