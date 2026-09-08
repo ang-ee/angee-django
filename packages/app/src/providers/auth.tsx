@@ -211,10 +211,19 @@ export function createAngeeAuthProviderFromRequest(
       }
     },
     async onError(error) {
-      const resolved = sharedErrorFromUnknown(error) ?? new Error("Request failed.");
-      return isUnauthorizedError(error)
-        ? { logout: true, redirectTo: loginPath, error: resolved }
-        : { error: resolved };
+      const unauthorized = isUnauthorizedError(error);
+      const resolved = unauthorized
+        ? new Error("This request requires authentication.")
+        : sharedErrorFromUnknown(error) ?? new Error("Request failed.");
+      if (!unauthorized) return { error: resolved };
+      // Another provider can reject its own credential while Django's session
+      // remains valid, so only the authoritative identity endpoint may log out.
+      try {
+        if (await currentUser()) return { error: resolved };
+      } catch (caught) {
+        if (!isUnauthorizedError(caught)) return { error: resolved };
+      }
+      return { logout: true, redirectTo: loginPath, error: resolved };
     },
   };
 }
@@ -228,8 +237,10 @@ export function createAngeeAuthProviderFromRequest(
  * each issuing their own. `staleTime: Infinity` keeps warm navigations from
  * re-issuing it — refine's `useInvalidateAuthStore` (login/logout) refreshes
  * the entry, and a mid-session server expiry still surfaces at the data layer as
- * a 401 → `onError` → logout (client gates are UX only; the server is the
- * authorization boundary).
+ * an unauthorized data response asks the authoritative Django `current_user`
+ * endpoint to confirm session loss before logout. This matters because one
+ * Refine auth provider serves data providers with independent credentials.
+ * Client gates remain UX only; the server is the authorization boundary.
  */
 export const IDENTITY_STALE_TIME = Number.POSITIVE_INFINITY;
 const IDENTITY_QUERY_SETTINGS = {

@@ -148,6 +148,81 @@ describe("Angee app auth provider", () => {
     });
   });
 
+  test("does not log out a valid Django session for another provider's 401", async () => {
+    const request = vi.fn(async (document: unknown) => {
+      expect(document).toBe(AngeeCurrentUserDocument);
+      return { current_user: currentUser };
+    });
+    const provider = createAngeeAuthProviderFromRequest(request as never);
+    const error = Object.assign(new Error("operator token expired"), {
+      response: { status: 401 },
+    });
+
+    await expect(provider.onError(error)).resolves.toEqual({
+      error: expect.objectContaining({ message: "This request requires authentication." }),
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    ["anonymous", async () => ({ current_user: null })],
+    ["unauthorized", async () => { throw Object.assign(new Error("unauthorized"), { response: { status: 401 } }); }],
+  ])("logs out after a %s authoritative identity response", async (_case, request) => {
+    const provider = createAngeeAuthProviderFromRequest(request as never);
+    const error = Object.assign(new Error("request unauthorized"), {
+      response: { status: 401 },
+    });
+
+    await expect(provider.onError(error)).resolves.toEqual({
+      logout: true,
+      redirectTo: "/login",
+      error: expect.objectContaining({ message: "This request requires authentication." }),
+    });
+  });
+
+  test("preserves the session when the authoritative identity probe fails transiently", async () => {
+    const provider = createAngeeAuthProviderFromRequest(async () => {
+      throw Object.assign(new Error("gateway unavailable"), { response: { status: 502 } });
+    });
+    const error = Object.assign(new Error("request unauthorized"), {
+      response: { status: 401 },
+    });
+
+    await expect(provider.onError(error)).resolves.toEqual({
+      error: expect.objectContaining({ message: "This request requires authentication." }),
+    });
+  });
+
+  test.each(["status", "statusCode"])(
+    "bounds sensitive top-level %s unauthorized errors",
+    async (field) => {
+      const sentinel = "provider-secret-must-not-render";
+      const provider = createAngeeAuthProviderFromRequest(async () => ({ current_user: currentUser }) as never);
+      const error = Object.assign(new Error(sentinel), { [field]: 401 });
+
+      const result = await provider.onError(error);
+      expect(result).not.toHaveProperty("logout");
+      expect(result.error?.message).toBe("This request requires authentication.");
+      expect(result.error?.message).not.toContain(sentinel);
+    },
+  );
+
+  test.each([
+    Object.assign(new Error("forbidden"), { response: { status: 403 } }),
+    Object.assign(new Error("permission denied"), {
+      response: { errors: [{ message: "Permission denied.", extensions: { code: "FORBIDDEN" } }] },
+    }),
+  ])("reports permission failures without probing identity or logging out", async (error) => {
+    const request = vi.fn();
+    const provider = createAngeeAuthProviderFromRequest(request as never);
+
+    const result = await provider.onError(error);
+    expect(result).not.toHaveProperty("logout");
+    expect(result).not.toHaveProperty("redirectTo");
+    expect(result.error).toBeInstanceOf(Error);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   test("auth state uses role refs for role checks", () => {
     const auth = currentUserToAuthState(currentUser);
 
