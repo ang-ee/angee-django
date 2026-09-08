@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, render } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { createRef, type ReactNode } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { GraphView } from "./GraphView";
@@ -19,6 +19,21 @@ vi.mock("@xyflow/react", async () => {
     Position: { Bottom: "bottom", Top: "top" },
     ReactFlow: (props: Record<string, unknown> & { children?: ReactNode }) => {
       reactFlowMock.lastProps = props;
+      const nodes = props.nodes as Array<{ id: string; position: { x: number; y: number }; style: { width: number; minHeight: number } }>;
+      const bounds = (selected: typeof nodes) => {
+        const left = Math.min(...selected.map((node) => node.position.x));
+        const top = Math.min(...selected.map((node) => node.position.y));
+        const right = Math.max(...selected.map((node) => node.position.x + node.style.width));
+        const bottom = Math.max(...selected.map((node) => node.position.y + node.style.minHeight));
+        return { x: left, y: top, width: right - left, height: bottom - top };
+      };
+      const intersects = (node: typeof nodes[number], rect: { x: number; y: number; width: number; height: number }) => node.position.x < rect.x + rect.width && node.position.x + node.style.width > rect.x && node.position.y < rect.y + rect.height && node.position.y + node.style.minHeight > rect.y;
+      (props.onInit as ((instance: object) => void) | undefined)?.({
+        getNode: (id: string) => nodes.find((node) => node.id === id),
+        getNodes: () => nodes,
+        getNodesBounds: (selected: Array<string | typeof nodes[number]>) => bounds(selected.map((item) => typeof item === "string" ? nodes.find((node) => node.id === item)! : item)),
+        getIntersectingNodes: (rect: { x: number; y: number; width: number; height: number }) => nodes.filter((node) => intersects(node, rect)),
+      });
       return React.createElement(
         "div",
         { "data-testid": "react-flow" },
@@ -103,6 +118,22 @@ describe("GraphView", () => {
     expect(props.nodesDraggable).toBe(false);
     expect(props.nodesConnectable).toBe(false);
     expect(props.elementsSelectable).toBe(false);
+  });
+
+  test("exposes native rendered bounds and always finds a nonintersecting lane", () => {
+    const geometry = createRef<import("./GraphView").GraphViewGeometry<"handler" | "blocker">>();
+    render(<GraphView
+      geometryRef={geometry}
+      nodes={[
+        { ...nodes[0], kind: "blocker", position: { x: 0, y: 0 } },
+        { ...nodes[1], kind: "handler", position: { x: 1100, y: 0 } },
+      ]}
+      edges={[]}
+      nodeStyles={{ ...nodeStyles, blocker: { ...nodeStyles.handler, width: 1000 } }}
+    />);
+    expect(geometry.current?.nodeBounds("draft")).toEqual({ x: 0, y: 0, width: 1000, height: 72 });
+    const position = geometry.current!.firstFreePosition("handler", { x: 100, y: 0 });
+    expect(geometry.current!.intersects({ ...position, width: 160, height: 72 })).toBe(false);
   });
 
   test("lays out self-loops and dangling edges instead of crashing", () => {

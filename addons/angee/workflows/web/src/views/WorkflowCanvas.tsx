@@ -27,6 +27,7 @@ import {
   useFormViewValues,
   type GraphViewConnection,
   type GraphViewEdge,
+  type GraphViewGeometry,
   type GraphViewNode,
   type GraphViewPosition,
   type FieldDescriptor,
@@ -37,7 +38,8 @@ import { fieldsWithMetadataDefaults } from "@angee/ui/views/model-metadata-defau
 import { WorkflowStepOperationsDocument } from "../documents.console";
 import { useWorkflowsT } from "../i18n";
 import { WorkflowOperationPicker, type WorkflowOperationChoice } from "./WorkflowOperationPicker";
-import { workflowNodeStyles, type WorkflowGraphNodeKind } from "./graph-data";
+import { workflowNodeKind, workflowNodeStyles, type WorkflowGraphNodeKind } from "./graph-data";
+import { graphWithDuplicate, graphWithOperation } from "./workflow-graph-authoring";
 import { EMPTY_WORKFLOW_EDITOR_SELECTION, workflowEditorSelection } from "./workflow-editor-state";
 import type { DefinitionEdge, DefinitionNode, WorkflowDefinitionValues } from "./workflow-definition-state";
 import { useDefinitionHistoryContext } from "./workflow-definition-history";
@@ -64,6 +66,7 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext }): Re
   const operationsQuery = useAuthoredQuery(WorkflowStepOperationsDocument);
   const operations = operationsQuery.data?.workflow_step_operations ?? [];
   const declaredFields = useWorkflowCanvasFields(t, operations as readonly WorkflowOperationChoice[] & NonNullable<Parameters<typeof useImplConfigFields>[2]>);
+  const graphGeometry = React.useRef<GraphViewGeometry<WorkflowGraphNodeKind>>(null);
   const diagnostics = values.definition?.readiness ?? [];
   const [pendingIssue, setPendingIssue] = React.useState<DefinitionDiagnostic | null>(null);
   const [issuesOpen, setIssuesOpen] = React.useState(false);
@@ -90,7 +93,7 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext }): Re
     const secondary = node.name && operation?.label && node.name !== operation.label ? operation.label : null;
     return {
       id: identity,
-      kind: nodeKind(node.step_class),
+      kind: workflowNodeKind(node.step_class),
       kindLabel: operation?.category || t("canvas.operationUnavailableShort"),
       ariaLabel: [title, secondary, operation?.category, node.is_entry ? t("canvas.start") : null, issueCount ? issueLabel(issueCount, t) : null].filter(Boolean).join(", "),
       title,
@@ -142,9 +145,9 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext }): Re
     const node: DefinitionNode = {
       id: "", clientKey, key: uniqueNodeKey(defaultKey || operation.key, latest.nodes), name: defaultName,
       step_class: operation.key, config: jsonObject(defaults.config), config_errors: {}, join_rule: typeof defaults.join_rule === "string" ? defaults.join_rule : "ALL_SUCCESS",
-      is_entry: Object.keys(latest.nodes).length === 0, position: insertionPosition(palette, latest.nodes, latest.edges),
+      is_entry: Object.keys(latest.nodes).length === 0, position: {},
     };
-    const updated = graphWithOperation(node, palette, latest.nodes, latest.edges);
+    const updated = graphWithOperation(node, palette, latest.nodes, latest.edges, graphGeometry.current);
     if (!updated) return;
     perform(() => {
       context.form.form.setValue("definition.nodes", updated.nodes as never, { shouldDirty: true, shouldTouch: true });
@@ -168,8 +171,9 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext }): Re
     const latest = currentGraph();
     const source = latest.nodes[identity]; if (!source) return;
     const clientKey = `node-${crypto.randomUUID()}`;
-    const copy = { ...structuredClone(source), id: "", clientKey, key: uniqueNodeKey(`${source.key}-copy`, latest.nodes), name: `${source.name} copy`, config_errors: {}, is_entry: false, position: offsetPosition(source.position) };
-    perform(() => context.form.form.setValue("definition.nodes", { ...latest.nodes, [clientKey]: copy } as never, { shouldDirty: true, shouldTouch: true }));
+    const copy = { ...structuredClone(source), id: "", clientKey, key: uniqueNodeKey(`${source.key}-copy`, latest.nodes), name: `${source.name} copy`, config_errors: {}, is_entry: false, position: {} };
+    const updated = graphWithDuplicate(copy, identity, latest.nodes, graphGeometry.current);
+    perform(() => context.form.form.setValue("definition.nodes", updated as never, { shouldDirty: true, shouldTouch: true }));
     dispatchSelection({ type: "select-step", id: clientKey });
   }, [context.form.form, currentGraph, perform, readOnly]);
   const makeEntry = React.useCallback((identity: string) => {
@@ -211,6 +215,7 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext }): Re
           <GraphView
             className="h-full"
             fitViewOptions={{ padding: 0.18, maxZoom: 1 }}
+            geometryRef={graphGeometry}
             nodes={graphNodes}
             edges={graphEdges}
             nodeStyles={workflowNodeStyles}
@@ -442,10 +447,6 @@ function nodeDiagnosticField(field: string, configFields: readonly string[], raw
   return rawConfig && (field === "config" || field.startsWith("config.")) ? "config" : null;
 }
 
-function nodeKind(value: string): WorkflowGraphNodeKind {
-  const normalized = value.toUpperCase();
-  return normalized in workflowNodeStyles ? normalized as WorkflowGraphNodeKind : "HANDLER";
-}
 function graphPosition(value: unknown): GraphViewPosition | undefined {
   if (!value || typeof value !== "object") return undefined;
   const position = value as { x?: unknown; y?: unknown };
@@ -485,34 +486,6 @@ function uniqueNodeKey(label: string, nodes: Record<string, DefinitionNode>): st
   }
   return candidate;
 }
-function newEdge(source: string, target: string, condition = ""): Record<string, DefinitionEdge> {
-  const clientKey = `edge-${crypto.randomUUID()}`;
-  return { [clientKey]: { id: "", clientKey, source, target, condition } as DefinitionEdge };
-}
-export function graphWithOperation(node: DefinitionNode, palette: { kind: "first" | "after" | "insert"; identity?: string }, nodes: Record<string, DefinitionNode>, edges: Record<string, DefinitionEdge>): { nodes: Record<string, DefinitionNode>; edges: Record<string, DefinitionEdge> } | null {
-  const identity = node.clientKey || node.id;
-  const nextNodes = { ...nodes, [identity]: node };
-  if (palette.kind === "after" && palette.identity) return { nodes: nextNodes, edges: { ...edges, ...newEdge(palette.identity, identity) } };
-  if (palette.kind === "insert" && palette.identity) {
-    const replaced = edges[palette.identity];
-    if (!replaced) return null;
-    const { [palette.identity]: _removed, ...remaining } = edges;
-    return { nodes: nextNodes, edges: { ...remaining, ...newEdge(replaced.source, identity, replaced.condition), ...newEdge(identity, replaced.target) } };
-  }
-  return { nodes: nextNodes, edges };
-}
 function nodeOptions(nodes: Record<string, DefinitionNode>): { value: string; label: string }[] {
   return Object.entries(nodes).map(([value, node]) => ({ value, label: node.name || node.key }));
-}
-function insertionPosition(palette: { kind: "first" | "after" | "insert"; identity?: string }, nodes: Record<string, DefinitionNode>, edges: Record<string, DefinitionEdge>): GraphViewPosition {
-  if (palette.kind === "after" && palette.identity) return offsetPosition(nodes[palette.identity]?.position);
-  if (palette.kind === "insert" && palette.identity) {
-    const edge = edges[palette.identity]; const source = edge ? graphPosition(nodes[edge.source]?.position) : undefined; const target = edge ? graphPosition(nodes[edge.target]?.position) : undefined;
-    if (source && target) return { x: (source.x + target.x) / 2, y: (source.y + target.y) / 2 };
-  }
-  return { x: 80 + Object.keys(nodes).length * 40, y: 80 + Object.keys(nodes).length * 40 };
-}
-function offsetPosition(value: unknown): GraphViewPosition {
-  const position = graphPosition(value) ?? { x: 80, y: 80 };
-  return { x: position.x + 180, y: position.y };
 }

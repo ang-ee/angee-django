@@ -77,7 +77,7 @@ async function fixture(options: {
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   let surface!: FormViewSaveSurface;
   const id = options.id === undefined ? "note-1" : options.id;
-  function Probe({ recordId, mountedFields, viewFields }: { recordId: string | null; mountedFields: readonly string[]; viewFields: readonly FieldDescriptor[] }) {
+  function Probe({ recordId, mountedFields, viewFields, boundFields }: { recordId: string | null; mountedFields: readonly string[]; viewFields: readonly FieldDescriptor[]; boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[] }) {
     surface = useFormViewSave({
       resource: "notes.Note", id: recordId, isCreate: recordId === null,
       dataResource: resource, modelMetadata: model, formFields: viewFields, fieldByName, refineFields,
@@ -88,11 +88,11 @@ async function fixture(options: {
     });
     return <>{mountedFields.map((name) => <Controller key={name} name={name} control={surface.form.control} render={({ field }) => (
       <input aria-label={name} value={String(field.value ?? "")} onChange={field.onChange} />
-    )} />)}{options.boundFields?.map((bound, index) => (
+    )} />)}{boundFields?.map((bound, index) => (
       <BoundDescriptorField key={index} form={surface} resource="notes.Note" {...bound} />
     ))}</>;
   }
-  function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = fields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[] }) {
+  function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = fields, boundFields = options.boundFields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[] }) {
     return <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
       <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
         {options.publicView ? (
@@ -108,7 +108,7 @@ async function fixture(options: {
             defaultRecordTab={options.recordTabs ? "activity" : undefined}
           />
         ) : (
-          <Probe key={recordId ?? "create"} recordId={recordId} mountedFields={mountedFields} viewFields={viewFields} />
+          <Probe key={recordId ?? "create"} recordId={recordId} mountedFields={mountedFields} viewFields={viewFields} boundFields={boundFields} />
         )}
       </AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider>
     </Refine>;
@@ -329,6 +329,36 @@ test("bound descriptors scope prefill, null, errors and readonly to the declarin
   act(() => f.surface().form.setError("definition.node.optional", { type: "server", message: "Nested problem" }));
   expect(await screen.findByText("Nested problem")).toBeTruthy();
   expect(screen.queryByLabelText("Configuration")).toBeNull();
+});
+
+test("a stateful bound widget remounts when its nested scope changes", async () => {
+  const until: MutationDialogField = { name: "until", label: "Until", widget: "datetime" };
+  const f = await fixture({
+    acknowledgedSource: {
+      record: { id: "note-1", title: "First" },
+      values: {
+        title: "First",
+        definition: {
+          nodes: {
+            first: { config: { until: "2026-09-10T08:00" } },
+            second: { config: { until: "2026-09-12T09:30" } },
+            fresh: { config: {} },
+          },
+        },
+      },
+    },
+    mountedFields: [],
+    boundFields: [{ field: until, scope: "definition.nodes.first.config" }],
+  });
+  await waitFor(() => expect(screen.getByLabelText("Until").textContent).toContain("Sep 10, 2026"));
+  f.rerender({ mountedFields: [], boundFields: [{ field: until, scope: "definition.nodes.second.config" }] });
+  await waitFor(() => expect(screen.getByLabelText("Until").textContent).toContain("Sep 12, 2026"));
+  f.rerender({ mountedFields: [], boundFields: [{ field: until, scope: "definition.nodes.fresh.config" }] });
+  expect(screen.getByLabelText("Until").textContent).not.toContain("Sep 10, 2026");
+  expect(screen.getByLabelText("Until").textContent).not.toContain("Sep 12, 2026");
+  expect(f.surface().form.getValues("definition.nodes.first.config.until")).toBe("2026-09-10T08:00");
+  expect(f.surface().form.getValues("definition.nodes.second.config.until")).toBe("2026-09-12T09:30");
+  expect(f.surface().form.getValues("definition.nodes.fresh.config.until")).toBeUndefined();
 });
 
 test("dirty values survive same-record refresh, late fields mount from the native baseline, and discard uses that baseline", async () => {

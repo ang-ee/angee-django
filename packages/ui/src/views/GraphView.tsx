@@ -12,6 +12,8 @@ import {
   type Edge,
   type FitViewOptions,
   type Node,
+  type ReactFlowInstance,
+  type Rect,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
@@ -90,6 +92,14 @@ export interface GraphViewConnection {
   targetHandle?: string | null;
 }
 
+export interface GraphViewGeometry<TNodeKind extends string = string> {
+  nodeBounds: (id: string) => Rect | undefined;
+  nodeSize: (kind: TNodeKind) => { width: number; height: number };
+  layout: () => Required<GraphViewLayout>;
+  intersects: (bounds: Rect, excludeIds?: ReadonlySet<string>) => boolean;
+  firstFreePosition: (kind: TNodeKind, preferred: GraphViewPosition, axis?: "horizontal" | "vertical", excludeIds?: ReadonlySet<string>) => GraphViewPosition;
+}
+
 export interface GraphViewProps<
   TNodeKind extends string = string,
   TEdgeKind extends string = string,
@@ -103,6 +113,8 @@ export interface GraphViewProps<
   defaultEdgeStyle?: GraphViewEdgeStyle;
   layout?: GraphViewLayout;
   fitViewOptions?: FitViewOptions;
+  /** Imperative read-only access to React Flow's rendered node geometry. */
+  geometryRef?: React.Ref<GraphViewGeometry<TNodeKind>>;
   className?: string;
   onNodeClick?: (node: GraphViewNode<TNodeKind, TNodeMeta>) => void;
   onEdgeClick?: (edge: GraphViewEdge<TEdgeKind, TEdgeMeta>) => void;
@@ -173,6 +185,7 @@ export function GraphView<
   defaultEdgeStyle,
   layout,
   fitViewOptions = DEFAULT_FIT_VIEW_OPTIONS,
+  geometryRef,
   className,
   onNodeClick,
   onEdgeClick,
@@ -216,6 +229,7 @@ export function GraphView<
   );
   const [renderNodes, setRenderNodes] = React.useState(layoutedGraph.nodes);
   const [renderEdges, setRenderEdges] = React.useState(layoutedGraph.edges);
+  const instanceRef = React.useRef<ReactFlowInstance<RenderNode<TNodeKind, TNodeMeta>, RenderEdge<TEdgeKind, TEdgeMeta>> | null>(null);
   React.useEffect(() => {
     setRenderNodes(layoutedGraph.nodes);
     setRenderEdges(layoutedGraph.edges);
@@ -225,10 +239,53 @@ export function GraphView<
   // unchanged selection loops: setState → re-render → store resync → re-emit
   // ("Maximum update depth exceeded" in StoreUpdater). Emit only on change.
   const lastSelectionSignature = React.useRef<string | null>(null);
+  React.useImperativeHandle(geometryRef, () => ({
+    nodeBounds: (id) => {
+      const instance = instanceRef.current;
+      if (!instance?.getNode(id)) return undefined;
+      return instance.getNodesBounds([id]);
+    },
+    nodeSize: (kind) => {
+      const style = nodeStyleFor(kind, nodeStyles);
+      return { width: style.width, height: style.height };
+    },
+    layout: () => resolvedLayout,
+    intersects: (bounds, excludeIds = new Set()) => (
+      instanceRef.current?.getIntersectingNodes(bounds, true).some((node) => !excludeIds.has(node.id)) ?? false
+    ),
+    firstFreePosition: (kind, preferred, axis = "horizontal", excludeIds = new Set()) => {
+      const instance = instanceRef.current;
+      const style = nodeStyleFor(kind, nodeStyles);
+      if (!instance) return preferred;
+      const step = axis === "horizontal" ? style.width + resolvedLayout.nodesep : style.height + resolvedLayout.ranksep;
+      const occupied = (position: GraphViewPosition) => instance.getIntersectingNodes({ ...position, width: style.width, height: style.height }, true).some((node) => !excludeIds.has(node.id));
+      const bounds = instance.getNodesBounds(instance.getNodes());
+      const span = axis === "horizontal" ? bounds.width + style.width : bounds.height + style.height;
+      const limit = Math.ceil(span / step) + 1;
+      for (let distance = 0; distance <= limit; distance += 1) {
+        for (const direction of distance === 0 ? [0] : [1, -1]) {
+          const offset = distance * direction * step;
+          const candidate = axis === "horizontal" ? { x: preferred.x + offset, y: preferred.y } : { x: preferred.x, y: preferred.y + offset };
+          if (!occupied(candidate)) return candidate;
+        }
+      }
+      const exterior = axis === "horizontal"
+        ? [
+            { x: bounds.x + bounds.width + resolvedLayout.nodesep, y: preferred.y },
+            { x: bounds.x - style.width - resolvedLayout.nodesep, y: preferred.y },
+          ]
+        : [
+            { x: preferred.x, y: bounds.y + bounds.height + resolvedLayout.ranksep },
+            { x: preferred.x, y: bounds.y - style.height - resolvedLayout.ranksep },
+          ];
+      return exterior.sort((left, right) => Math.hypot(left.x - preferred.x, left.y - preferred.y) - Math.hypot(right.x - preferred.x, right.y - preferred.y))[0]!;
+    },
+  }), [geometryRef, nodeStyles, resolvedLayout]);
 
   return (
     <div className={cn("min-h-0", className)}>
       <ReactFlow
+        onInit={(instance) => { instanceRef.current = instance; }}
         nodes={renderNodes}
         edges={renderEdges}
         onNodesChange={(changes) => {

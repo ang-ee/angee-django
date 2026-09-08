@@ -77,7 +77,7 @@ export function workflowGraphEdges(
   }));
 }
 
-function workflowNodeKind(value: string): WorkflowGraphNodeKind {
+export function workflowNodeKind(value: string): WorkflowGraphNodeKind {
   const normalized = value.toUpperCase();
   if (normalized in workflowNodeStyles) {
     return normalized as WorkflowGraphNodeKind;

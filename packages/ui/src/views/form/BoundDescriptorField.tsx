@@ -47,6 +47,7 @@ export function BoundDescriptorField({
 
   return (
     <Controller
+      key={name}
       control={surface.form.control}
       name={name}
       render={({ field: controller, fieldState }) => (

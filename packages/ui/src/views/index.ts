@@ -94,6 +94,7 @@ export {
   GraphView,
   type GraphViewEdge,
   type GraphViewEdgeStyle,
+  type GraphViewGeometry,
   type GraphViewLayout,
   type GraphViewNode,
   type GraphViewNodeStyle,

@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 
 import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import * as React from "react";
 import { testDataResource } from "@angee/metadata/testing";
 import { Refine, type DataProvider } from "@angee/refine";
-import { AppRuntimeProvider, Field, Form, ModalsHost, ToastProvider, defaultWidgets, type RecordPanelContext } from "@angee/ui";
+import { AppRuntimeProvider, Field, Form, ModalsHost, ToastProvider, defaultWidgets, type GraphViewGeometry, type RecordPanelContext } from "@angee/ui";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
@@ -46,6 +47,23 @@ vi.mock("@angee/refine", async (importOriginal) => {
                 effect: "UNKNOWN",
                 effect_description: "The callable declares no effect metadata.",
                 idempotent: null,
+                subject_declaration: "",
+              },
+              {
+                key: "wait",
+                label: "Wait until",
+                category: "Control",
+                defaults: { config: {} },
+                config_schema: {
+                  type: "object",
+                  properties: { until: { type: "string", format: "date-time", label: "Until" } },
+                  required: ["until"],
+                },
+                description: "Wait until a timestamp.",
+                selectable: true,
+                effect: "NONE",
+                effect_description: "",
+                idempotent: true,
                 subject_declaration: "",
               },
               {
@@ -115,7 +133,10 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   };
 });
 
-import { WorkflowCanvas, graphWithOperation } from "./WorkflowCanvas";
+import { WorkflowCanvas } from "./WorkflowCanvas";
+import { graphWithOperation } from "./workflow-graph-authoring";
+import { DefinitionHistoryProvider, useDefinitionHistory } from "./workflow-definition-history";
+import { workflowNodeStyles, type WorkflowGraphNodeKind } from "./graph-data";
 
 let canvasSurface: RecordPanelContext["form"] | null = null;
 
@@ -185,7 +206,13 @@ const edgeResource = testDataResource("workflows.Edge", {
   fields: [scalarField("id", "ID"), scalarField("source", "ID"), scalarField("target", "ID"), scalarField("condition")],
 });
 
-function renderCanvas(initial?: { nodes?: Record<string, Record<string, unknown>>; edges?: Record<string, Record<string, unknown>>; readiness?: Record<string, unknown>[]; settings?: boolean }): void {
+function CanvasHistoryHarness({ context }: { context: RecordPanelContext }): React.ReactElement {
+  const surface = React.useRef<RecordPanelContext["form"] | null>(context.form);
+  const history = useDefinitionHistory(surface, false);
+  return <DefinitionHistoryProvider value={history}><button type="button" onClick={history.undo} disabled={!history.canUndo}>Undo</button><WorkflowCanvas context={context} /></DefinitionHistoryProvider>;
+}
+
+function renderCanvas(initial?: { nodes?: Record<string, Record<string, unknown>>; edges?: Record<string, Record<string, unknown>>; readiness?: Record<string, unknown>[]; settings?: boolean; history?: boolean }): void {
   const rootRoute = createRootRoute();
   const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: () => null });
   const router = createRouter({ routeTree: rootRoute.addChildren([indexRoute]), history: createMemoryHistory({ initialEntries: ["/"] }) });
@@ -219,7 +246,7 @@ function renderCanvas(initial?: { nodes?: Record<string, Record<string, unknown>
                       definition: { revision: 1, nodes: initialNodes, edges: initialEdges, readiness: initial?.readiness ?? [] },
                     },
                   }}
-                  recordTabs={[{ id: "editor", label: "Editor", render: (context) => { canvasSurface = context.form; return <WorkflowCanvas context={context} />; }, keepMounted: true }]}
+                  recordTabs={[{ id: "editor", label: "Editor", render: (context) => { canvasSurface = context.form; return initial?.history ? <CanvasHistoryHarness context={context} /> : <WorkflowCanvas context={context} />; }, keepMounted: true }]}
                   defaultRecordTab="editor"
                   overviewTab={{ label: "Settings", position: "last" }}
                 >{initial?.settings ? <Field name="name" /> : null}</Form>
@@ -230,6 +257,31 @@ function renderCanvas(initial?: { nodes?: Record<string, Record<string, unknown>
       </RouterContextProvider>
     </Refine>,
   );
+}
+
+function testGeometry(nodes: Record<string, import("./workflow-definition-state").DefinitionNode>): GraphViewGeometry<WorkflowGraphNodeKind> {
+  const size = workflowNodeStyles.HANDLER;
+  const bounds = (identity: string) => {
+    const position = nodes[identity]?.position as { x?: number; y?: number } | undefined;
+    return typeof position?.x === "number" && typeof position.y === "number" ? { x: position.x, y: position.y, width: size.width, height: size.height } : undefined;
+  };
+  const intersects = (rect: { x: number; y: number; width: number; height: number }, exclude: ReadonlySet<string> = new Set<string>()) => Object.keys(nodes).some((identity) => {
+    if (exclude.has(identity)) return false;
+    const current = bounds(identity);
+    return current ? current.x < rect.x + rect.width && current.x + current.width > rect.x && current.y < rect.y + rect.height && current.y + current.height > rect.y : false;
+  });
+  return {
+    nodeBounds: bounds,
+    nodeSize: () => ({ width: size.width, height: size.height }),
+    layout: () => ({ rankdir: "TB", nodesep: 34, ranksep: 76, edgesep: 18, marginx: 24, marginy: 24 }),
+    intersects,
+    firstFreePosition: (_kind, preferred, _axis, exclude) => {
+      for (let lane = 0; ; lane += 1) {
+        const position = { x: preferred.x + lane * (size.width + 34), y: preferred.y };
+        if (!intersects({ ...position, width: size.width, height: size.height }, exclude)) return position;
+      }
+    },
+  };
 }
 
 describe("WorkflowCanvas native narrow inspector", () => {
@@ -299,6 +351,34 @@ describe("WorkflowCanvas native narrow inspector", () => {
       expect.objectContaining({ source: "new", target: "last", condition: "" }),
     ]));
   });
+
+  test("insertion moves only its downstream suffix and uses a free lane for a cycle", () => {
+    const nodes = {
+      source: { ...mocks.record, id: "source", position: { x: 0, y: 0 } },
+      target: { ...mocks.record, id: "target", position: { x: 0, y: 100 } },
+      downstream: { ...mocks.record, id: "downstream", position: { x: 0, y: 300 } },
+      manual: { ...mocks.record, id: "manual", position: { x: 600, y: 40 } },
+    } as unknown as Record<string, import("./workflow-definition-state").DefinitionNode>;
+    const edges = {
+      route: { id: "route", source: "source", target: "target", condition: "" },
+      continuation: { id: "continuation", source: "target", target: "downstream", condition: "" },
+    } as unknown as Record<string, import("./workflow-definition-state").DefinitionEdge>;
+    const geometry = testGeometry(nodes);
+    const inserted = { ...mocks.record, id: "", clientKey: "inserted", position: {} } as unknown as import("./workflow-definition-state").DefinitionNode;
+    const result = graphWithOperation(inserted, { kind: "insert", identity: "route" }, nodes, edges, geometry)!;
+    expect(result.nodes.source!.position).toEqual({ x: 0, y: 0 });
+    expect((result.nodes.target!.position as { y: number }).y).toBeGreaterThan(100);
+    expect((result.nodes.downstream!.position as { y: number }).y).toBeGreaterThan(300);
+    expect(result.nodes.manual!.position).toEqual({ x: 600, y: 40 });
+
+    const cycle = graphWithOperation(inserted, { kind: "insert", identity: "route" }, nodes, {
+      ...edges,
+      back: { id: "back", source: "target", target: "source", condition: "" } as never,
+    }, geometry)!;
+    expect(cycle.nodes.source!.position).toEqual({ x: 0, y: 0 });
+    expect(cycle.nodes.target!.position).toEqual({ x: 0, y: 100 });
+    expect((cycle.nodes.inserted!.position as { x: number }).x).not.toBe(0);
+  });
   test("adds a declared operation after the selected step in the shared draft", async () => {
     renderCanvas();
     await screen.findByText("Import files");
@@ -313,6 +393,88 @@ describe("WorkflowCanvas native narrow inspector", () => {
     expect((await screen.findByLabelText("Mode") as HTMLInputElement).value).toBe("safe");
     expect(Object.values(canvasSurface!.form.getValues("definition.nodes") as unknown as Record<string, { join_rule: string }>).some((node) => node.join_rule === "ONE_SUCCESS")).toBe(true);
     expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  });
+
+  test("places an addition below a legacy-positioned source without moving occupied or manual nodes", async () => {
+    renderCanvas({ nodes: {
+      step_1: { ...mocks.record, position: {}, clientKey: undefined },
+      occupied: { ...mocks.record, id: "step_2", key: "occupied", name: "Occupied", is_entry: false, position: { x: 24, y: 176 }, clientKey: undefined },
+      manual: { ...mocks.record, id: "step_3", key: "manual", name: "Manual", is_entry: false, position: { x: 620, y: 37 }, clientKey: undefined },
+    } });
+    await screen.findByText("Import files");
+    fireEvent.click(screen.getByTestId("rf__node-step_1"));
+    fireEvent.click(await screen.findByRole("button", { name: "Add after" }));
+    const search = await screen.findByPlaceholderText("Search operations…");
+    fireEvent.change(search, { target: { value: "Run callable" } });
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    fireEvent.keyDown(search, { key: "Enter" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    const values = canvasSurface!.form.getValues("definition.nodes") as unknown as Record<string, { id: string; position: { x?: number; y?: number } }>;
+    const created = Object.values(values).find((node) => node.id === "")!;
+    expect(created.position.y).toBeGreaterThan(0);
+    expect(created.position.x).not.toBe(24);
+    expect(values.step_1!.position).toEqual({ x: 24, y: 24 });
+    expect(values.occupied!.position).toEqual({ x: 24, y: 176 });
+    expect(values.manual!.position).toEqual({ x: 620, y: 37 });
+  });
+
+  test("materializes a legacy fallback before placing a duplicate without moving manual nodes", async () => {
+    renderCanvas({ nodes: {
+      step_1: { ...mocks.record, position: {}, clientKey: undefined },
+      manual: { ...mocks.record, id: "step_3", key: "manual", name: "Manual", is_entry: false, position: { x: 700, y: 400 }, clientKey: undefined },
+    } });
+    await screen.findByText("Import files");
+    fireEvent.click(screen.getByTestId("rf__node-step_1"));
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate" }));
+    await screen.findByText("Import files copy");
+
+    const values = canvasSurface!.form.getValues("definition.nodes") as unknown as Record<string, { id: string; name: string; position: { x?: number; y?: number } }>;
+    const copy = Object.values(values).find((node) => node.name === "Import files copy")!;
+    expect(typeof values.step_1!.position.x).toBe("number");
+    expect(typeof values.step_1!.position.y).toBe("number");
+    expect(copy.position.y).toBe(values.step_1!.position.y);
+    expect(copy.position.x).not.toBe(values.step_1!.position.x);
+    expect(values.manual!.position).toEqual({ x: 700, y: 400 });
+  });
+
+  test("inserts by shifting only the downstream suffix and undoes positions with the route", async () => {
+    const originalNodes = {
+      step_1: { ...mocks.record, position: { x: 20, y: 20 }, clientKey: undefined },
+      target: { ...mocks.record, id: "step_2", key: "target", name: "Target", is_entry: false, position: { x: 20, y: 120 }, clientKey: undefined },
+      downstream: { ...mocks.record, id: "step_3", key: "downstream", name: "Downstream", is_entry: false, position: { x: 20, y: 40 }, clientKey: undefined },
+      manual: { ...mocks.record, id: "step_4", key: "manual", name: "Manual", is_entry: false, position: { x: 600, y: 45 }, clientKey: undefined },
+    };
+    const originalEdges = {
+      route: { id: "edge_1", source: "step_1", target: "target", condition: "completed", clientKey: undefined },
+      continuation: { id: "edge_2", source: "target", target: "downstream", condition: "", clientKey: undefined },
+    };
+    renderCanvas({ nodes: originalNodes, edges: originalEdges, history: true, readiness: [
+      { code: "route", message: "Review route", kind: "EDGE", id: "edge_1", client_key: null, field: "condition" },
+    ] });
+    await screen.findByText("Target");
+    fireEvent.click(screen.getByRole("button", { name: "1 saved issue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import files → Target · Outcome: Review route" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Insert step" }));
+    const search = await screen.findByPlaceholderText("Search operations…");
+    fireEvent.change(search, { target: { value: "Run callable" } });
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    fireEvent.keyDown(search, { key: "Enter" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    const changed = canvasSurface!.form.getValues("definition.nodes") as unknown as Record<string, { id: string; position: { x: number; y: number } }>;
+    const inserted = Object.values(changed).find((node) => node.id === "")!;
+    expect(inserted.position.y).toBeGreaterThan(20);
+    expect(inserted.position.x).not.toBe(20);
+    expect(changed.target!.position).toEqual({ x: 20, y: 120 });
+    expect(changed.downstream!.position).toEqual({ x: 20, y: 40 });
+    expect(changed.manual!.position).toEqual({ x: 600, y: 45 });
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(canvasSurface!.form.getValues("definition.nodes.target.position")).toEqual({ x: 20, y: 120 }));
+    expect(canvasSurface!.form.getValues("definition.nodes.downstream.position")).toEqual({ x: 20, y: 40 });
+    expect(canvasSurface!.form.getValues("definition.nodes.manual.position")).toEqual({ x: 600, y: 45 });
+    expect(Object.values(canvasSurface!.form.getValues("definition.nodes") as unknown as Record<string, { id: string }>).some((node) => node.id === "")).toBe(false);
+    expect(canvasSurface!.form.getValues("definition.edges")).toEqual(originalEdges);
   });
 
   test("connects two steps without a drag gesture and keeps the entry action explicit", async () => {
@@ -381,6 +543,30 @@ describe("WorkflowCanvas native narrow inspector", () => {
     fireEvent.click(screen.getByTestId("rf__node-step_1"));
 
     expect((await screen.findByLabelText("Name") as HTMLInputElement).value).toBe("Import every file");
+  });
+
+  test("isolates bound config widgets when switching and adding the same operation", async () => {
+    renderCanvas({ nodes: {
+      step_1: { ...mocks.record, name: "First wait", step_class: "wait", config: { until: "2026-09-10T08:00" }, position: { x: 0, y: 0 }, clientKey: undefined },
+      step_2: { ...mocks.record, id: "step_2", key: "second-wait", name: "Second wait", step_class: "wait", config: { until: "2026-09-12T09:30" }, is_entry: false, position: { x: 0, y: 180 }, clientKey: undefined },
+    } });
+    await screen.findByText("First wait");
+    fireEvent.click(screen.getByTestId("rf__node-step_1"));
+    expect((await screen.findByLabelText("Until") as HTMLInputElement).value).toContain("2026-09-10");
+
+    fireEvent.click(screen.getByTestId("rf__node-step_2"));
+    expect((await screen.findByLabelText("Until") as HTMLInputElement).value).toContain("2026-09-12");
+    expect(canvasSurface!.form.getValues("definition.nodes.step_1.config.until")).toBe("2026-09-10T08:00");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add after" }));
+    const search = await screen.findByPlaceholderText("Search operations…");
+    fireEvent.change(search, { target: { value: "Wait until" } });
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    fireEvent.keyDown(search, { key: "Enter" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect((await screen.findByLabelText("Until") as HTMLInputElement).value).toBe("");
+    const created = Object.values(canvasSurface!.form.getValues("definition.nodes") as unknown as Record<string, { id: string; config: Record<string, unknown> }>).find((node) => node.id === "");
+    expect(created?.config).toEqual({});
   });
 
   test("keeps only the persisted nonselectable operation readable", async () => {
