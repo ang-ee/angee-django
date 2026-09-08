@@ -435,6 +435,35 @@ def test_schedule_trigger_fires_when_due_and_computes_next_fire(
     assert _run_count() == 2
 
 
+def test_schedule_start_failure_rolls_back_due_claim(
+    workflow_trigger_tables: None,
+    no_workflow_queue: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed pinned start leaves its schedule occurrence durably retryable."""
+
+    del workflow_trigger_tables, no_workflow_queue
+    workflow_triggers = importlib.import_module("angee.workflows.triggers")
+    now = timezone.now().replace(microsecond=0)
+    trigger = _schedule_trigger(config={"interval_seconds": 3600}, next_fire_at=now)
+    with system_context(reason="retire schedule publication"):
+        published = Workflow.objects.current_published_for(trigger.workflow)
+        assert published is not None
+        published.archive()
+
+    assert workflow_triggers.run_due_schedule_triggers(now=now) == {
+        "triggers": 1,
+        "fired": 0,
+        "skipped": 1,
+    }
+    trigger.refresh_from_db()
+    assert trigger.next_fire_at == now
+    assert trigger.last_fire_at is None
+    assert trigger.hourly_fire_count == 0
+    assert _run_count() == 0
+    assert "failed to start workflow" in caplog.text
+
+
 def test_schedule_trigger_primes_missing_next_fire_with_injected_timestamp(
     workflow_trigger_tables: None,
     no_workflow_queue: None,

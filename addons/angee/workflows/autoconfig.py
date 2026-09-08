@@ -12,6 +12,10 @@ SETTINGS = {
             "task": "workflows.reap",
             "schedule": 60.0,
         },
+        "workflows.publish_dispatches": {
+            "task": "workflows.publish_dispatches",
+            "schedule": 30.0,
+        },
         "workflows.schedule_triggers": {
             "task": "workflows.schedule_triggers",
             "schedule": 60.0,

@@ -36,6 +36,7 @@ from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
+from angee.workflows.attempts import AttemptResultKind
 from angee.workflows.steps import TransientStepError
 from angee.workflows_agents import sessions
 from tests.conftest import (
@@ -48,8 +49,10 @@ from tests.test_agents import InferenceModel, _provider
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent, AgentSession, AgentTurn
 from tests.workflows import (
     WORKFLOW_RUNTIME_MODELS,
+    StepAttempt,
     StepRun,
     Workflow,
+    WorkflowDispatch,
     WorkflowRun,
     advance_once,
     execute_started,
@@ -395,12 +398,12 @@ def test_backend_error_routes_failed_outcome(
     assert failed_row.status == workflow_models.StepRunStatus.STARTED
 
 
-def test_agent_step_reraises_transient_backend_errors(
+def test_agent_step_retains_transient_backend_errors_and_allocates_retry(
     workflows_agents_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Retryable provider errors stay transient for the workflow task strategy."""
+    """Retryable provider errors retain evidence and allocate the policy successor."""
 
     del workflows_agents_tables, no_workflow_queue
     model = _inference_model("stub-transient")
@@ -429,11 +432,17 @@ def test_agent_step_reraises_transient_backend_errors(
     run = start_run(workflow)
     step_run = advance_once(run)[0]
 
-    with pytest.raises(TransientStepError, match="rate limited"):
-        engine.execute(step_run.pk)
+    execute_started(run)
 
     step_run.refresh_from_db()
+    with system_context(reason="test retained transient result"):
+        attempts = list(step_run.attempts.order_by("ordinal"))
     assert step_run.status == workflow_models.StepRunStatus.STARTED
+    assert len(attempts) == 2
+    assert attempts[0].result_kind == str(AttemptResultKind.TRANSIENT_ERROR)
+    assert attempts[0].error == "rate limited"
+    assert attempts[1].retry_of_id == attempts[0].pk
+    assert attempts[1].started_at is None
 
 
 def test_session_and_turn_reads_and_turn_subscription_are_owner_gated(
@@ -495,7 +504,7 @@ def test_delivery_generation_closes_the_post_between_park_and_waiting_race(
         return result
 
     monkeypatch.setattr(AgentSessionStepImpl, "run", park_then_post)
-    engine.execute(step_run.pk)
+    execute_started(run)
 
     step_run.refresh_from_db()
     run.refresh_from_db()
@@ -506,7 +515,7 @@ def test_delivery_generation_closes_the_post_between_park_and_waiting_race(
 
     monkeypatch.setattr(AgentSessionStepImpl, "run", original_run)
     assert engine.advance(run.pk) == {"claimed": 1}
-    engine.execute(step_run.pk)
+    execute_started(run)
 
     late_turns[0].refresh_from_db()
     assert late_turns[0].status == TurnStatus.COMPLETED
@@ -534,6 +543,22 @@ def test_quiet_turn_heartbeat_cadence_survives_reaper_then_expires_without_pulse
     )
     run = start_run(workflow)
     step_run = advance_once(run, now=started_at)[0]
+    with system_context(reason="test quiet heartbeat admit"):
+        attempt = step_run.current_attempt
+        dispatch = WorkflowDispatch.objects.get(step_attempt=attempt)
+    with system_context(reason="test quiet heartbeat admit"), transaction.atomic():
+        with WorkflowDispatch.objects._owner_transition(
+            dispatch_id=dispatch.pk,
+            lease_token=attempt.lease_token,
+            at=started_at,
+            using=WorkflowDispatch.objects.db,
+        ):
+            StepAttempt.objects.admit_invocation(
+                attempt.pk,
+                lease_token=attempt.lease_token,
+                at=started_at,
+            )
+            WorkflowDispatch.objects._consume_locked(dispatch.pk, at=started_at)
     clock = {"now": started_at, "sleeps": 0}
 
     class StopHeartbeat(Exception):
@@ -697,7 +722,7 @@ def test_transient_exhaustion_fails_turn_and_parks_session(
     monkeypatch.setattr(PydanticAIRuntime, "session_runner", lambda self: RateLimitedRunner())
     # Default step policy is max_attempts=1: this execution is the final
     # attempt, so the impl converts instead of re-raising to the engine.
-    engine.execute(step_run.pk)
+    execute_started(run)
     engine.advance(run.pk)
 
     step_run.refresh_from_db()

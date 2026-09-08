@@ -87,6 +87,25 @@ class JsonPresence:
     value: Any = None
 
 
+_STRICT_JSON = TypeAdapter(JsonValue, config=ConfigDict(strict=True, allow_inf_nan=False))
+
+
+def validate_json_presence(value: JsonPresence, *, label: str = "JSON value") -> JsonPresence:
+    """Validate an exact absent/present JSON envelope without coercion."""
+
+    if not isinstance(value, JsonPresence) or type(value.present) is not bool:
+        raise ValueError(f"{label} must use JsonPresence with a boolean presence flag.")
+    if not value.present:
+        if value.value is not None:
+            raise ValueError(f"Absent {label} cannot carry a value.")
+        return value
+    try:
+        _STRICT_JSON.validate_python(value.value, strict=True)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"Present {label} must contain an exact finite JSON value.") from error
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class AttemptInput(JsonPresence):
     """Resolved attempt input plus its durable source provenance."""

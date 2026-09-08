@@ -23,9 +23,11 @@ from angee.workflows.attempts import (
     DecisionSpec,
     DecisionTimerKind,
     InvocationAdmission,
+    JsonPresence,
     LeaseRevocationReason,
     deserialize_decision_specs,
     serialize_decision_specs,
+    validate_json_presence,
 )
 from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import GateStep, StepResult
@@ -33,6 +35,33 @@ from tests.workflows import Decision, StepAttempt, StepRun, WorkflowRun, workflo
 
 pytest_plugins = ("tests.workflows",)
 User = get_user_model()
+
+
+def test_json_presence_rejects_coercive_or_nonfinite_values() -> None:
+    assert validate_json_presence(JsonPresence(True, None)).value is None
+    invalid = (
+        JsonPresence(False, 0),
+        JsonPresence(True, {1: "x"}),
+        JsonPresence(True, ("x",)),
+        JsonPresence(True, float("nan")),
+    )
+    for value in invalid:
+        with pytest.raises(ValueError):
+            validate_json_presence(value)
+
+
+def test_attempt_result_rejects_non_json_output_and_checkpoint() -> None:
+    for result in (
+        AttemptResult(AttemptResultKind.DONE, output_present=True, output=("x",)),
+        AttemptResult(
+            AttemptResultKind.WAIT,
+            checkpoint_present=True,
+            checkpoint={"bad": float("nan")},
+            requested_until=timezone.now(),
+        ),
+    ):
+        with pytest.raises(ValidationError):
+            StepAttempt.objects.validate_result(result)
 
 
 def _set_retry_config(step_run: StepRun, retry: object) -> None:
@@ -444,7 +473,7 @@ def test_legacy_attempt_counter_allocates_next_without_fabricating_history(sched
 
     with system_context(reason="test retained counter guard"):
         retained = StepRun.objects.get(pk=scheduled_step_run.pk)
-        with pytest.raises(ValidationError, match="owned by StepAttemptManager"):
+        with pytest.raises(TypeError, match="manager owner"):
             retained.record_attempt()
 
 
@@ -698,7 +727,9 @@ def test_retained_decision_owner_rejects_direct_and_bulk_provenance_bypasses(
             [Decision(step_run=scheduled_step_run, action="legacy")]
         )[0]
         legacy.action = "updated"
-        Decision.objects.bulk_update([legacy], (name for name in ("action",)))
+        with pytest.raises(TypeError, match="owned by DecisionManager"):
+            Decision.objects.bulk_update([legacy], (name for name in ("action",)))
+        legacy.save(update_fields=["action", "updated_at"])
 
     assert legacy.suspension_attempt_id is None
     assert legacy.declaration_index is None
@@ -1077,6 +1108,67 @@ def test_attempt_save_capability_cannot_mutate_other_evidence_from_signal(
     assert earlier.error == original_earlier_error
     assert unrelated.claimed_at == original_unrelated_claimed_at
     assert current.result_recorded_at is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_retained_step_run_projection_and_ancestry_reject_public_writes(
+    scheduled_step_run: StepRun,
+) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    original_run_id = scheduled_step_run.run_id
+    original_step_id = scheduled_step_run.step_id
+
+    with pytest.raises(TypeError, match="StepAttemptManager"):
+        StepRun.objects.filter(pk=scheduled_step_run.pk).update(status=StepRunStatus.FAILED)
+    with pytest.raises(TypeError, match="StepAttemptManager"):
+        StepRun.objects.bulk_update([scheduled_step_run], (name for name in ("output",)))
+    with pytest.raises(TypeError, match="StepAttemptManager"):
+        StepRun.objects.filter(pk=scheduled_step_run.pk).update(map_index=3)
+
+    scheduled_step_run.run_id = original_run_id + 1
+    with pytest.raises(ValidationError, match="ancestry"):
+        scheduled_step_run.save(update_fields=["run", "updated_at"])
+
+    with system_context(reason="verify retained StepRun ancestry"):
+        scheduled_step_run.refresh_from_db()
+        attempt.refresh_from_db()
+    assert scheduled_step_run.run_id == original_run_id
+    assert scheduled_step_run.step_id == original_step_id
+    assert scheduled_step_run.current_attempt_id == attempt.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_step_run_projection_capability_is_spent_before_save_signals(
+    scheduled_step_run: StepRun,
+) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(
+        attempt.pk, lease_token=attempt.lease_token, at=timezone.now()
+    )
+
+    def rewrite_projection(sender: object, instance: StepRun, **kwargs: object) -> None:
+        del sender, kwargs
+        instance.output = {"forged": True}
+        instance.save(update_fields=["output", "updated_at"])
+
+    post_save.connect(rewrite_projection, sender=StepRun, weak=False)
+    try:
+        with pytest.raises(TypeError, match="manager owner"):
+            StepAttempt.objects.finalize(
+                attempt.pk,
+                lease_token=attempt.lease_token,
+                result=AttemptResult(AttemptResultKind.DONE, output_present=True, output={"ok": True}),
+                recorded_at=timezone.now(),
+            )
+    finally:
+        post_save.disconnect(rewrite_projection, sender=StepRun)
+
+    with system_context(reason="verify StepRun signal rollback"):
+        attempt.refresh_from_db()
+        scheduled_step_run.refresh_from_db()
+    assert attempt.result_recorded_at is None
+    assert scheduled_step_run.status == StepRunStatus.STARTED
+    assert scheduled_step_run.output == {}
 
 
 @pytest.mark.django_db(transaction=True)

@@ -1,4 +1,4 @@
-"""Durable workflow-delivery publication without runtime task activation."""
+"""Durable workflow-delivery publication for the retained runtime."""
 
 from __future__ import annotations
 
@@ -70,9 +70,8 @@ def publish_due(
 ) -> dict[str, int]:
     """Publish a bounded due batch outside database locks and record telemetry.
 
-    This foundation deliberately has no scheduled caller or Celery task route.
     The retained dispatch remains pending after broker acceptance; only its
-    domain transition owner may consume it during the later runtime cutover.
+    exact domain transition owner consumes it after locked admission.
     """
 
     if limit <= 0:

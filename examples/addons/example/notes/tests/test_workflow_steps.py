@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import patch
 
 from django.apps import apps
@@ -26,8 +27,19 @@ Workflow = apps.get_model("workflows", "Workflow")
 Step = apps.get_model("workflows", "Step")
 WorkflowRun = apps.get_model("workflows", "WorkflowRun")
 StepRun = apps.get_model("workflows", "StepRun")
+WorkflowDispatch = apps.get_model("workflows", "WorkflowDispatch")
 Resource = apps.get_model("resources", "Resource")
 User = get_user_model()
+
+
+def execute_retained(step_run: Any) -> None:
+    """Consume the exact execution intent allocated for one started row."""
+
+    with system_context(reason="note workflow retained execution"):
+        step_run.refresh_from_db()
+        attempt = step_run.current_attempt
+        dispatch = WorkflowDispatch.objects.get(step_attempt=attempt)
+    engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token)
 
 
 class NoteWorkflowStepTests(TransactionTestCase):
@@ -192,14 +204,14 @@ class NoteWorkflowStepTests(TransactionTestCase):
         engine.advance(run.pk)
         with system_context(reason="note workflow execute validation"):
             validation = StepRun.objects.get(run=run, step__key="entry")
-        engine.execute(validation.pk)
+        execute_retained(validation)
         validation.refresh_from_db()
         self.assertEqual(validation.outcome, "needs_review")
 
         engine.advance(run.pk)
         with system_context(reason="note workflow execute approval"):
             approval = StepRun.objects.get(run=run, step__key="approval")
-        engine.execute(approval.pk)
+        execute_retained(approval)
         with system_context(reason="note workflow read approval"):
             decision = approval.decisions.get()
         engine.decide(decision, "complete", actor=self.owner)
@@ -207,7 +219,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
         engine.advance(run.pk)
         with system_context(reason="note workflow execute publication"):
             publication = StepRun.objects.get(run=run, step__key="finalize")
-        engine.execute(publication.pk)
+        execute_retained(publication)
         engine.advance(run.pk)
 
         run.refresh_from_db()

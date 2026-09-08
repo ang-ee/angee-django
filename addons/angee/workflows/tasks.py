@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from celery import shared_task
 from celery.exceptions import Retry
 from django.apps import apps
-from django.db import transaction
+from django.core.exceptions import ValidationError
+from django.db import models, transaction
 from django.utils import timezone
 from rebac import system_context
 
+from angee.jobs.enqueue import enqueue_task
 from angee.jobs.locks import record_lock_key, task_lock
+from angee.workflows import dispatch as workflow_dispatch
 from angee.workflows import engine, triggers
+from angee.workflows.dispatch import WorkflowDispatchEnvelope, WorkflowDispatchKind
 from angee.workflows.models import StepRunStatus
 from angee.workflows.steps import StepRetryPolicy, TransientStepError, retry_policy_from_config
 
@@ -26,13 +31,17 @@ from angee.workflows.steps import StepRetryPolicy, TransientStepError, retry_pol
     retry_kwargs={"max_retries": 5},
 )
 def advance_workflow_run(self: Any, run_id: int) -> None:
-    """Run one short orchestration pass for a workflow run."""
+    """Translate a legacy wake into a durable ADVANCE pulse."""
 
     del self
-    with task_lock(record_lock_key("workflows.WorkflowRun", run_id, "advance")) as acquired:
-        if not acquired:
+    run_model = apps.get_model("workflows", "WorkflowRun")
+    dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
+    with system_context(reason="workflows.legacy_advance"), transaction.atomic():
+        run = run_model.objects.filter(pk=run_id).first()
+        if run is None:
             return
-        engine.advance(run_id)
+        dispatch_model.objects.schedule_advance(run, available_at=timezone.now())
+    workflow_dispatch.publish_due(_send_dispatch, now=timezone.now(), limit=100)
 
 
 @shared_task(bind=True, name="workflows.execute")
@@ -43,6 +52,15 @@ def execute_workflow_step(self: Any, step_run_id: int) -> None:
         if not acquired:
             return
         try:
+            step_run_model = apps.get_model("workflows", "StepRun")
+            with system_context(reason="workflows.legacy_execute"):
+                retained = step_run_model.objects.filter(pk=step_run_id).filter(
+                    models.Q(effect_key__isnull=False)
+                    | models.Q(current_attempt__isnull=False)
+                    | models.Q(attempts__isnull=False)
+                ).exists()
+            if retained:
+                return
             engine.execute(step_run_id)
         except TransientStepError as error:
             _retry_or_journal_exhausted(self, step_run_id, error)
@@ -151,6 +169,62 @@ def _retry_or_journal_exhausted(task: Any, step_run_id: int, error: TransientSte
             raise
     _journal_retry_exhausted(step_run, exception=error)
     raise error
+
+
+@shared_task(bind=True, name="workflows.dispatch")
+def consume_workflow_dispatch(
+    self: Any,
+    dispatch_id: int,
+    kind: str,
+    target_id: int,
+    generation: int | None = None,
+    lease_token: str | None = None,
+) -> None:
+    """Consume one identifier-only durable workflow envelope."""
+
+    del self
+    parsed = WorkflowDispatchKind(kind)
+    parsed_lease = uuid.UUID(lease_token) if lease_token is not None else None
+    dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
+    with system_context(reason="workflows.dispatch.envelope"):
+        durable = dispatch_model.objects.select_related("step_attempt").get(pk=dispatch_id).envelope
+    supplied = WorkflowDispatchEnvelope(dispatch_id, parsed, target_id, generation, parsed_lease)
+    if supplied != durable:
+        raise ValidationError({"dispatch": "Transport envelope does not match its durable intent."})
+    if parsed == WorkflowDispatchKind.ADVANCE:
+        engine.advance_dispatch(dispatch_id, expected_run_id=target_id)
+    elif parsed == WorkflowDispatchKind.EXECUTE:
+        engine.execute_dispatch(dispatch_id, target_id, cast(uuid.UUID, parsed_lease))
+    elif parsed == WorkflowDispatchKind.DECISION_ESCALATE:
+        engine.escalate_decision_dispatch(
+            dispatch_id, expected_decision_id=target_id, expected_generation=generation
+        )
+    else:
+        engine.expire_decision_dispatch(
+            dispatch_id, expected_decision_id=target_id, expected_generation=generation
+        )
+
+
+@shared_task(bind=True, name="workflows.publish_dispatches")
+def publish_workflow_dispatches(self: Any, timestamp: int | None = None) -> None:
+    """Publish one bounded batch of due durable workflow intents."""
+
+    del self
+    workflow_dispatch.publish_due(_send_dispatch, now=_periodic_timestamp(timestamp), limit=100)
+
+
+def _send_dispatch(envelope: WorkflowDispatchEnvelope) -> None:
+    enqueue_task(
+        "workflows.dispatch",
+        kwargs={
+            "dispatch_id": envelope.dispatch_id,
+            "kind": envelope.kind.value,
+            "target_id": envelope.target_id,
+            "generation": envelope.generation,
+            "lease_token": str(envelope.lease_token) if envelope.lease_token else None,
+        },
+        eta=None,
+    )
 
 
 def _step_run_for_id(step_run_id: int) -> Any | None:

@@ -23,6 +23,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, ClassVar, Literal, Self
 
+from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db import models
 from django.utils import timezone
@@ -304,7 +305,16 @@ class StepImpl(ImplBase):
 
         if str(getattr(step_run.status, "value", step_run.status)) != "started":
             return
-        step_run.heartbeat_at = at or timezone.now()
+        timestamp = at or timezone.now()
+        if step_run.current_attempt_id is not None:
+            attempt_model = apps.get_model("workflows", "StepAttempt")
+            with system_context(reason="workflows.step.heartbeat.load"):
+                attempt = attempt_model.objects.get(pk=step_run.current_attempt_id)
+            attempt_model.objects.heartbeat(
+                attempt.pk, lease_token=attempt.lease_token, at=timestamp
+            )
+            return
+        step_run.heartbeat_at = timestamp
         with system_context(reason="workflows.step.heartbeat"):
             step_run.save(update_fields=["heartbeat_at", "updated_at"])
 

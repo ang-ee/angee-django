@@ -18,6 +18,7 @@ from rebac import system_context
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows import steps as workflow_steps
+from angee.workflows.attempts import JsonPresence
 from angee.workflows.steps import HandlerStep, StepResult
 from tests.workflows import (
     Decision,
@@ -26,6 +27,7 @@ from tests.workflows import (
     StepRun,
     Trigger,
     Workflow,
+    WorkflowDispatch,
     WorkflowRun,
     advance_once,
     execute_started,
@@ -38,6 +40,75 @@ from tests.workflows import (
 
 User = get_user_model()
 pytest_plugins = ("tests.workflows",)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("handler_calls")
+def test_start_captures_input_presence_and_initial_advance_atomically(
+    workflow_engine_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publish_requests: list[None] = []
+    monkeypatch.setattr(engine, "enqueue_dispatch_publisher", lambda: publish_requests.append(None))
+    workflow = workflow_with_steps(
+        steps=({"key": "start", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    supplied = {"value": [1]}
+
+    absent = engine.start(workflow, subject=None, actor=None)
+    present_null = engine.start(workflow, subject=None, actor=None, input=JsonPresence(True, None))
+    present_value = engine.start(workflow, subject=None, actor=None, input=JsonPresence(True, supplied))
+    supplied["value"].append(2)
+
+    assert (absent.input_present, absent.input) == (False, None)
+    assert (present_null.input_present, present_null.input) == (True, None)
+    assert (present_value.input_present, present_value.input) == (True, {"value": [1]})
+    assert len(publish_requests) == 3
+    with system_context(reason="verify initial workflow dispatches"):
+        assert WorkflowDispatch.objects.filter(run__in=[absent, present_null, present_value]).count() == 3
+    present_value.input = {"changed": True}
+    with pytest.raises(ValidationError, match="input is immutable"):
+        present_value.save(update_fields={"input", "updated_at"})
+    with system_context(reason="verify immutable workflow input"):
+        deferred = WorkflowRun.objects.only("pk").get(pk=present_value.pk)
+    deferred.input_present = False
+    deferred.input = None
+    with pytest.raises(ValidationError, match="input is immutable"):
+        deferred.save()
+    absent.input_present = True
+    absent.input = None
+    with system_context(reason="verify immutable workflow input"):
+        with pytest.raises(TypeError, match="input is immutable"):
+            WorkflowRun.objects.bulk_update([absent], ["input_present", "input"])
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        JsonPresence(False, {"silently": "dropped"}),
+        JsonPresence("yes", None),  # type: ignore[arg-type]
+        JsonPresence(True, ("tuple",)),
+        JsonPresence(True, float("nan")),
+    ],
+)
+def test_start_rejects_malformed_input_presence_before_writes(
+    workflow_engine_tables: None,
+    invalid: JsonPresence,
+) -> None:
+    workflow = workflow_with_steps(
+        steps=({"key": "start", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+
+    with pytest.raises(ValueError, match="workflow run input"):
+        engine.start(workflow, subject=None, actor=None, input=invalid)
+
+    with system_context(reason="verify rejected workflow start"):
+        assert WorkflowRun.objects.count() == 0
+        assert WorkflowDispatch.objects.count() == 0
 
 
 @pytest.fixture()
@@ -609,7 +680,7 @@ def test_transient_step_error_uses_configured_retry_backoff(
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Transient impl failures stay started and Celery retries per step config."""
+    """Transient impl failures retain a durable successor using configured backoff."""
 
     del workflow_engine_tables, no_workflow_queue
     transient_error = getattr(workflow_steps, "TransientStepError", None)
@@ -635,20 +706,20 @@ def test_transient_step_error_uses_configured_retry_backoff(
 
     from angee.workflows import engine, tasks
 
-    with pytest.raises(transient_error):
-        engine.execute(step_run.pk)
+    with system_context(reason="test transient dispatch"):
+        attempt = step_run.current_attempt
+        dispatch = WorkflowDispatch.objects.get(step_attempt=attempt)
+    assert engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token) == {"executed": 1}
 
     step_run.refresh_from_db()
     assert step_run.status == step_run_status.STARTED
-    assert step_run.attempt == 1
+    assert step_run.attempt == 2
+    with system_context(reason="test transient successor"):
+        assert step_run.current_attempt.retry_of_id == attempt.pk
 
     policy = tasks._retry_policy_for_step_run(step_run)
     assert policy.max_attempts == 3
     assert policy.delay_for(1) == 7
-    tasks._journal_retry_exhausted(step_run, exception=transient_error("try again"))
-    step_run.refresh_from_db()
-    assert step_run.status == step_run_status.FAILED
-    assert "try again" in step_run.error
 
 
 @pytest.mark.django_db(transaction=True)
@@ -741,18 +812,30 @@ def test_heartbeat_timeout_reaps_started_rows_and_routes_failed_outcome(
         edges=(("start", "cleanup", "failed"),),
     )
     run = start_run(workflow)
-    advance_once(run, now=stale_at)
+    step_run = advance_once(run, now=stale_at)[0]
+    with system_context(reason="test stale attempt"):
+        attempt = step_run.current_attempt
+    type(attempt).objects.admit_invocation(
+        attempt.pk, lease_token=attempt.lease_token, at=stale_at
+    )
 
     from angee.workflows import engine
 
     monkeypatch.setattr(engine, "enqueue_advance", lambda run_id: enqueued.append(run_id))
+    monkeypatch.setattr(
+        engine,
+        "_defer",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("broker unavailable")),
+    )
     assert engine.reap(now=now) == {"reaped": 1}
 
     failed = step_run_for(run, "start")
     assert failed.status == step_run_status.FAILED
     assert failed.outcome == "failed"
     assert "heartbeat" in failed.error
-    assert enqueued == [run.pk]
+    assert enqueued == []
+    with system_context(reason="test retained timeout advance"):
+        assert WorkflowDispatch.objects.filter(run=run, consumed_at__isnull=True).exists()
 
     advance_once(run, now=now)
     assert step_run_for(run, "cleanup").status == step_run_status.STARTED
@@ -785,10 +868,6 @@ def test_reaper_ignores_waiting_rows(
     advance_once(run, now=now - timedelta(minutes=10))
     execute_started(run, now=now - timedelta(minutes=10))
     waiting = step_run_for(run, "wait")
-    with system_context(reason="test workflows waiting stale heartbeat"):
-        waiting.heartbeat_at = now - timedelta(minutes=10)
-        waiting.save(update_fields=["heartbeat_at", "updated_at"])
-
     from angee.workflows import engine
 
     assert engine.reap(now=now) == {"reaped": 0}
@@ -823,14 +902,14 @@ def test_reaper_finishes_canceled_started_rows(
 
     engine.cancel(run)
     monkeypatch.setattr(engine, "enqueue_advance", lambda run_id: enqueued.append(run_id))
-    assert engine.reap(now=now) == {"reaped": 1}
+    assert engine.reap(now=now) == {"reaped": 0}
 
     run.refresh_from_db()
     step_run.refresh_from_db()
     assert run.status == run_status.CANCELED
-    assert step_run.status == step_run_status.FAILED
+    assert step_run.status == step_run_status.CANCELED
     assert step_run.resume_state["cancel_requested"] is True
-    assert enqueued == [run.pk]
+    assert enqueued == []
 
 
 @pytest.mark.django_db(transaction=True)

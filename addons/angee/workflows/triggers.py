@@ -74,15 +74,17 @@ def run_due_schedule_triggers(*, now: datetime | None = None) -> dict[str, int]:
     skipped = 0
     for trigger_id in trigger_ids:
         try:
-            claimed = trigger_model.objects.claim_due_schedule(trigger_id, timestamp=timestamp)
+            claimed = trigger_model.objects.start_due_schedule(trigger_id, timestamp=timestamp)
         except CroniterBadCronError, ValueError, TypeError:
             logger.exception("Skipping workflow schedule trigger %s after next fire calculation failed.", trigger_id)
+            claimed = None
+        except Exception:
+            logger.exception("Workflow schedule trigger %s failed to start workflow.", trigger_id)
             claimed = None
         if claimed is None:
             skipped += 1
             continue
-        trigger, due_at = claimed
-        _enqueue_start(trigger, subject=None, dedup_key=f"schedule:{trigger.pk}:{due_at.isoformat()}")
+        _run, _due_at = claimed
         fired += 1
     return {"triggers": len(trigger_ids), "fired": fired, "skipped": skipped}
 

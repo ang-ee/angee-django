@@ -177,6 +177,48 @@ def test_legacy_gate_decision_still_marks_the_suspended_step_succeeded(
     assert gate.outcome == "completed"
 
 
+def test_force_expiry_wakes_retained_decision_continuation(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="wdc-force-expire")
+
+    def suspend(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+        del self, step_run, now
+        return StepResult.suspend(
+            resume_state={"_resume_after_decisions": True, "gate": {"policy": "all_done"}},
+            decisions=(
+                DecisionSpec(
+                    assignees=(str(to_subject_ref(assignee)),),
+                    action="approve-tool",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(HandlerStep, "run", suspend)
+    workflow = workflow_with_steps(
+        name="Force expiry continuation",
+        steps=({"key": "handler", "step_class": "handler", "config": {}},),
+        edges=(),
+    )
+    run = start_run(workflow)
+    advance_once(run)
+    execute_started(run)
+    row = _step_run(run, "handler")
+    prior_attempt_id = row.current_attempt_id
+
+    assert engine.expire_pending_decisions(run, resolved_by="test/session-close") == 1
+
+    row.refresh_from_db()
+    decision = _decision_for(run, "handler")
+    assert decision.verdict == workflow_models.Verdict.EXPIRED
+    assert row.current_attempt_id == prior_attempt_id
+    assert row.resume_state["_decision_outcome"] == "completed"
+    assert row.wait_until is not None
+
+
 def test_resume_after_decisions_scopes_each_single_and_multi_suspension(
     workflow_gate_tables: None,
     no_workflow_queue: None,
@@ -584,12 +626,6 @@ def test_decision_schema_is_exposed_narrowly_on_public_and_console_decisions(
     )
     schema_decision = _decision_for(_open_gate_run(workflow), "gate")
     schema_less_decision = _opened_decision([assignee], None)
-    with system_context(reason="test workflows legacy gate schema"):
-        state = dict(schema_decision.step_run.resume_state)
-        state.pop("_decision_schemas")
-        schema_decision.step_run.resume_state = state
-        schema_decision.step_run.save(update_fields=["resume_state", "updated_at"])
-
     invalid = engine.decide(schema_decision, "complete", payload={}, actor=assignee)
     assert invalid.validation_error is not None
     query = """
@@ -618,6 +654,61 @@ def test_decision_schema_is_exposed_narrowly_on_public_and_console_decisions(
     assert public_schema_less["workflow_decisions_by_pk"]["decision_schema"] is None
     assert console_schema["workflow_decisions_by_pk"]["decision_schema"] == decision_schema
     assert console_schema_less["workflow_decisions_by_pk"]["decision_schema"] is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_retained_decision_transition_requires_complete_owner(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="wdc-owner-guard")
+    workflow = workflow_with_steps(
+        name="Decision owner guard",
+        steps=(
+            {
+                "key": "gate",
+                "step_class": "gate",
+                "config": _gate_config([assignee], None, []),
+            },
+        ),
+        edges=(),
+    )
+    decision = _decision_for(_open_gate_run(workflow), "gate")
+
+    with pytest.raises(RuntimeError, match="exact transition owner"):
+        type(decision).objects.resolve_retained(
+            decision.pk,
+            verdict=workflow_models.Verdict.COMPLETED,
+            resolution={},
+            resolved_by="test",
+            at=timezone.now(),
+        )
+
+    decision.refresh_from_db()
+    assert decision.verdict == workflow_models.Verdict.PENDING
+
+    with pytest.raises(TypeError, match="transition owner"):
+        decision.resolve(
+            workflow_models.Verdict.COMPLETED,
+            resolution={},
+            resolved_by="bypass",
+        )
+    decision.refresh_from_db()
+    with pytest.raises(TypeError, match="transition owner"):
+        decision.record_invalid_resolution()
+    decision.refresh_from_db()
+    with pytest.raises(TypeError, match="DecisionManager"):
+        type(decision).objects.filter(pk=decision.pk).update(
+            verdict=workflow_models.Verdict.COMPLETED
+        )
+    decision.attempts += 1
+    with pytest.raises(TypeError, match="DecisionManager"):
+        type(decision).objects.bulk_update([decision], ["attempts"])
+
+    decision.refresh_from_db()
+    assert decision.verdict == workflow_models.Verdict.PENDING
+    assert decision.attempts == 0
 
 
 def test_public_decision_schema_query_count_stays_flat_for_three_rows(

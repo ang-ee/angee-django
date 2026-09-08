@@ -176,6 +176,7 @@ def no_workflow_queue(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(engine, "enqueue_advance", lambda run_id: None)
     monkeypatch.setattr(engine, "enqueue_advance_at", lambda run_id, when: None)
     monkeypatch.setattr(engine, "enqueue_execute", lambda step_run_id: None)
+    monkeypatch.setattr(engine, "enqueue_dispatch_publisher", lambda: None)
     monkeypatch.setattr(engine, "enqueue_decision_escalation_at", lambda decision_id, attempt, when: None)
     monkeypatch.setattr(engine, "enqueue_decision_expiry_at", lambda decision_id, attempt, when: None)
 
@@ -244,7 +245,21 @@ def execute_started(run: Any, *, now: Any | None = None, limit: int | None = Non
     if limit is not None:
         rows = rows[:limit]
     for row in rows:
-        if now is None:
+        with system_context(reason="test retained execute dispatch"):
+            attempt = row.current_attempt
+            dispatch = (
+                WorkflowDispatch.objects.filter(step_attempt=attempt).first()
+                if attempt is not None
+                else None
+            )
+        if dispatch is not None:
+            engine.execute_dispatch(
+                dispatch.pk,
+                attempt.pk,
+                attempt.lease_token,
+                now=now,
+            )
+        elif now is None:
             engine.execute(row.pk)
         else:
             engine.execute(row.pk, now=now)
