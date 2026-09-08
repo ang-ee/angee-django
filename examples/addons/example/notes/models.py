@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from django.db import models
+from django.core.exceptions import ValidationError
+from django.db import models, transaction
 
 from angee.base.fields import StateField
 from angee.base.mixins import (
@@ -77,3 +78,35 @@ class Note(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel, HistoryMixin, 
                 field_names.add("updated_at")
                 kwargs["update_fields"] = field_names
         super().save(*args, **kwargs)
+
+    def publication_summary(self) -> dict[str, str]:
+        """Validate publication readiness and return the safe workflow projection."""
+
+        errors: dict[str, str] = {}
+        if not self.title.strip():
+            errors["title"] = "A note title is required for publication."
+        if not self.body.strip():
+            errors["body"] = "Note content is required for publication."
+        if self.status != self.Status.IN_REVIEW:
+            errors["status"] = "A note must be in review before publication."
+        if errors:
+            raise ValidationError(errors)
+        return {
+            "id": str(self.sqid),
+            "title": self.title,
+            "status": str(self.status),
+        }
+
+    def publish(self) -> dict[str, str]:
+        """Publish a ready note through its normal audited save path."""
+
+        with transaction.atomic():
+            current = type(self)._base_manager.select_for_update().get(pk=self.pk)
+            current.publication_summary()
+            current.status = self.Status.ACTIVE
+            current.save(update_fields={"status"})
+            return {
+                "id": str(current.sqid),
+                "title": current.title,
+                "status": str(current.status),
+            }

@@ -5,10 +5,9 @@ rows:
     fields:
       workflow: notes.note_publish_approval
       key: entry
-      name: Entry handler
-      step_class: handler
-      config:
-        outcome: needs_review
+      name: Validate note
+      step_class: note_validate_publication
+      config: {}
       is_entry: true
       position:
         x: 0
@@ -33,10 +32,9 @@ rows:
     fields:
       workflow: notes.note_publish_approval
       key: finalize
-      name: Finalize handler
-      step_class: handler
-      config:
-        outcome: done
+      name: Publish note
+      step_class: note_publish
+      config: {}
       join_rule: all_success
       is_entry: false
       position:

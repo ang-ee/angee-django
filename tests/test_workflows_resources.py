@@ -168,6 +168,22 @@ def _notes_workflow_addon(tmp_path: Path) -> AppConfig:
     }
     target = tmp_path / "notes"
     shutil.copytree(path / "resources", target / "resources")
+    # This isolated loader fixture installs the concrete workflows.Workflow subject
+    # and the core step registry; composed-host coverage exercises the source addon
+    # against notes.Note and its contributed operations.
+    workflow_path = target / "resources" / "demo" / "100_workflows.workflow.yaml"
+    workflow_path.write_text(
+        workflow_path.read_text().replace(
+            "subject_declaration: notes.note",
+            "subject_declaration: workflows.workflow",
+        )
+    )
+    steps_path = target / "resources" / "demo" / "101_workflows.step.yaml"
+    steps_path.write_text(
+        steps_path.read_text()
+        .replace("step_class: note_validate_publication", "step_class: handler")
+        .replace("step_class: note_publish", "step_class: handler")
+    )
     module = ModuleType("example.notes")
     module.__file__ = str(target / "__init__.py")
     config = AppConfig(module.__name__, module)
