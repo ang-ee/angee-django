@@ -120,6 +120,8 @@ export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {
   messages?: readonly string[];
   readOnly?: boolean;
   onChange?: (value: TValue) => void;
+  /** Signal that the widget's current user interaction has completed. */
+  onCommit?: () => void;
 }
 
 export interface WidgetDefinition<TValue = unknown, TRow = unknown> {

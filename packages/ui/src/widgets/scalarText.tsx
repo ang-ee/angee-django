@@ -12,6 +12,7 @@ import type {
 function EmailEdit({
   value,
   onChange,
+  onCommit,
   field,
   readOnly,
 }: WidgetRenderProps<string>): ReactElement {
@@ -24,6 +25,7 @@ function EmailEdit({
       aria-label={widgetLabel(field, "Email")}
       placeholder={fieldPlaceholder(field)}
       onChange={(event) => onChange?.(event.currentTarget.value)}
+      onBlur={onCommit}
     />
   );
 }
@@ -37,6 +39,7 @@ function EmailRead({
 function UrlEdit({
   value,
   onChange,
+  onCommit,
   field,
   readOnly,
 }: WidgetRenderProps<string>): ReactElement {
@@ -49,6 +52,7 @@ function UrlEdit({
       aria-label={widgetLabel(field, "URL")}
       placeholder={fieldPlaceholder(field)}
       onChange={(event) => onChange?.(event.currentTarget.value)}
+      onBlur={onCommit}
     />
   );
 }
@@ -72,6 +76,7 @@ function UrlRead({
 function PhoneEdit({
   value,
   onChange,
+  onCommit,
   field,
   readOnly,
 }: WidgetRenderProps<string>): ReactElement {
@@ -84,6 +89,7 @@ function PhoneEdit({
       aria-label={widgetLabel(field, "Phone")}
       placeholder={fieldPlaceholder(field)}
       onChange={(event) => onChange?.(event.currentTarget.value)}
+      onBlur={onCommit}
     />
   );
 }
@@ -97,6 +103,7 @@ function PhoneRead({
 function PasswordEdit({
   value,
   onChange,
+  onCommit,
   field,
   readOnly,
 }: WidgetRenderProps<string>): ReactElement {
@@ -109,6 +116,7 @@ function PasswordEdit({
       aria-label={widgetLabel(field, "Password")}
       placeholder={fieldPlaceholder(field)}
       onChange={(event) => onChange?.(event.currentTarget.value)}
+      onBlur={onCommit}
     />
   );
 }

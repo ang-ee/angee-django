@@ -7,6 +7,7 @@ import type { WidgetDefinition, WidgetRenderProps } from "./types";
 function TextareaEdit({
   value,
   onChange,
+  onCommit,
   field,
   readOnly,
 }: WidgetRenderProps<string>): ReactElement {
@@ -19,6 +20,7 @@ function TextareaEdit({
       placeholder={field?.label === undefined ? undefined : widgetLabel(field, "Text")}
       rows={6}
       onChange={(event) => onChange?.(event.currentTarget.value)}
+      onBlur={onCommit}
     />
   );
 }

@@ -29,6 +29,7 @@ function slugifyInput(value: string): string {
 function SlugEdit({
   value,
   onChange,
+  onCommit,
   field,
   readOnly,
 }: WidgetRenderProps<string>): ReactElement {
@@ -40,6 +41,7 @@ function SlugEdit({
       aria-label={widgetLabel(field, field?.name ?? "slug")}
       placeholder={fieldPlaceholder(field)}
       onChange={(event) => onChange?.(slugifyInput(event.currentTarget.value))}
+      onBlur={onCommit}
     />
   );
 }

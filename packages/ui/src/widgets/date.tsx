@@ -15,6 +15,7 @@ import type { WidgetDefinition, WidgetRenderProps } from "./types";
 function DateEdit({
   value,
   onChange,
+  onCommit,
   field,
   readOnly,
 }: WidgetRenderProps<DateWidgetValue>): ReactElement {
@@ -34,6 +35,7 @@ function DateEdit({
       onOpenChange={setOpen}
       onSelectDate={(next) => {
         onChange?.(formatDateStorage(next));
+        onCommit?.();
         setOpen(false);
       }}
       footer={
@@ -46,6 +48,7 @@ function DateEdit({
               className="w-full"
               onClick={() => {
                 onChange?.(null);
+                onCommit?.();
                 setOpen(false);
               }}
             >

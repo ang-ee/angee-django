@@ -8,6 +8,7 @@ import type { WidgetDefinition, WidgetRenderProps } from "./types";
 function SwitchEdit({
   value,
   onChange,
+  onCommit,
   field,
   readOnly,
 }: WidgetRenderProps<boolean>): ReactElement {
@@ -16,7 +17,7 @@ function SwitchEdit({
       checked={Boolean(value)}
       disabled={readOnly}
       aria-label={widgetLabel(field, "Toggle")}
-      onCheckedChange={(checked) => onChange?.(checked)}
+      onCheckedChange={(checked) => { onChange?.(checked); onCommit?.(); }}
     />
   );
 }

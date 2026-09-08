@@ -26,6 +26,7 @@ import {
 function ComboboxEdit({
   value,
   onChange,
+  onCommit,
   field,
   readOnly,
 }: WidgetRenderProps<string>): ReactElement {
@@ -48,7 +49,7 @@ function ComboboxEdit({
       onOpenChange={(open) => {
         if (!open) setQuery("");
       }}
-      onValueChange={(next) => onChange?.(next ?? "")}
+      onValueChange={(next) => { onChange?.(next ?? ""); onCommit?.(); }}
     >
       <SelectPrimitive.Trigger
         aria-label={widgetLabel(field, t("combobox.label"))}

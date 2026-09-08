@@ -9,6 +9,8 @@ import { refineResourcesFromDataResources, schemaFieldMetadataFromDataResources,
 import { testDataResource } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
+import { AppRuntimeProvider } from "../../runtime";
+import { defaultWidgets } from "../../widgets";
 import { BoundDescriptorField } from "./BoundDescriptorField";
 import { FormView } from "./FormView";
 import {
@@ -51,6 +53,8 @@ async function fixture(options: {
   acknowledgedSource?: FormViewAcknowledgedSource;
   boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[];
   publicView?: boolean;
+  onFieldInteractionStart?: (path: string) => void;
+  onFieldInteractionCommit?: (path: string) => void;
 } = {}) {
   let record: Row = {
     id: options.id ?? "note-1",
@@ -77,6 +81,8 @@ async function fixture(options: {
       dataResource: resource, modelMetadata: model, formFields: viewFields, fieldByName, refineFields,
       submit: options.submit, onSaved, t: (key) => key,
       acknowledgedSource: options.acknowledgedSource,
+      onFieldInteractionStart: options.onFieldInteractionStart,
+      onFieldInteractionCommit: options.onFieldInteractionCommit,
     });
     return <>{mountedFields.map((name) => <Controller key={name} name={name} control={surface.form.control} render={({ field }) => (
       <input aria-label={name} value={String(field.value ?? "")} onChange={field.onChange} />
@@ -86,7 +92,7 @@ async function fixture(options: {
   }
   function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = fields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[] }) {
     return <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
-      <RouterContextProvider router={router}><ModalsHost><ToastProvider>
+      <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
         {options.publicView ? (
           <FormView
             resource="notes.Note"
@@ -94,11 +100,13 @@ async function fixture(options: {
             fields={viewFields}
             acknowledgedSource={options.acknowledgedSource}
             submit={options.submit}
+            onFieldInteractionStart={options.onFieldInteractionStart}
+            onFieldInteractionCommit={options.onFieldInteractionCommit}
           />
         ) : (
           <Probe key={recordId ?? "create"} recordId={recordId} mountedFields={mountedFields} viewFields={viewFields} />
         )}
-      </ToastProvider></ModalsHost></RouterContextProvider>
+      </AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider>
     </Refine>;
   }
   const view = render(<Tree />);
@@ -567,4 +575,44 @@ test("bound descriptors apply scoped variant visibility through the native form 
   expect(await screen.findByLabelText("Target")).toBeTruthy();
   expect(screen.queryByLabelText("Retry")).toBeNull();
   expect(f.surface().form.getValues("settings.retry")).toBe("later");
+});
+
+test("native bound widgets delimit text, discrete, structured and presence interactions", async () => {
+  const starts = vi.fn();
+  const commits = vi.fn();
+  await fixture({
+    acknowledgedSource: {
+      record: { id: "note-1", title: "First" },
+      values: {
+        title: "First",
+        settings: { title: "Old", kind: "gate", items: [], optional: "set", locked: "fixed" },
+      },
+    },
+    mountedFields: [],
+    onFieldInteractionStart: starts,
+    onFieldInteractionCommit: commits,
+    boundFields: [
+      { scope: "settings", field: { name: "title", label: "Title" } },
+      { scope: "settings", field: { name: "items", label: "Items", widget: "list", itemTemplate: { name: "item", label: "Item" } } },
+      { scope: "settings", field: { name: "optional", label: "Optional", omittable: true } },
+      { scope: "settings", field: { name: "locked", label: "Locked" }, readOnly: true },
+    ],
+  });
+
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "N" } });
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "New" } });
+  expect(starts.mock.calls.filter(([path]) => path === "settings.title")).toHaveLength(1);
+  expect(commits).not.toHaveBeenCalledWith("settings.title");
+  fireEvent.blur(screen.getByLabelText("Title"), { relatedTarget: screen.getByLabelText("Optional") });
+  await waitFor(() => expect(commits).toHaveBeenCalledWith("settings.title"));
+
+  fireEvent.click(await screen.findByRole("button", { name: "Add item" }));
+  expect(starts).toHaveBeenCalledWith("settings.items");
+  expect(commits).toHaveBeenCalledWith("settings.items");
+
+  fireEvent.click(screen.getAllByRole("button", { name: "Not set" })[0]!);
+  expect(starts).toHaveBeenCalledWith("settings.optional");
+  expect(commits).toHaveBeenCalledWith("settings.optional");
+  expect(starts).not.toHaveBeenCalledWith("settings.locked");
+  expect(commits).not.toHaveBeenCalledWith("settings.locked");
 });

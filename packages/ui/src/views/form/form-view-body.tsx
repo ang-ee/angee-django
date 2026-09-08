@@ -90,6 +90,8 @@ export function FormViewRecordHeader({
     fieldReadOnly,
     clearServerFieldError,
     afterFieldChange,
+    startFieldInteraction,
+    commitFieldInteraction,
   } = surface;
   const headerValues = useWatch({
     control: form.control,
@@ -133,10 +135,12 @@ export function FormViewRecordHeader({
                     <RelationFieldWidget
                       value={relationValueId(controller.value) || null}
                       onChange={(next) => {
+                        startFieldInteraction(currentTitleField.name);
                         clearServerFieldError(currentTitleField.name);
                         controller.onChange(next);
                         afterFieldChange(currentTitleField, next);
                       }}
+                      onCommit={() => commitFieldInteraction(currentTitleField.name)}
                       relation={titleRelation}
                       selectedOption={titleSelectedOption}
                       placeholder={currentTitleField.placeholder ?? t("form.untitled")}
@@ -152,10 +156,12 @@ export function FormViewRecordHeader({
                       compact ? "h-8 border-0 bg-transparent px-0 text-base font-semibold shadow-none" : cn(TITLE_TEXT_CLASS, TITLE_INPUT_CLASS),
                     )}
                     onChange={(event) => {
+                      startFieldInteraction(currentTitleField.name);
                       clearServerFieldError(currentTitleField.name);
                       controller.onChange(event.currentTarget.value);
                       afterFieldChange(currentTitleField, event.currentTarget.value);
                     }}
+                    onBlur={() => commitFieldInteraction(currentTitleField.name)}
                   />
                 )
               }
@@ -206,9 +212,11 @@ export function FormViewRecordHeader({
                   value={controller.value}
                   readOnly={fieldReadOnly(currentStatusField)}
                   onChange={(next) => {
+                    startFieldInteraction(currentStatusField.name);
                     controller.onChange(next);
                     afterFieldChange(currentStatusField, next);
                   }}
+                  onCommit={() => commitFieldInteraction(currentStatusField.name)}
                 />
               )}
             />
@@ -240,6 +248,8 @@ export function FormViewOverview({
     clearServerFieldError,
     afterFieldChange,
     fieldReadOnly,
+    startFieldInteraction,
+    commitFieldInteraction,
   } = surface;
   const bodyValues = useWatch({
     control: form.control,
@@ -269,7 +279,9 @@ export function FormViewOverview({
             value={controller.value}
             readOnly={fieldReadOnly(field)}
             errors={fieldState.error ? [fieldState.error] : []}
+            onCommit={() => commitFieldInteraction(field.name)}
             onChange={(next) => {
+              startFieldInteraction(field.name);
               clearServerFieldError(field.name);
               controller.onChange(next);
               afterFieldChange(field, next);
@@ -350,7 +362,9 @@ export function FormViewOverview({
                 value={controller.value}
                 readOnly={fieldReadOnly(currentBodyField)}
                 errors={fieldState.error ? [fieldState.error] : []}
+                onCommit={() => commitFieldInteraction(currentBodyField.name)}
                 onChange={(next) => {
+                  startFieldInteraction(currentBodyField.name);
                   clearServerFieldError(currentBodyField.name);
                   controller.onChange(next);
                   afterFieldChange(currentBodyField, next);
@@ -496,6 +510,7 @@ function BoundFieldRow({
   errors,
   serverMessages,
   onChange,
+  onCommit,
 }: {
   field: FieldDescriptor;
   relation?: RelationFieldInfo;
@@ -505,6 +520,7 @@ function BoundFieldRow({
   errors: readonly unknown[];
   serverMessages?: readonly string[];
   onChange: (value: unknown) => void;
+  onCommit?: () => void;
 }): React.ReactElement {
   const effectiveReadOnly = Boolean(readOnly);
   const composite = Boolean(field.objectTemplate || field.itemTemplate || "rowTemplate" in field);
@@ -528,11 +544,12 @@ function BoundFieldRow({
             : EDITABLE_FIELD_CONTROL_CLASS,
         )}
       >
-        <DescriptorPresenceControl field={field} value={value} readOnly={effectiveReadOnly} onChange={onChange}>
+      <DescriptorPresenceControl field={field} value={value} readOnly={effectiveReadOnly} onChange={onChange} onCommit={onCommit}>
         {relation ? (
           <RelationFieldWidget
             value={relationValueId(value) || null}
             onChange={onChange}
+            onCommit={onCommit}
             readOnly={effectiveReadOnly}
             relation={relation}
             selectedOption={selectedOption}
@@ -545,6 +562,7 @@ function BoundFieldRow({
             messages={messages}
             readOnly={effectiveReadOnly}
             onChange={onChange}
+            onCommit={onCommit}
             controlProps={field.required ? { id: field.name, "aria-required": true } : undefined}
           />
         )}
@@ -562,6 +580,7 @@ function BodyFieldControl({
   errors,
   serverMessages,
   onChange,
+  onCommit,
 }: {
   field: FieldDescriptor;
   value: unknown;
@@ -569,18 +588,20 @@ function BodyFieldControl({
   errors: readonly unknown[];
   serverMessages?: readonly string[];
   onChange: (value: unknown) => void;
+  onCommit?: () => void;
 }): React.ReactElement {
   const composite = Boolean(field.objectTemplate || field.itemTemplate || "rowTemplate" in field);
   const messages = [...fieldErrorMessages(errors, composite ? field.name : undefined), ...(serverMessages ?? [])];
   return (
     <FieldRoot invalid={messages.length > 0} className="grid gap-2">
-      <DescriptorPresenceControl field={field} value={value} readOnly={readOnly} onChange={onChange}>
+      <DescriptorPresenceControl field={field} value={value} readOnly={readOnly} onChange={onChange} onCommit={onCommit}>
       <FieldDescriptorControl
         field={field}
         value={value}
         messages={messages}
         readOnly={readOnly}
         onChange={onChange}
+        onCommit={onCommit}
       />
       </DescriptorPresenceControl>
       <FieldFooter description={field.description} errors={messages} />

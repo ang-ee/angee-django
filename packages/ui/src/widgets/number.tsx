@@ -9,6 +9,7 @@ type NumericWidgetValue = number | string | null;
 function IntegerEdit({
   value,
   onChange,
+  onCommit,
   field,
   readOnly,
 }: WidgetRenderProps<NumericWidgetValue>): ReactElement {
@@ -22,6 +23,7 @@ function IntegerEdit({
         ...field?.controlProps,
         "aria-label": widgetLabel(field, "Integer"),
         inputMode: "numeric",
+        onBlur: onCommit,
       }}
       onValueChange={(next) =>
         onChange?.(next === null ? null : Math.trunc(next))
@@ -33,6 +35,7 @@ function IntegerEdit({
 function FloatEdit({
   value,
   onChange,
+  onCommit,
   field,
   readOnly,
 }: WidgetRenderProps<NumericWidgetValue>): ReactElement {
@@ -45,6 +48,7 @@ function FloatEdit({
         ...field?.controlProps,
         "aria-label": widgetLabel(field, "Decimal number"),
         inputMode: "decimal",
+        onBlur: onCommit,
       }}
       onValueChange={(next) => onChange?.(next)}
     />

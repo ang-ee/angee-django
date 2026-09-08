@@ -16,7 +16,7 @@ type StructuredWidgetField = WidgetField & {
   maxItems?: number;
 };
 
-function ObjectField({ value, field, messages = [], readOnly = false, onChange }: WidgetRenderProps): React.ReactElement {
+function ObjectField({ value, field, messages = [], readOnly = false, onChange, onCommit }: WidgetRenderProps): React.ReactElement {
   const template = structuredField(field).objectTemplate;
   if (!template) throw new Error('The "object" widget requires field.objectTemplate.');
   const objectValue = recordValue(value);
@@ -28,13 +28,14 @@ function ObjectField({ value, field, messages = [], readOnly = false, onChange }
         return <LabeledDescriptorField key={child.name} field={{ ...child, name: path }}
           value={objectValue[child.name]} messages={messagesForDottedPath(messages, path)}
           readOnly={readOnly || child.readOnly}
+          onCommit={onCommit}
           onChange={(next) => onChange?.(updatedRecord(objectValue, child.name, next))} />;
       })}
     </fieldset>
   );
 }
 
-function ListField({ value, field, messages = [], readOnly = false, onChange }: WidgetRenderProps): React.ReactElement {
+function ListField({ value, field, messages = [], readOnly = false, onChange, onCommit }: WidgetRenderProps): React.ReactElement {
   const t = useUiT();
   const descriptorField = structuredField(field);
   const item = descriptorField.itemTemplate;
@@ -51,20 +52,21 @@ function ListField({ value, field, messages = [], readOnly = false, onChange }: 
           <div key={identities.current[index]} className="space-y-2 rounded-6 border border-border p-3">
             <LabeledDescriptorField field={{ ...item, name: path, label: item.label ?? t("form.list.item", { number: index + 1 }) }}
               value={entry} messages={messagesForDottedPath(messages, path)} readOnly={readOnly || item.readOnly}
+              onCommit={onCommit}
               onChange={(next) => onChange?.(values.map((current, currentIndex) => currentIndex === index ? next : current))} />
             {!readOnly ? <div className="flex flex-wrap gap-1">
               <Button type="button" size="sm" variant="ghost" disabled={index === 0} aria-label={t("form.list.moveUpNamed", { number: index + 1 })}
-                onClick={() => { identities.current = moved(identities.current, index, index - 1); onChange?.(moved(values, index, index - 1)); }}>{t("form.list.moveUp")}</Button>
+                onClick={() => { identities.current = moved(identities.current, index, index - 1); onChange?.(moved(values, index, index - 1)); onCommit?.(); }}>{t("form.list.moveUp")}</Button>
               <Button type="button" size="sm" variant="ghost" disabled={index === values.length - 1} aria-label={t("form.list.moveDownNamed", { number: index + 1 })}
-                onClick={() => { identities.current = moved(identities.current, index, index + 1); onChange?.(moved(values, index, index + 1)); }}>{t("form.list.moveDown")}</Button>
+                onClick={() => { identities.current = moved(identities.current, index, index + 1); onChange?.(moved(values, index, index + 1)); onCommit?.(); }}>{t("form.list.moveDown")}</Button>
               <Button type="button" size="sm" variant="ghost" disabled={descriptorField.minItems !== undefined && values.length <= descriptorField.minItems} aria-label={t("form.list.removeNamed", { number: index + 1 })}
-                onClick={() => { identities.current.splice(index, 1); onChange?.(values.filter((_, currentIndex) => currentIndex !== index)); }}>{t("form.list.remove")}</Button>
+                onClick={() => { identities.current.splice(index, 1); onChange?.(values.filter((_, currentIndex) => currentIndex !== index)); onCommit?.(); }}>{t("form.list.remove")}</Button>
             </div> : null}
           </div>
         );
       })}
       {!readOnly ? <Button type="button" size="sm" variant="secondary" disabled={descriptorField.maxItems !== undefined && values.length >= descriptorField.maxItems}
-        onClick={() => { identities.current.push(nextIdentity()); onChange?.([...values, initialFormSpecValue(item)]); }}>{t("form.list.add")}</Button> : null}
+        onClick={() => { identities.current.push(nextIdentity()); onChange?.([...values, initialFormSpecValue(item)]); onCommit?.(); }}>{t("form.list.add")}</Button> : null}
     </div>
   );
 }

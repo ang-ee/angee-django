@@ -20,6 +20,7 @@ import type { WidgetDefinition, WidgetRenderProps } from "./types";
 function DatetimeEdit({
   value,
   onChange,
+  onCommit,
   field,
   readOnly,
 }: WidgetRenderProps<DateWidgetValue>): ReactElement {
@@ -37,7 +38,7 @@ function DatetimeEdit({
       label={label}
       ariaLabel={widgetLabel(field, t("datetime.label"))}
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={(nextOpen) => { setOpen(nextOpen); if (!nextOpen) onCommit?.(); }}
       onSelectDate={(next) => {
         if (!next) return;
         const selected = new Date(next);
@@ -79,6 +80,7 @@ function DatetimeEdit({
               size="sm"
               onClick={() => {
                 onChange?.(null);
+                onCommit?.();
                 setOpen(false);
               }}
             >

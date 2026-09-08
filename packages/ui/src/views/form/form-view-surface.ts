@@ -119,6 +119,10 @@ export interface UseFormViewSurfaceProps {
   onSaved?: (row: Row) => void;
   submit?: FormSubmit;
   createSubmit?: FormSubmit;
+  /** Called before a native field owner applies the first value in an interaction. */
+  onFieldInteractionStart?: (path: string) => void;
+  /** Called when that native field interaction is complete. */
+  onFieldInteractionCommit?: (path: string) => void;
   recordTabs?: readonly RecordTabDescriptor[];
   defaultRecordTab?: string;
   deleteAction?: RecordDeleteAction;
@@ -169,6 +173,8 @@ export function useFormViewSurface({
   onSaved,
   submit,
   createSubmit,
+  onFieldInteractionStart,
+  onFieldInteractionCommit,
   recordTabs,
   defaultRecordTab = FORM_VIEW_OVERVIEW_TAB_ID,
   deleteAction,
@@ -411,6 +417,8 @@ export function useFormViewSurface({
     onSaved,
     submit,
     createSubmit,
+    onFieldInteractionStart,
+    onFieldInteractionCommit,
     defaultSlugSource,
     t,
     readOnly,

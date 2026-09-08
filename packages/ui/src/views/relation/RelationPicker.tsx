@@ -54,6 +54,7 @@ export interface RelationPickerProps {
   id?: string;
   value?: string | null;
   onChange?: (value: string) => void;
+  onCommit?: () => void;
   options: readonly RelationOption[];
   placeholder?: string;
   searchPlaceholder?: string;
@@ -108,6 +109,7 @@ export function RelationPicker({
   id,
   value,
   onChange,
+  onCommit,
   options,
   placeholder,
   searchPlaceholder,
@@ -136,7 +138,7 @@ export function RelationPicker({
           <RelationField
             id={id}
             value={value}
-            onChange={onChange}
+            onChange={(next) => { onChange?.(next); onCommit?.(); }}
             options={options}
             placeholder={placeholder}
             searchPlaceholder={searchPlaceholder}
@@ -196,6 +198,7 @@ export function RelationPicker({
                       const id = rowPublicId(row);
                       if (id) {
                         onChange?.(id);
+                        onCommit?.();
                         onCreated?.(id);
                       }
                       setDialog(null);

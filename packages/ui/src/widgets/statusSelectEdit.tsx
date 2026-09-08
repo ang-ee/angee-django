@@ -7,6 +7,7 @@ import type { WidgetRenderProps } from "./types";
 export function StatusSelectEdit({
   value,
   onChange,
+  onCommit,
   field,
   readOnly,
 }: WidgetRenderProps<string>): ReactElement {
@@ -18,7 +19,10 @@ export function StatusSelectEdit({
       disabled={readOnly}
       aria-label={widgetLabel(field, "Status")}
       placeholder={widgetLabel(field, "Status")}
-      onValueChange={(next) => onChange?.(next)}
+      onValueChange={(next) => {
+        onChange?.(next);
+        onCommit?.();
+      }}
     />
   );
 }

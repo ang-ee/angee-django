@@ -7,6 +7,7 @@ import type { WidgetDefinition, WidgetRenderProps } from "./types";
 function BooleanEdit({
   value,
   onChange,
+  onCommit,
   field,
   readOnly,
 }: WidgetRenderProps<boolean>): ReactElement {
@@ -15,7 +16,7 @@ function BooleanEdit({
       checked={Boolean(value)}
       disabled={readOnly}
       aria-label={widgetLabel(field, "Boolean")}
-      onCheckedChange={(checked) => onChange?.(checked)}
+      onCheckedChange={(checked) => { onChange?.(checked); onCommit?.(); }}
     />
   );
 }

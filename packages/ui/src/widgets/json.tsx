@@ -36,6 +36,7 @@ const EDITOR_SHELL =
 function JsonEdit({
   value,
   onChange,
+  onCommit,
   field,
   readOnly,
 }: WidgetRenderProps<JsonValue>): ReactElement {
@@ -69,6 +70,7 @@ function JsonEdit({
   useCodeMirrorEditor(hostRef, {
     value: draft,
     onChange: handleStringChange,
+    onBlur: onCommit,
     readOnly,
     placeholder: widgetLabel(field, "JSON"),
     extensions: JSON_EXTENSIONS,

@@ -33,6 +33,7 @@ export interface FieldDescriptorControlProps {
   messages?: readonly string[];
   readOnly?: boolean;
   onChange?: (value: unknown) => void;
+  onCommit?: () => void;
   controlProps?: WidgetControlProps;
 }
 
@@ -48,6 +49,7 @@ export function FieldDescriptorControl({
   messages,
   readOnly,
   onChange,
+  onCommit,
   controlProps,
 }: FieldDescriptorControlProps): React.ReactElement {
   const widget = useResolvedWidget(fieldWidgetId(field)) ?? fallbackWidget();
@@ -79,6 +81,7 @@ export function FieldDescriptorControl({
       messages={messages}
       readOnly={readOnly}
       onChange={onChange}
+      onCommit={onCommit}
     />
   );
 }
@@ -91,6 +94,7 @@ function fallbackWidget(): WidgetDefinition {
     edit: ({
       value,
       onChange,
+      onCommit,
       readOnly,
       field,
     }: WidgetRenderProps) => (
@@ -100,6 +104,7 @@ function fallbackWidget(): WidgetDefinition {
         value={String(value ?? "")}
         readOnly={readOnly}
         onChange={(event) => onChange?.(event.currentTarget.value)}
+        onBlur={onCommit}
       />
     ),
   };

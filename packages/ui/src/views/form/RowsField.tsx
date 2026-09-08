@@ -52,6 +52,7 @@ export function RowsField({
   messages = [],
   readOnly = false,
   onChange,
+  onCommit,
 }: WidgetRenderProps<RowsValue>): ReactElement {
   const rows = rowsValue(value);
   const fieldName = rowsFieldName(field);
@@ -110,6 +111,7 @@ export function RowsField({
                       ),
                     );
                   }}
+                  onCommit={onCommit}
                 />
               ))}
             </TableRow>
@@ -128,6 +130,7 @@ function RowsCell({
   row,
   rowIndex,
   onChange,
+  onCommit,
 }: {
   column: FormSpecFieldDescriptor;
   fieldName: string;
@@ -136,6 +139,7 @@ function RowsCell({
   row: Record<string, unknown>;
   rowIndex: number;
   onChange: (value: unknown) => void;
+  onCommit?: () => void;
 }): ReactElement {
   const cellPath = `${fieldName}.${rowIndex}.${column.name}`;
   return (
@@ -152,6 +156,7 @@ function RowsCell({
         showLabel={false}
         showDescription={false}
         onChange={onChange}
+        onCommit={onCommit}
       />
     </TableCell>
   );

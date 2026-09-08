@@ -19,6 +19,7 @@ import { useRelationOptions } from "./relation-options";
 export interface RelationFieldWidgetProps {
   value?: string | null;
   onChange?: (value: string) => void;
+  onCommit?: () => void;
   readOnly?: boolean;
   relation: RelationFieldInfo;
   /** Server-side filters narrowing the rows offered by this relation picker. */
@@ -45,6 +46,7 @@ export interface RelationFieldWidgetProps {
 export function RelationFieldWidget({
   value,
   onChange,
+  onCommit,
   readOnly,
   relation,
   filters,
@@ -87,6 +89,7 @@ export function RelationFieldWidget({
     <RelationPicker
       value={value}
       onChange={onChange}
+      onCommit={onCommit}
       options={options}
       readOnly={readOnly}
       placeholder={placeholder}

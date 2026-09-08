@@ -13,6 +13,7 @@ import {
 function SelectEdit({
   value,
   onChange,
+  onCommit,
   field,
   readOnly,
 }: WidgetRenderProps<string>): ReactElement {
@@ -31,6 +32,7 @@ function SelectEdit({
       onValueChange={(next) => {
         if (next === selected) return;
         onChange?.(next);
+        onCommit?.();
       }}
     />
   );

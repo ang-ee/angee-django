@@ -43,6 +43,7 @@ export interface CodeMirrorEditorOptions {
   value: string;
   /** Called (coalesced per frame) with the new text on every edit. */
   onChange?: (value: string) => void;
+  onBlur?: () => void;
   readOnly?: boolean;
   /** Placeholder shown while the document is empty. */
   placeholder: string;
@@ -63,10 +64,11 @@ export function useCodeMirrorEditor(
   host: RefObject<HTMLDivElement | null>,
   options: CodeMirrorEditorOptions,
 ): RefObject<EditorView | null> {
-  const { value, onChange, readOnly, placeholder: placeholderText, extensions } =
+  const { value, onChange, onBlur, readOnly, placeholder: placeholderText, extensions } =
     options;
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
+  const onBlurRef = useRef(onBlur);
   const pendingRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const syncingRef = useRef(false);
@@ -79,7 +81,8 @@ export function useCodeMirrorEditor(
 
   useEffect(() => {
     onChangeRef.current = onChange;
-  }, [onChange]);
+    onBlurRef.current = onBlur;
+  }, [onBlur, onChange]);
 
   const flushPendingChange = useCallback(() => {
     if (timerRef.current !== null) {
@@ -109,7 +112,7 @@ export function useCodeMirrorEditor(
       if (!update.docChanged || syncingRef.current) return;
       scheduleChange();
     });
-    const blurHandler = EditorView.domEventHandlers({ blur: flushPendingChange });
+    const blurHandler = EditorView.domEventHandlers({ blur: () => { flushPendingChange(); onBlurRef.current?.(); } });
     const state = EditorState.create({
       doc: init.value,
       extensions: [

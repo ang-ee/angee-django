@@ -115,6 +115,8 @@ export interface UseFormViewSaveProps {
   submit?: FormSubmit;
   createSubmit?: FormSubmit;
   defaultSlugSource?: string;
+  onFieldInteractionStart?: (path: string) => void;
+  onFieldInteractionCommit?: (path: string) => void;
   t: UiTranslate;
 }
 
@@ -139,6 +141,8 @@ export interface FormViewSaveSurface {
   reload: () => void;
   afterFieldChange: (field: FieldDescriptor, value: unknown, scope?: string) => void;
   fieldReadOnly: (field: FieldDescriptor) => boolean;
+  startFieldInteraction: (path: string) => void;
+  commitFieldInteraction: (path: string) => void;
 }
 
 /** RHF owns values/baselines/errors; Refine owns resource reads and mutations. */
@@ -158,6 +162,8 @@ export function useFormViewSave({
   submit,
   createSubmit,
   defaultSlugSource,
+  onFieldInteractionStart,
+  onFieldInteractionCommit,
   t,
 }: UseFormViewSaveProps): FormViewSaveSurface {
   const refineResource = dataResource ? refineResourceName(dataResource) : "";
@@ -646,6 +652,22 @@ export function useFormViewSave({
     reset(isCreate ? emptyValues : values, { keepDirtyValues: false, keepDirty: false });
     formIsDirtyRef.current = false;
   }, [emptyValues, isCreate, reset, values]);
+  const activeFieldInteractions = React.useRef(new Set<string>());
+  const startFieldInteraction = React.useCallback(
+    (path: string) => {
+      if (activeFieldInteractions.current.has(path)) return;
+      activeFieldInteractions.current.add(path);
+      onFieldInteractionStart?.(path);
+    },
+    [onFieldInteractionStart],
+  );
+  const commitFieldInteraction = React.useCallback(
+    (path: string) => {
+      if (!activeFieldInteractions.current.delete(path)) return;
+      onFieldInteractionCommit?.(path);
+    },
+    [onFieldInteractionCommit],
+  );
 
   return {
     form,
@@ -668,6 +690,8 @@ export function useFormViewSave({
     reload,
     afterFieldChange,
     fieldReadOnly,
+    startFieldInteraction,
+    commitFieldInteraction,
   };
 }
 

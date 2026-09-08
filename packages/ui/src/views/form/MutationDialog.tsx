@@ -97,6 +97,7 @@ export interface MutationDialogControlProps {
   /** Present when the custom control declares `controlLabelMode: "group"`. */
   labelledBy: string | undefined;
   onChange: (value: unknown) => void;
+  onCommit?: () => void;
   /** Every current dialog value, so a control can scope itself by a sibling field. */
   dialogValues: Record<string, unknown>;
 }
@@ -361,6 +362,7 @@ export function LabeledDescriptorField({
   showLabel = true,
   showDescription = true,
   onChange,
+  onCommit,
 }: {
   field: MutationDialogField & {
     rowTemplate?: readonly FormSpecFieldDescriptor[];
@@ -378,6 +380,7 @@ export function LabeledDescriptorField({
   showLabel?: boolean;
   showDescription?: boolean;
   onChange: (value: unknown) => void;
+  onCommit?: () => void;
 }): React.ReactElement {
   const generatedId = React.useId();
   const controlId = `mutation-field-${generatedId}`;
@@ -407,7 +410,7 @@ export function LabeledDescriptorField({
           {field.label ?? field.name}
         </FieldLabel>
       ) : null}
-      <DescriptorPresenceControl field={field} value={value} readOnly={readOnly} onChange={onChange}>
+      <DescriptorPresenceControl field={field} value={value} readOnly={readOnly} onChange={onChange} onCommit={onCommit}>
       {field.control ? (
         field.control({
           id: controlId,
@@ -416,6 +419,7 @@ export function LabeledDescriptorField({
           describedBy,
           labelledBy: groupLabel ? labelId : undefined,
           onChange,
+          onCommit,
           dialogValues: dialogValues ?? {},
         })
       ) : field.relation ? (
@@ -427,6 +431,7 @@ export function LabeledDescriptorField({
           value={value}
           readOnly={readOnly}
           onChange={onChange}
+          onCommit={onCommit}
         />
       ) : (
         <FieldDescriptorControl
@@ -441,6 +446,7 @@ export function LabeledDescriptorField({
             ...(field.required ? { "aria-required": true } : {}),
           }}
           onChange={onChange}
+          onCommit={onCommit}
         />
       )}
       </DescriptorPresenceControl>
@@ -471,6 +477,7 @@ function MutationDialogRelationControl({
   value,
   readOnly,
   onChange,
+  onCommit,
 }: {
   controlId: string;
   describedBy?: string;
@@ -479,6 +486,7 @@ function MutationDialogRelationControl({
   value: unknown;
   readOnly?: boolean;
   onChange: (value: unknown) => void;
+  onCommit?: () => void;
 }): React.ReactElement {
   const [opened, setOpened] = React.useState(false);
   const metadata = useSchemaFieldMetadata();
@@ -537,6 +545,7 @@ function MutationDialogRelationControl({
         aria-describedby={describedBy}
         aria-required={field.required || undefined}
         onChange={onChange}
+        onCommit={onCommit}
       />
     );
   }
@@ -545,6 +554,7 @@ function MutationDialogRelationControl({
       id={controlId}
       value={selectedValue}
       onChange={onChange}
+      onCommit={onCommit}
       options={options}
       readOnly={readOnly}
       placeholder={field.placeholder}

@@ -180,6 +180,26 @@ describe("RelationPicker edit affordance", () => {
     );
   });
 
+  test("commits a portal selection after changing the relation", async () => {
+    const onChange = vi.fn();
+    const onCommit = vi.fn();
+    renderPicker(
+      <RelationPicker
+        value={null}
+        options={options}
+        onChange={onChange}
+        onCommit={onCommit}
+        aria-label="OAuth Client"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "OAuth Client" }));
+    fireEvent.click(await screen.findByText("Globex OAuth"));
+
+    expect(onChange).toHaveBeenCalledWith("client-2");
+    expect(onCommit).toHaveBeenCalledTimes(1);
+  });
+
   test("opens the selected record in an edit dialog", async () => {
     renderPicker(
       <RelationPicker
