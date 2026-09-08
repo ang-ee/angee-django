@@ -76,6 +76,7 @@ export function FormViewRecordHeader({
     titleFieldMessages,
     displayRecord,
     modelMetadata,
+    relationByField,
     loading,
     subtitleParts,
     statusField,
@@ -83,6 +84,15 @@ export function FormViewRecordHeader({
     clearServerFieldError,
     afterFieldChange,
   } = surface;
+  const titleRelation = titleField
+    ? relationByField.get(titleField.name)
+    : undefined;
+  const titleSelectedOption = titleField && titleRelation
+    ? relationSelectedOption(
+        displayRecord?.[titleField.name],
+        titleRelation.labelField,
+      )
+    : undefined;
   return (
     <header className="grid gap-4">
       <div className="flex items-start gap-4 max-[900px]:flex-col max-[900px]:items-stretch">
@@ -94,8 +104,28 @@ export function FormViewRecordHeader({
               render={({ field: controller }) =>
                 fieldReadOnly(titleField) ? (
                   <h1 className={TITLE_TEXT_CLASS}>
-                    {titleText(controller.value, t("form.untitled"))}
+                    {titleText(
+                      titleRelation
+                        ? titleSelectedOption?.label ?? relationValueId(controller.value)
+                        : controller.value,
+                      t("form.untitled"),
+                    )}
                   </h1>
+                ) : titleRelation ? (
+                  <div className={TITLE_TEXT_CLASS}>
+                    <RelationFieldWidget
+                      value={relationValueId(controller.value) || null}
+                      onChange={(next) => {
+                        clearServerFieldError(titleField.name);
+                        controller.onChange(next);
+                        afterFieldChange(titleField, next);
+                      }}
+                      relation={titleRelation}
+                      selectedOption={titleSelectedOption}
+                      placeholder={titleField.placeholder ?? t("form.untitled")}
+                      aria-label={fieldAriaLabel(titleField)}
+                    />
+                  </div>
                 ) : (
                   <Input
                     value={String(controller.value ?? "")}

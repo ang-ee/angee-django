@@ -1022,6 +1022,99 @@ describe("FormView", () => {
     );
   });
 
+  test("renders a relation title from its declared record representation", async () => {
+    sdkMocks.record = {
+      id: "run-1",
+      workflow: { id: "workflow-1", name: "Daily briefing" },
+    };
+    renderWithProviders(
+      <FormView
+        resource="workflows.Run"
+        id="run-1"
+        fields={[{ name: "workflow", label: "Workflow", title: true, readOnly: true }]}
+      />,
+      workflowRelationMetadata(),
+    );
+
+    expect(await screen.findByRole("heading", { name: "Daily briefing" })).toBeTruthy();
+    expect(screen.queryByText("[object Object]")).toBeNull();
+  });
+
+  test("falls back from a missing relation label to identity, then Untitled", async () => {
+    sdkMocks.record = { id: "run-1", workflow: { id: "workflow-1" } };
+    const metadata = workflowRelationMetadata();
+
+    renderWithProviders(
+      <FormView
+        resource="workflows.Run"
+        id="run-1"
+        fields={[{ name: "workflow", label: "Workflow", title: true, readOnly: true }]}
+      />,
+      metadata,
+    );
+    expect(await screen.findByRole("heading", { name: "workflow-1" })).toBeTruthy();
+
+    cleanup();
+    sdkMocks.record = { id: "run-2", workflow: null };
+    renderWithProviders(
+      <FormView
+        resource="workflows.Run"
+        id="run-2"
+        fields={[{ name: "workflow", label: "Workflow", title: true, readOnly: true }]}
+      />,
+      metadata,
+    );
+    expect(await screen.findByRole("heading", { name: "Untitled" })).toBeTruthy();
+    expect(screen.queryByText("[object Object]")).toBeNull();
+  });
+
+  test("renders an editable relation title through the native picker", async () => {
+    sdkMocks.record = {
+      id: "run-1",
+      workflow: { id: "workflow-1", name: "Daily briefing" },
+    };
+    sdkMocks.listRows = [
+      { id: "workflow-1", name: "Daily briefing" },
+      { id: "workflow-2", name: "Weekly review" },
+    ];
+
+    renderWithProviders(
+      <FormView
+        resource="workflows.Run"
+        id="run-1"
+        fields={[{ name: "workflow", label: "Workflow", title: true }]}
+      />,
+      workflowRelationMetadata(),
+    );
+
+    const picker = await screen.findByRole("button", {
+      name: "Workflow: Daily briefing",
+    });
+    expect(screen.queryByRole("textbox", { name: "Workflow" })).toBeNull();
+    fireEvent.click(picker);
+    fireEvent.click(await screen.findByText("Weekly review"));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Workflow: Weekly review" }),
+      ).toBeTruthy(),
+    );
+
+    cleanup();
+    sdkMocks.record = null;
+    renderWithProviders(
+      <FormView
+        resource="workflows.Run"
+        id={null}
+        fields={[{ name: "workflow", label: "Workflow", title: true }]}
+      />,
+      workflowRelationMetadata(),
+    );
+    expect(screen.getByRole("button", { name: "Workflow" }).textContent).toContain(
+      "Untitled",
+    );
+    expect(screen.queryByRole("textbox", { name: "Workflow" })).toBeNull();
+  });
+
   test("submits create on title Enter while omitting blank non-string values", async () => {
     const metadata: TestSchemaMetadata = {
       types: {
@@ -3042,6 +3135,33 @@ function defaultResource(typeName: string, modelLabel: string): DataResourceMeta
     aggregateFields: [],
 
 
+  };
+}
+
+function workflowRelationMetadata(): TestSchemaMetadata {
+  return {
+    types: {
+      RunType: {
+        ...defaultModel("RunType", "workflows.Run"),
+        fields: {
+          workflow: {
+            name: "workflow",
+            kind: "relation",
+            relationModelLabel: "workflows.Workflow",
+          },
+        },
+      },
+      WorkflowType: {
+        ...defaultModel("WorkflowType", "workflows.Workflow"),
+        fields: {
+          name: { name: "name", kind: "scalar", scalar: "String" },
+        },
+        resource: {
+          ...defaultResource("WorkflowType", "workflows.Workflow"),
+          recordRepresentation: "name",
+        },
+      },
+    },
   };
 }
 

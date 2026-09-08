@@ -1,12 +1,23 @@
 import { describe, expect, test } from "vitest";
 
 import type { FieldDescriptor } from "../page";
-import { emptyDraft, missingRequiredFieldNames, mutationData, recordToValues } from "./form-view-model";
+import {
+  emptyDraft,
+  missingRequiredFieldNames,
+  mutationData,
+  recordToValues,
+  titleText,
+} from "./form-view-model";
 
 const fields: readonly FieldDescriptor[] = [
   { name: "config.local_root", widget: "text" },
   { name: "config.local_name", widget: "text" },
 ];
+
+test("titleText preserves string and numeric scalar titles", () => {
+  expect(titleText("Daily briefing", "Untitled")).toBe("Daily briefing");
+  expect(titleText(42, "Untitled")).toBe("42");
+});
 
 describe("dotted form fields", () => {
   test("seed and read nested record values through native RHF-shaped data", () => {
