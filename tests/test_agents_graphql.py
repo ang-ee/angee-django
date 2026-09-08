@@ -30,6 +30,7 @@ from angee.agents.context import render_view_context
 from angee.agents.models import Agent as AbstractAgent
 from angee.agents.models import AgentSession as AbstractAgentSession
 from angee.agents.models import AgentTurn as AbstractAgentTurn
+from angee.agents.models import MCPPlacement
 from angee.agents.models import MCPServer as AbstractMCPServer
 from angee.agents.models import MCPTool as AbstractMCPTool
 from angee.agents.models import ToolGrant as AbstractToolGrant
@@ -1713,6 +1714,31 @@ def test_mcp_config_emits_secret_ref_auth_header_for_credentialed_server(
     # The bearer reaches the container via the service env, set from the operator secret.
     assert f'{agent.mcp_bearer_env(secured)}: "${{secret.{secret_name}}}"' in service_inputs["mcp_env"]
     assert secrets == {secret_name: "tok-notes"}  # synced server-side, never in the file
+
+
+def test_mcp_secrets_derive_per_agent_bearer_for_internal_server(agents_console_tables: None) -> None:
+    """An internal server syncs the per-agent derived bearer, not the raw credential secret."""
+
+    owner = User.objects.create_user(username="agt-mcpint-owner", email="mcpint@example.com")
+    with system_context(reason="test.agents.mcp_secrets.internal"):
+        credential = Credential.objects.create_local_credential(
+            owner, kind=str(CredentialKind.STATIC_TOKEN), name="angee-bearer", material={"api_key": "tok-internal"}
+        )
+        agent = Agent.objects.create(name="Internal Cfg", owner=owner)
+        server = MCPServer.objects.create(
+            name="angee",
+            url="http://host.docker.internal:8111/mcp/",
+            credential=credential,
+            placement=MCPPlacement.INTERNAL,
+        )
+        agent.mcp_servers.add(server)
+        secrets = agent.mcp_secrets()
+        secret_name = agent.mcp_secret_name(server)
+        bearer = server.bearer_for(agent)
+
+    assert secrets[secret_name] == bearer
+    assert bearer.startswith(f"{agent.sqid}.")
+    assert bearer != "tok-internal"  # the raw credential secret never leaves the platform
 
 
 def test_mcp_config_resolves_builtin_server_from_settings(

@@ -1,59 +1,76 @@
 """The agents addon's MCP bearer → actor verifier.
 
-An ``agents.MCPServer.credential`` (an ``integrate.Credential``) holds the bearer the
-agent presents to an internal MCP server. This verifier matches an inbound bearer
-to that credential and resolves it to the agent actor the tool bodies run under. It is
-named by ``ANGEE_MCP_ACTOR_VERIFIER`` (see ``agents.autoconfig``); the base
-``angee.mcp`` runtime calls it and has no knowledge of the catalogue.
+Each provisioned agent presents its own bearer to a platform-internal MCP server:
+``MCPServer.bearer_for`` mints ``"<agent sqid>.<hmac>"`` from the server's
+``agents.MCPServer.credential`` (an ``integrate.Credential``). This verifier parses that
+shape, resolves the named agent, and confirms one of the agent's internal MCP servers
+mints the presented digest — returning the agent subject the tool bodies run under. It is
+named by ``ANGEE_MCP_ACTOR_VERIFIER`` (see ``agents.autoconfig``); the base ``angee.mcp``
+runtime calls it and has no knowledge of the catalogue.
 
-Caveat: this verifier authenticates the bearer to an agent subject only. Per-tool
-authorization is not yet enforced at this layer: any authenticated agent reaches
-every registered tool body, gated only by the tool's underlying REBAC scoping.
-Shared-server credentials resolving to more than one candidate agent fail closed
-(``None``). Per-agent bearers plus per-tool gating are deferred to
-``.work/plans/fork-a6-mcp-authz-deferred.md``.
+This verifier authenticates the bearer to an agent subject only. Per-tool authorization
+is enforced separately by ``agents.grants`` tool grants (the pydantic runtime's
+``ToolGrantAccess``), so an authenticated agent still reaches only the tools it was granted.
 """
 
 from __future__ import annotations
 
-import hmac
-from typing import Any
+import logging
 
 from django.apps import apps
 from rebac import SubjectRef, system_context
 
-from angee.agents.models import AgentLifecycle, RuntimeStatus
+from angee.agents.models import AgentLifecycle, MCPPlacement, RuntimeStatus
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_actor(bearer: str) -> SubjectRef | None:
-    """Return the MCP actor for ``bearer``, or ``None`` when no credential matches.
+    """Return the MCP actor for ``bearer``, or ``None`` when it resolves to no agent.
 
-    Credential material is encrypted at rest, so the bearer can't be queried by
-    column: the candidate set is the (small, bounded) credentials backing MCP
-    servers, compared by their decrypted ``secret_value()`` with a constant-time
-    digest so the match leaks no timing. A bearer must resolve to exactly one
-    provisioned non-template agent; no match, no agent, or multiple agents returns
-    ``None`` (no admin/user fallback) and lets FastMCP deny the request.
+    The bearer is ``"<agent sqid>.<hmac>"`` (see :meth:`MCPServer.bearer_for`): parse it,
+    look the agent up by its public sqid, and — for a READY/RUNNING non-template agent —
+    accept it when one of the agent's internal, credentialed MCP servers mints the presented
+    digest (:meth:`MCPServer.accepts_bearer_digest`, a constant-time compare). Every decline
+    returns ``None`` (no admin/user fallback) and is logged at WARNING with its reason and
+    the sqid segment only — never the digest, bearer, or any secret — letting FastMCP deny
+    the request.
     """
 
     if not bearer:
+        logger.warning("MCP bearer declined: empty bearer")
         return None
     mcp_server = apps.get_model("agents", "MCPServer")
-    agents: dict[Any, Any] = {}
+    agent_model = apps.get_model("agents", "Agent")
+    parsed = mcp_server.parse_bearer(bearer)
+    if parsed is None:
+        logger.warning("MCP bearer declined: malformed bearer")
+        return None
+    sqid, digest = parsed
     with system_context(reason="agents.mcp.verify_bearer"):
-        for server in mcp_server.objects.exclude(credential__isnull=True).select_related(
-            "credential"
-        ).prefetch_related("agents"):
-            if hmac.compare_digest(str(server.credential.secret_value()), bearer):
-                for agent in server.agents.all():
-                    if (
-                        agent.is_template
-                        or agent.lifecycle != AgentLifecycle.READY
-                        or agent.runtime_status != RuntimeStatus.RUNNING
-                    ):
-                        continue
-                    agents[agent.pk] = agent
-        if len(agents) != 1:
+        agent = agent_model._base_manager.filter(**agent_model.public_id_lookup(sqid)).first()
+        if agent is None:
+            logger.warning("MCP bearer declined: unknown agent %s", sqid)
             return None
-        agent = next(iter(agents.values()))
-        return agent.principal_subject()
+        if (
+            agent.is_template
+            or agent.lifecycle != AgentLifecycle.READY
+            or agent.runtime_status != RuntimeStatus.RUNNING
+        ):
+            logger.warning(
+                "MCP bearer declined: agent %s is not ready/running (lifecycle=%s, runtime_status=%s)",
+                sqid,
+                agent.lifecycle,
+                agent.runtime_status,
+            )
+            return None
+        servers = (
+            agent.mcp_servers.filter(placement=MCPPlacement.INTERNAL)
+            .exclude(credential__isnull=True)
+            .select_related("credential")
+        )
+        for server in servers:
+            if server.accepts_bearer_digest(agent, digest):
+                return agent.principal_subject()
+        logger.warning("MCP bearer declined: no internal MCP server of agent %s accepts this bearer", sqid)
+        return None

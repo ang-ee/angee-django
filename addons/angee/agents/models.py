@@ -10,6 +10,8 @@ and an :class:`InferenceProvider` integration child with its
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
@@ -412,11 +414,12 @@ class MCPServer(SqidMixin, AuditMixin, AngeeModel):
     placement = StateField(choices_enum=MCPPlacement, default=MCPPlacement.EXTERNAL)
     transport = StateField(choices_enum=MCPTransport, default=MCPTransport.HTTP)
     url = models.URLField(blank=True)
-    # Expected to be a non-rotating credential (e.g. a static token). The provisioned
-    # bearer is a *frozen* snapshot of ``secret_value()`` (see ``Agent.mcp_secrets``);
-    # for a rotating credential (OAuth) a later refresh would drift the live secret from
-    # the frozen bearer, so the verifier stops matching and the agent's MCP calls 401
-    # until reprovisioned. Constrain to static credentials at the catalogue level.
+    # Expected to be a non-rotating credential (e.g. a static token). For an internal
+    # server this credential's secret is the HMAC key from which each agent's per-agent
+    # bearer is derived (see ``bearer_for``); the raw secret never leaves the platform.
+    # Rotating the credential re-keys the derivation, so every provisioned agent's bearer
+    # stops verifying and its MCP calls 401 until reprovisioned. Constrain to static
+    # credentials at the catalogue level.
     credential = models.ForeignKey(
         "integrate.Credential",
         on_delete=models.SET_NULL,
@@ -490,6 +493,67 @@ class MCPServer(SqidMixin, AuditMixin, AngeeModel):
         if bearer_env is not None:
             entry["headers"] = {"Authorization": f"Bearer ${{{bearer_env}}}"}
         return entry
+
+    def bearer_for(self, agent: Agent) -> str:
+        """Return the bearer ``agent`` presents to this MCP server.
+
+        For an ``INTERNAL`` (platform-verified) server this is a *per-agent* bearer
+        ``"<agent sqid>.<hmac>"`` derived from the server credential (see
+        :meth:`_bearer_digest`): each agent gets a distinct value, an agent holding only
+        its own bearer cannot forge a peer's (it never sees the server secret), and the
+        derivation is deterministic, so a reprovision re-mints the same value while the
+        credential is unchanged. For any other placement the server verifies the raw token
+        itself, so it receives the credential's ``secret_value()`` unchanged. Callers
+        refresh the credential (``ensure_fresh()``) first, as :meth:`Agent.mcp_secrets` does.
+        """
+
+        if self.placement == MCPPlacement.INTERNAL:
+            return f"{agent.sqid}.{self._bearer_digest(agent)}"
+        return str(self.credential.secret_value())
+
+    def accepts_bearer_digest(self, agent: Agent, digest: str) -> bool:
+        """Whether ``digest`` is the per-agent bearer digest this server mints for ``agent``.
+
+        Only meaningful for an ``INTERNAL`` server (an external one verifies its own raw
+        token, not a derived digest), so any other placement returns ``False``. Compared in
+        constant time against the freshly recomputed digest so a mismatch leaks no timing.
+        """
+
+        if self.placement != MCPPlacement.INTERNAL:
+            return False
+        return hmac.compare_digest(self._bearer_digest(agent), digest)
+
+    def _bearer_digest(self, agent: Agent) -> str:
+        """Return the HMAC digest binding ``agent`` to this server's credential.
+
+        The single home of the derivation, so minting (:meth:`bearer_for`) and verifying
+        (:meth:`accepts_bearer_digest`) cannot drift: the credential secret keys an
+        HMAC-SHA256 over the agent's stable public sqid.
+        """
+
+        secret = str(self.credential.secret_value())
+        return hmac.new(secret.encode(), agent.sqid.encode(), hashlib.sha256).hexdigest()
+
+    @staticmethod
+    def parse_bearer(bearer: str) -> tuple[str, str] | None:
+        """Split a platform bearer into its ``(agent sqid, digest)`` parts, or ``None``.
+
+        The internal-server bearer minted by :meth:`bearer_for` is
+        ``"<agent sqid>.<hmac>"``. Agent sqids are a prefix plus base-alphabet characters
+        and never contain ``.``, so a single partition recovers the parts. The digest must
+        be the 64-character lowercase hexadecimal output of HMAC-SHA256; rejecting every
+        other shape here also keeps arbitrary Unicode away from ``hmac.compare_digest``.
+        """
+
+        sqid, dot, digest = bearer.partition(".")
+        if (
+            not dot
+            or not sqid
+            or len(digest) != hashlib.sha256().digest_size * 2
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            return None
+        return sqid, digest
 
 
 class MCPTool(SqidMixin, AuditMixin, AngeeModel):
@@ -1013,8 +1077,8 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         """Return the operator secret name holding one MCP server's bearer for this agent.
 
         Stable and scoped to the agent + server credential: the service env references it
-        (``${secret.<name>}`` → the bearer env var) and the provision flow syncs the
-        credential value under it (the value never appears in the file or the browser).
+        (``${secret.<name>}`` → the bearer env var) and the provision flow syncs the agent's
+        bearer (:meth:`mcp_secrets`) under it (the value never appears in the file or the browser).
         """
 
         return f"agent-{self.sqid}-mcp-{server.credential.sqid}"
@@ -1035,8 +1099,11 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
     def mcp_secrets(self) -> dict[str, str]:
         """Return ``{secret_name: bearer_value}`` for every credentialed MCP server.
 
-        Server-side only — the provision flow pushes these to the operator secret
-        store so each server's ``${secret.<name>}`` header resolves in the container.
+        The bearer is whatever this agent presents to the server (:meth:`MCPServer.bearer_for`):
+        a per-agent derived token for an internal, platform-verified server, or the raw
+        credential secret for an external one. Server-side only — the provision flow pushes
+        these to the operator secret store so each server's ``${secret.<name>}`` header
+        resolves in the container; the raw internal-server secret never reaches a container.
         """
 
         secrets: dict[str, str] = {}
@@ -1044,7 +1111,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
             if not secret_name:
                 continue
             server.credential.ensure_fresh()
-            secrets[secret_name] = str(server.credential.secret_value())
+            secrets[secret_name] = server.bearer_for(self)
         return secrets
 
     def inference_secret_name(self) -> str:

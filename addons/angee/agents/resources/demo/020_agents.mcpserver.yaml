@@ -1,10 +1,12 @@
 # The platform's own built-in MCP server, exposing installed `/mcp` tools to
 # provisioned demo agents. The row models *which* server the agent includes
 # (`config.builtin = angee`); `agents.MCPServer` resolves the concrete container-
-# reachable URL from the composed stack setting `ANGEE_BUILTIN_MCP_URL`. The bearer
-# rides the credential; at provision time `mcp_secrets()`
-# syncs it to the operator store and the agent's `.mcp.json` carries it as the
-# `Authorization` header. `url` is explicitly blank so reloads clear older demo
+# reachable URL from the composed stack setting `ANGEE_BUILTIN_MCP_URL`. Because this
+# server is `internal`, each provisioned agent gets its own bearer derived from the
+# `credential` below by `MCPServer.bearer_for()`, and the verifier resolves that bearer
+# back to the owning agent; at provision time `mcp_secrets()` syncs each agent's bearer to
+# the operator store and the agent's `.mcp.json` carries it as the `Authorization` header.
+# `url` is explicitly blank so reloads clear older demo
 # rows that baked in a dev port. Demo agents depend on this row so their M2M can resolve it.
 - xref: mcp_angee
   name: angee-demo

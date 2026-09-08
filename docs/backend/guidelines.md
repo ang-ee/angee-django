@@ -955,6 +955,12 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   Name such a module for its role, not the library (the MCP tool seam infers — or
   resolves a `[mcp].tools` override to — `mcp_tools.py`, not `mcp.py`).
 
+- **MCP bearers are per agent and derived from the server credential.**
+  `MCPServer.bearer_for()` mints `<agent sqid>.<hmac>` for an internal server; rotating
+  the credential (or changing placement) invalidates every provisioned agent's bearer
+  until reprovision. The verifier logs each decline with its reason; FastMCP's 401 text
+  about "expired" tokens is boilerplate.
+
 ## Framework Contracts
 
 Framework contracts should be self-explaining in code. Add docstrings to public
