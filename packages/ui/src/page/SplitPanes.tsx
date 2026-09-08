@@ -59,6 +59,8 @@ export type SplitPanesProps = Omit<
      * to each `SplitPane`'s `defaultSize`.
      */
     autoSave?: string;
+    /** Temporarily suppress layout writes while retaining the mounted pane tree. */
+    persistLayout?: boolean;
     /**
      * The ids of the panes actually rendered. For a group with
      * conditionally-rendered panes, this lets the library save/restore a
@@ -90,11 +92,13 @@ function PersistentGroup({
   storageId,
   storage,
   panelIds,
+  persistLayout,
   ...groupProps
 }: {
   storageId: string;
   storage: LayoutStorage;
   panelIds?: string[];
+  persistLayout: boolean;
 } & Omit<
   ResizableGroupProps,
   "defaultLayout" | "onLayoutChange" | "onLayoutChanged"
@@ -107,7 +111,7 @@ function PersistentGroup({
   return (
     <ResizableGroup
       defaultLayout={defaultLayout}
-      onLayoutChanged={onLayoutChanged}
+      onLayoutChanged={persistLayout ? onLayoutChanged : undefined}
       {...groupProps}
     />
   );
@@ -115,7 +119,14 @@ function PersistentGroup({
 
 export const SplitPanes = React.forwardRef<HTMLDivElement, SplitPanesProps>(
   function SplitPanes(
-    { autoSave, panelIds, className, direction = "horizontal", ...props },
+    {
+      autoSave,
+      panelIds,
+      persistLayout = true,
+      className,
+      direction = "horizontal",
+      ...props
+    },
     ref,
   ) {
     const styles = splitPanesVariants({ direction });
@@ -131,6 +142,7 @@ export const SplitPanes = React.forwardRef<HTMLDivElement, SplitPanesProps>(
             storageId={autoSave}
             storage={storage}
             panelIds={panelIds}
+            persistLayout={persistLayout}
             elementRef={ref}
             orientation={direction}
             className={styles.group({ className })}
@@ -234,6 +246,8 @@ export type CollapsiblePane = {
   onResize: NonNullable<OnPanelResize>;
   /** Reactive — recomputed in `onResize`, since v4 `isCollapsed()` is not. */
   collapsed: boolean;
+  /** True after the panel handle is mounted and commands are ready. */
+  ready: boolean;
   /** Collapse if expanded, expand if collapsed. */
   toggle: () => void;
   collapse: () => void;
@@ -293,10 +307,11 @@ export function useCollapsiblePane(
       panelRef: stablePanelRef,
       onResize,
       collapsed,
+      ready: handle !== null,
       toggle,
       collapse,
       expand,
     }),
-    [stablePanelRef, onResize, collapsed, toggle, collapse, expand],
+    [stablePanelRef, onResize, collapsed, handle, toggle, collapse, expand],
   );
 }

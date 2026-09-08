@@ -62,7 +62,7 @@ const workflowsMenu: readonly BaseMenuItem[] = [
       },
       {
         id: "workflows.inbox",
-        label: "Inbox",
+        label: "Approvals",
         icon: "workflow-inbox",
         route: "workflows.inbox",
       },
