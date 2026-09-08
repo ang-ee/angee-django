@@ -4,6 +4,8 @@ import {
   type SchemaFieldMetadata,
 } from "@angee/metadata";
 import { ActiveDataProviderNameProvider } from "@angee/refine";
+import { Button, ErrorBanner } from "@angee/ui";
+import { useUiT } from "@angee/ui/i18n";
 import type { AuthProvider as RefineAuthProvider } from "@refinedev/core";
 import type { QueryClient } from "@tanstack/react-query";
 import {
@@ -11,6 +13,7 @@ import {
   Outlet,
   createRoute,
   redirect,
+  useRouter,
 } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
@@ -18,7 +21,7 @@ import type {
   BaseAddonRoute,
   RefineLayoutConfig,
 } from "./define-base-addon";
-import { identityQueryOptions } from "./providers/auth";
+import { identityQueryOptions, isUnauthorizedError } from "./providers/auth";
 import { routePathUnderParent } from "./route-paths";
 
 interface RouteSchemaConfig {
@@ -53,7 +56,10 @@ export function createLayoutRoutes({
         getParentRoute: () => rootRoute,
         id: refineLayoutRouteId(layoutName),
         ...(requireAuth
-          ? { beforeLoad: authBeforeLoad(authProvider, queryClient, loginPath) }
+          ? {
+              beforeLoad: authBeforeLoad(authProvider, queryClient, loginPath),
+              errorComponent: authRouteError(queryClient, authProvider),
+            }
           : {}),
         component: () => (
           <RefineLayoutRoute
@@ -180,21 +186,56 @@ function layoutRequiresAuth(
   return layouts[layoutName]?.requireAuth ?? layoutName !== "public";
 }
 
-function authBeforeLoad(
+export function authBeforeLoad(
   authProvider: RefineAuthProvider,
   queryClient: QueryClient,
   loginPath: string,
 ) {
   return async ({ location }: { location: { href: string } }): Promise<void> => {
-    const identity = await queryClient
-      .ensureQueryData(identityQueryOptions(authProvider))
-      .catch(() => null);
+    let identity;
+    try {
+      identity = await queryClient.ensureQueryData(identityQueryOptions(authProvider));
+    } catch (error) {
+      if (!isUnauthorizedError(error)) throw new AuthIdentityCheckError();
+      identity = null;
+    }
     if (identity) return;
     throw redirect({
       to: loginPath,
       search: { next: location.href },
       replace: true,
     });
+  };
+}
+
+class AuthIdentityCheckError extends Error {
+  constructor() {
+    super("The server could not confirm the current session.");
+    this.name = "AuthIdentityCheckError";
+  }
+}
+
+export function authRouteError(queryClient: QueryClient, authProvider: RefineAuthProvider) {
+  return function AuthRouteError({ error }: { error: unknown }): ReactNode {
+    const router = useRouter();
+    const t = useUiT();
+    if (!(error instanceof AuthIdentityCheckError)) throw error;
+    const retry = async () => {
+      queryClient.removeQueries({
+        queryKey: identityQueryOptions(authProvider).queryKey,
+        exact: true,
+      });
+      await router.invalidate();
+    };
+    return (
+      <div className="mx-auto grid w-full max-w-xl gap-3 p-6">
+        <ErrorBanner
+          title={t("auth.sessionCheckFailed")}
+          description={t("auth.sessionCheckFailedDescription")}
+          actions={<Button type="button" size="sm" variant="secondary" onClick={() => { void retry(); }}>{t("auth.retrySessionCheck")}</Button>}
+        />
+      </div>
+    );
   };
 }
 

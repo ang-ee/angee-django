@@ -568,7 +568,7 @@ function hasAuthGraphQLError(value: unknown): boolean {
   });
 }
 
-function isUnauthorizedError(value: unknown): boolean {
+export function isUnauthorizedError(value: unknown): boolean {
   const record = recordValue(value);
   const response = recordValue(record?.response);
   return response?.status === 401 || record?.statusCode === 401 || record?.status === 401
