@@ -55,6 +55,7 @@ export const WorkflowStepOperationsDocument = graphql(`
       output_schema
       input_contract { raw_schema root_node_id nodes { id kind json_type title description nullable } edges { parent_node_id child_node_id kind key } }
       output_contract { raw_schema root_node_id nodes { id kind json_type title description nullable } edges { parent_node_id child_node_id kind key } }
+      outcomes { key label description }
       description
       selectable
       effect

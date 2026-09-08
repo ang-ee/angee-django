@@ -30,6 +30,13 @@ export interface WorkflowOperationChoice {
   selectable: boolean;
   effect: string;
   effect_description: string;
+  outcomes?: readonly WorkflowOutcomeChoice[];
+}
+
+export interface WorkflowOutcomeChoice {
+  key: string;
+  label: string;
+  description: string;
 }
 
 export interface WorkflowOperationPickerProps {

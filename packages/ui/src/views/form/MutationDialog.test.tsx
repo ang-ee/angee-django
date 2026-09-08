@@ -39,6 +39,90 @@ describe("MutationDialog", () => {
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
   });
 
+  test("resolves dependent descriptor options from current values without replacing an unknown value", async () => {
+    const submit = vi.fn();
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog
+        open
+        onOpenChange={vi.fn()}
+        title="Connect"
+        fields={[
+          { name: "source", label: "Source", widget: "select", options: [{ value: "a", label: "A" }, { value: "b", label: "B" }] },
+          {
+            name: "outcome",
+            label: "Outcome",
+            resolve: (values) => ({
+              name: "outcome",
+              widget: "select",
+              options: [
+                { value: "", label: "Any outcome" },
+                { value: values.source === "a" ? "completed" : "pending", label: values.source === "a" ? "Completed" : "Pending" },
+                { value: String(values.outcome), label: `Unavailable (${String(values.outcome)})` },
+              ],
+            }),
+          },
+        ]}
+        initialValues={{ source: "a", outcome: "legacy" }}
+        submitLabel="Connect"
+        parseValues={parseRawValues}
+        onSubmit={submit}
+      />
+    </AppRuntimeProvider>);
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Source" }));
+    const sourceB = screen.getByRole("option", { name: "B" });
+    fireEvent.pointerDown(sourceB, { pointerType: "mouse" });
+    fireEvent.click(sourceB);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Source" }).textContent).toContain("B"));
+    fireEvent.click(screen.getByRole("combobox", { name: "Outcome" }));
+    expect(await screen.findByRole("option", { name: "Pending" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Unavailable (legacy)" })).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Outcome" }), { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ source: "b", outcome: "legacy" }));
+  });
+
+  test("revalidates resolved required and read-only state while retaining declared field identity", async () => {
+    const submit = vi.fn();
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog
+        open
+        onOpenChange={vi.fn()}
+        title="Dependent"
+        fields={[
+          { name: "mode", label: "Mode", widget: "select", options: [{ value: "fixed", label: "Fixed" }, { value: "custom", label: "Custom" }] },
+          {
+            name: "value",
+            label: "Value",
+            resolve: (values) => ({
+              name: "wrong-name",
+              required: values.mode === "custom",
+              readOnly: values.mode !== "custom",
+            }),
+          },
+        ]}
+        initialValues={{ mode: "fixed", value: "" }}
+        submitLabel="Save"
+        parseValues={parseRawValues}
+        onSubmit={submit}
+      />
+    </AppRuntimeProvider>);
+
+    expect(screen.queryByRole("textbox", { name: "Value" })).toBeNull();
+    fireEvent.click(screen.getByRole("combobox", { name: "Mode" }));
+    const custom = screen.getByRole("option", { name: "Custom" });
+    fireEvent.pointerDown(custom, { pointerType: "mouse" });
+    fireEvent.click(custom);
+    const value = await screen.findByRole("textbox", { name: "Value" }) as HTMLInputElement;
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(value, { target: { value: "kept" } });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ mode: "custom", value: "kept" }));
+  });
+
   test("a required nullable FormSpec value accepts explicit null", async () => {
     const submit = vi.fn();
     render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>

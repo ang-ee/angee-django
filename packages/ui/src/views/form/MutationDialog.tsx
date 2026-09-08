@@ -30,7 +30,7 @@ import { RelationPicker, type RelationCreateConfig } from "../relation/RelationP
 import { useRelationOptions } from "../relation/relation-options";
 import type { FieldDescriptor } from "../page";
 import { directDottedPathMessages } from "./validation-errors";
-import { fieldErrorMessages } from "./form-view-model";
+import { fieldErrorMessages, resolveField } from "./form-view-model";
 import { emptyValueForField, isStructuredPresenceField, structuredFieldErrorPaths } from "./field-values";
 import { DescriptorPresenceControl } from "./descriptor-presence-control";
 
@@ -243,7 +243,11 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     defaultValues: initialDialogValues(fields, initialValues),
     mode: "onChange",
     resolver: (formValues) => {
-      const editable = fields.filter((field) => !field.readOnly && !field.readOnlyWhen?.(formValues));
+      const resolved = fields.map((field) => ({
+        ...resolveField(field, formValues),
+        name: field.name,
+      } as MutationDialogField));
+      const editable = resolved.filter((field) => !field.readOnly && !field.readOnlyWhen?.(formValues));
       const missing = editable.flatMap((field) => {
         if (isStructuredPresenceField(field)) {
           return structuredFieldErrorPaths(field, formValues[field.name], Object.hasOwn(formValues, field.name));
@@ -322,23 +326,29 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       size={size}
       placement={placement}
     >
-      {fields.map((field) => (
-        <Controller key={field.name} name={field.name} control={form.control}
-          render={({ field: control, fieldState }) => (
-            <LabeledDescriptorField
-              field={field}
-              value={control.value}
-              dialogValues={values}
-              messages={fieldState.error ? fieldErrorMessages(
-                [fieldState.error],
-                field.objectTemplate || field.itemTemplate || "rowTemplate" in field ? field.name : undefined,
-              ) : []}
-              readOnly={field.readOnly || field.readOnlyWhen?.(values) || submitting}
-              onChange={control.onChange}
-            />
-          )}
-        />
-      ))}
+      {fields.map((declaredField) => {
+        const field = {
+          ...resolveField(declaredField, values),
+          name: declaredField.name,
+        } as MutationDialogField;
+        return (
+          <Controller key={field.name} name={field.name} control={form.control}
+            render={({ field: control, fieldState }) => (
+              <LabeledDescriptorField
+                field={field}
+                value={control.value}
+                dialogValues={values}
+                messages={fieldState.error ? fieldErrorMessages(
+                  [fieldState.error],
+                  field.objectTemplate || field.itemTemplate || "rowTemplate" in field ? field.name : undefined,
+                ) : []}
+                readOnly={field.readOnly || field.readOnlyWhen?.(values) || submitting}
+                onChange={control.onChange}
+              />
+            )}
+          />
+        );
+      })}
       <ErrorBanner description={error} />
     </DialogForm>
   );

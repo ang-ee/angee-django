@@ -48,6 +48,10 @@ vi.mock("@angee/refine", async (importOriginal) => {
                 effect_description: "The callable declares no effect metadata.",
                 idempotent: null,
                 subject_declaration: "",
+                outcomes: [
+                  { key: "completed", label: "Completed", description: "Completed normally." },
+                  { key: "failed", label: "Failed", description: "Failed." },
+                ],
               },
               {
                 key: "wait",
@@ -65,6 +69,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
                 effect_description: "",
                 idempotent: true,
                 subject_declaration: "",
+                outcomes: [],
               },
               {
                 key: "handler",
@@ -78,6 +83,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
                 effect_description: "",
                 idempotent: null,
                 subject_declaration: "",
+                outcomes: [],
               },
               {
                 key: "gate",
@@ -516,7 +522,11 @@ describe("WorkflowCanvas native narrow inspector", () => {
     const target = screen.getByRole("combobox", { name: "Target" });
     fireEvent.click(target);
     fireEvent.click(screen.getByRole("option", { name: /^Import files$/ }));
-    fireEvent.change(screen.getByLabelText("Outcome"), { target: { value: "completed" } });
+    const outcome = screen.getByRole("combobox", { name: "Outcome" });
+    fireEvent.click(outcome);
+    const completed = screen.getByRole("option", { name: "Completed" });
+    fireEvent.pointerDown(completed, { pointerType: "mouse" });
+    fireEvent.click(completed);
     const connect = screen.getByRole("button", { name: /^Connect$/ });
     await waitFor(() => expect(connect.hasAttribute("disabled")).toBe(false));
     fireEvent.click(connect);
@@ -526,6 +536,30 @@ describe("WorkflowCanvas native narrow inspector", () => {
       expect.objectContaining({ source: expect.stringMatching(/^node-/), target: "step_1", condition: "completed" }),
     ]);
     expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  });
+
+  test("preserves an unavailable outcome and updates choices when the source changes", async () => {
+    renderCanvas({
+      nodes: {
+        step_1: { ...mocks.record, position: { x: 0, y: 0 }, clientKey: undefined },
+        second: { id: "step_2", name: "Wait", key: "wait", step_class: "wait", join_rule: "ALL_SUCCESS", is_entry: false, config: {}, config_errors: {}, position: { x: 0, y: 180 } },
+      },
+      edges: { route: { id: "edge_1", source: "step_1", target: "second", condition: "legacy-result", clientKey: undefined } },
+      readiness: [{ code: "outcome", message: "Repair outcome", kind: "EDGE", id: "edge_1", client_key: null, field: "condition" }],
+    });
+    await screen.findByText("Import files");
+    fireEvent.click(screen.getByRole("button", { name: "1 saved issue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import files → Wait · Outcome: Repair outcome" }));
+
+    const outcome = await screen.findByRole("combobox", { name: "Outcome" });
+    expect(outcome.textContent).toContain("Unavailable outcome (legacy-result)");
+    fireEvent.click(screen.getByRole("combobox", { name: "Source" }));
+    const wait = screen.getByRole("option", { name: "Wait" });
+    fireEvent.pointerDown(wait, { pointerType: "mouse" });
+    fireEvent.click(wait);
+    fireEvent.blur(screen.getByRole("combobox", { name: "Source" }));
+    expect((screen.getByLabelText("Outcome") as HTMLInputElement).value).toBe("legacy-result");
+    expect(canvasSurface!.form.getValues("definition.edges.route.condition")).toBe("legacy-result");
   });
 
   test("makes an entry explicit and deletes a node with all incident connections", async () => {

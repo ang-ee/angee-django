@@ -55,6 +55,8 @@ export const enWorkflowsMessages: Record<string, string> = {
   "canvas.source": "Source",
   "canvas.target": "Target",
   "canvas.condition": "Outcome",
+  "canvas.anyOutcome": "Any outcome",
+  "canvas.unavailableOutcome": "Unavailable outcome ({outcome})",
   "canvas.stepConfig": "Step config",
   "canvas.operation": "Operation",
   "canvas.operationUnavailable": "Operation details are unavailable.",

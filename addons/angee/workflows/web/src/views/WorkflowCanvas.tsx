@@ -122,16 +122,20 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
       meta: { node },
     };
   }) satisfies GraphViewNode<WorkflowGraphNodeKind, { node: DefinitionNode; }>[], [diagnostics, nodes, operations, selectedStep, t]);
-  const graphEdges = React.useMemo(() => Object.entries(edges).map(([identity, edge]) => ({
-    id: identity,
-    source: edge.source,
-    target: edge.target,
-    kind: edge.condition ? "condition" as const : "default" as const,
-    label: edge.condition || undefined,
-    selected: identity === selectedEdge,
-    ariaLabel: edgeAriaLabel(edge, nodes, diagnosticsForEdge(diagnostics, identity, edge).length, t),
-    meta: { edge },
-  })) satisfies GraphViewEdge<"condition" | "default", { edge: DefinitionEdge; }>[], [diagnostics, edges, nodes, selectedEdge, t]);
+  const graphEdges = React.useMemo(() => Object.entries(edges).map(([identity, edge]) => {
+    const outcome = outcomeChoiceForEdge(edge, nodes, operations);
+    const outcomeLabel = outcome?.label ?? edge.condition;
+    return {
+      id: identity,
+      source: edge.source,
+      target: edge.target,
+      kind: edge.condition ? "condition" as const : "default" as const,
+      label: outcomeLabel || undefined,
+      selected: identity === selectedEdge,
+      ariaLabel: edgeAriaLabel(edge, nodes, outcomeLabel, diagnosticsForEdge(diagnostics, identity, edge).length, t),
+      meta: { edge },
+    };
+  }) satisfies GraphViewEdge<"condition" | "default", { edge: DefinitionEdge; }>[], [diagnostics, edges, nodes, operations, selectedEdge, t]);
   const currentGraph = React.useCallback(() => ({
     nodes: (context.form.form.getValues("definition.nodes") ?? {}) as Record<string, DefinitionNode>,
     edges: (context.form.form.getValues("definition.edges") ?? {}) as Record<string, DefinitionEdge>,
@@ -256,7 +260,7 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
         <SplitPaneHandle className={!wide ? "hidden" : undefined} />
         <SplitPane id="inspector" defaultSize={32} minSize={22} collapsible panelRef={inspectorPane.panelRef} onResize={inspectorPane.onResize} className={!wide && !showingInspector ? "hidden" : undefined}>
           {!wide && hasSelection ? <Button type="button" variant="ghost" size="sm" onClick={() => { dispatchSelection({ type: "show-canvas" }); requestCanvasFocus(); }}><Glyph name="chevron-left" />{t("canvas.back")}</Button> : null}
-        <CanvasInspector context={context} nodeKey={selectedStep} edgeKey={selectedEdge} node={selectedStep ? nodes[selectedStep] : undefined} edge={selectedEdge ? edges[selectedEdge] : undefined} nodes={nodes} diagnostics={diagnostics} pendingIssue={pendingIssue} fields={declaredFields} onIssueFocused={() => setPendingIssue(null)} onSelectStep={(id) => { suppressDefaultInspectorFocus.current = false; dispatchSelection({ type: "select-step", id }); }} onAddAfter={(identity) => setPalette({ kind: "after", identity })} onInsert={(identity) => setPalette({ kind: "insert", identity })} onDuplicate={duplicateNode} onDelete={deleteNode} onDeleteEdge={deleteEdge} onMakeEntry={makeEntry} />
+        <CanvasInspector context={context} nodeKey={selectedStep} edgeKey={selectedEdge} node={selectedStep ? nodes[selectedStep] : undefined} edge={selectedEdge ? edges[selectedEdge] : undefined} nodes={nodes} operations={operations} diagnostics={diagnostics} pendingIssue={pendingIssue} fields={declaredFields} onIssueFocused={() => setPendingIssue(null)} onSelectStep={(id) => { suppressDefaultInspectorFocus.current = false; dispatchSelection({ type: "select-step", id }); }} onAddAfter={(identity) => setPalette({ kind: "after", identity })} onInsert={(identity) => setPalette({ kind: "insert", identity })} onDuplicate={duplicateNode} onDelete={deleteNode} onDeleteEdge={deleteEdge} onMakeEntry={makeEntry} />
         </SplitPane>
         <WorkflowOperationPicker operations={operations as readonly WorkflowOperationChoice[]} open={palette !== null} onOpenChange={(open) => { if (!open) setPalette(null); }} onChoose={chooseOperation} loading={operationsQuery.isFetching} error={operationsQuery.error ? errorMessage(operationsQuery.error) : null} />
         <MutationDialog
@@ -267,7 +271,20 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
           fields={[
             { name: "source", label: t("canvas.source"), widget: "select", options: nodeOptions(nodes), required: true },
             { name: "target", label: t("canvas.target"), widget: "select", options: nodeOptions(nodes), required: true },
-            { name: "condition", label: t("canvas.condition") },
+            {
+              name: "condition",
+              label: t("canvas.condition"),
+              resolve: (dialogValues) => outcomeField(
+                { name: "condition", label: t("canvas.condition") },
+                {
+                  condition: String(dialogValues.condition ?? ""),
+                  source: String(dialogValues.source ?? ""),
+                },
+                nodes,
+                operations,
+                t,
+              ),
+            },
           ]}
           initialValues={{ source: selectedStep ?? "", target: "", condition: "" }}
           submitLabel={t("canvas.connect")}
@@ -282,10 +299,10 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
   );
 }
 
-function CanvasInspector({ context, nodeKey, edgeKey, node, edge, nodes, diagnostics, pendingIssue, fields, onIssueFocused, onSelectStep, onAddAfter, onInsert, onDuplicate, onDelete, onDeleteEdge, onMakeEntry }: { context: RecordPanelContext; nodeKey: string | null; edgeKey: string | null; node?: DefinitionNode; edge?: DefinitionEdge; nodes: Record<string, DefinitionNode>; diagnostics: WorkflowDefinitionValues["definition"]["readiness"]; pendingIssue: DefinitionDiagnostic | null; fields: WorkflowCanvasFields; onIssueFocused: () => void; onSelectStep: (id: string) => void; onAddAfter: (id: string) => void; onInsert: (id: string) => void; onDuplicate: (id: string) => void; onDelete: (id: string) => void; onDeleteEdge: (id: string) => void; onMakeEntry: (id: string) => void; }): React.ReactElement {
+function CanvasInspector({ context, nodeKey, edgeKey, node, edge, nodes, operations, diagnostics, pendingIssue, fields, onIssueFocused, onSelectStep, onAddAfter, onInsert, onDuplicate, onDelete, onDeleteEdge, onMakeEntry }: { context: RecordPanelContext; nodeKey: string | null; edgeKey: string | null; node?: DefinitionNode; edge?: DefinitionEdge; nodes: Record<string, DefinitionNode>; operations: readonly WorkflowOperationChoice[]; diagnostics: WorkflowDefinitionValues["definition"]["readiness"]; pendingIssue: DefinitionDiagnostic | null; fields: WorkflowCanvasFields; onIssueFocused: () => void; onSelectStep: (id: string) => void; onAddAfter: (id: string) => void; onInsert: (id: string) => void; onDuplicate: (id: string) => void; onDelete: (id: string) => void; onDeleteEdge: (id: string) => void; onMakeEntry: (id: string) => void; }): React.ReactElement {
   const t = useWorkflowsT();
   if (nodeKey && node) return <StepConfigPanel context={context} nodeKey={nodeKey} node={node} diagnostics={diagnostics} pendingIssue={pendingIssue} fields={fields} onIssueFocused={onIssueFocused} nodes={nodes} onSelectStep={onSelectStep} onAddAfter={onAddAfter} onDuplicate={onDuplicate} onDelete={onDelete} onMakeEntry={onMakeEntry} />;
-  if (edgeKey && edge) return <EdgeConfigPanel context={context} edgeKey={edgeKey} edge={edge} nodes={nodes} diagnostics={diagnostics} pendingIssue={pendingIssue} fields={fields} onIssueFocused={onIssueFocused} onInsert={onInsert} onDelete={onDeleteEdge} />;
+  if (edgeKey && edge) return <EdgeConfigPanel context={context} edgeKey={edgeKey} edge={edge} nodes={nodes} operations={operations} diagnostics={diagnostics} pendingIssue={pendingIssue} fields={fields} onIssueFocused={onIssueFocused} onInsert={onInsert} onDelete={onDeleteEdge} />;
   return <div className="min-h-0 overflow-auto bg-sheet-1 p-4"><EmptyState icon="workflow-step" title={t("canvas.stepConfig")} description={t("canvas.selectStep")} /></div>;
 }
 
@@ -360,10 +377,11 @@ function StepConfigPanel({ context, nodeKey, node, nodes, diagnostics, pendingIs
   </div>;
 }
 
-function EdgeConfigPanel({ context, edgeKey, edge, nodes, diagnostics, pendingIssue, fields, onIssueFocused, onInsert, onDelete }: { context: RecordPanelContext; edgeKey: string; edge: DefinitionEdge; nodes: Record<string, DefinitionNode>; diagnostics: WorkflowDefinitionValues["definition"]["readiness"]; pendingIssue: DefinitionDiagnostic | null; fields: WorkflowCanvasFields; onIssueFocused: () => void; onInsert: (id: string) => void; onDelete: (id: string) => void; }): React.ReactElement {
+function EdgeConfigPanel({ context, edgeKey, edge, nodes, operations, diagnostics, pendingIssue, fields, onIssueFocused, onInsert, onDelete }: { context: RecordPanelContext; edgeKey: string; edge: DefinitionEdge; nodes: Record<string, DefinitionNode>; operations: readonly WorkflowOperationChoice[]; diagnostics: WorkflowDefinitionValues["definition"]["readiness"]; pendingIssue: DefinitionDiagnostic | null; fields: WorkflowCanvasFields; onIssueFocused: () => void; onInsert: (id: string) => void; onDelete: (id: string) => void; }): React.ReactElement {
   const t = useWorkflowsT();
   const scope = `definition.edges.${edgeKey}`;
   const options = Object.entries(nodes).map(([value, node]) => ({ value, label: node.name || node.key }));
+  const conditionField = outcomeField(fields.edge.condition, edge, nodes, operations, t);
   const edgeErrors = diagnosticsForEdge(diagnostics, edgeKey, edge).map((item) => item.message).join(" ");
   React.useEffect(() => {
     if (!pendingIssue || diagnosticIdentity(pendingIssue, { [edgeKey]: edge }) !== edgeKey || !["source", "target", "condition"].includes(pendingIssue.field)) return;
@@ -374,7 +392,7 @@ function EdgeConfigPanel({ context, edgeKey, edge, nodes, diagnostics, pendingIs
     <ErrorBanner description={edgeErrors || null} />
     <BoundDescriptorField form={context.form} resource={EDGE_MODEL} scope={scope} field={{ ...fields.edge.source, widget: "select", options }} />
     <BoundDescriptorField form={context.form} resource={EDGE_MODEL} scope={scope} field={{ ...fields.edge.target, widget: "select", options }} />
-    <BoundDescriptorField form={context.form} resource={EDGE_MODEL} scope={scope} field={fields.edge.condition} />
+    <BoundDescriptorField form={context.form} resource={EDGE_MODEL} scope={scope} field={conditionField} />
     {!context.form.formReadOnly ? <div className="flex gap-2"><Button type="button" size="sm" onClick={() => onInsert(edgeKey)}>{t("canvas.insertStep")}</Button><Button type="button" size="sm" variant="danger" onClick={() => onDelete(edgeKey)}>{t("canvas.deleteConnection")}</Button></div> : null}
   </div>;
 }
@@ -475,6 +493,34 @@ function operationChoice(operations: readonly WorkflowOperationChoice[], value: 
   const key = canonicalOptionValue(options, value);
   return operations.find((operation) => operation.key === key);
 }
+function outcomeChoiceForEdge(
+  edge: Pick<DefinitionEdge, "condition" | "source">,
+  nodes: Record<string, DefinitionNode>,
+  operations: readonly WorkflowOperationChoice[],
+) {
+  const operation = operationChoice(operations, nodes[edge.source]?.step_class);
+  return operation?.outcomes?.find((outcome) => outcome.key === edge.condition);
+}
+function outcomeField(
+  field: FieldDescriptor,
+  edge: Pick<DefinitionEdge, "condition" | "source">,
+  nodes: Record<string, DefinitionNode>,
+  operations: readonly WorkflowOperationChoice[],
+  t: WorkflowT,
+): FieldDescriptor {
+  const operation = operationChoice(operations, nodes[edge.source]?.step_class);
+  const declared = operation?.outcomes ?? [];
+  if (!declared.length) return field;
+  const options = [
+    { value: "", label: t("canvas.anyOutcome") },
+    ...declared.map((outcome) => ({ value: outcome.key, label: outcome.label })),
+  ];
+  if (edge.condition && !declared.some((outcome) => outcome.key === edge.condition)) {
+    options.push({ value: edge.condition, label: t("canvas.unavailableOutcome", { outcome: edge.condition }) });
+  }
+  const selected = declared.find((outcome) => outcome.key === edge.condition);
+  return { ...field, widget: "select", options, description: selected?.description || field.description };
+}
 function diagnosticsForNode(diagnostics: readonly DefinitionDiagnostic[], identity: string, node: DefinitionNode): DefinitionDiagnostic[] {
   return diagnostics.filter((item) => String(item.kind).toUpperCase() === "NODE" && ((item.id != null && item.id === node.id) || (item.client_key != null && item.client_key === identity)));
 }
@@ -482,10 +528,10 @@ function diagnosticsForEdge(diagnostics: readonly DefinitionDiagnostic[], identi
   return diagnostics.filter((item) => String(item.kind).toUpperCase() === "EDGE" && ((item.id != null && item.id === edge.id) || (item.client_key != null && item.client_key === identity)));
 }
 function issueLabel(count: number, t: WorkflowT): string { return t(count === 1 ? "canvas.oneIssue" : "canvas.manyIssues", { count }); }
-function edgeAriaLabel(edge: DefinitionEdge, nodes: Record<string, DefinitionNode>, count: number, t: WorkflowT): string {
+function edgeAriaLabel(edge: DefinitionEdge, nodes: Record<string, DefinitionNode>, outcomeLabel: string, count: number, t: WorkflowT): string {
   const source = nodes[edge.source]?.name || nodes[edge.source]?.key || edge.source;
   const target = nodes[edge.target]?.name || nodes[edge.target]?.key || edge.target;
-  return [t("canvas.connectionAria", { source, target }), edge.condition ? t("canvas.outcomeAria", { outcome: edge.condition }) : null, count ? issueLabel(count, t) : null].filter(Boolean).join(", ");
+  return [t("canvas.connectionAria", { source, target }), outcomeLabel ? t("canvas.outcomeAria", { outcome: outcomeLabel }) : null, count ? issueLabel(count, t) : null].filter(Boolean).join(", ");
 }
 function diagnosticIdentity(diagnostic: DefinitionDiagnostic, rows: Record<string, { id: string; clientKey?: string; }>): string | null {
   return Object.entries(rows).find(([key, row]) => (
