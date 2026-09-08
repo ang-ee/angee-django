@@ -27,6 +27,8 @@ export interface GraphViewNode<
 > {
   id: string;
   kind: TKind;
+  kindLabel?: React.ReactNode;
+  ariaLabel?: string;
   title: React.ReactNode;
   code?: React.ReactNode;
   detail?: React.ReactNode;
@@ -43,6 +45,7 @@ export interface GraphViewEdge<
   source: string;
   target: string;
   kind: TKind;
+  ariaLabel?: string;
   label?: React.ReactNode;
   meta?: TMeta;
 }
@@ -306,6 +309,7 @@ function toReactFlowNode<
   const style = nodeStyleFor(node.kind, nodeStyles);
   return {
     id: node.id,
+    ariaLabel: node.ariaLabel,
     type: style.type ?? "default",
     position: { x: 0, y: 0 },
     sourcePosition: Position.Bottom,
@@ -345,6 +349,7 @@ function toReactFlowEdge<
   };
   return {
     id: edge.id,
+    ariaLabel: edge.ariaLabel,
     source: edge.source,
     target: edge.target,
     type: "smoothstep",
@@ -370,7 +375,7 @@ function GraphNodeLabel<TKind extends string>({
           {node.title}
         </span>
         <Badge density="compact" tone={style.badgeTone ?? "neutral"}>
-          {node.kind}
+          {node.kindLabel ?? node.kind}
         </Badge>
       </div>
       {node.code ? (

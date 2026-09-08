@@ -77,6 +77,25 @@ function currentProps(): Record<string, unknown> {
 }
 
 describe("GraphView", () => {
+  test("forwards accessible names and keeps kind as the style key", () => {
+    render(
+      <GraphView
+        nodes={[{ ...nodes[0], kindLabel: "Operation", ariaLabel: "Draft operation, entry step" }]}
+        edges={[{ ...edges[0], source: "draft", target: "draft", ariaLabel: "Draft succeeds to itself" }]}
+        nodeStyles={nodeStyles}
+      />,
+    );
+
+    const flowNode = (currentProps().nodes as Array<{ ariaLabel?: string; data: { label: ReactNode }; style: { width: number } }>)[0]!;
+    const flowEdge = (currentProps().edges as Array<{ ariaLabel?: string }>)[0]!;
+    expect(flowNode.ariaLabel).toBe("Draft operation, entry step");
+    expect(flowNode.style.width).toBe(nodeStyles.handler.width);
+    expect(flowEdge.ariaLabel).toBe("Draft succeeds to itself");
+    const label = render(flowNode.data.label);
+    expect(label.getByText("Operation")).toBeTruthy();
+    expect(label.getByText("handler").tagName).toBe("CODE");
+  });
+
   test("keeps the canvas read-only by default", () => {
     render(<GraphView nodes={nodes} edges={edges} nodeStyles={nodeStyles} />);
 

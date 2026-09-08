@@ -30,7 +30,7 @@ describe("GraphView interactions", () => {
       <GraphView
         className="h-[360px] w-[520px]"
         nodes={[
-          { id: "draft", kind: "handler", title: "Draft", code: "handler" },
+          { id: "draft", kind: "handler", title: "Draft", code: "handler", ariaLabel: "Draft validation, entry step" },
           { id: "review", kind: "gate", title: "Review", code: "gate" },
         ]}
         edges={[
@@ -56,6 +56,8 @@ describe("GraphView interactions", () => {
         onNodeSelect={onNodeSelect}
       />,
     );
+
+    expect(screen.getByLabelText("Draft validation, entry step")).toBeTruthy();
 
     fireEvent.click(screen.getByText("Draft"));
 
