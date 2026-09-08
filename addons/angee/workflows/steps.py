@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
 from typing import Any, ClassVar, Literal, Self
@@ -31,6 +31,7 @@ from pydantic import BaseModel
 from rebac import system_context
 
 from angee.base.impl import ImplBase, ImplChoice
+from angee.workflows.attempts import AttemptResult, AttemptResultKind, DecisionSpec, JsonPresence
 from angee.workflows.configs import GateConfig, MapConfig, WaitConfig
 
 _MODEL_LABEL_RE = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$")
@@ -87,22 +88,6 @@ class StepOperation:
 
 
 @dataclass(frozen=True, slots=True)
-class DecisionSpec:
-    """Declaration for one awaited decision slot created while a step suspends."""
-
-    assignees: tuple[str, ...]
-    action: str
-    payload: dict[str, Any] = field(default_factory=dict)
-    priority: int = 0
-    requester: str = ""
-    escalation: tuple[str, ...] = ()
-    max_attempts: int | None = None
-    expires_at: datetime | None = None
-    escalate_at: datetime | None = None
-    decision_schema: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True, slots=True)
 class StepResult:
     """Result returned by a workflow step implementation.
 
@@ -120,6 +105,23 @@ class StepResult:
     resume_state: dict[str, Any] | None = None
     decisions: tuple[DecisionSpec, ...] = ()
     waiting_kind: Literal["scheduled", "approval", "external"] | str = ""
+
+    def to_attempt_result(self) -> AttemptResult:
+        """Convert the implementation result into the retained closed envelope."""
+
+        kind = AttemptResultKind(self.kind)
+        checkpoint = JsonPresence(self.resume_state is not None, self.resume_state)
+        return AttemptResult(
+            kind=kind,
+            output_present=kind == AttemptResultKind.DONE,
+            output=self.output if kind == AttemptResultKind.DONE else None,
+            checkpoint_present=checkpoint.present,
+            checkpoint=checkpoint.value,
+            outcome=self.outcome,
+            waiting_kind=self.waiting_kind,
+            requested_until=self.until,
+            decisions=self.decisions,
+        )
 
     @classmethod
     def done(cls, output: Any = None, outcome: str = "") -> Self:

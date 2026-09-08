@@ -4,27 +4,85 @@ from __future__ import annotations
 
 import uuid
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models.signals import post_save
 from django.utils import timezone
 from rebac import system_context
+from rebac.models import active_relationship_model
 
 from angee.workflows.attempts import (
     AttemptCause,
     AttemptInput,
     AttemptResult,
     AttemptResultKind,
+    DecisionSpec,
+    DecisionTimerKind,
     InvocationAdmission,
     LeaseRevocationReason,
+    deserialize_decision_specs,
+    serialize_decision_specs,
 )
 from angee.workflows.models import RunStatus, StepRunStatus
-from tests.workflows import StepAttempt, StepRun, WorkflowRun, workflow_with_steps
+from angee.workflows.steps import GateStep, StepResult
+from tests.workflows import Decision, StepAttempt, StepRun, WorkflowRun, workflow_with_steps
 
 pytest_plugins = ("tests.workflows",)
 User = get_user_model()
+
+
+def test_step_result_converts_to_retained_envelope_without_inventing_null_presence() -> None:
+    until = timezone.now() + timedelta(minutes=5)
+    decision = DecisionSpec(
+        assignees=("auth/user:reviewer",),
+        action="approve",
+        expires_at=until,
+    )
+
+    waiting = StepResult.wait(until=until, resume_state=None).to_attempt_result()
+    suspended = StepResult.suspend(decisions=(decision,), resume_state={"value": None}).to_attempt_result()
+
+    assert waiting.kind == AttemptResultKind.WAIT
+    assert waiting.requested_until == until
+    assert not waiting.checkpoint_present
+    assert suspended.kind == AttemptResultKind.SUSPEND
+    assert suspended.checkpoint_present and suspended.checkpoint == {"value": None}
+    assert suspended.decisions == (decision,)
+
+
+def test_gate_normalizes_legacy_naive_deadlines_before_retained_roundtrip() -> None:
+    result = GateStep().run(
+        SimpleNamespace(
+            step=SimpleNamespace(
+                config={
+                    "action": "approve",
+                    "slots": [{"assignee": "auth/user:reviewer"}],
+                    "escalate_at": "2026-09-08T12:00:00",
+                    "expires_at": "2026-09-08T13:00:00+00:00",
+                }
+            )
+        ),
+        now=timezone.now(),
+    )
+    declaration = result.decisions[0]
+
+    assert timezone.is_aware(declaration.escalate_at)
+    assert timezone.is_aware(declaration.expires_at)
+    envelope = result.to_attempt_result()
+    assert deserialize_decision_specs(serialize_decision_specs(envelope.decisions)) == envelope.decisions
+
+
+def test_decision_declaration_rejects_unknown_constructor_fields() -> None:
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        DecisionSpec(
+            assignees=("auth/user:reviewer",),
+            action="approve",
+            expires_att=timezone.now(),  # type: ignore[call-arg]
+        )
 
 
 @pytest.fixture()
@@ -410,3 +468,347 @@ def test_user_deletion_nulls_only_attempt_attribution_and_retains_evidence(sched
     for field, value in before.items():
         if field not in {"created_by_id", "updated_by_id"}:
             assert after[field] == value
+
+
+@pytest.mark.django_db(transaction=True)
+def test_revoked_suspension_retains_exact_declarations_without_live_decisions(
+    scheduled_step_run: StepRun,
+) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.revoke(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        reason=LeaseRevocationReason.CANCELED,
+        at=timezone.now(),
+    )
+    expires_at = timezone.now() + timedelta(hours=1)
+    spec = DecisionSpec(
+        assignees=("auth/user:reviewer",),
+        action="approve",
+        payload={"nullable": None},
+        expires_at=expires_at,
+    )
+
+    finalized = StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=AttemptResult(
+            AttemptResultKind.SUSPEND,
+            checkpoint_present=True,
+            checkpoint=None,
+            decisions=(spec,),
+            waiting_kind="approval",
+        ),
+        recorded_at=timezone.now(),
+    )
+    with system_context(reason="verify late suspension evidence"):
+        attempt.refresh_from_db()
+
+    assert finalized.recorded and not finalized.applied and not finalized.timer_intents
+    assert attempt.checkpoint_present and attempt.checkpoint is None
+    assert deserialize_decision_specs(attempt.result_decisions)[0] == spec
+    with system_context(reason="verify no late decisions"):
+        assert Decision.objects.filter(suspension_attempt=attempt).count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_applicable_suspension_creates_ordered_decisions_rebac_and_timer_intents(
+    scheduled_step_run: StepRun,
+) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+    escalate_at = timezone.now() + timedelta(minutes=5)
+    expires_at = timezone.now() + timedelta(minutes=10)
+    specs = (
+        DecisionSpec(
+            assignees=("auth/user:first",),
+            action="approve",
+            priority=3,
+            escalate_at=escalate_at,
+        ),
+        DecisionSpec(
+            assignees=("auth/user:second",),
+            action="approve",
+            priority=3,
+            expires_at=expires_at,
+            decision_schema={"type": "object"},
+        ),
+    )
+
+    retained_result = AttemptResult(
+        AttemptResultKind.SUSPEND,
+        checkpoint_present=True,
+        checkpoint={"gate": True},
+        decisions=specs,
+        waiting_kind="approval",
+    )
+    finalized = StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=retained_result,
+        recorded_at=timezone.now(),
+    )
+    with system_context(reason="verify suspension projection"):
+        decisions = tuple(Decision.objects.filter(suspension_attempt=attempt).order_by("declaration_index"))
+        scheduled_step_run.refresh_from_db()
+
+    assert [decision.declaration_index for decision in decisions] == [0, 1]
+    assert scheduled_step_run.resume_state["_decision_ids"] == [decision.pk for decision in decisions]
+    assert scheduled_step_run.resume_state["_decision_schemas"] == {
+        str(decisions[1].pk): {"type": "object"}
+    }
+    assert [(intent.kind, intent.decision_id, intent.when) for intent in finalized.timer_intents] == [
+        (DecisionTimerKind.ESCALATE, decisions[0].pk, escalate_at),
+        (DecisionTimerKind.EXPIRE, decisions[1].pk, expires_at),
+    ]
+    relationship_model = active_relationship_model()
+    relationship_count = relationship_model.objects.count()
+    assert relationship_count >= 2
+
+    repeated = StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=retained_result,
+        recorded_at=timezone.now(),
+    )
+    assert not repeated.recorded and repeated.applied
+    assert repeated.timer_intents == finalized.timer_intents
+    with system_context(reason="verify duplicate suspension"):
+        assert Decision.objects.filter(suspension_attempt=attempt).count() == 2
+    assert relationship_model.objects.count() == relationship_count
+
+    decisions[0].declaration_index = 4
+    with pytest.raises(TypeError, match="immutable"):
+        decisions[0].save()
+    with pytest.raises(TypeError, match="owned by DecisionManager"):
+        Decision.objects.filter(pk=decisions[0].pk).update(declaration_index=4)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_decision_relationship_failure_rolls_back_entire_suspension(
+    scheduled_step_run: StepRun, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from angee.workflows import models as workflow_models
+
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+    relationship_model = active_relationship_model()
+    before_relationships = relationship_model.objects.count()
+    native_write = workflow_models.write_relationships
+    calls = 0
+
+    def fail_second_batch(relationships: object) -> None:
+        nonlocal calls
+        calls += 1
+        native_write(relationships)
+        if calls == 2:
+            raise RuntimeError("relationship backend failed")
+
+    monkeypatch.setattr(workflow_models, "write_relationships", fail_second_batch)
+    specs = (
+        DecisionSpec(assignees=("auth/user:first",), action="approve"),
+        DecisionSpec(assignees=("auth/user:second",), action="approve"),
+    )
+
+    with pytest.raises(RuntimeError, match="relationship backend failed"):
+        StepAttempt.objects.finalize(
+            attempt.pk,
+            lease_token=attempt.lease_token,
+            result=AttemptResult(
+                AttemptResultKind.SUSPEND,
+                decisions=specs,
+                waiting_kind="approval",
+            ),
+            recorded_at=timezone.now(),
+        )
+    with system_context(reason="verify suspension rollback"):
+        attempt.refresh_from_db()
+        scheduled_step_run.refresh_from_db()
+
+    assert attempt.result_recorded_at is None
+    assert scheduled_step_run.status == StepRunStatus.STARTED
+    with system_context(reason="verify no rolled-back decisions"):
+        assert Decision.objects.filter(suspension_attempt=attempt).count() == 0
+    assert relationship_model.objects.count() == before_relationships
+
+
+@pytest.mark.django_db(transaction=True)
+def test_invalid_later_declaration_is_rejected_before_any_suspension_write(
+    scheduled_step_run: StepRun,
+) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+    specs = (
+        DecisionSpec(assignees=("auth/user:first",), action="approve"),
+        DecisionSpec(assignees=("invalid-subject",), action="approve"),
+    )
+
+    with pytest.raises(ValidationError, match="Decision declarations"):
+        StepAttempt.objects.finalize(
+            attempt.pk,
+            lease_token=attempt.lease_token,
+            result=AttemptResult(
+                AttemptResultKind.SUSPEND,
+                decisions=specs,
+                waiting_kind="approval",
+            ),
+            recorded_at=timezone.now(),
+        )
+    with system_context(reason="verify invalid declaration batch"):
+        attempt.refresh_from_db()
+        assert Decision.objects.filter(suspension_attempt=attempt).count() == 0
+    assert attempt.result_recorded_at is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_retained_decision_owner_rejects_direct_and_bulk_provenance_bypasses(
+    scheduled_step_run: StepRun,
+) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    declaration = DecisionSpec(assignees=("auth/user:reviewer",), action="approve")
+
+    with pytest.raises(RuntimeError, match="active StepAttemptManager transaction"):
+        Decision.objects.create_for_suspension(
+            step_run=scheduled_step_run,
+            attempt=attempt,
+            declarations=(declaration,),
+            using="default",
+        )
+    with system_context(reason="test retained decision bulk guard"):
+        with pytest.raises(TypeError, match="owned by DecisionManager"):
+            Decision.objects.bulk_create(
+                [
+                    Decision(
+                        step_run=scheduled_step_run,
+                        suspension_attempt=attempt,
+                        declaration_index=0,
+                        action="approve",
+                    )
+                ]
+            )
+        legacy = Decision.objects.bulk_create(
+            [Decision(step_run=scheduled_step_run, action="legacy")]
+        )[0]
+        legacy.action = "updated"
+        Decision.objects.bulk_update([legacy], (name for name in ("action",)))
+
+    assert legacy.suspension_attempt_id is None
+    assert legacy.declaration_index is None
+    with system_context(reason="verify legacy decision bulk update"):
+        assert Decision.objects.get(pk=legacy.pk).action == "updated"
+
+
+@pytest.mark.parametrize("bypass", ("save", "update", "bulk_create"))
+@pytest.mark.django_db(transaction=True)
+def test_decision_create_capability_cannot_mutate_unrelated_provenance_from_signal(
+    scheduled_step_run: StepRun,
+    bypass: str,
+) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+
+    def attempt_bypass(**kwargs: object) -> None:
+        instance = kwargs["instance"]
+        assert isinstance(instance, Decision)
+        if bypass == "save":
+            Decision(
+                step_run=scheduled_step_run,
+                suspension_attempt=attempt,
+                declaration_index=99,
+                action="unrelated",
+            ).save()
+        elif bypass == "update":
+            Decision.objects.filter(pk=instance.pk).update(declaration_index=99)
+        else:
+            Decision.objects.bulk_create(
+                [
+                    Decision(
+                        step_run=scheduled_step_run,
+                        suspension_attempt=attempt,
+                        declaration_index=99,
+                        action="unrelated",
+                    )
+                ]
+            )
+
+    post_save.connect(attempt_bypass, sender=Decision, weak=False)
+    try:
+        with pytest.raises(TypeError, match="Decision suspension provenance"):
+            StepAttempt.objects.finalize(
+                attempt.pk,
+                lease_token=attempt.lease_token,
+                result=AttemptResult(
+                    AttemptResultKind.SUSPEND,
+                    decisions=(DecisionSpec(assignees=("auth/user:reviewer",), action="approve"),),
+                    waiting_kind="approval",
+                ),
+                recorded_at=timezone.now(),
+            )
+    finally:
+        post_save.disconnect(attempt_bypass, sender=Decision)
+
+    with system_context(reason="verify signal bypass rollback"):
+        attempt.refresh_from_db()
+        assert Decision.objects.filter(suspension_attempt=attempt).count() == 0
+    assert attempt.result_recorded_at is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_non_json_later_declaration_is_rejected_before_any_suspension_write(
+    scheduled_step_run: StepRun,
+) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+    specs = (
+        DecisionSpec(assignees=("auth/user:first",), action="approve"),
+        DecisionSpec.model_construct(
+            assignees=("auth/user:second",),
+            action="approve",
+            payload={1: "coerced"},
+            priority="3",
+        ),
+    )
+
+    with pytest.raises(ValidationError, match="Decision declarations"):
+        StepAttempt.objects.finalize(
+            attempt.pk,
+            lease_token=attempt.lease_token,
+            result=AttemptResult(AttemptResultKind.SUSPEND, decisions=specs, waiting_kind="approval"),
+            recorded_at=timezone.now(),
+        )
+    with system_context(reason="verify invalid typed declaration batch"):
+        attempt.refresh_from_db()
+        assert Decision.objects.filter(suspension_attempt=attempt).count() == 0
+    assert attempt.result_recorded_at is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_returned_wait_deadline_is_retained_when_effective_wait_is_already_due(
+    scheduled_step_run: StepRun,
+) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+    requested = timezone.now() + timedelta(days=1)
+    recorded = timezone.now()
+    with system_context(reason="deliver while invocation runs"):
+        models.QuerySet.update(WorkflowRun.objects.filter(pk=scheduled_step_run.run_id), deliveries=1)
+
+    StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=AttemptResult(
+            AttemptResultKind.WAIT,
+            checkpoint_present=True,
+            checkpoint=None,
+            requested_until=requested,
+            waiting_kind="scheduled",
+        ),
+        recorded_at=recorded,
+    )
+    with system_context(reason="verify requested and effective wait"):
+        attempt.refresh_from_db()
+        scheduled_step_run.refresh_from_db()
+
+    assert attempt.result_requested_until == requested
+    assert attempt.checkpoint_present and attempt.checkpoint is None
+    assert scheduled_step_run.wait_until == recorded

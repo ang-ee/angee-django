@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any, Self, cast
 
@@ -26,9 +26,12 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
-from django.db import OperationalError, ProgrammingError, connections, models, router, transaction
+from django.core.validators import validate_slug
+from django.db import DEFAULT_DB_ALIAS, OperationalError, ProgrammingError, connections, models, router, transaction
 from django.utils import timezone
-from rebac import actor_context, system_context
+from pydantic_core import PydanticSerializationError
+from rebac import RelationshipTuple, SubjectRef, actor_context, system_context, write_relationships
+from rebac.resources import to_object_ref
 
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
@@ -46,9 +49,14 @@ from angee.workflows.attempts import (
     AttemptResult,
     AttemptResultKind,
     AttemptStatus,
+    DecisionSpec,
+    DecisionTimerIntent,
+    DecisionTimerKind,
     InvocationAdmission,
     LeaseRevocation,
     LeaseRevocationReason,
+    deserialize_decision_specs,
+    serialize_decision_specs,
 )
 from angee.workflows.definitions import WorkflowDefinitionManagerMixin
 from angee.workflows.steps import (
@@ -81,6 +89,7 @@ _definition_write_session: ContextVar[_DefinitionWriteSession | None] = ContextV
 class _AttemptWriteSession:
     alias: str
     connection_id: int
+    step_run_id: int
 
 
 _attempt_write_session: ContextVar[_AttemptWriteSession | None] = ContextVar(
@@ -88,7 +97,21 @@ _attempt_write_session: ContextVar[_AttemptWriteSession | None] = ContextVar(
 )
 
 
-def _attempt_write_active(alias: str) -> bool:
+@dataclass(frozen=True, slots=True)
+class _DecisionWriteSession:
+    alias: str
+    connection_id: int
+    step_run_id: int
+    attempt_id: int
+    declaration_index: int
+
+
+_decision_write_session: ContextVar[_DecisionWriteSession | None] = ContextVar(
+    "workflow_decision_write_session", default=None
+)
+
+
+def _attempt_write_active(alias: str, step_run_id: int | None = None) -> bool:
     session = _attempt_write_session.get()
     connection = connections[alias]
     return (
@@ -96,6 +119,22 @@ def _attempt_write_active(alias: str) -> bool:
         and session.alias == alias
         and session.connection_id == id(connection)
         and connection.in_atomic_block
+        and (step_run_id is None or session.step_run_id == step_run_id)
+    )
+
+
+def _decision_write_active(alias: str, instance: Any) -> bool:
+    session = _decision_write_session.get()
+    connection = connections[alias]
+    return (
+        session is not None
+        and session.alias == alias
+        and session.connection_id == id(connection)
+        and connection.in_atomic_block
+        and instance._state.adding
+        and instance.step_run_id == session.step_run_id
+        and instance.suspension_attempt_id == session.attempt_id
+        and instance.declaration_index == session.declaration_index
     )
 
 
@@ -2117,17 +2156,21 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
     """Allocate, lease, and finalize retained attempts under ancestor locks."""
 
     @contextmanager
-    def _write(self, alias: str) -> Iterable[None]:
+    def _write(self, alias: str, step_run_id: int) -> Iterable[None]:
         connection = connections[alias]
         if not connection.in_atomic_block:
             raise RuntimeError("Attempt writes require an active database transaction.")
         active = _attempt_write_session.get()
         if active is not None:
-            if active.alias != alias or active.connection_id != id(connection):
-                raise RuntimeError("An attempt write cannot span database connections.")
+            if (
+                active.alias != alias
+                or active.connection_id != id(connection)
+                or active.step_run_id != step_run_id
+            ):
+                raise RuntimeError("An attempt write cannot span database connections or logical step runs.")
             yield
             return
-        token = _attempt_write_session.set(_AttemptWriteSession(alias, id(connection)))
+        token = _attempt_write_session.set(_AttemptWriteSession(alias, id(connection), step_run_id))
         try:
             yield
         finally:
@@ -2157,7 +2200,11 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
 
         self._validate_claim(cause, input)
         alias = self.db
-        with transaction.atomic(using=alias), self._write(alias), system_context(reason="workflows.attempt.claim"):
+        with (
+            transaction.atomic(using=alias),
+            self._write(alias, step_run.pk),
+            system_context(reason="workflows.attempt.claim"),
+        ):
             run, locked = self._locked_ancestry(step_run.pk, alias)
             if run.is_terminal:
                 raise ValidationError({"step_run": "A terminal workflow run cannot claim an attempt."})
@@ -2194,7 +2241,11 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         if result.output_present or result.checkpoint_present or result.waiting_kind:
             raise ValidationError({"result": "Preparation failure cannot carry output, checkpoint, or wait state."})
         alias = self.db
-        with transaction.atomic(using=alias), self._write(alias), system_context(reason="workflows.attempt.prepare"):
+        with (
+            transaction.atomic(using=alias),
+            self._write(alias, step_run.pk),
+            system_context(reason="workflows.attempt.prepare"),
+        ):
             run, locked = self._locked_ancestry(step_run.pk, alias)
             if run.is_terminal:
                 raise ValidationError({"step_run": "A terminal workflow run cannot record preparation failure."})
@@ -2209,7 +2260,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             attempt.error = result.error
             attempt.stacktrace = result.stacktrace
             attempt.outcome = result.outcome
-            self._apply_result(locked, attempt, result)
+            self._apply_result(run, locked, attempt, result)
             attempt.applied_at = recorded_at
             attempt.save(using=alias)
             self._charge_logical_execution(run, alias=alias)
@@ -2253,7 +2304,11 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
 
         alias = self.db
         unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
-        with transaction.atomic(using=alias), self._write(alias), system_context(reason="workflows.attempt.invoke"):
+        with (
+            transaction.atomic(using=alias),
+            self._write(alias, unresolved.step_run_id),
+            system_context(reason="workflows.attempt.invoke"),
+        ):
             run, step_run = self._locked_ancestry(unresolved.step_run_id, alias)
             attempt = system_queryset(self.model, using=alias, lock=("self",)).get(pk=attempt_id)
             if (
@@ -2279,7 +2334,11 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
 
         alias = self.db
         unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
-        with transaction.atomic(using=alias), self._write(alias), system_context(reason="workflows.attempt.lease"):
+        with (
+            transaction.atomic(using=alias),
+            self._write(alias, unresolved.step_run_id),
+            system_context(reason="workflows.attempt.lease"),
+        ):
             run, step_run = self._locked_ancestry(unresolved.step_run_id, alias)
             attempt = system_queryset(self.model, using=alias, lock=("self",)).get(pk=attempt_id)
             if (
@@ -2321,6 +2380,28 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             raise ValidationError({"checkpoint": "An absent attempt checkpoint cannot carry a value."})
         if result.waiting_kind and result.waiting_kind not in WaitingKind.values:
             raise ValidationError({"waiting_kind": "Attempt result waiting kind is not declared."})
+        wait_facts = result.requested_until is not None or bool(result.decisions) or result.checkpoint_present
+        if result.kind == AttemptResultKind.WAIT:
+            if result.requested_until is None or result.decisions:
+                raise ValidationError({"result": "Wait requires a deadline and cannot declare decisions."})
+        elif result.kind == AttemptResultKind.SUSPEND:
+            if result.requested_until is not None:
+                raise ValidationError({"result": "Suspension cannot carry a timer deadline."})
+        elif wait_facts or result.waiting_kind:
+            raise ValidationError({"result": "This result kind cannot carry wait or decision facts."})
+        if result.checkpoint_present and result.checkpoint is not None and not isinstance(result.checkpoint, dict):
+            raise ValidationError({"checkpoint": "A non-null checkpoint must be a JSON object."})
+        for declaration in result.decisions:
+            if not declaration.action:
+                raise ValidationError({"decisions": "Decision actions cannot be empty."})
+            try:
+                validate_slug(declaration.action)
+                for subject in (*declaration.assignees, *declaration.escalation):
+                    SubjectRef.parse(subject)
+                if declaration.requester:
+                    SubjectRef.parse(declaration.requester)
+            except (TypeError, ValueError, ValidationError) as error:
+                raise ValidationError({"decisions": "Decision declarations are invalid."}) from error
 
     @staticmethod
     def _validate_claim_source(step_run: Any, cause: AttemptCause) -> None:
@@ -2350,7 +2431,11 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             raise ValidationError({"reason": "Lease revocation requires a declared reason."})
         alias = self.db
         unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
-        with transaction.atomic(using=alias), self._write(alias), system_context(reason="workflows.attempt.revoke"):
+        with (
+            transaction.atomic(using=alias),
+            self._write(alias, unresolved.step_run_id),
+            system_context(reason="workflows.attempt.revoke"),
+        ):
             _, step_run = self._locked_ancestry(unresolved.step_run_id, alias)
             attempt = system_queryset(self.model, using=alias, lock=("self",)).get(pk=attempt_id)
             if attempt.lease_token != lease_token or step_run.current_attempt_id != attempt.pk:
@@ -2369,10 +2454,19 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
     ) -> AttemptFinalization:
         """Retain one result and atomically apply its closed legacy projection."""
 
-        self._validate_result(result)
+        try:
+            encoded_decisions = serialize_decision_specs(result.decisions)
+            result = replace(result, decisions=deserialize_decision_specs(encoded_decisions))
+            self._validate_result(result)
+        except (TypeError, ValueError, PydanticSerializationError) as error:
+            raise ValidationError({"decisions": "Decision declarations are invalid."}) from error
         alias = self.db
         unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
-        with transaction.atomic(using=alias), self._write(alias), system_context(reason="workflows.attempt.finalize"):
+        with (
+            transaction.atomic(using=alias),
+            self._write(alias, unresolved.step_run_id),
+            system_context(reason="workflows.attempt.finalize"),
+        ):
             run, step_run = self._locked_ancestry(unresolved.step_run_id, alias)
             attempt = system_queryset(self.model, using=alias, lock=("self",)).get(pk=attempt_id)
             if attempt.lease_token != lease_token:
@@ -2380,7 +2474,11 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             if attempt.result_recorded_at is not None:
                 if not self._result_matches(attempt, result):
                     raise ValidationError({"result": "A different result is already retained for this attempt."})
-                return AttemptFinalization(False, attempt.applied_at is not None)
+                applied = attempt.applied_at is not None
+                intents: tuple[DecisionTimerIntent, ...] = ()
+                if applied and result.kind == AttemptResultKind.SUSPEND:
+                    intents = step_run.decisions.model.objects.timer_intents_for(attempt=attempt, using=alias)
+                return AttemptFinalization(False, applied, intents)
             attempt.result_kind = str(result.kind)
             attempt.result_recorded_at = recorded_at
             attempt.output_present = result.output_present
@@ -2391,16 +2489,19 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             attempt.stacktrace = result.stacktrace
             attempt.outcome = result.outcome
             attempt.waiting_kind = result.waiting_kind
+            attempt.result_requested_until = result.requested_until
+            attempt.result_decisions = encoded_decisions
             applicable = (
                 not run.is_terminal
                 and step_run.current_attempt_id == attempt.pk
                 and attempt.lease_revoked_at is None
             )
+            timer_intents: tuple[DecisionTimerIntent, ...] = ()
             if applicable:
-                self._apply_result(step_run, attempt, result)
+                timer_intents = self._apply_result(run, step_run, attempt, result)
                 attempt.applied_at = recorded_at
             attempt.save(using=alias)
-            return AttemptFinalization(True, applicable)
+            return AttemptFinalization(True, applicable, timer_intents)
 
     @staticmethod
     def _result_matches(attempt: Any, result: AttemptResult) -> bool:
@@ -2416,9 +2517,13 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             and attempt.stacktrace == result.stacktrace
             and attempt.outcome == result.outcome
             and attempt.waiting_kind == result.waiting_kind
+            and attempt.result_requested_until == result.requested_until
+            and attempt.result_decisions == serialize_decision_specs(result.decisions)
         )
 
-    def _apply_result(self, step_run: Any, attempt: Any, result: AttemptResult) -> None:
+    def _apply_result(
+        self, run: Any, step_run: Any, attempt: Any, result: AttemptResult
+    ) -> tuple[DecisionTimerIntent, ...]:
         if result.kind == AttemptResultKind.PREPARATION_ERROR:
             if attempt.started_at is not None or step_run.status not in {
                 StepRunStatus.SCHEDULED,
@@ -2434,16 +2539,41 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             step_run.status_transitions.force_state(
                 step_run, StepRunStatus.FAILED, reason="attempt preparation failed before invocation"
             )
-            return
+            return ()
         if attempt.started_at is None or step_run.status != StepRunStatus.STARTED:
             raise ValidationError({"result": "This result requires a started current attempt."})
         if result.kind == AttemptResultKind.DONE:
             step_run.mark_succeeded(output=result.output if result.output_present else None, outcome=result.outcome)
         elif result.kind in {AttemptResultKind.WAIT, AttemptResultKind.SUSPEND}:
+            effective_until = result.requested_until
+            if result.kind == AttemptResultKind.WAIT and run.deliveries > step_run.claimed_deliveries:
+                effective_until = attempt.result_recorded_at
+            resume_state = result.checkpoint if result.checkpoint_present else None
+            timer_intents: tuple[DecisionTimerIntent, ...] = ()
+            if result.kind == AttemptResultKind.SUSPEND:
+                decision_model = step_run.decisions.model
+                decisions, timer_intents = decision_model.objects.create_for_suspension(
+                    step_run=step_run,
+                    attempt=attempt,
+                    declarations=result.decisions,
+                    using=self.db,
+                )
+                resume_state = dict(resume_state or {})
+                if decisions:
+                    resume_state["_decision_ids"] = [decision.pk for decision in decisions]
+                schemas = {
+                    str(decision.pk): dict(spec.decision_schema)
+                    for decision, spec in zip(decisions, result.decisions, strict=True)
+                    if spec.decision_schema
+                }
+                if schemas:
+                    resume_state["_decision_schemas"] = schemas
             step_run.mark_waiting(
-                resume_state=result.checkpoint if result.checkpoint_present else None,
+                until=effective_until,
+                resume_state=resume_state,
                 waiting_kind=result.waiting_kind or WaitingKind.EXTERNAL,
             )
+            return timer_intents
         elif result.kind in {AttemptResultKind.ERROR, AttemptResultKind.NO_RESULT}:
             error = result.error or (
                 "Step implementation returned no result." if result.kind == AttemptResultKind.NO_RESULT else ""
@@ -2455,6 +2585,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             )
         else:
             raise ValidationError({"result": f"Unsupported attempt result kind {result.kind!s}."})
+        return ()
 
 
 class StepAttempt(AuditMixin, AngeeDataModel):
@@ -2495,6 +2626,8 @@ class StepAttempt(AuditMixin, AngeeDataModel):
     stacktrace = models.TextField(null=True, blank=True)
     outcome = models.SlugField(max_length=100, blank=True, default="")
     waiting_kind = models.CharField(max_length=32, blank=True, default="")
+    result_requested_until = models.DateTimeField(null=True, blank=True)
+    result_decisions = models.JSONField(default=list, blank=True)
     applied_at = models.DateTimeField(null=True, blank=True)
 
     objects = StepAttemptManager()
@@ -2566,6 +2699,168 @@ class StepAttempt(AuditMixin, AngeeDataModel):
         raise TypeError("Step attempts are retained execution evidence and cannot be deleted.")
 
 
+class DecisionQuerySet(AngeeQuerySet[Any]):
+    """Decision reads with protected retained-suspension provenance."""
+
+    _PROTECTED_FIELDS = frozenset({"suspension_attempt", "suspension_attempt_id", "declaration_index"})
+
+    def update(self, **kwargs: Any) -> int:
+        if self._PROTECTED_FIELDS.intersection(kwargs):
+            raise TypeError("Decision suspension provenance is owned by DecisionManager.")
+        return super().update(**kwargs)
+
+    def bulk_create(self, objs: Iterable[Any], *args: Any, **kwargs: Any) -> list[Any]:
+        rows = list(objs)
+        retained = any(
+            row.suspension_attempt_id is not None or row.declaration_index is not None for row in rows
+        )
+        if retained:
+            raise TypeError("Decision suspension provenance is owned by DecisionManager.")
+        return super().bulk_create(rows, *args, **kwargs)
+
+    def bulk_update(
+        self,
+        objs: Iterable[Any],
+        fields: Iterable[str],
+        batch_size: int | None = None,
+    ) -> int:
+        field_names = tuple(fields)
+        if self._PROTECTED_FIELDS.intersection(field_names):
+            raise TypeError("Decision suspension provenance is owned by DecisionManager.")
+        return super().bulk_update(objs, field_names, batch_size=batch_size)
+
+
+class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ignore[misc]
+    """Create actionable decisions and their authorization tuples atomically."""
+
+    def timer_intents_for(self, *, attempt: Any, using: str) -> tuple[DecisionTimerIntent, ...]:
+        """Reconstruct deterministic post-commit work for an applied suspension."""
+
+        decisions = system_queryset(self.model, using=using, lock=None).filter(
+            suspension_attempt=attempt
+        ).order_by("declaration_index")
+        intents: list[DecisionTimerIntent] = []
+        for decision in decisions:
+            if decision.escalate_at is not None:
+                intents.append(
+                    DecisionTimerIntent(
+                        DecisionTimerKind.ESCALATE,
+                        decision.pk,
+                        decision.attempts,
+                        decision.escalate_at,
+                    )
+                )
+            if decision.expires_at is not None:
+                intents.append(
+                    DecisionTimerIntent(
+                        DecisionTimerKind.EXPIRE,
+                        decision.pk,
+                        decision.attempts,
+                        decision.expires_at,
+                    )
+                )
+        return tuple(intents)
+
+    def create_for_suspension(
+        self,
+        *,
+        step_run: Any,
+        attempt: Any,
+        declarations: tuple[DecisionSpec, ...],
+        using: str,
+    ) -> tuple[tuple[Any, ...], tuple[DecisionTimerIntent, ...]]:
+        """Create one validated, ordered batch for an applicable suspension.
+
+        ORM and relationship rows share rollback on the current host's default
+        database with REBAC's transactional local backend. Other aliases and
+        remote backends require a durable relationship-intent contract before
+        this unused API can enter the production execution cutover.
+        """
+        if using != DEFAULT_DB_ALIAS:
+            raise ValidationError(
+                {"using": "Atomic decision relationship creation currently requires the default database."}
+            )
+        if not _attempt_write_active(using, step_run.pk):
+            raise RuntimeError("Retained decisions require an active StepAttemptManager transaction.")
+
+        declarations = deserialize_decision_specs(serialize_decision_specs(declarations))
+
+        prepared = tuple(
+            (
+                spec,
+                tuple(SubjectRef.parse(subject) for subject in spec.assignees),
+                SubjectRef.parse(spec.requester) if spec.requester else None,
+                tuple(SubjectRef.parse(subject) for subject in spec.escalation),
+            )
+            for spec in declarations
+        )
+        if attempt.step_run_id != step_run.pk:
+            raise ValidationError({"attempt": "The suspension attempt must belong to this step run."})
+        if (
+            step_run.current_attempt_id != attempt.pk
+            or step_run.status != StepRunStatus.STARTED
+            or step_run.run.is_terminal
+            or attempt.started_at is None
+            or attempt.lease_revoked_at is not None
+            or attempt.result_kind != str(AttemptResultKind.SUSPEND)
+            or attempt.result_recorded_at is None
+        ):
+            raise ValidationError({"attempt": "Decisions require the current applicable suspension attempt."})
+
+        decisions: list[Any] = []
+        timer_intents: list[DecisionTimerIntent] = []
+        with transaction.atomic(using=using):
+            connection = connections[using]
+            manager = self.db_manager(using)
+            for index, (spec, assignees, requester, escalation) in enumerate(prepared):
+                token = _decision_write_session.set(
+                    _DecisionWriteSession(using, id(connection), step_run.pk, attempt.pk, index)
+                )
+                try:
+                    decision = manager.create(
+                        step_run=step_run,
+                        suspension_attempt=attempt,
+                        declaration_index=index,
+                        priority=spec.priority,
+                        action=spec.action,
+                        payload=spec.payload,
+                        max_attempts=spec.max_attempts,
+                        expires_at=spec.expires_at,
+                        escalate_at=spec.escalate_at,
+                    )
+                finally:
+                    _decision_write_session.reset(token)
+                resource = to_object_ref(decision)
+                relationships = [
+                    RelationshipTuple(resource=resource, relation="assignee", subject=subject)
+                    for subject in assignees
+                ]
+                if requester is not None:
+                    relationships.append(
+                        RelationshipTuple(resource=resource, relation="requester", subject=requester)
+                    )
+                relationships.extend(
+                    RelationshipTuple(resource=resource, relation="escalation", subject=subject)
+                    for subject in escalation
+                )
+                if relationships:
+                    write_relationships(relationships)
+                decisions.append(decision)
+                if spec.escalate_at is not None:
+                    timer_intents.append(
+                        DecisionTimerIntent(
+                            DecisionTimerKind.ESCALATE, decision.pk, decision.attempts, spec.escalate_at
+                        )
+                    )
+                if spec.expires_at is not None:
+                    timer_intents.append(
+                        DecisionTimerIntent(
+                            DecisionTimerKind.EXPIRE, decision.pk, decision.attempts, spec.expires_at
+                        )
+                    )
+        return tuple(decisions), tuple(timer_intents)
+
+
 class Decision(AuditMixin, AngeeDataModel):
     """One awaited resolution slot for a suspended step-run."""
 
@@ -2574,6 +2869,10 @@ class Decision(AuditMixin, AngeeDataModel):
 
     sqid_prefix = "wdc_"
     step_run = models.ForeignKey("workflows.StepRun", on_delete=models.CASCADE, related_name="decisions")
+    suspension_attempt = models.ForeignKey(
+        "workflows.StepAttempt", on_delete=models.PROTECT, null=True, blank=True, related_name="decisions"
+    )
+    declaration_index = models.PositiveIntegerField(null=True, blank=True, editable=False)
     priority = models.IntegerField(default=0)
     action = models.SlugField(max_length=100)
     payload = models.JSONField(default=dict, blank=True)
@@ -2597,22 +2896,54 @@ class Decision(AuditMixin, AngeeDataModel):
         },
     )
 
-    objects = AngeeManager()
+    objects = DecisionManager()
 
     class Meta:
         """Django model options for workflow decisions."""
 
         abstract = True
-        ordering = ("step_run", "priority", "created_at", "sqid")
+        ordering = ("step_run", "priority", "declaration_index", "created_at", "sqid")
         rebac_resource_type = "workflows/decision"
         rebac_id_attr = "sqid"
         indexes = (models.Index(fields=("step_run", "verdict", "priority"), name="idx_wdc_step_verdict"),)
+        constraints = (
+            models.UniqueConstraint(
+                fields=("suspension_attempt", "declaration_index"), name="uniq_wdc_attempt_declaration"
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(suspension_attempt__isnull=True, declaration_index__isnull=True)
+                    | models.Q(suspension_attempt__isnull=False, declaration_index__isnull=False)
+                ),
+                name="chk_wdc_declaration_source_pair",
+            ),
+        )
 
     @property
     def is_terminal(self) -> bool:
         """Return whether this decision has a terminal verdict."""
 
         return self.verdict in Verdict.TERMINAL
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Keep retained suspension provenance immutable outside its manager."""
+
+        alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
+        if self._state.adding:
+            if (
+                (self.suspension_attempt_id is not None or self.declaration_index is not None)
+                and not _decision_write_active(alias, self)
+            ):
+                raise TypeError("Decision suspension provenance is owned by DecisionManager.")
+        else:
+            retained = system_queryset(type(self), using=alias, lock=None).filter(pk=self.pk).values(
+                "suspension_attempt_id", "declaration_index"
+            ).get()
+            if retained["suspension_attempt_id"] != self.suspension_attempt_id or retained[
+                "declaration_index"
+            ] != self.declaration_index:
+                raise TypeError("Decision suspension provenance is immutable.")
+        super().save(*args, **kwargs)
 
     @classmethod
     def form_schema_annotation(cls) -> dict[str, Any]:
