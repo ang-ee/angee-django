@@ -23,6 +23,27 @@ afterEach(() => {
 });
 
 describe("GraphView interactions", () => {
+  test("renders controlled node selection with the shared selected recipe", async () => {
+    const graph = (selected: boolean) => <GraphView
+      className="h-[360px] w-[520px]"
+      nodes={[{ id: "a", kind: "step", title: "A", selected }]}
+      edges={[]}
+      nodeStyles={{ step: { width: 160, height: 72, borderColor: "var(--border-subtle)" } }}
+    />;
+    const view = render(graph(true));
+    const node = await screen.findByTestId("rf__node-a");
+    expect(node.className).toContain("selected");
+    expect(node.style.borderColor).toBe("var(--brand)");
+    expect(node.style.background).toBe("var(--brand-soft)");
+    expect(node.style.borderWidth).toBe("2px");
+
+    view.rerender(graph(false));
+    await waitFor(() => expect(node.className).not.toContain("selected"));
+    expect(node.style.borderColor).toBe("var(--border-subtle)");
+    expect(node.style.background).toBe("var(--surface-sheet)");
+    expect(node.style.borderWidth).toBe("1px");
+  });
+
   test("forwards a programmatic focus target for pane navigation", async () => {
     const surface = React.createRef<HTMLDivElement>();
     render(

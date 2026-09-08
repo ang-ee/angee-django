@@ -34,6 +34,8 @@ export interface GraphViewNode<
   title: React.ReactNode;
   code?: React.ReactNode;
   detail?: React.ReactNode;
+  /** Controlled native React Flow selection state. */
+  selected?: boolean;
   highlighted?: boolean;
   position?: GraphViewPosition;
   meta?: TMeta;
@@ -49,6 +51,8 @@ export interface GraphViewEdge<
   kind: TKind;
   ariaLabel?: string;
   label?: React.ReactNode;
+  /** Controlled native React Flow selection state. */
+  selected?: boolean;
   meta?: TMeta;
 }
 
@@ -376,8 +380,10 @@ function toReactFlowNode<
   nodeStyles: Readonly<Record<TKind, GraphViewNodeStyle>>,
 ): RenderNode<TKind, TMeta> {
   const style = nodeStyleFor(node.kind, nodeStyles);
+  const emphasized = node.selected || node.highlighted;
   return {
     id: node.id,
+    selected: node.selected,
     ariaLabel: node.ariaLabel,
     type: style.type ?? "default",
     position: { x: 0, y: 0 },
@@ -390,11 +396,11 @@ function toReactFlowNode<
     style: {
       width: style.width,
       minHeight: style.height,
-      borderColor: node.highlighted
+      borderColor: emphasized
         ? style.highlightedBorderColor ?? "var(--brand)"
         : style.borderColor,
-      borderWidth: node.highlighted ? 2 : 1,
-      background: node.highlighted
+      borderWidth: emphasized ? 2 : 1,
+      background: emphasized
         ? style.highlightedBackground ?? "var(--brand-soft)"
         : style.background ?? "var(--surface-sheet)",
       color: style.color ?? "var(--text-primary)",
@@ -418,6 +424,7 @@ function toReactFlowEdge<
   };
   return {
     id: edge.id,
+    selected: edge.selected,
     ariaLabel: edge.ariaLabel,
     source: edge.source,
     target: edge.target,
@@ -425,7 +432,10 @@ function toReactFlowEdge<
     data: { edge },
     label: edge.label,
     markerEnd: { type: MarkerType.ArrowClosed },
-    style: { stroke: style.stroke, strokeWidth: style.strokeWidth },
+    style: {
+      stroke: edge.selected ? "var(--brand)" : style.stroke,
+      strokeWidth: edge.selected ? Math.max(2, (style.strokeWidth ?? 1) + 1) : style.strokeWidth,
+    },
     labelStyle: { fill: style.labelColor, fontSize: 11 },
   };
 }

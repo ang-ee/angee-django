@@ -288,7 +288,7 @@ describe("WorkflowCanvas native narrow inspector", () => {
   test("uses declared presentation and navigates saved issues to their exact fields", async () => {
     renderCanvas({ settings: true, nodes: {
       step_1: { ...mocks.record, position: { x: 0, y: 0 }, clientKey: undefined },
-      step_2: { ...mocks.record, id: "step_2", key: "finish", name: "Finish", is_entry: false, position: { x: 300, y: 0 }, clientKey: undefined },
+      step_2: { ...mocks.record, id: "step_2", key: "finish", name: "Finish", is_entry: false, position: { x: 0, y: 180 }, clientKey: undefined },
     }, edges: { edge_1: { id: "edge_1", source: "step_1", target: "step_2", condition: "", clientKey: undefined } }, readiness: [
       { code: "missing_mode", message: "Field required", kind: "NODE", id: "step_1", client_key: null, field: "config.mode" },
       { code: "invalid", message: "Field required", kind: "NODE", id: "step_1", client_key: null, field: "key" },
@@ -314,6 +314,7 @@ describe("WorkflowCanvas native narrow inspector", () => {
     fireEvent.click(screen.getByRole("button", { name: "Import files · Mode: Field required" }));
     const mode = await screen.findByLabelText("Mode");
     await waitFor(() => expect(document.activeElement).toBe(mode));
+    expect(screen.getByTestId("rf__node-step_1").className).toContain("selected");
 
     fireEvent.click(screen.getByRole("button", { name: "5 saved issues" }));
     fireEvent.click(screen.getByRole("button", { name: "Import files · Key: Field required" }));
@@ -330,6 +331,7 @@ describe("WorkflowCanvas native narrow inspector", () => {
     fireEvent.click(screen.getByRole("button", { name: "Import files → Finish · Outcome: Field required" }));
     const outcome = await screen.findByLabelText("Outcome");
     await waitFor(() => expect(document.activeElement).toBe(outcome));
+    expect(screen.getByTestId("rf__node-step_1").className).not.toContain("selected");
     fireEvent.click(screen.getByRole("button", { name: "Back to canvas" }));
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("region", { name: "Editor" })));
   });
@@ -349,6 +351,20 @@ describe("WorkflowCanvas native narrow inspector", () => {
     await screen.findByText("Import files");
     fireEvent.click(screen.getByRole("button", { name: "1 saved issue" }));
     expect(screen.getByRole("button", { name: "Import files · Input: Choose a value type." })).toBeTruthy();
+  });
+
+  test("Go to source moves native selection to the referenced step", async () => {
+    renderCanvas({ nodes: {
+      step_1: { ...mocks.record, input_binding: { kind: "step_output", step_key: "finish", path: [] }, position: { x: 0, y: 0 }, clientKey: undefined },
+      step_2: { ...mocks.record, id: "step_2", key: "finish", name: "Finish", is_entry: false, input_binding: null, position: { x: 0, y: 180 }, clientKey: undefined },
+    } });
+    await screen.findByText("Import files");
+    fireEvent.click(screen.getByTestId("rf__node-step_1"));
+    fireEvent.click(await screen.findByRole("tab", { name: "Input" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Go to source" }));
+    await waitFor(() => expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Finish"));
+    expect(screen.getByTestId("rf__node-step_1").className).not.toContain("selected");
+    expect(screen.getByTestId("rf__node-step_2").className).toContain("selected");
   });
 
   test("insertion replaces one route with two and preserves the source outcome", () => {

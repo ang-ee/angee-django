@@ -117,20 +117,21 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
       ariaLabel: [title, secondary, operation?.category, node.is_entry ? t("canvas.start") : null, issueCount ? issueLabel(issueCount, t) : null].filter(Boolean).join(", "),
       title,
       detail: [secondary, node.is_entry ? t("canvas.start") : null, issueCount ? issueLabel(issueCount, t) : null].filter(Boolean).join(" · "),
-      highlighted: node.is_entry,
+      selected: identity === selectedStep,
       position: graphPosition(node.position),
       meta: { node },
     };
-  }) satisfies GraphViewNode<WorkflowGraphNodeKind, { node: DefinitionNode; }>[], [diagnostics, nodes, operations, t]);
+  }) satisfies GraphViewNode<WorkflowGraphNodeKind, { node: DefinitionNode; }>[], [diagnostics, nodes, operations, selectedStep, t]);
   const graphEdges = React.useMemo(() => Object.entries(edges).map(([identity, edge]) => ({
     id: identity,
     source: edge.source,
     target: edge.target,
     kind: edge.condition ? "condition" as const : "default" as const,
     label: edge.condition || undefined,
+    selected: identity === selectedEdge,
     ariaLabel: edgeAriaLabel(edge, nodes, diagnosticsForEdge(diagnostics, identity, edge).length, t),
     meta: { edge },
-  })) satisfies GraphViewEdge<"condition" | "default", { edge: DefinitionEdge; }>[], [diagnostics, edges, nodes, t]);
+  })) satisfies GraphViewEdge<"condition" | "default", { edge: DefinitionEdge; }>[], [diagnostics, edges, nodes, selectedEdge, t]);
   const currentGraph = React.useCallback(() => ({
     nodes: (context.form.form.getValues("definition.nodes") ?? {}) as Record<string, DefinitionNode>,
     edges: (context.form.form.getValues("definition.edges") ?? {}) as Record<string, DefinitionEdge>,
