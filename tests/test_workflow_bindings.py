@@ -12,6 +12,7 @@ from angee.workflows.bindings import (
     BindingContext,
     SourceValue,
     UnavailableSource,
+    binding_error_details,
     binding_error_locations,
     evaluate_binding,
     parse_binding,
@@ -194,3 +195,6 @@ def test_parse_error_locations_remove_only_actual_union_tags() -> None:
     with pytest.raises(ValidationError) as child_error:
         parse_binding(invalid_child)
     assert binding_error_locations(invalid_child, child_error.value) == (("fields", "kind"),)
+    assert binding_error_details(invalid_child, child_error.value) == (
+        (("fields", "kind"), "Choose a value type."),
+    )

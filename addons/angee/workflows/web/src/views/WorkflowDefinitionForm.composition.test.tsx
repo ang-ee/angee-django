@@ -34,22 +34,31 @@ const resource = testDataResource("workflows.Workflow", {
   modelName: "Workflow", typeNames: { node: "WorkflowType" },
   fields: [field("id", "ID"), field("name"), field("description"), field("status"), field("version", "Int"), field("lineage_id"), field("error_workflow", "ID"), field("max_steps", "Int"), field("budget", "JSON")],
 });
-function workflowSnapshot(revision: number, name: string, nodeName = "First") { return {
-  revision,
-  workflow: { id: "workflow_1", key: "flow", name, description: "", purpose: "AUTOMATION", subject_declaration: "", status: "DRAFT", version: 1, lineage_id: "workflow_1", error_workflow: null, max_steps: 10, budget: {}, current_published_version: null, publication_status: "unpublished" },
-  nodes: [{ id: "node_1", key: "first", name: nodeName, step_class: "gate", config: {}, config_errors: {}, join_rule: "ALL_SUCCESS", is_entry: true, position: {} }], edges: [], readiness: [],
-}; }
+function workflowSnapshot(revision: number, name: string, nodeName = "First") {
+  return {
+    revision,
+    workflow: { id: "workflow_1", key: "flow", name, description: "", purpose: "AUTOMATION", subject_declaration: "", status: "DRAFT", version: 1, lineage_id: "workflow_1", error_workflow: null, max_steps: 10, budget: {}, current_published_version: null, publication_status: "unpublished" },
+    nodes: [{ id: "node_1", key: "first", name: nodeName, step_class: "gate", config: {}, config_errors: {}, input_binding: null, join_rule: "ALL_SUCCESS", is_entry: true, position: {} }], edges: [], readiness: [],
+  };
+}
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+const complexBinding = { kind: "object", fields: { "a.b[]/kind": { kind: "array", items: [{ kind: "constant", value: null }] } } };
+const laterBinding = { kind: "object", fields: { "a.b[]/kind": { kind: "array", items: [{ kind: "constant", value: null }, { kind: "constant", value: "later" }] } } };
 let surface: RecordPanelContext["form"] | null = null;
-function SurfaceProbe({ context }: { context: RecordPanelContext }) {
+function SurfaceProbe({ context }: { context: RecordPanelContext; }) {
   surface = context.form;
   const history = useDefinitionHistoryContext();
-  return <button type="button" onClick={() => history?.perform(() => {
+  return <><button type="button" onClick={() => history?.perform(() => context.form.form.setValue("definition.nodes.node_1.input_binding", complexBinding as never, { shouldDirty: true }))}>Set complex binding</button><button type="button" onClick={() => history?.perform(() => context.form.form.setValue("definition.nodes.node_1.input_binding", laterBinding as never, { shouldDirty: true }))}>Set later binding</button><button type="button" onClick={() => history?.perform(() => {
     const nodes = context.form.form.getValues("definition.nodes") as unknown as Record<string, unknown>;
-    const edges = context.form.form.getValues("definition.edges") as unknown as Record<string, { source: string; target: string }>;
+    const edges = context.form.form.getValues("definition.edges") as unknown as Record<string, { source: string; target: string; }>;
     const { node_1: _removed, ...remaining } = nodes;
     context.form.form.setValue("definition.nodes", remaining as never, { shouldDirty: true });
     context.form.form.setValue("definition.edges", Object.fromEntries(Object.entries(edges).filter(([, edge]) => edge.source !== "node_1" && edge.target !== "node_1")) as never, { shouldDirty: true });
-  })}>Delete fixture node</button>;
+  })}>Delete fixture node</button></>;
 }
 beforeEach(() => { cleanup(); surface = null; state.publish.mockReset(); state.refetch.mockReset(); });
 
@@ -73,6 +82,20 @@ test("the registered form exposes parsed settings and saves through the definiti
   expect(screen.getByRole("button", { name: "Publish" }).hasAttribute("disabled")).toBe(true);
   fireEvent.change(name, { target: { value: "Changed" } });
   fireEvent.blur(name);
+  fireEvent.click(screen.getByRole("tab", { name: "Editor" }));
+  fireEvent.click(screen.getByRole("button", { name: "Set complex binding" }));
+  const complex = complexBinding;
+  expect(surface!.form.getValues("definition.nodes.node_1.input_binding")).toEqual(complex);
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(surface!.form.getValues("definition.nodes.node_1.input_binding")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+  expect(surface!.form.getValues("definition.nodes.node_1.input_binding")).toEqual(complex);
+  fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+  expect(surface!.form.getValues("definition.nodes.node_1.input_binding")).toBeNull();
+  fireEvent.change(name, { target: { value: "Changed" } });
+  fireEvent.blur(name);
+  fireEvent.click(screen.getByRole("button", { name: "Set complex binding" }));
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   expect((name as HTMLInputElement).value).toBe("Original");
   await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).toBeNull());
@@ -89,14 +112,52 @@ test("the registered form exposes parsed settings and saves through the definiti
   expect((name as HTMLInputElement).value).toBe("Original");
   fireEvent.change(name, { target: { value: "Changed" } });
   fireEvent.blur(name);
+  fireEvent.click(screen.getByRole("button", { name: "Set complex binding" }));
   fireEvent.click(await screen.findByRole("button", { name: "Save" }));
   await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1));
   expect(state.save.mock.calls[0]?.[0]).toMatchObject({ expectedRevision: 4, edit: { workflow: { name: "Changed" } } });
+  expect(state.save.mock.calls[0]?.[0]).toMatchObject({ edit: { node_patches: [{ id: "node_1", fields: { input_binding: complex } }] } });
+});
+
+test("a save acknowledgement rebases a later complex binding edit without losing history", async () => {
+  state.snapshot = workflowSnapshot(4, "Original");
+  const firstSave = deferred<unknown>();
+  state.save.mockReset();
+  state.save
+    .mockImplementationOnce(() => firstSave.promise)
+    .mockResolvedValueOnce({ save_workflow_definition: { status: "SUCCESS", revision: 6, current_revision: 6, nodes: [], edges: [], diagnostics: [] } });
+  const provider = { getApiUrl: () => "test://workflows", getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
+    <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" defaultRecordTab="editor" recordTabs={[{ id: "editor", label: "Editor", keepMounted: true, render: (context) => <SurfaceProbe context={context} /> }]} />
+    </AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider>
+  </Refine>);
+
+  await screen.findByRole("button", { name: "Set complex binding" });
+  fireEvent.click(screen.getByRole("button", { name: "Set complex binding" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+  await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1));
+  expect(state.save.mock.calls[0]?.[0]).toMatchObject({ expectedRevision: 4, edit: { node_patches: [{ id: "node_1", fields: { input_binding: complexBinding } }] } });
+  fireEvent.click(screen.getByRole("button", { name: "Set later binding" }));
+  expect(surface!.form.getValues("definition.nodes.node_1.input_binding")).toEqual(laterBinding);
+
+  firstSave.resolve({ save_workflow_definition: { status: "SUCCESS", revision: 5, current_revision: 5, nodes: [], edges: [], diagnostics: [] } });
+  await waitFor(() => expect(surface!.form.getValues("definition.revision")).toBe(5));
+  expect((surface!.form.formState.defaultValues?.definition as { nodes?: { node_1?: { input_binding?: unknown; }; }; } | undefined)?.nodes?.node_1?.input_binding).toEqual(complexBinding);
+  expect(surface!.form.getValues("definition.nodes.node_1.input_binding")).toEqual(laterBinding);
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(surface!.form.getValues("definition.nodes.node_1.input_binding")).toEqual(complexBinding);
+  fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+  expect(surface!.form.getValues("definition.nodes.node_1.input_binding")).toEqual(laterBinding);
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(state.save).toHaveBeenCalledTimes(2));
+  expect(state.save.mock.calls[1]?.[0]).toMatchObject({ expectedRevision: 5, edit: { node_patches: [{ id: "node_1", fields: { input_binding: laterBinding } }] } });
 });
 
 test("the registered create branch uses the native resource create mutation", async () => {
   state.save.mockReset();
-  const create = vi.fn(async ({ variables }: { variables: Record<string, unknown> }) => ({ data: { id: "workflow_new", ...variables } }));
+  const create = vi.fn(async ({ variables }: { variables: Record<string, unknown>; }) => ({ data: { id: "workflow_new", ...variables } }));
   const provider = { getApiUrl: () => "test://workflows", getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })), create, update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}><RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowDefinitionForm resource="workflows.Workflow" id={null} defaultValues={{ status: "DRAFT" }} /></AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider></Refine>);
@@ -191,7 +252,7 @@ test("undo during a pending deletion rekeys the restored node and edge after ack
   expect(surface!.form.getValues(`definition.nodes.${restoredKey}.id`)).toBe("");
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(state.save).toHaveBeenCalledTimes(2));
-  const edit = (state.save.mock.calls[1]?.[0] as { edit: Record<string, unknown> }).edit;
+  const edit = (state.save.mock.calls[1]?.[0] as { edit: Record<string, unknown>; }).edit;
   expect(edit.node_creates).toEqual([expect.objectContaining({ client_key: restoredKey })]);
   expect(edit.edge_creates).toEqual([expect.objectContaining({ source: { client_key: restoredKey }, target: { id: "node_2" } })]);
 });

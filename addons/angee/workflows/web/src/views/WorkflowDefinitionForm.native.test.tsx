@@ -168,3 +168,16 @@ test("publish refreshes publication metadata without admitting a newer draft rev
   await waitFor(() => expect(state.save).toHaveBeenCalled());
   expect((state.save.mock.calls.at(-1)?.[0] as Record<string, unknown>).expectedRevision).toBe(2);
 });
+
+test("publication readiness is announced once outside toolbar actions", async () => {
+  (state.snapshot.readiness as unknown[]) = [{ code: "required", message: "Required", kind: "NODE", id: "node_1", client_key: null, requested_id: null, field: "input_binding", detail_path: [] }];
+  render(<WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" />);
+  const status = await screen.findByRole("status");
+  expect(status.textContent).toBe("Resolve 1 saved issue before publishing.");
+  expect(screen.getAllByRole("status")).toHaveLength(1);
+  const publish = screen.getByRole("button", { name: "Publish" });
+  expect(publish.getAttribute("title")).toBe("Resolve 1 saved issue before publishing.");
+  expect((publish as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByRole("button", { name: "Undo" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Redo" })).toBeTruthy();
+});

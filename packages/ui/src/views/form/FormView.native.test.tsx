@@ -1,17 +1,18 @@
 // @vitest-environment happy-dom
 
+import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Refine, type DataProvider } from "@refinedev/core";
 import { QueryClient } from "@tanstack/react-query";
 import { createRootRoute, createRouter, createMemoryHistory, RouterContextProvider } from "@tanstack/react-router";
-import { Controller } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type ModelMetadata, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
-import { BoundDescriptorField } from "./BoundDescriptorField";
+import { BoundDescriptorField, BoundFormValue } from "./BoundDescriptorField";
 import { FormView } from "./FormView";
 import {
   acknowledgeFormSubmit,
@@ -45,6 +46,34 @@ const resource = testDataResource("notes.Note", {
 const model: ModelMetadata = schemaFieldMetadataFromDataResources([resource]).labels["notes.Note"]!;
 const clients: QueryClient[] = [];
 afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
+
+test("a domain controlled value uses FormView interaction ownership and remounts by full name", () => {
+  const start = vi.fn(); const commit = vi.fn();
+  function Harness({ name }: { name: string }) {
+    const form = useForm({ defaultValues: { first: "one", second: "two" } });
+    const surface = { form, startFieldInteraction: start, commitFieldInteraction: commit, clearServerFieldError: vi.fn() } as unknown as FormViewSaveSurface;
+    return <BoundFormValue form={surface} name={name}>{({ value, onChange, onCommit }) => <input aria-label={name} value={String(value)} onChange={(event) => onChange(event.currentTarget.value)} onBlur={onCommit} />}</BoundFormValue>;
+  }
+  const view = render(<Harness name="first" />);
+  fireEvent.change(screen.getByRole("textbox", { name: "first" }), { target: { value: "changed" } });
+  fireEvent.blur(screen.getByRole("textbox", { name: "first" }));
+  expect(start).toHaveBeenCalledWith("first"); expect(commit).toHaveBeenCalledWith("first");
+  view.rerender(<Harness name="second" />);
+  expect((screen.getByRole("textbox", { name: "second" }) as HTMLInputElement).value).toBe("two");
+});
+
+test("a domain controlled value preserves nested form error messages", async () => {
+  function Harness() {
+    const form = useForm({ defaultValues: { binding: { fields: { literal: null } } } });
+    React.useEffect(() => {
+      form.setError("binding.fields.literal", { message: "Nested value is required" });
+    }, [form]);
+    const surface = { form, startFieldInteraction: vi.fn(), commitFieldInteraction: vi.fn(), clearServerFieldError: vi.fn() } as unknown as FormViewSaveSurface;
+    return <BoundFormValue form={surface} name="binding">{({ messages }) => <span>{messages.join(" ")}</span>}</BoundFormValue>;
+  }
+  render(<Harness />);
+  expect(await screen.findByText("fields.literal: Nested value is required")).toBeTruthy();
+});
 
 async function fixture(options: {
   id?: string | null;

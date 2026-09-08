@@ -7,6 +7,7 @@ import { LabeledDescriptorField } from "./MutationDialog";
 import { fieldErrorMessages, isFieldVisible, resolveField, type FormValues } from "./form-view-model";
 import type { FormViewSaveSurface } from "./use-form-view-save";
 import { fieldsWithMetadataDefaults } from "../resource/model-metadata-defaults";
+import type { WidgetFocusTarget } from "../../widgets";
 
 export interface BoundDescriptorFieldProps {
   /** The shared FormView surface that owns values, errors, dirtiness and save. */
@@ -18,6 +19,41 @@ export interface BoundDescriptorFieldProps {
   /** Dotted object path containing the descriptor's sibling values. */
   scope?: string;
   readOnly?: boolean;
+}
+
+export interface BoundFormValueRenderProps {
+  value: unknown;
+  error?: string;
+  messages: string[];
+  controlRef: (target: WidgetFocusTarget | null) => void;
+  onChange: (value: unknown) => void;
+  onCommit: () => void;
+}
+export interface BoundFormValueProps {
+  form: FormViewSaveSurface;
+  name: string;
+  children: (props: BoundFormValueRenderProps) => React.ReactElement;
+}
+
+/** Bind a domain-owned controlled editor to one value in FormView's RHF tree. */
+export function BoundFormValue({ form: surface, name, children }: BoundFormValueProps): React.ReactElement {
+  return <Controller
+    key={name}
+    control={surface.form.control}
+    name={name}
+    render={({ field, fieldState }) => children({
+      value: field.value,
+      error: fieldState.error?.message,
+      messages: fieldErrorMessages(fieldState.error ? [fieldState.error] : []),
+      controlRef: field.ref,
+      onCommit: () => surface.commitFieldInteraction(name),
+      onChange: (value) => {
+        surface.startFieldInteraction(name);
+        surface.clearServerFieldError(name);
+        field.onChange(value);
+      },
+    })}
+  />;
 }
 
 /** Subscribe a custom record panel to FormView's single RHF value tree. */
@@ -45,30 +81,16 @@ export function BoundDescriptorField({
   const name = scope ? `${scope}.${resolved.name}` : resolved.name;
   if (!isFieldVisible(resolved, siblingValues)) return <></>;
 
-  return (
-    <Controller
-      key={name}
-      control={surface.form.control}
-      name={name}
-      render={({ field: controller, fieldState }) => (
-        <LabeledDescriptorField
-          field={resolved}
-          value={controller.value}
-          dialogValues={siblingValues}
-          readOnly={readOnly || surface.fieldReadOnly(resolved)}
-          controlRef={controller.ref}
-          messages={fieldErrorMessages(fieldState.error ? [fieldState.error] : [])}
-          onCommit={() => surface.commitFieldInteraction(name)}
-          onChange={(next) => {
-            surface.startFieldInteraction(name);
-            surface.clearServerFieldError(name);
-            controller.onChange(next);
-            surface.afterFieldChange(resolved, next, scope);
-          }}
-        />
-      )}
-    />
-  );
+  return <BoundFormValue form={surface} name={name}>{(bound) => <LabeledDescriptorField
+    field={resolved}
+    value={bound.value}
+    dialogValues={siblingValues}
+    readOnly={readOnly || surface.fieldReadOnly(resolved)}
+    controlRef={bound.controlRef}
+    messages={bound.messages}
+    onCommit={bound.onCommit}
+    onChange={(next) => { bound.onChange(next); surface.afterFieldChange(resolved, next, scope); }}
+  />}</BoundFormValue>;
 }
 
 function isFormValues(value: unknown): value is FormValues {

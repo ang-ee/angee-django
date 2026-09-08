@@ -7,6 +7,8 @@ import {
   Form,
   Group,
   LoadingPanel,
+  Statusline,
+  StatusSegment,
   acknowledgeFormSubmit,
   registerForm,
   type FormSubmit,
@@ -30,6 +32,7 @@ import {
   type WorkflowDefinitionValues,
 } from "./workflow-definition-state";
 import { DefinitionHistoryProvider, useDefinitionHistory } from "./workflow-definition-history";
+import { inputPreviewRequest, WorkflowInputPreviewProvider } from "./workflow-input-preview";
 
 export const WORKFLOW_MODEL = "workflows.Workflow";
 
@@ -98,6 +101,21 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
   }), [acknowledged?.record, definition.isFetching, definition.refetch, values]);
   const readOnly = props.readOnly || (acknowledged !== null && String(acknowledged.record.status) !== "DRAFT");
   const history = useDefinitionHistory(formSurface, Boolean(readOnly));
+  const inputPreview = React.useMemo(() => ({
+    prepare: (targetIdentity: string) => {
+      const current = formSurface.current?.form.getValues() as WorkflowDefinitionValues | undefined;
+      return id && acknowledged?.values && current
+        ? inputPreviewRequest(id, acknowledged.values, current, targetIdentity)
+        : null;
+    },
+    stale: () => {
+      const current = formSurface.current?.form.getValues() as WorkflowDefinitionValues | undefined;
+      if (current) setStaleReview(current);
+      setStale(true);
+      setReviewOpen(false);
+      setReviewCandidate(null);
+    },
+  }), [acknowledged?.values, id]);
 
   const submit = React.useCallback<FormSubmit>(async (_data, context) => {
     if (!id || acknowledged?.record.id !== id) return null;
@@ -191,7 +209,7 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
       <ErrorBanner description={reloadError} />
       <div className="flex gap-2"><Button type="button" size="sm" variant="secondary" onClick={() => setReviewOpen(false)}>{t("form.cancelReview")}</Button><Button type="button" size="sm" variant="danger" disabled={!reviewCandidate} onClick={discardAndReload}>{t("form.discardReload")}</Button></div>
     </section> : null}
-    <DefinitionHistoryProvider value={history}><Form
+    <DefinitionHistoryProvider value={history}><WorkflowInputPreviewProvider value={inputPreview}><Form
       key={formGeneration}
       {...props}
       resource={WORKFLOW_MODEL}
@@ -211,7 +229,7 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
     >
       {workflowFields(t)}
       {props.children}
-    </Form></DefinitionHistoryProvider>
+    </Form>{values?.definition.readiness.length ? <Statusline><StatusSegment><span role="status" aria-live="polite">{t(values.definition.readiness.length === 1 ? "form.publishBlockedOne" : "form.publishBlockedMany", { count: values.definition.readiness.length })}</span></StatusSegment></Statusline> : null}</WorkflowInputPreviewProvider></DefinitionHistoryProvider>
   </>);
 }
 
@@ -225,7 +243,7 @@ function DefinitionActions({ context, history, publishState, sourceLoading, issu
 }): React.ReactElement {
   const t = useWorkflowsT();
   const publishReason = issues ? t(issues === 1 ? "form.publishBlockedOne" : "form.publishBlockedMany", { count: issues }) : undefined;
-  return <><Button type="button" size="sm" variant="ghost" disabled={!history.canUndo} onClick={history.undo}>{t("form.undo")}</Button><Button type="button" size="sm" variant="ghost" disabled={!history.canRedo} onClick={history.redo}>{t("form.redo")}</Button>{publishReason ? <span className="text-12 text-fg-muted" role="status">{publishReason}</span> : null}<Button
+  return <><Button type="button" size="sm" variant="ghost" disabled={!history.canUndo} onClick={history.undo}>{t("form.undo")}</Button><Button type="button" size="sm" variant="ghost" disabled={!history.canRedo} onClick={history.redo}>{t("form.redo")}</Button><Button
     type="button"
     size="sm"
     variant="secondary"

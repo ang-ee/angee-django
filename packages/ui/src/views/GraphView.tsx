@@ -115,6 +115,10 @@ export interface GraphViewProps<
   fitViewOptions?: FitViewOptions;
   /** Imperative read-only access to React Flow's rendered node geometry. */
   geometryRef?: React.Ref<GraphViewGeometry<TNodeKind>>;
+  /** Programmatic focus target for hosts that swap the graph with another pane. */
+  surfaceRef?: React.Ref<HTMLDivElement>;
+  /** Accessible name for the focusable graph surface. */
+  ariaLabel?: string;
   className?: string;
   onNodeClick?: (node: GraphViewNode<TNodeKind, TNodeMeta>) => void;
   onEdgeClick?: (edge: GraphViewEdge<TEdgeKind, TEdgeMeta>) => void;
@@ -186,6 +190,8 @@ export function GraphView<
   layout,
   fitViewOptions = DEFAULT_FIT_VIEW_OPTIONS,
   geometryRef,
+  surfaceRef,
+  ariaLabel,
   className,
   onNodeClick,
   onEdgeClick,
@@ -283,7 +289,13 @@ export function GraphView<
   }), [geometryRef, nodeStyles, resolvedLayout]);
 
   return (
-    <div className={cn("min-h-0", className)}>
+    <div
+      ref={surfaceRef}
+      tabIndex={-1}
+      role={ariaLabel ? "region" : undefined}
+      aria-label={ariaLabel}
+      className={cn("min-h-0 outline-none", className)}
+    >
       <ReactFlow
         onInit={(instance) => { instanceRef.current = instance; }}
         nodes={renderNodes}

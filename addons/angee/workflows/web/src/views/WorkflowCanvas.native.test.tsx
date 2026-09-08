@@ -209,7 +209,7 @@ const edgeResource = testDataResource("workflows.Edge", {
 function CanvasHistoryHarness({ context }: { context: RecordPanelContext }): React.ReactElement {
   const surface = React.useRef<RecordPanelContext["form"] | null>(context.form);
   const history = useDefinitionHistory(surface, false);
-  return <DefinitionHistoryProvider value={history}><button type="button" onClick={history.undo} disabled={!history.canUndo}>Undo</button><WorkflowCanvas context={context} /></DefinitionHistoryProvider>;
+  return <DefinitionHistoryProvider value={history}><button type="button" onClick={history.undo} disabled={!history.canUndo}>Undo</button><button type="button" onClick={history.redo} disabled={!history.canRedo}>Redo</button><WorkflowCanvas context={context} /></DefinitionHistoryProvider>;
 }
 
 function renderCanvas(initial?: { nodes?: Record<string, Record<string, unknown>>; edges?: Record<string, Record<string, unknown>>; readiness?: Record<string, unknown>[]; settings?: boolean; history?: boolean }): void {
@@ -330,6 +330,8 @@ describe("WorkflowCanvas native narrow inspector", () => {
     fireEvent.click(screen.getByRole("button", { name: "Import files → Finish · Outcome: Field required" }));
     const outcome = await screen.findByLabelText("Outcome");
     await waitFor(() => expect(document.activeElement).toBe(outcome));
+    fireEvent.click(screen.getByRole("button", { name: "Back to canvas" }));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("region", { name: "Editor" })));
   });
 
   test("keeps an issue for an unavailable unsaved target without selecting another row", async () => {
@@ -340,6 +342,13 @@ describe("WorkflowCanvas native narrow inspector", () => {
     fireEvent.click(unavailableIssue);
     expect(screen.queryByLabelText("Mode")).toBeNull();
     expect(screen.getByText("Select a step on the canvas.")).toBeTruthy();
+  });
+
+  test("labels binding readiness with the Input owner", async () => {
+    renderCanvas({ readiness: [{ code: "binding_invalid", message: "Choose a value type.", kind: "NODE", id: "step_1", client_key: null, field: "input_binding", detail_path: ["items", 1] }] });
+    await screen.findByText("Import files");
+    fireEvent.click(screen.getByRole("button", { name: "1 saved issue" }));
+    expect(screen.getByRole("button", { name: "Import files · Input: Choose a value type." })).toBeTruthy();
   });
 
   test("insertion replaces one route with two and preserves the source outcome", () => {
@@ -526,9 +535,12 @@ describe("WorkflowCanvas native narrow inspector", () => {
   test("retains a typed inspector value across Back and reopen", async () => {
     renderCanvas();
     await screen.findByText("Import files");
-    fireEvent.click(screen.getByTestId("rf__node-step_1"));
+    const selectedNode = screen.getByTestId("rf__node-step_1");
+    selectedNode.focus();
+    fireEvent.keyDown(selectedNode, { key: "Enter" });
 
     const name = await screen.findByLabelText("Name");
+    await waitFor(() => expect(document.activeElement).toBe(name));
     const operation = screen.getByLabelText("Operation");
     expect(screen.getByText(/Effect: depends on the operation/)).toBeTruthy();
     expect(screen.getByLabelText("Mode")).toBeTruthy();
@@ -540,6 +552,9 @@ describe("WorkflowCanvas native narrow inspector", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Back to canvas" }));
     await waitFor(() => expect(screen.getByTestId("inspector").firstElementChild?.className).toContain("hidden"));
+    const graphSurface = screen.getByRole("region", { name: "Editor" });
+    await waitFor(() => expect(document.activeElement).toBe(graphSurface));
+    expect(screen.getByTestId("rf__node-step_1").getAttribute("tabindex")).toBe("0");
     fireEvent.click(screen.getByTestId("rf__node-step_1"));
 
     expect((await screen.findByLabelText("Name") as HTMLInputElement).value).toBe("Import every file");
@@ -567,6 +582,28 @@ describe("WorkflowCanvas native narrow inspector", () => {
     expect((await screen.findByLabelText("Until") as HTMLInputElement).value).toBe("");
     const created = Object.values(canvasSurface!.form.getValues("definition.nodes") as unknown as Record<string, { id: string; config: Record<string, unknown> }>).find((node) => node.id === "");
     expect(created?.config).toEqual({});
+  });
+
+  test("input modes share definition history and preserve absent versus literal null", async () => {
+    renderCanvas({ history: true, nodes: { step_1: { ...mocks.record, input_binding: null, position: { x: 0, y: 0 }, clientKey: undefined } } });
+    await screen.findByText("Import files");
+    fireEvent.click(screen.getByTestId("rf__node-step_1"));
+    fireEvent.click(await screen.findByRole("tab", { name: "Input" }));
+    expect(screen.getByText("Automatic input")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Map input" }));
+    fireEvent.click(screen.getByRole("button", { name: "Literal value" }));
+    expect(canvasSurface!.form.getValues("definition.nodes.step_1.input_binding")).toEqual({ kind: "constant" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Use null" }));
+    fireEvent.blur(screen.getByRole("checkbox", { name: "Use null" }));
+    expect(canvasSurface!.form.getValues("definition.nodes.step_1.input_binding")).toEqual({ kind: "constant", value: null });
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(canvasSurface!.form.getValues("definition.nodes.step_1.input_binding")).toEqual({ kind: "constant" });
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(canvasSurface!.form.getValues("definition.nodes.step_1.input_binding")).toEqual({});
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(canvasSurface!.form.getValues("definition.nodes.step_1.input_binding")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+    expect(canvasSurface!.form.getValues("definition.nodes.step_1.input_binding")).toEqual({});
   });
 
   test("keeps only the persisted nonselectable operation readable", async () => {

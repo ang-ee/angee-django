@@ -354,14 +354,19 @@ describe("FormView", () => {
     expect(await screen.findByRole("menuitem", { name: "Delete" })).toBeTruthy();
   });
 
-  test("renders record-aware toolbarStart content", async () => {
+  test("keeps every record-aware toolbar action operable", async () => {
+    const publish = vi.fn();
     renderWithProviders(
       <FormView
         resource="notes.Note"
         id="note-1"
         toolbarStart={({ record }) =>
           record?.status === "ACTIVE" ? (
-            <button type="button">Provision</button>
+            <>
+              <button type="button">Undo</button>
+              <button type="button">Redo</button>
+              <button type="button" onClick={publish}>Publish</button>
+            </>
           ) : null
         }
       >
@@ -370,7 +375,9 @@ describe("FormView", () => {
       </FormView>,
     );
 
-    expect(await screen.findByRole("button", { name: "Provision" })).toBeTruthy();
+    const publishButton = await screen.findByRole("button", { name: "Publish" });
+    fireEvent.click(publishButton);
+    expect(publish).toHaveBeenCalledOnce();
   });
 
 

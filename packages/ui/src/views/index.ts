@@ -177,7 +177,7 @@ export {
   type RecordChromeContext,
 } from "./resource/record-chrome-context";
 export { EditableLines, type EditableLinesProps } from "./form/EditableLines";
-export { BoundDescriptorField, useFormViewValues, type BoundDescriptorFieldProps } from "./form/BoundDescriptorField";
+export { BoundDescriptorField, BoundFormValue, useFormViewValues, type BoundDescriptorFieldProps, type BoundFormValueProps, type BoundFormValueRenderProps } from "./form/BoundDescriptorField";
 export {
   diffLines,
   duplicateLineRow,

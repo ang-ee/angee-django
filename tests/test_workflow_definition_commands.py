@@ -203,7 +203,19 @@ def test_source_preview_rejects_an_ambiguous_target_reference(workflow_tables: N
             )
 
 
-@pytest.mark.parametrize("binding", [{"kind": {}}, {"kind": []}, {"kind": "missing"}, {}])
+@pytest.mark.parametrize(
+    "binding",
+    [
+        {"kind": {}},
+        {"kind": []},
+        {"kind": "missing"},
+        {},
+        {
+            "kind": "object",
+            "fields": {"a.b[]/kind": {"kind": "array", "items": [{"kind": "constant", "value": None}, {}]}},
+        },
+    ],
+)
 def test_manager_saves_malformed_binding_discriminators_as_readiness_issues(
     workflow_tables: None,
     binding: dict[str, object],
@@ -224,6 +236,10 @@ def test_manager_saves_malformed_binding_discriminators_as_readiness_issues(
         diagnostic.code == "binding_invalid" and diagnostic.location.field == "input_binding"
         for diagnostic in result.readiness
     )
+    if "fields" in binding:
+        diagnostic = next(item for item in result.readiness if item.code == "binding_invalid")
+        assert diagnostic.message == "Choose a value type."
+        assert diagnostic.location.detail_path == ("fields", "a.b[]/kind", "items", 1)
 
 
 def test_key_swap_is_explicit_and_map_config_is_never_rewritten(workflow_tables: None) -> None:

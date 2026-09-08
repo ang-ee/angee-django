@@ -51,6 +51,10 @@ export const WorkflowStepOperationsDocument = graphql(`
       category
       defaults
       config_schema
+      input_schema
+      output_schema
+      input_contract { raw_schema root_node_id nodes { id kind json_type title description nullable } edges { parent_node_id child_node_id kind key } }
+      output_contract { raw_schema root_node_id nodes { id kind json_type title description nullable } edges { parent_node_id child_node_id kind key } }
       description
       selectable
       effect
@@ -82,10 +86,10 @@ export const WorkflowDefinitionDocument = graphql(`
         publication_status
       }
       nodes {
-        id key name step_class config config_errors join_rule is_entry position
+        id key name step_class config config_errors input_binding join_rule is_entry position
       }
       edges { id source target condition }
-      readiness { code message kind id client_key requested_id field }
+      readiness { code message kind id client_key requested_id field detail_path }
     }
   }
 `);
@@ -96,7 +100,7 @@ export const SaveWorkflowDefinitionDocument = graphql(`
       status revision current_revision
       nodes { client_key id }
       edges { client_key id }
-      diagnostics { code message kind id client_key requested_id field }
+      diagnostics { code message kind id client_key requested_id field detail_path }
     }
   }
 `);
@@ -106,7 +110,20 @@ export const PublishWorkflowDefinitionDocument = graphql(`
     publish_workflow_definition(workflow: $workflow, expected_revision: $expectedRevision) {
       status revision current_revision publication_created
       publication { id version status }
-      diagnostics { code message kind id client_key requested_id field }
+      diagnostics { code message kind id client_key requested_id field detail_path }
+    }
+  }
+`);
+
+export const WorkflowInputSourcesDocument = graphql(`
+  query WorkflowInputSources($workflow: ID!, $expectedRevision: Int!, $edit: WorkflowDefinitionEditInput!, $target: WorkflowEndpointInput!) {
+    workflow_input_sources(workflow: $workflow, expected_revision: $expectedRevision, edit: $edit, target: $target) {
+      status revision current_revision
+      diagnostics { code message kind id client_key requested_id field detail_path }
+      sources {
+        kind id client_key step_key label
+        contract { raw_schema root_node_id nodes { id kind json_type title description nullable } edges { parent_node_id child_node_id kind key } }
+      }
     }
   }
 `);

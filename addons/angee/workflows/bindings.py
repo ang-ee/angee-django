@@ -274,6 +274,27 @@ def binding_error_locations(value: JsonValue, error: PydanticValidationError) ->
     return tuple(_binding_error_location(value, tuple(item["loc"])) for item in error.errors(include_url=False))
 
 
+def binding_error_details(
+    value: JsonValue,
+    error: PydanticValidationError,
+) -> tuple[tuple[BindingPath, str], ...]:
+    """Project native parser errors into stable authoring paths and messages."""
+
+    return tuple(
+        (
+            _binding_error_location(value, tuple(item["loc"])),
+            _binding_error_message(item),
+        )
+        for item in error.errors(include_url=False)
+    )
+
+
+def _binding_error_message(item: dict[str, Any]) -> str:
+    if item.get("type") in {"union_tag_not_found", "union_tag_invalid"}:
+        return "Choose a value type."
+    return str(item["msg"])
+
+
 _BINDING_KINDS = frozenset({"constant", "workflow_input", "step_output", "map_item", "object", "array"})
 
 

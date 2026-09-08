@@ -23,6 +23,24 @@ afterEach(() => {
 });
 
 describe("GraphView interactions", () => {
+  test("forwards a programmatic focus target for pane navigation", async () => {
+    const surface = React.createRef<HTMLDivElement>();
+    render(
+      <GraphView
+        surfaceRef={surface}
+        ariaLabel="Workflow editor"
+        className="h-[360px] w-[520px]"
+        nodes={[]}
+        edges={[]}
+        nodeStyles={{}}
+      />,
+    );
+
+    surface.current?.focus();
+    expect(document.activeElement).toBe(surface.current);
+    expect(screen.getByRole("region", { name: "Workflow editor" })).toBe(surface.current);
+  });
+
   test("selects a node through the real xyflow canvas", async () => {
     const onNodeSelect = vi.fn();
 

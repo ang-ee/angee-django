@@ -201,8 +201,8 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     void submitForm();
   };
   const controlBand = (
-    <ControlBand className={formIsDirty ? "bg-brand-soft" : undefined}>
-      <div className="flex min-w-0 items-center gap-2">
+    <ControlBand className={cn("overflow-x-auto overflow-y-hidden", formIsDirty ? "bg-brand-soft" : undefined)}>
+      <div className="flex min-w-max shrink-0 items-center gap-2">
         {toolbarStartNode}
         {isCreate || formIsDirty ? (
           <div className="flex items-center gap-2">
@@ -247,7 +247,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
         ) : null}
       </div>
       <div className="min-w-2 flex-1" />
-      <div className="flex min-w-0 items-center gap-2">
+      <div className="flex min-w-max shrink-0 items-center gap-2">
         {recordChromeContext ? (
           <RecordChromeProvider value={recordChromeContext}>
             <SlotOutlet entries={recordChrome} />

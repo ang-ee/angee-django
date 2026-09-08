@@ -199,6 +199,23 @@ def test_binding_readiness_uses_declared_paths_ancestry_and_structured_locations
     malformed = graph([node("source", SourceStep, entry=True, binding={"kind": "step_output"})])
     assert any(item.code == "binding_invalid" and item.location.detail_path for item in malformed.diagnostics())
 
+    incomplete = graph(
+        [
+            node(
+                "source",
+                SourceStep,
+                entry=True,
+                binding={
+                    "kind": "object",
+                    "fields": {"a.b[]/kind": {"kind": "array", "items": [{"kind": "constant", "value": None}, {}]}},
+                },
+            )
+        ]
+    )
+    discriminator = next(item for item in incomplete.diagnostics() if item.code == "binding_invalid")
+    assert discriminator.message == "Choose a value type."
+    assert discriminator.location.detail_path == ("fields", "a.b[]/kind", "items", 1)
+
     constructed = graph(
         [
             node(

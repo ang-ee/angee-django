@@ -12,7 +12,7 @@ from typing import Any, Literal, cast
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from pydantic import ValidationError as PydanticValidationError
 
-from angee.workflows.bindings import binding_error_locations, parse_binding
+from angee.workflows.bindings import binding_error_details, parse_binding
 from angee.workflows.data_contracts import DataContract, model_data_contract
 from angee.workflows.steps import StepImpl, validate_retry_config
 
@@ -412,9 +412,8 @@ class WorkflowGraph:
             try:
                 binding = parse_binding(node.input_binding)
             except PydanticValidationError as error:
-                locations = binding_error_locations(node.input_binding, error)
-                for item, detail in zip(error.errors(include_url=False), locations, strict=True):
-                    result.append(self._binding(node, "binding_invalid", item["msg"], detail))
+                for detail, message in binding_error_details(node.input_binding, error):
+                    result.append(self._binding(node, "binding_invalid", message, detail))
                 continue
             sources = self.input_sources(node.identity)
             by_step_key: dict[str | None, list[GraphInputSource]] = defaultdict(list)
