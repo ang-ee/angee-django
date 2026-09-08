@@ -238,11 +238,11 @@ describe("WorkflowCanvas native narrow inspector", () => {
       step_1: { ...mocks.record, position: { x: 0, y: 0 }, clientKey: undefined },
       step_2: { ...mocks.record, id: "step_2", key: "finish", name: "Finish", is_entry: false, position: { x: 300, y: 0 }, clientKey: undefined },
     }, edges: { edge_1: { id: "edge_1", source: "step_1", target: "step_2", condition: "", clientKey: undefined } }, readiness: [
-      { code: "missing_mode", message: "Choose a mode", kind: "NODE", id: "step_1", client_key: null, field: "config.mode" },
-      { code: "invalid", message: "Choose a key", kind: "NODE", id: "step_1", client_key: null, field: "key" },
-      { code: "invalid", message: "Choose a join rule", kind: "NODE", id: "step_1", client_key: null, field: "join_rule" },
-      { code: "invalid", message: "Choose an outcome", kind: "EDGE", id: "edge_1", client_key: null, field: "condition" },
-      { code: "missing_name", message: "Name the workflow", kind: "WORKFLOW", id: "workflow_1", client_key: null, field: "name" },
+      { code: "missing_mode", message: "Field required", kind: "NODE", id: "step_1", client_key: null, field: "config.mode" },
+      { code: "invalid", message: "Field required", kind: "NODE", id: "step_1", client_key: null, field: "key" },
+      { code: "invalid", message: "Field required", kind: "NODE", id: "step_1", client_key: null, field: "join_rule" },
+      { code: "invalid", message: "Field required", kind: "EDGE", id: "edge_1", client_key: null, field: "condition" },
+      { code: "missing_name", message: "Field required", kind: "WORKFLOW", id: "workflow_1", client_key: null, field: "name" },
     ] });
     await screen.findByText("Import files");
     expect(screen.getAllByText("Activity")).toHaveLength(2);
@@ -253,29 +253,29 @@ describe("WorkflowCanvas native narrow inspector", () => {
     fireEvent.click(screen.getByRole("button", { name: "5 saved issues" }));
     expect(screen.getByText("Unsaved edits are checked when you save.")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Name the workflow" }));
+    fireEvent.click(screen.getByRole("button", { name: "Settings · Name: Field required" }));
     const name = await screen.findByRole("textbox", { name: "Name" });
     await waitFor(() => expect(document.activeElement).toBe(name));
     expect(screen.getByRole("tab", { name: "Settings" }).getAttribute("aria-selected")).toBe("true");
     fireEvent.click(screen.getByRole("tab", { name: "Editor" }));
     fireEvent.click(screen.getByRole("button", { name: "5 saved issues" }));
-    fireEvent.click(screen.getByRole("button", { name: "Choose a mode" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import files · Mode: Field required" }));
     const mode = await screen.findByLabelText("Mode");
     await waitFor(() => expect(document.activeElement).toBe(mode));
 
     fireEvent.click(screen.getByRole("button", { name: "5 saved issues" }));
-    fireEvent.click(screen.getByRole("button", { name: "Choose a key" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import files · Key: Field required" }));
     const key = await screen.findByLabelText("Key");
     await waitFor(() => expect(document.activeElement).toBe(key));
     expect(screen.getByRole("button", { name: "Advanced" }).getAttribute("aria-expanded")).toBe("true");
 
     fireEvent.click(screen.getByRole("button", { name: "5 saved issues" }));
-    fireEvent.click(screen.getByRole("button", { name: "Choose a join rule" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import files · Join Rule: Field required" }));
     const join = await screen.findByRole("combobox", { name: /Join rule/i });
     await waitFor(() => expect(document.activeElement).toBe(join));
 
     fireEvent.click(screen.getByRole("button", { name: "5 saved issues" }));
-    fireEvent.click(screen.getByRole("button", { name: "Choose an outcome" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import files → Finish · Outcome: Field required" }));
     const outcome = await screen.findByLabelText("Outcome");
     await waitFor(() => expect(document.activeElement).toBe(outcome));
   });
@@ -284,7 +284,8 @@ describe("WorkflowCanvas native narrow inspector", () => {
     renderCanvas({ readiness: [{ code: "missing", message: "Repair removed step", kind: "NODE", id: null, client_key: "removed", field: "config.mode" }] });
     await screen.findByText("Import files");
     fireEvent.click(screen.getByRole("button", { name: "1 saved issue" }));
-    fireEvent.click(screen.getByRole("button", { name: "Repair removed step" }));
+    const unavailableIssue = screen.getByRole("button", { name: "Unavailable step (removed) · Mode: Repair removed step" });
+    fireEvent.click(unavailableIssue);
     expect(screen.queryByLabelText("Mode")).toBeNull();
     expect(screen.getByText("Select a step on the canvas.")).toBeTruthy();
   });
