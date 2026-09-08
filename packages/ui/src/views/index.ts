@@ -151,6 +151,7 @@ export { Form, type FormProps } from "./form/Form";
 export { RegisteredFormView, registerForm, useRegisteredForm, type RegisteredForm, type RegisteredFormProps } from "./form/registered-form";
 export {
   FormView,
+  acknowledgeFormSubmit,
   FORM_VIEW_RECORD_ACTIONS_SLOT,
   FORM_VIEW_RECORD_CHROME_SLOT,
   FORM_VIEW_SECTIONS_SLOT,
@@ -158,7 +159,9 @@ export {
   formViewSectionsSlot,
   type FormViewProps,
   type FormSubmit,
+  type FormSubmitAcknowledgement,
   type FormSubmitContext,
+  type FormViewAcknowledgedSource,
   type FormField,
   type FieldKind,
   type OverviewTabOptions,
@@ -173,6 +176,7 @@ export {
   type RecordChromeContext,
 } from "./resource/record-chrome-context";
 export { EditableLines, type EditableLinesProps } from "./form/EditableLines";
+export { BoundDescriptorField, useFormViewValues, type BoundDescriptorFieldProps } from "./form/BoundDescriptorField";
 export {
   diffLines,
   duplicateLineRow,

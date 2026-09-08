@@ -32,6 +32,10 @@ import {
 } from "./form-view-body";
 
 export {
+  acknowledgeFormSubmit,
+} from "./form-view-surface";
+
+export {
   FORM_VIEW_RECORD_ACTIONS_SLOT,
   FORM_VIEW_RECORD_CHROME_SLOT,
   FORM_VIEW_SECTIONS_SLOT,
@@ -44,7 +48,9 @@ export type FormField = FieldDescriptor;
 
 export type {
   FormSubmit,
+  FormSubmitAcknowledgement,
   FormSubmitContext,
+  FormViewAcknowledgedSource,
   OverviewTabOptions,
   RecordPresentation,
   RecordPanelContext,
@@ -92,6 +98,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     actions,
     returning,
     defaultValues,
+    acknowledgedSource,
     onSaved,
     submit,
     createSubmit,
@@ -118,6 +125,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     actions,
     returning,
     defaultValues,
+    acknowledgedSource,
     onSaved,
     submit,
     createSubmit,

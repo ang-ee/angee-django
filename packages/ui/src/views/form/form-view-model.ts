@@ -291,7 +291,7 @@ function recordFieldValue(record: Row, field: FieldDescriptor): unknown {
   return value;
 }
 
-function isFieldVisible(field: FieldDescriptor, values: FormValues): boolean {
+export function isFieldVisible(field: FieldDescriptor, values: FormValues): boolean {
   return !field.showWhen || field.showWhen(values);
 }
 

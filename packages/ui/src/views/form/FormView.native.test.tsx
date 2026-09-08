@@ -9,7 +9,16 @@ import { refineResourcesFromDataResources, schemaFieldMetadataFromDataResources,
 import { testDataResource } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
-import { useFormViewSave, type FormSubmit, type FormViewSaveSurface } from "./use-form-view-save";
+import { BoundDescriptorField } from "./BoundDescriptorField";
+import { FormView } from "./FormView";
+import {
+  acknowledgeFormSubmit,
+  useFormViewSave,
+  type FormSubmit,
+  type FormViewAcknowledgedSource,
+  type FormViewSaveSurface,
+} from "./use-form-view-save";
+import type { MutationDialogField } from "./MutationDialog";
 import type { FieldDescriptor } from "../page";
 
 const fields: readonly FieldDescriptor[] = [
@@ -34,7 +43,15 @@ const model: ModelMetadata = schemaFieldMetadataFromDataResources([resource]).la
 const clients: QueryClient[] = [];
 afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
 
-async function fixture(options: { id?: string | null; submit?: FormSubmit; mountedFields?: readonly string[]; presenceValues?: boolean } = {}) {
+async function fixture(options: {
+  id?: string | null;
+  submit?: FormSubmit;
+  mountedFields?: readonly string[];
+  presenceValues?: boolean;
+  acknowledgedSource?: FormViewAcknowledgedSource;
+  boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[];
+  publicView?: boolean;
+} = {}) {
   let record: Row = {
     id: options.id ?? "note-1",
     title: "First",
@@ -59,24 +76,211 @@ async function fixture(options: { id?: string | null; submit?: FormSubmit; mount
       resource: "notes.Note", id: recordId, isCreate: recordId === null,
       dataResource: resource, modelMetadata: model, formFields: viewFields, fieldByName, refineFields,
       submit: options.submit, onSaved, t: (key) => key,
+      acknowledgedSource: options.acknowledgedSource,
     });
     return <>{mountedFields.map((name) => <Controller key={name} name={name} control={surface.form.control} render={({ field }) => (
       <input aria-label={name} value={String(field.value ?? "")} onChange={field.onChange} />
-    )} />)}</>;
+    )} />)}{options.boundFields?.map((bound, index) => (
+      <BoundDescriptorField key={index} form={surface} resource="notes.Note" {...bound} />
+    ))}</>;
   }
   function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = fields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[] }) {
     return <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
       <RouterContextProvider router={router}><ModalsHost><ToastProvider>
-        <Probe key={recordId ?? "create"} recordId={recordId} mountedFields={mountedFields} viewFields={viewFields} />
+        {options.publicView ? (
+          <FormView
+            resource="notes.Note"
+            id={recordId}
+            fields={viewFields}
+            acknowledgedSource={options.acknowledgedSource}
+            submit={options.submit}
+          />
+        ) : (
+          <Probe key={recordId ?? "create"} recordId={recordId} mountedFields={mountedFields} viewFields={viewFields} />
+        )}
       </ToastProvider></ModalsHost></RouterContextProvider>
     </Refine>;
   }
   const view = render(<Tree />);
-  if (id !== null) await waitFor(() => expect(surface?.form.getValues("title")).toBe("First"));
+  if (!options.publicView && id !== null && options.acknowledgedSource?.values !== null) {
+    await waitFor(() => expect(surface?.form.getValues("title")).toBe("First"));
+  }
   return { surface: () => surface, onSaved, getOne, update, client, setRecord: (next: Row) => { record = next; }, rerender: (props: Parameters<typeof Tree>[0]) => view.rerender(<Tree {...props} />) };
 }
 
 function edit(name: string, value: string) { fireEvent.change(screen.getByLabelText(name), { target: { value } }); }
+
+test("external acknowledged values share one save and disable the native detail read", async () => {
+  const source = {
+    record: { id: "note-1", title: "First" },
+    values: { title: "First", definition: { node: { name: "Node one", config: null } } },
+  } satisfies FormViewAcknowledgedSource;
+  const submit = vi.fn(async (_data, context) => acknowledgeFormSubmit(
+    { id: "note-1", title: String(context.values.title) },
+    context.values,
+  ));
+  const f = await fixture({
+    acknowledgedSource: source,
+    submit,
+    mountedFields: ["title", "definition.node.name"],
+  });
+
+  edit("title", "Outer edit");
+  edit("definition.node.name", "Nested edit");
+  await act(async () => f.surface().submitForm());
+
+  expect(f.getOne).not.toHaveBeenCalled();
+  expect(submit).toHaveBeenCalledTimes(1);
+  expect(submit.mock.calls[0]?.[0]).toEqual({ title: "Outer edit" });
+  expect(submit.mock.calls[0]?.[1].values).toMatchObject({
+    title: "Outer edit",
+    definition: { node: { name: "Nested edit", config: null } },
+  });
+  expect(submit.mock.calls[0]?.[1].baselineValues).toMatchObject(source.values);
+  expect(f.surface().formIsDirty).toBe(false);
+  f.rerender({});
+  expect(f.surface().form.getValues("title")).toBe("Outer edit");
+  expect(f.surface().formIsDirty).toBe(false);
+});
+
+test("an explicitly empty external source never falls back to the native detail cache", async () => {
+  const f = await fixture({
+    acknowledgedSource: { record: null, values: null },
+    mountedFields: ["title"],
+  });
+  expect(f.getOne).not.toHaveBeenCalled();
+  expect(f.surface().displayRecord).toBeNull();
+  expect(f.surface().formReadOnly).toBe(true);
+  act(() => f.surface().reload());
+  expect(f.getOne).not.toHaveBeenCalled();
+});
+
+test("public FormView forwards the external acknowledged source", async () => {
+  const f = await fixture({
+    publicView: true,
+    acknowledgedSource: {
+      record: { id: "note-1", title: "External", body: "Body" },
+      values: { title: "External", body: "Body" },
+    },
+  });
+  expect(await screen.findByDisplayValue("External")).toBeTruthy();
+  expect(f.getOne).not.toHaveBeenCalled();
+});
+
+test("a full acknowledgement rebases submitted graph values while retaining later nested edits", async () => {
+  let resolve!: (value: ReturnType<typeof acknowledgeFormSubmit>) => void;
+  const source = {
+    record: { id: "note-1", title: "First" },
+    values: { title: "First", definition: { nodes: { new: { name: "Node" } } } },
+  } satisfies FormViewAcknowledgedSource;
+  const f = await fixture({
+    acknowledgedSource: source,
+    mountedFields: ["title", "definition.nodes.new.name"],
+    submit: () => new Promise((done) => { resolve = done; }),
+  });
+  edit("title", "Submitted");
+  edit("definition.nodes.new.name", "Submitted node");
+  let saving!: Promise<void>;
+  act(() => { saving = f.surface().submitForm(); });
+  await waitFor(() => expect(f.surface().pending).toBe(true));
+  edit("definition.nodes.new.name", "Later node");
+  const accepted = {
+    title: "Submitted",
+    definition: { nodes: { new: { id: "step-1", name: "Submitted node" } } },
+  };
+  await act(async () => {
+    resolve(acknowledgeFormSubmit(
+      { id: "note-1", title: "Submitted" },
+      accepted,
+      ({ accepted: server, current }) => ({
+        ...server,
+        definition: {
+          nodes: {
+            new: {
+              ...((server.definition as { nodes: { new: object } }).nodes.new),
+              name: (current.definition as { nodes: { new: { name: string } } }).nodes.new.name,
+            },
+          },
+        },
+      }),
+    ));
+    await saving;
+  });
+  expect(f.surface().form.getValues("title")).toBe("Submitted");
+  expect(f.surface().form.getValues("definition.nodes.new")).toEqual({
+    id: "step-1", name: "Later node",
+  });
+  expect(f.surface().form.formState.defaultValues).toMatchObject(accepted);
+  expect(f.surface().form.getFieldState("definition.nodes.new.name").isDirty).toBe(true);
+  expect(f.surface().formIsDirty).toBe(true);
+});
+
+test.each(["add", "remove"] as const)("a full acknowledgement preserves an in-flight array %s", async (change) => {
+  let resolve!: (value: ReturnType<typeof acknowledgeFormSubmit>) => void;
+  const original = { key: "first", name: "First" };
+  const source: FormViewAcknowledgedSource = {
+    record: { id: "note-1", title: "First" },
+    values: { title: "First", definition: { nodes: [original] } },
+  };
+  const f = await fixture({
+    acknowledgedSource: source,
+    submit: () => new Promise((done) => { resolve = done; }),
+  });
+  act(() => f.surface().form.setValue("title", "Submitted", { shouldDirty: true }));
+  let saving!: Promise<void>;
+  act(() => { saving = f.surface().submitForm(); });
+  await waitFor(() => expect(f.surface().pending).toBe(true));
+  act(() => f.surface().form.setValue(
+    "definition.nodes",
+    (change === "add" ? [original, { key: "later", name: "Later" }] : []) as never,
+    { shouldDirty: true },
+  ));
+  await act(async () => {
+    resolve(acknowledgeFormSubmit(
+      { id: "note-1", title: "Submitted" },
+      { title: "Submitted", definition: { nodes: [{ ...original, serverValue: "accepted" }] } },
+    ));
+    await saving;
+  });
+  expect(f.surface().form.getValues("definition.nodes")).toEqual(
+    change === "add"
+      ? [original, { key: "later", name: "Later" }]
+      : [],
+  );
+  expect(f.surface().formIsDirty).toBe(true);
+});
+
+test("bound descriptors scope prefill, null, errors and readonly to the declaring record", async () => {
+  const source = {
+    record: { id: "note-1", title: "First" },
+    values: { title: "First", definition: { node: { operation: "old", config: null } } },
+  } satisfies FormViewAcknowledgedSource;
+  const operation: MutationDialogField = {
+    name: "operation",
+    label: "Operation",
+    prefill: () => ({ config: { mode: "fresh" } }),
+    prefillReplace: ["config"],
+  };
+  const optional: MutationDialogField = {
+    name: "optional", label: "Optional", nullable: true, omittable: true,
+  };
+  const f = await fixture({
+    acknowledgedSource: source,
+    mountedFields: [],
+    boundFields: [
+      { field: operation, scope: "definition.node" },
+      { field: optional, scope: "definition.node" },
+      { field: { name: "config", label: "Configuration", widget: "json", nullable: true }, scope: "definition.node", readOnly: true },
+    ],
+  });
+  expect(f.surface().form.getValues("definition.node.config")).toBeNull();
+  expect(f.surface().form.getValues("definition.node.optional")).toBeUndefined();
+  edit("Operation", "new");
+  expect(f.surface().form.getValues("definition.node.config")).toEqual({ mode: "fresh" });
+  act(() => f.surface().form.setError("definition.node.optional", { type: "server", message: "Nested problem" }));
+  expect(await screen.findByText("Nested problem")).toBeTruthy();
+  expect(screen.queryByLabelText("Configuration")).toBeNull();
+});
 
 test("dirty values survive same-record refresh, late fields mount from the native baseline, and discard uses that baseline", async () => {
   const f = await fixture({ mountedFields: ["title"] });
@@ -342,4 +546,25 @@ test("a later edit equal to the canonical accepted value becomes clean", async (
   expect(f.surface().form.getValues("title")).toBe("Normalized title");
   expect(f.surface().form.getFieldState("title").isDirty).toBe(false);
   expect(f.surface().formIsDirty).toBe(false);
+});
+
+test("bound descriptors apply scoped variant visibility through the native form owner", async () => {
+  const f = await fixture({
+    acknowledgedSource: {
+      record: { id: "note-1", title: "First" },
+      values: { title: "First", settings: { kind: "gate", retry: "later", target: "child" } },
+    },
+    mountedFields: [],
+    boundFields: [
+      { scope: "settings", field: { name: "kind", label: "Operation" } },
+      { scope: "settings", field: { name: "retry", label: "Retry", showWhen: (values) => values.kind === "gate" } },
+      { scope: "settings", field: { name: "target", label: "Target", showWhen: (values) => values.kind === "map" } },
+    ],
+  });
+  expect(await screen.findByLabelText("Retry")).toBeTruthy();
+  expect(screen.queryByLabelText("Target")).toBeNull();
+  act(() => f.surface().form.setValue("settings.kind", "map" as never, { shouldDirty: true }));
+  expect(await screen.findByLabelText("Target")).toBeTruthy();
+  expect(screen.queryByLabelText("Retry")).toBeNull();
+  expect(f.surface().form.getValues("settings.retry")).toBe("later");
 });

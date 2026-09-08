@@ -52,10 +52,17 @@ import {
 import {
   useFormViewSave,
   type FormSubmit,
+  type FormViewAcknowledgedSource,
   type FormViewSaveSurface,
 } from "./use-form-view-save";
 
-export type { FormSubmit, FormSubmitContext } from "./use-form-view-save";
+export type {
+  FormSubmit,
+  FormSubmitAcknowledgement,
+  FormSubmitContext,
+  FormViewAcknowledgedSource,
+} from "./use-form-view-save";
+export { acknowledgeFormSubmit } from "./use-form-view-save";
 
 /** Value of the form body's leading tab, shown when record tabs are declared. */
 export const FORM_VIEW_OVERVIEW_TAB_ID = "overview";
@@ -70,6 +77,7 @@ export interface OverviewTabOptions {
 export interface RecordPanelContext {
   recordId: string;
   reload: () => void;
+  form: FormViewSaveSurface;
 }
 
 export interface RecordToolbarContext {
@@ -77,6 +85,7 @@ export interface RecordToolbarContext {
   record: Row | null;
   patchRecord: (patch: Record<string, unknown>) => void;
   reload: () => void;
+  form: FormViewSaveSurface;
 }
 
 export interface RecordTabDescriptor {
@@ -106,6 +115,7 @@ export interface UseFormViewSurfaceProps {
   actions?: readonly ActionDescriptor[];
   returning?: readonly string[];
   defaultValues?: Record<string, unknown>;
+  acknowledgedSource?: FormViewAcknowledgedSource;
   onSaved?: (row: Row) => void;
   submit?: FormSubmit;
   createSubmit?: FormSubmit;
@@ -155,6 +165,7 @@ export function useFormViewSurface({
   actions,
   returning,
   defaultValues,
+  acknowledgedSource,
   onSaved,
   submit,
   createSubmit,
@@ -396,6 +407,7 @@ export function useFormViewSurface({
     fieldByName,
     refineFields,
     defaultValues,
+    acknowledgedSource,
     onSaved,
     submit,
     createSubmit,
@@ -474,9 +486,9 @@ export function useFormViewSurface({
   const recordPanelContext = React.useMemo<RecordPanelContext | null>(
     () =>
       !isCreate && id != null
-        ? { recordId: id, reload: save.reload }
+        ? { recordId: id, reload: save.reload, form: save }
         : null,
-    [id, isCreate, save.reload],
+    [id, isCreate, save],
   );
   const recordToolbarContext = React.useMemo<RecordToolbarContext>(
     () => ({
@@ -484,8 +496,9 @@ export function useFormViewSurface({
       record: save.displayRecord,
       patchRecord: save.patchRecord,
       reload: save.reload,
+      form: save,
     }),
-    [id, save.displayRecord, save.patchRecord, save.reload],
+    [id, save],
   );
   const visibleDeleteAction =
     readOnly || deleteAction === undefined ||

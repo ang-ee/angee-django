@@ -56,12 +56,46 @@ export interface FormSubmitContext {
   isCreate: boolean;
   record: Row | null;
   lines: LineDiff | null;
+  /** Exact RHF snapshot submitted by the user, including externally supplied fields. */
+  values: FormValues;
+  /** Last acknowledged snapshot against which this submission became dirty. */
+  baselineValues: FormValues;
+}
+
+export interface FormSubmitAcknowledgement {
+  kind: "form-submit-acknowledgement";
+  record: Row;
+  /** Complete server-accepted form snapshot, including generated identities. */
+  values: FormValues;
+  /** Optional domain-owned correlation when RHF's atomic dirty branches are insufficient. */
+  reconcile?: (snapshots: {
+    accepted: FormValues;
+    submitted: FormValues;
+    current: FormValues;
+  }) => FormValues;
+}
+
+export function acknowledgeFormSubmit(
+  record: Row,
+  values: FormValues,
+  reconcile?: FormSubmitAcknowledgement["reconcile"],
+): FormSubmitAcknowledgement {
+  return { kind: "form-submit-acknowledgement", record, values, ...(reconcile ? { reconcile } : {}) };
 }
 
 export type FormSubmit = (
   data: Record<string, unknown>,
   context: FormSubmitContext,
-) => Row | null | undefined | Promise<Row | null | undefined>;
+) => Row | FormSubmitAcknowledgement | null | undefined | Promise<Row | FormSubmitAcknowledgement | null | undefined>;
+
+export interface FormViewAcknowledgedSource {
+  /** Record facts used by shared record chrome and addon declarations. */
+  record: Row | null;
+  /** Complete acknowledged form baseline. Local dirty values survive later snapshots. */
+  values: FormValues | null;
+  loading?: boolean;
+  reload?: () => void;
+}
 
 export type FormViewForm = UseFormReturn<FormValues>;
 
@@ -76,6 +110,7 @@ export interface UseFormViewSaveProps {
   fieldByName: ReadonlyMap<string, FieldDescriptor>;
   refineFields: Fields;
   defaultValues?: Record<string, unknown>;
+  acknowledgedSource?: FormViewAcknowledgedSource;
   onSaved?: (row: Row) => void;
   submit?: FormSubmit;
   createSubmit?: FormSubmit;
@@ -102,7 +137,7 @@ export interface FormViewSaveSurface {
   applyPatch: (patch: Record<string, unknown>) => Promise<Row | null>;
   patchRecord: (patch: Record<string, unknown>) => void;
   reload: () => void;
-  afterFieldChange: (field: FieldDescriptor, value: unknown) => void;
+  afterFieldChange: (field: FieldDescriptor, value: unknown, scope?: string) => void;
   fieldReadOnly: (field: FieldDescriptor) => boolean;
 }
 
@@ -118,6 +153,7 @@ export function useFormViewSave({
   fieldByName,
   refineFields,
   defaultValues,
+  acknowledgedSource,
   onSaved,
   submit,
   createSubmit,
@@ -134,6 +170,10 @@ export function useFormViewSave({
     [defaultValues],
   );
   const manualSlugFieldsRef = React.useRef<Set<string>>(new Set());
+  const localAcknowledgementRef = React.useRef<{
+    previous: FormValues | null;
+    accepted: FormValues;
+  } | null>(null);
   const mounted = React.useRef(true);
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const submittingRef = React.useRef(false);
@@ -171,13 +211,21 @@ export function useFormViewSave({
     meta: { fields: refineFields },
     queryOptions: {
       queryKey: detailKey,
-      enabled: !isCreate && Boolean(id && dataResource?.roots.detail),
+      enabled: acknowledgedSource === undefined && !isCreate && Boolean(id && dataResource?.roots.detail),
     },
   });
-  const record = read.result ?? null;
+  const record = acknowledgedSource !== undefined
+    ? acknowledgedSource.record
+    : read.result ?? null;
   const displayRecord = record;
-  const loading = read.query.isFetching;
-  const reload = React.useCallback(() => { void read.query.refetch(); }, [read.query.refetch]);
+  const loading = acknowledgedSource?.loading ?? read.query.isFetching;
+  const reload = React.useCallback(() => {
+    if (acknowledgedSource !== undefined) {
+      acknowledgedSource.reload?.();
+      return;
+    }
+    void read.query.refetch();
+  }, [acknowledgedSource, read.query.refetch]);
   const create = useCreate<RowRecord, HttpError, FormValues>({
     resource: refineResource || "__angee_disabled__",
     dataProviderName: dataResource?.schemaName,
@@ -237,11 +285,18 @@ export function useFormViewSave({
     });
   }, [dataResource, id, invalidate]);
 
-  const values = React.useMemo(
-    () => isCreate ? emptyValues : record
-      ? recordToValues(record, formFields, linesSeed(seedLineRows)) : emptyValues,
-    [emptyValues, formFields, isCreate, linesSeed, record, seedLineRows],
-  );
+  const values = React.useMemo(() => {
+    if (acknowledgedSource !== undefined) {
+      const local = localAcknowledgementRef.current;
+      if (local && replaceEqualDeep(local.previous, acknowledgedSource.values) === local.previous) {
+        return local.accepted;
+      }
+      localAcknowledgementRef.current = null;
+      return acknowledgedSource.values ?? emptyValues;
+    }
+    return isCreate ? emptyValues : record
+      ? recordToValues(record, formFields, linesSeed(seedLineRows)) : emptyValues;
+  }, [acknowledgedSource, emptyValues, formFields, isCreate, linesSeed, record, seedLineRows]);
   const form = useForm<FormValues>({
     defaultValues: emptyValues,
     shouldUnregister: false,
@@ -284,8 +339,11 @@ export function useFormViewSave({
   const recordUnavailable = !isCreate && record == null;
   const submitOwner = submit ?? (isCreate ? createSubmit : undefined);
   const customSubmit = useMutation({
-    mutationFn: async ({ data, lines }: { data: FormValues; lines: LineDiff | null }) =>
-      (await submitOwner?.(data, { resource, id: id ?? null, isCreate, record: displayRecord, lines })) ?? null,
+    mutationFn: async ({ data, lines, submitted, baseline }: { data: FormValues; lines: LineDiff | null; submitted: FormValues; baseline: FormValues }) =>
+      (await submitOwner?.(data, {
+        resource, id: id ?? null, isCreate, record: displayRecord, lines,
+        values: submitted, baselineValues: baseline,
+      })) ?? null,
   });
   const formReadOnly = React.useMemo(
     () =>
@@ -310,8 +368,13 @@ export function useFormViewSave({
   });
 
   const runSubmit = React.useCallback(
-    async (data: FormValues, lines: LineDiff | null = null): Promise<Row | null> => {
-      if (submitOwner) return customSubmit.mutateAsync({ data, lines });
+    async (data: FormValues, lines: LineDiff | null = null, submitted: FormValues = data): Promise<Row | FormSubmitAcknowledgement | null> => {
+      if (submitOwner) return customSubmit.mutateAsync({
+        data,
+        lines,
+        submitted,
+        baseline: (form.formState.defaultValues ?? {}) as FormValues,
+      });
       if (lines && lines.hasChanges && id != null && saveOperation.target !== null) {
         const saved = await resourceSave.save({
           pk: id,
@@ -343,6 +406,8 @@ export function useFormViewSave({
     (saved: Row, options: {
       submitted?: FormValues;
       submittedFields?: readonly string[];
+      acceptedValues?: FormValues;
+      reconcile?: FormSubmitAcknowledgement["reconcile"];
       createdLines?: boolean;
       notify?: boolean;
       refetchPartial?: boolean;
@@ -353,19 +418,42 @@ export function useFormViewSave({
       const submitted = Object.fromEntries((options.submittedFields ?? [])
         .map((name) => [name, options.submitted?.[name]]));
       const acceptedPatch = { ...submitted, ...saved };
-      const accepted = isCreate ? acceptedPatch : queryClient.setQueryData<GetOneResponse<RowRecord>>(
+      const accepted = acknowledgedSource !== undefined
+        ? { ...(record ?? {}), ...saved }
+        : isCreate ? acceptedPatch : queryClient.setQueryData<GetOneResponse<RowRecord>>(
         detailKey,
         (current) => ({ ...current, data: { ...(current?.data ?? record), ...acceptedPatch } }),
       )?.data ?? acceptedPatch;
       if (!mounted.current) return;
-      const savedValues = recordToValues(accepted, formFields, linesSeed(rowsFromRecord(accepted)));
-      // Advancing only the submitted defaults makes RHF identify edits made
-      // during the request without a second dirty-value comparison engine.
-      resetDefaultValues({ ...form.formState.defaultValues, ...submitted }, { keepIsValid: true });
-      syncRecordValues(savedValues, linesField
-        ? options.createdLines ? submitted[linesField] : savedValues[linesField]
-        : undefined);
-      formIsDirtyRef.current = formFields.some((field) => form.getFieldState(field.name).isDirty)
+      const savedValues = options.acceptedValues
+        ?? recordToValues(accepted, formFields, linesSeed(rowsFromRecord(accepted)));
+      if (options.acceptedValues && options.submitted) {
+        const reconciled = options.reconcile?.({
+          accepted: options.acceptedValues,
+          submitted: options.submitted,
+          current: form.getValues(),
+        });
+        if (reconciled) {
+          reset(options.acceptedValues, { keepIsValid: true });
+          reset(reconciled, { keepDefaultValues: true, keepIsValid: true });
+        } else {
+          resetDefaultValues(options.submitted, { keepIsValid: true });
+          syncRecordValues(options.acceptedValues);
+        }
+      } else {
+        // Advancing only the submitted defaults makes RHF identify edits made
+        // during the request without a second dirty-value comparison engine.
+        resetDefaultValues({ ...form.formState.defaultValues, ...submitted }, { keepIsValid: true });
+        syncRecordValues(savedValues, linesField
+          ? options.createdLines ? submitted[linesField] : savedValues[linesField]
+          : undefined);
+      }
+      const observedNames = new Set([
+        ...formFields.map((field) => field.name),
+        ...Object.keys(form.getValues()),
+        ...Object.keys(savedValues),
+      ]);
+      formIsDirtyRef.current = [...observedNames].some((name) => form.getFieldState(name).isDirty)
         || Boolean(linesField && form.getFieldState(linesField).isDirty);
       if (isCreate) manualSlugFieldsRef.current.clear();
       if (options.notify) onSaved?.(accepted);
@@ -375,7 +463,7 @@ export function useFormViewSave({
         || (linesActive && linesField !== null && !Object.hasOwn(saved, linesField))
       )) reload();
     },
-    [detailKey, form, formFields, isCreate, linesActive, linesField, linesSeed, onSaved, queryClient, record, reload, resetDefaultValues, rowsFromRecord, syncRecordValues],
+    [acknowledgedSource, detailKey, form, formFields, isCreate, linesActive, linesField, linesSeed, onSaved, queryClient, record, reload, reset, resetDefaultValues, rowsFromRecord, setValue, syncRecordValues],
   );
   const submitValues = React.useCallback(
     async (value: FormValues) => {
@@ -417,13 +505,27 @@ export function useFormViewSave({
       }
       submittingRef.current = true;
       try {
-        const saved = await runSubmit(data, linesDiff);
-        if (saved) commitSavedRecord(saved, {
-          submitted: value,
-          submittedFields: [...Object.keys(data), ...(linesDiff?.hasChanges && linesField ? [linesField] : [])],
-          createdLines: Boolean(linesDiff?.created.length),
-          notify: true,
-        });
+        const response = await runSubmit(data, linesDiff, value);
+        if (response) {
+          const acknowledgement = isFormSubmitAcknowledgement(response) ? response : undefined;
+          const saved: Row = acknowledgement ? acknowledgement.record : response as Row;
+          if (acknowledgement && acknowledgedSource !== undefined) {
+            localAcknowledgementRef.current = {
+              previous: acknowledgedSource.values,
+              accepted: acknowledgement.values,
+            };
+          }
+          commitSavedRecord(saved, {
+            submitted: value,
+            submittedFields: acknowledgement
+              ? []
+              : [...Object.keys(data), ...(linesDiff?.hasChanges && linesField ? [linesField] : [])],
+            ...(acknowledgement ? { acceptedValues: acknowledgement.values } : {}),
+            ...(acknowledgement?.reconcile ? { reconcile: acknowledgement.reconcile } : {}),
+            createdLines: Boolean(linesDiff?.created.length),
+            notify: true,
+          });
+        }
       } catch (error) {
         const { fieldErrors, formErrors } = validationErrorsFromError(error);
         if (!mounted.current) return;
@@ -475,9 +577,13 @@ export function useFormViewSave({
       if (formReadOnly) {
         throw new Error(`Resource mutation for "${resource}" is disabled.`);
       }
-      const saved = await runSubmit(patch);
-      if (saved) {
-        commitSavedRecord(saved);
+      const response = await runSubmit(patch);
+      let saved: Row | null = null;
+      if (response) {
+        saved = isFormSubmitAcknowledgement(response) ? response.record : response;
+        commitSavedRecord(saved, isFormSubmitAcknowledgement(response) ? {
+          acceptedValues: response.values,
+        } : undefined);
         clearErrors();
       }
       return saved;
@@ -489,23 +595,25 @@ export function useFormViewSave({
   }, [clearErrors, commitSavedRecord, record]);
 
   const afterFieldChange = React.useCallback(
-    (field: FieldDescriptor, value: unknown): void => {
-      clearErrors(field.name);
+    (field: FieldDescriptor, value: unknown, scope = ""): void => {
+      const scoped = (name: string) => scope ? `${scope}.${name}` : name;
+      clearErrors(scoped(field.name));
       if (isCreate || !field.createOnly) {
         const seeds = field.prefill?.(value);
         if (seeds) {
           const replacements = new Set(field.prefillReplace ?? []);
           for (const [name, seed] of Object.entries(seeds)) {
+            const target = scoped(name);
             if (
               field.prefillPreserveDirty &&
               !replacements.has(name) &&
-              getFieldState(name).isDirty
+              getFieldState(target).isDirty
             ) continue;
             if (field.prefillPreserveDirty && !replacements.has(name)) {
-              resetField(name, { defaultValue: seed });
+              resetField(target, { defaultValue: seed });
               continue;
             }
-            setValue(name, seed, {
+            setValue(target, seed, {
               shouldDirty: true,
               shouldTouch: true,
             });
@@ -561,6 +669,10 @@ export function useFormViewSave({
     afterFieldChange,
     fieldReadOnly,
   };
+}
+
+function isFormSubmitAcknowledgement(value: Row | FormSubmitAcknowledgement): value is FormSubmitAcknowledgement {
+  return value.kind === "form-submit-acknowledgement" && "record" in value && "values" in value;
 }
 
 function requiredErrors(names: readonly string[], message: string): FieldErrors<FormValues> {
