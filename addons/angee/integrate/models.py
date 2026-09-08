@@ -1380,6 +1380,31 @@ class IntegrationRuntimeStatus(models.TextChoices):
             raise ValueError(f"Unsupported integration runtime status: {raw}") from error
 
 
+_HISTORICAL_INTEGRATION_STATUS_AXES = {
+    "DRAFT": ("draft", "ok"),
+    "ACTIVE": ("active", "ok"),
+    "PAUSED": ("paused", "ok"),
+    "DISABLED": ("disabled", "ok"),
+    "ERROR": ("active", "error"),
+}
+
+
+def integration_status_axes(status: object) -> tuple[str, str]:
+    """Map the frozen pre-split status vocabulary for historical migrations.
+
+    Runtime integrations use :class:`IntegrationLifecycle` and
+    :class:`IntegrationRuntimeStatus` directly. This callable remains at its
+    original import path because already-materialized Django migrations import
+    it while replaying a fresh database.
+    """
+
+    raw = str(getattr(status, "value", status)).strip()
+    try:
+        return _HISTORICAL_INTEGRATION_STATUS_AXES[raw.upper()]
+    except KeyError as error:
+        raise ValueError(f"Unsupported legacy integration status: {raw}") from error
+
+
 class IntegrationQuerySet(AngeeQuerySet[Any]):
     """Chainable collection scopes for integration and bridge rows."""
 

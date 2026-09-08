@@ -935,6 +935,41 @@ def _integration_lifecycle_state(
     return state
 
 
+@pytest.mark.parametrize(
+    ("legacy_status", "split_axes", "current_lifecycle"),
+    [
+        ("draft", ("draft", "ok"), "disconnected"),
+        ("ACTIVE", ("active", "ok"), "connected"),
+        ("paused", ("paused", "ok"), "paused"),
+        ("DISABLED", ("disabled", "ok"), "disconnected"),
+        ("error", ("active", "error"), "connected"),
+    ],
+)
+def test_historical_integration_status_split_remains_replayable(
+    legacy_status: str,
+    split_axes: tuple[str, str],
+    current_lifecycle: str,
+) -> None:
+    """Frozen migration imports retain old axes before current normalization."""
+
+    from angee.integrate.models import integration_status_axes  # noqa: PLC0415
+
+    lifecycle_values = importlib.import_module(
+        "angee.integrate.runtime_migrations.integration_lifecycle_values"
+    )
+    assert integration_status_axes(legacy_status) == split_axes
+    assert dict(lifecycle_values.FORWARD_VALUES).get(split_axes[0], split_axes[0]) == current_lifecycle
+
+
+def test_historical_integration_status_split_rejects_current_runtime_vocabulary() -> None:
+    """The migration shim does not make current lifecycle values legacy statuses."""
+
+    from angee.integrate.models import integration_status_axes  # noqa: PLC0415
+
+    with pytest.raises(ValueError, match="Unsupported legacy integration status: connected"):
+        integration_status_axes("connected")
+
+
 def test_integrate_lifecycle_values_migration_applies_on_the_legacy_marker_values() -> None:
     """The predicate keys on marker values, so a later fourth value is not a landmine."""
 
