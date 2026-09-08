@@ -51,11 +51,11 @@ export function definitionValues(snapshot: DefinitionSnapshot): WorkflowDefiniti
   };
 }
 
-const WORKFLOW_FIELDS = [
+export const WORKFLOW_FIELDS = [
   "name", "description", "purpose", "subject_declaration", "error_workflow", "max_steps", "budget",
 ] as const;
-const NODE_FIELDS = ["key", "name", "step_class", "config", "join_rule", "is_entry", "position"] as const;
-const EDGE_FIELDS = ["condition"] as const;
+export const NODE_FIELDS = ["key", "name", "step_class", "config", "join_rule", "is_entry", "position"] as const;
+export const EDGE_FIELDS = ["condition"] as const;
 
 export function definitionEdit(
   baseline: WorkflowDefinitionValues,

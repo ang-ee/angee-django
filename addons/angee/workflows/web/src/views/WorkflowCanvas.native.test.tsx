@@ -3,7 +3,7 @@
 import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { Refine, type DataProvider } from "@angee/refine";
-import { AppRuntimeProvider, Form, ModalsHost, ToastProvider, defaultWidgets } from "@angee/ui";
+import { AppRuntimeProvider, Form, ModalsHost, ToastProvider, defaultWidgets, type RecordPanelContext } from "@angee/ui";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
@@ -36,7 +36,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
                 key: "workflows.steps.CallableStep",
                 label: "Run callable",
                 category: "Activity",
-                defaults: {},
+                defaults: { config: { mode: "safe" }, join_rule: "ONE_SUCCESS" },
                 config_schema: {
                   type: "object",
                   properties: { mode: { type: "string", label: "Mode" } },
@@ -115,7 +115,9 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   };
 });
 
-import { WorkflowCanvas } from "./WorkflowCanvas";
+import { WorkflowCanvas, graphWithOperation } from "./WorkflowCanvas";
+
+let canvasSurface: RecordPanelContext["form"] | null = null;
 
 beforeAll(() => {
   class ResizeObserverStub {
@@ -128,6 +130,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   cleanup();
+  canvasSurface = null;
   mocks.workflowStatus = "DRAFT";
   mocks.record = {
     id: "step_1",
@@ -171,13 +174,13 @@ const stepResource = testDataResource("workflows.Step", {
     scalarField("workflow", "ID"),
     scalarField("key"),
     scalarField("step_class", "String", ["workflows.steps.CallableStep", "handler", "gate"]),
-    scalarField("join_rule", "String", ["ALL_SUCCESS", "ANY_SUCCESS"]),
+    scalarField("join_rule", "String", ["ALL_SUCCESS", "ONE_SUCCESS"]),
     scalarField("is_entry", "Boolean"),
     scalarField("config", "JSON"),
   ],
 });
 
-function renderCanvas(): void {
+function renderCanvas(initial?: { nodes?: Record<string, Record<string, unknown>>; edges?: Record<string, Record<string, unknown>> }): void {
   const rootRoute = createRootRoute();
   const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: () => null });
   const router = createRouter({ routeTree: rootRoute.addChildren([indexRoute]), history: createMemoryHistory({ initialEntries: ["/"] }) });
@@ -191,6 +194,8 @@ function renderCanvas(): void {
   } as DataProvider;
   const dataResources = [workflowResource, stepResource];
   const node = { ...mocks.record, position: { x: 0, y: 0 }, clientKey: undefined };
+  const initialNodes = initial?.nodes ?? { step_1: node };
+  const initialEdges = initial?.edges ?? {};
   render(
     <Refine resources={[...refineResourcesFromDataResources(dataResources)]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
       <RouterContextProvider router={router}>
@@ -206,10 +211,10 @@ function renderCanvas(): void {
                     record: { id: "workflow_1", name: "Workflow" },
                     values: {
                       id: "workflow_1", name: "Workflow", status: mocks.workflowStatus, version: 1,
-                      definition: { revision: 1, nodes: { step_1: node }, edges: {}, readiness: [] },
+                      definition: { revision: 1, nodes: initialNodes, edges: initialEdges, readiness: [] },
                     },
                   }}
-                  recordTabs={[{ id: "editor", label: "Editor", render: (context) => <WorkflowCanvas context={context} />, keepMounted: true }]}
+                  recordTabs={[{ id: "editor", label: "Editor", render: (context) => { canvasSurface = context.form; return <WorkflowCanvas context={context} />; }, keepMounted: true }]}
                   defaultRecordTab="editor"
                 />
               </AppRuntimeProvider>
@@ -222,6 +227,77 @@ function renderCanvas(): void {
 }
 
 describe("WorkflowCanvas native narrow inspector", () => {
+  test("insertion replaces one route with two and preserves the source outcome", () => {
+    const node = { id: "", clientKey: "new", name: "Middle", key: "middle", step_class: "gate", config: {}, config_errors: {}, join_rule: "ALL_SUCCESS", is_entry: false, position: {} } as never;
+    const result = graphWithOperation(node, { kind: "insert", identity: "route" }, {} as never, { route: { id: "edge_1", clientKey: undefined, source: "first", target: "last", condition: "completed" } } as never)!;
+    expect(result.edges.route).toBeUndefined();
+    expect(Object.values(result.edges)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: "first", target: "new", condition: "completed" }),
+      expect.objectContaining({ source: "new", target: "last", condition: "" }),
+    ]));
+  });
+  test("adds a declared operation after the selected step in the shared draft", async () => {
+    renderCanvas();
+    await screen.findByText("Import files");
+    fireEvent.click(screen.getByTestId("rf__node-step_1"));
+    fireEvent.click(await screen.findByRole("button", { name: "Add after" }));
+    const search = await screen.findByPlaceholderText("Search operations…");
+    fireEvent.change(search, { target: { value: "Run callable" } });
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    fireEvent.keyDown(search, { key: "Enter" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getAllByText("Run callable").length).toBeGreaterThan(0);
+    expect((await screen.findByLabelText("Mode") as HTMLInputElement).value).toBe("safe");
+    expect(screen.getAllByText("ONE_SUCCESS").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  });
+
+  test("connects two steps without a drag gesture and keeps the entry action explicit", async () => {
+    renderCanvas();
+    await screen.findByText("Import files");
+    fireEvent.click(screen.getByTestId("rf__node-step_1"));
+    expect(screen.queryByLabelText("Is entry")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate" }));
+    expect(await screen.findByText("Import files copy")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect steps" }));
+    const source = await screen.findByRole("combobox", { name: "Source" });
+    expect(source.textContent).toContain("Import files copy");
+    const target = screen.getByRole("combobox", { name: "Target" });
+    fireEvent.click(target);
+    fireEvent.click(screen.getByRole("option", { name: /^Import files$/ }));
+    fireEvent.change(screen.getByLabelText("Outcome"), { target: { value: "completed" } });
+    const connect = screen.getByRole("button", { name: /^Connect$/ });
+    await waitFor(() => expect(connect.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(connect);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(Object.values(canvasSurface!.form.getValues("definition.edges") ?? {})).toEqual([
+      expect.objectContaining({ source: expect.stringMatching(/^node-/), target: "step_1", condition: "completed" }),
+    ]);
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  });
+
+  test("makes an entry explicit and deletes a node with all incident connections", async () => {
+    renderCanvas({
+      nodes: {
+        step_1: { ...mocks.record, position: { x: 0, y: 0 }, clientKey: undefined },
+        second: { id: "step_2", name: "Finish", key: "finish", step_class: "workflows.steps.CallableStep", join_rule: "ALL_SUCCESS", is_entry: false, config: {}, config_errors: {}, position: { x: 300, y: 0 } },
+      },
+      edges: { route: { id: "edge_1", source: "step_1", target: "second", condition: "completed", clientKey: undefined } },
+    });
+    await screen.findByText("Import files");
+    await screen.findByText("Finish");
+    fireEvent.click(screen.getByTestId("rf__node-second"));
+    fireEvent.click(await screen.findByRole("button", { name: "Make entry" }));
+    expect(canvasSurface!.form.getValues("definition.nodes.second.is_entry")).toBe(true);
+    expect(canvasSurface!.form.getValues("definition.nodes.step_1.is_entry")).toBe(false);
+    fireEvent.click(screen.getByTestId("rf__node-step_1"));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete step" }));
+    expect(canvasSurface!.form.getValues("definition.nodes.step_1")).toBeUndefined();
+    expect(Object.values(canvasSurface!.form.getValues("definition.edges") ?? {}).every((edge) => (edge as { source: string; target: string }).source !== "step_1" && (edge as { source: string; target: string }).target !== "step_1")).toBe(true);
+  });
+
   test("retains a typed inspector value across Back and reopen", async () => {
     renderCanvas();
     await screen.findByText("Import files");
@@ -268,8 +344,9 @@ describe("WorkflowCanvas native narrow inspector", () => {
 
     const operation = await screen.findByRole("combobox", { name: "Operation" });
     expect(operation.textContent).toContain("Wait for approval");
-    expect(screen.getByText("Retry")).toBeTruthy();
     expect(screen.getByText("Slots")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
+    expect(screen.getByText("Retry")).toBeTruthy();
     expect(screen.queryByLabelText("Mode")).toBeNull();
     expect(screen.queryByText("Advanced configuration")).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();

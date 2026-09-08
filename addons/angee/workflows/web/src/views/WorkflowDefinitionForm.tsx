@@ -29,6 +29,7 @@ import {
   definitionValues,
   type WorkflowDefinitionValues,
 } from "./workflow-definition-state";
+import { DefinitionHistoryProvider, useDefinitionHistory } from "./workflow-definition-history";
 
 export const WORKFLOW_MODEL = "workflows.Workflow";
 
@@ -71,12 +72,18 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
     record: Record<string, unknown>;
     values: WorkflowDefinitionValues;
   } | null>(null);
-  const admitNextSnapshot = React.useRef(false);
   React.useEffect(() => {
     if (!snapshot || !projected || snapshot.workflow.id !== id) return;
     setAcknowledged((current) => {
-      if (current && current.record.id === snapshot.workflow.id && !admitNextSnapshot.current) return current;
-      admitNextSnapshot.current = false;
+      if (current && current.record.id === snapshot.workflow.id) {
+        const record = {
+          ...current.record,
+          current_published_version: snapshot.workflow.current_published_version,
+          publication_status: snapshot.workflow.publication_status,
+        };
+        if (record.current_published_version === current.record.current_published_version && record.publication_status === current.record.publication_status) return current;
+        return { record, values: current.values };
+      }
       return { record: snapshot.workflow, values: projected };
     });
   }, [id, projected, snapshot]);
@@ -86,11 +93,11 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
     values,
     loading: definition.isFetching,
     reload: () => {
-      admitNextSnapshot.current = true;
       void definition.refetch();
     },
   }), [acknowledged?.record, definition.isFetching, definition.refetch, values]);
   const readOnly = props.readOnly || (acknowledged !== null && String(acknowledged.record.status) !== "DRAFT");
+  const history = useDefinitionHistory(formSurface, Boolean(readOnly));
 
   const submit = React.useCallback<FormSubmit>(async (_data, context) => {
     if (!id || acknowledged?.record.id !== id) return null;
@@ -112,6 +119,7 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
       throw definitionSubmitError(payload, submitted);
     }
     const accepted = acceptedDefinition(submitted, payload);
+    history.rebase(baseline, submitted, payload);
     const { definition: _definition, ...acceptedWorkflow } = accepted;
     const record = { ...(acknowledged?.record ?? {}), ...acceptedWorkflow };
     setAcknowledged({ record, values: accepted });
@@ -124,7 +132,7 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
       accepted,
       reconcileDefinition,
     );
-  }, [acknowledged?.record, id, saveDefinition]);
+  }, [acknowledged?.record, history, id, saveDefinition]);
 
   const reviewLatest = React.useCallback(async () => {
     setReloadError(null);
@@ -143,6 +151,7 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
 
   const discardAndReload = React.useCallback(() => {
     if (!reviewCandidate) return;
+    history.reset();
     setAcknowledged(reviewCandidate);
     setStale(false);
     setStaleReview(null);
@@ -150,7 +159,7 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
     setReviewCandidate(null);
     setReloadError(null);
     setFormGeneration((generation) => generation + 1);
-  }, [reviewCandidate]);
+  }, [history, reviewCandidate]);
 
   const publish = React.useCallback(async (context: RecordToolbarContext) => {
     if (!id || acknowledged?.record.id !== id) return;
@@ -182,7 +191,7 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
       <ErrorBanner description={reloadError} />
       <div className="flex gap-2"><Button type="button" size="sm" variant="secondary" onClick={() => setReviewOpen(false)}>{t("form.cancelReview")}</Button><Button type="button" size="sm" variant="danger" disabled={!reviewCandidate} onClick={discardAndReload}>{t("form.discardReload")}</Button></div>
     </section> : null}
-    <Form
+    <DefinitionHistoryProvider value={history}><Form
       key={formGeneration}
       {...props}
       resource={WORKFLOW_MODEL}
@@ -190,11 +199,13 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
       readOnly={readOnly}
       acknowledgedSource={source}
       submit={submit}
+      onFieldInteractionStart={history.start}
+      onFieldInteractionCommit={history.commit}
       toolbarStart={(context) => {
         formSurface.current = context.form;
         return readOnly ? <Button type="button" size="sm" variant="secondary" onClick={() => {
           if (values?.lineage_id) void navigate({ to: routeHref("workflows.workflow", { id: values.lineage_id }) });
-        }}>{t("form.openDraft")}</Button> : <Button
+        }}>{t("form.openDraft")}</Button> : <><Button type="button" size="sm" variant="ghost" disabled={!history.canUndo} onClick={history.undo}>{t("form.undo")}</Button><Button type="button" size="sm" variant="ghost" disabled={!history.canRedo} onClick={history.redo}>{t("form.redo")}</Button><Button
             type="button"
             size="sm"
             variant="secondary"
@@ -203,12 +214,12 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
             onClick={() => { void publish(context); }}
           >
             {t("form.publish")}
-          </Button>;
+          </Button></>;
       }}
     >
       {workflowFields(t)}
       {props.children}
-    </Form>
+    </Form></DefinitionHistoryProvider>
   </>);
 }
 

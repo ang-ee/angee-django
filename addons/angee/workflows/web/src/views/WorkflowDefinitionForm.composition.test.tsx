@@ -8,13 +8,13 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import { beforeEach, expect, test, vi } from "vitest";
 
-const state = vi.hoisted(() => ({ snapshot: null as Record<string, unknown> | null, save: vi.fn(), refetch: vi.fn() }));
+const state = vi.hoisted(() => ({ snapshot: null as Record<string, unknown> | null, save: vi.fn(), publish: vi.fn(), refetch: vi.fn() }));
 vi.mock("@angee/refine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/refine")>();
   return {
     ...actual,
     useAuthoredQuery: () => ({ data: { workflow_definition: state.snapshot }, isFetching: false, error: null, refetch: state.refetch }),
-    useAuthoredMutation: (document: unknown) => [String(document).includes("Publish") ? vi.fn() : state.save, { fetching: false }],
+    useAuthoredMutation: (document: unknown) => [String(document).includes("Publish") ? state.publish : state.save, { fetching: false }],
   };
 });
 vi.mock("../documents.console", () => ({
@@ -24,6 +24,7 @@ vi.mock("../documents.console", () => ({
 }));
 
 import { WorkflowDefinitionForm } from "./WorkflowDefinitionForm";
+import { useDefinitionHistoryContext } from "./workflow-definition-history";
 
 const field = (name: string, scalar = "String") => ({
   name, kind: "scalar" as const, scalar, values: [], readable: true, filterable: true,
@@ -39,11 +40,23 @@ function workflowSnapshot(revision: number, name: string, nodeName = "First") { 
   nodes: [{ id: "node_1", key: "first", name: nodeName, step_class: "gate", config: {}, config_errors: {}, join_rule: "ALL_SUCCESS", is_entry: true, position: {} }], edges: [], readiness: [],
 }; }
 let surface: RecordPanelContext["form"] | null = null;
-function SurfaceProbe({ context }: { context: RecordPanelContext }) { surface = context.form; return null; }
-beforeEach(() => { cleanup(); surface = null; });
+function SurfaceProbe({ context }: { context: RecordPanelContext }) {
+  surface = context.form;
+  const history = useDefinitionHistoryContext();
+  return <button type="button" onClick={() => history?.perform(() => {
+    const nodes = context.form.form.getValues("definition.nodes") as unknown as Record<string, unknown>;
+    const edges = context.form.form.getValues("definition.edges") as unknown as Record<string, { source: string; target: string }>;
+    const { node_1: _removed, ...remaining } = nodes;
+    context.form.form.setValue("definition.nodes", remaining as never, { shouldDirty: true });
+    context.form.form.setValue("definition.edges", Object.fromEntries(Object.entries(edges).filter(([, edge]) => edge.source !== "node_1" && edge.target !== "node_1")) as never, { shouldDirty: true });
+  })}>Delete fixture node</button>;
+}
+beforeEach(() => { cleanup(); surface = null; state.publish.mockReset(); state.refetch.mockReset(); });
 
 test("the registered form exposes parsed settings and saves through the definition command", async () => {
   state.snapshot = workflowSnapshot(4, "Original");
+  (state.snapshot.nodes as Record<string, unknown>[])[0]!.config_errors = { "config.mode": ["Kept server error"] };
+  state.snapshot.readiness = [{ code: "kept", message: "Kept readiness", kind: "NODE", id: "node_1", client_key: null, requested_id: null, field: "config" }];
   state.save.mockReset();
   state.save.mockResolvedValue({ save_workflow_definition: { status: "SUCCESS", revision: 5, current_revision: 5, nodes: [], edges: [], diagnostics: [] } });
   const provider = { getApiUrl: () => "test://workflows", getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
@@ -57,6 +70,16 @@ test("the registered form exposes parsed settings and saves through the definiti
   expect(screen.getByText("Definition")).toBeTruthy();
   expect(screen.getByLabelText(/Max steps/i)).toBeTruthy();
   fireEvent.change(name, { target: { value: "Changed" } });
+  fireEvent.blur(name);
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect((name as HTMLInputElement).value).toBe("Original");
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).toBeNull());
+  expect(surface!.form.getValues("definition.revision")).toBe(4);
+  expect(surface!.form.getValues("definition.readiness")).toEqual(expect.arrayContaining([expect.objectContaining({ code: "kept" })]));
+  expect(surface!.form.getValues("definition.nodes.node_1.config_errors")).toEqual({ "config.mode": ["Kept server error"] });
+  fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+  expect((name as HTMLInputElement).value).toBe("Changed");
+  expect(await screen.findByRole("button", { name: "Save" })).toBeTruthy();
   fireEvent.click(await screen.findByRole("button", { name: "Save" }));
   await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1));
   expect(state.save.mock.calls[0]?.[0]).toMatchObject({ expectedRevision: 4, edit: { workflow: { name: "Changed" } } });
@@ -85,7 +108,7 @@ test("real Form keeps stale defaults until reviewed discard adopts the fetched d
   state.refetch.mockRejectedValueOnce(new Error("Offline"));
   const provider = { getApiUrl: () => "test://workflows", getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
-  render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}><RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" recordTabs={[{ id: "editor", label: "Editor", keepMounted: true, render: (context) => <SurfaceProbe context={context} /> }]} /></AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider></Refine>);
+  render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}><RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" defaultRecordTab="editor" recordTabs={[{ id: "editor", label: "Editor", keepMounted: true, render: (context) => <SurfaceProbe context={context} /> }]} /></AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider></Refine>);
   fireEvent.change(await screen.findByRole("textbox", { name: "Name" }), { target: { value: "Local" } });
   surface!.form.setValue("definition.nodes.node_1.name", "Local node" as never, { shouldDirty: true });
   fireEvent.click(await screen.findByRole("button", { name: "Save" }));
@@ -108,4 +131,58 @@ test("real Form keeps stale defaults until reviewed discard adopts the fetched d
   expect(surface!.form.getValues("definition.nodes.node_1.name")).toBe("Remote node");
   expect(surface!.form.formState.defaultValues?.definition).toMatchObject({ revision: 3 });
   expect(surface!.formIsDirty).toBe(false);
+  expect(screen.getByRole("button", { name: "Undo" }).hasAttribute("disabled")).toBe(true);
+});
+
+test("publishing never admits a newer draft revision over edits made while the request is pending", async () => {
+  state.snapshot = workflowSnapshot(2, "Original");
+  let finishPublish!: (value: unknown) => void;
+  state.publish.mockImplementation(() => new Promise((resolve) => { finishPublish = resolve; }));
+  state.save.mockReset();
+  state.save.mockResolvedValue({ save_workflow_definition: { status: "STALE", revision: null, current_revision: 4, nodes: [], edges: [], diagnostics: [] } });
+  const provider = { getApiUrl: () => "test://workflows", getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  const element = <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}><RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" recordTabs={[{ id: "editor", label: "Editor", keepMounted: true, render: (context) => <SurfaceProbe context={context} /> }]} /></AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider></Refine>;
+  const view = render(element);
+  state.refetch.mockImplementation(async () => { view.rerender(element); return { data: { workflow_definition: state.snapshot } }; });
+  fireEvent.click(await screen.findByRole("button", { name: "Publish" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Edited while publishing" } });
+  state.snapshot = workflowSnapshot(3, "Concurrent remote edit");
+  (state.snapshot.workflow as Record<string, unknown>).current_published_version = 1;
+  (state.snapshot.workflow as Record<string, unknown>).publication_status = "published";
+  finishPublish({ publish_workflow_definition: { status: "SUCCESS" } });
+  await waitFor(() => expect(state.refetch).toHaveBeenCalled());
+  expect(surface!.form.getValues("name")).toBe("Edited while publishing");
+  expect(surface!.form.formState.defaultValues?.definition).toMatchObject({ revision: 2 });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1));
+  expect((state.save.mock.calls[0]?.[0] as Record<string, unknown>).expectedRevision).toBe(2);
+});
+
+test("undo during a pending deletion rekeys the restored node and edge after acknowledgement", async () => {
+  const initial = workflowSnapshot(2, "Original") as Record<string, unknown>;
+  const nodes = (initial.nodes as Record<string, unknown>[]);
+  nodes.push({ ...nodes[0] as object, id: "node_2", key: "second", name: "Second", is_entry: false });
+  initial.edges = [{ id: "edge_1", source: "node_1", target: "node_2", condition: "completed" }];
+  state.snapshot = initial;
+  let acknowledge!: (value: unknown) => void;
+  state.save.mockReset();
+  state.save.mockImplementationOnce(() => new Promise((resolve) => { acknowledge = resolve; })).mockResolvedValueOnce({ save_workflow_definition: { status: "SUCCESS", revision: 4, current_revision: 4, nodes: [], edges: [], diagnostics: [] } });
+  const provider = { getApiUrl: () => "test://workflows", getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}><RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" defaultRecordTab="editor" recordTabs={[{ id: "editor", label: "Editor", keepMounted: true, render: (context) => <SurfaceProbe context={context} /> }]} /></AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider></Refine>);
+  fireEvent.click(await screen.findByRole("button", { name: "Delete fixture node" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(surface!.form.getValues("definition.nodes.node_1.id")).toBe("node_1");
+  acknowledge({ save_workflow_definition: { status: "SUCCESS", revision: 3, current_revision: 3, nodes: [], edges: [], diagnostics: [] } });
+  await waitFor(() => expect(Object.keys(surface!.form.getValues("definition.nodes") as unknown as object).some((key) => key.startsWith("node-") && key !== "node_1")).toBe(true));
+  const restoredKey = Object.keys(surface!.form.getValues("definition.nodes") as unknown as object).find((key) => key.startsWith("node-"))!;
+  expect(surface!.form.getValues(`definition.nodes.${restoredKey}.id`)).toBe("");
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(state.save).toHaveBeenCalledTimes(2));
+  const edit = (state.save.mock.calls[1]?.[0] as { edit: Record<string, unknown> }).edit;
+  expect(edit.node_creates).toEqual([expect.objectContaining({ client_key: restoredKey })]);
+  expect(edit.edge_creates).toEqual([expect.objectContaining({ source: { client_key: restoredKey }, target: { id: "node_2" } })]);
 });

@@ -38,7 +38,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 
 function FormProbe(props: Record<string, unknown>): React.ReactElement {
-  const source = props.acknowledgedSource as { values: Values | null } | undefined;
+  const source = props.acknowledgedSource as { record: Record<string, unknown> | null; values: Values | null; reload: () => void } | undefined;
   const [baseline, setBaseline] = React.useState<Values | null>(null);
   const [current, setCurrent] = React.useState<Values | null>(null);
   React.useEffect(() => {
@@ -49,7 +49,9 @@ function FormProbe(props: Record<string, unknown>): React.ReactElement {
   }, [baseline, source?.values]);
   if (!baseline || !current) return <span>Loading</span>;
   const node = current.definition.nodes.node_1!;
+  const toolbar = props.toolbarStart as ((context: Record<string, unknown>) => React.ReactNode) | undefined;
   return <>
+    <span data-testid="publication-record">{JSON.stringify(source?.record ?? null)}</span>
     <input aria-label="Workflow name" value={current.name} onChange={(event) => setCurrent({ ...current, name: event.target.value })} />
     <input aria-label="Node name" value={node.name} onChange={(event) => setCurrent({
       ...current,
@@ -59,6 +61,7 @@ function FormProbe(props: Record<string, unknown>): React.ReactElement {
       const submit = props.submit as (data: Record<string, unknown>, context: Record<string, unknown>) => Promise<unknown>;
       void submit({}, { values: current, baselineValues: baseline }).catch(() => undefined);
     }}>Save</button>
+    {toolbar?.({ recordId: "workflow_1", record: source?.record ?? null, reload: source?.reload, form: { form: { getValues: () => current, setError: vi.fn() }, formIsDirty: false } })}
   </>;
 }
 
@@ -148,4 +151,20 @@ test("does not admit or submit a retained snapshot for the previously requested 
   state.snapshot = snapshot(1, "Second workflow", "workflow_2");
   view.rerender(<WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_2" />);
   expect((await screen.findByLabelText("Workflow name") as HTMLInputElement).value).toBe("Second workflow");
+});
+
+test("publish refreshes publication metadata without admitting a newer draft revision", async () => {
+  state.publish.mockResolvedValue({ publish_workflow_definition: { status: "SUCCESS" } });
+  const view = render(<WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Publish" }));
+  state.snapshot = snapshot(3, "Remote");
+  (state.snapshot.workflow as Record<string, unknown>).current_published_version = 1;
+  (state.snapshot.workflow as Record<string, unknown>).publication_status = "published";
+  await waitFor(() => expect(state.refetch).toHaveBeenCalled());
+  // The query rerender supplies publication projections while the admitted values stay at revision 2.
+  view.rerender(<WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" />);
+  await waitFor(() => expect(screen.getByTestId("publication-record").textContent).toContain('"publication_status":"published"'));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(state.save).toHaveBeenCalled());
+  expect((state.save.mock.calls.at(-1)?.[0] as Record<string, unknown>).expectedRevision).toBe(2);
 });
