@@ -4,7 +4,7 @@ import {
   useModelMetadata,
 } from "@angee/metadata";
 
-import type { WidgetOption } from "../../widgets";
+import { canonicalOptionValue, type WidgetOption } from "../../widgets";
 import { useAppRuntime } from "../../runtime";
 import { deserializeFormSpec, type FormSpecFieldDescriptor } from "../form/form-spec";
 import type { FieldDescriptor } from "../page";
@@ -35,12 +35,16 @@ export function useEnumOptions(resource: string, field: string): readonly Widget
   );
 }
 
-export function useImplChoices(resource: string, field: string): readonly ImplChoice[] {
+export function useImplChoices(
+  resource: string,
+  field: string,
+  supplied?: readonly ImplChoice[],
+): readonly ImplChoice[] {
   const { data } = useAuthoredQuery(BaseImplChoices, {
     model: resource,
     field,
-  });
-  return data?.impl_choices ?? [];
+  }, { enabled: supplied == null });
+  return supplied ?? data?.impl_choices ?? [];
 }
 
 export interface ImplConfigFields {
@@ -54,10 +58,16 @@ export interface ImplConfigFields {
  * engine; choices without a declaration continue to use their native raw JSON
  * field.
  */
-export function useImplConfigFields(resource: string, field: string): ImplConfigFields {
-  const choices = useImplChoices(resource, field);
+export function useImplConfigFields(
+  resource: string,
+  field: string,
+  supplied?: readonly ImplChoice[],
+): ImplConfigFields {
+  const choices = useImplChoices(resource, field, supplied);
   const { widgets } = useAppRuntime();
   return React.useMemo(() => {
+    const options = choices.map((choice) => ({ value: choice.key, label: choice.key }));
+    const choiceKey = (value: unknown) => canonicalOptionValue(options, value) ?? String(value);
     const parsed = choices.flatMap((choice) => choice.config_schema == null
       ? []
       : [{ choice, fields: deserializeFormSpec(choice.config_schema, widgets) }]);
@@ -77,17 +87,17 @@ export function useImplConfigFields(resource: string, field: string): ImplConfig
       fields: [...byName.values()].map(({ descriptor, variants }) => ({
         ...descriptor,
         name: `config.${descriptor.name}`,
-        showWhen: (values) => variants.has(String(values[field])),
+        showWhen: (values) => variants.has(choiceKey(values[field])),
         resolve: (values) => {
-          const selected = variants.get(String(values[field])) ?? descriptor;
+          const selected = variants.get(choiceKey(values[field])) ?? descriptor;
           return {
             ...selected,
             name: `config.${selected.name}`,
-            showWhen: (current) => variants.has(String(current[field])),
+            showWhen: (current) => variants.has(choiceKey(current[field])),
           };
         },
       })),
-      hasSchema: (value: unknown) => schemaKeys.has(String(value)),
+      hasSchema: (value: unknown) => schemaKeys.has(choiceKey(value)),
     };
   }, [choices, field, widgets]);
 }
@@ -95,8 +105,9 @@ export function useImplConfigFields(resource: string, field: string): ImplConfig
 export function useImplCategory(resource: string, field: string): (value: unknown) => string {
   const choices = useImplChoices(resource, field);
   return React.useMemo(() => {
+    const options = choices.map((choice) => ({ value: choice.key, label: choice.key }));
     const byKey = new Map(choices.map((choice) => [choice.key, choice.category]));
-    return (value: unknown) => byKey.get(String(value)) ?? "";
+    return (value: unknown) => byKey.get(canonicalOptionValue(options, value) ?? String(value)) ?? "";
   }, [choices]);
 }
 
@@ -111,14 +122,17 @@ export function useImplPrefill(
   resource: string,
   field: string,
   reset: Readonly<Record<string, unknown>> = EMPTY_IMPL_PREFILL_RESET,
+  supplied?: readonly ImplChoice[],
 ): (value: unknown) => Record<string, unknown> | undefined {
-  const choices = useImplChoices(resource, field);
+  const choices = useImplChoices(resource, field, supplied);
   return React.useMemo(() => {
+    const options = choices.map((choice) => ({ value: choice.key, label: choice.key }));
     const byKey = new Map(
       choices.map((choice) => [choice.key, choice.defaults]),
     );
     return (value: unknown) => {
-      const defaults = byKey.get(String(value));
+      const key = canonicalOptionValue(options, value) ?? String(value);
+      const defaults = byKey.get(key);
       if (!defaults) return undefined;
       return { ...reset, ...defaults } as Record<string, unknown>;
     };

@@ -300,30 +300,9 @@ export function ResourceEdit({
 export function ResourceShow({
   resource,
   id,
-  fields,
-  groups,
   ...props
 }: ResourceFormActionProps): React.ReactElement {
-  return (
-    <FormView
-      {...props}
-      resource={resource}
-      id={id}
-      fields={fields?.map(readOnlyField)}
-      groups={groups?.map(readOnlyGroup)}
-    />
-  );
-}
-
-function readOnlyField(field: FormField): FormField {
-  return field.readOnly ? field : { ...field, readOnly: true };
-}
-
-function readOnlyGroup(group: GroupDescriptor): GroupDescriptor {
-  return {
-    ...group,
-    fields: group.fields.map(readOnlyField),
-  };
+  return <FormView {...props} resource={resource} id={id} readOnly />;
 }
 
 function controlledRecordController<TRow extends Row>(

@@ -5,10 +5,8 @@ import {
   isWidgetDefinition,
   type WidgetOption,
 } from "../../widgets";
-import {
-  emptyValueForField,
-  type MutationDialogField,
-} from "./MutationDialog";
+import type { MutationDialogField } from "./MutationDialog";
+import { emptyValueForField } from "./field-values";
 import type { RelationCreateConfig } from "../relation/RelationPicker";
 import { parseFormSpec, parseFormSpecPayload, type FormSpecWire, type FormSpecFieldType } from "./form-spec-schema";
 export type { FormSpecFieldType } from "./form-spec-schema";
@@ -26,6 +24,11 @@ export type FormSpecRelationCreate = Pick<RelationCreateConfig, "resource">;
  */
 export interface FormSpecFieldDescriptor extends MutationDialogField {
   rowTemplate?: readonly FormSpecFieldDescriptor[];
+  objectTemplate?: readonly FormSpecFieldDescriptor[];
+  itemTemplate?: FormSpecFieldDescriptor;
+  nullable?: boolean;
+  omittable?: boolean;
+  hasDefault?: boolean;
 }
 
 const TYPE_WIDGETS: Readonly<Record<FormSpecFieldType, string>> = {
@@ -70,16 +73,53 @@ export function formSpecInitialValues(
   const values: Record<string, unknown> = {};
   for (const field of fields) {
     if (Object.hasOwn(payloadValues, field.name)) {
-      values[field.name] = payloadValues[field.name];
+      const payloadValue = payloadValues[field.name];
+      values[field.name] = field.objectTemplate && payloadValue && typeof payloadValue === "object" && !Array.isArray(payloadValue)
+        ? formSpecInitialValues(field.objectTemplate, payloadValue)
+        : field.itemTemplate?.objectTemplate && Array.isArray(payloadValue)
+          ? payloadValue.map((item) => item && typeof item === "object" && !Array.isArray(item)
+            ? formSpecInitialValues(field.itemTemplate!.objectTemplate!, item)
+            : item)
+          : payloadValue;
       continue;
     }
-    if (field.defaultValue !== undefined) {
+    if (field.hasDefault) {
       values[field.name] = field.defaultValue;
       continue;
     }
-    values[field.name] = emptyValueForField(field);
+    if (!field.presenceRequired && (field.required || !field.omittable)) {
+      values[field.name] = initialFormSpecValue(field);
+    }
   }
   return values;
+}
+
+/** Seed one present form-spec value without conflating omission with null. */
+export function initialFormSpecValue(field: FormSpecFieldDescriptor): unknown {
+  if (field.hasDefault) return field.defaultValue;
+  if (field.nullable) return null;
+  if (field.objectTemplate) return formSpecInitialValues(field.objectTemplate, {});
+  return emptyValueForField(field);
+}
+
+/** Remove omitted descriptor keys while preserving explicit JSON values. */
+export function normalizeFormSpecValues(
+  fields: readonly FormSpecFieldDescriptor[],
+  values: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  return Object.fromEntries(fields.flatMap((field) => {
+    if (!Object.hasOwn(values, field.name) || values[field.name] === undefined) return [];
+    const value = values[field.name];
+    if (field.objectTemplate && value && typeof value === "object" && !Array.isArray(value)) {
+      return [[field.name, normalizeFormSpecValues(field.objectTemplate, value as Record<string, unknown>)]];
+    }
+    if (field.itemTemplate?.objectTemplate && Array.isArray(value)) {
+      return [[field.name, value.map((item) => item && typeof item === "object" && !Array.isArray(item)
+        ? normalizeFormSpecValues(field.itemTemplate!.objectTemplate!, item as Record<string, unknown>)
+        : item)]];
+    }
+    return [[field.name, value]];
+  }));
 }
 
 function deserializeObjectFields(
@@ -102,8 +142,15 @@ function deserializeField(
 ): FormSpecFieldDescriptor {
   const path = parentPath === "form spec" ? name : `${parentPath}.${name}`;
   const type = field.type ?? "any";
-  const rowTemplate = field.type === "array" && field.items?.type === "object"
+  const variableList = field.type === "array" && field.widget === "list";
+  const rowTemplate = field.type === "array" && field.items?.type === "object" && !variableList
     ? deserializeObjectFields(field.items, widgets, path)
+    : undefined;
+  const objectTemplate = field.type === "object" && field.widget === "object"
+    ? deserializeObjectFields(field, widgets, path)
+    : undefined;
+  const itemTemplate = variableList && field.items
+    ? deserializeField("item", field.items, true, widgets, `${path}[]`)
     : undefined;
   const { relation, widget: authoredWidget, label, description, placeholder, readOnly } = field;
   const options = optionsFrom(field);
@@ -128,11 +175,22 @@ function deserializeField(
     ...(description ? { description } : {}),
     ...(placeholder ? { placeholder } : {}),
     ...(required ? { required: true } : {}),
+    ...(field.presenceRequired ? { presenceRequired: true } : {}),
+    ...(field.omittable ? { omittable: true } : {}),
+    ...(field.nullable ? { nullable: true } : {}),
+    ...(field.minimum !== undefined ? { minimum: field.minimum } : {}),
+    ...(field.maximum !== undefined ? { maximum: field.maximum } : {}),
+    ...(field.minLength !== undefined ? { minLength: field.minLength } : {}),
+    ...(field.maxLength !== undefined ? { maxLength: field.maxLength } : {}),
+    ...(field.minItems !== undefined ? { minItems: field.minItems } : {}),
+    ...(field.maxItems !== undefined ? { maxItems: field.maxItems } : {}),
     ...(readOnly ? { readOnly: true } : {}),
-    ...(Object.hasOwn(field, "defaultValue") ? { defaultValue: field.defaultValue } : {}),
+    ...(Object.hasOwn(field, "defaultValue") ? { defaultValue: field.defaultValue, hasDefault: true } : {}),
     ...(options ? { options } : {}),
     ...(relation ? { relation } : {}),
     ...(rowTemplate ? { rowTemplate } : {}),
+    ...(objectTemplate ? { objectTemplate } : {}),
+    ...(itemTemplate ? { itemTemplate } : {}),
   };
 }
 

@@ -69,6 +69,7 @@ export interface UseFormViewSaveProps {
   resource: string;
   id?: string | null;
   isCreate: boolean;
+  readOnly?: boolean;
   dataResource: DataResourceMetadata | null;
   modelMetadata: ModelMetadata | null;
   formFields: readonly FieldDescriptor[];
@@ -110,6 +111,7 @@ export function useFormViewSave({
   resource,
   id,
   isCreate,
+  readOnly = false,
   dataResource,
   modelMetadata,
   formFields,
@@ -287,11 +289,12 @@ export function useFormViewSave({
   });
   const formReadOnly = React.useMemo(
     () =>
+      readOnly ||
       recordUnavailable ||
       (!submitOwner &&
         !Boolean(isCreate ? dataResource?.roots.create : dataResource?.roots.update)) ||
       (formFields.length > 0 && formFields.every((field) => field.readOnly)),
-    [dataResource, formFields, isCreate, recordUnavailable, submitOwner],
+    [dataResource, formFields, isCreate, readOnly, recordUnavailable, submitOwner],
   );
   const formIsDirty = form.formState.isDirty;
   const pending = create.mutation.isPending || update.mutation.isPending || customSubmit.isPending || resourceSave.fetching || form.formState.isSubmitting;
@@ -528,8 +531,8 @@ export function useFormViewSave({
   );
   const fieldReadOnly = React.useCallback(
     (field: FieldDescriptor): boolean =>
-      recordUnavailable || Boolean(field.readOnly),
-    [recordUnavailable],
+      readOnly || recordUnavailable || Boolean(field.readOnly),
+    [readOnly, recordUnavailable],
   );
   const discardChanges = React.useCallback(() => {
     reset(isCreate ? emptyValues : values, { keepDirtyValues: false, keepDirty: false });

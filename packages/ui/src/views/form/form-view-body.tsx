@@ -22,6 +22,7 @@ import { statusTone } from "../../widgets/status-tones";
 import type { RelationOption } from "../../widgets/RelationField";
 import { EditableLines } from "./EditableLines";
 import { FieldDescriptorControl } from "./field-descriptor-control";
+import { DescriptorPresenceControl } from "./descriptor-presence-control";
 import type { FieldDescriptor } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
@@ -38,6 +39,7 @@ import {
   type FormValues,
 } from "./form-view-model";
 import type { FormViewSurface } from "./form-view-surface";
+import { directDottedPathMessages } from "./validation-errors";
 
 const TITLE_TEXT_CLASS =
   "block w-full min-w-0 truncate text-28 font-semibold leading-9 text-fg";
@@ -505,10 +507,14 @@ function BoundFieldRow({
   onChange: (value: unknown) => void;
 }): React.ReactElement {
   const effectiveReadOnly = Boolean(readOnly);
-  const messages = [...fieldErrorMessages(errors), ...(serverMessages ?? [])];
+  const composite = Boolean(field.objectTemplate || field.itemTemplate || "rowTemplate" in field);
+  const messages = [...fieldErrorMessages(errors, composite ? field.name : undefined), ...(serverMessages ?? [])];
+  const displayedMessages = composite
+    ? directDottedPathMessages(messages, field.name)
+    : messages;
   return (
     <FieldRoot
-      invalid={messages.length > 0}
+      invalid={displayedMessages.length > 0}
       className={cn(FIELD_ROOT_CLASS, gridFieldClass(field))}
     >
       <FieldLabel className={FIELD_LABEL_CLASS}>
@@ -522,6 +528,7 @@ function BoundFieldRow({
             : EDITABLE_FIELD_CONTROL_CLASS,
         )}
       >
+        <DescriptorPresenceControl field={field} value={value} readOnly={effectiveReadOnly} onChange={onChange}>
         {relation ? (
           <RelationFieldWidget
             value={relationValueId(value) || null}
@@ -535,13 +542,15 @@ function BoundFieldRow({
           <FieldDescriptorControl
             field={field}
             value={value}
+            messages={messages}
             readOnly={effectiveReadOnly}
             onChange={onChange}
             controlProps={field.required ? { id: field.name, "aria-required": true } : undefined}
           />
         )}
+        </DescriptorPresenceControl>
       </div>
-      <FieldFooter description={field.description} errors={messages} />
+      <FieldFooter description={field.description} errors={displayedMessages} />
     </FieldRoot>
   );
 }
@@ -561,15 +570,19 @@ function BodyFieldControl({
   serverMessages?: readonly string[];
   onChange: (value: unknown) => void;
 }): React.ReactElement {
-  const messages = [...fieldErrorMessages(errors), ...(serverMessages ?? [])];
+  const composite = Boolean(field.objectTemplate || field.itemTemplate || "rowTemplate" in field);
+  const messages = [...fieldErrorMessages(errors, composite ? field.name : undefined), ...(serverMessages ?? [])];
   return (
     <FieldRoot invalid={messages.length > 0} className="grid gap-2">
+      <DescriptorPresenceControl field={field} value={value} readOnly={readOnly} onChange={onChange}>
       <FieldDescriptorControl
         field={field}
         value={value}
+        messages={messages}
         readOnly={readOnly}
         onChange={onChange}
       />
+      </DescriptorPresenceControl>
       <FieldFooter description={field.description} errors={messages} />
     </FieldRoot>
   );

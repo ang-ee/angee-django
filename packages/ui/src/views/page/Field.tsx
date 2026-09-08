@@ -19,6 +19,20 @@ export interface FieldDescriptor extends FieldPresentation {
   readOnly?: boolean;
   /** Require a value independently of generated model create metadata. */
   required?: boolean;
+  /** A required structured value may explicitly be JSON null. */
+  nullable?: boolean;
+  /** Treat required as JSON property presence; emitted only by structured FormSpec. */
+  presenceRequired?: boolean;
+  omittable?: boolean;
+  hasDefault?: boolean;
+  minimum?: number;
+  maximum?: number;
+  minLength?: number;
+  maxLength?: number;
+  minItems?: number;
+  maxItems?: number;
+  objectTemplate?: readonly FieldDescriptor[];
+  itemTemplate?: FieldDescriptor;
   /** Editable only while creating; read-only (and never patched) on an edit. */
   createOnly?: boolean;
   /** Editable only while editing; read-only (and never sent) on a create. */

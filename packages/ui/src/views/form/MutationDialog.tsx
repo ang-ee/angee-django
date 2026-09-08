@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Controller, useForm, useWatch } from "react-hook-form";
+import { Controller, set, useForm, useWatch, type FieldErrors } from "react-hook-form";
 import {
   canonicalModelLabelOrNull,
   modelMetadataForLabel,
@@ -30,6 +30,11 @@ import { RelationPicker, type RelationCreateConfig } from "../relation/RelationP
 import { useRelationOptions } from "../relation/relation-options";
 import type { FieldDescriptor } from "../page";
 import { directDottedPathMessages } from "./validation-errors";
+import { fieldErrorMessages } from "./form-view-model";
+import { emptyValueForField, isStructuredPresenceField, structuredFieldErrorPaths } from "./field-values";
+import { DescriptorPresenceControl } from "./descriptor-presence-control";
+
+export { emptyValueForField } from "./field-values";
 
 /** What a dialog field needs to offer (and optionally create) a related row. */
 export interface MutationDialogRelation {
@@ -53,6 +58,10 @@ export interface MutationDialogRelation {
 export interface MutationDialogField extends FieldDescriptor {
   /** Client-side gate for simple mutation dialogs. Server validation remains authoritative. */
   required?: boolean;
+  /** JSON-schema presence facts used by FormSpec-backed fields. */
+  nullable?: boolean;
+  omittable?: boolean;
+  hasDefault?: boolean;
   /** Disable editing for this field against the current dialog values. */
   readOnlyWhen?: (values: Record<string, unknown>) => boolean;
   /**
@@ -232,9 +241,15 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     defaultValues: initialDialogValues(fields, initialValues),
     mode: "onChange",
     resolver: (formValues) => {
-      const missing = fields.filter((field) => field.required && !field.readOnly && !field.readOnlyWhen?.(formValues) && emptyDialogValue(formValues[field.name]));
+      const editable = fields.filter((field) => !field.readOnly && !field.readOnlyWhen?.(formValues));
+      const missing = editable.flatMap((field) => {
+        if (isStructuredPresenceField(field)) {
+          return structuredFieldErrorPaths(field, formValues[field.name], Object.hasOwn(formValues, field.name));
+        }
+        return field.required && emptyDialogValue(formValues[field.name]) ? [field.name] : [];
+      });
       return missing.length ? {
-        values: {}, errors: Object.fromEntries(missing.map((field) => [field.name, { type: "required", message: t("form.required") }])),
+        values: {}, errors: requiredDialogErrors(missing, t("form.required")),
       } : { values: formValues, errors: {} };
     },
   });
@@ -312,7 +327,10 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
               field={field}
               value={control.value}
               dialogValues={values}
-              messages={fieldState.error?.message ? [fieldState.error.message] : []}
+              messages={fieldState.error ? fieldErrorMessages(
+                [fieldState.error],
+                field.objectTemplate || field.itemTemplate || "rowTemplate" in field ? field.name : undefined,
+              ) : []}
               readOnly={field.readOnly || field.readOnlyWhen?.(values) || submitting}
               onChange={control.onChange}
             />
@@ -322,6 +340,12 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       <ErrorBanner description={error} />
     </DialogForm>
   );
+}
+
+function requiredDialogErrors(names: readonly string[], message: string): FieldErrors<Record<string, unknown>> {
+  const errors: FieldErrors<Record<string, unknown>> = {};
+  for (const name of names) set(errors, name, { type: "required", message });
+  return errors;
 }
 
 /**
@@ -340,6 +364,11 @@ export function LabeledDescriptorField({
 }: {
   field: MutationDialogField & {
     rowTemplate?: readonly FormSpecFieldDescriptor[];
+    objectTemplate?: readonly FormSpecFieldDescriptor[];
+    itemTemplate?: FormSpecFieldDescriptor;
+    nullable?: boolean;
+    omittable?: boolean;
+    hasDefault?: boolean;
   };
   value: unknown;
   /** The sibling dialog values a `field.control` may scope itself by. */
@@ -353,9 +382,9 @@ export function LabeledDescriptorField({
   const generatedId = React.useId();
   const controlId = `mutation-field-${generatedId}`;
   const labelId = `${controlId}-label`;
-  const isRowsField = field.rowTemplate !== undefined;
-  const groupLabel = field.controlLabelMode === "group";
-  const displayedMessages = isRowsField
+  const isCompositeField = field.rowTemplate !== undefined || field.objectTemplate !== undefined || field.itemTemplate !== undefined;
+  const groupLabel = field.controlLabelMode === "group" || isCompositeField;
+  const displayedMessages = isCompositeField
     ? directDottedPathMessages(messages, field.name)
     : messages;
   const descriptionId = showDescription && field.description
@@ -372,12 +401,13 @@ export function LabeledDescriptorField({
       {showLabel ? (
         <FieldLabel
           id={groupLabel ? labelId : undefined}
-          htmlFor={isRowsField || groupLabel ? undefined : controlId}
+          htmlFor={isCompositeField || groupLabel ? undefined : controlId}
           required={field.required}
         >
           {field.label ?? field.name}
         </FieldLabel>
       ) : null}
+      <DescriptorPresenceControl field={field} value={value} readOnly={readOnly} onChange={onChange}>
       {field.control ? (
         field.control({
           id: controlId,
@@ -407,11 +437,13 @@ export function LabeledDescriptorField({
           controlProps={{
             id: controlId,
             ...(describedBy ? { "aria-describedby": describedBy } : {}),
+            ...(groupLabel ? { "aria-labelledby": labelId } : {}),
             ...(field.required ? { "aria-required": true } : {}),
           }}
           onChange={onChange}
         />
       )}
+      </DescriptorPresenceControl>
       {showDescription && field.description ? (
         <FieldDescription id={descriptionId}>{field.description}</FieldDescription>
       ) : null}
@@ -534,39 +566,15 @@ function initialDialogValues(
 ): Record<string, unknown> {
   const values: Record<string, unknown> = {};
   for (const field of fields) {
-    values[field.name] =
-      initialValues?.[field.name] ?? emptyValueForField(field);
+    if (initialValues && Object.hasOwn(initialValues, field.name)) {
+      values[field.name] = initialValues[field.name];
+    } else if (field.hasDefault) {
+      values[field.name] = field.defaultValue;
+    } else if (!field.omittable && !field.presenceRequired) {
+      values[field.name] = field.nullable ? null : emptyValueForField(field);
+    }
   }
   return values;
-}
-
-/**
- * The empty starting value for a descriptor field. Collection and object schema
- * kinds keep their JSON shape, numeric/unknown schema kinds avoid the empty
- * string rejected by Strawberry, switches/booleans start false, and remaining
- * scalar controls start `""`.
- */
-export function emptyValueForField(
-  field: Pick<FieldDescriptor, "widget" | "kind">,
-): unknown {
-  if (field.kind === "array" || field.widget === "tagInput") return [];
-  if (field.kind === "object") return {};
-  if (
-    field.kind === "boolean" ||
-    field.kind === "switch" ||
-    field.widget === "switch"
-  ) {
-    return false;
-  }
-  if (
-    field.kind === "integer" ||
-    field.kind === "number" ||
-    field.kind === "any"
-  ) {
-    if (field.widget === "select") return "";
-    return null;
-  }
-  return "";
 }
 
 /** Whether a dialog value counts as unfilled for the required-submit gate. */

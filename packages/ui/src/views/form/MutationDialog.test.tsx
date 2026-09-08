@@ -17,6 +17,7 @@ import {
   emptyValueForField,
   mutationDialogValueCodecs,
 } from "./MutationDialog";
+import { deserializeFormSpec } from "./form-spec";
 
 const parseRawValues = (values: Readonly<Record<string, unknown>>) => values;
 
@@ -36,6 +37,40 @@ describe("MutationDialog", () => {
     await waitFor(() => expect(button().disabled).toBe(false));
     fireEvent.click(button());
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
+  });
+
+  test("a required nullable FormSpec value accepts explicit null", async () => {
+    const submit = vi.fn();
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Nullable" fields={[
+        { name: "note", label: "Note", required: true, nullable: true, presenceRequired: true },
+      ]} initialValues={{ note: null }} submitLabel="Save" parseValues={parseRawValues} onSubmit={submit} />
+    </AppRuntimeProvider>);
+
+    const button = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ note: null }));
+  });
+
+  test("keeps submit invalid for a missing nested required list constraint", async () => {
+    const [slots] = deserializeFormSpec({
+      type: "object", required: ["slots"], properties: {
+        slots: { type: "array", widget: "list", presenceRequired: true, minItems: 1, items: {
+          type: "object", widget: "object", required: ["assignees"], properties: {
+            assignees: { type: "array", widget: "list", presenceRequired: true, minItems: 1, items: { type: "string" } },
+          },
+        } },
+      },
+    }, defaultWidgets);
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Slots" fields={[slots!]}
+        submitLabel="Save" parseValues={parseRawValues} onSubmit={vi.fn()} />
+    </AppRuntimeProvider>);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add item" }));
+    expect(await screen.findByText("This field is required.")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   test("associates descriptor labels and descriptions with widget inputs", () => {

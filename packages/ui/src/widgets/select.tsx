@@ -28,7 +28,10 @@ function SelectEdit({
       disabled={readOnly}
       aria-label={label}
       placeholder={label}
-      onValueChange={(next) => onChange?.(next)}
+      onValueChange={(next) => {
+        if (next === selected) return;
+        onChange?.(next);
+      }}
     />
   );
 }

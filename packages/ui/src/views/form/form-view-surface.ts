@@ -98,6 +98,8 @@ export interface RecordTabDescriptor {
 export interface UseFormViewSurfaceProps {
   resource: string;
   id?: string | null;
+  /** Render the complete declared form as a non-mutating record surface. */
+  readOnly?: boolean;
   fields?: readonly FieldDescriptor[];
   groups?: readonly GroupDescriptor[];
   children?: React.ReactNode;
@@ -146,6 +148,7 @@ const EMPTY_RECORD_TABS: readonly RecordTabDescriptor[] = [];
 export function useFormViewSurface({
   resource,
   id,
+  readOnly = false,
   fields,
   groups,
   children,
@@ -398,6 +401,7 @@ export function useFormViewSurface({
     createSubmit,
     defaultSlugSource,
     t,
+    readOnly,
   });
   const chrome = useFormViewRecordChrome({
     dataResource,
@@ -484,7 +488,7 @@ export function useFormViewSurface({
     [id, save.displayRecord, save.patchRecord, save.reload],
   );
   const visibleDeleteAction =
-    deleteAction === undefined ||
+    readOnly || deleteAction === undefined ||
     (deleteVisibleWhen !== undefined &&
       (save.displayRecord == null || !deleteVisibleWhen(save.displayRecord)))
       ? undefined

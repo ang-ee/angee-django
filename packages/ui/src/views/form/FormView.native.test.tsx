@@ -15,8 +15,11 @@ import type { FieldDescriptor } from "../page";
 const fields: readonly FieldDescriptor[] = [
   { name: "title", label: "Title" }, { name: "body", label: "Body" },
   { name: "deadline", label: "Deadline", showWhen: (values) => values.title === "Scheduled" },
+  { name: "note", label: "Note", nullable: true, omittable: true },
+  { name: "settings", label: "Settings", kind: "object", nullable: true, omittable: true },
+  { name: "summary", label: "Summary", omittable: true },
 ];
-const refineFields = ["id", "title", "body", "deadline"];
+const refineFields = ["id", "title", "body", "deadline", "note", "settings", "summary"];
 const fieldByName = new Map(fields.map((field) => [field.name, field]));
 const resource = testDataResource("notes.Note", {
   createFields: ["title", "body", "deadline"],
@@ -31,8 +34,14 @@ const model: ModelMetadata = schemaFieldMetadataFromDataResources([resource]).la
 const clients: QueryClient[] = [];
 afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
 
-async function fixture(options: { id?: string | null; submit?: FormSubmit; mountedFields?: readonly string[] } = {}) {
-  let record: Row = { id: options.id ?? "note-1", title: "First", body: "Original body", deadline: "" };
+async function fixture(options: { id?: string | null; submit?: FormSubmit; mountedFields?: readonly string[]; presenceValues?: boolean } = {}) {
+  let record: Row = {
+    id: options.id ?? "note-1",
+    title: "First",
+    body: "Original body",
+    deadline: "",
+    ...(options.presenceValues ? { note: null, settings: null } : {}),
+  };
   const onSaved = vi.fn();
   const getOne = vi.fn(async () => ({ data: record }));
   const update = vi.fn(async ({ variables }: { variables?: unknown }) => {
@@ -92,6 +101,25 @@ test("full native Refine saves submit only dirty fields and establish a clean ba
   await waitFor(() => expect(f.surface().formIsDirty).toBe(false));
   expect(f.surface().displayRecord?.title).toBe("Saved title");
   expect(f.surface().form.formState.dirtyFields).toEqual({});
+});
+
+test("persisted null and omitted fields stay pristine during an unrelated save", async () => {
+  const f = await fixture({ presenceValues: true });
+  expect(f.surface().form.getValues("note")).toBeNull();
+  expect(f.surface().form.getValues("settings")).toBeNull();
+  expect(Object.hasOwn(f.surface().form.getValues(), "summary")).toBe(false);
+  expect(f.surface().formIsDirty).toBe(false);
+
+  edit("title", "Only title changed");
+  await act(async () => f.surface().submitForm());
+
+  expect(f.update).toHaveBeenCalledWith(expect.objectContaining({
+    id: "note-1",
+    variables: { title: "Only title changed" },
+  }));
+  expect(f.surface().form.getValues("note")).toBeNull();
+  expect(f.surface().form.getValues("settings")).toBeNull();
+  expect(Object.hasOwn(f.surface().form.getValues(), "summary")).toBe(false);
 });
 
 test("accepted patches update the real detail cache and displayed record without a competing patched-record state", async () => {

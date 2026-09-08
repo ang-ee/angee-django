@@ -39,7 +39,7 @@ export type {
   WidgetOption,
   WidgetRenderProps,
 } from "./types";
-export { optionToken, relationValueId } from "./types";
+export { canonicalOptionValue, optionToken, relationValueId } from "./types";
 export { widgetLabel } from "./label";
 export { slugify } from "./slug";
 export { STATUS_TONES, statusTone, type StatusToneOptions } from "./status-tones";
@@ -92,6 +92,14 @@ const rowsWidget = lazyWidget(
   () => import("../views/form/RowsField").then((m) => m.rowsWidget),
   { edit: true },
 );
+const objectWidget = lazyWidget(
+  () => import("../views/form/StructuredField").then((m) => m.objectWidget),
+  { edit: true },
+);
+const listWidget = lazyWidget(
+  () => import("../views/form/StructuredField").then((m) => m.listWidget),
+  { edit: true },
+);
 
 export const defaultWidgets = {
   text: textWidget,
@@ -125,6 +133,8 @@ export const defaultWidgets = {
   many2one: many2oneWidget,
   many2many: many2manyWidget,
   rows: rowsWidget,
+  object: objectWidget,
+  list: listWidget,
 } satisfies WidgetMap;
 
 export function useResolvedWidget(

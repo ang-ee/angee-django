@@ -4,6 +4,7 @@ import { defaultWidgets } from "../../widgets";
 import {
   deserializeFormSpec,
   formSpecInitialValues,
+  normalizeFormSpecValues,
 } from "./form-spec";
 
 describe("deserializeFormSpec", () => {
@@ -70,6 +71,7 @@ describe("deserializeFormSpec", () => {
         placeholder: "Review import",
         required: true,
         defaultValue: "Untitled",
+        hasDefault: true,
       },
       { name: "count", kind: "integer", widget: "integer" },
       { name: "confidence", kind: "number", widget: "float" },
@@ -229,6 +231,21 @@ describe("formSpecInitialValues", () => {
       note: "Review carefully",
       rows: [{ target: "chn_1" }],
     });
+  });
+
+  test("preserves omitted, defaulted, nullable, and falsey JSON values", () => {
+    const fields = deserializeFormSpec({ properties: {
+      absent: { type: "string", omittable: true },
+      defaultNull: { type: "string", nullable: true, omittable: true, defaultValue: null },
+      requiredNull: { type: "string", nullable: true },
+      empty: { type: "string", omittable: true },
+      zero: { type: "integer", omittable: true },
+      disabled: { type: "boolean", omittable: true },
+    } }, defaultWidgets);
+
+    const values = formSpecInitialValues(fields, { empty: "", zero: 0, disabled: false });
+    expect(values).toEqual({ defaultNull: null, requiredNull: null, empty: "", zero: 0, disabled: false });
+    expect(normalizeFormSpecValues(fields, { ...values, absent: undefined })).toEqual(values);
   });
 });
 

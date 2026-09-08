@@ -21,6 +21,7 @@ import {
   type GroupDescriptor,
 } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
+import { isStructuredPresenceField, structuredFieldErrorPaths } from "./field-values";
 
 export type FormValues = Record<string, unknown>;
 const MISSING_DOTTED_VALUE = Symbol("missing-dotted-value");
@@ -227,23 +228,27 @@ export function emptyDraft(
 ): FormValues {
   const evaluation: FormValues = {};
   for (const field of fields) {
-    setDottedValue(evaluation, field.name, cloneFormValue(hasDottedValue(defaultValues, field.name)
-      ? dottedValue(defaultValues, field.name)
-      : field.defaultValue !== undefined
-        ? field.defaultValue
-        : emptyValue(field)));
+    const value = initialDraftFieldValue(field, defaultValues);
+    if (value !== MISSING_DOTTED_VALUE) setDottedValue(evaluation, field.name, cloneFormValue(value));
   }
   const draft: FormValues = {};
   for (const declared of fields) {
     const field = resolveField(declared, evaluation);
     if (!isFieldVisible(field, evaluation)) continue;
-    setDottedValue(draft, field.name, cloneFormValue(hasDottedValue(defaultValues, field.name)
-      ? dottedValue(defaultValues, field.name)
-      : field.defaultValue !== undefined
-        ? field.defaultValue
-        : emptyValue(field)));
+    const value = initialDraftFieldValue(field, defaultValues);
+    if (value !== MISSING_DOTTED_VALUE) setDottedValue(draft, field.name, cloneFormValue(value));
   }
   return draft;
+}
+
+function initialDraftFieldValue(
+  field: FieldDescriptor,
+  defaultValues: Record<string, unknown> | undefined,
+): unknown {
+  if (hasDottedValue(defaultValues, field.name)) return dottedValue(defaultValues, field.name);
+  if (field.hasDefault || field.defaultValue !== undefined) return field.defaultValue;
+  if (field.omittable || field.presenceRequired) return MISSING_DOTTED_VALUE;
+  return emptyValue(field);
 }
 
 export function recordToValues(
@@ -255,10 +260,13 @@ export function recordToValues(
   for (const declared of fields) {
     const field = resolveField(declared, record);
     if (!isFieldVisible(field, record)) continue;
+    const present = hasDottedValue(record, field.name);
+    if (!present && (field.omittable || field.presenceRequired)) continue;
     const raw = dottedValue(record, field.name);
-    setDottedValue(values, field.name, isRelationIdField(field)
+    const value = isRelationIdField(field)
       ? raw ?? null
-      : recordFieldValue({ ...record, [field.name]: raw }, field) ?? emptyValue(field));
+      : recordFieldValue({ ...record, [field.name]: raw }, field);
+    setDottedValue(values, field.name, value === undefined ? emptyValue(field) : value);
   }
   if (lines) values[lines.field] = lines.rows;
   return values;
@@ -292,15 +300,17 @@ export function missingRequiredFieldNames(
   fields: readonly FieldDescriptor[],
   requiredFieldNames: ReadonlySet<string>,
 ): readonly string[] {
-  return fields
-    .map((field) => resolveField(field, values))
-    .filter(
-      (field) =>
-        (field.required || requiredFieldNames.has(field.name))
-        && isFieldVisible(field, values)
-        && isEmptyFieldValue(dottedValue(values, field.name)),
-    )
-    .map((field) => field.name);
+  return fields.flatMap((declared) => {
+    const field = resolveField(declared, values);
+    if (!isFieldVisible(field, values)) return [];
+    const value = dottedValue(values, field.name);
+    if (isStructuredPresenceField(field)) {
+      return structuredFieldErrorPaths(field, value, hasDottedValue(values, field.name));
+    }
+    return (field.required || requiredFieldNames.has(field.name)) && isEmptyFieldValue(value)
+      ? [field.name]
+      : [];
+  });
 }
 
 export function visibleSections(
@@ -476,8 +486,21 @@ export function gridFieldClass(field: FieldDescriptor): string | undefined {
   return fieldWidgetId(field) === "tagInput" ? "col-span-full" : undefined;
 }
 
-export function fieldErrorMessages(errors: readonly unknown[]): string[] {
-  return errors.map(fieldErrorMessage);
+export function fieldErrorMessages(errors: readonly unknown[], path?: string): string[] {
+  return errors.flatMap((error) => nestedFieldErrorMessages(error, path));
+}
+
+function nestedFieldErrorMessages(error: unknown, path?: string): string[] {
+  if (error && typeof error === "object" && "message" in error
+    && (typeof error.message === "string" || typeof error.message === "number")) {
+    const message = String(error.message);
+    return path ? [`${path}: ${message}`] : [message];
+  }
+  if (!error || typeof error !== "object") return [fieldErrorMessage(error)];
+  return Object.entries(error).flatMap(([name, child]) => {
+    if (name === "ref" || name === "type" || child === undefined) return [];
+    return nestedFieldErrorMessages(child, path ? `${path}.${name}` : name);
+  });
 }
 
 export function fieldValidationSummary(

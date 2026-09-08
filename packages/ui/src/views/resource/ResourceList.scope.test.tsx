@@ -66,6 +66,8 @@ test("a native controlled child list isolates queries and record UI from its par
     const [recordId, setRecordId] = React.useState<string>();
     selectedRecordId = recordId;
     return <ResourceList resource={trigger.modelLabel} scope="local" placement="inline"
+      recordPresentation="workspace"
+      recordTabs={[{ id: "activity", label: "Activity", render: () => <div style={{ height: 3000 }}>Long inspector</div> }]}
       baseFilter={{ workflow: { exact: "workflow-1" } }} createDefaults={{ workflow: "workflow-1" }}
       recordId={recordId} onSelect={(id) => setRecordId(id ?? REFINE_CREATE_ID)}
       onClose={() => setRecordId(undefined)}
@@ -102,16 +104,22 @@ test("a native controlled child list isolates queries and record UI from its par
   fireEvent.click(screen.getByRole("button", { name: /New Trigger/i }));
   await waitFor(() => expect(selectedRecordId).toBe(REFINE_CREATE_ID));
   expect(await screen.findByLabelText("Kind")).toBeTruthy();
+  expect(document.querySelector('[data-record-presentation="workspace"]')).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "List view" }));
   await waitFor(() => expect(selectedRecordId).toBeUndefined());
 
   fireEvent.click(screen.getByRole("button", { name: "Open Schedule" }));
   await waitFor(() => expect(selectedRecordId).toBe("trigger-1"));
-  expect(await screen.findByDisplayValue("Schedule")).toBeTruthy();
+  const recordField = await screen.findByDisplayValue("Schedule");
+  expect(recordField.closest('[data-record-presentation="workspace"]')).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+  const longInspector = await screen.findByText("Long inspector");
+  expect(longInspector.closest('[data-record-presentation="workspace"]')).toBeTruthy();
   expect(getOne).toHaveBeenCalledWith(expect.objectContaining({ resource: "triggers", id: "trigger-1",
     meta: expect.objectContaining({ modelLabel: trigger.modelLabel }) }));
   fireEvent.click(screen.getByRole("button", { name: "List view" }));
   await waitFor(() => expect(selectedRecordId).toBeUndefined());
+  expect(document.querySelector('[data-record-presentation="workspace"]')).toBeNull();
 
   expect(parent.state.pagination.pageSize).toBe(50);
   expect(parent.state.groupStack).toEqual([{ field: "status" }]);

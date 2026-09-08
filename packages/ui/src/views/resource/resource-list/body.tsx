@@ -299,7 +299,14 @@ export function ResourceListBody<TRow extends Row = Row>({
   }
 
   return (
-    <div className={cn("h-full min-h-0 min-w-0", className)}>
+    <div
+      className={cn("h-full min-h-0 min-w-0", className)}
+      data-record-presentation={
+        open && !resolvedCreating && recordPresentation === "workspace" && (recordTabs?.length ?? 0) > 0
+          ? "workspace"
+          : undefined
+      }
+    >
       <ControlBandProvider inherit={!open} host={undefined}>
         <div hidden={open} aria-hidden={open || undefined}>
           {!open || retainLocalList ? list : null}

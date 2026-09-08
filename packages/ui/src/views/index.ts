@@ -54,6 +54,7 @@ export { RowsField, type RowsValue } from "./form/RowsField";
 export {
   deserializeFormSpec,
   formSpecInitialValues,
+  normalizeFormSpecValues,
   useFormSpecFields,
   type FormSpecFieldDescriptor,
   type FormSpecFieldType,

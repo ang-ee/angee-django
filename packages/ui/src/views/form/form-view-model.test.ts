@@ -93,6 +93,46 @@ describe("dotted form fields", () => {
     )).toEqual([]);
   });
 
+  test("accepts explicit null only for a nullable required descriptor", () => {
+    expect(missingRequiredFieldNames(
+      { note: null }, [{ name: "note", required: true, nullable: true, presenceRequired: true }], new Set(),
+    )).toEqual([]);
+    expect(missingRequiredFieldNames(
+      { note: null }, [{ name: "note", required: true }], new Set(),
+    )).toEqual(["note"]);
+  });
+
+  test("hydrates explicit null and omission without changing their presence", () => {
+    const presenceFields: FieldDescriptor[] = [
+      { name: "note", nullable: true, omittable: true },
+      { name: "settings", kind: "object", nullable: true, omittable: true },
+      { name: "summary", omittable: true },
+    ];
+
+    expect(recordToValues({ note: null, settings: null }, presenceFields)).toEqual({
+      note: null,
+      settings: null,
+    });
+  });
+
+  test("uses JSON presence and declared constraints only when explicitly projected", () => {
+    const presenceFields: FieldDescriptor[] = [
+      { name: "title", required: true, presenceRequired: true },
+      { name: "items", required: true, presenceRequired: true, kind: "array" },
+    ];
+    expect(missingRequiredFieldNames({ title: "", items: [] }, presenceFields, new Set())).toEqual([]);
+    expect(missingRequiredFieldNames({ title: "" }, presenceFields, new Set())).toEqual(["items"]);
+    expect(missingRequiredFieldNames(
+      { title: "", items: [] }, [{ ...presenceFields[0]!, minLength: 1 }, { ...presenceFields[1]!, minItems: 1 }], new Set(),
+    )).toEqual(["title", "items"]);
+    expect(missingRequiredFieldNames(
+      { title: "" }, [{ name: "title", required: true }], new Set(),
+    )).toEqual(["title"]);
+    const optional = { name: "summary", omittable: true, minLength: 2 };
+    expect(missingRequiredFieldNames({}, [optional], new Set())).toEqual([]);
+    expect(missingRequiredFieldNames({ summary: "" }, [optional], new Set())).toEqual(["summary"]);
+  });
+
   test("submits nested config through its writable root and nested dirty state", () => {
     expect(mutationData(
       { config: { local_root: "/repo", local_name: "main" } },

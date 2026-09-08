@@ -85,6 +85,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
   const {
     resource,
     id,
+    readOnly = false,
     fields,
     groups,
     children,
@@ -110,6 +111,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
   const surface = useFormViewSurface({
     resource,
     id,
+    readOnly,
     fields,
     groups,
     children,
@@ -214,7 +216,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             </Button>
           </div>
         ) : null}
-        {declaredActions.length > 0 || visibleDeleteAction !== undefined ? (
+        {!readOnly && (declaredActions.length > 0 || visibleDeleteAction !== undefined) ? (
           <RecordActionBar
             record={displayRecord ?? null}
             actions={declaredActions}
@@ -223,7 +225,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             deleteAction={visibleDeleteAction}
           />
         ) : null}
-        {recordChromeContext ? (
+        {!readOnly && recordChromeContext ? (
           <RecordChromeProvider value={recordChromeContext}>
             <SlotOutlet entries={recordActions} />
           </RecordChromeProvider>

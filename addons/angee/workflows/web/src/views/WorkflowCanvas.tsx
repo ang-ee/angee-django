@@ -15,9 +15,11 @@ import {
   SplitPane,
   SplitPaneHandle,
   SplitPanes,
+  canonicalOptionValue,
   useCollapsiblePane,
   useContainerQuery,
   useEnumOptions,
+  useImplConfigFields,
   useImplPrefill,
   type GraphViewConnection,
   type GraphViewPosition,
@@ -27,6 +29,7 @@ import {
   CreateWorkflowEdgeDocument,
   UpdateWorkflowStepPositionDocument,
   WorkflowGraphDocument,
+  WorkflowStepOperationsDocument,
 } from "../documents.console";
 import { useWorkflowsT } from "../i18n";
 import {
@@ -73,6 +76,7 @@ export function WorkflowCanvas({
   const workflow = graphQuery.data?.workflows_by_pk;
   const steps = graphQuery.data?.workflow_steps ?? [];
   const edges = graphQuery.data?.workflow_edges ?? [];
+  const selectedStepRecord = steps.find((step) => step.id === selectedStep);
   const isDraft = workflow?.status === "DRAFT";
   const hasSelection = selectedStep !== null || selectedEdge !== null;
   React.useEffect(() => {
@@ -189,7 +193,14 @@ export function WorkflowCanvas({
             {t("canvas.back")}
           </Button>
         ) : null}
-        <CanvasInspector selectedStep={selectedStep} selectedEdge={selectedEdge} readOnly={!isDraft} onChanged={refreshGraph} />
+        <CanvasInspector
+          selectedStep={selectedStepRecord
+            ? { id: selectedStepRecord.id, stepClass: selectedStepRecord.step_class, configErrors: configErrors(selectedStepRecord.config_errors) }
+            : null}
+          selectedEdge={selectedEdge}
+          readOnly={!isDraft}
+          onChanged={refreshGraph}
+        />
       </SplitPane>
     </SplitPanes>
   );
@@ -199,34 +210,141 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function CanvasInspector({ selectedStep, selectedEdge, readOnly, onChanged }: { selectedStep: string | null; selectedEdge: string | null; readOnly: boolean; onChanged: () => void }): React.ReactElement {
+function CanvasInspector({ selectedStep, selectedEdge, readOnly, onChanged }: { selectedStep: { id: string; stepClass: string; configErrors: Record<string, string[]> } | null; selectedEdge: string | null; readOnly: boolean; onChanged: () => void }): React.ReactElement {
   const t = useWorkflowsT();
-  if (selectedStep) return <StepConfigPanel stepId={selectedStep} readOnly={readOnly} onChanged={onChanged} />;
+  if (selectedStep) return <StepConfigPanel stepId={selectedStep.id} persistedStepClass={selectedStep.stepClass} configErrors={selectedStep.configErrors} readOnly={readOnly} onChanged={onChanged} />;
   if (selectedEdge) return <EdgeConfigPanel edgeId={selectedEdge} readOnly={readOnly} onChanged={onChanged} />;
   return <div className="min-h-0 overflow-auto bg-sheet-1 p-4"><EmptyState icon="workflow-step" title={t("canvas.stepConfig")} description={t("canvas.selectStep")} /></div>;
 }
 
-function StepConfigPanel({ stepId, readOnly, onChanged }: { stepId: string; readOnly: boolean; onChanged: () => void }): React.ReactElement {
+function StepConfigPanel({ stepId, persistedStepClass, configErrors, readOnly, onChanged }: { stepId: string; persistedStepClass: string; configErrors: Record<string, string[]>; readOnly: boolean; onChanged: () => void }): React.ReactElement {
   const t = useWorkflowsT();
-  const stepClassOptions = useEnumOptions(STEP_MODEL, "step_class");
-  const stepClassPrefill = useImplPrefill(STEP_MODEL, "step_class");
+  const operationsQuery = useAuthoredQuery(WorkflowStepOperationsDocument);
+  const operations = operationsQuery.data?.workflow_step_operations ?? [];
+  const stepClassOptions = React.useMemo(() => operationOptions(operations), [operations]);
+  const stepClassPrefill = useImplPrefill(STEP_MODEL, "step_class", {}, operations);
+  const implConfig = useImplConfigFields(STEP_MODEL, "step_class", operations);
   const joinRuleOptions = useEnumOptions(STEP_MODEL, "join_rule");
   const StepResource = readOnly ? ResourceShow : ResourceEdit;
+  const hasConfigErrors = Object.keys(configErrors).length > 0;
+  const invalidPersistedConfig = (values: Record<string, unknown>): boolean => (
+    hasConfigErrors && String(values.step_class) === persistedStepClass
+  );
   return (
     <div className="min-h-0 overflow-auto bg-sheet-1">
+      <ErrorBanner description={operationsQuery.error ? errorMessage(operationsQuery.error) : null} />
+      <ErrorBanner description={hasConfigErrors ? configErrorMessage(configErrors) : null} />
       <StepResource resource={STEP_MODEL} id={stepId} onSaved={onChanged}>
         <Field name="name" title />
         <Group label={t("canvas.step")} columns={2}>
           <Field name="workflow" readOnly />
           <Field name="key" />
-          <Field name="step_class" widget="select" options={stepClassOptions} prefill={stepClassPrefill} />
+          <Field
+            name="step_class"
+            label={t("canvas.operation")}
+            widget="select"
+            options={stepClassOptions}
+            prefill={stepClassPrefill}
+            prefillPreserveDirty
+            prefillReplace={["config"]}
+            resolve={(values) => {
+              const options = operationOptions(operations, values.step_class);
+              const currentKey = canonicalOptionValue(options, values.step_class);
+              return {
+                name: "step_class",
+                label: t("canvas.operation"),
+                widget: "select",
+                options,
+                description: operationHint(
+                  operations.find((operation) => operation.key === currentKey),
+                  t,
+                ),
+              };
+            }}
+          />
           <Field name="join_rule" widget="select" options={joinRuleOptions} />
           <Field name="is_entry" />
         </Group>
-        <Field name="config" widget="json" />
+        <Group label={t("canvas.configuration")} columns={1}>
+          <Field
+            name="config"
+            label={t("canvas.rawConfiguration")}
+            widget="json"
+            showWhen={(values) => !implConfig.hasSchema(values.step_class) || invalidPersistedConfig(values)}
+          />
+          {implConfig.fields.map((field) => (
+            <Field
+              key={field.name}
+              {...field}
+              showWhen={(values) => !invalidPersistedConfig(values) && (field.showWhen?.(values) ?? true)}
+              resolve={(values) => {
+                const resolved = field.resolve?.(values) ?? field;
+                return {
+                  ...resolved,
+                  showWhen: (current) => (
+                    !invalidPersistedConfig(current) && (resolved.showWhen?.(current) ?? true)
+                  ),
+                };
+              }}
+            />
+          ))}
+        </Group>
       </StepResource>
     </div>
   );
+}
+
+function configErrors(value: unknown): Record<string, string[]> {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([path, messages]) => (
+      Array.isArray(messages) && messages.every((message) => typeof message === "string")
+        ? [[path, messages]]
+        : []
+    )),
+  );
+}
+
+function configErrorMessage(errors: Record<string, string[]>): string {
+  return Object.entries(errors)
+    .flatMap(([path, messages]) => messages.map((message) => `${path}: ${message}`))
+    .join(" ");
+}
+
+function operationOptions(
+  operations: readonly { key: string; label: string; selectable: boolean }[],
+  current?: unknown,
+): { value: string; label: string; disabled: boolean }[] {
+  const options = operations.map((operation) => ({
+    value: operation.key,
+    label: operation.label,
+    disabled: !operation.selectable,
+  }));
+  const currentKey = canonicalOptionValue(options, current);
+  return options.filter((option) => !option.disabled || option.value === currentKey);
+}
+
+type WorkflowT = ReturnType<typeof useWorkflowsT>;
+
+function operationHint(
+  operation: { description: string; effect: string; effect_description: string } | undefined,
+  t: WorkflowT,
+): string {
+  if (!operation) return t("canvas.operationUnavailable");
+  const effect = operationEffectLabel(operation.effect, t);
+  return [operation.description, t("canvas.effectHint", { effect }), operation.effect_description]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function operationEffectLabel(effect: string, t: WorkflowT): string {
+  switch (effect) {
+    case "NONE": return t("canvas.effect.none");
+    case "READ": return t("canvas.effect.read");
+    case "WRITE": return t("canvas.effect.write");
+    case "EXTERNAL": return t("canvas.effect.external");
+    default: return t("canvas.effect.unknown");
+  }
 }
 
 function EdgeConfigPanel({ edgeId, readOnly, onChanged }: { edgeId: string; readOnly: boolean; onChanged: () => void }): React.ReactElement {

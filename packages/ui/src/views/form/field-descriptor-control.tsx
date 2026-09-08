@@ -15,11 +15,17 @@ import type { FormSpecFieldDescriptor } from "./form-spec";
 
 type DescriptorWidgetField = WidgetField & {
   rowTemplate?: readonly FormSpecFieldDescriptor[];
+  objectTemplate?: readonly FormSpecFieldDescriptor[];
+  itemTemplate?: FormSpecFieldDescriptor;
+  minItems?: number;
+  maxItems?: number;
 };
 
 export interface FieldDescriptorControlProps {
   field: FieldDescriptor & {
     rowTemplate?: readonly FormSpecFieldDescriptor[];
+    objectTemplate?: readonly FormSpecFieldDescriptor[];
+    itemTemplate?: FormSpecFieldDescriptor;
   };
   value: unknown;
   /** Source row for widgets whose display depends on a sibling field (money). */
@@ -51,8 +57,18 @@ export function FieldDescriptorControl({
     label: field.label,
     options: field.options,
     placeholder: field.placeholder,
-    controlProps,
+    ...(controlProps ? { controlProps: {
+        ...controlProps,
+        ...(field.minimum !== undefined ? { min: field.minimum } : {}),
+        ...(field.maximum !== undefined ? { max: field.maximum } : {}),
+        ...(field.minLength !== undefined ? { minLength: field.minLength } : {}),
+        ...(field.maxLength !== undefined ? { maxLength: field.maxLength } : {}),
+      } } : {}),
     ...(field.rowTemplate ? { rowTemplate: field.rowTemplate } : {}),
+    ...(field.objectTemplate ? { objectTemplate: field.objectTemplate } : {}),
+    ...(field.itemTemplate ? { itemTemplate: field.itemTemplate } : {}),
+    ...(field.minItems !== undefined ? { minItems: field.minItems } : {}),
+    ...(field.maxItems !== undefined ? { maxItems: field.maxItems } : {}),
     ...(field.currencyField ? { currencyField: field.currencyField } : {}),
   };
   return (

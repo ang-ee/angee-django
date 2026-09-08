@@ -17,6 +17,7 @@ export const WorkflowGraphDocument = graphql(`
       name
       step_class
       config
+      config_errors
       join_rule
       is_entry
       position
@@ -38,6 +39,24 @@ export const WorkflowGraphDocument = graphql(`
         key
         name
       }
+    }
+  }
+`);
+
+export const WorkflowStepOperationsDocument = graphql(`
+  query WorkflowStepOperations {
+    workflow_step_operations {
+      key
+      label
+      category
+      defaults
+      config_schema
+      description
+      selectable
+      effect
+      effect_description
+      idempotent
+      subject_declaration
     }
   }
 `);

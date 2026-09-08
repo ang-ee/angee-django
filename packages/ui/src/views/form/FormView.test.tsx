@@ -14,6 +14,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
   } from "@testing-library/react";
 import {
   Outlet,
@@ -52,6 +53,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { defaultWidgets } from "../../widgets";
+import { deserializeFormSpec } from "./form-spec";
 import { Form } from "./Form";
 import {
   FormView,
@@ -1529,6 +1531,41 @@ describe("FormView", () => {
 
     expect(await screen.findByText("This field is required.")).toBeTruthy();
     expect(screen.getByLabelText("Local root").getAttribute("aria-required")).toBe("true");
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  test("renders structured presence controls and nested errors in the native form", async () => {
+    const descriptors = deserializeFormSpec({
+      type: "object",
+      required: ["slots"],
+      properties: {
+        retry: { type: "object", widget: "object", omittable: true, properties: {
+          max_attempts: { type: "integer", label: "Max attempts", defaultValue: 1, omittable: true },
+        } },
+        note: { type: "string", label: "Note", nullable: true, omittable: true },
+        slots: { type: "array", widget: "list", label: "Slots", presenceRequired: true, minItems: 1, items: {
+          type: "object", widget: "object", required: ["assignees"], properties: {
+            assignees: { type: "array", widget: "list", label: "Assignees", presenceRequired: true, minItems: 1, items: { type: "string" } },
+          },
+        } },
+      },
+    }, defaultWidgets).map((field) => ({ ...field, name: `config.${field.name}` }));
+    renderWithProviders(<FormView resource="OAuthClient" fields={descriptors} />);
+
+    const retry = screen.getByText("Config Retry").closest('[data-layout="stack"]') as HTMLElement;
+    expect(within(retry).getByText("Not set")).toBeTruthy();
+    fireEvent.click(within(retry).getByRole("button", { name: "Set value" }));
+    expect((await screen.findByLabelText("Max attempts") as HTMLInputElement).value).toBe("1");
+
+    const note = screen.getByText("Note").closest('[data-layout="stack"]') as HTMLElement;
+    fireEvent.click(within(note).getByRole("button", { name: "Leave empty" }));
+    expect(within(note).getByText("Left empty")).toBeTruthy();
+
+    const slots = screen.getByText("Slots").closest('[data-layout="stack"]') as HTMLElement;
+    fireEvent.click(within(slots).getByRole("button", { name: "Add item" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    const nestedError = await screen.findByText("This field is required.");
+    expect(screen.getByText("Assignees").closest('[data-layout="stack"]')?.contains(nestedError)).toBe(true);
     expect(sdkMocks.mutate).not.toHaveBeenCalled();
   });
 

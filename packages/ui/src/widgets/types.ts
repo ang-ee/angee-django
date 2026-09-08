@@ -104,7 +104,12 @@ export interface WidgetField extends FieldPresentation {
 export interface WidgetControlProps {
   id: string;
   "aria-describedby"?: string;
+  "aria-labelledby"?: string;
   "aria-required"?: boolean;
+  min?: number;
+  max?: number;
+  minLength?: number;
+  maxLength?: number;
 }
 
 export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {
