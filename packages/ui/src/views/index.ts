@@ -92,6 +92,7 @@ export {
 } from "./relation/enum-options";
 export {
   GraphView,
+  type GraphViewActivation,
   type GraphViewEdge,
   type GraphViewEdgeStyle,
   type GraphViewGeometry,

@@ -373,6 +373,44 @@ describe("WorkflowCanvas native narrow inspector", () => {
     expect(screen.getByTestId("rf__node-step_2").className).toContain("selected");
   });
 
+  test("returns to the canvas when undo removes the selected unsaved step", async () => {
+    renderCanvas({ history: true });
+    await screen.findByText("Import files");
+    fireEvent.click(screen.getByTestId("rf__node-step_1"), { detail: 1 });
+    fireEvent.click(await screen.findByRole("button", { name: "Duplicate" }));
+    await screen.findByText("Import files copy");
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+    await waitFor(() => expect(screen.queryByText("Import files copy")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Back to canvas" })).toBeNull());
+    const graph = screen.getByRole("region", { name: "Editor" });
+    await waitFor(() => expect(document.activeElement).toBe(graph));
+  });
+
+  test("focuses desktop inspector fields for keyboard graph activation without pointer focus theft", async () => {
+    const bounds = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      bottom: 600, height: 600, left: 0, right: 1000, top: 0, width: 1000, x: 0, y: 0,
+      toJSON: () => ({}),
+    });
+    renderCanvas();
+    await screen.findByText("Import files");
+
+    const node = screen.getByTestId("rf__node-step_1");
+    node.focus();
+    fireEvent.keyDown(node, { key: "Enter" });
+
+    const name = await screen.findByRole("textbox", { name: "Name" });
+    await waitFor(() => expect(document.activeElement).toBe(name));
+    bounds.mockRestore();
+    node.focus();
+    fireEvent.keyDown(node, { key: " " });
+    await waitFor(() => expect(document.activeElement).toBe(name));
+    node.focus();
+    fireEvent.click(node, { detail: 1 });
+    await waitFor(() => expect(document.activeElement).toBe(node));
+  });
+
   test("insertion replaces one route with two and preserves the source outcome", () => {
     const node = { id: "", clientKey: "new", name: "Middle", key: "middle", step_class: "gate", config: {}, config_errors: {}, join_rule: "ALL_SUCCESS", is_entry: false, position: {} } as never;
     const result = graphWithOperation(node, { kind: "insert", identity: "route" }, {} as never, { route: { id: "edge_1", clientKey: undefined, source: "first", target: "last", condition: "completed" } } as never)!;
@@ -509,7 +547,7 @@ describe("WorkflowCanvas native narrow inspector", () => {
   });
 
   test("connects two steps without a drag gesture and keeps the entry action explicit", async () => {
-    renderCanvas();
+    renderCanvas({ history: true });
     await screen.findByText("Import files");
     fireEvent.click(screen.getByTestId("rf__node-step_1"));
     expect(screen.queryByLabelText("Is entry")).toBeNull();
@@ -536,6 +574,11 @@ describe("WorkflowCanvas native narrow inspector", () => {
       expect.objectContaining({ source: expect.stringMatching(/^node-/), target: "step_1", condition: "completed" }),
     ]);
     expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(Object.values(canvasSurface!.form.getValues("definition.edges") ?? {})).toEqual([]));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Back to canvas" })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("region", { name: "Editor" })));
   });
 
   test("preserves an unavailable outcome and updates choices when the source changes", async () => {

@@ -73,12 +73,36 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
   const graphGeometry = React.useRef<GraphViewGeometry<WorkflowGraphNodeKind>>(null);
   const graphSurface = React.useRef<HTMLDivElement>(null);
   const suppressDefaultInspectorFocus = React.useRef(false);
+  const keyboardFocusSequence = React.useRef(0);
+  const [keyboardFocus, setKeyboardFocus] = React.useState<{
+    kind: "node" | "edge";
+    id: string;
+    sequence: number;
+  } | null>(null);
   const [canvasFocusRequest, requestCanvasFocus] = React.useReducer((request) => request + 1, 0);
   const diagnostics = values.definition?.readiness ?? [];
   const [pendingIssue, setPendingIssue] = React.useState<DefinitionDiagnostic | null>(null);
   const [issuesOpen, setIssuesOpen] = React.useState(false);
   const [palette, setPalette] = React.useState<{ kind: "first" | "after" | "insert"; identity?: string; } | null>(null);
   const [connectOpen, setConnectOpen] = React.useState(false);
+  React.useEffect(() => {
+    if ((selectedStep && !Object.hasOwn(nodes, selectedStep)) || (selectedEdge && !Object.hasOwn(edges, selectedEdge))) {
+      setKeyboardFocus(null);
+      dispatchSelection({ type: "clear" });
+      if (!wide) requestCanvasFocus();
+    }
+  }, [edges, nodes, selectedEdge, selectedStep, wide]);
+  React.useEffect(() => {
+    if (!keyboardFocus) return;
+    if (keyboardFocus.kind === "node" && selectedStep === keyboardFocus.id) {
+      focusField(`definition.nodes.${keyboardFocus.id}.name`);
+    } else if (keyboardFocus.kind === "edge" && selectedEdge === keyboardFocus.id) {
+      focusField(`definition.edges.${keyboardFocus.id}.condition`);
+    } else {
+      return;
+    }
+    setKeyboardFocus((current) => current?.sequence === keyboardFocus.sequence ? null : current);
+  }, [focusField, keyboardFocus, selectedEdge, selectedStep]);
   React.useEffect(() => {
     if (!graphPane.ready || !inspectorPane.ready) return;
     if (wide) {
@@ -248,8 +272,18 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
               nodesDraggable={!readOnly}
               onNodeDragEnd={!readOnly ? handleNodeDragEnd : undefined}
               onConnect={!readOnly ? handleConnect : undefined}
-              onNodeClick={(node) => dispatchSelection({ type: "select-step", id: node.id })}
-              onEdgeClick={(edge) => dispatchSelection({ type: "select-edge", id: edge.id })}
+              onNodeClick={(node, activation) => {
+                if (activation.source === "keyboard") {
+                  setKeyboardFocus({ kind: "node", id: node.id, sequence: ++keyboardFocusSequence.current });
+                }
+                dispatchSelection({ type: "select-step", id: node.id });
+              }}
+              onEdgeClick={(edge, activation) => {
+                if (activation.source === "keyboard") {
+                  setKeyboardFocus({ kind: "edge", id: edge.id, sequence: ++keyboardFocusSequence.current });
+                }
+                dispatchSelection({ type: "select-edge", id: edge.id });
+              }}
               onNodeSelect={(node) => { if (node) dispatchSelection({ type: "select-step", id: node.id }); }}
               onEdgeSelect={(edge) => { if (edge) dispatchSelection({ type: "select-edge", id: edge.id }); }}
             />

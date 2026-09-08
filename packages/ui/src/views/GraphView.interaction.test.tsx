@@ -107,6 +107,35 @@ describe("GraphView interactions", () => {
     });
   });
 
+  test("reports whether native graph activation came from pointer or keyboard", async () => {
+    const onNodeClick = vi.fn();
+    const onNodeSelect = vi.fn();
+    render(
+      <GraphView
+        className="h-[360px] w-[520px]"
+        nodes={[{ id: "draft", kind: "step", title: "Draft" }]}
+        edges={[]}
+        nodeStyles={{ step: { width: 160, height: 72, borderColor: "var(--border-subtle)" } }}
+        onNodeClick={onNodeClick}
+        onNodeSelect={onNodeSelect}
+      />,
+    );
+    const node = await screen.findByTestId("rf__node-draft");
+
+    fireEvent.click(node, { detail: 1 });
+    await waitFor(() => expect(onNodeSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "draft" })));
+    fireEvent.keyDown(node, { key: "Enter" });
+    await waitFor(() => expect(onNodeClick).toHaveBeenCalledTimes(2));
+    fireEvent.keyDown(node, { key: " " });
+    await waitFor(() => expect(onNodeClick).toHaveBeenCalledTimes(3));
+    fireEvent.keyDown(screen.getByTitle("Fit View"), { key: "Enter" });
+    expect(onNodeClick).toHaveBeenCalledTimes(3);
+
+    expect(onNodeClick).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: "draft" }), { source: "pointer" });
+    expect(onNodeClick).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: "draft" }), { source: "keyboard" });
+    expect(onNodeClick).toHaveBeenNthCalledWith(3, expect.objectContaining({ id: "draft" }), { source: "keyboard" });
+  });
+
   test("survives a consumer that sets state from selection with inline layout", async () => {
     // Regression: the nexus graph page passes `layout` as an inline literal and
     // stores every selection emission as fresh state. Re-emitting an unchanged

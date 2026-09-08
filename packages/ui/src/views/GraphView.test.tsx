@@ -30,6 +30,7 @@ vi.mock("@xyflow/react", async () => {
       const intersects = (node: typeof nodes[number], rect: { x: number; y: number; width: number; height: number }) => node.position.x < rect.x + rect.width && node.position.x + node.style.width > rect.x && node.position.y < rect.y + rect.height && node.position.y + node.style.minHeight > rect.y;
       (props.onInit as ((instance: object) => void) | undefined)?.({
         getNode: (id: string) => nodes.find((node) => node.id === id),
+        getEdge: (id: string) => (props.edges as Array<{ id: string }>).find((edge) => edge.id === id),
         getNodes: () => nodes,
         getNodesBounds: (selected: Array<string | typeof nodes[number]>) => bounds(selected.map((item) => typeof item === "string" ? nodes.find((node) => node.id === item)! : item)),
         getIntersectingNodes: (rect: { x: number; y: number; width: number; height: number }) => nodes.filter((node) => intersects(node, rect)),
@@ -275,6 +276,13 @@ describe("GraphView", () => {
       undefined,
       flowEdges[0]!,
     );
-    expect(onEdgeClick).toHaveBeenCalledWith(edges[0]);
+    expect(onEdgeClick).toHaveBeenCalledWith(edges[0], { source: "pointer" });
+
+    const edgeTarget = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    edgeTarget.setAttribute("data-graph-edge-id", "draft-review");
+    const preventDefault = vi.fn();
+    (props.onKeyDown as (event: unknown) => void)({ key: "Enter", target: edgeTarget, preventDefault });
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(onEdgeClick).toHaveBeenLastCalledWith(edges[0], { source: "keyboard" });
   });
 });

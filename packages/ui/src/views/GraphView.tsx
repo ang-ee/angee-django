@@ -124,8 +124,8 @@ export interface GraphViewProps<
   /** Accessible name for the focusable graph surface. */
   ariaLabel?: string;
   className?: string;
-  onNodeClick?: (node: GraphViewNode<TNodeKind, TNodeMeta>) => void;
-  onEdgeClick?: (edge: GraphViewEdge<TEdgeKind, TEdgeMeta>) => void;
+  onNodeClick?: (node: GraphViewNode<TNodeKind, TNodeMeta>, activation: GraphViewActivation) => void;
+  onEdgeClick?: (edge: GraphViewEdge<TEdgeKind, TEdgeMeta>, activation: GraphViewActivation) => void;
   nodesDraggable?: boolean;
   onNodeDragEnd?: (
     node: GraphViewNode<TNodeKind, TNodeMeta>,
@@ -136,6 +136,11 @@ export interface GraphViewProps<
   /** Full current selection for graph actions that require more than one node. */
   onNodesSelect?: (nodes: readonly GraphViewNode<TNodeKind, TNodeMeta>[]) => void;
   onEdgeSelect?: (edge: GraphViewEdge<TEdgeKind, TEdgeMeta> | null) => void;
+}
+
+export interface GraphViewActivation {
+  /** Keyboard includes native zero-detail assistive activation; it does not assert hardware provenance. */
+  source: "keyboard" | "pointer";
 }
 
 interface GraphViewNodeData<
@@ -304,6 +309,25 @@ export function GraphView<
         onInit={(instance) => { instanceRef.current = instance; }}
         nodes={renderNodes}
         edges={renderEdges}
+        onKeyDown={(event) => {
+          if (!isGraphActivationKey(event.key)) return;
+          if (!(event.target instanceof Element)) return;
+          const nodeId = event.target.getAttribute("data-graph-node-id");
+          const edgeId = event.target.getAttribute("data-graph-edge-id");
+          if (nodeId) {
+            const node = instanceRef.current?.getNode(nodeId);
+            if (node) {
+              event.preventDefault();
+              onNodeClick?.(node.data.node, { source: "keyboard" });
+            }
+          } else if (edgeId) {
+            const edge = instanceRef.current?.getEdge(edgeId);
+            if (edge?.data?.edge) {
+              event.preventDefault();
+              onEdgeClick?.(edge.data.edge, { source: "keyboard" });
+            }
+          }
+        }}
         onNodesChange={(changes) => {
           setRenderNodes((current) => applyNodeChanges(changes, current));
         }}
@@ -317,13 +341,13 @@ export function GraphView<
         elementsSelectable={Boolean(onNodeSelect || onNodesSelect || onEdgeSelect)}
         onNodeClick={
           onNodeClick
-            ? (_, node) => onNodeClick(node.data.node)
+            ? (event, node) => onNodeClick(node.data.node, graphActivation(event))
             : undefined
         }
         onEdgeClick={
           onEdgeClick
-            ? (_, edge) => {
-                if (edge.data?.edge) onEdgeClick(edge.data.edge);
+            ? (event, edge) => {
+                if (edge.data?.edge) onEdgeClick(edge.data.edge, graphActivation(event));
               }
             : undefined
         }
@@ -372,6 +396,14 @@ export function GraphView<
   );
 }
 
+function graphActivation(event?: React.MouseEvent): GraphViewActivation {
+  return { source: event?.detail === 0 ? "keyboard" : "pointer" };
+}
+
+function isGraphActivationKey(key: string): boolean {
+  return key === "Enter" || key === " ";
+}
+
 function toReactFlowNode<
   TKind extends string,
   TMeta extends Record<string, unknown>,
@@ -383,6 +415,7 @@ function toReactFlowNode<
   const emphasized = node.selected || node.highlighted;
   return {
     id: node.id,
+    domAttributes: { "data-graph-node-id": node.id } as RenderNode<TKind, TMeta>["domAttributes"],
     selected: node.selected,
     ariaLabel: node.ariaLabel,
     type: style.type ?? "default",
@@ -424,6 +457,7 @@ function toReactFlowEdge<
   };
   return {
     id: edge.id,
+    domAttributes: { "data-graph-edge-id": edge.id } as RenderEdge<TKind, TMeta>["domAttributes"],
     selected: edge.selected,
     ariaLabel: edge.ariaLabel,
     source: edge.source,
