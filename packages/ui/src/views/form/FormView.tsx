@@ -20,6 +20,8 @@ import {
   FORM_VIEW_OVERVIEW_TAB_ID,
   useFormViewSurface,
   type RecordPanelContext,
+  type OverviewTabOptions,
+  type RecordPresentation,
   type RecordToolbarContext,
   type UseFormViewSurfaceProps,
 } from "./form-view-surface";
@@ -43,6 +45,8 @@ export type FormField = FieldDescriptor;
 export type {
   FormSubmit,
   FormSubmitContext,
+  OverviewTabOptions,
+  RecordPresentation,
   RecordPanelContext,
   RecordTabDescriptor,
   RecordToolbarContext,
@@ -58,6 +62,12 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   recordExtras?: (context: RecordPanelContext) => React.ReactNode;
   /** Group presentation; ungrouped/title/body/status placement is unchanged. */
   layout?: "stacked" | "tabs";
+  /** Record chrome density and height behavior. */
+  recordPresentation?: RecordPresentation;
+  /** Initial saved-record tab; invalid or unavailable ids fall back to Overview. */
+  defaultRecordTab?: string;
+  /** Label and bounded placement of the built-in form tab. */
+  overviewTab?: OverviewTabOptions;
   className?: string;
 }
 
@@ -92,6 +102,9 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     toolbar,
     recordExtras,
     layout = "stacked",
+    recordPresentation = "document",
+    defaultRecordTab,
+    overviewTab,
     className,
   } = props;
   const surface = useFormViewSurface({
@@ -107,6 +120,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     submit,
     createSubmit,
     recordTabs,
+    defaultRecordTab,
     deleteAction,
     deleteVisibleWhen,
   });
@@ -139,6 +153,10 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
       ? toolbarStart(recordToolbarContext)
       : toolbarStart;
   const overview = <FormViewOverview surface={surface} layout={layout} />;
+  const overviewLabel = overviewTab?.label ?? t("form.tabOverview");
+  const orderedTabs = overviewTab?.position === "last"
+    ? [...recordTabList, { id: FORM_VIEW_OVERVIEW_TAB_ID, label: overviewLabel }]
+    : [{ id: FORM_VIEW_OVERVIEW_TAB_ID, label: overviewLabel }, ...recordTabList];
   const overviewBody = recordChromeContext ? (
     <RecordChromeProvider value={recordChromeContext}>
       {overview}
@@ -151,82 +169,87 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
       </div>
     ) : null;
 
+  const handleFormKeyDown = (event: React.KeyboardEvent<HTMLFormElement>) => {
+    if (
+      !isCreate ||
+      event.key !== "Enter" ||
+      event.defaultPrevented ||
+      event.nativeEvent.isComposing ||
+      !(event.target instanceof HTMLInputElement) ||
+      event.target.type !== "text"
+    ) {
+      return;
+    }
+    event.preventDefault();
+    void submitForm();
+  };
+  const controlBand = (
+    <ControlBand className={formIsDirty ? "bg-brand-soft" : undefined}>
+      <div className="flex min-w-0 items-center gap-2">
+        {toolbarStartNode}
+        {isCreate || formIsDirty ? (
+          <div className="flex items-center gap-2">
+            {formIsDirty ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={pending}
+                onClick={discardChanges}
+              >
+                {t("form.discard")}
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              loading={pending}
+              disabled={formReadOnly}
+              onClick={() => {
+                void submitForm();
+              }}
+            >
+              {submitLabel ?? (isCreate ? t("form.create") : t("form.save"))}
+            </Button>
+          </div>
+        ) : null}
+        {declaredActions.length > 0 || visibleDeleteAction !== undefined ? (
+          <RecordActionBar
+            record={displayRecord ?? null}
+            actions={declaredActions}
+            applyPatch={applyPatch}
+            reload={reload}
+            deleteAction={visibleDeleteAction}
+          />
+        ) : null}
+        {recordChromeContext ? (
+          <RecordChromeProvider value={recordChromeContext}>
+            <SlotOutlet entries={recordActions} />
+          </RecordChromeProvider>
+        ) : null}
+      </div>
+      <div className="min-w-2 flex-1" />
+      <div className="flex min-w-0 items-center gap-2">
+        {recordChromeContext ? (
+          <RecordChromeProvider value={recordChromeContext}>
+            <SlotOutlet entries={recordChrome} />
+          </RecordChromeProvider>
+        ) : null}
+        {toolbar}
+      </div>
+    </ControlBand>
+  );
+
   const formElement = (
     <form
       className={cn("min-h-full bg-sheet", className)}
-      onKeyDown={(event) => {
-        if (
-          !isCreate ||
-          event.key !== "Enter" ||
-          event.defaultPrevented ||
-          event.nativeEvent.isComposing ||
-          !(event.target instanceof HTMLInputElement) ||
-          event.target.type !== "text"
-        ) {
-          return;
-        }
-        event.preventDefault();
-        void submitForm();
-      }}
+      onKeyDown={handleFormKeyDown}
       onSubmit={(event) => {
         void submitForm(event);
       }}
     >
-      <ControlBand className={formIsDirty ? "bg-brand-soft" : undefined}>
-        <div className="flex min-w-0 items-center gap-2">
-          {toolbarStartNode}
-          {isCreate || formIsDirty ? (
-            <div className="flex items-center gap-2">
-              {formIsDirty ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={pending}
-                  onClick={discardChanges}
-                >
-                  {t("form.discard")}
-                </Button>
-              ) : null}
-              <Button
-                type="button"
-                variant="primary"
-                size="sm"
-                loading={pending}
-                disabled={formReadOnly}
-                onClick={() => {
-                  void submitForm();
-                }}
-              >
-                {submitLabel ?? (isCreate ? t("form.create") : t("form.save"))}
-              </Button>
-            </div>
-          ) : null}
-          {declaredActions.length > 0 || visibleDeleteAction !== undefined ? (
-            <RecordActionBar
-              record={displayRecord ?? null}
-              actions={declaredActions}
-              applyPatch={applyPatch}
-              reload={reload}
-              deleteAction={visibleDeleteAction}
-            />
-          ) : null}
-          {recordChromeContext ? (
-            <RecordChromeProvider value={recordChromeContext}>
-              <SlotOutlet entries={recordActions} />
-            </RecordChromeProvider>
-          ) : null}
-        </div>
-        <div className="min-w-2 flex-1" />
-        <div className="flex min-w-0 items-center gap-2">
-          {recordChromeContext ? (
-            <RecordChromeProvider value={recordChromeContext}>
-              <SlotOutlet entries={recordChrome} />
-            </RecordChromeProvider>
-          ) : null}
-          {toolbar}
-        </div>
-      </ControlBand>
+      {controlBand}
       <div
         className={cn(
           FORM_VIEW_COLUMN_CLASS,
@@ -241,13 +264,14 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
         {tabbed ? (
           <>
             <Tabs.List>
-              <Tabs.Tab value={FORM_VIEW_OVERVIEW_TAB_ID}>
-                {t("form.tabOverview")}
-              </Tabs.Tab>
-              {recordTabList.map((tab) => (
-                <Tabs.Tab key={tab.id} value={tab.id} icon={renderGlyph(tab.icon)}>
+              {orderedTabs.map((tab) => (
+                <Tabs.Tab
+                  key={tab.id}
+                  value={tab.id}
+                  icon={"icon" in tab ? renderGlyph(tab.icon) : undefined}
+                >
                   {tab.label}
-                  {tab.badge != null ? (
+                  {"badge" in tab && tab.badge != null ? (
                     <Tabs.Count>{tab.badge}</Tabs.Count>
                   ) : null}
                 </Tabs.Tab>
@@ -267,6 +291,64 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
       </div>
     </form>
   );
+
+  if (recordPresentation === "workspace" && tabbed) {
+    return (
+      <Tabs
+        value={activeRecordTab}
+        onValueChange={setActiveRecordTab}
+        variant="card"
+        className={cn("flex h-full min-h-0 flex-col bg-sheet", className)}
+      >
+        <form
+          className="contents"
+          onKeyDown={handleFormKeyDown}
+          onSubmit={(event) => {
+            void submitForm(event);
+          }}
+        >
+          {controlBand}
+          <div className="flex-none border-b border-border-subtle px-4 pt-3">
+            <FormViewRecordHeader surface={surface} compact />
+            <ErrorBanner description={saveError} title={t("form.saveFailed")} />
+            <Tabs.List className="mt-2">
+              {orderedTabs.map((tab) => (
+                <Tabs.Tab
+                  key={tab.id}
+                  value={tab.id}
+                  icon={"icon" in tab ? renderGlyph(tab.icon) : undefined}
+                >
+                  {tab.label}
+                  {"badge" in tab && tab.badge != null ? <Tabs.Count>{tab.badge}</Tabs.Count> : null}
+                </Tabs.Tab>
+              ))}
+            </Tabs.List>
+          </div>
+          <Tabs.Panel
+            value={FORM_VIEW_OVERVIEW_TAB_ID}
+            className="min-h-0 flex-1 overflow-auto pt-0"
+          >
+            <div className={cn(FORM_VIEW_COLUMN_CLASS, "grid gap-6 py-6")}>{overviewBody}</div>
+          </Tabs.Panel>
+        </form>
+        {recordTabList.map((tab) => (
+          <Tabs.Panel
+            key={tab.id}
+            value={tab.id}
+            keepMounted={tab.keepMounted}
+            className="min-h-0 flex-1 overflow-hidden pt-0"
+          >
+            <ControlBandProvider host={undefined}>
+              {recordPanelContext ? (recordChromeContext ? <RecordChromeProvider value={recordChromeContext}>{tab.render(recordPanelContext)}</RecordChromeProvider> : tab.render(recordPanelContext)) : null}
+            </ControlBandProvider>
+          </Tabs.Panel>
+        ))}
+        {activeRecordTab === FORM_VIEW_OVERVIEW_TAB_ID
+          ? recordExtrasPanel
+          : null}
+      </Tabs>
+    );
+  }
 
   if (!tabbed) {
     return (

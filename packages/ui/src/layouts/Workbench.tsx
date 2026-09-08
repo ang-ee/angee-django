@@ -96,7 +96,7 @@ export function Workbench({
       <div
         className={cn(
           browserScroll
-            ? "min-h-0 min-w-0 overflow-visible"
+            ? "h-full min-h-0 min-w-0 overflow-visible"
             : "h-full min-h-0 min-w-0",
           className,
         )}
@@ -121,7 +121,8 @@ export function Workbench({
       autoSave={autoSave}
       panelIds={panelIds}
       className={cn(
-        browserScroll ? "h-auto min-h-0 overflow-visible" : "h-full min-h-0",
+        "h-full min-h-0",
+        browserScroll && "overflow-visible",
         className,
       )}
     >

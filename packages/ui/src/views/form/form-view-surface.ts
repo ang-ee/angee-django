@@ -60,6 +60,13 @@ export type { FormSubmit, FormSubmitContext } from "./use-form-view-save";
 /** Value of the form body's leading tab, shown when record tabs are declared. */
 export const FORM_VIEW_OVERVIEW_TAB_ID = "overview";
 
+export type RecordPresentation = "document" | "workspace";
+
+export interface OverviewTabOptions {
+  label?: React.ReactNode;
+  position?: "first" | "last";
+}
+
 export interface RecordPanelContext {
   recordId: string;
   reload: () => void;
@@ -101,6 +108,7 @@ export interface UseFormViewSurfaceProps {
   submit?: FormSubmit;
   createSubmit?: FormSubmit;
   recordTabs?: readonly RecordTabDescriptor[];
+  defaultRecordTab?: string;
   deleteAction?: RecordDeleteAction;
   deleteVisibleWhen?: (record: Row) => boolean;
 }
@@ -148,13 +156,12 @@ export function useFormViewSurface({
   submit,
   createSubmit,
   recordTabs,
+  defaultRecordTab = FORM_VIEW_OVERVIEW_TAB_ID,
   deleteAction,
   deleteVisibleWhen,
 }: UseFormViewSurfaceProps): FormViewSurface {
   const t = useUiT();
-  const [activeRecordTab, setActiveRecordTab] = React.useState(
-    FORM_VIEW_OVERVIEW_TAB_ID,
-  );
+  const [requestedRecordTab, setActiveRecordTab] = React.useState(defaultRecordTab);
   const hasFieldChildren = hasPageField(children);
   const hasGroupChildren = hasDirectPageElement(children, "group");
   if (
@@ -331,7 +338,7 @@ export function useFormViewSurface({
     [formFields],
   );
   const hasConditionalFields = React.useMemo(
-    () => formFields.some((field) => field.showWhen),
+    () => formFields.some((field) => field.showWhen || field.resolve),
     [formFields],
   );
   const relationByField = React.useMemo(() => {
@@ -402,8 +409,8 @@ export function useFormViewSurface({
   });
 
   React.useEffect(() => {
-    setActiveRecordTab(FORM_VIEW_OVERVIEW_TAB_ID);
-  }, [resource, id]);
+    setActiveRecordTab(defaultRecordTab);
+  }, [defaultRecordTab, resource, id]);
   const fieldLayout = React.useMemo(
     () =>
       formViewFieldLayout(
@@ -486,6 +493,9 @@ export function useFormViewSurface({
     () => mergeRecordTabs(recordTabs ?? EMPTY_RECORD_TABS, slotRecordTabs),
     [recordTabs, slotRecordTabs],
   );
+  const activeRecordTab = recordTabList.some((tab) => tab.id === requestedRecordTab)
+    ? requestedRecordTab
+    : FORM_VIEW_OVERVIEW_TAB_ID;
 
   return {
     ...save,

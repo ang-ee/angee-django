@@ -145,6 +145,28 @@ describe("page element markers", () => {
     ]);
   });
 
+  test("preserves the complete Field descriptor contract", () => {
+    const resolve = (row: Record<string, unknown>) => ({
+      name: "title",
+      readOnly: row.status === "PUBLISHED",
+    });
+    const [field] = parsePageFields(
+      <Field
+        name="title"
+        required
+        defaultValue="Draft title"
+        resolve={resolve}
+      />,
+    );
+
+    expect(field).toMatchObject({
+      name: "title",
+      required: true,
+      defaultValue: "Draft title",
+    });
+    expect(field?.resolve).toBe(resolve);
+  });
+
   test("identify nested fields and direct group/action declarations", () => {
     const declaration = (
       <>

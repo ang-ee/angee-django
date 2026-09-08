@@ -2466,6 +2466,214 @@ describe("FormView", () => {
     });
   });
 
+  test("workspace records open the validated default panel with Settings last", async () => {
+    renderWithProviders(
+      <FormView
+        resource="notes.Note"
+        id="note-1"
+        fields={fields}
+        recordPresentation="workspace"
+        defaultRecordTab="editor"
+        overviewTab={{ label: "Settings", position: "last" }}
+        recordExtras={() => <p>Related records</p>}
+        recordTabs={[
+          { id: "editor", label: "Editor", keepMounted: true, render: () => <button type="button">Editor action</button> },
+          { id: "runs", label: "Runs", render: () => <p>Runs panel</p> },
+        ]}
+      />,
+    );
+
+    const tabs = await screen.findAllByRole("tab");
+    expect(tabs.map((tab) => tab.textContent)).toEqual(["Editor", "Runs", "Settings"]);
+    expect(screen.getByRole("button", { name: "Editor action" })).toBeTruthy();
+    expect(screen.getByText("Active")).toBeTruthy();
+    expect(screen.queryByText("ACTIVE")).toBeNull();
+    expect(screen.queryByLabelText("Reminder")).toBeNull();
+    expect(screen.queryByText("Related records")).toBeNull();
+    expect(document.querySelector("form")?.className).toContain("contents");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(await screen.findByLabelText("Reminder")).toBeTruthy();
+    expect(screen.getByText("Related records")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Editor action" })).toBeNull();
+  });
+
+  test("document records honor overview tab placement without changing presentation", async () => {
+    renderWithProviders(
+      <FormView
+        resource="notes.Note"
+        id="note-1"
+        fields={fields}
+        defaultRecordTab="activity"
+        overviewTab={{ label: "Settings", position: "last" }}
+        recordTabs={[
+          { id: "activity", label: "Activity", render: () => <p>Activity panel</p> },
+        ]}
+      />,
+    );
+
+    expect((await screen.findAllByRole("tab")).map((tab) => tab.textContent)).toEqual([
+      "Activity",
+      "Settings",
+    ]);
+    expect(screen.getByText("Activity panel")).toBeTruthy();
+    expect(document.querySelector("form")?.className).toContain("min-h-full");
+  });
+
+  test("workspace tab switches preserve dirty settings and reset to the default for a new record", async () => {
+    function Harness(): ReactElement {
+      const [id, setId] = useState("note-1");
+      return <>
+        <button type="button" onClick={() => setId("note-2")}>Next note</button>
+        <FormView resource="notes.Note" id={id} fields={fields}
+          recordPresentation="workspace" defaultRecordTab="editor"
+          overviewTab={{ label: "Settings", position: "last" }}
+          recordTabs={[{ id: "editor", label: "Editor", render: () => <p>Editor panel</p> }]} />
+      </>;
+    }
+    renderWithProviders(<Harness />);
+
+    expect(await screen.findByText("Editor panel")).toBeTruthy();
+    const title = await screen.findByLabelText("Title");
+    fireEvent.change(title, { target: { value: "Dirty title" } });
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(await screen.findByLabelText("Reminder")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Editor" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Dirty title");
+
+    sdkMocks.record = { ...sdkMocks.record, id: "note-2", title: "Second" };
+    fireEvent.click(screen.getByRole("button", { name: "Next note" }));
+    expect(await screen.findByText("Editor panel")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Editor" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  test("workspace falls back to the form for invalid defaults and create", async () => {
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1" fields={fields}
+        recordPresentation="workspace" defaultRecordTab="removed"
+        overviewTab={{ label: "Settings", position: "last" }}
+        recordTabs={[{ id: "editor", label: "Editor", render: () => <p>Editor panel</p> }]} />,
+    );
+    expect(await screen.findByLabelText("Title")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Settings" }).getAttribute("aria-selected")).toBe("true");
+
+    cleanup();
+    sdkMocks.record = null;
+    renderWithProviders(
+      <FormView resource="notes.Note" id={null} fields={fields}
+        recordPresentation="workspace" defaultRecordTab="editor"
+        overviewTab={{ label: "Settings", position: "last" }}
+        recordTabs={[{ id: "editor", label: "Editor", render: () => <p>Editor panel</p> }]} />,
+    );
+    expect(await screen.findByLabelText("Title")).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Editor" })).toBeNull();
+  });
+
+  test("resolves record-dependent read-only fields in the header, body, and groups", async () => {
+    const resolvedFields = [
+      {
+        name: "title",
+        label: "Title",
+        title: true,
+        resolve: (record: Row) => ({
+          name: "title",
+          title: true,
+          readOnly: record.status === "PUBLISHED",
+        }),
+      },
+      {
+        name: "description",
+        label: "Description",
+        body: true,
+        kind: "textarea",
+        resolve: (record: Row) => ({
+          name: "description",
+          readOnly: record.status === "PUBLISHED",
+        }),
+      },
+      { name: "status", label: "Status", defaultValue: "DRAFT" },
+      {
+        name: "wordCount",
+        label: "Word Count",
+        resolve: (record: Row) => ({
+          name: "wordCount",
+          readOnly: record.status === "PUBLISHED",
+        }),
+      },
+    ] satisfies readonly FormField[];
+
+    sdkMocks.record = {
+      id: "note-1",
+      title: "Published note",
+      description: "Frozen body",
+      status: "PUBLISHED",
+      wordCount: 3,
+    };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1" fields={resolvedFields} />,
+    );
+    expect(await screen.findByRole("heading", { name: "Published note" })).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Description" })).toBeNull();
+    expect(screen.queryByRole("spinbutton", { name: "Word Count" })).toBeNull();
+
+    cleanup();
+    sdkMocks.record = {
+      id: "note-2",
+      title: "Draft note",
+      description: "Editable body",
+      status: "DRAFT",
+      wordCount: 2,
+    };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-2" fields={resolvedFields} />,
+    );
+    expect(await screen.findByRole("textbox", { name: "Title" })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Description" })).toBeTruthy();
+
+    cleanup();
+    sdkMocks.record = null;
+    renderWithProviders(
+      <FormView resource="notes.Note" id={null} fields={resolvedFields} />,
+    );
+    expect(await screen.findByRole("textbox", { name: "Title" })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Description" })).toBeTruthy();
+  });
+
+  test("honors resolve from JSX Field declarations", async () => {
+    sdkMocks.record = {
+      id: "note-1",
+      title: "Published JSX note",
+      status: "PUBLISHED",
+      wordCount: 3,
+    };
+    const readOnlyWhenPublished = (record: Row) => ({
+      name: "wordCount",
+      readOnly: record.status === "PUBLISHED",
+    });
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field
+          name="title"
+          title
+          resolve={(record) => ({
+            name: "title",
+            title: true,
+            readOnly: record.status === "PUBLISHED",
+          })}
+        />
+        <Field name="status" />
+        <Field name="wordCount" resolve={readOnlyWhenPublished} />
+      </FormView>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Published JSX note" })).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
+    expect(screen.queryByRole("spinbutton", { name: "Word Count" })).toBeNull();
+  });
+
   test("mounts keepMounted record panels eagerly from the first render", async () => {
     const mountPanel = vi.fn();
     function ActivityPanel(): ReactElement {

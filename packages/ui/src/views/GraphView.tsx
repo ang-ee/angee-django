@@ -102,6 +102,7 @@ export interface GraphViewProps<
   fitViewOptions?: FitViewOptions;
   className?: string;
   onNodeClick?: (node: GraphViewNode<TNodeKind, TNodeMeta>) => void;
+  onEdgeClick?: (edge: GraphViewEdge<TEdgeKind, TEdgeMeta>) => void;
   nodesDraggable?: boolean;
   onNodeDragEnd?: (
     node: GraphViewNode<TNodeKind, TNodeMeta>,
@@ -171,6 +172,7 @@ export function GraphView<
   fitViewOptions = DEFAULT_FIT_VIEW_OPTIONS,
   className,
   onNodeClick,
+  onEdgeClick,
   nodesDraggable = false,
   onNodeDragEnd,
   onConnect,
@@ -240,6 +242,13 @@ export function GraphView<
         onNodeClick={
           onNodeClick
             ? (_, node) => onNodeClick(node.data.node)
+            : undefined
+        }
+        onEdgeClick={
+          onEdgeClick
+            ? (_, edge) => {
+                if (edge.data?.edge) onEdgeClick(edge.data.edge);
+              }
             : undefined
         }
         onNodeDragStop={

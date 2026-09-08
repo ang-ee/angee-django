@@ -192,33 +192,7 @@ function facetDescriptor(props: FacetProps): FacetDescriptor {
 }
 
 function fieldDescriptor(props: FieldProps): FieldDescriptor {
-  return cachedDescriptor(fieldDescriptorCache, props, () => ({
-    name: props.name,
-    ...(props.label !== undefined ? { label: props.label } : {}),
-    ...(props.widget !== undefined ? { widget: props.widget } : {}),
-    ...(props.readOnly !== undefined ? { readOnly: props.readOnly } : {}),
-    ...(props.createOnly !== undefined ? { createOnly: props.createOnly } : {}),
-    ...(props.editOnly !== undefined ? { editOnly: props.editOnly } : {}),
-    ...(props.showWhen !== undefined ? { showWhen: props.showWhen } : {}),
-    ...(props.prefill !== undefined ? { prefill: props.prefill } : {}),
-    ...(props.prefillPreserveDirty !== undefined
-      ? { prefillPreserveDirty: props.prefillPreserveDirty }
-      : {}),
-    ...(props.prefillReplace !== undefined
-      ? { prefillReplace: props.prefillReplace }
-      : {}),
-    ...(props.slugFrom !== undefined ? { slugFrom: props.slugFrom } : {}),
-    ...(props.title !== undefined ? { title: props.title } : {}),
-    ...(props.body !== undefined ? { body: props.body } : {}),
-    ...(props.kind !== undefined ? { kind: props.kind } : {}),
-    ...(props.options !== undefined ? { options: props.options } : {}),
-    ...(props.placeholder !== undefined
-      ? { placeholder: props.placeholder }
-      : {}),
-    ...(props.description !== undefined
-      ? { description: props.description }
-      : {}),
-  }));
+  return cachedDescriptor(fieldDescriptorCache, props, () => props);
 }
 
 function actionDescriptor(props: ActionProps): ActionDescriptor {

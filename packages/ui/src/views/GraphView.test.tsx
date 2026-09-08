@@ -151,6 +151,7 @@ describe("GraphView", () => {
     const onConnect = vi.fn();
     const onNodeSelect = vi.fn();
     const onEdgeSelect = vi.fn();
+    const onEdgeClick = vi.fn();
 
     render(
       <GraphView
@@ -162,6 +163,7 @@ describe("GraphView", () => {
         onConnect={onConnect}
         onNodeSelect={onNodeSelect}
         onEdgeSelect={onEdgeSelect}
+        onEdgeClick={onEdgeClick}
       />,
     );
 
@@ -218,5 +220,11 @@ describe("GraphView", () => {
     )({ nodes: [], edges: [flowEdges[0]!] });
     expect(onNodeSelect).toHaveBeenLastCalledWith(null);
     expect(onEdgeSelect).toHaveBeenLastCalledWith(edges[0]);
+
+    (props.onEdgeClick as (event: unknown, edge: (typeof flowEdges)[number]) => void)(
+      undefined,
+      flowEdges[0]!,
+    );
+    expect(onEdgeClick).toHaveBeenCalledWith(edges[0]);
   });
 });

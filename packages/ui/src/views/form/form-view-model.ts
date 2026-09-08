@@ -364,8 +364,9 @@ export function mutationData(
   return data;
 }
 
-function resolveField(field: FieldDescriptor, values: FormValues): FieldDescriptor {
-  return field.resolve?.(values) ?? field;
+export function resolveField(field: FieldDescriptor, values: FormValues): FieldDescriptor {
+  const resolved = field.resolve?.(values);
+  return resolved ? { ...field, ...resolved } : field;
 }
 
 function isWritableDottedField(writable: ReadonlySet<string>, path: string): boolean {

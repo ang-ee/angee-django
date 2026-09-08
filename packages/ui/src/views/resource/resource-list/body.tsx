@@ -52,6 +52,9 @@ export function ResourceListBody<TRow extends Row = Row>({
   createDefaults,
   recordExtras,
   recordTabs,
+  recordPresentation,
+  defaultRecordTab,
+  overviewTab,
   toolbarActions,
   cardActions,
   draggableRow,
@@ -263,6 +266,9 @@ export function ResourceListBody<TRow extends Row = Row>({
       }
       recordExtras={resolvedCreating ? undefined : recordExtras}
       recordTabs={resolvedCreating ? undefined : recordTabs}
+      recordPresentation={recordPresentation}
+      defaultRecordTab={defaultRecordTab}
+      overviewTab={overviewTab}
       onSaved={handleSaved}
       toolbarStart={formRenderProps.toolbarStart}
       toolbar={composeNodes(formRenderProps.toolbar, recordHeaderActions)}
@@ -293,7 +299,7 @@ export function ResourceListBody<TRow extends Row = Row>({
   }
 
   return (
-    <div className={cn("min-h-full min-w-0", className)}>
+    <div className={cn("h-full min-h-0 min-w-0", className)}>
       <ControlBandProvider inherit={!open} host={undefined}>
         <div hidden={open} aria-hidden={open || undefined}>
           {!open || retainLocalList ? list : null}
@@ -301,7 +307,7 @@ export function ResourceListBody<TRow extends Row = Row>({
       </ControlBandProvider>
       {open ? (
         <>
-          <div className="overflow-hidden rounded-6 border border-border bg-sheet">
+          <div className="h-full min-h-0 overflow-hidden rounded-6 border border-border bg-sheet">
             {recordForm}
           </div>
           {recordDeleteDialog}

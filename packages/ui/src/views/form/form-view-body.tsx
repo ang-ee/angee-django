@@ -4,6 +4,7 @@ import { Controller, useWatch, type Control } from "react-hook-form";
 // Render-only bindings for the headless FormView surface.
 
 import { Input } from "../../ui/input";
+import { Badge } from "../../ui/badge";
 import {
   FieldDescription,
   FieldLabel,
@@ -16,7 +17,8 @@ import { Tabs } from "../../ui/tabs";
 import { renderGlyph } from "../../chrome/Glyph";
 import { textRoleVariants } from "../../ui/text";
 import { cn } from "../../lib/cn";
-import { relationValueId } from "../../widgets/types";
+import { optionLabel, relationValueId } from "../../widgets/types";
+import { statusTone } from "../../widgets/status-tones";
 import type { RelationOption } from "../../widgets/RelationField";
 import { EditableLines } from "./EditableLines";
 import { FieldDescriptorControl } from "./field-descriptor-control";
@@ -29,6 +31,7 @@ import {
   fieldErrorMessages,
   gridFieldClass,
   recordRepresentationValue,
+  resolveField,
   titleText,
   visibleSections,
   type FormSectionModel,
@@ -66,8 +69,10 @@ export const FORM_VIEW_COLUMN_CLASS =
 
 export function FormViewRecordHeader({
   surface,
+  compact = false,
 }: {
   surface: FormViewSurface;
+  compact?: boolean;
 }): React.ReactElement {
   const {
     t,
@@ -84,26 +89,36 @@ export function FormViewRecordHeader({
     clearServerFieldError,
     afterFieldChange,
   } = surface;
-  const titleRelation = titleField
-    ? relationByField.get(titleField.name)
+  const headerValues = useWatch({
+    control: form.control,
+    disabled: !titleField?.resolve && !statusField?.resolve,
+  }) as FormValues;
+  const currentTitleField = titleField
+    ? resolveField(titleField, headerValues)
     : undefined;
-  const titleSelectedOption = titleField && titleRelation
+  const currentStatusField = statusField
+    ? resolveField(statusField, headerValues)
+    : undefined;
+  const titleRelation = currentTitleField
+    ? relationByField.get(currentTitleField.name)
+    : undefined;
+  const titleSelectedOption = currentTitleField && titleRelation
     ? relationSelectedOption(
-        displayRecord?.[titleField.name],
+        displayRecord?.[currentTitleField.name],
         titleRelation.labelField,
       )
     : undefined;
   return (
-    <header className="grid gap-4">
+    <header className={cn("grid", compact ? "gap-1" : "gap-4")}>
       <div className="flex items-start gap-4 max-[900px]:flex-col max-[900px]:items-stretch">
         <div className="min-w-0 flex-1 self-start">
-          {titleField ? (
+          {currentTitleField ? (
             <Controller
               control={form.control}
-              name={titleField.name}
+              name={currentTitleField.name}
               render={({ field: controller }) =>
-                fieldReadOnly(titleField) ? (
-                  <h1 className={TITLE_TEXT_CLASS}>
+                fieldReadOnly(currentTitleField) ? (
+                  <h1 className={compact ? "truncate text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>
                     {titleText(
                       titleRelation
                         ? titleSelectedOption?.label ?? relationValueId(controller.value)
@@ -112,30 +127,32 @@ export function FormViewRecordHeader({
                     )}
                   </h1>
                 ) : titleRelation ? (
-                  <div className={TITLE_TEXT_CLASS}>
+                  <div className={compact ? "min-w-0 text-base font-semibold" : TITLE_TEXT_CLASS}>
                     <RelationFieldWidget
                       value={relationValueId(controller.value) || null}
                       onChange={(next) => {
-                        clearServerFieldError(titleField.name);
+                        clearServerFieldError(currentTitleField.name);
                         controller.onChange(next);
-                        afterFieldChange(titleField, next);
+                        afterFieldChange(currentTitleField, next);
                       }}
                       relation={titleRelation}
                       selectedOption={titleSelectedOption}
-                      placeholder={titleField.placeholder ?? t("form.untitled")}
-                      aria-label={fieldAriaLabel(titleField)}
+                      placeholder={currentTitleField.placeholder ?? t("form.untitled")}
+                      aria-label={fieldAriaLabel(currentTitleField)}
                     />
                   </div>
                 ) : (
                   <Input
                     value={String(controller.value ?? "")}
-                    placeholder={titleField.placeholder ?? t("form.untitled")}
-                    aria-label={fieldAriaLabel(titleField)}
-                    className={cn(TITLE_TEXT_CLASS, TITLE_INPUT_CLASS)}
+                    placeholder={currentTitleField.placeholder ?? t("form.untitled")}
+                    aria-label={fieldAriaLabel(currentTitleField)}
+                    className={cn(
+                      compact ? "h-8 border-0 bg-transparent px-0 text-base font-semibold shadow-none" : cn(TITLE_TEXT_CLASS, TITLE_INPUT_CLASS),
+                    )}
                     onChange={(event) => {
-                      clearServerFieldError(titleField.name);
+                      clearServerFieldError(currentTitleField.name);
                       controller.onChange(event.currentTarget.value);
-                      afterFieldChange(titleField, event.currentTarget.value);
+                      afterFieldChange(currentTitleField, event.currentTarget.value);
                     }}
                   />
                 )
@@ -154,25 +171,41 @@ export function FormViewRecordHeader({
               {titleFieldMessages.join(", ")}
             </p>
           ) : null}
-          <RecordSubtitle
-            loading={loading}
-            loadingLabel={t("form.loading")}
-            parts={subtitleParts}
-          />
+          {!compact ? <RecordSubtitle loading={loading} loadingLabel={t("form.loading")} parts={subtitleParts} /> : null}
         </div>
-        {statusField ? (
+        {currentStatusField && compact ? (
+          <Controller
+            control={form.control}
+            name={currentStatusField.name}
+            render={({ field: controller }) => {
+              const value = typeof controller.value === "string"
+                ? controller.value
+                : "";
+              return value ? (
+                <Badge
+                  tone={statusTone(value)}
+                  density="compact"
+                  shape="pill"
+                  className="self-start"
+                >
+                  {optionLabel(currentStatusField.options, value)}
+                </Badge>
+              ) : <span aria-hidden />;
+            }}
+          />
+        ) : currentStatusField ? (
           <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-3 max-[900px]:w-full">
             <Controller
               control={form.control}
-              name={statusField.name}
+              name={currentStatusField.name}
               render={({ field: controller }) => (
                 <FieldDescriptorControl
-                  field={statusField}
+                  field={currentStatusField}
                   value={controller.value}
-                  readOnly={fieldReadOnly(statusField)}
+                  readOnly={fieldReadOnly(currentStatusField)}
                   onChange={(next) => {
                     controller.onChange(next);
-                    afterFieldChange(statusField, next);
+                    afterFieldChange(currentStatusField, next);
                   }}
                 />
               )}
@@ -206,6 +239,13 @@ export function FormViewOverview({
     afterFieldChange,
     fieldReadOnly,
   } = surface;
+  const bodyValues = useWatch({
+    control: form.control,
+    disabled: !bodyField?.resolve,
+  }) as FormValues;
+  const currentBodyField = bodyField
+    ? resolveField(bodyField, bodyValues)
+    : undefined;
   const renderField = (field: FieldDescriptor): React.ReactNode => {
     const relation = surface.relationByField.get(field.name);
     const selectedOption = relation
@@ -294,24 +334,24 @@ export function FormViewOverview({
           />
         </section>
       ) : null}
-      {bodyField ? (
+      {currentBodyField ? (
         <section className="grid gap-2">
-          {bodyField.label ? (
-            <SectionEyebrow as="span">{bodyField.label}</SectionEyebrow>
+          {currentBodyField.label ? (
+            <SectionEyebrow as="span">{currentBodyField.label}</SectionEyebrow>
           ) : null}
           <Controller
             control={form.control}
-            name={bodyField.name}
+            name={currentBodyField.name}
             render={({ field: controller, fieldState }) => (
               <BodyFieldControl
-                field={bodyField}
+                field={currentBodyField}
                 value={controller.value}
-                readOnly={fieldReadOnly(bodyField)}
+                readOnly={fieldReadOnly(currentBodyField)}
                 errors={fieldState.error ? [fieldState.error] : []}
                 onChange={(next) => {
-                  clearServerFieldError(bodyField.name);
+                  clearServerFieldError(currentBodyField.name);
                   controller.onChange(next);
-                  afterFieldChange(bodyField, next);
+                  afterFieldChange(currentBodyField, next);
                 }}
               />
             )}

@@ -452,6 +452,7 @@ describe("ConsoleLayout", () => {
     await screen.findByText("Tall body");
 
     expect(screen.getByRole("main").className).toBe("console-browser-scroll-main");
+    expect(container.querySelector(".area-content")?.className).toContain("h-full");
     const statusHost = container.querySelector(".area-status");
     expect(statusHost?.className).toContain("console-statusline-host");
     expect(statusHost?.textContent).toContain("Ready");

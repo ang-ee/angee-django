@@ -133,6 +133,12 @@ export interface ResourceListProps<TRow extends Row = Row> {
   /** Tabs rendered for a saved record beside the form's "Overview" tab (not on
    * create) — e.g. provisioning and chat panels. See `FormView.recordTabs`. */
   recordTabs?: FormViewProps["recordTabs"];
+  /** Saved-record presentation forwarded to `FormView`. */
+  recordPresentation?: FormViewProps["recordPresentation"];
+  /** Initial saved-record tab forwarded to `FormView`. */
+  defaultRecordTab?: FormViewProps["defaultRecordTab"];
+  /** Built-in form tab label and placement forwarded to `FormView`. */
+  overviewTab?: FormViewProps["overviewTab"];
   rowHref?: (row: TRow, scope?: ListViewNavigationScope) => string;
   /** Native cross-pane drag payload forwarded to supported record-row renderers. */
   draggableRow?: ListViewProps<TRow>["draggableRow"];

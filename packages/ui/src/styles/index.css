@@ -400,6 +400,7 @@
 @utility area-status  { grid-area: status; }
 
 .console-browser-scroll-main {
+  height: 100%;
   min-height: 100%;
   overflow: visible;
   padding-bottom: 1.75rem;
