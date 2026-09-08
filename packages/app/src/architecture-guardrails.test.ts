@@ -35,6 +35,16 @@ const OPTIONAL_ADDON_ROOTS = [
   resolve(MONOREPO_ROOT, "../angee-messaging-bridges/addons"),
 ] as const;
 
+test("addon TypeScript resolves host-generated GraphQL before the standalone cache", () => {
+  const path = join(MONOREPO_ROOT, "addons", "angee", "tsconfig.base.json");
+  const parsed = ts.parseConfigFileTextToJson(path, readFileSync(path, "utf8"));
+  expect(parsed.error).toBeUndefined();
+  expect(parsed.config.compilerOptions.paths["@angee/gql/*"]).toEqual([
+    "../../../../../runtime/gql/*",
+    "../../.angee/runtime/gql/*",
+  ]);
+});
+
 interface PackageRoot {
   name: string;
   root: string;

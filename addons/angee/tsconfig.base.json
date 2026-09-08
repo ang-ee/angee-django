@@ -1,15 +1,15 @@
 {
   "compilerOptions": {
     // Base-addon fragments typecheck against the stack's composed generated
-    // documents. A standalone monorepo checkout may cache the same generated
-    // tree under .angee/runtime; a composed stack remains the authoritative
-    // fallback when this repo is a slot at <stack>/workspaces/<ws>/<repo>.
+    // documents. A composed stack is authoritative when this repo is a slot at
+    // <stack>/workspaces/<ws>/<repo>; a standalone monorepo checkout may cache
+    // the same generated tree under .angee/runtime as a fallback.
     // TypeScript tries the paths in order, so neither topology is hard-coded
     // as the only valid host for the addon subtree.
     "paths": {
       "@angee/gql/*": [
-        "../../.angee/runtime/gql/*",
-        "../../../../../runtime/gql/*"
+        "../../../../../runtime/gql/*",
+        "../../.angee/runtime/gql/*"
       ]
     },
     "target": "ES2022",

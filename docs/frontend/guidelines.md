@@ -453,7 +453,9 @@ Hard-won traps — the wise learn from others' mistakes
   '@angee/gql/console'` or implicit-`any` errors in `documents.ts` consumers — not real
   defects. After a schema change, regenerate in order: `manage.py schema` (the SDL — see
   the backend "Regenerate the SDL after `angee build`" pitfall) → `pnpm codegen` → then the
-  filtered typecheck/test.
+  filtered typecheck/test. Addon fragments resolve generated documents from the composed
+  stack first because that host owns codegen; the repository-local `.angee/runtime` tree
+  is only the standalone-checkout fallback and may be stale in a workspace slot.
 - **Relation widgets follow the SDL field kind** — a nested object FK
   (`kind:"relation"`) auto-wires to a creatable `many2one` picker; a to-one FK a
   node projects as a bare `ID` scalar auto-wires too, but as a scalar-id relation:
