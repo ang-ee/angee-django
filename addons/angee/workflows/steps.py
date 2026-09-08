@@ -175,6 +175,21 @@ class StepImpl(ImplBase):
     subject_declaration: ClassVar[str] = ""
     deterministic: ClassVar[bool] = True
     decision_schema: ClassVar[type[Any] | None] = None
+    map_body_operation: ClassVar[bool] = False
+
+    @classmethod
+    def is_executable(cls, *, registered_key: str) -> bool:
+        """Return whether the implementation supplies concrete runtime behavior."""
+
+        del registered_key
+        return cls.run is not StepImpl.run
+
+    @classmethod
+    def map_body_target(cls, config: Any) -> str | None:
+        """Return the referenced Map body key when this operation expands one."""
+
+        del config
+        return None
 
     @classmethod
     def operation(cls, *, key: str) -> StepOperation:
@@ -385,6 +400,22 @@ class MapStep(StepImpl):
     )
     effect_description = "Effects and idempotency depend on the configured target operation."
     config_model = MapConfig
+    map_body_operation = True
+
+    @classmethod
+    def is_executable(cls, *, registered_key: str) -> bool:
+        """Match the exact operation key selected by the engine's Map query."""
+
+        return registered_key == MapStep.key
+
+    @classmethod
+    def map_body_target(cls, config: Any) -> str | None:
+        """Return the declared body step key without resolving persistence."""
+
+        if not isinstance(config, Mapping):
+            return None
+        target = config.get("target_step")
+        return str(target) if isinstance(target, str) and target else None
 
     @classmethod
     def engine_expanded_filter(cls) -> dict[str, Any]:

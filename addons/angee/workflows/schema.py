@@ -14,6 +14,7 @@ from django.db import models
 from strawberry import auto
 from strawberry.scalars import JSON
 
+from angee.base.identity import public_data_id_field
 from angee.base.scoping import read_scoped_queryset
 from angee.graphql.actions import (
     ActionResult,
@@ -30,6 +31,20 @@ from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import session_user
 from angee.workflows import engine
+from angee.workflows.definitions import (
+    DefinitionEdit,
+    DefinitionEditError,
+    DefinitionReadinessError,
+    EdgeCreate,
+    EdgeDelete,
+    EdgePatch,
+    EndpointRef,
+    NodeCreate,
+    NodeDelete,
+    NodePatch,
+    StaleDefinitionError,
+)
+from angee.workflows.graph import GraphDiagnostic, GraphIdentity, GraphLocation
 from angee.workflows.steps import StepEffect, StepImpl, StepOperation
 
 Workflow = apps.get_model("workflows", "Workflow")
@@ -140,9 +155,7 @@ class WorkflowStepOperationQuery:
 
         field = Step.impl_field("step_class")
         return [
-            WorkflowStepOperation.from_operation(
-                cast(type[StepImpl], field.resolve_class(key)).operation(key=key)
-            )
+            WorkflowStepOperation.from_operation(cast(type[StepImpl], field.resolve_class(key)).operation(key=key))
             for key in field.registered_keys()
         ]
 
@@ -158,6 +171,7 @@ class WorkflowType(AngeeNode):
     subject_declaration: auto
     status: auto
     version: auto
+    draft_revision: auto
     published_from: "WorkflowType | None"
     error_workflow: "WorkflowType | None"
     max_steps: auto
@@ -204,6 +218,7 @@ class StepType(AngeeNode):
     key: auto
     name: auto
     step_class: auto
+
     @strawberry_django.field
     def config(self) -> JSON:
         """Return canonical config without rewriting historical workflow rows."""
@@ -215,6 +230,7 @@ class StepType(AngeeNode):
         """Return typed-config diagnostics while keeping malformed raw values repairable."""
 
         return cast(Any, self).config_projection().errors
+
     join_rule: auto
     is_entry: auto
     position: JSON
@@ -424,6 +440,145 @@ class WorkflowObjectRefInput:
 
     subject_declaration: str
     id: PublicID
+
+
+@strawberry.input
+class WorkflowDefinitionPatchInput:
+    name: str | None = strawberry.UNSET
+    description: str | None = strawberry.UNSET
+    purpose: str | None = strawberry.UNSET
+    subject_declaration: str | None = strawberry.UNSET
+    error_workflow: PublicID | None = strawberry.UNSET
+    max_steps: int | None = strawberry.UNSET
+    budget: JSON | None = strawberry.UNSET
+
+
+@strawberry.input
+class WorkflowNodeFieldsInput:
+    key: str | None = strawberry.UNSET
+    name: str | None = strawberry.UNSET
+    step_class: str | None = strawberry.UNSET
+    config: JSON | None = strawberry.UNSET
+    join_rule: str | None = strawberry.UNSET
+    is_entry: bool | None = strawberry.UNSET
+    position: JSON | None = strawberry.UNSET
+
+
+@strawberry.input
+class WorkflowNodeCreateInput:
+    client_key: str
+    fields: WorkflowNodeFieldsInput
+
+
+@strawberry.input
+class WorkflowNodePatchInput:
+    id: PublicID
+    fields: WorkflowNodeFieldsInput
+
+
+@strawberry.input
+class WorkflowEndpointInput:
+    id: PublicID | None = strawberry.UNSET
+    client_key: str | None = strawberry.UNSET
+
+
+@strawberry.input
+class WorkflowEdgeFieldsInput:
+    condition: str | None = strawberry.UNSET
+
+
+@strawberry.input
+class WorkflowEdgeCreateInput:
+    client_key: str
+    source: WorkflowEndpointInput
+    target: WorkflowEndpointInput
+    fields: WorkflowEdgeFieldsInput | None = None
+
+
+@strawberry.input
+class WorkflowEdgePatchInput:
+    id: PublicID
+    fields: WorkflowEdgeFieldsInput | None = None
+    source: WorkflowEndpointInput | None = strawberry.UNSET
+    target: WorkflowEndpointInput | None = strawberry.UNSET
+
+
+@strawberry.input
+class WorkflowDefinitionEditInput:
+    workflow: WorkflowDefinitionPatchInput | None = None
+    node_creates: list[WorkflowNodeCreateInput] | None = None
+    node_patches: list[WorkflowNodePatchInput] | None = None
+    node_deletes: list[PublicID] | None = None
+    edge_creates: list[WorkflowEdgeCreateInput] | None = None
+    edge_patches: list[WorkflowEdgePatchInput] | None = None
+    edge_deletes: list[PublicID] | None = None
+
+
+@strawberry.enum
+class WorkflowDefinitionStatus(Enum):
+    SUCCESS = "success"
+    STALE = "stale"
+    STRUCTURAL = "structural"
+    READINESS = "readiness"
+
+
+@strawberry.type
+class WorkflowDefinitionDiagnostic:
+    code: str
+    message: str
+    kind: str
+    id: PublicID | None
+    client_key: str | None
+    requested_id: str | None
+    field: str
+
+
+@strawberry.type
+class WorkflowDefinitionCorrelation:
+    client_key: str
+    id: PublicID
+
+
+@strawberry.type
+class WorkflowDefinitionPayload:
+    status: WorkflowDefinitionStatus
+    revision: int | None = None
+    current_revision: int | None = None
+    publication: WorkflowType | None = None
+    publication_created: bool | None = None
+    nodes: list[WorkflowDefinitionCorrelation] = strawberry.field(default_factory=list)
+    edges: list[WorkflowDefinitionCorrelation] = strawberry.field(default_factory=list)
+    diagnostics: list[WorkflowDefinitionDiagnostic] = strawberry.field(default_factory=list)
+
+
+@strawberry.type
+class WorkflowDefinitionNode:
+    id: PublicID
+    key: str
+    name: str
+    step_class: str
+    config: JSON
+    config_errors: JSON
+    join_rule: str
+    is_entry: bool
+    position: JSON
+
+
+@strawberry.type
+class WorkflowDefinitionEdge:
+    id: PublicID
+    source: PublicID
+    target: PublicID
+    condition: str
+
+
+@strawberry.type
+class WorkflowDefinitionSnapshot:
+    workflow: WorkflowType
+    revision: int
+    nodes: list[WorkflowDefinitionNode]
+    edges: list[WorkflowDefinitionEdge]
+    readiness: list[WorkflowDefinitionDiagnostic]
 
 
 _WORKFLOW_RESOURCE = hasura_model_resource(
@@ -662,9 +817,262 @@ class WorkflowActionMutation:
         target = resolve_action_target(Workflow, workflow, reason="workflows.graphql.publish_workflow")
         try:
             published = target.publish()
-        except Exception as error:  # noqa: BLE001 - domain publish failures return action results.
+        except ValidationError as error:
             return ActionResult(ok=False, message=f"Publish failed: {error}")
         return ActionResult(ok=True, message=f"Published workflow {published.sqid}.")
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def save_workflow_definition(
+        self,
+        info: strawberry.Info,
+        workflow: PublicID,
+        expected_revision: int,
+        edit: WorkflowDefinitionEditInput,
+    ) -> WorkflowDefinitionPayload:
+        """Atomically save one draft graph against its acknowledged revision."""
+
+        target = authorized_action_target(info, Workflow, workflow, "write")
+        try:
+            command = _definition_edit(target, edit)
+            result = Workflow.objects.apply_definition(
+                target,
+                expected_revision=expected_revision,
+                edit=command,
+            )
+        except StaleDefinitionError as error:
+            return WorkflowDefinitionPayload(
+                status=WorkflowDefinitionStatus.STALE,
+                current_revision=error.current,
+            )
+        except DefinitionEditError as error:
+            return WorkflowDefinitionPayload(
+                status=WorkflowDefinitionStatus.STRUCTURAL,
+                revision=expected_revision,
+                diagnostics=_definition_diagnostics(error.diagnostics),
+            )
+        return WorkflowDefinitionPayload(
+            status=WorkflowDefinitionStatus.SUCCESS,
+            revision=result.revision,
+            nodes=[
+                WorkflowDefinitionCorrelation(
+                    client_key=item.client_key,
+                    id=cast(PublicID, to_public_id(Step, item.identity)),
+                )
+                for item in result.nodes
+            ],
+            edges=[
+                WorkflowDefinitionCorrelation(
+                    client_key=item.client_key,
+                    id=cast(PublicID, to_public_id(Edge, item.identity)),
+                )
+                for item in result.edges
+            ],
+            diagnostics=_definition_diagnostics(result.readiness),
+        )
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def publish_workflow_definition(
+        self,
+        info: strawberry.Info,
+        workflow: PublicID,
+        expected_revision: int,
+    ) -> WorkflowDefinitionPayload:
+        """Publish exactly one saved draft revision."""
+
+        target = authorized_action_target(info, Workflow, workflow, "write")
+        try:
+            result = Workflow.objects.publish_definition(target, expected_revision=expected_revision)
+        except StaleDefinitionError as error:
+            return WorkflowDefinitionPayload(
+                status=WorkflowDefinitionStatus.STALE,
+                current_revision=error.current,
+            )
+        except DefinitionReadinessError as error:
+            return WorkflowDefinitionPayload(
+                status=WorkflowDefinitionStatus.READINESS,
+                revision=expected_revision,
+                diagnostics=_definition_diagnostics(error.diagnostics),
+            )
+        except DefinitionEditError as error:
+            return WorkflowDefinitionPayload(
+                status=WorkflowDefinitionStatus.STRUCTURAL,
+                revision=expected_revision,
+                diagnostics=_definition_diagnostics(error.diagnostics),
+            )
+        return WorkflowDefinitionPayload(
+            status=WorkflowDefinitionStatus.SUCCESS,
+            revision=result.revision,
+            publication=cast(WorkflowType, result.publication),
+            publication_created=result.created,
+        )
+
+
+@strawberry.type
+class WorkflowDefinitionQuery:
+    """Coherent workflow definition reads for the console editor."""
+
+    @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def workflow_definition(self, info: strawberry.Info, workflow: PublicID) -> WorkflowDefinitionSnapshot:
+        target = authorized_action_target(info, Workflow, workflow, "read")
+        snapshot = Workflow.objects.definition_snapshot(target)
+        return WorkflowDefinitionSnapshot(
+            workflow=cast(WorkflowType, snapshot.workflow),
+            revision=snapshot.revision,
+            nodes=[
+                WorkflowDefinitionNode(
+                    id=row.sqid,
+                    key=row.key,
+                    name=row.name,
+                    step_class=row.step_class,
+                    config=cast(JSON, row.config_projection().value),
+                    config_errors=cast(JSON, row.config_projection().errors),
+                    join_rule=str(row.join_rule),
+                    is_entry=row.is_entry,
+                    position=cast(JSON, row.position),
+                )
+                for row in snapshot.nodes
+            ],
+            edges=[
+                WorkflowDefinitionEdge(
+                    id=row.sqid,
+                    source=row.source.sqid,
+                    target=row.target.sqid,
+                    condition=row.condition,
+                )
+                for row in snapshot.edges
+            ],
+            readiness=_definition_diagnostics(snapshot.readiness),
+        )
+
+
+def _definition_edit(workflow: Any, value: WorkflowDefinitionEditInput) -> DefinitionEdit:
+    """Translate typed transport values to the domain command without deciding policy."""
+
+    workflow_fields = _set_fields(value.workflow)
+    if "error_workflow" in workflow_fields and workflow_fields["error_workflow"] is not None:
+        related = instance_for_id(
+            Workflow,
+            workflow_fields["error_workflow"],
+            queryset=Workflow.objects.with_action("read"),
+        )
+        if related is None:
+            raise DefinitionEditError(
+                (
+                    GraphDiagnostic(
+                        "reference_invalid",
+                        "Error workflow is missing or unavailable.",
+                        GraphLocation("workflow", GraphIdentity(existing_id=workflow.pk), "error_workflow"),
+                    ),
+                )
+            )
+        workflow_fields["error_workflow"] = related
+    return DefinitionEdit(
+        workflow=workflow_fields,
+        node_creates=tuple(NodeCreate(item.client_key, _set_fields(item.fields)) for item in value.node_creates or ()),
+        node_patches=tuple(_node_patch(item) for item in value.node_patches or ()),
+        node_deletes=tuple(_node_delete(item) for item in value.node_deletes or ()),
+        edge_creates=tuple(
+            EdgeCreate(
+                item.client_key,
+                _endpoint_ref(workflow, item.source),
+                _endpoint_ref(workflow, item.target),
+                _set_fields(item.fields),
+            )
+            for item in value.edge_creates or ()
+        ),
+        edge_patches=tuple(
+            _edge_patch(workflow, item)
+            for item in value.edge_patches or ()
+        ),
+        edge_deletes=tuple(_edge_delete(item) for item in value.edge_deletes or ()),
+    )
+
+
+def _set_fields(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    return {name: field_value for name, field_value in vars(value).items() if field_value is not strawberry.UNSET}
+
+
+def _definition_pk(model: type[models.Model], value: PublicID) -> int:
+    """Decode a public id without resolving or authorizing the referenced row."""
+
+    try:
+        public_field = public_data_id_field(model)
+        if public_field is None:
+            return -1
+        resolved = public_field.public_id_to_value(value)
+    except (TypeError, ValueError, ValidationError):
+        return -1
+    return resolved if type(resolved) is int else -1
+
+
+def _definition_reference(model: type[models.Model], value: PublicID) -> tuple[int, str]:
+    return _definition_pk(model, value), str(value)
+
+
+def _node_patch(item: WorkflowNodePatchInput) -> NodePatch:
+    identity, requested_id = _definition_reference(Step, item.id)
+    return NodePatch(identity, _set_fields(item.fields), requested_id)
+
+
+def _node_delete(value: PublicID) -> NodeDelete:
+    identity, requested_id = _definition_reference(Step, value)
+    return NodeDelete(identity, requested_id)
+
+
+def _edge_patch(workflow: Any, item: WorkflowEdgePatchInput) -> EdgePatch:
+    identity, requested_id = _definition_reference(Edge, item.id)
+    return EdgePatch(
+        identity,
+        _set_fields(item.fields),
+        None if item.source is strawberry.UNSET else _endpoint_ref(workflow, cast(Any, item.source)),
+        None if item.target is strawberry.UNSET else _endpoint_ref(workflow, cast(Any, item.target)),
+        requested_id,
+    )
+
+
+def _edge_delete(value: PublicID) -> EdgeDelete:
+    identity, requested_id = _definition_reference(Edge, value)
+    return EdgeDelete(identity, requested_id)
+
+
+def _endpoint_ref(workflow: Any, value: WorkflowEndpointInput | None) -> EndpointRef:
+    if value is None:
+        return EndpointRef()
+    existing = None
+    if value.id is not strawberry.UNSET and value.id is not None:
+        existing = _definition_pk(Step, value.id)
+    client_key = None if value.client_key is strawberry.UNSET else value.client_key
+    return EndpointRef(existing_id=existing, client_key=client_key)
+
+
+def _definition_diagnostics(values: tuple[GraphDiagnostic, ...]) -> list[WorkflowDefinitionDiagnostic]:
+    return [
+        WorkflowDefinitionDiagnostic(
+            code=value.code,
+            message=value.message,
+            kind=value.location.kind,
+            id=_definition_public_identity(value),
+            client_key=_definition_client_identity(value),
+            requested_id=value.location.key.requested_id,
+            field=value.location.field,
+        )
+        for value in values
+    ]
+
+
+def _definition_public_identity(value: GraphDiagnostic) -> PublicID | None:
+    identity = value.location.key
+    if identity.existing_id is None:
+        return None
+    pk = identity.existing_id
+    model = {"workflow": Workflow, "node": Step, "edge": Edge}[value.location.kind]
+    return to_public_id(model, pk)
+
+
+def _definition_client_identity(value: GraphDiagnostic) -> str | None:
+    return value.location.key.client_key
 
 
 @strawberry.type
@@ -785,6 +1193,22 @@ _CONSOLE_TYPES: list[object] = [
     StepRunType,
     DecisionType,
     WorkflowObjectRefInput,
+    WorkflowDefinitionPatchInput,
+    WorkflowNodeFieldsInput,
+    WorkflowNodeCreateInput,
+    WorkflowNodePatchInput,
+    WorkflowEndpointInput,
+    WorkflowEdgeFieldsInput,
+    WorkflowEdgeCreateInput,
+    WorkflowEdgePatchInput,
+    WorkflowDefinitionEditInput,
+    WorkflowDefinitionStatus,
+    WorkflowDefinitionDiagnostic,
+    WorkflowDefinitionCorrelation,
+    WorkflowDefinitionPayload,
+    WorkflowDefinitionNode,
+    WorkflowDefinitionEdge,
+    WorkflowDefinitionSnapshot,
     *_WORKFLOW_RESOURCE.types,
     *_STEP_RESOURCE.types,
     *_EDGE_RESOURCE.types,
@@ -811,6 +1235,7 @@ schemas = {
         "query": [
             WorkflowSubjectDeclarationQuery,
             WorkflowStepOperationQuery,
+            WorkflowDefinitionQuery,
             _WORKFLOW_RESOURCE.query,
             _STEP_RESOURCE.query,
             _EDGE_RESOURCE.query,

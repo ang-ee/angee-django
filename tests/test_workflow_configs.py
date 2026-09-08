@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import models
 from rebac import system_context
 
 from angee.workflows.configs import GateConfig, MapConfig, WaitConfig
@@ -98,7 +99,7 @@ def test_step_canonical_config_projects_legacy_gate_without_rewriting_row(workfl
             config=legacy,
             is_entry=True,
         )
-        Step.objects.filter(pk=step.pk).update(config=legacy)
+        models.QuerySet.update(Step._base_manager.filter(pk=step.pk), config=legacy)
         step.refresh_from_db()
 
     projection = step.config_projection()
@@ -110,7 +111,7 @@ def test_step_canonical_config_projects_legacy_gate_without_rewriting_row(workfl
 
     invalid = {"action": "approve", "slots": [{"assignee": ""}]}
     with system_context(reason="test invalid legacy gate read projection"):
-        Step.objects.filter(pk=step.pk).update(config=invalid)
+        models.QuerySet.update(Step._base_manager.filter(pk=step.pk), config=invalid)
         step.refresh_from_db()
     projection = step.config_projection()
     assert projection.value == invalid

@@ -174,7 +174,8 @@ def advance(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
 
         _activate_run_if_needed(run, timestamp=timestamp)
         _route_completed_steps(run)
-        _process_map_steps(run, timestamp=timestamp)
+        if not _process_map_steps(run, timestamp=timestamp):
+            return {"claimed": 0}
         _route_completed_steps(run)
         if _fail_if_budget_exceeded(run):
             return {"claimed": 0}
@@ -1026,7 +1027,7 @@ def _terminal_step_runs(run: Any) -> Iterable[Any]:
     )
 
 
-def _process_map_steps(run: Any, *, timestamp: datetime) -> None:
+def _process_map_steps(run: Any, *, timestamp: datetime) -> bool:
     map_rows = list(
         run.step_runs.lock_if_supported()
         .select_related("step")
@@ -1035,12 +1036,17 @@ def _process_map_steps(run: Any, *, timestamp: datetime) -> None:
     )
     for step_run in map_rows:
         if step_run.status == StepRunStatus.SCHEDULED:
-            _expand_map_step(run, step_run, timestamp=timestamp)
+            if not _expand_map_step(run, step_run, timestamp=timestamp):
+                return False
         if step_run.status == StepRunStatus.WAITING:
-            _complete_map_step_if_ready(run, step_run)
+            if not _complete_map_step_if_ready(run, step_run):
+                return False
+    return True
 
 
-def _expand_map_step(run: Any, step_run: Any, *, timestamp: datetime) -> None:
+def _expand_map_step(run: Any, step_run: Any, *, timestamp: datetime) -> bool:
+    if not _workflow_capacity_allows(run):
+        return False
     try:
         target = MapStep.target_step(step_run)
         items = MapStep.items(step_run)
@@ -1050,7 +1056,10 @@ def _expand_map_step(run: Any, step_run: Any, *, timestamp: datetime) -> None:
         step_run.mark_succeeded(output=output, outcome="failed")
         run.steps_taken += 1
         run.save(update_fields=["steps_taken", "updated_at"])
-        return
+        return True
+
+    if not _map_capacity_allows(run, target=target, items=items):
+        return False
 
     state = dict(step_run.resume_state)
     state["map"] = {
@@ -1065,24 +1074,27 @@ def _expand_map_step(run: Any, step_run: Any, *, timestamp: datetime) -> None:
     run.save(update_fields=["steps_taken", "updated_at"])
     _ensure_map_children(run, step_run, target=target, items=items)
     if not items:
-        _complete_map_step_if_ready(run, step_run)
+        return _complete_map_step_if_ready(run, step_run)
     else:
         step_run.mark_waiting(resume_state=state, waiting_kind="children")
+    return True
 
 
-def _complete_map_step_if_ready(run: Any, step_run: Any) -> None:
+def _complete_map_step_if_ready(run: Any, step_run: Any) -> bool:
     state = dict(step_run.resume_state.get("map", {}))
     target_id = state.get("target_step_id")
     items = list(state.get("items", ()))
     if target_id is None:
-        return
+        return True
     target = _model("Step").objects.get(pk=target_id)
     children = list(run.step_runs.lock_if_supported().filter(step=target, map_index__gte=0).order_by("map_index"))
     if len(children) < len(items):
+        if not _map_capacity_allows(run, target=target, items=items):
+            return False
         _ensure_map_children(run, step_run, target=target, items=items)
-        return
+        return True
     if any(child.status not in StepRunStatus.TERMINAL for child in children):
-        return
+        return True
 
     output = _map_output(children)
     outcome = "succeeded" if MapStep.policy_passes(step_run.step.config, output) else "failed"
@@ -1093,6 +1105,31 @@ def _complete_map_step_if_ready(run: Any, step_run: Any) -> None:
     step_run.resume_state = updated_state
     step_run.save(update_fields=["resume_state", "updated_at"])
     step_run.mark_succeeded(output=output, outcome=outcome)
+    return True
+
+
+def _map_capacity_allows(run: Any, *, target: Any, items: list[Any]) -> bool:
+    """Reserve journal capacity for one Map expansion before creating children."""
+
+    step_runs = run.step_runs.lock_if_supported()
+    existing_indexes = set(
+        step_runs.filter(step=target, map_index__gte=0, map_index__lt=len(items))
+        .values_list("map_index", flat=True)
+    )
+    missing_children = len(items) - len(existing_indexes)
+    if _workflow_capacity_allows(run, additional=missing_children):
+        return True
+    return False
+
+
+def _workflow_capacity_allows(run: Any, *, additional: int = 0) -> bool:
+    """Fail before executing work that cannot fit the run journal budget."""
+
+    admitted = run.step_runs.filter(status=StepRunStatus.SCHEDULED).count()
+    if run.steps_taken + admitted + additional <= run.workflow.max_steps:
+        return True
+    run.mark_failed(f"Workflow exceeded max_steps={run.workflow.max_steps}.")
+    return False
 
 
 def _ensure_map_children(run: Any, step_run: Any, *, target: Any, items: list[Any]) -> None:

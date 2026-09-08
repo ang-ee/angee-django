@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from contextlib import ExitStack
 from typing import Any
 
 from django.conf import settings
@@ -30,6 +31,7 @@ from angee.resources.loader import (
     DryRunRollback,
     build_resource,
 )
+from angee.resources.mixins import ResourceWritePreparation
 
 
 class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
@@ -147,39 +149,62 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         try:
             reason = "resources.validate" if dry_run else "resources.load"
             with system_context(reason=reason), transaction.atomic():
-                for group, resource in loaded_groups:
-                    try:
-                        result = resource.import_data(
-                            group.dataset,
-                            dry_run=False,
-                            raise_errors=True,
-                            rollback_on_validation_errors=True,
-                            use_transactions=False,
-                        )
-                    except ResourceImportError as error:
-                        if error.number is not None:
-                            error.number = group.source_rows[error.number - 1]
-                        raise ResourceLoadError(f"{group.entry.display}: {error}") from error
-                    except IntegrityError as error:
-                        raise ResourceLoadError(f"{group.entry.display}: {error}") from error
-                    load_result = load_result.with_result(result)
-                if not dry_run:
-                    self._run_post_load_hooks(loaded_groups)
-                created, skipped = materialize_grant_groups(
-                    grant_groups,
-                    ledger_model=self.model,
-                    addon_aliases=addon_aliases,
-                )
-                load_result = LoadResult(
-                    created=load_result.created + created,
-                    updated=load_result.updated,
-                    skipped=load_result.skipped + skipped,
-                )
-                if dry_run:
-                    raise DryRunRollback()
+                with ExitStack() as preparations:
+                    for plan in self._write_preparations(loaded_groups):
+                        preparations.enter_context(plan.owner.prepare_resource_writes(plan.targets))
+                    for group, resource in loaded_groups:
+                        try:
+                            result = resource.import_data(
+                                group.dataset,
+                                dry_run=False,
+                                raise_errors=True,
+                                rollback_on_validation_errors=True,
+                                use_transactions=False,
+                            )
+                        except ResourceImportError as error:
+                            if error.number is not None:
+                                error.number = group.source_rows[error.number - 1]
+                            raise ResourceLoadError(f"{group.entry.display}: {error}") from error
+                        except IntegrityError as error:
+                            raise ResourceLoadError(f"{group.entry.display}: {error}") from error
+                        load_result = load_result.with_result(result)
+                    if not dry_run:
+                        self._run_post_load_hooks(loaded_groups)
+                    created, skipped = materialize_grant_groups(
+                        grant_groups,
+                        ledger_model=self.model,
+                        addon_aliases=addon_aliases,
+                    )
+                    load_result = LoadResult(
+                        created=load_result.created + created,
+                        updated=load_result.updated,
+                        skipped=load_result.skipped + skipped,
+                    )
+                    if dry_run:
+                        raise DryRunRollback()
         except DryRunRollback:
             pass
         return load_result
+
+    @staticmethod
+    def _write_preparations(
+        loaded_groups: list[tuple[ResourceGroup, Any]],
+    ) -> tuple[ResourceWritePreparation, ...]:
+        """Merge model-declared targets so each owner prepares once in stable order."""
+
+        grouped: dict[str, tuple[Any, set[Any]]] = {}
+        for group, resource in loaded_groups:
+            hook = getattr(group.model, "resource_write_preparation", None)
+            plan = hook(resource, group.dataset) if callable(hook) else None
+            if plan is None:
+                continue
+            key = plan.owner._meta.label_lower
+            owner, targets = grouped.setdefault(key, (plan.owner, set()))
+            targets.update(plan.targets)
+        return tuple(
+            ResourceWritePreparation(owner=owner, targets=frozenset(targets))
+            for _key, (owner, targets) in sorted(grouped.items())
+        )
 
     def _run_post_load_hooks(
         self,

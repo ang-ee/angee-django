@@ -30,7 +30,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
-from angee.base.refs import ancestor_object_refs
 from django.db import models
 from rebac import (
     ObjectRef,
@@ -42,6 +41,7 @@ from rebac import (
 )
 from rebac.models import active_relationship_model
 
+from angee.base.refs import ancestor_object_refs
 from angee.resources.entries import GrantGroup, GrantRow
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.widgets import resolve_xref

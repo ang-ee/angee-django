@@ -298,7 +298,7 @@ def test_budget_ceiling_fails_run_via_engine(
                     "prompt_template": "Spend tokens.",
                 },
             },
-            {"key": "finish", "config": {"outcome": "done"}},
+            {"key": "finish", "step_class": "agent_session", "config": {"outcome": "done"}},
         ),
         edges=(("agent", "finish", "completed"),),
     )
@@ -377,7 +377,7 @@ def test_backend_error_routes_failed_outcome(
                     "prompt_template": "Fail gracefully.",
                 },
             },
-            {"key": "on_failed", "config": {"outcome": "done"}},
+            {"key": "on_failed", "step_class": "agent_session", "config": {"outcome": "done"}},
         ),
         edges=(("agent", "on_failed", "failed"),),
     )
@@ -529,7 +529,7 @@ def test_quiet_turn_heartbeat_cadence_survives_reaper_then_expires_without_pulse
     started_at = timezone.now()
     workflow = workflow_with_steps(
         name="Quiet heartbeat",
-        steps=({"key": "quiet", "config": {"outcome": "done"}},),
+        steps=({"key": "quiet", "step_class": "agent_session", "config": {"outcome": "done"}},),
         edges=(),
     )
     run = start_run(workflow)

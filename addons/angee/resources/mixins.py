@@ -3,8 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any
 
 from django.db import models
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceWritePreparation:
+    """Model-owned targets to prepare before a resource transaction writes rows."""
+
+    owner: Any
+    targets: frozenset[Any]
 
 
 class ResourceLoadMixin(models.Model):
@@ -20,6 +30,13 @@ class ResourceLoadMixin(models.Model):
         """Keep the hook protocol abstract and tableless."""
 
         abstract = True
+
+    @classmethod
+    def resource_write_preparation(cls, resource: Any, dataset: Any) -> ResourceWritePreparation | None:
+        """Return optional model-owned write targets needed before importing a batch."""
+
+        del resource, dataset
+        return None
 
     @classmethod
     def after_resource_load(

@@ -1,0 +1,264 @@
+"""Native GraphQL coverage for workflow definition commands."""
+
+from __future__ import annotations
+
+import pytest
+from rebac import system_context
+
+from tests.conftest import execute_schema, result_data
+from tests.test_workflows import _console_schema, _platform_admin
+from tests.workflows import Step, Workflow
+
+pytest_plugins = ("tests.workflows",)
+
+
+SAVE = """
+mutation SaveDefinition($workflow: ID!, $revision: Int!, $edit: WorkflowDefinitionEditInput!) {
+  save_workflow_definition(workflow: $workflow, expected_revision: $revision, edit: $edit) {
+    status revision current_revision
+    nodes { client_key id }
+    edges { client_key id }
+    diagnostics { code message kind id client_key field }
+  }
+}
+"""
+
+
+def _draft() -> tuple[Workflow, Step]:
+    with system_context(reason="test definition GraphQL setup"):
+        workflow = Workflow.objects.create(name="Definition API")
+        entry = Step.objects.create(
+            workflow=workflow,
+            key="entry",
+            name="Entry",
+            step_class="agent_session",
+            is_entry=True,
+        )
+        workflow.refresh_from_db()
+    return workflow, entry
+
+
+def test_definition_mutation_preserves_omission_correlates_rows_and_reports_readiness(
+    workflow_tables: None,
+) -> None:
+    del workflow_tables
+    schema = _console_schema()
+    admin = _platform_admin("definition-schema-admin")
+    workflow, entry = _draft()
+    client_key = str(entry.pk)
+    variables = {
+        "workflow": workflow.sqid,
+        "revision": workflow.draft_revision,
+        "edit": {
+            "workflow": {"description": "Saved"},
+            "node_creates": [
+                {
+                    "client_key": client_key,
+                    "fields": {"key": "wait", "name": "Wait", "step_class": "wait", "config": {}},
+                }
+            ],
+            "edge_creates": [
+                {
+                    "client_key": "edge-client",
+                    "source": {"id": entry.sqid},
+                    "target": {"client_key": client_key},
+                }
+            ],
+        },
+    }
+
+    payload = result_data(execute_schema(schema, SAVE, variables, user=admin))["save_workflow_definition"]
+
+    assert payload["status"] == "SUCCESS", payload
+    assert payload["revision"] == workflow.draft_revision + 1
+    assert payload["nodes"][0]["client_key"] == client_key
+    assert payload["edges"][0]["client_key"] == "edge-client"
+    assert any(item["field"] == "config.until" for item in payload["diagnostics"])
+    with system_context(reason="test definition GraphQL result"):
+        workflow.refresh_from_db()
+    assert workflow.name == "Definition API"
+    assert workflow.description == "Saved"
+
+
+def test_definition_mutation_returns_structural_and_stale_without_losing_data(workflow_tables: None) -> None:
+    del workflow_tables
+    schema = _console_schema()
+    admin = _platform_admin("definition-errors-admin")
+    workflow, _entry = _draft()
+
+    invalid = result_data(
+        execute_schema(
+            schema,
+            SAVE,
+            {
+                "workflow": workflow.sqid,
+                "revision": workflow.draft_revision,
+                "edit": {"workflow": {"description": None}, "node_creates": []},
+            },
+            user=admin,
+        )
+    )["save_workflow_definition"]
+    stale = result_data(
+        execute_schema(
+            schema,
+            SAVE,
+            {"workflow": workflow.sqid, "revision": workflow.draft_revision - 1, "edit": {}},
+            user=admin,
+        )
+    )["save_workflow_definition"]
+
+    assert invalid["status"] == "STRUCTURAL"
+    assert any(item["field"] == "description" for item in invalid["diagnostics"])
+    assert stale == {
+        "status": "STALE",
+        "revision": None,
+        "current_revision": workflow.draft_revision,
+        "nodes": [],
+        "edges": [],
+        "diagnostics": [],
+    }
+    with system_context(reason="test rejected definition GraphQL result"):
+        workflow.refresh_from_db()
+    assert workflow.description == ""
+
+
+def test_definition_snapshot_and_publish_payloads_are_typed(workflow_tables: None) -> None:
+    del workflow_tables
+    schema = _console_schema()
+    admin = _platform_admin("definition-publish-admin")
+    workflow, entry = _draft()
+    query = """
+      query Definition($workflow: ID!) {
+        workflow_definition(workflow: $workflow) {
+          revision
+          workflow {
+            id draft_revision lineage_id current_published_id current_published_version publication_status
+          }
+          nodes { id key config config_errors }
+          edges { id source target condition }
+          readiness { code field id client_key }
+        }
+      }
+    """
+    mutation = """
+      mutation Publish($workflow: ID!, $revision: Int!) {
+        publish_workflow_definition(workflow: $workflow, expected_revision: $revision) {
+          status revision publication_created publication {
+            id version draft_revision lineage_id current_published_id current_published_version publication_status
+          }
+          diagnostics { code field }
+        }
+      }
+    """
+
+    snapshot = result_data(execute_schema(schema, query, {"workflow": workflow.sqid}, user=admin))[
+        "workflow_definition"
+    ]
+    first = result_data(
+        execute_schema(
+            schema,
+            mutation,
+            {"workflow": workflow.sqid, "revision": workflow.draft_revision},
+            user=admin,
+        )
+    )["publish_workflow_definition"]
+    second = result_data(
+        execute_schema(
+            schema,
+            mutation,
+            {"workflow": workflow.sqid, "revision": workflow.draft_revision},
+            user=admin,
+        )
+    )["publish_workflow_definition"]
+
+    assert snapshot["revision"] == workflow.draft_revision
+    assert snapshot["workflow"]["draft_revision"] == workflow.draft_revision
+    assert snapshot["workflow"]["lineage_id"] == workflow.sqid
+    assert snapshot["workflow"]["publication_status"] == "draft"
+    assert snapshot["nodes"] == [{"id": entry.sqid, "key": "entry", "config": {}, "config_errors": {}}]
+    assert snapshot["readiness"] == []
+    assert first["status"] == "SUCCESS" and first["publication_created"] is True
+    assert second["status"] == "SUCCESS" and second["publication_created"] is False
+    assert second["publication"]["id"] == first["publication"]["id"]
+
+
+def test_definition_adapter_rejects_unavailable_relations_and_explicit_null_endpoint(workflow_tables: None) -> None:
+    del workflow_tables
+    schema = _console_schema()
+    admin = _platform_admin("definition-reference-admin")
+    workflow, _entry = _draft()
+    unavailable = result_data(
+        execute_schema(
+            schema,
+            SAVE,
+            {
+                "workflow": workflow.sqid,
+                "revision": workflow.draft_revision,
+                "edit": {"workflow": {"error_workflow": "wfl_unavailable"}},
+            },
+            user=admin,
+        )
+    )["save_workflow_definition"]
+    explicit_null = result_data(
+        execute_schema(
+            schema,
+            SAVE,
+            {
+                "workflow": workflow.sqid,
+                "revision": workflow.draft_revision,
+                "edit": {"edge_patches": [{"id": "wed_unavailable", "source": None}]},
+            },
+            user=admin,
+        )
+    )["save_workflow_definition"]
+    assert unavailable["status"] == "STRUCTURAL"
+    assert unavailable["diagnostics"][0]["field"] == "error_workflow"
+    assert explicit_null["status"] == "STRUCTURAL"
+    assert {item["field"] for item in explicit_null["diagnostics"]} >= {"identity", "source"}
+
+
+def test_definition_adapter_does_not_catch_unexpected_errors(
+    workflow_tables: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del workflow_tables
+    schema = _console_schema()
+    admin = _platform_admin("definition-unexpected-admin")
+    workflow, _entry = _draft()
+
+    def fail(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("unexpected-command-failure")
+
+    monkeypatch.setattr(Workflow.objects, "apply_definition", fail)
+    result = execute_schema(
+        schema,
+        SAVE,
+        {"workflow": workflow.sqid, "revision": workflow.draft_revision, "edit": {}},
+        user=admin,
+    )
+
+    assert result.errors is not None
+    assert result.errors[0].message == "An unexpected error occurred."
+    assert result.errors[0].extensions == {"code": "INTERNAL"}
+
+
+def test_legacy_publish_adapter_does_not_collapse_unexpected_errors(
+    workflow_tables: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del workflow_tables
+    schema = _console_schema()
+    admin = _platform_admin("legacy-publish-unexpected-admin")
+    workflow, _entry = _draft()
+
+    def fail(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("unexpected-legacy-publication-failure")
+
+    monkeypatch.setattr(Workflow, "publish", fail)
+    result = execute_schema(
+        schema,
+        "mutation Publish($workflow: ID!) { publish_workflow(workflow: $workflow) { ok message } }",
+        {"workflow": workflow.sqid},
+        user=admin,
+    )
+    assert result.errors is not None
+    assert result.errors[0].message == "An unexpected error occurred."
+    assert result.errors[0].extensions == {"code": "INTERNAL"}

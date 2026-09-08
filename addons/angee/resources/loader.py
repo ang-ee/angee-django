@@ -171,6 +171,24 @@ class AngeeResource(resources.ModelResource):
             self._instances[xref] = self._instance_from_ledger(ledger)
         return self._instances[xref]
 
+    def related_instances(self, dataset: tablib.Dataset, field_name: str) -> tuple[models.Model, ...]:
+        """Resolve one imported relation column for model-owned write preparation."""
+
+        field = self.fields[field_name]
+        if field.column_name not in dataset.headers:
+            return ()
+        instances: dict[tuple[type[models.Model], Any], models.Model] = {}
+        for raw in dataset[field.column_name]:
+            try:
+                instance = field.widget.clean(raw)
+            except (LookupError, ValueError):
+                continue
+            if instance is not None and not isinstance(instance, models.Model):
+                instance = field.widget.model._base_manager.get(pk=instance)
+            if instance is not None:
+                instances[(type(instance), instance.pk)] = instance
+        return tuple(instances[key] for key in sorted(instances, key=lambda item: (item[0]._meta.label, item[1])))
+
     def _prime_existing_ledgers(self, dataset: tablib.Dataset) -> None:
         """Load existing ledger rows for this import dataset in one query."""
 

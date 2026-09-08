@@ -13,6 +13,8 @@ from __future__ import annotations
 import copy
 import logging
 from collections.abc import Iterable, Mapping
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Self, cast
@@ -23,26 +25,127 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
-from django.db import OperationalError, ProgrammingError, models, transaction
+from django.db import OperationalError, ProgrammingError, connections, models, router, transaction
 from django.utils import timezone
-from rebac import system_context
+from rebac import actor_context, system_context
 
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import RecordRefMixin
+from angee.base.scoping import system_queryset
 from angee.base.transitions import StateTransitions, TransitionNotAllowed, save_state, transition
-from angee.resources.mixins import ResourceLoadMixin
+from angee.resources.mixins import ResourceLoadMixin, ResourceWritePreparation
+from angee.workflows.definitions import WorkflowDefinitionManagerMixin
 from angee.workflows.steps import (
     StepImpl,
     optional_non_negative_int,
     optional_positive_int,
-    validate_retry_config,
 )
 
 logger = logging.getLogger(__name__)
 _CHANGE_FEED_FIX = "declare changes() for the model to join the change feed"
+
+
+@dataclass
+class _DefinitionWriteSession:
+    """Private state for one locked, reentrant definition transaction."""
+
+    alias: str
+    connection_id: int
+    workflow_ids: frozenset[int]
+    changed_head_ids: set[int]
+    copy_target_ids: set[int]
+
+
+_definition_write_session: ContextVar[_DefinitionWriteSession | None] = ContextVar(
+    "workflow_definition_write_session", default=None
+)
+
+
+def _combined_delete_results(*results: tuple[int, dict[str, int]]) -> tuple[int, dict[str, int]]:
+    """Combine Django delete counts from explicitly owned cascade phases."""
+
+    total = 0
+    counts: dict[str, int] = {}
+    for deleted, per_model in results:
+        total += deleted
+        for label, count in per_model.items():
+            counts[label] = counts.get(label, 0) + count
+    return total, counts
+
+
+def _definition_rows(model: type[models.Model], alias: str) -> Any:
+    """Return an internal unscoped queryset for ownership and lock verification."""
+
+    return system_queryset(model, using=alias, lock=None)
+
+
+def _definition_related_rows(manager: Any, owner: Any, alias: str) -> Any:
+    """Bind internal child traversal to the caller's explicit actor or sudo intent."""
+
+    queryset = manager.using(alias)
+    if owner.is_sudo():
+        return queryset.sudo(reason="workflows.definition_write.cascade")
+    if actor := owner.actor():
+        return queryset.with_actor(actor)
+    return queryset
+
+
+def _definition_caller_context(owner: Any) -> Any:
+    """Project an explicit instance binding into Django's validation queries."""
+
+    if owner.is_sudo():
+        return system_context(reason="workflows.definition_write.validation")
+    if actor := owner.actor():
+        return actor_context(actor)
+    return nullcontext()
+
+
+def _bind_definition_caller(instance: Any, owner: Any) -> Any:
+    """Carry an explicit caller binding onto a manager-fetched or copied row."""
+
+    if owner.is_sudo():
+        return instance.sudo(reason="workflows.definition_write.owner")
+    if actor := owner.actor():
+        return instance.with_actor(actor)
+    return instance
+
+
+class DefinitionQuerySet(AngeeQuerySet[Any]):
+    """Definition collection writes that cannot preserve row invariants."""
+
+    def update(self, **kwargs: Any) -> int:
+        raise TypeError("Workflow definitions do not support QuerySet.update(); save instances instead.")
+
+    def bulk_create(self, *args: Any, **kwargs: Any) -> list[Any]:
+        raise TypeError("Workflow definitions do not support bulk_create(); save instances instead.")
+
+    def bulk_update(self, *args: Any, **kwargs: Any) -> int:
+        raise TypeError("Workflow definitions do not support bulk_update(); save instances instead.")
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        instances = list(self.order_by("pk"))
+        if not instances:
+            return (0, {})
+        if isinstance(self, WorkflowQuerySet):
+            workflow_model = self.model
+            workflow_ids = [instance.pk for instance in instances]
+        else:
+            workflow_field = self.model._meta.get_field("workflow")
+            workflow_model = workflow_field.remote_field.model
+            workflow_ids = [instance.workflow_id for instance in instances]
+        manager = workflow_model.objects.db_manager(self.db)
+        with manager._definition_write(workflow_ids, using=self.db):
+            total = 0
+            counts: dict[str, int] = {}
+            for instance in instances:
+                deleted, per_model = instance.delete()
+                total += deleted
+                for label, count in per_model.items():
+                    counts[label] = counts.get(label, 0) + count
+            return total, counts
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,7 +267,7 @@ def _save_workflow_status(instance: models.Model, source: Any, target: Any) -> N
 _CURRENCY_STATUSES = (WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED)
 
 
-class WorkflowQuerySet(AngeeQuerySet[Any]):
+class WorkflowQuerySet(DefinitionQuerySet):
     """QuerySet owning subject declaration discovery and version currency."""
 
     def current_published(self) -> Self:
@@ -215,8 +318,107 @@ class WorkflowQuerySet(AngeeQuerySet[Any]):
         return cast(Self, self.annotate(**workflow_model.lineage_projection_annotation()))
 
 
-class WorkflowManager(AngeeManager.from_queryset(WorkflowQuerySet)):  # type: ignore[misc]
+class WorkflowManager(WorkflowDefinitionManagerMixin, AngeeManager.from_queryset(WorkflowQuerySet)):  # type: ignore[misc]
     """Manager owning workflow lineage lookups."""
+
+    @contextmanager
+    def _definition_write(
+        self,
+        workflow_ids: Iterable[int],
+        *,
+        using: str | None = None,
+        _allow_status_transition: bool = False,
+    ) -> Iterable[list[Any]]:
+        """Lock declared lineages and share one revision owner across nested writes."""
+
+        alias = using or self.db
+        ids = frozenset(workflow_ids)
+        active = _definition_write_session.get()
+        connection_id = id(connections[alias])
+        if active is not None:
+            if active.alias != alias or active.connection_id != connection_id:
+                raise RuntimeError("A workflow definition write cannot span database connections.")
+            undeclared = ids - active.workflow_ids - active.copy_target_ids
+            if undeclared:
+                raise RuntimeError("A workflow definition write cannot expand to a new lineage after locking.")
+            rows = list(system_queryset(self.model, using=alias, lock=None).filter(pk__in=ids).order_by("pk"))
+            if len(rows) != len(ids):
+                raise ValidationError("A workflow definition parent no longer exists.")
+            if not _allow_status_transition and any(
+                row.is_immutable and row.pk not in active.copy_target_ids for row in rows
+            ):
+                raise ValidationError("Published workflow versions are immutable.")
+            yield rows
+            return
+
+        ordered_ids = sorted(ids)
+        with transaction.atomic(using=alias):
+            rows = list(
+                system_queryset(self.model, using=alias, lock=("self",))
+                .filter(pk__in=ordered_ids)
+                .order_by("pk")
+            )
+            if len(rows) != len(ordered_ids):
+                raise ValidationError("A workflow definition parent no longer exists.")
+            if not _allow_status_transition and any(row.is_immutable for row in rows):
+                raise ValidationError("Published workflow versions are immutable.")
+            session = _DefinitionWriteSession(alias, connection_id, ids, set(), set())
+            token = _definition_write_session.set(session)
+            try:
+                yield rows
+                for workflow_id in sorted(session.changed_head_ids):
+                    models.QuerySet.update(
+                        self.model._base_manager.using(alias).filter(
+                            pk=workflow_id, published_from__isnull=True
+                        ),
+                        draft_revision=models.F("draft_revision") + 1,
+                    )
+            finally:
+                _definition_write_session.reset(token)
+
+    def mark_definition_changed(self, workflow_id: int) -> None:
+        """Record one editable lineage as changed in the active write session."""
+
+        session = _definition_write_session.get()
+        if session is None or workflow_id not in session.workflow_ids:
+            raise RuntimeError("Definition changes require an active locked write session.")
+        session.changed_head_ids.add(workflow_id)
+
+    def _definition_revision(self, workflow_id: int, current: int) -> int:
+        """Return the exact revision this active locked session will commit."""
+
+        session = _definition_write_session.get()
+        if session is None or workflow_id not in session.workflow_ids:
+            raise RuntimeError("Definition revision projection requires its active locked write session.")
+        return current + int(workflow_id in session.changed_head_ids)
+
+    @contextmanager
+    def _definition_caller(self, workflow: Any) -> Iterable[None]:
+        """Project a command target's explicit actor or sudo binding to nested ORM work."""
+
+        with _definition_caller_context(workflow):
+            yield
+
+    @contextmanager
+    def _definition_read(self, workflow_id: int, *, using: str | None = None) -> Iterable[Any]:
+        """Lock one mutable or immutable definition for a coherent snapshot read."""
+
+        alias = using or self.db
+        with transaction.atomic(using=alias):
+            yield system_queryset(self.model, using=alias, lock=("self",)).get(pk=workflow_id)
+
+    @contextmanager
+    def _copy_to(self, workflow_id: int) -> Iterable[None]:
+        """Permit inserts into one new publication within the locked session."""
+
+        session = _definition_write_session.get()
+        if session is None:
+            raise RuntimeError("Publication copying requires an active definition write session.")
+        session.copy_target_ids.add(workflow_id)
+        try:
+            yield
+        finally:
+            session.copy_target_ids.remove(workflow_id)
 
     def current_published_for(self, workflow: Any) -> Any | None:
         """Return the latest published version for ``workflow``'s lineage.
@@ -274,9 +476,10 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     subject_declaration = models.CharField(max_length=200, blank=True, default="")
     status = StateField(choices_enum=WorkflowStatus, default=WorkflowStatus.DRAFT)
     version = models.PositiveIntegerField(default=0)
+    draft_revision = models.PositiveIntegerField(default=0, editable=False)
     published_from = models.ForeignKey(
         "workflows.Workflow",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         null=True,
         blank=True,
         related_name="published_versions",
@@ -346,6 +549,36 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         }
 
     @classmethod
+    def resource_write_preparation(cls, resource: Any, dataset: Any) -> ResourceWritePreparation | None:
+        """Declare existing lineage heads before a resource batch starts writing."""
+
+        targets = frozenset(
+            instance.pk
+            for xref in dataset["_xref"]
+            if (instance := resource.instance_for_xref(xref)) is not None
+        )
+        return ResourceWritePreparation(cls, targets) if targets else None
+
+    @classmethod
+    @contextmanager
+    def prepare_resource_writes(cls, workflow_ids: Iterable[int]) -> Iterable[None]:
+        """Prelock every declared resource lineage in deterministic order."""
+
+        ids = sorted(set(workflow_ids))
+        alias = router.db_for_write(cls)
+        with transaction.atomic(using=alias):
+            rows = list(
+                system_queryset(cls, using=alias, lock=("self",))
+                .filter(pk__in=ids)
+                .order_by("pk")
+            )
+            if len(rows) != len(ids):
+                raise ValidationError("A workflow definition parent no longer exists.")
+            if any(row.is_immutable for row in rows):
+                raise ValidationError("Published workflow versions are immutable.")
+            yield
+
+    @classmethod
     def after_resource_load(
         cls,
         instances: Iterable[Any],
@@ -368,6 +601,14 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     @transition(status, source=WorkflowStatus.DRAFT, target=WorkflowStatus.PUBLISHED, on_success=_save_workflow_status)
     def mark_published(self) -> None:
         """Mark this copied version as published."""
+
+        session = _definition_write_session.get()
+        if (
+            self.published_from_id is None
+            or session is None
+            or self.pk not in session.copy_target_ids
+        ):
+            raise ValidationError("Only a new snapshot created by publish() can be marked published.")
 
     @transition(
         status,
@@ -424,42 +665,99 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the workflow after enforcing immutability and model validation."""
 
-        persisted = self._persisted_save_snapshot()
-        self._raise_if_immutable_save(persisted)
-        self.full_clean()
-        self._raise_if_key_changed(persisted)
-        update_fields = kwargs.get("update_fields")
-        assigns_stable_key = (
-            persisted is not None
-            and not persisted.key
-            and bool(self.key)
-            and (update_fields is None or "key" in update_fields)
-        )
-        with transaction.atomic():
+        alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        if self._state.adding:
+            if self.published_from_id is not None:
+                session = _definition_write_session.get()
+                if session is None or self.published_from_id not in session.workflow_ids:
+                    raise ValidationError("Published workflow versions can only be created by publish().")
+                if self.status != WorkflowStatus.DRAFT:
+                    raise ValidationError({"status": "New publications must begin as draft snapshots."})
+            elif self.status != WorkflowStatus.DRAFT or self.version != 0 or self.draft_revision != 0:
+                raise ValidationError("New workflow lineage heads must begin as revision-zero drafts.")
+            with _definition_caller_context(self):
+                self.full_clean()
+            super().save(*args, **kwargs)
+            return
+
+        manager = type(self).objects.db_manager(alias)
+        with manager._definition_write(
+            (self.pk,),
+            using=alias,
+            _allow_status_transition=getattr(self, "_allow_immutable_status_save", False),
+        ):
+            persisted = cast(Self, _definition_rows(type(self), alias).get(pk=self.pk))
+            self._raise_if_immutable_save(persisted)
+            if self.published_from_id != persisted.published_from_id:
+                raise ValidationError({"published_from": "Workflow lineage ownership is immutable."})
+            if self.version != persisted.version:
+                raise ValidationError({"version": "Workflow publication versions are immutable."})
+            if self.status != persisted.status and not getattr(self, "_allow_immutable_status_save", False):
+                raise ValidationError({"status": "Workflow status changes require a declared transition."})
+            # The database counter is the sole owner; a stale model can never write it backwards.
+            self.draft_revision = persisted.draft_revision
+            with _definition_caller_context(self):
+                self.full_clean()
+            self._raise_if_key_changed(persisted)
+            update_fields = kwargs.get("update_fields")
+            definition_fields = {
+                "name",
+                "description",
+                "purpose",
+                "subject_declaration",
+                "error_workflow",
+                "error_workflow_id",
+                "max_steps",
+                "budget",
+            }
+            updated = None if update_fields is None else set(update_fields)
+            considered = definition_fields if updated is None else {
+                field for field in definition_fields if field in updated or field.removesuffix("_id") in updated
+            }
+            changed = any(getattr(persisted, field) != getattr(self, field) for field in considered)
+            assigns_stable_key = (
+                not persisted.key
+                and bool(self.key)
+                and (update_fields is None or "key" in update_fields)
+            )
             super().save(*args, **kwargs)
             if assigns_stable_key:
                 self._propagate_resource_key_backfill()
+            if changed and self.published_from_id is None:
+                manager.mark_definition_changed(self.pk)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Delete only mutable workflow rows."""
 
-        self._raise_if_immutable_save(self._persisted_save_snapshot())
-        return super().delete(*args, **kwargs)
+        alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        manager = type(self).objects.db_manager(alias)
+        with manager._definition_write((self.pk,), using=alias):
+            persisted = cast(Self, _definition_rows(type(self), alias).get(pk=self.pk))
+            self._raise_if_immutable_save(persisted)
+            if persisted.published_versions.exists():
+                raise ValidationError("A workflow with publication history cannot be deleted.")
+            # Collector skips child instance delete methods. Own the full cascade here.
+            edges = _definition_related_rows(persisted.edges, self, alias).all().delete()
+            steps = _definition_related_rows(persisted.steps, self, alias).all().delete()
+            with _definition_caller_context(self):
+                workflow = super().delete(*args, **kwargs)
+            return _combined_delete_results(edges, steps, workflow)
 
     def publish(self) -> Self:
         """Copy this draft lineage head into an immutable published version."""
 
-        self.full_clean()
         if self.published_from_id is not None:
             raise ValidationError({"published_from": "Only a workflow lineage head can be published."})
-        if self.status != WorkflowStatus.DRAFT:
-            raise ValidationError({"status": "Only draft workflows can be published."})
-        self._validate_publishable()
-
-        with transaction.atomic():
-            draft = type(self).objects.lock_if_supported().get(pk=self.pk)
-            draft._validate_publishable()
-            version = draft._next_published_version()
+        alias = router.db_for_write(type(self), instance=self)
+        manager = type(self).objects.db_manager(alias)
+        with manager._definition_write((self.pk,), using=alias):
+            draft = cast(Self, _bind_definition_caller(_definition_rows(type(self), alias).get(pk=self.pk), self))
+            if draft.status != WorkflowStatus.DRAFT:
+                raise ValidationError({"status": "Only draft workflows can be published."})
+            with _definition_caller_context(draft):
+                draft._validate_publishable()
+            with _definition_caller_context(draft):
+                version = draft._next_published_version()
             published = type(self)(
                 key=draft.key,
                 name=draft.name,
@@ -468,6 +766,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                 subject_declaration=draft.subject_declaration,
                 status=WorkflowStatus.DRAFT,
                 version=version,
+                draft_revision=manager._definition_revision(draft.pk, draft.draft_revision),
                 published_from=draft,
                 error_workflow=draft.error_workflow,
                 max_steps=draft.max_steps,
@@ -475,18 +774,26 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                 created_by_id=draft.created_by_id,
                 updated_by_id=draft.updated_by_id,
             )
-            published.save()
-            draft._copy_definition_to(published)
-            published.mark_published()
+            _bind_definition_caller(published, draft)
+            published.save(using=alias)
+            with manager._copy_to(published.pk):
+                with _definition_caller_context(draft):
+                    draft._copy_definition_to(published)
+                published.mark_published()
             return cast(Self, published)
 
     def publish_if_changed(self) -> Self | None:
         """Publish this draft only when no current version has the same definition."""
 
-        current = type(self).objects.current_published_for(self)
-        if current is not None and self._definition_signature() == current._definition_signature():
-            return None
-        return self.publish()
+        alias = router.db_for_write(type(self), instance=self)
+        manager = type(self).objects.db_manager(alias)
+        with manager._definition_write((self.pk,), using=alias):
+            draft = cast(Self, _bind_definition_caller(_definition_rows(type(self), alias).get(pk=self.pk), self))
+            with _definition_caller_context(draft):
+                current = manager.current_published_for(draft)
+                if current is not None and draft._definition_signature() == current._definition_signature():
+                    return None
+            return draft.publish()
 
     def _next_published_version(self) -> int:
         """Return the next immutable version number for this lineage head."""
@@ -514,15 +821,18 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                 is_entry=step.is_entry,
                 position=copy.deepcopy(step.position),
             )
+            _bind_definition_caller(copied, published)
             copied.save()
             step_map[step.pk] = copied
         for edge in self.edges.select_related("source", "target").order_by("pk"):
-            edge_model(
+            copied_edge = edge_model(
                 workflow=published,
                 source=step_map[edge.source_id],
                 target=step_map[edge.target_id],
                 condition=edge.condition,
-            ).save()
+            )
+            _bind_definition_caller(copied_edge, published)
+            copied_edge.save()
 
     def _definition_signature(self) -> dict[str, Any]:
         """Return the versioned definition content for publish idempotency."""
@@ -565,11 +875,23 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         }
 
     def _validate_publishable(self) -> None:
-        """Require exactly one entry step before publishing."""
+        """Validate the exact locked graph before creating an executable snapshot."""
 
-        entry_count = self.steps.filter(is_entry=True).count()
-        if entry_count != 1:
-            raise ValidationError({"steps": "A workflow must have exactly one entry step before publishing."})
+        self.validate_readiness()
+
+    def graph_diagnostics(self) -> tuple[Any, ...]:
+        """Return readiness diagnostics for the currently persisted definition."""
+
+        from angee.workflows.graph import WorkflowGraph
+
+        return WorkflowGraph.from_workflow(self).diagnostics()
+
+    def validate_readiness(self) -> None:
+        """Raise all readiness diagnostics for the currently persisted definition."""
+
+        from angee.workflows.graph import WorkflowGraph
+
+        WorkflowGraph.from_workflow(self).validate()
 
     def _persisted_save_snapshot(self) -> Self | None:
         """Return the persisted status and stable key for save guards."""
@@ -605,13 +927,25 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         versions = type(self)._base_manager.filter(published_from=self)
         if versions.exclude(key__in=("", self.key)).exists():
             raise ValidationError({"key": "Published workflow versions disagree with their lineage stable key."})
-        versions.filter(key="").update(key=self.key, updated_at=timezone.now())
+        models.QuerySet.update(
+            versions.filter(key=""),
+            key=self.key,
+            updated_at=timezone.now(),
+        )
 
     @property
     def is_immutable(self) -> bool:
         """Return whether this workflow version rejects definition edits."""
 
         return self.status in {WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED}
+
+
+class StepQuerySet(DefinitionQuerySet):
+    """Guard collection writes to workflow steps."""
+
+
+class StepManager(AngeeManager.from_queryset(StepQuerySet)):  # type: ignore[misc]
+    """Manager for guarded workflow-step writes."""
 
 
 class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
@@ -633,7 +967,7 @@ class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
     is_entry = models.BooleanField(default=False)
     position = models.JSONField(default=dict, blank=True)
 
-    objects = AngeeManager()
+    objects = StepManager()
 
     class Meta:
         """Django model options for workflow steps."""
@@ -649,6 +983,21 @@ class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
 
         return self.name or self.key
 
+    @classmethod
+    def resource_write_preparation(cls, resource: Any, dataset: Any) -> ResourceWritePreparation | None:
+        """Declare old and proposed workflow parents for a resource step batch."""
+
+        workflows = set(resource.related_instances(dataset, "workflow"))
+        workflows.update(
+            instance.workflow
+            for xref in dataset["_xref"]
+            if (instance := resource.instance_for_xref(xref)) is not None
+        )
+        if not workflows:
+            return None
+        workflow_model = cls._meta.get_field("workflow").remote_field.model
+        return ResourceWritePreparation(workflow_model, frozenset(row.pk for row in workflows))
+
     def config_projection(self) -> StepConfigProjection:
         """Project legacy config for repair without rewriting its stored value."""
 
@@ -662,30 +1011,97 @@ class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
             return StepConfigProjection(value=raw, errors=error.message_dict)
 
     def clean(self) -> None:
-        """Validate the step implementation key and config."""
+        """Validate structural draft fields without requiring readiness."""
 
         super().clean()
+        if not isinstance(self.config, Mapping):
+            raise ValidationError({"config": "Step config must be an object."})
         try:
-            impl = cast(type[StepImpl], self.resolve_impl("step_class"))
-            impl.validate_config(self.config)
-            validate_retry_config(self.config)
+            self.resolve_impl("step_class")
         except ValidationError:
             raise
         except Exception as error:
             raise ValidationError({"step_class": "Unknown workflow step class."}) from error
 
+    def validate_impl_configs(self, *, update_fields: Any = None) -> None:
+        """Canonicalize complete drafts while preserving incomplete object configs."""
+
+        if not self._state.adding and update_fields is not None and "config" not in update_fields:
+            return
+        if not isinstance(self.config, Mapping):
+            raise ValidationError({"config": "Step config must be an object."})
+        impl = cast(type[StepImpl], self.resolve_impl("step_class"))
+        if impl.config_model is None:
+            return
+        try:
+            self.config = impl.normalize_config(self.config)
+        except ValidationError:
+            # Incomplete typed config is a readiness diagnostic, not a storage error.
+            self.config = copy.deepcopy(dict(self.config))
+
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the step after enforcing parent immutability and validation."""
 
-        self._raise_if_workflow_immutable()
-        self.full_clean()
-        super().save(*args, **kwargs)
+        alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        old_parent_id = None
+        if not self._state.adding:
+            old_parent_id = _definition_rows(type(self), alias).filter(pk=self.pk).values_list(
+                "workflow_id", flat=True
+            ).first()
+        parent_ids = {value for value in (old_parent_id, self.workflow_id) if value is not None}
+        manager = type(self.workflow).objects
+        with manager._definition_write(parent_ids, using=alias):
+            old = None if self._state.adding else _definition_rows(type(self), alias).filter(pk=self.pk).first()
+            if not self._state.adding and (old is None or old.workflow_id != old_parent_id):
+                raise ValidationError("The stored workflow step changed while it was being edited.")
+            if old is not None and old.workflow_id != self.workflow_id:
+                if _definition_rows(type(self), alias).filter(
+                    models.Q(outgoing_edges__isnull=False) | models.Q(incoming_edges__isnull=False), pk=self.pk
+                ).exists():
+                    raise ValidationError({"workflow": "A connected step cannot move to another workflow."})
+            with _definition_caller_context(self):
+                self.full_clean()
+            update_fields = kwargs.get("update_fields")
+            self.validate_impl_configs(update_fields=update_fields)
+            fields = {"workflow_id", "key", "name", "step_class", "config", "join_rule", "is_entry", "position"}
+            updated = None if update_fields is None else set(update_fields)
+            considered = fields if updated is None else {
+                field for field in fields if field in updated or field.removesuffix("_id") in updated
+            }
+            changed = old is None or any(
+                getattr(old, field) != getattr(self, field)
+                for field in considered
+            )
+            super().save(*args, **kwargs)
+            session = _definition_write_session.get()
+            if changed and session is not None and self.workflow_id not in session.copy_target_ids:
+                for workflow_id in parent_ids:
+                    manager.mark_definition_changed(workflow_id)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Delete only steps belonging to mutable workflow rows."""
 
-        self._raise_if_workflow_immutable()
-        return super().delete(*args, **kwargs)
+        alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        workflow_id = _definition_rows(type(self), alias).filter(pk=self.pk).values_list(
+            "workflow_id", flat=True
+        ).first()
+        if workflow_id is None:
+            return (0, {})
+        manager = type(self.workflow).objects
+        with manager._definition_write((workflow_id,), using=alias):
+            persisted = _definition_rows(type(self), alias).get(pk=self.pk)
+            if persisted.workflow_id != workflow_id:
+                raise ValidationError("The stored workflow step changed while it was being deleted.")
+            edge_model = persisted.outgoing_edges.model
+            edges = _definition_related_rows(edge_model.objects, self, alias).filter(
+                models.Q(source_id=self.pk) | models.Q(target_id=self.pk)
+            ).delete()
+            with _definition_caller_context(self):
+                step = super().delete(*args, **kwargs)
+            session = _definition_write_session.get()
+            if session is not None and workflow_id not in session.copy_target_ids:
+                manager.mark_definition_changed(workflow_id)
+            return _combined_delete_results(edges, step)
 
     def _raise_if_workflow_immutable(self) -> None:
         """Reject writes when this step belongs to an immutable workflow version."""
@@ -695,6 +1111,14 @@ class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
         workflow = type(self.workflow)._base_manager.only("status").get(pk=self.workflow_id)
         if workflow.is_immutable:
             raise ValidationError("Published workflow versions are immutable.")
+
+
+class EdgeQuerySet(DefinitionQuerySet):
+    """Guard collection writes to workflow edges."""
+
+
+class EdgeManager(AngeeManager.from_queryset(EdgeQuerySet)):  # type: ignore[misc]
+    """Manager for guarded workflow-edge writes."""
 
 
 class Edge(AuditMixin, AngeeDataModel):
@@ -708,7 +1132,7 @@ class Edge(AuditMixin, AngeeDataModel):
     target = models.ForeignKey("workflows.Step", on_delete=models.CASCADE, related_name="incoming_edges")
     condition = models.SlugField(max_length=100, blank=True, default="")
 
-    objects = AngeeManager()
+    objects = EdgeManager()
 
     class Meta:
         """Django model options for workflow edges."""
@@ -726,6 +1150,21 @@ class Edge(AuditMixin, AngeeDataModel):
 
         return f"{self.source_id}->{self.target_id}:{self.condition}"
 
+    @classmethod
+    def resource_write_preparation(cls, resource: Any, dataset: Any) -> ResourceWritePreparation | None:
+        """Declare old and proposed workflow parents for a resource edge batch."""
+
+        workflows = set(resource.related_instances(dataset, "workflow"))
+        workflows.update(
+            instance.workflow
+            for xref in dataset["_xref"]
+            if (instance := resource.instance_for_xref(xref)) is not None
+        )
+        if not workflows:
+            return None
+        workflow_model = cls._meta.get_field("workflow").remote_field.model
+        return ResourceWritePreparation(workflow_model, frozenset(row.pk for row in workflows))
+
     def clean(self) -> None:
         """Validate that an edge is fully contained in one workflow."""
 
@@ -741,15 +1180,66 @@ class Edge(AuditMixin, AngeeDataModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the edge after enforcing parent immutability and validation."""
 
-        self._raise_if_workflow_immutable()
-        self.full_clean()
-        super().save(*args, **kwargs)
+        alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        old_parent_id = None
+        if not self._state.adding:
+            old_parent_id = _definition_rows(type(self), alias).filter(pk=self.pk).values_list(
+                "workflow_id", flat=True
+            ).first()
+        step_model = self._meta.get_field("source").remote_field.model
+        parent_ids = {value for value in (old_parent_id, self.workflow_id) if value is not None}
+        manager = type(self.workflow).objects
+        with manager._definition_write(parent_ids, using=alias):
+            old = None if self._state.adding else _definition_rows(type(self), alias).filter(pk=self.pk).first()
+            if not self._state.adding and (old is None or old.workflow_id != old_parent_id):
+                raise ValidationError("The stored workflow edge changed while it was being edited.")
+            endpoints = dict(
+                _definition_rows(step_model, alias)
+                .filter(pk__in=(self.source_id, self.target_id))
+                .values_list("pk", "workflow_id")
+            )
+            if endpoints.get(self.source_id) != self.workflow_id:
+                raise ValidationError({"source": "Edge source must belong to the same workflow."})
+            if endpoints.get(self.target_id) != self.workflow_id:
+                raise ValidationError({"target": "Edge target must belong to the same workflow."})
+            with _definition_caller_context(self):
+                self.full_clean()
+            update_fields = kwargs.get("update_fields")
+            fields = {"workflow_id", "source_id", "target_id", "condition"}
+            updated = None if update_fields is None else set(update_fields)
+            considered = fields if updated is None else {
+                field for field in fields if field in updated or field.removesuffix("_id") in updated
+            }
+            changed = old is None or any(
+                getattr(old, field) != getattr(self, field)
+                for field in considered
+            )
+            super().save(*args, **kwargs)
+            session = _definition_write_session.get()
+            if changed and session is not None and self.workflow_id not in session.copy_target_ids:
+                for workflow_id in parent_ids:
+                    manager.mark_definition_changed(workflow_id)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Delete only edges belonging to mutable workflow rows."""
 
-        self._raise_if_workflow_immutable()
-        return super().delete(*args, **kwargs)
+        alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        workflow_id = _definition_rows(type(self), alias).filter(pk=self.pk).values_list(
+            "workflow_id", flat=True
+        ).first()
+        if workflow_id is None:
+            return (0, {})
+        manager = type(self.workflow).objects
+        with manager._definition_write((workflow_id,), using=alias):
+            persisted = _definition_rows(type(self), alias).get(pk=self.pk)
+            if persisted.workflow_id != workflow_id:
+                raise ValidationError("The stored workflow edge changed while it was being deleted.")
+            with _definition_caller_context(self):
+                result = super().delete(*args, **kwargs)
+            session = _definition_write_session.get()
+            if session is not None and workflow_id not in session.copy_target_ids:
+                manager.mark_definition_changed(workflow_id)
+            return result
 
     def _raise_if_workflow_immutable(self) -> None:
         """Reject writes when this edge belongs to an immutable workflow version."""

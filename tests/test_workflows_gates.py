@@ -38,6 +38,17 @@ User = get_user_model()
 pytest_plugins = ("tests.workflows",)
 
 
+@pytest.fixture(autouse=True)
+def executable_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep legacy handler fixtures executable while tests replace behavior as needed."""
+
+    def run(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+        del self, now
+        return StepResult.done(outcome=str(step_run.step.config.get("outcome", "done")))
+
+    monkeypatch.setattr(HandlerStep, "run", run)
+
+
 def test_suspend_result_creates_decision_rows_and_relationship_tuples(
     workflow_gate_tables: None,
     no_workflow_queue: None,
@@ -483,9 +494,13 @@ def test_override_run_cancels_active_steps_and_injects_synthetic_step_run(
         name="Gate workflow",
         steps=(
             {"key": "active", "config": {"outcome": "done"}},
-            {"key": "finish", "config": {"outcome": "done"}, "is_entry": False},
+            {
+                "key": "finish",
+                "config": {"outcome": "done"},
+                "is_entry": False,
+            },
         ),
-        edges=(),
+        edges=(("active", "finish", "unreachable"),),
     )
     active = step_for(workflow, "active")
     finish = step_for(workflow, "finish")

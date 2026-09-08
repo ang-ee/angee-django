@@ -181,8 +181,8 @@ def _notes_workflow_addon(tmp_path: Path) -> AppConfig:
     steps_path = target / "resources" / "demo" / "101_workflows.step.yaml"
     steps_path.write_text(
         steps_path.read_text()
-        .replace("step_class: note_validate_publication", "step_class: handler")
-        .replace("step_class: note_publish", "step_class: handler")
+        .replace("step_class: note_validate_publication", "step_class: agent_session")
+        .replace("step_class: note_publish", "step_class: agent_session")
     )
     module = ModuleType("example.notes")
     module.__file__ = str(target / "__init__.py")

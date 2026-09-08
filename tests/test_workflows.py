@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.db import models
 from django.utils.text import slugify
 from pydantic import BaseModel
 from pydantic import Field as PydanticField
@@ -105,7 +106,13 @@ def create_workflow(name: str = "Document Review") -> Workflow:
 def create_entry(workflow: Workflow, *, key: str = "start", name: str = "Start") -> Step:
     """Create one entry step for ``workflow``."""
 
-    return Step.objects.create(workflow=workflow, key=key, name=name, is_entry=True)
+    return Step.objects.create(
+        workflow=workflow,
+        key=key,
+        name=name,
+        step_class="agent_session",
+        is_entry=True,
+    )
 
 
 def _platform_admin(username: str) -> Any:
@@ -199,7 +206,12 @@ def test_publish_copies_draft_to_immutable_version(workflow_tables: None) -> Non
     with system_context(reason="test workflows publish copy"):
         draft = create_workflow()
         entry = create_entry(draft)
-        finish = Step.objects.create(workflow=draft, key="finish", name="Finish")
+        finish = Step.objects.create(
+            workflow=draft,
+            key="finish",
+            name="Finish",
+            step_class="agent_session",
+        )
         Edge.objects.create(workflow=draft, source=entry, target=finish, condition="done")
 
         first = draft.publish()
@@ -330,7 +342,7 @@ def test_graphql_wait_fields_are_nullable_for_completed_and_legacy_rows(
     admin = _platform_admin("workflow-wait-projection-admin")
     workflow = workflow_with_steps(
         name="Wait projection",
-        steps=({"key": "done", "config": {"outcome": "done"}},),
+        steps=({"key": "done", "step_class": "agent_session", "config": {}},),
         edges=(),
     )
     run = start_run(workflow)
@@ -516,7 +528,7 @@ def test_workflow_step_config_query_projects_legacy_and_preserves_invalid_raw_va
             step_class="gate",
             config={"action": "approve", "slots": [{"assignee": "auth/user:1"}]},
         )
-        Step.objects.filter(pk=step.pk).update(
+        models.QuerySet.update(Step._base_manager.filter(pk=step.pk),
             config={"action": "approve", "slots": [{"assignee": "auth/user:1"}]}
         )
     query = """
@@ -530,13 +542,13 @@ def test_workflow_step_config_query_projects_legacy_and_preserves_invalid_raw_va
 
     invalid = {"action": "approve", "slots": [{"assignee": ""}]}
     with system_context(reason="test invalid workflow config GraphQL projection"):
-        Step.objects.filter(pk=step.pk).update(config=invalid)
+        models.QuerySet.update(Step._base_manager.filter(pk=step.pk), config=invalid)
     projected = result_data(execute_schema(_console_schema(), query, {"id": step.sqid}, user=admin))
     assert projected["workflow_steps_by_pk"]["config"] == invalid
     assert "config.slots.0.assignees.0" in projected["workflow_steps_by_pk"]["config_errors"]
 
     with system_context(reason="test scalar workflow config GraphQL projection"):
-        Step.objects.filter(pk=step.pk).update(config="invalid root")
+        models.QuerySet.update(Step._base_manager.filter(pk=step.pk), config="invalid root")
     projected = result_data(execute_schema(_console_schema(), query, {"id": step.sqid}, user=admin))
     assert projected["workflow_steps_by_pk"]["config"] == "invalid root"
     assert projected["workflow_steps_by_pk"]["config_errors"] == {

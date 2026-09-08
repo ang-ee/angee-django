@@ -45,6 +45,17 @@ User = get_user_model()
 pytest_plugins = ("tests.workflows",)
 
 
+@pytest.fixture()
+def executable_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make legacy trigger handler fixtures executable with their configured outcome."""
+
+    def run(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+        del self, now
+        return StepResult.done(outcome=str(step_run.step.config.get("outcome", "done")))
+
+    monkeypatch.setattr(HandlerStep, "run", run)
+
+
 class TriggerSubject(models.Model):
     """Concrete row declared into the change feed for event-trigger tests."""
 
@@ -108,10 +119,12 @@ class TriggerSchemaQuery:
 
 
 @pytest.fixture()
-def workflow_trigger_tables(transactional_db: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def workflow_trigger_tables(
+    transactional_db: Any, monkeypatch: pytest.MonkeyPatch, executable_handler: None
+) -> Iterator[None]:
     """Create trigger-specific concrete tables and sync workflow REBAC."""
 
-    del transactional_db
+    del transactional_db, executable_handler
     models = (*WORKFLOW_RUNTIME_MODELS, *TRIGGER_TEST_MODELS)
     workflow_triggers = importlib.import_module("angee.workflows.triggers")
     schemas = GraphQLSchemas(
@@ -141,9 +154,10 @@ def workflow_trigger_tables(transactional_db: Any, monkeypatch: pytest.MonkeyPat
 
 
 @pytest.fixture()
-def item_handler(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+def item_handler(monkeypatch: pytest.MonkeyPatch, executable_handler: None) -> list[dict[str, Any]]:
     """Run handlers synchronously and fail one mapped item by value."""
 
+    del executable_handler
     calls: list[dict[str, Any]] = []
 
     def run(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
@@ -221,7 +235,9 @@ def test_event_trigger_check_rejects_persisted_non_published_model(
     del workflow_trigger_tables
     with system_context(reason="test invalid event trigger check setup"):
         draft = Workflow.objects.create(name="Invalid Event")
-        Step.objects.create(workflow=draft, key="start", name="Start", is_entry=True)
+        Step.objects.create(
+            workflow=draft, key="start", name="Start", is_entry=True
+        )
         workflow = draft.publish()
     trigger = Trigger(
         workflow=workflow,
@@ -614,7 +630,9 @@ def _event_trigger(
     }
     with system_context(reason="test workflows event trigger"):
         draft = Workflow.objects.create(name=f"Event {condition}")
-        Step.objects.create(workflow=draft, key="start", name="Start", is_entry=True)
+        Step.objects.create(
+            workflow=draft, key="start", name="Start", is_entry=True
+        )
         draft.publish()
         return Trigger.objects.create(
             workflow=draft,
@@ -629,7 +647,9 @@ def _schedule_trigger(*, config: dict[str, Any], next_fire_at: Any) -> Trigger:
 
     with system_context(reason="test workflows schedule trigger"):
         draft = Workflow.objects.create(name="Schedule")
-        Step.objects.create(workflow=draft, key="start", name="Start", is_entry=True)
+        Step.objects.create(
+            workflow=draft, key="start", name="Start", is_entry=True
+        )
         draft.publish()
         return Trigger.objects.create(
             workflow=draft,
@@ -649,6 +669,7 @@ def _map_workflow(*, policy: dict[str, Any], items: list[str]) -> Workflow:
             workflow=draft,
             key="entry",
             name="Entry",
+            step_class="handler",
             is_entry=True,
             config={"outcome": "map"},
         )
@@ -659,9 +680,15 @@ def _map_workflow(*, policy: dict[str, Any], items: list[str]) -> Workflow:
             step_class="map",
             config={"target_step": "item", "items": items, **policy},
         )
-        Step.objects.create(workflow=draft, key="item", name="Item", config={"outcome": "done"})
-        passed = Step.objects.create(workflow=draft, key="passed", name="Passed", config={"outcome": "done"})
-        failed = Step.objects.create(workflow=draft, key="failed", name="Failed", config={"outcome": "done"})
+        Step.objects.create(
+            workflow=draft, key="item", name="Item", step_class="handler", config={"outcome": "done"}
+        )
+        passed = Step.objects.create(
+            workflow=draft, key="passed", name="Passed", step_class="handler", config={"outcome": "done"}
+        )
+        failed = Step.objects.create(
+            workflow=draft, key="failed", name="Failed", step_class="handler", config={"outcome": "done"}
+        )
         Edge.objects.create(workflow=draft, source=entry, target=map_step, condition="map")
         Edge.objects.create(workflow=draft, source=map_step, target=passed, condition="succeeded")
         Edge.objects.create(workflow=draft, source=map_step, target=failed, condition="failed")

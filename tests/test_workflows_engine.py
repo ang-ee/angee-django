@@ -11,7 +11,6 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
-from django.db.models.deletion import ProtectedError
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import system_context
@@ -102,6 +101,7 @@ def test_two_step_run_completes_end_to_end(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("handler_calls")
 def test_start_accepts_matching_and_empty_subject_declarations(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -132,6 +132,7 @@ def test_start_accepts_matching_and_empty_subject_declarations(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("handler_calls")
 def test_start_rejects_subject_outside_subject_declaration(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -333,6 +334,7 @@ def test_one_success_join_runs_without_waiting_for_all_siblings(
         (workflow_models.JoinRule.NONE_FAILED_MIN_ONE_SUCCESS, ("skipped", "succeeded"), "started"),
     ],
 )
+@pytest.mark.usefixtures("handler_calls")
 def test_join_rule_truth_table(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -350,7 +352,11 @@ def test_join_rule_truth_table(
             {"key": "right", "is_entry": False, "config": {"outcome": "done"}},
             {"key": "join", "is_entry": False, "join_rule": rule, "config": {"outcome": "done"}},
         ),
-        edges=(("left", "join", ""), ("right", "join", "")),
+        edges=(
+            ("left", "right", "unreachable"),
+            ("left", "join", ""),
+            ("right", "join", ""),
+        ),
     )
     left = step_for(workflow, "left")
     right = step_for(workflow, "right")
@@ -543,6 +549,7 @@ def test_deliver_is_idempotent_and_counts_delivery_on_terminal_runs(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("handler_calls")
 def test_cancellation_propagates_to_journal_and_child_runs(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -596,6 +603,7 @@ def test_cancellation_propagates_to_journal_and_child_runs(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("handler_calls")
 def test_transient_step_error_uses_configured_retry_backoff(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -679,6 +687,7 @@ def test_hard_failure_routes_failed_outcome(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("handler_calls")
 def test_step_impl_heartbeat_helper_updates_started_row(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -788,6 +797,7 @@ def test_reaper_ignores_waiting_rows(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("handler_calls")
 def test_reaper_finishes_canceled_started_rows(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -866,6 +876,7 @@ def test_error_workflow_fires_once_with_failed_run_subject(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("handler_calls")
 def test_identity_migration_backfills_only_structurally_known_run_origins(
     workflow_engine_tables: None,
 ) -> None:
@@ -941,6 +952,7 @@ def test_error_workflow_run_does_not_start_another_error_workflow(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("handler_calls")
 def test_override_run_reuses_existing_terminal_step_run(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -954,7 +966,7 @@ def test_override_run_reuses_existing_terminal_step_run(
             {"key": "active", "config": {"outcome": "done"}},
             {"key": "retry", "config": {"outcome": "done"}, "is_entry": False},
         ),
-        edges=(),
+        edges=(("active", "retry", "unreachable"),),
     )
     active = step_for(workflow, "active")
     retry = step_for(workflow, "retry")
@@ -981,6 +993,7 @@ def test_override_run_reuses_existing_terminal_step_run(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("handler_calls")
 def test_workflow_run_save_uses_loaded_dedup_key_without_extra_select(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -1085,6 +1098,7 @@ def test_postgres_lock_sql_scopes_joined_engine_queries_to_self(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("handler_calls")
 def test_publish_retargets_new_starts_without_migrating_trigger(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -1116,6 +1130,7 @@ def test_publish_retargets_new_starts_without_migrating_trigger(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("handler_calls")
 def test_published_and_archived_definition_rows_are_immutable(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -1152,6 +1167,7 @@ def test_published_and_archived_definition_rows_are_immutable(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("handler_calls")
 def test_archived_latest_version_refuses_new_runs(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -1173,11 +1189,12 @@ def test_archived_latest_version_refuses_new_runs(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_referenced_published_version_delete_is_protected(
+@pytest.mark.usefixtures("handler_calls")
+def test_referenced_published_version_delete_is_rejected_as_immutable(
     workflow_engine_tables: None,
     no_workflow_queue: None,
 ) -> None:
-    """A WorkflowRun's pinned version FK blocks deleting the referenced published version."""
+    """Published history remains immutable even when a run also pins the version."""
 
     del workflow_engine_tables, no_workflow_queue
     workflow = workflow_with_steps(
@@ -1187,5 +1204,6 @@ def test_referenced_published_version_delete_is_protected(
     start_run(workflow)
 
     with system_context(reason="test workflows version protect"):
-        with pytest.raises(ProtectedError):
+        with pytest.raises(ValidationError, match="immutable"):
             Workflow.objects.filter(pk=workflow.pk).delete()
+        assert Workflow.objects.filter(pk=workflow.pk).exists()
