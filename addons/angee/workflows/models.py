@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import uuid
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
@@ -37,6 +38,16 @@ from angee.base.refs import RecordRefMixin
 from angee.base.scoping import system_queryset
 from angee.base.transitions import StateTransitions, TransitionNotAllowed, save_state, transition
 from angee.resources.mixins import ResourceLoadMixin, ResourceWritePreparation
+from angee.workflows.attempts import (
+    AttemptCause,
+    AttemptFinalization,
+    AttemptInput,
+    AttemptResult,
+    AttemptResultKind,
+    AttemptStatus,
+    LeaseRevocation,
+    LeaseRevocationReason,
+)
 from angee.workflows.definitions import WorkflowDefinitionManagerMixin
 from angee.workflows.steps import (
     StepImpl,
@@ -62,6 +73,28 @@ class _DefinitionWriteSession:
 _definition_write_session: ContextVar[_DefinitionWriteSession | None] = ContextVar(
     "workflow_definition_write_session", default=None
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _AttemptWriteSession:
+    alias: str
+    connection_id: int
+
+
+_attempt_write_session: ContextVar[_AttemptWriteSession | None] = ContextVar(
+    "workflow_attempt_write_session", default=None
+)
+
+
+def _attempt_write_active(alias: str) -> bool:
+    session = _attempt_write_session.get()
+    connection = connections[alias]
+    return (
+        session is not None
+        and session.alias == alias
+        and session.connection_id == id(connection)
+        and connection.in_atomic_block
+    )
 
 
 def _combined_delete_results(*results: tuple[int, dict[str, int]]) -> tuple[int, dict[str, int]]:
@@ -1774,6 +1807,26 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         locked.save(update_fields=["budget_spent", "updated_at"])
 
 
+class StepRunQuerySet(AngeeQuerySet[Any]):
+    """Step-run collection writes protecting attempt-owned execution facts."""
+
+    _attempt_owned = frozenset({"attempt", "current_attempt", "current_attempt_id", "effect_key", "effect_generation"})
+
+    def update(self, **kwargs: Any) -> int:
+        if self._attempt_owned.intersection(kwargs) and not _attempt_write_active(self.db):
+            raise TypeError("Attempt-owned StepRun fields can only be changed by StepAttemptManager.")
+        return super().update(**kwargs)
+
+    def bulk_update(self, objs: Iterable[Any], fields: Iterable[str], **kwargs: Any) -> int:
+        if self._attempt_owned.intersection(fields) and not _attempt_write_active(self.db):
+            raise TypeError("Attempt-owned StepRun fields can only be changed by StepAttemptManager.")
+        return super().bulk_update(objs, fields, **kwargs)
+
+
+class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: ignore[misc]
+    """Manager preserving existing StepRun creation with guarded attempt facts."""
+
+
 class StepRun(AuditMixin, AngeeDataModel):
     """Journal row for one workflow step execution or system-injected event."""
 
@@ -1798,6 +1851,16 @@ class StepRun(AuditMixin, AngeeDataModel):
     claimed_deliveries = models.PositiveBigIntegerField(default=0)
     outcome = models.SlugField(max_length=100, blank=True, default="")
     attempt = models.PositiveIntegerField(default=0)
+    effect_key = models.UUIDField(null=True, blank=True, editable=False)
+    effect_generation = models.PositiveIntegerField(default=0, editable=False)
+    current_attempt = models.OneToOneField(
+        "workflows.StepAttempt",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="current_for_step_run",
+        editable=False,
+    )
     wait_until = models.DateTimeField(null=True, blank=True, db_index=True)
     waiting_kind = StateField(choices_enum=WaitingKind, blank=True, default="")
     heartbeat_at = models.DateTimeField(null=True, blank=True)
@@ -1832,7 +1895,7 @@ class StepRun(AuditMixin, AngeeDataModel):
         },
     )
 
-    objects = AngeeManager()
+    objects = StepRunManager()
 
     class Meta:
         """Django model options for workflow step-run journal rows."""
@@ -1850,6 +1913,31 @@ class StepRun(AuditMixin, AngeeDataModel):
         """Return whether this journal row has reached a terminal status."""
 
         return self.status in StepRunStatus.TERMINAL
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Keep attempt-owned facts immutable outside the attempt manager."""
+
+        alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
+        if self._state.adding and not _attempt_write_active(alias):
+            invalid = self.effect_key is not None or self.effect_generation != 0 or self.current_attempt_id is not None
+            if invalid:
+                raise ValidationError({"effect_key": "Attempt identity is initialized by StepAttemptManager."})
+        elif not _attempt_write_active(alias):
+            loaded = system_queryset(type(self), using=alias, lock=None).filter(pk=self.pk).values(
+                "attempt", "current_attempt_id", "effect_key", "effect_generation"
+            ).get()
+            changed = {
+                name
+                for name in ("current_attempt_id", "effect_key", "effect_generation")
+                if loaded[name] != getattr(self, name)
+            }
+            if loaded["attempt"] != self.attempt and (
+                loaded["current_attempt_id"] is not None or loaded["effect_key"] is not None
+            ):
+                changed.add("attempt")
+            if changed:
+                raise ValidationError({name: "This field is owned by StepAttemptManager." for name in changed})
+        super().save(*args, **kwargs)
 
     @transition(
         status,
@@ -1996,6 +2084,381 @@ class StepRun(AuditMixin, AngeeDataModel):
             "error",
             "stacktrace",
         }
+
+
+class StepAttemptQuerySet(AngeeQuerySet[Any]):
+    """Reject collection mutations that would bypass retained-evidence rules."""
+
+    @staticmethod
+    def _is_audit_nullification(values: Mapping[str, Any]) -> bool:
+        audit_fields = frozenset(field.name for field in AuditMixin._meta.fields)
+        return bool(values) and set(values).issubset(audit_fields) and all(value is None for value in values.values())
+
+    def update(self, **kwargs: Any) -> int:
+        if self._is_audit_nullification(kwargs):
+            return super().update(**kwargs)
+        if not _attempt_write_active(self.db):
+            raise TypeError("Step attempts can only be changed by StepAttemptManager.")
+        return super().update(**kwargs)
+
+    def bulk_create(self, *args: Any, **kwargs: Any) -> list[Any]:
+        raise TypeError("Step attempts do not support bulk_create().")
+
+    def bulk_update(self, *args: Any, **kwargs: Any) -> int:
+        raise TypeError("Step attempts do not support bulk_update().")
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        raise TypeError("Step attempts are retained execution evidence and cannot be deleted.")
+
+
+class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # type: ignore[misc]
+    """Allocate, lease, and finalize retained attempts under ancestor locks."""
+
+    @contextmanager
+    def _write(self, alias: str) -> Iterable[None]:
+        connection = connections[alias]
+        if not connection.in_atomic_block:
+            raise RuntimeError("Attempt writes require an active database transaction.")
+        active = _attempt_write_session.get()
+        if active is not None:
+            if active.alias != alias or active.connection_id != id(connection):
+                raise RuntimeError("An attempt write cannot span database connections.")
+            yield
+            return
+        token = _attempt_write_session.set(_AttemptWriteSession(alias, id(connection)))
+        try:
+            yield
+        finally:
+            _attempt_write_session.reset(token)
+
+    def _locked_ancestry(self, step_run_id: int, alias: str) -> tuple[Any, Any]:
+        step_run_model = self.model._meta.get_field("step_run").remote_field.model
+        run_model = step_run_model._meta.get_field("run").remote_field.model
+        run_id = system_queryset(step_run_model, using=alias, lock=None).values_list("run_id", flat=True).get(
+            pk=step_run_id
+        )
+        run = system_queryset(run_model, using=alias, lock=("self",)).get(pk=run_id)
+        step_run = system_queryset(step_run_model, using=alias, lock=("self",)).get(pk=step_run_id)
+        if step_run.run_id != run.pk:
+            raise OperationalError("Step run ownership changed while its attempt was being locked.")
+        return run, step_run
+
+    def allocate(
+        self,
+        step_run: Any,
+        *,
+        cause: AttemptCause = AttemptCause.INITIAL,
+        input: AttemptInput = AttemptInput(),
+        claimed_at: datetime | None = None,
+    ) -> Any:
+        """Allocate the next physical attempt for an active logical step run."""
+
+        if not input.present and input.value is not None:
+            raise ValidationError({"input": "An absent attempt input cannot carry a value."})
+        if input.provenance is not None and not isinstance(input.provenance, dict):
+            raise ValidationError({"input_provenance": "Input provenance must be a JSON object."})
+        if not isinstance(cause, AttemptCause):
+            raise ValidationError({"cause": "Attempt allocation requires a declared cause."})
+        alias = self.db
+        with transaction.atomic(using=alias), self._write(alias), system_context(reason="workflows.attempt.allocate"):
+            run, locked = self._locked_ancestry(step_run.pk, alias)
+            if run.is_terminal or locked.status not in {StepRunStatus.SCHEDULED, StepRunStatus.WAITING}:
+                raise ValidationError({"step_run": "Only an active step run can allocate an attempt."})
+            if locked.current_attempt_id is not None:
+                current = system_queryset(self.model, using=alias, lock=("self",)).get(pk=locked.current_attempt_id)
+                if current.result_recorded_at is None and current.lease_revoked_at is None:
+                    raise ValidationError({"step_run": "This step run already has an active attempt."})
+            if locked.effect_key is None:
+                locked.effect_key = uuid.uuid4()
+            ordinal = locked.attempt + 1
+            attempt = self.model(
+                step_run=locked,
+                ordinal=ordinal,
+                cause=str(cause),
+                lease_token=uuid.uuid4(),
+                input_present=input.present,
+                input=input.value,
+                input_provenance=input.provenance or {},
+                claimed_at=claimed_at,
+                effect_key=locked.effect_key,
+                effect_generation=locked.effect_generation,
+            )
+            attempt.save(using=alias, force_insert=True)
+            locked.attempt = ordinal
+            locked.current_attempt = attempt
+            locked.save(
+                using=alias,
+                update_fields=["attempt", "current_attempt", "effect_key", "updated_at"],
+            )
+            return attempt
+
+    def mark_started(self, attempt_id: int, *, lease_token: uuid.UUID, at: datetime) -> bool:
+        """Record physical invocation and project its logical started state."""
+
+        return self._touch_lease(attempt_id, lease_token=lease_token, at=at, started=True)
+
+    def heartbeat(self, attempt_id: int, *, lease_token: uuid.UUID, at: datetime) -> bool:
+        """Refresh a live lease without changing logical lifecycle state."""
+
+        return self._touch_lease(attempt_id, lease_token=lease_token, at=at, started=False)
+
+    def _touch_lease(self, attempt_id: int, *, lease_token: uuid.UUID, at: datetime, started: bool) -> bool:
+        alias = self.db
+        unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
+        with transaction.atomic(using=alias), self._write(alias), system_context(reason="workflows.attempt.lease"):
+            run, step_run = self._locked_ancestry(unresolved.step_run_id, alias)
+            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(pk=attempt_id)
+            if (
+                run.is_terminal
+                or step_run.current_attempt_id != attempt.pk
+                or attempt.lease_token != lease_token
+                or attempt.lease_revoked_at is not None
+                or attempt.result_recorded_at is not None
+            ):
+                return False
+            timestamps = (attempt.claimed_at, attempt.started_at, attempt.heartbeat_at, at)
+            freshness = max(value for value in timestamps if value)
+            if started and attempt.started_at is None:
+                step_run.mark_started(heartbeat_at=freshness, claimed_deliveries=step_run.claimed_deliveries)
+                attempt.started_at = freshness
+            elif not started and attempt.started_at is None:
+                return False
+            attempt.heartbeat_at = freshness
+            attempt.save(using=alias, update_fields=["started_at", "heartbeat_at", "updated_at"])
+            return True
+
+    def revoke(
+        self, attempt_id: int, *, lease_token: uuid.UUID, reason: LeaseRevocationReason, at: datetime
+    ) -> LeaseRevocation:
+        """Revoke a current resultless lease while preserving later evidence."""
+
+        if not isinstance(reason, LeaseRevocationReason):
+            raise ValidationError({"reason": "Lease revocation requires a declared reason."})
+        alias = self.db
+        unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
+        with transaction.atomic(using=alias), self._write(alias), system_context(reason="workflows.attempt.revoke"):
+            _, step_run = self._locked_ancestry(unresolved.step_run_id, alias)
+            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(pk=attempt_id)
+            if attempt.lease_token != lease_token or step_run.current_attempt_id != attempt.pk:
+                return LeaseRevocation(False, attempt.result_recorded_at is not None)
+            if attempt.result_recorded_at is not None:
+                return LeaseRevocation(False, True)
+            if attempt.lease_revoked_at is not None:
+                return LeaseRevocation(attempt.lease_revocation_reason == str(reason), False)
+            attempt.lease_revoked_at = at
+            attempt.lease_revocation_reason = str(reason)
+            attempt.save(using=alias, update_fields=["lease_revoked_at", "lease_revocation_reason", "updated_at"])
+            return LeaseRevocation(True, False)
+
+    def finalize(
+        self, attempt_id: int, *, lease_token: uuid.UUID, result: AttemptResult, recorded_at: datetime
+    ) -> AttemptFinalization:
+        """Retain one result and atomically apply its closed legacy projection."""
+
+        if result.kind == AttemptResultKind.TRANSIENT_ERROR:
+            raise ValidationError({"result": "Transient results require atomic successor allocation."})
+        if not isinstance(result.kind, AttemptResultKind):
+            raise ValidationError({"result": "Attempt results require a declared result kind."})
+        if not result.output_present and result.output is not None:
+            raise ValidationError({"output": "An absent attempt output cannot carry a value."})
+        if not result.checkpoint_present and result.checkpoint is not None:
+            raise ValidationError({"checkpoint": "An absent attempt checkpoint cannot carry a value."})
+        if result.waiting_kind and result.waiting_kind not in WaitingKind.values:
+            raise ValidationError({"waiting_kind": "Attempt result waiting kind is not declared."})
+        alias = self.db
+        unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
+        with transaction.atomic(using=alias), self._write(alias), system_context(reason="workflows.attempt.finalize"):
+            run, step_run = self._locked_ancestry(unresolved.step_run_id, alias)
+            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(pk=attempt_id)
+            if attempt.lease_token != lease_token:
+                return AttemptFinalization(False, False)
+            if attempt.result_recorded_at is not None:
+                if not self._result_matches(attempt, result):
+                    raise ValidationError({"result": "A different result is already retained for this attempt."})
+                return AttemptFinalization(False, attempt.applied_at is not None)
+            attempt.result_kind = str(result.kind)
+            attempt.result_recorded_at = recorded_at
+            attempt.output_present = result.output_present
+            attempt.output = result.output
+            attempt.checkpoint_present = result.checkpoint_present
+            attempt.checkpoint = result.checkpoint
+            attempt.error = result.error
+            attempt.stacktrace = result.stacktrace
+            attempt.outcome = result.outcome
+            attempt.waiting_kind = result.waiting_kind
+            applicable = (
+                not run.is_terminal
+                and step_run.current_attempt_id == attempt.pk
+                and attempt.lease_revoked_at is None
+            )
+            if applicable:
+                self._apply_result(step_run, attempt, result)
+                attempt.applied_at = recorded_at
+            attempt.save(using=alias)
+            return AttemptFinalization(True, applicable)
+
+    @staticmethod
+    def _result_matches(attempt: Any, result: AttemptResult) -> bool:
+        """Compare a retry with the retained semantic envelope, excluding delivery time."""
+
+        return (
+            attempt.result_kind == str(result.kind)
+            and attempt.output_present == result.output_present
+            and attempt.output == result.output
+            and attempt.checkpoint_present == result.checkpoint_present
+            and attempt.checkpoint == result.checkpoint
+            and attempt.error == result.error
+            and attempt.stacktrace == result.stacktrace
+            and attempt.outcome == result.outcome
+            and attempt.waiting_kind == result.waiting_kind
+        )
+
+    def _apply_result(self, step_run: Any, attempt: Any, result: AttemptResult) -> None:
+        if result.kind == AttemptResultKind.PREPARATION_ERROR:
+            if attempt.started_at is not None or step_run.status not in {
+                StepRunStatus.SCHEDULED,
+                StepRunStatus.WAITING,
+            }:
+                raise ValidationError({"result": "Preparation errors require an unstarted active step run."})
+            step_run.error = result.error or ""
+            step_run.stacktrace = result.stacktrace or ""
+            step_run.outcome = result.outcome or "failed"
+            step_run.wait_until = None
+            step_run.waiting_kind = ""
+            step_run._transition_fields = {"error", "stacktrace", "outcome", "wait_until", "waiting_kind"}
+            step_run.status_transitions.force_state(
+                step_run, StepRunStatus.FAILED, reason="attempt preparation failed before invocation"
+            )
+            return
+        if attempt.started_at is None or step_run.status != StepRunStatus.STARTED:
+            raise ValidationError({"result": "This result requires a started current attempt."})
+        if result.kind == AttemptResultKind.DONE:
+            step_run.mark_succeeded(output=result.output if result.output_present else None, outcome=result.outcome)
+        elif result.kind in {AttemptResultKind.WAIT, AttemptResultKind.SUSPEND}:
+            step_run.mark_waiting(
+                resume_state=result.checkpoint if result.checkpoint_present else None,
+                waiting_kind=result.waiting_kind or WaitingKind.EXTERNAL,
+            )
+        elif result.kind in {AttemptResultKind.ERROR, AttemptResultKind.NO_RESULT}:
+            error = result.error or (
+                "Step implementation returned no result." if result.kind == AttemptResultKind.NO_RESULT else ""
+            )
+            step_run.mark_failed(
+                error=error,
+                stacktrace=result.stacktrace or "",
+                outcome=result.outcome or "failed",
+            )
+        else:
+            raise ValidationError({"result": f"Unsupported attempt result kind {result.kind!s}."})
+
+
+class StepAttempt(AuditMixin, AngeeDataModel):
+    """Append-only evidence for one physical execution attempt."""
+
+    runtime = True
+
+    sqid_prefix = "wsa_"
+    step_run = models.ForeignKey("workflows.StepRun", on_delete=models.PROTECT, related_name="attempts")
+    ordinal = models.PositiveIntegerField()
+    cause = models.CharField(max_length=32, choices=[(value.value, value.name.title()) for value in AttemptCause])
+    lease_token = models.UUIDField(editable=False)
+    effect_key = models.UUIDField(editable=False)
+    effect_generation = models.PositiveIntegerField(default=0, editable=False)
+    input_present = models.BooleanField(default=False)
+    input = models.JSONField(null=True, blank=True)
+    input_provenance = models.JSONField(default=dict, blank=True)
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    heartbeat_at = models.DateTimeField(null=True, blank=True)
+    lease_revoked_at = models.DateTimeField(null=True, blank=True)
+    lease_revocation_reason = models.CharField(
+        max_length=32,
+        blank=True,
+        choices=[(value.value, value.name.title()) for value in LeaseRevocationReason],
+    )
+    result_kind = models.CharField(
+        max_length=32,
+        blank=True,
+        choices=[(value.value, value.name.title()) for value in AttemptResultKind],
+    )
+    result_recorded_at = models.DateTimeField(null=True, blank=True)
+    output_present = models.BooleanField(default=False)
+    output = models.JSONField(null=True, blank=True)
+    checkpoint_present = models.BooleanField(default=False)
+    checkpoint = models.JSONField(null=True, blank=True)
+    error = models.TextField(null=True, blank=True)
+    stacktrace = models.TextField(null=True, blank=True)
+    outcome = models.SlugField(max_length=100, blank=True, default="")
+    waiting_kind = models.CharField(max_length=32, blank=True, default="")
+    applied_at = models.DateTimeField(null=True, blank=True)
+
+    objects = StepAttemptManager()
+
+    class Meta:
+        abstract = True
+        base_manager_name = "objects"
+        ordering = ("step_run_id", "ordinal")
+        constraints = (
+            models.UniqueConstraint(fields=("step_run", "ordinal"), name="uniq_workflows_step_attempt_ordinal"),
+            models.UniqueConstraint(fields=("lease_token",), name="uniq_workflows_step_attempt_lease"),
+            models.CheckConstraint(
+                condition=models.Q(input_present=True) | models.Q(input__isnull=True),
+                name="chk_wsa_absent_input_null",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(output_present=True) | models.Q(output__isnull=True),
+                name="chk_wsa_absent_output_null",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(checkpoint_present=True) | models.Q(checkpoint__isnull=True),
+                name="chk_wsa_absent_checkpoint_null",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(lease_revoked_at__isnull=True, lease_revocation_reason="")
+                    | (models.Q(lease_revoked_at__isnull=False) & ~models.Q(lease_revocation_reason=""))
+                ),
+                name="chk_wsa_revocation_pair",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(result_recorded_at__isnull=True, result_kind="")
+                    | (models.Q(result_recorded_at__isnull=False) & ~models.Q(result_kind=""))
+                ),
+                name="chk_wsa_result_pair",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(applied_at__isnull=True)
+                    | (models.Q(result_recorded_at__isnull=False) & models.Q(lease_revoked_at__isnull=True))
+                ),
+                name="chk_wsa_applied_result",
+            ),
+        )
+
+    @property
+    def status(self) -> AttemptStatus:
+        """Derive lifecycle display from retained lease and result evidence."""
+
+        if self.result_recorded_at is not None:
+            return AttemptStatus.COMPLETED if self.applied_at is not None else AttemptStatus.LATE_RESULT
+        if self.lease_revoked_at is not None:
+            return AttemptStatus.REVOKED
+        if self.started_at is not None:
+            return AttemptStatus.RUNNING
+        if self.claimed_at is not None:
+            return AttemptStatus.CLAIMED
+        return AttemptStatus.ALLOCATED
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
+        active = _attempt_write_session.get()
+        if active is None or not _attempt_write_active(alias):
+            raise TypeError("Step attempts can only be saved by StepAttemptManager.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        raise TypeError("Step attempts are retained execution evidence and cannot be deleted.")
 
 
 class Decision(AuditMixin, AngeeDataModel):

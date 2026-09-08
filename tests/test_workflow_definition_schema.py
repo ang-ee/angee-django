@@ -182,6 +182,38 @@ def test_definition_snapshot_and_publish_payloads_are_typed(workflow_tables: Non
     assert second["publication"]["id"] == first["publication"]["id"]
 
 
+def test_native_workflow_create_returns_lineage_projection(workflow_tables: None) -> None:
+    """Generic inserts may return a model instance that was not read through the annotated query."""
+
+    del workflow_tables
+    schema = _console_schema()
+    admin = _platform_admin("definition-create-admin")
+    created = result_data(
+        execute_schema(
+            schema,
+            """
+            mutation {
+              insert_workflows_one(object: {name: "Created workflow"}) {
+                id name lineage_id current_published_id current_published_version
+                current_published_subject_declaration publication_status
+              }
+            }
+            """,
+            user=admin,
+        )
+    )["insert_workflows_one"]
+
+    assert created == {
+        "id": created["id"],
+        "name": "Created workflow",
+        "lineage_id": created["id"],
+        "current_published_id": None,
+        "current_published_version": None,
+        "current_published_subject_declaration": None,
+        "publication_status": "draft",
+    }
+
+
 def test_definition_adapter_rejects_unavailable_relations_and_explicit_null_endpoint(workflow_tables: None) -> None:
     del workflow_tables
     schema = _console_schema()

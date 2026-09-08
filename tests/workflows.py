@@ -94,6 +94,15 @@ class StepRun(workflow_models.StepRun):
         rebac_id_attr = "sqid"
 
 
+class StepAttempt(workflow_models.StepAttempt):
+    """Concrete retained attempt model for source-addon runtime tests."""
+
+    class Meta(workflow_models.StepAttempt.Meta):
+        abstract = False
+        app_label = "workflows"
+        db_table = "test_workflows_step_attempt"
+
+
 class Decision(workflow_models.Decision):
     """Concrete decision model for source-addon runtime tests."""
 
@@ -106,7 +115,7 @@ class Decision(workflow_models.Decision):
 
 
 WORKFLOW_DEFINITION_MODELS = (Workflow, Step, Edge, Trigger)
-WORKFLOW_RUNTIME_MODELS = (*WORKFLOW_DEFINITION_MODELS, WorkflowRun, StepRun, Decision)
+WORKFLOW_RUNTIME_MODELS = (*WORKFLOW_DEFINITION_MODELS, WorkflowRun, StepRun, StepAttempt, Decision)
 
 
 @contextmanager

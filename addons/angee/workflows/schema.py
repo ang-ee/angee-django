@@ -183,31 +183,42 @@ class WorkflowType(AngeeNode):
     def lineage_id(self) -> PublicID:
         """Return the public id of this row's editable lineage head."""
 
-        return cast(PublicID, to_public_id(Workflow, cast(Any, self)._workflow_lineage_id))
+        return cast(PublicID, to_public_id(Workflow, _workflow_projection(self)._workflow_lineage_id))
 
     @strawberry_django.field(annotate=cast(Any, Workflow).lineage_projection_annotation())
     def current_published_id(self) -> PublicID | None:
         """Return the current publication id, or null for an unpublished/retired lineage."""
 
-        return to_public_id(Workflow, cast(Any, self)._workflow_current_published_pk)
+        return to_public_id(Workflow, _workflow_projection(self)._workflow_current_published_pk)
 
     @strawberry_django.field(annotate=cast(Any, Workflow).lineage_projection_annotation())
     def current_published_version(self) -> int | None:
         """Return the current published version number."""
 
-        return cast(int | None, cast(Any, self)._workflow_current_published_version)
+        return cast(int | None, _workflow_projection(self)._workflow_current_published_version)
 
     @strawberry_django.field(annotate=cast(Any, Workflow).lineage_projection_annotation())
     def current_published_subject_declaration(self) -> str | None:
         """Return current publication subject context, preserving a blank declaration."""
 
-        return cast(str | None, cast(Any, self)._workflow_current_published_subject_declaration)
+        return cast(str | None, _workflow_projection(self)._workflow_current_published_subject_declaration)
 
     @strawberry_django.field(annotate=cast(Any, Workflow).lineage_projection_annotation())
     def publication_status(self) -> str:
         """Return the lineage publication state independently of the editable head."""
 
-        return cast(str, cast(Any, self)._workflow_publication_status)
+        return cast(str, _workflow_projection(self)._workflow_publication_status)
+
+
+def _workflow_projection(value: Any) -> Any:
+    """Ensure mutation-returned rows use the same lineage projection as queries."""
+
+    if hasattr(value, "_workflow_lineage_id"):
+        return value
+    projected = Workflow.objects.with_lineage_projection().get(pk=value.pk)
+    for name in Workflow.lineage_projection_annotation():
+        setattr(value, name, getattr(projected, name))
+    return value
 
 
 @strawberry_django.type(Step)
