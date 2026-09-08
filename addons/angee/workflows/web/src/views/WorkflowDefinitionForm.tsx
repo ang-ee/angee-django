@@ -205,22 +205,34 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
         formSurface.current = context.form;
         return readOnly ? <Button type="button" size="sm" variant="secondary" onClick={() => {
           if (values?.lineage_id) void navigate({ to: routeHref("workflows.workflow", { id: values.lineage_id }) });
-        }}>{t("form.openDraft")}</Button> : <><Button type="button" size="sm" variant="ghost" disabled={!history.canUndo} onClick={history.undo}>{t("form.undo")}</Button><Button type="button" size="sm" variant="ghost" disabled={!history.canRedo} onClick={history.redo}>{t("form.redo")}</Button><Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            loading={publishState.fetching}
-            disabled={context.form.formIsDirty || source.loading || values == null}
-            onClick={() => { void publish(context); }}
-          >
-            {t("form.publish")}
-          </Button></>;
+        }}>{t("form.openDraft")}</Button> : <DefinitionActions context={context} history={history} publishState={publishState} sourceLoading={Boolean(source.loading)} issues={values?.definition.readiness.length ?? 0} onPublish={publish} />;
       }}
     >
       {workflowFields(t)}
       {props.children}
     </Form></DefinitionHistoryProvider>
   </>);
+}
+
+function DefinitionActions({ context, history, publishState, sourceLoading, issues, onPublish }: {
+  context: RecordToolbarContext;
+  history: ReturnType<typeof useDefinitionHistory>;
+  publishState: { fetching: boolean };
+  sourceLoading: boolean;
+  issues: number;
+  onPublish: (context: RecordToolbarContext) => Promise<void>;
+}): React.ReactElement {
+  const t = useWorkflowsT();
+  const publishReason = issues ? t(issues === 1 ? "form.publishBlockedOne" : "form.publishBlockedMany", { count: issues }) : undefined;
+  return <><Button type="button" size="sm" variant="ghost" disabled={!history.canUndo} onClick={history.undo}>{t("form.undo")}</Button><Button type="button" size="sm" variant="ghost" disabled={!history.canRedo} onClick={history.redo}>{t("form.redo")}</Button>{publishReason ? <span className="text-12 text-fg-muted" role="status">{publishReason}</span> : null}<Button
+    type="button"
+    size="sm"
+    variant="secondary"
+    loading={publishState.fetching}
+    disabled={context.form.formIsDirty || sourceLoading || issues > 0}
+    title={publishReason}
+    onClick={() => { void onPublish(context); }}
+  >{t("form.publish")}</Button></>;
 }
 
 function workflowFields(t: ReturnType<typeof useWorkflowsT>): React.ReactElement {

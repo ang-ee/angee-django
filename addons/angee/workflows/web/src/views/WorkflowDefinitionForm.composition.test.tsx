@@ -69,6 +69,8 @@ test("the registered form exposes parsed settings and saves through the definiti
   const name = await screen.findByRole("textbox", { name: "Name" });
   expect(screen.getByText("Definition")).toBeTruthy();
   expect(screen.getByLabelText(/Max steps/i)).toBeTruthy();
+  expect(screen.getByText("Resolve 1 saved issue before publishing.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Publish" }).hasAttribute("disabled")).toBe(true);
   fireEvent.change(name, { target: { value: "Changed" } });
   fireEvent.blur(name);
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));

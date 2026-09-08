@@ -3,7 +3,7 @@
 import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { Refine, type DataProvider } from "@angee/refine";
-import { AppRuntimeProvider, Form, ModalsHost, ToastProvider, defaultWidgets, type RecordPanelContext } from "@angee/ui";
+import { AppRuntimeProvider, Field, Form, ModalsHost, ToastProvider, defaultWidgets, type RecordPanelContext } from "@angee/ui";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
@@ -179,8 +179,13 @@ const stepResource = testDataResource("workflows.Step", {
     scalarField("config", "JSON"),
   ],
 });
+const edgeResource = testDataResource("workflows.Edge", {
+  modelName: "Edge",
+  typeNames: { node: "WorkflowEdgeType" },
+  fields: [scalarField("id", "ID"), scalarField("source", "ID"), scalarField("target", "ID"), scalarField("condition")],
+});
 
-function renderCanvas(initial?: { nodes?: Record<string, Record<string, unknown>>; edges?: Record<string, Record<string, unknown>> }): void {
+function renderCanvas(initial?: { nodes?: Record<string, Record<string, unknown>>; edges?: Record<string, Record<string, unknown>>; readiness?: Record<string, unknown>[]; settings?: boolean }): void {
   const rootRoute = createRootRoute();
   const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: () => null });
   const router = createRouter({ routeTree: rootRoute.addChildren([indexRoute]), history: createMemoryHistory({ initialEntries: ["/"] }) });
@@ -192,7 +197,7 @@ function renderCanvas(initial?: { nodes?: Record<string, Record<string, unknown>
     update: vi.fn(async () => ({ data: mocks.record })),
     deleteOne: vi.fn(async () => ({ data: mocks.record })),
   } as DataProvider;
-  const dataResources = [workflowResource, stepResource];
+  const dataResources = [workflowResource, stepResource, edgeResource];
   const node = { ...mocks.record, position: { x: 0, y: 0 }, clientKey: undefined };
   const initialNodes = initial?.nodes ?? { step_1: node };
   const initialEdges = initial?.edges ?? {};
@@ -211,12 +216,13 @@ function renderCanvas(initial?: { nodes?: Record<string, Record<string, unknown>
                     record: { id: "workflow_1", name: "Workflow" },
                     values: {
                       id: "workflow_1", name: "Workflow", status: mocks.workflowStatus, version: 1,
-                      definition: { revision: 1, nodes: initialNodes, edges: initialEdges, readiness: [] },
+                      definition: { revision: 1, nodes: initialNodes, edges: initialEdges, readiness: initial?.readiness ?? [] },
                     },
                   }}
                   recordTabs={[{ id: "editor", label: "Editor", render: (context) => { canvasSurface = context.form; return <WorkflowCanvas context={context} />; }, keepMounted: true }]}
                   defaultRecordTab="editor"
-                />
+                  overviewTab={{ label: "Settings", position: "last" }}
+                >{initial?.settings ? <Field name="name" /> : null}</Form>
               </AppRuntimeProvider>
             </ToastProvider>
           </ModalsHost>
@@ -227,6 +233,62 @@ function renderCanvas(initial?: { nodes?: Record<string, Record<string, unknown>
 }
 
 describe("WorkflowCanvas native narrow inspector", () => {
+  test("uses declared presentation and navigates saved issues to their exact fields", async () => {
+    renderCanvas({ settings: true, nodes: {
+      step_1: { ...mocks.record, position: { x: 0, y: 0 }, clientKey: undefined },
+      step_2: { ...mocks.record, id: "step_2", key: "finish", name: "Finish", is_entry: false, position: { x: 300, y: 0 }, clientKey: undefined },
+    }, edges: { edge_1: { id: "edge_1", source: "step_1", target: "step_2", condition: "", clientKey: undefined } }, readiness: [
+      { code: "missing_mode", message: "Choose a mode", kind: "NODE", id: "step_1", client_key: null, field: "config.mode" },
+      { code: "invalid", message: "Choose a key", kind: "NODE", id: "step_1", client_key: null, field: "key" },
+      { code: "invalid", message: "Choose a join rule", kind: "NODE", id: "step_1", client_key: null, field: "join_rule" },
+      { code: "invalid", message: "Choose an outcome", kind: "EDGE", id: "edge_1", client_key: null, field: "condition" },
+      { code: "missing_name", message: "Name the workflow", kind: "WORKFLOW", id: "workflow_1", client_key: null, field: "name" },
+    ] });
+    await screen.findByText("Import files");
+    expect(screen.getAllByText("Activity")).toHaveLength(2);
+    expect(screen.getByText("Run callable · Start · 3 saved issues")).toBeTruthy();
+    expect(screen.queryByText("ALL_SUCCESS")).toBeNull();
+    expect(screen.queryByText("import-files")).toBeNull();
+    expect(screen.getByTestId("rf__node-step_1").getAttribute("aria-label")).toContain("Start");
+    fireEvent.click(screen.getByRole("button", { name: "5 saved issues" }));
+    expect(screen.getByText("Unsaved edits are checked when you save.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Name the workflow" }));
+    const name = await screen.findByRole("textbox", { name: "Name" });
+    await waitFor(() => expect(document.activeElement).toBe(name));
+    expect(screen.getByRole("tab", { name: "Settings" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(screen.getByRole("tab", { name: "Editor" }));
+    fireEvent.click(screen.getByRole("button", { name: "5 saved issues" }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose a mode" }));
+    const mode = await screen.findByLabelText("Mode");
+    await waitFor(() => expect(document.activeElement).toBe(mode));
+
+    fireEvent.click(screen.getByRole("button", { name: "5 saved issues" }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose a key" }));
+    const key = await screen.findByLabelText("Key");
+    await waitFor(() => expect(document.activeElement).toBe(key));
+    expect(screen.getByRole("button", { name: "Advanced" }).getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: "5 saved issues" }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose a join rule" }));
+    const join = await screen.findByRole("combobox", { name: /Join rule/i });
+    await waitFor(() => expect(document.activeElement).toBe(join));
+
+    fireEvent.click(screen.getByRole("button", { name: "5 saved issues" }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose an outcome" }));
+    const outcome = await screen.findByLabelText("Outcome");
+    await waitFor(() => expect(document.activeElement).toBe(outcome));
+  });
+
+  test("keeps an issue for an unavailable unsaved target without selecting another row", async () => {
+    renderCanvas({ readiness: [{ code: "missing", message: "Repair removed step", kind: "NODE", id: null, client_key: "removed", field: "config.mode" }] });
+    await screen.findByText("Import files");
+    fireEvent.click(screen.getByRole("button", { name: "1 saved issue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Repair removed step" }));
+    expect(screen.queryByLabelText("Mode")).toBeNull();
+    expect(screen.getByText("Select a step on the canvas.")).toBeTruthy();
+  });
+
   test("insertion replaces one route with two and preserves the source outcome", () => {
     const node = { id: "", clientKey: "new", name: "Middle", key: "middle", step_class: "gate", config: {}, config_errors: {}, join_rule: "ALL_SUCCESS", is_entry: false, position: {} } as never;
     const result = graphWithOperation(node, { kind: "insert", identity: "route" }, {} as never, { route: { id: "edge_1", clientKey: undefined, source: "first", target: "last", condition: "completed" } } as never)!;
@@ -248,7 +310,7 @@ describe("WorkflowCanvas native narrow inspector", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.getAllByText("Run callable").length).toBeGreaterThan(0);
     expect((await screen.findByLabelText("Mode") as HTMLInputElement).value).toBe("safe");
-    expect(screen.getAllByText("ONE_SUCCESS").length).toBeGreaterThan(0);
+    expect(Object.values(canvasSurface!.form.getValues("definition.nodes") as unknown as Record<string, { join_rule: string }>).some((node) => node.join_rule === "ONE_SUCCESS")).toBe(true);
     expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
   });
 
