@@ -7,7 +7,7 @@ import {
 } from "./canonical-model-label";
 
 describe("canonicalModelLabel", () => {
-  test("resolves qualified, bare Pascal, and lowercase aliases across schemas", () => {
+  test("resolves canonical, Django-qualified lowercase, and bare aliases across schemas", () => {
     const resources = [
       testDataResource("notes.Note", { schemaName: "console" }),
       testDataResource("notes.Note", { schemaName: "public" }),
@@ -15,9 +15,13 @@ describe("canonicalModelLabel", () => {
     ];
 
     expect(canonicalModelLabel(resources, "notes.Note")).toBe("notes.Note");
+    expect(canonicalModelLabel(resources, "notes.note")).toBe("notes.Note");
     expect(canonicalModelLabel(resources, "Note")).toBe("notes.Note");
     expect(canonicalModelLabel(resources, "note")).toBe("notes.Note");
     expect(canonicalModelLabel(resources, "Integration")).toBe(
+      "integrate.Integration",
+    );
+    expect(canonicalModelLabel(resources, "integrate.integration")).toBe(
       "integrate.Integration",
     );
   });
@@ -47,6 +51,17 @@ describe("canonicalModelLabel", () => {
 
     expect(() => canonicalModelLabel(resources, "api")).toThrow(
       /ambiguous.*alpha\.API.*beta\.Api/,
+    );
+  });
+
+  test("rejects a Django-qualified lowercase collision", () => {
+    const resources = [
+      testDataResource("alpha.API", { schemaName: "console" }),
+      testDataResource("alpha.Api", { schemaName: "public" }),
+    ];
+
+    expect(() => canonicalModelLabel(resources, "alpha.api")).toThrow(
+      /ambiguous.*alpha\.API.*alpha\.Api/,
     );
   });
 

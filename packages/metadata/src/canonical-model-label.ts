@@ -18,9 +18,10 @@ export function mergeModelLabelInventory(
  * Resolve an authored model spelling to its emitted canonical `modelLabel`.
  *
  * Accepted spellings are the exact qualified label (`integrate.Integration`),
- * the label's bare model segment (`Integration`), and the emitted lowercase
- * `modelName` (`integration`). Exact qualified labels always win. Bare and
- * lowercase aliases must identify one canonical label across the supplied
+ * its Django-qualified lowercase spelling (`integrate.integration`), the
+ * label's bare model segment (`Integration`), and the emitted lowercase
+ * `modelName` (`integration`). Exact qualified labels always win. Other
+ * aliases must identify one canonical label across the supplied
  * resource inventory; repeating the same label in several GraphQL schemas is harmless,
  * while aliases shared by different labels are ambiguous and throw. Unknown
  * spellings throw as well, so registry declarations cannot silently miss.
@@ -41,7 +42,8 @@ export function canonicalModelLabel(
   for (const resource of resources) {
     const modelSegment = modelLabelSegment(resource.modelLabel);
     if (
-      spelling === modelSegment
+      spelling === resource.modelLabel.toLowerCase()
+      || spelling === modelSegment
       || spelling === modelSegment.toLowerCase()
       || spelling === resource.modelName
     ) {
