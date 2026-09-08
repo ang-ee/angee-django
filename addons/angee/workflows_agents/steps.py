@@ -34,7 +34,9 @@ from angee.agents.runners import TurnOutcome
 from angee.workflows.models import RunStatus, StepRunStatus, Verdict
 from angee.workflows.steps import (
     DecisionSpec,
+    StepEffect,
     StepImpl,
+    StepOutcome,
     StepResult,
     TransientStepError,
     retry_policy_from_config,
@@ -72,6 +74,14 @@ class AgentStepImpl(StepImpl):
     key = "agent"
     label = "Agent"
     category = "Activity"
+    description = "Run one inference request and journal its bounded result."
+    outcomes = (
+        StepOutcome("completed", "Completed"),
+        StepOutcome("failed", "Failed"),
+    )
+    effect = StepEffect.EXTERNAL
+    effect_description = "Calls the configured inference provider."
+    idempotent = False
     deterministic = False
 
     @classmethod
@@ -155,6 +165,8 @@ class AgentSessionStepImpl(StepImpl):
     key = "agent_session"
     label = "Agent session"
     category = "Activity"
+    description = "Internal multi-turn agent-session operation."
+    selectable = False
     deterministic = False
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:

@@ -16,20 +16,25 @@ suspended result.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
+from enum import Enum
 from typing import Any, ClassVar, Literal, Self
 
-from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
+from django.db import models
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
+from pydantic import BaseModel
 from rebac import system_context
 
-from angee.base.impl import ImplBase
+from angee.base.impl import ImplBase, ImplChoice
+from angee.workflows.configs import GateConfig, MapConfig, WaitConfig
 
-GATE_POLICIES = frozenset({"one_done", "all_success", "majority", "sequential"})
-"""Seat aggregation policies supported by the built-in gate step."""
+_MODEL_LABEL_RE = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$")
+_OUTCOME_KEY_FIELD = models.SlugField(max_length=100)
 
 
 class TransientStepError(Exception):
@@ -44,6 +49,41 @@ class StepRetryPolicy:
     wait: int = 0
     linear_wait: int = 0
     exponential_wait: int = 0
+
+
+class StepEffect(str, Enum):
+    """Declared external effect category of a workflow operation."""
+
+    UNKNOWN = "unknown"
+    NONE = "none"
+    READ = "read"
+    WRITE = "write"
+    EXTERNAL = "external"
+
+
+@dataclass(frozen=True, slots=True)
+class StepOutcome:
+    """One labeled routing outcome a step implementation may produce."""
+
+    key: str
+    label: str
+    description: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class StepOperation:
+    """Complete authoring metadata projected from one registered step implementation."""
+
+    choice: ImplChoice
+    description: str
+    selectable: bool
+    input_schema: dict[str, Any] | None
+    output_schema: dict[str, Any] | None
+    outcomes: tuple[StepOutcome, ...]
+    effect: StepEffect
+    effect_description: str
+    idempotent: bool | None
+    subject_declaration: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,8 +164,76 @@ class StepResult:
 class StepImpl(ImplBase):
     """Base class for registry-selected workflow step implementations."""
 
+    description: ClassVar[str] = ""
+    selectable: ClassVar[bool] = True
+    input_model: ClassVar[type[BaseModel] | None] = None
+    output_model: ClassVar[type[BaseModel] | None] = None
+    outcomes: ClassVar[tuple[StepOutcome, ...]] = ()
+    effect: ClassVar[StepEffect] = StepEffect.UNKNOWN
+    effect_description: ClassVar[str] = ""
+    idempotent: ClassVar[bool | None] = None
+    subject_declaration: ClassVar[str] = ""
     deterministic: ClassVar[bool] = True
     decision_schema: ClassVar[type[Any] | None] = None
+
+    @classmethod
+    def operation(cls, *, key: str) -> StepOperation:
+        """Return this registered implementation's workflow-owned authoring contract."""
+
+        cls._validate_operation(key=key)
+        choice = cls.choice()
+        return StepOperation(
+            choice=replace(choice, key=key),
+            description=cls.description,
+            selectable=cls.selectable,
+            input_schema=cls._model_schema(cls.input_model),
+            output_schema=cls._model_schema(cls.output_model),
+            outcomes=cls.outcomes,
+            effect=cls.effect,
+            effect_description=cls.effect_description,
+            idempotent=cls.idempotent,
+            subject_declaration=cls.subject_declaration,
+        )
+
+    @classmethod
+    def _validate_operation(cls, *, key: str) -> None:
+        """Reject malformed authoring declarations at their registered key."""
+
+        owner = f"Workflow step implementation {key!r}"
+        if not isinstance(cls.effect, StepEffect):
+            raise ImproperlyConfigured(f"{owner} declares invalid effect {cls.effect!r}.")
+        if not isinstance(cls.outcomes, tuple):
+            raise ImproperlyConfigured(f"{owner} declares invalid outcomes {cls.outcomes!r}.")
+        seen: set[str] = set()
+        for outcome in cls.outcomes:
+            if not isinstance(outcome, StepOutcome):
+                raise ImproperlyConfigured(f"{owner} declares invalid outcome {outcome!r}.")
+            if (
+                not isinstance(outcome.key, str)
+                or not isinstance(outcome.label, str)
+                or not isinstance(outcome.description, str)
+            ):
+                raise ImproperlyConfigured(f"{owner} declares invalid outcome {outcome!r}.")
+            if not outcome.key.strip() or not outcome.label.strip():
+                raise ImproperlyConfigured(f"{owner} outcome keys and labels must be non-blank.")
+            try:
+                _OUTCOME_KEY_FIELD.run_validators(outcome.key)
+            except ValidationError as error:
+                raise ImproperlyConfigured(f"{owner} declares invalid outcome key {outcome.key!r}.") from error
+            if outcome.key in seen:
+                raise ImproperlyConfigured(f"{owner} declares duplicate outcome key {outcome.key!r}.")
+            seen.add(outcome.key)
+        declaration = cls.subject_declaration
+        if not isinstance(declaration, str):
+            raise ImproperlyConfigured(f"{owner} declares invalid subject label {declaration!r}.")
+        if declaration and _MODEL_LABEL_RE.fullmatch(declaration) is None:
+            raise ImproperlyConfigured(f"{owner} declares invalid subject label {declaration!r}.")
+
+    @staticmethod
+    def _model_schema(model: type[BaseModel] | None) -> dict[str, Any] | None:
+        """Return a Pydantic JSON schema, preserving null for a dynamic contract."""
+
+        return model.model_json_schema() if model is not None else None
 
     @classmethod
     def validate_config(cls, config: Any) -> None:
@@ -133,6 +241,8 @@ class StepImpl(ImplBase):
 
         if not isinstance(config, Mapping):
             raise ValidationError({"config": "Step config must be a JSON object."})
+        if cls.config_model is not None:
+            cls.normalize_config(config)
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Execute one step-run journal row."""
@@ -195,6 +305,8 @@ class HandlerStep(StepImpl):
     key = "handler"
     label = "Handler"
     category = "Activity"
+    description = "Legacy abstract activity handler retained for stored workflow compatibility."
+    selectable = False
     deterministic = False
 
 
@@ -204,16 +316,12 @@ class WaitStep(StepImpl):
     key = "wait"
     label = "Wait"
     category = "Control"
-
-    @classmethod
-    def validate_config(cls, config: Any) -> None:
-        """Validate timer wait configuration."""
-
-        super().validate_config(config)
-        if "until" not in config:
-            raise ValidationError({"config": "Wait steps require an until timestamp."})
-        if "until" in config and _config_until(config["until"]) is None:
-            raise ValidationError({"config": "Wait until must be an ISO datetime."})
+    description = "Wait until the configured timestamp before routing through the timer outcome."
+    outcomes = (StepOutcome("timer", "Timer elapsed"),)
+    effect = StepEffect.NONE
+    effect_description = "Does not read or change the workflow subject."
+    idempotent = True
+    config_model = WaitConfig
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Return done once the timer or event condition has arrived."""
@@ -239,43 +347,19 @@ class GateStep(StepImpl):
     key = "gate"
     label = "Gate"
     category = "Control"
-
-    @classmethod
-    def validate_config(cls, config: Any) -> None:
-        """Validate declarative gate slot configuration."""
-
-        super().validate_config(config)
-        policy = str(config.get("policy", "one_done") or "one_done")
-        if policy not in GATE_POLICIES:
-            raise ValidationError({"config": f"Gate policy must be one of {', '.join(sorted(GATE_POLICIES))}."})
-        if not str(config.get("action", "") or ""):
-            raise ValidationError({"config": "Gate steps require an action slug."})
-        slots = config.get("slots")
-        if slots is None:
-            slots = [{"assignee": subject} for subject in config.get("assignees", ())]
-        if not isinstance(slots, list) or not slots:
-            raise ValidationError({"config": "Gate steps require at least one slot."})
-        for index, slot in enumerate(slots):
-            if not isinstance(slot, Mapping):
-                raise ValidationError({"config": f"Gate slot {index + 1} must be an object."})
-            assignees = _slot_assignees(slot)
-            if not assignees:
-                raise ValidationError({"config": f"Gate slot {index + 1} requires an assignee."})
-            try:
-                int(slot.get("priority", index))
-            except (TypeError, ValueError) as error:
-                raise ValidationError({"config": f"Gate slot {index + 1} priority must be an integer."}) from error
-        max_attempts = config.get("max_attempts")
-        if max_attempts not in (None, ""):
-            try:
-                parsed_max_attempts = int(max_attempts)
-            except (TypeError, ValueError) as error:
-                raise ValidationError({"config": "Gate max_attempts must be an integer."}) from error
-            if parsed_max_attempts < 1:
-                raise ValidationError({"config": "Gate max_attempts must be positive when set."})
-        for key in ("expires_at", "escalate_at"):
-            if config.get(key) not in (None, "") and _config_datetime(config.get(key)) is None:
-                raise ValidationError({"config": f"Gate {key} must be an ISO datetime."})
+    description = "Suspend execution until the configured approval policy resolves."
+    outcomes = tuple(
+        StepOutcome(key, label)
+        for key, label in (
+            ("completed", "Completed"),
+            ("rejected", "Rejected"),
+            ("escalated", "Escalated"),
+            ("expired", "Expired"),
+        )
+    )
+    effect = StepEffect.NONE
+    effect_description = "Creates workflow decision journals without changing the workflow subject."
+    config_model = GateConfig
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Suspend the step, keeping only durable resume state."""
@@ -294,21 +378,13 @@ class MapStep(StepImpl):
     key = "map"
     label = "Map"
     category = "Control"
-
-    @classmethod
-    def validate_config(cls, config: Any) -> None:
-        """Validate the map declaration consumed by the engine."""
-
-        super().validate_config(config)
-        if not str(config.get("target_step", "") or ""):
-            raise ValidationError({"config": "Map steps require target_step."})
-        items = config.get("items")
-        if not isinstance(items, (str, list)) or not items:
-            raise ValidationError({"config": "Map steps require an items expression or literal list."})
-        parsed = optional_number(config.get("min_success_ratio", config.get("min_success")), "Map min_success_ratio")
-        if parsed is not None:
-            if parsed < 0 or parsed > 1:
-                raise ValidationError({"config": "Map min_success_ratio must be between 0 and 1."})
+    description = "Run one target step for each configured item and aggregate the child results."
+    outcomes = (
+        StepOutcome("succeeded", "Succeeded"),
+        StepOutcome("failed", "Failed"),
+    )
+    effect_description = "Effects and idempotency depend on the configured target operation."
+    config_model = MapConfig
 
     @classmethod
     def engine_expanded_filter(cls) -> dict[str, Any]:
@@ -499,7 +575,11 @@ def _decision_specs_from_config(config: Mapping[str, Any]) -> tuple[DecisionSpec
                 payload=payload,
                 priority=int(slot.get("priority", index)),
                 requester=str(slot.get("requester", requester) or requester),
-                escalation=tuple(str(subject) for subject in slot.get("escalation", escalation) if str(subject)),
+                escalation=tuple(
+                    str(subject)
+                    for subject in (escalation if slot.get("escalation") is None else slot["escalation"])
+                    if str(subject)
+                ),
                 max_attempts=parsed_max_attempts,
                 expires_at=expires_at,
                 escalate_at=escalate_at,

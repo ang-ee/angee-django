@@ -7,8 +7,10 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.utils.text import slugify
+from pydantic import BaseModel
+from pydantic import Field as PydanticField
 from rebac import app_settings, system_context
 from rebac.roles import grant
 
@@ -18,6 +20,7 @@ from angee.workflows.models import (
     WorkflowPurpose,
     WorkflowStatus,
 )
+from angee.workflows.steps import StepImpl, StepOutcome
 from tests.conftest import SchemaAddon, execute_schema, result_data
 from tests.workflows import (
     Edge,
@@ -32,6 +35,65 @@ from tests.workflows import (
 
 User = get_user_model()
 pytest_plugins = ("tests.workflows",)
+
+
+class _ContractProbeConfig(BaseModel):
+    """Typed config fixture for workflow operation metadata."""
+
+    mode: str = PydanticField(default="safe", description="Execution mode.")
+
+
+class _ContractProbeInput(BaseModel):
+    """Typed input fixture for workflow operation metadata."""
+
+    payload: str
+
+
+class _ContractProbeOutput(BaseModel):
+    """Typed output fixture for workflow operation metadata."""
+
+    accepted: bool
+
+
+class ContractProbeStep(StepImpl):
+    """Additive registered step used to prove the operation query contract."""
+
+    key = "contract_probe"
+    label = "Contract probe"
+    category = "Tests"
+    description = "Exercise typed operation metadata."
+    defaults = {"config": {"mode": "safe"}}
+    config_model = _ContractProbeConfig
+    input_model = _ContractProbeInput
+    output_model = _ContractProbeOutput
+    outcomes = (StepOutcome("accepted", "Accepted", "The payload was accepted."),)
+    subject_declaration = "tests.workflow"
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        ({"outcomes": (StepOutcome("", "Blank"),)}, "keys and labels must be non-blank"),
+        ({"outcomes": (StepOutcome("needs review", "Review"),)}, "invalid outcome key 'needs review'"),
+        (
+            {"outcomes": (StepOutcome("done", "Done"), StepOutcome("done", "Again"))},
+            "duplicate outcome key 'done'",
+        ),
+        ({"subject_declaration": "WrongShape"}, "invalid subject label 'WrongShape'"),
+        ({"subject_declaration": 7}, "invalid subject label 7"),
+        ({"effect": "external"}, "invalid effect 'external'"),
+    ],
+)
+def test_step_operation_rejects_malformed_declarations(
+    declaration: dict[str, Any],
+    message: str,
+) -> None:
+    """Operation metadata fails at its registered implementation key."""
+
+    malformed = type("MalformedStep", (StepImpl,), declaration)
+
+    with pytest.raises(ImproperlyConfigured, match=message):
+        malformed.operation(key="malformed_probe")
 
 
 def create_workflow(name: str = "Document Review") -> Workflow:
@@ -374,6 +436,114 @@ def test_graphql_filters_workflow_runs_across_a_public_workflow_lineage(workflow
 
     assert {row["id"] for row in data["workflow_runs"]} == {run.sqid for run in expected}
     assert data["workflow_runs_aggregate"]["aggregate"]["count"] == 3
+
+
+@pytest.mark.django_db(transaction=True)
+def test_workflow_step_operations_are_registry_derived_and_admin_only(
+    workflow_tables: None,
+    settings: Any,
+) -> None:
+    """The console projects generic choices plus workflow contracts from the impl field."""
+
+    del workflow_tables
+    settings.ANGEE_WORKFLOW_STEP_CLASSES = {
+        **settings.ANGEE_WORKFLOW_STEP_CLASSES,
+        "contract_probe": "tests.test_workflows.ContractProbeStep",
+    }
+    schema = _console_schema()
+    plain = User.objects.create_user(username="workflow-operation-plain")
+    admin = _platform_admin("workflow-operation-admin")
+    query = """
+      query {
+        workflow_step_operations {
+          key label category defaults config_schema
+          description selectable input_schema output_schema
+          outcomes { key label description }
+          effect effect_description idempotent subject_declaration
+        }
+      }
+    """
+
+    assert execute_schema(schema, query, user=plain).errors is not None
+    operations = result_data(execute_schema(schema, query, user=admin))["workflow_step_operations"]
+    assert [operation["key"] for operation in operations] == sorted(
+        operation["key"] for operation in operations
+    )
+    by_key = {operation["key"]: operation for operation in operations}
+
+    assert "HANDLER" in schema._schema.get_type("WorkflowStepImpl").values
+    assert by_key["handler"]["selectable"] is False
+    assert by_key["handler"]["effect"] == "UNKNOWN"
+    assert by_key["handler"]["idempotent"] is None
+    assert by_key["gate"]["idempotent"] is None
+    assert by_key["map"]["effect"] == "UNKNOWN"
+    assert by_key["map"]["idempotent"] is None
+    probe = by_key["contract_probe"]
+    assert probe["defaults"] == {"config": {"mode": "safe"}}
+    assert probe["config_schema"]["properties"]["mode"]["defaultValue"] == "safe"
+    assert probe["input_schema"]["required"] == ["payload"]
+    assert probe["output_schema"]["required"] == ["accepted"]
+    assert probe["outcomes"] == [
+        {"key": "accepted", "label": "Accepted", "description": "The payload was accepted."}
+    ]
+    assert probe["effect"] == "UNKNOWN"
+    assert probe["idempotent"] is None
+    assert probe["subject_declaration"] == "tests.workflow"
+    assert "archive_probe" in by_key
+    assert by_key["agent"]["outcomes"] == [
+        {"key": "completed", "label": "Completed", "description": ""},
+        {"key": "failed", "label": "Failed", "description": ""},
+    ]
+    assert by_key["agent"]["effect"] == "EXTERNAL"
+    assert by_key["agent"]["idempotent"] is False
+    assert by_key["agent_session"]["selectable"] is False
+
+
+@pytest.mark.django_db(transaction=True)
+def test_workflow_step_config_query_projects_legacy_and_preserves_invalid_raw_values(
+    workflow_tables: None,
+) -> None:
+    """The console receives canonical legacy config or explicit repair diagnostics."""
+
+    del workflow_tables
+    admin = _platform_admin("workflow-config-projection-admin")
+    with system_context(reason="test workflow config GraphQL projection"):
+        workflow = Workflow.objects.create(name="Config projection")
+        step = Step.objects.create(
+            workflow=workflow,
+            key="gate",
+            name="Gate",
+            step_class="gate",
+            config={"action": "approve", "slots": [{"assignee": "auth/user:1"}]},
+        )
+        Step.objects.filter(pk=step.pk).update(
+            config={"action": "approve", "slots": [{"assignee": "auth/user:1"}]}
+        )
+    query = """
+      query StepConfig($id: String!) {
+        workflow_steps_by_pk(id: $id) { config config_errors }
+      }
+    """
+    valid = result_data(execute_schema(_console_schema(), query, {"id": step.sqid}, user=admin))
+    assert valid["workflow_steps_by_pk"]["config"]["slots"][0]["assignees"] == ["auth/user:1"]
+    assert valid["workflow_steps_by_pk"]["config_errors"] == {}
+
+    invalid = {"action": "approve", "slots": [{"assignee": ""}]}
+    with system_context(reason="test invalid workflow config GraphQL projection"):
+        Step.objects.filter(pk=step.pk).update(config=invalid)
+    projected = result_data(execute_schema(_console_schema(), query, {"id": step.sqid}, user=admin))
+    assert projected["workflow_steps_by_pk"]["config"] == invalid
+    assert "config.slots.0.assignees.0" in projected["workflow_steps_by_pk"]["config_errors"]
+
+    with system_context(reason="test scalar workflow config GraphQL projection"):
+        Step.objects.filter(pk=step.pk).update(config="invalid root")
+    projected = result_data(execute_schema(_console_schema(), query, {"id": step.sqid}, user=admin))
+    assert projected["workflow_steps_by_pk"]["config"] == "invalid root"
+    assert projected["workflow_steps_by_pk"]["config_errors"] == {
+        "config": ["Step config must be a JSON object."]
+    }
+    step.refresh_from_db()
+    assert step.config == "invalid root"
 
 
 @pytest.mark.django_db(transaction=True)

@@ -13,6 +13,7 @@ from __future__ import annotations
 import copy
 import logging
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Self, cast
 
@@ -42,6 +43,14 @@ from angee.workflows.steps import (
 
 logger = logging.getLogger(__name__)
 _CHANGE_FEED_FIX = "declare changes() for the model to join the change feed"
+
+
+@dataclass(frozen=True, slots=True)
+class StepConfigProjection:
+    """Canonical authoring value and diagnostics for one persisted step config."""
+
+    value: Any
+    errors: dict[str, list[str]]
 
 
 class WorkflowStatus(models.TextChoices):
@@ -639,6 +648,18 @@ class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
         """Return the step's display label."""
 
         return self.name or self.key
+
+    def config_projection(self) -> StepConfigProjection:
+        """Project legacy config for repair without rewriting its stored value."""
+
+        impl = cast(type[StepImpl], self.resolve_impl("step_class"))
+        raw = copy.deepcopy(self.config)
+        try:
+            impl.validate_config(raw)
+            value = impl.normalize_config(raw) if impl.config_model is not None else raw
+            return StepConfigProjection(value=value, errors={})
+        except ValidationError as error:
+            return StepConfigProjection(value=raw, errors=error.message_dict)
 
     def clean(self) -> None:
         """Validate the step implementation key and config."""

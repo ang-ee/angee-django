@@ -24,11 +24,13 @@ from angee.graphql.actions import (
 )
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, instance_for_id, to_public_id
+from angee.graphql.impl import ImplChoice as GraphQLImplChoice
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import session_user
 from angee.workflows import engine
+from angee.workflows.steps import StepEffect, StepImpl, StepOperation
 
 Workflow = apps.get_model("workflows", "Workflow")
 Step = apps.get_model("workflows", "Step")
@@ -70,6 +72,79 @@ class DecisionVerb(Enum):
     COMPLETE = "complete"
     REJECT = "reject"
     ESCALATE = "escalate"
+
+
+WorkflowStepEffect = strawberry.enum(StepEffect, name="WorkflowStepEffect")
+
+
+@strawberry.type
+class WorkflowStepOutcome:
+    """One labeled routing outcome declared by a workflow operation."""
+
+    key: str
+    label: str
+    description: str
+
+
+@strawberry.type
+class WorkflowStepOperation(GraphQLImplChoice):
+    """Workflow-owned authoring contract for one registered step implementation."""
+
+    description: str
+    selectable: bool
+    input_schema: JSON | None
+    output_schema: JSON | None
+    outcomes: list[WorkflowStepOutcome]
+    effect: WorkflowStepEffect
+    effect_description: str
+    idempotent: bool | None
+    subject_declaration: str
+
+    @classmethod
+    def from_operation(cls, operation: StepOperation) -> "WorkflowStepOperation":
+        """Project the owning step declaration while reusing generic choice metadata."""
+
+        return cls(
+            key=operation.choice.key,
+            label=operation.choice.label,
+            icon=operation.choice.icon,
+            category=operation.choice.category,
+            defaults=cast(JSON, operation.choice.defaults),
+            config_schema=cast(JSON | None, operation.choice.config_schema),
+            description=operation.description,
+            selectable=operation.selectable,
+            input_schema=cast(JSON | None, operation.input_schema),
+            output_schema=cast(JSON | None, operation.output_schema),
+            outcomes=[
+                WorkflowStepOutcome(
+                    key=outcome.key,
+                    label=outcome.label,
+                    description=outcome.description,
+                )
+                for outcome in operation.outcomes
+            ],
+            effect=operation.effect,
+            effect_description=operation.effect_description,
+            idempotent=operation.idempotent,
+            subject_declaration=operation.subject_declaration,
+        )
+
+
+@strawberry.type
+class WorkflowStepOperationQuery:
+    """Admin-only workflow operation catalogue derived from the Step impl field."""
+
+    @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def workflow_step_operations(self) -> list[WorkflowStepOperation]:
+        """Return registered step operations in deterministic key order."""
+
+        field = Step.impl_field("step_class")
+        return [
+            WorkflowStepOperation.from_operation(
+                cast(type[StepImpl], field.resolve_class(key)).operation(key=key)
+            )
+            for key in field.registered_keys()
+        ]
 
 
 @strawberry_django.type(Workflow)
@@ -129,7 +204,17 @@ class StepType(AngeeNode):
     key: auto
     name: auto
     step_class: auto
-    config: JSON
+    @strawberry_django.field
+    def config(self) -> JSON:
+        """Return canonical config without rewriting historical workflow rows."""
+
+        return cast(Any, self).config_projection().value
+
+    @strawberry_django.field
+    def config_errors(self) -> JSON:
+        """Return typed-config diagnostics while keeping malformed raw values repairable."""
+
+        return cast(Any, self).config_projection().errors
     join_rule: auto
     is_entry: auto
     position: JSON
@@ -689,6 +774,9 @@ class TriggerActionMutation:
 
 _CONSOLE_TYPES: list[object] = [
     DecisionVerb,
+    WorkflowStepEffect,
+    WorkflowStepOutcome,
+    WorkflowStepOperation,
     WorkflowType,
     StepType,
     EdgeType,
@@ -722,6 +810,7 @@ schemas = {
     "console": {
         "query": [
             WorkflowSubjectDeclarationQuery,
+            WorkflowStepOperationQuery,
             _WORKFLOW_RESOURCE.query,
             _STEP_RESOURCE.query,
             _EDGE_RESOURCE.query,
