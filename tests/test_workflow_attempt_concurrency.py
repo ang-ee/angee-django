@@ -7,12 +7,17 @@ from threading import Barrier
 from typing import Any
 
 import pytest
-from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection, connections
 from django.utils import timezone
 from rebac import system_context
 
-from angee.workflows.attempts import AttemptResult, AttemptResultKind, LeaseRevocationReason
+from angee.workflows.attempts import (
+    AttemptInput,
+    AttemptResult,
+    AttemptResultKind,
+    InvocationAdmission,
+    LeaseRevocationReason,
+)
 from angee.workflows.models import RunStatus
 from tests.workflows import StepAttempt, StepRun, WorkflowRun, workflow_with_steps
 
@@ -43,28 +48,53 @@ def scheduled_step_run(workflow_engine_tables: None) -> StepRun:
         return StepRun.objects.create(run=run, step=workflow.steps.get(key="start"))
 
 
-def test_concurrent_allocation_produces_one_active_attempt(scheduled_step_run: StepRun) -> None:
+def test_concurrent_claim_reuses_one_active_attempt(scheduled_step_run: StepRun) -> None:
     start = Barrier(2)
+    claimed_at = timezone.now()
 
-    def allocate() -> int:
+    def claim() -> tuple[int, bool]:
         start.wait(timeout=5)
-        return StepAttempt.objects.allocate(scheduled_step_run).pk
+        result = StepAttempt.objects.claim(
+            scheduled_step_run,
+            input=AttemptInput(present=True, value={"stable": True}),
+            claimed_at=claimed_at,
+        )
+        return result.attempt.pk, result.newly_claimed
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = (pool.submit(_thread, allocate), pool.submit(_thread, allocate))
-        outcomes: list[int | type[Exception]] = []
-        for future in futures:
-            try:
-                outcomes.append(future.result(timeout=10))
-            except ValidationError as error:
-                outcomes.append(type(error))
+        futures = (pool.submit(_thread, claim), pool.submit(_thread, claim))
+        outcomes = [future.result(timeout=10) for future in futures]
 
-    assert sum(isinstance(value, int) for value in outcomes) == 1
-    assert outcomes.count(ValidationError) == 1
+    assert len({attempt_id for attempt_id, _ in outcomes}) == 1
+    assert sorted(newly_claimed for _, newly_claimed in outcomes) == [False, True]
+
+
+def test_concurrent_physical_delivery_is_admitted_once(scheduled_step_run: StepRun) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    start = Barrier(2)
+
+    def admit() -> InvocationAdmission:
+        start.wait(timeout=5)
+        return StepAttempt.objects.admit_invocation(
+            attempt.pk,
+            lease_token=attempt.lease_token,
+            at=timezone.now(),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = (pool.submit(_thread, admit), pool.submit(_thread, admit))
+        outcomes = [future.result(timeout=10) for future in futures]
+
+    assert sorted(outcomes) == sorted(
+        [InvocationAdmission.FIRST_START, InvocationAdmission.ALREADY_STARTED]
+    )
 
 
 def test_result_and_revocation_are_serialized_without_losing_evidence(scheduled_step_run: StepRun) -> None:
-    attempt = StepAttempt.objects.allocate(scheduled_step_run)
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    assert StepAttempt.objects.admit_invocation(
+        attempt.pk, lease_token=attempt.lease_token, at=timezone.now()
+    ) == InvocationAdmission.FIRST_START
     start = Barrier(2)
 
     def finalize() -> Any:
@@ -72,7 +102,7 @@ def test_result_and_revocation_are_serialized_without_losing_evidence(scheduled_
         return StepAttempt.objects.finalize(
             attempt.pk,
             lease_token=attempt.lease_token,
-            result=AttemptResult(AttemptResultKind.PREPARATION_ERROR, error="failed"),
+            result=AttemptResult(AttemptResultKind.ERROR, error="failed"),
             recorded_at=timezone.now(),
         )
 

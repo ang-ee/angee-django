@@ -48,6 +48,14 @@ class LeaseRevocationReason(StrEnum):
     SUPERSEDED = "superseded"
 
 
+class InvocationAdmission(StrEnum):
+    """Outcome of attempting to admit one physical delivery."""
+
+    FIRST_START = "first_start"
+    ALREADY_STARTED = "already_started"
+    FENCED = "fenced"
+
+
 @dataclass(frozen=True, slots=True)
 class JsonPresence:
     """A JSON value whose presence is distinct from a present null."""
@@ -61,6 +69,14 @@ class AttemptInput(JsonPresence):
     """Resolved attempt input plus its durable source provenance."""
 
     provenance: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptClaim:
+    """A logical claim and whether this call created its durable attempt."""
+
+    attempt: Any
+    newly_claimed: bool
 
 
 @dataclass(frozen=True, slots=True)

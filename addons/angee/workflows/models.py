@@ -40,11 +40,13 @@ from angee.base.transitions import StateTransitions, TransitionNotAllowed, save_
 from angee.resources.mixins import ResourceLoadMixin, ResourceWritePreparation
 from angee.workflows.attempts import (
     AttemptCause,
+    AttemptClaim,
     AttemptFinalization,
     AttemptInput,
     AttemptResult,
     AttemptResultKind,
     AttemptStatus,
+    InvocationAdmission,
     LeaseRevocation,
     LeaseRevocationReason,
 )
@@ -2143,66 +2145,138 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             raise OperationalError("Step run ownership changed while its attempt was being locked.")
         return run, step_run
 
-    def allocate(
+    def claim(
         self,
         step_run: Any,
         *,
         cause: AttemptCause = AttemptCause.INITIAL,
         input: AttemptInput = AttemptInput(),
-        claimed_at: datetime | None = None,
-    ) -> Any:
-        """Allocate the next physical attempt for an active logical step run."""
+        claimed_at: datetime,
+    ) -> AttemptClaim:
+        """Claim one logical delivery, returning the existing claim on duplicate admission."""
 
-        if not input.present and input.value is not None:
-            raise ValidationError({"input": "An absent attempt input cannot carry a value."})
-        if input.provenance is not None and not isinstance(input.provenance, dict):
-            raise ValidationError({"input_provenance": "Input provenance must be a JSON object."})
-        if not isinstance(cause, AttemptCause):
-            raise ValidationError({"cause": "Attempt allocation requires a declared cause."})
+        self._validate_claim(cause, input)
         alias = self.db
-        with transaction.atomic(using=alias), self._write(alias), system_context(reason="workflows.attempt.allocate"):
+        with transaction.atomic(using=alias), self._write(alias), system_context(reason="workflows.attempt.claim"):
             run, locked = self._locked_ancestry(step_run.pk, alias)
-            if run.is_terminal or locked.status not in {StepRunStatus.SCHEDULED, StepRunStatus.WAITING}:
-                raise ValidationError({"step_run": "Only an active step run can allocate an attempt."})
+            if run.is_terminal:
+                raise ValidationError({"step_run": "A terminal workflow run cannot claim an attempt."})
+            if locked.current_attempt_id is not None:
+                current = system_queryset(self.model, using=alias, lock=("self",)).get(pk=locked.current_attempt_id)
+                active = current.result_recorded_at is None and current.lease_revoked_at is None
+                if locked.status == StepRunStatus.STARTED and active:
+                    self._validate_duplicate_claim(current, cause, input)
+                    return AttemptClaim(current, False)
+                if active:
+                    raise ValidationError({"step_run": "This step run already has an active attempt."})
+            self._validate_claim_source(locked, cause)
+            attempt = self._allocate_locked(locked, cause=cause, input=input, claimed_at=claimed_at, alias=alias)
+            locked.mark_started(heartbeat_at=None, claimed_deliveries=run.deliveries)
+            self._charge_logical_execution(run, alias=alias)
+            return AttemptClaim(attempt, True)
+
+    def fail_preparation(
+        self,
+        step_run: Any,
+        *,
+        cause: AttemptCause,
+        input: AttemptInput,
+        result: AttemptResult,
+        claimed_at: datetime,
+        recorded_at: datetime,
+    ) -> Any:
+        """Retain a preparation failure without describing a physical invocation."""
+
+        self._validate_claim(cause, input)
+        if result.kind != AttemptResultKind.PREPARATION_ERROR:
+            raise ValidationError({"result": "Preparation failure requires a preparation-error result."})
+        self._validate_result(result)
+        if result.output_present or result.checkpoint_present or result.waiting_kind:
+            raise ValidationError({"result": "Preparation failure cannot carry output, checkpoint, or wait state."})
+        alias = self.db
+        with transaction.atomic(using=alias), self._write(alias), system_context(reason="workflows.attempt.prepare"):
+            run, locked = self._locked_ancestry(step_run.pk, alias)
+            if run.is_terminal:
+                raise ValidationError({"step_run": "A terminal workflow run cannot record preparation failure."})
             if locked.current_attempt_id is not None:
                 current = system_queryset(self.model, using=alias, lock=("self",)).get(pk=locked.current_attempt_id)
                 if current.result_recorded_at is None and current.lease_revoked_at is None:
                     raise ValidationError({"step_run": "This step run already has an active attempt."})
-            if locked.effect_key is None:
-                locked.effect_key = uuid.uuid4()
-            ordinal = locked.attempt + 1
-            attempt = self.model(
-                step_run=locked,
-                ordinal=ordinal,
-                cause=str(cause),
-                lease_token=uuid.uuid4(),
-                input_present=input.present,
-                input=input.value,
-                input_provenance=input.provenance or {},
-                claimed_at=claimed_at,
-                effect_key=locked.effect_key,
-                effect_generation=locked.effect_generation,
-            )
-            attempt.save(using=alias, force_insert=True)
-            locked.attempt = ordinal
-            locked.current_attempt = attempt
-            locked.save(
-                using=alias,
-                update_fields=["attempt", "current_attempt", "effect_key", "updated_at"],
-            )
+            self._validate_claim_source(locked, cause)
+            attempt = self._allocate_locked(locked, cause=cause, input=input, claimed_at=claimed_at, alias=alias)
+            attempt.result_kind = str(result.kind)
+            attempt.result_recorded_at = recorded_at
+            attempt.error = result.error
+            attempt.stacktrace = result.stacktrace
+            attempt.outcome = result.outcome
+            self._apply_result(locked, attempt, result)
+            attempt.applied_at = recorded_at
+            attempt.save(using=alias)
+            self._charge_logical_execution(run, alias=alias)
             return attempt
 
-    def mark_started(self, attempt_id: int, *, lease_token: uuid.UUID, at: datetime) -> bool:
-        """Record physical invocation and project its logical started state."""
+    @staticmethod
+    def _charge_logical_execution(run: Any, *, alias: str) -> None:
+        """Charge one newly retained logical execution under the locked run owner."""
 
-        return self._touch_lease(attempt_id, lease_token=lease_token, at=at, started=True)
+        run.steps_taken += 1
+        run.save(using=alias, update_fields=["steps_taken", "updated_at"])
+
+    def _allocate_locked(
+        self, locked: Any, *, cause: AttemptCause, input: AttemptInput, claimed_at: datetime, alias: str
+    ) -> Any:
+        if locked.effect_key is None:
+            locked.effect_key = uuid.uuid4()
+        ordinal = locked.attempt + 1
+        attempt = self.model(
+            step_run=locked,
+            ordinal=ordinal,
+            cause=str(cause),
+            lease_token=uuid.uuid4(),
+            input_present=input.present,
+            input=input.value,
+            input_provenance=input.provenance or {},
+            claimed_at=claimed_at,
+            effect_key=locked.effect_key,
+            effect_generation=locked.effect_generation,
+        )
+        attempt.save(using=alias, force_insert=True)
+        locked.attempt = ordinal
+        locked.current_attempt = attempt
+        locked.save(using=alias, update_fields=["attempt", "current_attempt", "effect_key", "updated_at"])
+        return attempt
+
+    def admit_invocation(
+        self, attempt_id: int, *, lease_token: uuid.UUID, at: datetime
+    ) -> InvocationAdmission:
+        """Admit exactly the first physical invocation for a current logical claim."""
+
+        alias = self.db
+        unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
+        with transaction.atomic(using=alias), self._write(alias), system_context(reason="workflows.attempt.invoke"):
+            run, step_run = self._locked_ancestry(unresolved.step_run_id, alias)
+            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(pk=attempt_id)
+            if (
+                run.is_terminal
+                or step_run.status != StepRunStatus.STARTED
+                or step_run.current_attempt_id != attempt.pk
+                or attempt.lease_token != lease_token
+                or attempt.lease_revoked_at is not None
+                or attempt.result_recorded_at is not None
+            ):
+                return InvocationAdmission.FENCED
+            if attempt.started_at is not None:
+                return InvocationAdmission.ALREADY_STARTED
+            timestamps = (attempt.claimed_at, attempt.heartbeat_at, at)
+            freshness = max(value for value in timestamps if value)
+            attempt.started_at = freshness
+            attempt.heartbeat_at = freshness
+            attempt.save(using=alias, update_fields=["started_at", "heartbeat_at", "updated_at"])
+            return InvocationAdmission.FIRST_START
 
     def heartbeat(self, attempt_id: int, *, lease_token: uuid.UUID, at: datetime) -> bool:
         """Refresh a live lease without changing logical lifecycle state."""
 
-        return self._touch_lease(attempt_id, lease_token=lease_token, at=at, started=False)
-
-    def _touch_lease(self, attempt_id: int, *, lease_token: uuid.UUID, at: datetime, started: bool) -> bool:
         alias = self.db
         unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
         with transaction.atomic(using=alias), self._write(alias), system_context(reason="workflows.attempt.lease"):
@@ -2218,14 +2292,54 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 return False
             timestamps = (attempt.claimed_at, attempt.started_at, attempt.heartbeat_at, at)
             freshness = max(value for value in timestamps if value)
-            if started and attempt.started_at is None:
-                step_run.mark_started(heartbeat_at=freshness, claimed_deliveries=step_run.claimed_deliveries)
-                attempt.started_at = freshness
-            elif not started and attempt.started_at is None:
+            if attempt.started_at is None:
                 return False
             attempt.heartbeat_at = freshness
             attempt.save(using=alias, update_fields=["started_at", "heartbeat_at", "updated_at"])
             return True
+
+    @staticmethod
+    def _validate_claim(cause: AttemptCause, input: AttemptInput) -> None:
+        if not isinstance(input, AttemptInput):
+            raise ValidationError({"input": "Attempt claim requires a typed input envelope."})
+        if not input.present and input.value is not None:
+            raise ValidationError({"input": "An absent attempt input cannot carry a value."})
+        if input.provenance is not None and not isinstance(input.provenance, dict):
+            raise ValidationError({"input_provenance": "Input provenance must be a JSON object."})
+        if not isinstance(cause, AttemptCause):
+            raise ValidationError({"cause": "Attempt claim requires a declared cause."})
+
+    @staticmethod
+    def _validate_result(result: AttemptResult) -> None:
+        if result.kind == AttemptResultKind.TRANSIENT_ERROR:
+            raise ValidationError({"result": "Transient results require atomic successor allocation."})
+        if not isinstance(result.kind, AttemptResultKind):
+            raise ValidationError({"result": "Attempt results require a declared result kind."})
+        if not result.output_present and result.output is not None:
+            raise ValidationError({"output": "An absent attempt output cannot carry a value."})
+        if not result.checkpoint_present and result.checkpoint is not None:
+            raise ValidationError({"checkpoint": "An absent attempt checkpoint cannot carry a value."})
+        if result.waiting_kind and result.waiting_kind not in WaitingKind.values:
+            raise ValidationError({"waiting_kind": "Attempt result waiting kind is not declared."})
+
+    @staticmethod
+    def _validate_claim_source(step_run: Any, cause: AttemptCause) -> None:
+        if step_run.status == StepRunStatus.WAITING and cause != AttemptCause.CONTINUATION:
+            raise ValidationError({"cause": "A waiting step run requires a continuation attempt."})
+        if step_run.status == StepRunStatus.SCHEDULED and cause != AttemptCause.INITIAL:
+            raise ValidationError({"cause": "A scheduled step run requires an initial attempt."})
+        if step_run.status not in {StepRunStatus.SCHEDULED, StepRunStatus.WAITING}:
+            raise ValidationError({"step_run": "Only a scheduled or waiting step run can claim an attempt."})
+
+    @staticmethod
+    def _validate_duplicate_claim(attempt: Any, cause: AttemptCause, input: AttemptInput) -> None:
+        if (
+            attempt.cause != str(cause)
+            or attempt.input_present != input.present
+            or attempt.input != input.value
+            or attempt.input_provenance != (input.provenance or {})
+        ):
+            raise ValidationError({"step_run": "The active attempt was claimed with different immutable input."})
 
     def revoke(
         self, attempt_id: int, *, lease_token: uuid.UUID, reason: LeaseRevocationReason, at: datetime
@@ -2255,16 +2369,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
     ) -> AttemptFinalization:
         """Retain one result and atomically apply its closed legacy projection."""
 
-        if result.kind == AttemptResultKind.TRANSIENT_ERROR:
-            raise ValidationError({"result": "Transient results require atomic successor allocation."})
-        if not isinstance(result.kind, AttemptResultKind):
-            raise ValidationError({"result": "Attempt results require a declared result kind."})
-        if not result.output_present and result.output is not None:
-            raise ValidationError({"output": "An absent attempt output cannot carry a value."})
-        if not result.checkpoint_present and result.checkpoint is not None:
-            raise ValidationError({"checkpoint": "An absent attempt checkpoint cannot carry a value."})
-        if result.waiting_kind and result.waiting_kind not in WaitingKind.values:
-            raise ValidationError({"waiting_kind": "Attempt result waiting kind is not declared."})
+        self._validate_result(result)
         alias = self.db
         unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
         with transaction.atomic(using=alias), self._write(alias), system_context(reason="workflows.attempt.finalize"):
