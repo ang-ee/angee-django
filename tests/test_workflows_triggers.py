@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from threading import Event
 from typing import Any
 
 import pytest
 import strawberry
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import close_old_connections, connection, connections, models, transaction
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import actor_context, app_settings, system_context
+from rebac.errors import MissingActorError
+from rebac.errors import PermissionDenied as RebacPermissionDenied
 from rebac.roles import grant
 
 from angee.base.models import AngeeDataModel, AngeeModel
@@ -506,16 +511,18 @@ def test_schedule_cron_catch_up_uses_one_base_at_max_after_now(
     now = after + timedelta(days=30)
 
     class FakeCroniter:
-        def __init__(self, cron: str, base: Any) -> None:
+        def __init__(self, cron: str, base: Any = None) -> None:
             del cron
-            bases.append(base)
+            if base is not None:
+                bases.append(base)
 
         def get_next(self, result_type: type[Any]) -> Any:
             del result_type
             return bases[-1] + timedelta(days=1)
 
-    monkeypatch.setattr(workflow_models, "croniter", FakeCroniter)
-    trigger = Trigger(config={"cron": "0 0 * * *"})
+    declarations = importlib.import_module("angee.workflows.trigger_declarations")
+    monkeypatch.setattr(declarations, "croniter", FakeCroniter)
+    trigger = Trigger(kind=workflow_models.TriggerKind.SCHEDULE, config={"cron": "0 0 * * *"})
 
     assert trigger.compute_next_fire_at(after=after, now=now) == now + timedelta(days=1)
     assert bases == [now]
@@ -534,7 +541,7 @@ def test_bad_schedule_row_is_logged_and_does_not_stop_scan(
     bad = _schedule_trigger(config={"interval_seconds": 3600}, next_fire_at=now)
     good = _schedule_trigger(config={"interval_seconds": 3600}, next_fire_at=now)
     with system_context(reason="test workflows invalid schedule row"):
-        Trigger.objects.filter(pk=bad.pk).update(config={"cron": "not a cron"})
+        models.QuerySet.update(Trigger.objects.filter(pk=bad.pk), config={"cron": "not a cron"})
 
     assert workflow_triggers.run_due_schedule_triggers(now=now) == {"triggers": 2, "fired": 1, "skipped": 1}
     good.refresh_from_db()
@@ -643,6 +650,84 @@ def test_console_can_enable_and_disable_triggers(
     assert trigger.enabled is False
 
 
+def test_schedule_preview_projects_invalid_drafts_as_typed_data(
+    workflow_trigger_tables: None,
+) -> None:
+    """Expected authoring errors stay in the preview payload, not GraphQL errors."""
+
+    del workflow_trigger_tables
+    workflows_schema = importlib.import_module("angee.workflows.schema")
+    schema = GraphQLSchemas(
+        [
+            SchemaAddon(
+                {"console": {key: tuple(workflows_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}}
+            )
+        ]
+    ).build("console")
+    admin = _platform_admin("workflow-trigger-preview-admin")
+    query = """
+      query Preview($config: JSON!, $count: Int!) {
+        workflow_schedule_preview(config: $config, count: $count) {
+          timezone occurrences errors
+        }
+      }
+    """
+
+    result = execute_schema(schema, query, {"config": {"interval_seconds": ""}, "count": 3}, user=admin)
+
+    assert result.errors is None
+    assert result_data(result)["workflow_schedule_preview"] == {
+        "timezone": "UTC",
+        "occurrences": [],
+        "errors": ["Value error, Schedule triggers require cron or interval_seconds, but not both."],
+    }
+
+
+def test_trigger_list_projects_summary_and_blocker_without_per_row_queries(
+    workflow_trigger_tables: None,
+) -> None:
+    """Trigger authoring projections load publication state once for the collection."""
+
+    del workflow_trigger_tables
+    workflows_schema = importlib.import_module("angee.workflows.schema")
+    schema = GraphQLSchemas(
+        [
+            SchemaAddon(
+                {"console": {key: tuple(workflows_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}}
+            )
+        ]
+    ).build("console")
+    with system_context(reason="test trigger list projection"):
+        draft = Workflow.objects.create(name="Trigger list")
+        Step.objects.create(workflow=draft, key="start", name="Start", is_entry=True)
+        draft.publish()
+        Trigger.objects.create(workflow=draft, kind=workflow_models.TriggerKind.MANUAL, config={})
+        Trigger.objects.create(workflow=draft, kind=workflow_models.TriggerKind.MANUAL, config={})
+    admin = _platform_admin("workflow-trigger-list-admin")
+    query = """
+      query TriggerList {
+        workflow_triggers { id summary activation_blocker last_fire_at }
+      }
+    """
+
+    with CaptureQueriesContext(connection) as queries:
+        rows = result_data(execute_schema(schema, query, user=admin))["workflow_triggers"]
+
+    assert [row["summary"] for row in rows] == ["Manual start", "Manual start"]
+    trigger_selects = [
+        item["sql"] for item in queries.captured_queries
+        if Trigger._meta.db_table in item["sql"] and item["sql"].lstrip().upper().startswith("SELECT")
+    ]
+    assert len(trigger_selects) == 1
+    domain_selects = [
+        item["sql"]
+        for item in queries.captured_queries
+        if item["sql"].lstrip().upper().startswith("SELECT")
+        and (Trigger._meta.db_table in item["sql"] or Workflow._meta.db_table in item["sql"])
+    ]
+    assert domain_selects == trigger_selects
+
+
 def _event_trigger(
     *,
     condition: dict[str, Any],
@@ -663,12 +748,14 @@ def _event_trigger(
             workflow=draft, key="start", name="Start", is_entry=True
         )
         draft.publish()
-        return Trigger.objects.create(
+        trigger = Trigger.objects.create(
             workflow=draft,
             kind=workflow_models.TriggerKind.EVENT,
-            enabled=enabled,
             config=trigger_config,
         )
+        if enabled:
+            trigger.enable()
+        return trigger
 
 
 def _schedule_trigger(*, config: dict[str, Any], next_fire_at: Any) -> Trigger:
@@ -680,13 +767,247 @@ def _schedule_trigger(*, config: dict[str, Any], next_fire_at: Any) -> Trigger:
             workflow=draft, key="start", name="Start", is_entry=True
         )
         draft.publish()
-        return Trigger.objects.create(
+        trigger = Trigger.objects.create(
             workflow=draft,
             kind=workflow_models.TriggerKind.SCHEDULE,
-            enabled=True,
             config=config,
             next_fire_at=next_fire_at,
         )
+        trigger.enable()
+        models.QuerySet.update(Trigger.objects.filter(pk=trigger.pk), next_fire_at=next_fire_at)
+        trigger.next_fire_at = next_fire_at
+        return trigger
+
+
+def test_trigger_creation_is_disabled_but_still_validates_rule_shape(
+    workflow_trigger_tables: None,
+) -> None:
+    """Every creation path disables rows without accepting malformed authored rules."""
+
+    del workflow_trigger_tables
+    with system_context(reason="test trigger creation contract"):
+        draft = Workflow.objects.create(name="Trigger creation")
+        trigger = Trigger.objects.create(
+            workflow=draft,
+            kind=workflow_models.TriggerKind.SCHEDULE,
+            enabled=True,
+            config={"interval_seconds": 60},
+        )
+        assert trigger.enabled is False
+        with pytest.raises(ValidationError, match="cron or interval"):
+            Trigger.objects.create(
+                workflow=draft,
+                kind=workflow_models.TriggerKind.SCHEDULE,
+                config={},
+            )
+
+
+def test_invalid_legacy_trigger_can_only_bypass_validation_to_disable(
+    workflow_trigger_tables: None,
+) -> None:
+    """Operational disable repairs actual state without opening a general validation bypass."""
+
+    del workflow_trigger_tables
+    trigger = _schedule_trigger(config={"interval_seconds": 60}, next_fire_at=timezone.now())
+    with system_context(reason="test invalid legacy trigger"):
+        models.QuerySet.update(Trigger.objects.filter(pk=trigger.pk), config={"cron": "invalid"})
+        trigger.refresh_from_db()
+        trigger.disable()
+        trigger.refresh_from_db()
+        assert trigger.enabled is False
+        trigger.config = {"cron": "invalid"}
+        with pytest.raises(ValidationError, match="cron"):
+            trigger.save(update_fields={"config", "updated_at"})
+
+
+def test_trigger_activation_preserves_caller_authorization_and_rejects_stale_lineage(
+    workflow_trigger_tables: None,
+) -> None:
+    """Direct actions require record access and cannot follow a stale instance to another head."""
+
+    del workflow_trigger_tables
+    trigger = _event_trigger(condition={}, enabled=False)
+    with pytest.raises((MissingActorError, RebacPermissionDenied)):
+        trigger.enable()
+    with pytest.raises((MissingActorError, RebacPermissionDenied)):
+        Trigger.objects.set_enabled(trigger, enabled=True)
+
+    with system_context(reason="test stale trigger activation"):
+        replacement = Workflow.objects.create(name="Replacement")
+        Step.objects.create(workflow=replacement, key="start", name="Start", is_entry=True)
+        replacement.publish()
+        models.QuerySet.update(Trigger.objects.filter(pk=trigger.pk), workflow_id=replacement.pk)
+        with pytest.raises(ValidationError, match="lineage changed"):
+            trigger.enable()
+
+
+def test_trigger_save_merges_partial_rule_fields_and_rejects_stale_activation(
+    workflow_trigger_tables: None,
+) -> None:
+    """Validation uses the locked effective row and a stale full save cannot re-enable it."""
+
+    del workflow_trigger_tables
+    trigger = _schedule_trigger(config={"interval_seconds": 60}, next_fire_at=timezone.now())
+    stale = Trigger.objects.sudo(reason="test stale trigger").get(pk=trigger.pk)
+    with system_context(reason="test concurrent trigger edit"):
+        models.QuerySet.update(
+            Trigger.objects.filter(pk=trigger.pk),
+            kind=workflow_models.TriggerKind.MANUAL,
+            enabled=False,
+        )
+        stale.config = {"interval_seconds": 120}
+        with pytest.raises(ValidationError, match="enable or disable"):
+            stale.save()
+
+        current = Trigger.objects.get(pk=trigger.pk)
+        current.config = {"legacy": True}
+        current.save(update_fields={"config", "updated_at"})
+        current.refresh_from_db()
+        assert current.kind == workflow_models.TriggerKind.MANUAL
+        assert current.config == {"legacy": True}
+
+
+def test_rule_saves_preserve_operational_state_and_only_cadence_reschedules(
+    workflow_trigger_tables: None,
+) -> None:
+    """Rule authoring cannot overwrite counters or move a schedule for unrelated config."""
+
+    del workflow_trigger_tables
+    due_at = timezone.now() + timedelta(hours=1)
+    trigger = _schedule_trigger(config={"interval_seconds": 60}, next_fire_at=due_at)
+    stale = Trigger.objects.sudo(reason="test stale operational trigger").get(pk=trigger.pk)
+    fired_at = timezone.now()
+    with system_context(reason="test trigger operational state"):
+        models.QuerySet.update(
+            Trigger.objects.filter(pk=trigger.pk),
+            last_fire_at=fired_at,
+            hourly_window_started_at=fired_at,
+            hourly_fire_count=1,
+        )
+        stale.config = {"interval_seconds": 60, "cooldown_seconds": 10, "opaque": True}
+        stale.save()
+        stale.refresh_from_db()
+        assert stale.last_fire_at == fired_at
+        assert stale.hourly_fire_count == 1
+        assert stale.next_fire_at == due_at
+        stale.config = {"interval_seconds": "60"}
+        stale.save(update_fields={"config", "updated_at"})
+        stale.refresh_from_db()
+        assert stale.next_fire_at == due_at
+        stale.next_fire_at = due_at - timedelta(minutes=5)
+        with pytest.raises(RuntimeError, match="owning manager"):
+            stale.save(update_fields={"next_fire_at", "updated_at"})
+
+        stale.disable()
+        disabled_due_at = stale.next_fire_at
+        stale.config = {"interval_seconds": 120}
+        stale.save(update_fields={"config", "updated_at"})
+        stale.refresh_from_db()
+        assert stale.enabled is False
+        assert stale.next_fire_at == disabled_due_at
+
+
+def test_operational_fields_only_change_through_locked_manager_transitions(
+    workflow_trigger_tables: None,
+) -> None:
+    """Collection writes are closed and a stale public fire derives from the locked row."""
+
+    del workflow_trigger_tables
+    trigger = _schedule_trigger(config={"interval_seconds": 60}, next_fire_at=timezone.now())
+    fired_at = timezone.now()
+    stale = Trigger.objects.sudo(reason="test stale fire caller").get(pk=trigger.pk)
+    with system_context(reason="test trigger operational guards"):
+        with pytest.raises(TypeError, match="QuerySet.update"):
+            Trigger.objects.filter(pk=trigger.pk).update(hourly_fire_count=99)
+        with pytest.raises(TypeError, match="bulk_update"):
+            Trigger.objects.bulk_update([trigger], ["event_model_label"])
+
+        models.QuerySet.update(
+            Trigger.objects.filter(pk=trigger.pk),
+            hourly_window_started_at=fired_at,
+            hourly_fire_count=4,
+        )
+        with transaction.atomic():
+            stale.record_fire(timestamp=fired_at + timedelta(seconds=1))
+
+        trigger.refresh_from_db()
+        assert trigger.hourly_window_started_at == fired_at
+        assert trigger.hourly_fire_count == 5
+        assert trigger.last_fire_at == fired_at + timedelta(seconds=1)
+
+
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL trigger serialization contract")
+def test_trigger_edit_and_activation_serialize_on_lineage_then_trigger(
+    workflow_trigger_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An activation racing a rule edit validates and schedules the committed rule."""
+
+    del workflow_trigger_tables
+    trigger = _schedule_trigger(config={"interval_seconds": 60}, next_fire_at=timezone.now())
+    with system_context(reason="prepare trigger activation race"):
+        trigger.disable()
+
+    edit_has_locks = Event()
+    release_edit = Event()
+    original_full_clean = Trigger.full_clean
+
+    def pause_locked_edit(instance: Trigger, *args: Any, **kwargs: Any) -> None:
+        if instance.pk == trigger.pk and instance.config == {"interval_seconds": 120} and not instance.enabled:
+            edit_has_locks.set()
+            assert release_edit.wait(timeout=10)
+        original_full_clean(instance, *args, **kwargs)
+
+    monkeypatch.setattr(Trigger, "full_clean", pause_locked_edit)
+
+    def edit_rule() -> None:
+        close_old_connections()
+        try:
+            with system_context(reason="concurrent trigger edit"):
+                row = Trigger.objects.get(pk=trigger.pk)
+                row.config = {"interval_seconds": 120}
+                row.save(update_fields={"config", "updated_at"})
+        finally:
+            connections.close_all()
+
+    def enable_rule() -> None:
+        close_old_connections()
+        try:
+            with system_context(reason="concurrent trigger activation"):
+                Trigger.objects.get(pk=trigger.pk).enable()
+        finally:
+            connections.close_all()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        edited = pool.submit(edit_rule)
+        assert edit_has_locks.wait(timeout=10)
+        enabled = pool.submit(enable_rule)
+        release_edit.set()
+        edited.result(timeout=10)
+        enabled.result(timeout=10)
+
+    with system_context(reason="verify trigger activation race"):
+        trigger.refresh_from_db()
+    assert trigger.enabled is True
+    assert trigger.config == {"interval_seconds": 120}
+    assert trigger.next_fire_at is not None
+    assert trigger.next_fire_at > timezone.now() + timedelta(seconds=100)
+
+
+def test_event_index_uses_the_validated_alias_precedence(
+    workflow_trigger_tables: None,
+) -> None:
+    """The indexed target cannot disagree with declaration alias normalization."""
+
+    del workflow_trigger_tables
+    with system_context(reason="test trigger index projection"):
+        draft = Workflow.objects.create(name="Trigger alias")
+        trigger = Trigger.objects.create(
+            workflow=draft,
+            kind=workflow_models.TriggerKind.EVENT,
+            config={"model": "   ", "model_label": TriggerSubject._meta.label_lower},
+        )
+    assert trigger.event_model_label == TriggerSubject._meta.label_lower
 
 
 def _map_workflow(*, policy: dict[str, Any], items: list[str]) -> Workflow:

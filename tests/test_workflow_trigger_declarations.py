@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from angee.workflows.trigger_declarations import (
     EventTriggerConfig,
     ScheduleTriggerConfig,
+    schedule_draft_preview,
     schedule_preview,
     trigger_config_schema,
     trigger_summary,
@@ -51,9 +52,23 @@ def test_event_whitespace_model_without_alias_is_invalid() -> None:
 def test_schedule_schema_owns_units_and_advanced_limits() -> None:
     schema = trigger_config_schema("schedule")
 
-    assert schema["properties"]["interval_seconds"]["unit"] == "seconds"
-    assert {item.get("minimum") for item in schema["properties"]["cooldown_seconds"]["anyOf"]} == {0, None}
-    assert {item.get("exclusiveMinimum") for item in schema["properties"]["hourly_cap"]["anyOf"]} == {0, None}
+    assert schema["properties"]["interval_seconds"]["label"] == "Interval seconds"
+    assert schema["properties"]["cooldown_seconds"] == {
+        "type": "integer",
+        "minimum": 0,
+        "nullable": True,
+        "label": "Cooldown Seconds",
+        "defaultValue": None,
+        "omittable": True,
+    }
+    assert schema["properties"]["hourly_cap"] == {
+        "type": "integer",
+        "minimum": 1,
+        "nullable": True,
+        "label": "Hourly Cap",
+        "defaultValue": None,
+        "omittable": True,
+    }
 
 
 @pytest.mark.parametrize(
@@ -87,6 +102,15 @@ def test_interval_preview_uses_scheduler_catch_up_semantics() -> None:
 def test_schedule_preview_is_bounded() -> None:
     with pytest.raises(ValueError, match="between 0 and 10"):
         schedule_preview({"interval_seconds": 1}, now=datetime(2026, 9, 9, tzinfo=UTC), count=11)
+
+
+def test_schedule_preview_reports_incomplete_drafts_without_raising() -> None:
+    now = datetime(2026, 9, 9, tzinfo=UTC)
+    assert schedule_draft_preview({}, now=now).errors
+    assert schedule_draft_preview({"interval_seconds": ""}, now=now).errors
+    assert schedule_draft_preview({"interval_seconds": 60}, now=now).occurrences
+    with pytest.raises(ValueError, match="between 0 and 10"):
+        schedule_draft_preview({"interval_seconds": 60}, now=now, count=11)
 
 
 def test_cron_preview_uses_the_same_validated_expression() -> None:

@@ -3,14 +3,26 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Iterable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from django.core.exceptions import ValidationError
 from django.db import router
 
 from angee.base.scoping import system_queryset
-from angee.workflows.graph import GraphDiagnostic, GraphIdentity, GraphInputSource, GraphLocation, WorkflowGraph
+from angee.workflows.graph import (
+    GraphDiagnostic,
+    GraphIdentity,
+    GraphInputSource,
+    GraphLocation,
+    GraphLocationKind,
+    WorkflowGraph,
+)
+
+if TYPE_CHECKING:
+    from angee.workflows.models import WorkflowQuerySet
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +151,22 @@ class DefinitionReadinessError(Exception):
 
 class WorkflowDefinitionManagerMixin:
     """Own atomic workflow definition commands on a Workflow manager."""
+
+    if TYPE_CHECKING:
+        model: type[Any]
+
+        def using(self, alias: str) -> "WorkflowQuerySet": ...
+        def current_published_for(self, workflow: Any) -> Any | None: ...
+        def _definition_caller(self, workflow: Any) -> AbstractContextManager[None]: ...
+        def _definition_read(self, workflow_id: int, *, using: str | None = None) -> AbstractContextManager[Any]: ...
+        def _definition_write(
+            self,
+            workflow_ids: Iterable[int],
+            *,
+            using: str | None = None,
+            _allow_status_transition: bool = False,
+        ) -> AbstractContextManager[Any]: ...
+        def _definition_revision(self, workflow_id: int, current: int) -> int: ...
 
     _WORKFLOW_FIELDS = frozenset(
         {"name", "description", "purpose", "subject_declaration", "error_workflow", "max_steps", "budget"}
@@ -402,39 +430,39 @@ class _DefinitionState:
         for edge in sorted(incident, key=lambda row: row.pk or 0):
             if edge.pk:
                 edge.delete()
-        for item in self.edit.edge_deletes:
-            edge = self.original_edges.get(item.identity)
+        for edge_delete in self.edit.edge_deletes:
+            edge = self.original_edges.get(edge_delete.identity)
             if edge is not None and edge not in incident:
                 edge.delete()
-        for item in self.edit.node_deletes:
-            self.original_nodes[item.identity].delete()
+        for node_delete in self.edit.node_deletes:
+            self.original_nodes[node_delete.identity].delete()
 
         node_results: list[Correlation] = []
-        for item in self.edit.node_patches:
-            row = self.nodes[item.identity]
-            row.save(update_fields=set(item.fields))
-        for item in self.edit.node_creates:
-            row = self.created_nodes[item.client_key]
+        for node_patch in self.edit.node_patches:
+            row = self.nodes[node_patch.identity]
+            row.save(update_fields=set(node_patch.fields))
+        for node_create in self.edit.node_creates:
+            row = self.created_nodes[node_create.client_key]
             row.save()
-            node_results.append(Correlation(item.client_key, row.pk))
+            node_results.append(Correlation(node_create.client_key, row.pk))
 
         edge_results: list[Correlation] = []
-        for item in self.edit.edge_patches:
-            row = self.edges[item.identity]
-            fields = set(item.fields)
-            if item.source is not None:
-                row.source = self._persisted_endpoint(item.source)
+        for edge_patch in self.edit.edge_patches:
+            row = self.edges[edge_patch.identity]
+            fields = set(edge_patch.fields)
+            if edge_patch.source is not None:
+                row.source = self._persisted_endpoint(edge_patch.source)
                 fields.add("source")
-            if item.target is not None:
-                row.target = self._persisted_endpoint(item.target)
+            if edge_patch.target is not None:
+                row.target = self._persisted_endpoint(edge_patch.target)
                 fields.add("target")
             row.save(update_fields=fields)
-        for item in self.edit.edge_creates:
-            row = self.created_edges[item.client_key]
-            row.source = self._persisted_endpoint(item.source)
-            row.target = self._persisted_endpoint(item.target)
+        for edge_create in self.edit.edge_creates:
+            row = self.created_edges[edge_create.client_key]
+            row.source = self._persisted_endpoint(edge_create.source)
+            row.target = self._persisted_endpoint(edge_create.target)
             row.save()
-            edge_results.append(Correlation(item.client_key, row.pk))
+            edge_results.append(Correlation(edge_create.client_key, row.pk))
         return node_results, edge_results
 
     def _validate_command_shape(self) -> None:
@@ -444,33 +472,61 @@ class _DefinitionState:
             self.workflow_fields,
             WorkflowDefinitionManagerMixin._WORKFLOW_FIELDS,
         )
-        for item in self.edit.node_creates:
-            self._fields("node", GraphIdentity(client_key=item.client_key), item.fields, self.manager._NODE_FIELDS)
-        for item in self.edit.node_patches:
-            self._fields("node", _edit_identity(item), item.fields, self.manager._NODE_FIELDS)
-        for item in self.edit.edge_creates:
-            self._fields("edge", GraphIdentity(client_key=item.client_key), item.fields, self.manager._EDGE_FIELDS)
-        for item in self.edit.edge_patches:
-            self._fields("edge", _edit_identity(item), item.fields, self.manager._EDGE_FIELDS)
+        for node_create in self.edit.node_creates:
+            self._fields(
+                "node",
+                GraphIdentity(client_key=node_create.client_key),
+                node_create.fields,
+                self.manager._NODE_FIELDS,
+            )
+        for node_patch in self.edit.node_patches:
+            self._fields("node", _edit_identity(node_patch), node_patch.fields, self.manager._NODE_FIELDS)
+        for edge_create in self.edit.edge_creates:
+            self._fields(
+                "edge",
+                GraphIdentity(client_key=edge_create.client_key),
+                edge_create.fields,
+                self.manager._EDGE_FIELDS,
+            )
+        for edge_patch in self.edit.edge_patches:
+            self._fields("edge", _edit_identity(edge_patch), edge_patch.fields, self.manager._EDGE_FIELDS)
         self._unique("node", "client_key", [item.client_key for item in self.edit.node_creates], client=True)
         self._unique("edge", "client_key", [item.client_key for item in self.edit.edge_creates], client=True)
         self._unique(
             "workflow",
             "client_key",
-            [item.client_key for item in (*self.edit.node_creates, *self.edit.edge_creates)],
+            [node.client_key for node in self.edit.node_creates] + [edge.client_key for edge in self.edit.edge_creates],
             client=True,
         )
-        self._unique("node", "identity", [item.identity for item in (*self.edit.node_patches, *self.edit.node_deletes)])
-        self._unique("edge", "identity", [item.identity for item in (*self.edit.edge_patches, *self.edit.edge_deletes)])
-        for item in (*self.edit.node_patches, *self.edit.node_deletes):
-            if item.identity not in self.nodes:
+        self._unique(
+            "node",
+            "identity",
+            [node.identity for node in self.edit.node_patches] + [node.identity for node in self.edit.node_deletes],
+        )
+        self._unique(
+            "edge",
+            "identity",
+            [edge.identity for edge in self.edit.edge_patches] + [edge.identity for edge in self.edit.edge_deletes],
+        )
+        node_edits: tuple[NodePatch | NodeDelete, ...] = (*self.edit.node_patches, *self.edit.node_deletes)
+        for node_edit in node_edits:
+            if node_edit.identity not in self.nodes:
                 self._command(
-                    "node", _edit_identity(item), "identity", "reference_invalid", "Node is missing or unavailable."
+                    "node",
+                    _edit_identity(node_edit),
+                    "identity",
+                    "reference_invalid",
+                    "Node is missing or unavailable.",
                 )
-        for item in (*self.edit.edge_patches, *self.edit.edge_deletes):
-            if item.identity not in self.edges:
+        edge_edits: tuple[EdgePatch | EdgeDelete, ...] = (*self.edit.edge_patches, *self.edit.edge_deletes)
+        for edge_edit in edge_edits:
+            if edge_edit.identity not in self.edges:
                 self._command(
-                    "edge", _edit_identity(item), "identity", "reference_invalid", "Edge is missing or unavailable."
+                    "edge",
+                    _edit_identity(edge_edit),
+                    "identity",
+                    "reference_invalid",
+                    "Edge is missing or unavailable.",
                 )
         key_patches = {item.identity: item.fields["key"] for item in self.edit.node_patches if "key" in item.fields}
         key_owners = {row.key: identity for identity, row in self.nodes.items()}
@@ -490,42 +546,45 @@ class _DefinitionState:
             for identity, edge in self.edges.items()
             if edge.source_id in deleted_nodes or edge.target_id in deleted_nodes
         }
-        for item in self.edit.edge_patches:
-            if item.identity in incident_edges:
+        for edge_patch in self.edit.edge_patches:
+            if edge_patch.identity in incident_edges:
                 self._command(
                     "edge",
-                    GraphIdentity(existing_id=item.identity),
+                    GraphIdentity(existing_id=edge_patch.identity),
                     "identity",
                     "edit_conflict",
                     "An edge removed with its node cannot also be patched.",
                 )
-        for item in (*self.edit.edge_creates, *self.edit.edge_patches):
-            for field_name, reference in (("source", item.source), ("target", item.target)):
-                if reference is not None:
+        for edge_create in self.edit.edge_creates:
+            for field_name, reference in (("source", edge_create.source), ("target", edge_create.target)):
+                self._validate_endpoint(
+                    reference,
+                    location=GraphIdentity(client_key=edge_create.client_key),
+                    field=field_name,
+                )
+        for edge_patch in self.edit.edge_patches:
+            for field_name, optional_reference in (("source", edge_patch.source), ("target", edge_patch.target)):
+                if optional_reference is not None:
                     self._validate_endpoint(
-                        reference,
-                        location=(
-                            GraphIdentity(client_key=item.client_key)
-                            if hasattr(item, "client_key")
-                            else _edit_identity(item)
-                        ),
+                        optional_reference,
+                        location=_edit_identity(edge_patch),
                         field=field_name,
                     )
 
     def _build_proposed_rows(self) -> None:
         for name, value in self.workflow_fields.items():
             setattr(self.workflow, name, copy.deepcopy(value))
-        for item in self.edit.node_patches:
-            row = self.nodes[item.identity]
-            for name, value in item.fields.items():
+        for node_patch in self.edit.node_patches:
+            row = self.nodes[node_patch.identity]
+            for name, value in node_patch.fields.items():
                 setattr(row, name, copy.deepcopy(value))
-        for item in self.edit.node_deletes:
-            self.nodes.pop(item.identity)
-        for item in self.edit.node_creates:
-            row = self.step_model(workflow=self.workflow, **copy.deepcopy(item.fields))
-            row._definition_identity = GraphIdentity(client_key=item.client_key)
-            self.created_nodes[item.client_key] = row
-            self.nodes[item.client_key] = row
+        for node_delete in self.edit.node_deletes:
+            self.nodes.pop(node_delete.identity)
+        for node_create in self.edit.node_creates:
+            row = self.step_model(workflow=self.workflow, **copy.deepcopy(node_create.fields))
+            row._definition_identity = GraphIdentity(client_key=node_create.client_key)
+            self.created_nodes[node_create.client_key] = row
+            self.nodes[node_create.client_key] = row
         for row in self.nodes.values():
             row._definition_identity = getattr(row, "_definition_identity", GraphIdentity(existing_id=row.pk))
         deleted_nodes = {item.identity for item in self.edit.node_deletes}
@@ -536,24 +595,24 @@ class _DefinitionState:
                 or row.target_id in deleted_nodes
             ):
                 self.edges.pop(identity)
-        for item in self.edit.edge_patches:
-            row = self.edges[item.identity]
-            for name, value in item.fields.items():
+        for edge_patch in self.edit.edge_patches:
+            row = self.edges[edge_patch.identity]
+            for name, value in edge_patch.fields.items():
                 setattr(row, name, copy.deepcopy(value))
-            if item.source is not None:
-                row.source = self._endpoint(item.source)
-            if item.target is not None:
-                row.target = self._endpoint(item.target)
-        for item in self.edit.edge_creates:
+            if edge_patch.source is not None:
+                row.source = self._endpoint(edge_patch.source)
+            if edge_patch.target is not None:
+                row.target = self._endpoint(edge_patch.target)
+        for edge_create in self.edit.edge_creates:
             row = self.edge_model(
                 workflow=self.workflow,
-                source=self._endpoint(item.source),
-                target=self._endpoint(item.target),
-                **copy.deepcopy(item.fields),
+                source=self._endpoint(edge_create.source),
+                target=self._endpoint(edge_create.target),
+                **copy.deepcopy(edge_create.fields),
             )
-            row._definition_identity = GraphIdentity(client_key=item.client_key)
-            self.created_edges[item.client_key] = row
-            self.edges[item.client_key] = row
+            row._definition_identity = GraphIdentity(client_key=edge_create.client_key)
+            self.created_edges[edge_create.client_key] = row
+            self.edges[edge_create.client_key] = row
         for row in self.edges.values():
             row._definition_identity = getattr(row, "_definition_identity", GraphIdentity(existing_id=row.pk))
 
@@ -570,26 +629,28 @@ class _DefinitionState:
                         "field_invalid",
                         message,
                     )
-        for kind, rows in (("node", self.nodes.values()), ("edge", self.edges.values())):
-            for row in rows:
-                try:
-                    row.full_clean(
-                        exclude={"source", "target"} if kind == "edge" else None,
-                        validate_unique=False,
-                        validate_constraints=False,
-                    )
-                except ValidationError as error:
-                    identity = row._definition_identity
-                    for path, messages in error.message_dict.items():
-                        for message in messages:
-                            self._command(kind, identity, path, "field_invalid", message)
+        self._validate_model_rows("node", self.nodes.values())
+        self._validate_model_rows("edge", self.edges.values())
+
+    def _validate_model_rows(self, kind: GraphLocationKind, rows: Iterable[Any]) -> None:
+        for row in rows:
+            try:
+                row.full_clean(
+                    exclude={"source", "target"} if kind == "edge" else None,
+                    validate_unique=False,
+                    validate_constraints=False,
+                )
+            except ValidationError as error:
+                identity = row._definition_identity
+                for path, messages in error.message_dict.items():
+                    for message in messages:
+                        self._command(kind, identity, path, "field_invalid", message)
 
     def _endpoint(self, reference: EndpointRef) -> Any:
-        return (
-            self.nodes[reference.existing_id]
-            if reference.existing_id is not None
-            else self.created_nodes[reference.client_key]
-        )
+        if reference.existing_id is not None:
+            return self.nodes[reference.existing_id]
+        assert reference.client_key is not None, "validated endpoints have one identity"
+        return self.created_nodes[reference.client_key]
 
     def _persisted_endpoint(self, reference: EndpointRef) -> Any:
         return self._endpoint(reference)
@@ -607,7 +668,7 @@ class _DefinitionState:
 
     def _fields(
         self,
-        kind: str,
+        kind: GraphLocationKind,
         identity: GraphIdentity,
         values: dict[str, Any],
         allowed: frozenset[str],
@@ -631,7 +692,7 @@ class _DefinitionState:
                     "This field cannot be null.",
                 )
 
-    def _unique(self, kind: str, field: str, values: list[Any], *, client: bool = False) -> None:
+    def _unique(self, kind: GraphLocationKind, field: str, values: list[Any], *, client: bool = False) -> None:
         seen: set[Any] = set()
         for value in values:
             if not value or value in seen:
@@ -644,7 +705,7 @@ class _DefinitionState:
                 )
             seen.add(value)
 
-    def _command(self, kind: str, identity: GraphIdentity, field: str, code: str, message: str) -> None:
+    def _command(self, kind: GraphLocationKind, identity: GraphIdentity, field: str, code: str, message: str) -> None:
         self.diagnostics.append(GraphDiagnostic(code, message, GraphLocation(kind, identity, field)))
 
 

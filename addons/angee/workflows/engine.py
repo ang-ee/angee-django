@@ -20,8 +20,8 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils import timezone
+from pydantic import JsonValue, create_model
 from pydantic import ValidationError as PydanticValidationError
-from pydantic import create_model
 from rebac import PermissionDenied, SubjectRef, current_actor, system_context
 from rebac.actors import to_subject_ref
 from rebac.backends import backend as rebac_backend
@@ -40,6 +40,7 @@ from angee.workflows.attempts import (
     AttemptResultKind,
     InvocationAdmission,
     JsonPresence,
+    MapItemSource,
 )
 from angee.workflows.bindings import (
     BindingContext,
@@ -84,6 +85,7 @@ class DecisionAttemptResult:
 class _AttemptPreparation:
     input: AttemptInput
     failure: AttemptResult | None = None
+    map_item: MapItemSource | None = None
 
 
 def start(
@@ -501,7 +503,7 @@ def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = Non
     _check_decision_act(current, actor_ref)
 
     if current.suspension_attempt_id is not None:
-        validation_error: ValidationError | None = None
+        retained_validation_error: ValidationError | None = None
         with (
             system_context(reason="workflows.engine.decide.retained"),
             transaction.atomic(),
@@ -509,13 +511,13 @@ def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = Non
         ):
             try:
                 resolution = _validate_resolution(current, payload, actor=actor_ref)
-            except ValidationError as error:
+            except ValidationError as resolution_error:
                 locked, exhausted = decision_model.objects.record_invalid_retained(decision_id)
-                validation_error = error
+                retained_validation_error = resolution_error
                 if exhausted:
                     locked.step_run.__class__.objects.fail_retained_decisions(
                         locked.step_run_id,
-                        error=f"Decision resolution failed validation: {error}",
+                        error=f"Decision resolution failed validation: {resolution_error}",
                     )
                 else:
                     _schedule_decision_timers(locked)
@@ -536,10 +538,10 @@ def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = Non
             )
             transaction.on_commit(enqueue_dispatch_publisher)
             decision_model.objects.complete_retained_resolution(decision_id)
-        return DecisionAttemptResult(locked, validation_error)
+        return DecisionAttemptResult(locked, retained_validation_error)
 
     run_id: int | None = None
-    validation_error: ValidationError | None = None
+    legacy_validation_error: ValidationError | None = None
     with system_context(reason="workflows.engine.decide"), transaction.atomic():
         locked = (
             decision_model.objects.lock_if_supported()
@@ -553,14 +555,14 @@ def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = Non
             resolution = _validate_resolution(locked, payload, actor=actor_ref)
         except ValidationError as error:
             _record_invalid_resolution(locked, error)
-            validation_error = error
+            legacy_validation_error = error
             run_id = locked.step_run.run_id
         else:
             locked.resolve(target, resolution=resolution, resolved_by=str(actor_ref))
             _apply_decision_policy(locked.step_run)
             run_id = locked.step_run.run_id
         transaction.on_commit(lambda run_id=run_id: enqueue_advance(cast(int, run_id)))
-    return DecisionAttemptResult(locked, validation_error)
+    return DecisionAttemptResult(locked, legacy_validation_error)
 
 
 def escalate_decision(decision_id: int, attempt: int, *, now: datetime | None = None) -> dict[str, int]:
@@ -1336,55 +1338,75 @@ def _terminal_step_runs(run: Any) -> Iterable[Any]:
 
 
 def _process_map_steps(run: Any, *, timestamp: datetime) -> bool:
-    map_rows = list(
+    locked_rows = list(
         run.step_runs.lock_if_supported()
         .select_related("step")
-        .filter(**MapStep.engine_expanded_filter(), status__in=[StepRunStatus.SCHEDULED, StepRunStatus.WAITING])
         .order_by("pk")
     )
+    map_rows = [
+        row
+        for row in locked_rows
+        if row.step_id is not None
+        and row.step.step_class == "map"
+        and row.map_index == -1
+        and row.status in {StepRunStatus.SCHEDULED, StepRunStatus.WAITING}
+    ]
     for step_run in map_rows:
         if step_run.status == StepRunStatus.SCHEDULED:
-            if not _expand_map_step(run, step_run, timestamp=timestamp):
+            if not _expand_retained_map_step(run, step_run, timestamp=timestamp):
                 return False
         if step_run.status == StepRunStatus.WAITING:
-            if not _complete_map_step_if_ready(run, step_run):
+            if step_run.is_retained:
+                if not _complete_retained_map_step_if_ready(run, step_run, timestamp=timestamp):
+                    return False
+            elif not _complete_map_step_if_ready(run, step_run):
                 return False
     return True
 
 
-def _expand_map_step(run: Any, step_run: Any, *, timestamp: datetime) -> bool:
-    if not _workflow_capacity_allows(run):
-        return False
-    try:
-        target = MapStep.target_step(step_run)
-        items = MapStep.items(step_run)
-    except ValidationError as error:
-        step_run.mark_started(heartbeat_at=timestamp, claimed_deliveries=run.deliveries)
-        output = {"error": str(error), "total": 0, "successes": 0, "failures": 0}
-        step_run.mark_succeeded(output=output, outcome="failed")
-        run.steps_taken += 1
-        run.save(update_fields=["steps_taken", "updated_at"])
-        return True
+def _expand_retained_map_step(run: Any, step_run: Any, *, timestamp: datetime) -> bool:
+    """Retain one Map expansion generation before exposing any body slot."""
 
-    if not _map_capacity_allows(run, target=target, items=items):
+    recorded = _model("StepAttempt").objects.record_map_expansion(step_run, at=timestamp)
+    if recorded is None:
         return False
-
-    state = dict(step_run.resume_state)
-    state["map"] = {
-        "target_step_key": target.key,
-        "target_step_id": target.pk,
-        "items": items,
-    }
-    step_run.mark_started(heartbeat_at=timestamp, claimed_deliveries=run.deliveries)
-    step_run.resume_state = state
-    step_run.save(update_fields=["resume_state", "updated_at"])
-    run.steps_taken += 1
-    run.save(update_fields=["steps_taken", "updated_at"])
-    _ensure_map_children(run, step_run, target=target, items=items)
+    expansion, plan = recorded
+    target = _model("Step").objects.get(pk=plan.target_id) if plan.target_id is not None else None
+    items = plan.items
+    if target is not None:
+        _ensure_map_children(run, step_run, target=target, items=items)
+        _model("StepRun").objects.bind_map_membership(
+            run_id=run.pk,
+            target_id=target.pk,
+            expansion_attempt_id=expansion.pk,
+            item_count=len(items),
+            at=timestamp,
+        )
     if not items:
-        return _complete_map_step_if_ready(run, step_run)
-    else:
-        step_run.mark_waiting(resume_state=state, waiting_kind="children")
+        return _complete_retained_map_step_if_ready(
+            run, step_run, timestamp=timestamp, expansion_attempt_id=expansion.pk
+        )
+    return True
+
+
+def _complete_retained_map_step_if_ready(
+    run: Any,
+    step_run: Any,
+    *,
+    timestamp: datetime,
+    expansion_attempt_id: int | None = None,
+) -> bool:
+    """Aggregate only the exact members of the current retained expansion."""
+
+    del run
+    expansion_id = expansion_attempt_id or step_run.current_attempt_id
+    if expansion_id is None:
+        raise ValidationError({"attempt": "Retained Map controller has no current expansion."})
+    _model("StepAttempt").objects.record_map_aggregate(
+        step_run.pk,
+        expansion_attempt_id=expansion_id,
+        at=timestamp,
+    )
     return True
 
 
@@ -1613,7 +1635,9 @@ def _same_step_run(left: Any | None, right: Any | None) -> bool:
 
 def _claim_due_steps(run: Any, *, timestamp: datetime, retained: bool = False) -> list[int]:
     locked_rows = list(
-        run.step_runs.lock_if_supported().select_related("step", "current_attempt").order_by("pk")
+        run.step_runs.lock_if_supported()
+        .select_related("step", "current_attempt", "current_map_expansion")
+        .order_by("pk")
     )
     due = [
         row
@@ -1638,12 +1662,12 @@ def _claim_due_steps(run: Any, *, timestamp: datetime, retained: bool = False) -
         run.mark_failed(f"Workflow exceeded max_steps={run.workflow.max_steps}.")
         return []
 
-    prepared = [
+    preparations = [
         (_prepare_attempt_input(run, step_run, source_rows=locked_rows) if retained else None)
         for step_run in due
     ]
     claimed: list[int] = []
-    for step_run, preparation in zip(due, prepared, strict=True):
+    for step_run, preparation in zip(due, preparations, strict=True):
         if retained:
             cause = (
                 AttemptCause.CONTINUATION
@@ -1656,6 +1680,7 @@ def _claim_due_steps(run: Any, *, timestamp: datetime, retained: bool = False) -
                     step_run,
                     cause=cause,
                     input=prepared.input,
+                    map_item=prepared.map_item,
                     result=prepared.failure,
                     claimed_at=timestamp,
                     recorded_at=timestamp,
@@ -1665,7 +1690,11 @@ def _claim_due_steps(run: Any, *, timestamp: datetime, retained: bool = False) -
                 continue
             attempt_input = prepared.input
             claim = _model("StepAttempt").objects.claim(
-                step_run, cause=cause, input=attempt_input, claimed_at=timestamp
+                step_run,
+                cause=cause,
+                input=attempt_input,
+                map_item=prepared.map_item,
+                claimed_at=timestamp,
             )
             _model("WorkflowDispatch").objects.schedule_execute(claim.attempt)
         else:
@@ -1686,15 +1715,40 @@ def _prepare_attempt_input(
 
     if step_run.status == StepRunStatus.WAITING and step_run.current_attempt_id is not None:
         previous = _model("StepAttempt").objects.get(pk=step_run.current_attempt_id)
+        map_item = (
+            MapItemSource(
+                previous.map_expansion_id,
+                previous.map_item_index,
+                JsonPresence(previous.map_item_present, previous.map_item),
+            )
+            if previous.map_expansion_id is not None and previous.map_item_index is not None
+            else None
+        )
         return _AttemptPreparation(
-            AttemptInput(previous.input_present, previous.input, previous.input_provenance)
+            AttemptInput(previous.input_present, previous.input, previous.input_provenance),
+            map_item=map_item,
         )
     if step_run.step.input_binding is None:
-        return _AttemptPreparation(AttemptInput(True, step_run.input, {"kind": "automatic"}))
+        map_item = None
+        expansion = step_run.current_map_expansion
+        if step_run.map_index >= 0 and expansion is not None:
+            checkpoint = expansion.checkpoint if expansion.checkpoint_present else None
+            map_state = checkpoint.get("map") if isinstance(checkpoint, dict) else None
+            items = map_state.get("items") if isinstance(map_state, dict) else None
+            if isinstance(items, list) and step_run.map_index < len(items):
+                map_item = MapItemSource(
+                    expansion.pk,
+                    step_run.map_index,
+                    JsonPresence(True, items[step_run.map_index]),
+                )
+        return _AttemptPreparation(
+            AttemptInput(True, step_run.input, {"kind": "automatic"}),
+            map_item=map_item,
+        )
     try:
         binding = parse_binding(step_run.step.input_binding)
     except PydanticValidationError as error:
-        diagnostics = [
+        diagnostics: list[dict[str, JsonValue]] = [
             {"path": list(path), "message": message}
             for path, message in binding_error_details(step_run.step.input_binding, error)
         ]
@@ -1740,14 +1794,44 @@ def _prepare_attempt_input(
             if valid
             else UnavailableSource("source_unavailable", "The referenced retained output is unavailable.", provenance)
         )
-    context = BindingContext(
-        workflow_input=workflow_input,
-        step_outputs=sources,
-        map_item=UnavailableSource(
+    map_item_source: MapItemSource | None = None
+    map_binding_source: SourceValue | UnavailableSource
+    expansion = step_run.current_map_expansion
+    if step_run.map_index >= 0 and expansion is not None:
+        checkpoint = expansion.checkpoint if expansion.checkpoint_present else None
+        map_state = checkpoint.get("map") if isinstance(checkpoint, dict) else None
+        items = map_state.get("items") if isinstance(map_state, dict) else None
+        if (
+            expansion.result_kind == str(AttemptResultKind.WAIT)
+            and expansion.applied_at is not None
+            and isinstance(items, list)
+            and step_run.map_index < len(items)
+        ):
+            presence = JsonPresence(True, items[step_run.map_index])
+            provenance = {
+                "kind": "map_item",
+                "expansion_attempt_id": expansion.pk,
+                "map_index": step_run.map_index,
+                "path": [],
+            }
+            map_item_source = MapItemSource(expansion.pk, step_run.map_index, presence)
+            map_binding_source = SourceValue(presence, provenance)
+        else:
+            map_binding_source = UnavailableSource(
+                "map_item_unavailable",
+                "The retained Map item is outside the current expansion.",
+                {"kind": "map_item", "map_index": step_run.map_index},
+            )
+    else:
+        map_binding_source = UnavailableSource(
             "map_item_unavailable",
             "Retained Map item provenance is not available for this execution generation.",
             {"kind": "map_item"},
-        ),
+        )
+    context = BindingContext(
+        workflow_input=workflow_input,
+        step_outputs=sources,
+        map_item=map_binding_source,
     )
     evaluation = evaluate_binding(binding, context)
     if evaluation.diagnostics or evaluation.value is None:
@@ -1771,7 +1855,7 @@ def _prepare_attempt_input(
         )
         provenance = dict(evaluation.provenance or {"kind": "binding"})
         provenance["diagnostics"] = diagnostics
-        return _AttemptPreparation(AttemptInput(False, None, provenance), failure)
+        return _AttemptPreparation(AttemptInput(False, None, provenance), failure, map_item_source)
     candidate = evaluation.value
     impl_class = step_run.step.resolve_impl("step_class")
     if impl_class.input_model is not None:
@@ -1780,10 +1864,13 @@ def _prepare_attempt_input(
         except PydanticValidationError as error:
             failure = _preparation_error("Workflow step input is invalid.", error)
             return _AttemptPreparation(
-                AttemptInput(candidate.present, candidate.value, evaluation.provenance), failure
+                AttemptInput(candidate.present, candidate.value, evaluation.provenance),
+                failure,
+                map_item_source,
             )
     return _AttemptPreparation(
-        AttemptInput(candidate.present, candidate.value, evaluation.provenance)
+        AttemptInput(candidate.present, candidate.value, evaluation.provenance),
+        map_item=map_item_source,
     )
 
 

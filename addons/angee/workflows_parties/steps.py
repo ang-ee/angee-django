@@ -19,6 +19,7 @@ from typing import Any
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from pydantic import JsonValue
 from rebac import actor_context, system_context
 from rebac.actors import to_subject_ref
 
@@ -96,6 +97,7 @@ class DedupeGateStepImpl(StepImpl):
 
         del now
         pairs = _input_pairs(step_run.input)
+        json_pairs: list[JsonValue] = [{key: value for key, value in pair.items()} for pair in pairs]
         config = dict(step_run.step.config)
         assignee = str(config.get("assignee") or _run_owner_subject(step_run.run))
         return StepResult.suspend(
@@ -104,7 +106,7 @@ class DedupeGateStepImpl(StepImpl):
                 DecisionSpec(
                     assignees=(assignee,),
                     action=str(config.get("action") or "dedupe-parties"),
-                    payload={"pairs": pairs},
+                    payload={"pairs": json_pairs},
                     max_attempts=positive_int(config.get("max_attempts", 3), "Dedupe gate max_attempts"),
                     decision_schema=_dedupe_form_schema(),
                 ),

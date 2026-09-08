@@ -7,7 +7,7 @@ from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypeAlias, cast
 
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from pydantic import ValidationError as PydanticValidationError
@@ -15,6 +15,8 @@ from pydantic import ValidationError as PydanticValidationError
 from angee.workflows.bindings import binding_error_details, parse_binding
 from angee.workflows.data_contracts import DataContract, model_data_contract
 from angee.workflows.steps import StepImpl, validate_retry_config
+
+GraphLocationKind: TypeAlias = Literal["workflow", "node", "edge"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +37,7 @@ class GraphIdentity:
 
 @dataclass(frozen=True, slots=True)
 class GraphLocation:
-    kind: Literal["workflow", "node", "edge"]
+    kind: GraphLocationKind
     key: GraphIdentity
     field: str
     detail_path: tuple[str | int, ...] = ()

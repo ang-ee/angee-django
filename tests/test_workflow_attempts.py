@@ -26,6 +26,7 @@ from angee.workflows.attempts import (
     JsonPresence,
     LeaseRevocationReason,
     deserialize_decision_specs,
+    json_values_equal,
     serialize_decision_specs,
     validate_json_presence,
 )
@@ -48,6 +49,48 @@ def test_json_presence_rejects_coercive_or_nonfinite_values() -> None:
     for value in invalid:
         with pytest.raises(ValueError):
             validate_json_presence(value)
+
+
+def test_json_equality_preserves_scalar_types_and_ignores_object_order() -> None:
+    assert json_values_equal(
+        {"a": [True, 1, 1.0], "b": None},
+        {"b": None, "a": [True, 1, 1.0]},
+    )
+    assert not json_values_equal({"value": True}, {"value": 1})
+    assert not json_values_equal({"value": 1}, {"value": 1.0})
+
+
+@pytest.mark.django_db(transaction=True)
+def test_duplicate_result_rejects_bool_number_substitution(
+    scheduled_step_run: StepRun,
+) -> None:
+    attempt = StepAttempt.objects.claim(
+        scheduled_step_run, claimed_at=timezone.now()
+    ).attempt
+    StepAttempt.objects.admit_invocation(
+        attempt.pk, lease_token=attempt.lease_token, at=timezone.now()
+    )
+    StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=AttemptResult(
+            AttemptResultKind.DONE,
+            output_present=True,
+            output={"value": True},
+        ),
+        recorded_at=timezone.now(),
+    )
+    with pytest.raises(ValidationError, match="different result"):
+        StepAttempt.objects.finalize(
+            attempt.pk,
+            lease_token=attempt.lease_token,
+            result=AttemptResult(
+                AttemptResultKind.DONE,
+                output_present=True,
+                output={"value": 1},
+            ),
+            recorded_at=timezone.now(),
+        )
 
 
 def test_attempt_result_rejects_non_json_output_and_checkpoint() -> None:

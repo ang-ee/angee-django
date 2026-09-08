@@ -13,19 +13,18 @@ from __future__ import annotations
 import copy
 import logging
 import uuid
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any, Self, cast
 
-from croniter import CroniterBadCronError, croniter
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
-from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
 from django.core.validators import validate_slug
 from django.db import DEFAULT_DB_ALIAS, OperationalError, ProgrammingError, connections, models, router, transaction
 from django.utils import timezone
@@ -40,7 +39,7 @@ from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import RecordRefMixin
-from angee.base.scoping import system_queryset
+from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.transitions import StateTransitions, TransitionNotAllowed, save_state, transition
 from angee.resources.mixins import ResourceLoadMixin, ResourceWritePreparation
 from angee.workflows.attempts import (
@@ -58,12 +57,15 @@ from angee.workflows.attempts import (
     JsonPresence,
     LeaseRevocation,
     LeaseRevocationReason,
+    MapExpansionPlan,
+    MapItemSource,
     RetryIntent,
     deserialize_decision_specs,
+    json_values_equal,
     serialize_decision_specs,
     validate_json_presence,
 )
-from angee.workflows.definitions import WorkflowDefinitionManagerMixin
+from angee.workflows.definitions import StaleDefinitionError, WorkflowDefinitionManagerMixin
 from angee.workflows.dispatch import (
     DispatchConsumption,
     DispatchPreflight,
@@ -73,9 +75,13 @@ from angee.workflows.dispatch import (
 )
 from angee.workflows.steps import (
     StepImpl,
-    optional_non_negative_int,
-    optional_positive_int,
     retry_policy_from_config,
+)
+from angee.workflows.trigger_declarations import (
+    EventTriggerConfig,
+    ScheduleTriggerConfig,
+    TriggerConfig,
+    validate_trigger_config,
 )
 
 logger = logging.getLogger(__name__)
@@ -308,6 +314,7 @@ class WorkflowStatus(models.TextChoices):
     """Publication lifecycle for a workflow definition row."""
 
     DRAFT = "draft", "Draft"
+    TEST = "test", "Test"
     PUBLISHED = "published", "Published"
     ARCHIVED = "archived", "Archived"
 
@@ -324,6 +331,7 @@ class RunOrigin(models.TextChoices):
 
     UNKNOWN = "unknown", "Unknown"
     MANUAL = "manual", "Manual"
+    TEST = "test", "Test"
     TRIGGER = "trigger", "Trigger"
     SESSION = "session", "Session"
     ERROR_WORKFLOW = "error_workflow", "Error workflow"
@@ -476,7 +484,7 @@ class WorkflowManager(WorkflowDefinitionManagerMixin, AngeeManager.from_queryset
         *,
         using: str | None = None,
         _allow_status_transition: bool = False,
-    ) -> Iterable[list[Any]]:
+    ) -> Iterator[list[Any]]:
         """Lock declared lineages and share one revision owner across nested writes."""
 
         alias = using or self.db
@@ -541,14 +549,14 @@ class WorkflowManager(WorkflowDefinitionManagerMixin, AngeeManager.from_queryset
         return current + int(workflow_id in session.changed_head_ids)
 
     @contextmanager
-    def _definition_caller(self, workflow: Any) -> Iterable[None]:
+    def _definition_caller(self, workflow: Any) -> Iterator[None]:
         """Project a command target's explicit actor or sudo binding to nested ORM work."""
 
         with _definition_caller_context(workflow):
             yield
 
     @contextmanager
-    def _definition_read(self, workflow_id: int, *, using: str | None = None) -> Iterable[Any]:
+    def _definition_read(self, workflow_id: int, *, using: str | None = None) -> Iterator[Any]:
         """Lock one mutable or immutable definition for a coherent snapshot read."""
 
         alias = using or self.db
@@ -556,7 +564,7 @@ class WorkflowManager(WorkflowDefinitionManagerMixin, AngeeManager.from_queryset
             yield system_queryset(self.model, using=alias, lock=("self",)).get(pk=workflow_id)
 
     @contextmanager
-    def _copy_to(self, workflow_id: int) -> Iterable[None]:
+    def _copy_to(self, workflow_id: int) -> Iterator[None]:
         """Permit inserts into one new publication within the locked session."""
 
         session = _definition_write_session.get()
@@ -586,6 +594,43 @@ class WorkflowManager(WorkflowDefinitionManagerMixin, AngeeManager.from_queryset
             return None
         return latest
 
+    def test_snapshot(self, workflow: Any, *, expected_revision: int) -> Any:
+        """Return the immutable test copy of one exact saved draft revision."""
+
+        self._validate_expected_revision(workflow, expected_revision)
+        if workflow.published_from_id is not None:
+            raise ValidationError({"workflow": "Test snapshots can only be taken from a lineage head."})
+        alias = self.db
+        with system_context(reason="workflows.test_snapshot"), self._definition_write(
+            (workflow.pk,), using=alias
+        ):
+            draft = cast(
+                Workflow,
+                _bind_definition_caller(_definition_rows(self.model, alias).get(pk=workflow.pk), workflow),
+            )
+            if draft.draft_revision != expected_revision:
+                raise StaleDefinitionError(expected=expected_revision, current=draft.draft_revision)
+            existing = system_queryset(self.model, using=alias, lock=None).filter(
+                published_from=draft,
+                status=WorkflowStatus.TEST,
+                draft_revision=expected_revision,
+            ).first()
+            if existing is not None:
+                return existing
+            with _definition_caller_context(draft):
+                draft._validate_publishable()
+            snapshot = draft._new_definition_copy(
+                version=0,
+                draft_revision=expected_revision,
+            )
+            _bind_definition_caller(snapshot, draft)
+            snapshot.save(using=alias)
+            with self._copy_to(snapshot.pk):
+                with _definition_caller_context(draft):
+                    draft._copy_definition_to(snapshot)
+                snapshot.mark_test()
+            return snapshot
+
 
 class WorkflowRunQuerySet(AngeeQuerySet[Any]):
     """QuerySet owning workflow-run subject lookups."""
@@ -607,6 +652,20 @@ class WorkflowRunQuerySet(AngeeQuerySet[Any]):
 
         if {"input", "input_present"} & kwargs.keys():
             raise TypeError("Workflow run input is immutable.")
+        identity_fields = {
+            "workflow",
+            "workflow_id",
+            "origin",
+            "subject_content_type",
+            "subject_content_type_id",
+            "subject_object_id",
+            "test_request_actor_ref",
+        }
+        with system_context(reason="workflows.runs.test_identity_guard"):
+            targets_test = models.QuerySet.filter(self, origin=RunOrigin.TEST).exists()
+        creates_test = "origin" in kwargs and str(kwargs["origin"]) == str(RunOrigin.TEST)
+        if identity_fields & kwargs.keys() and (targets_test or creates_test):
+            raise TypeError("Workflow test request identity is immutable.")
         return super().update(**kwargs)
 
     def bulk_update(
@@ -617,7 +676,23 @@ class WorkflowRunQuerySet(AngeeQuerySet[Any]):
         field_names = tuple(fields)
         if {"input", "input_present"} & set(field_names):
             raise TypeError("Workflow run input is immutable.")
-        return super().bulk_update(objs, field_names, batch_size=batch_size)
+        rows = list(objs)
+        identity_fields = {
+            "workflow",
+            "workflow_id",
+            "origin",
+            "subject_content_type",
+            "subject_content_type_id",
+            "subject_object_id",
+            "test_request_actor_ref",
+        }
+        targets_test = system_queryset(self.model, using=self.db, lock=None).filter(
+            pk__in=[row.pk for row in rows], origin=RunOrigin.TEST
+        ).exists()
+        creates_test = "origin" in field_names and any(str(row.origin) == str(RunOrigin.TEST) for row in rows)
+        if identity_fields & set(field_names) and (targets_test or creates_test):
+            raise TypeError("Workflow test request identity is immutable.")
+        return super().bulk_update(rows, field_names, batch_size=batch_size)
 
 
 class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # type: ignore[misc]
@@ -706,6 +781,135 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             raise ValidationError({"workflow": "Workflow has no published version to start."})
         if version.status != WorkflowStatus.PUBLISHED:
             raise ValidationError({"workflow": "Workflow runs must pin a published version."})
+        return self._start_pinned_locked(
+            version,
+            subject,
+            actor,
+            trigger=trigger,
+            parent_step_run=parent_step_run,
+            dedup_key=dedup_key,
+            origin=origin,
+            input=input,
+            available_at=available_at,
+            using=using,
+        )
+
+    def start_test(
+        self,
+        workflow: Any,
+        *,
+        expected_revision: int,
+        request_key: str,
+        subject: Any,
+        actor: Any,
+        input: JsonPresence = JsonPresence(),
+    ) -> Any:
+        """Start or recover one idempotent whole-workflow test request."""
+
+        workflow_model = self.model._meta.get_field("workflow").remote_field.model
+        workflow_model.objects._validate_expected_revision(workflow, expected_revision)
+        input = validate_json_presence(input, label="workflow run input")
+        if not isinstance(request_key, str) or not request_key.strip():
+            raise ValidationError({"request_key": "Test launch request keys must be non-empty strings."})
+        head_id = workflow.pk if workflow.published_from_id is None else workflow.published_from_id
+        dedup_key = f"test:{head_id}:{request_key}"
+        if len(dedup_key) > self.model._meta.get_field("dedup_key").max_length:
+            raise ValidationError({"request_key": "Test launch request key is too long."})
+        alias = self.db
+        authorized = read_scoped_queryset(workflow_model, actor, action="write")
+        if authorized is None or not authorized.filter(pk=workflow.pk).exists():
+            raise PermissionDenied("Test workflow access was denied.")
+        with system_context(reason="workflows.runs.start_test"), transaction.atomic(using=alias):
+            head = system_queryset(workflow_model, using=alias, lock=("self",)).get(pk=head_id)
+            requested = head
+            if workflow.published_from_id is not None:
+                requested = system_queryset(workflow_model, using=alias, lock=("self",)).get(pk=workflow.pk)
+                if requested.status != WorkflowStatus.TEST:
+                    raise ValidationError({"workflow": "Test runs require a draft head or test snapshot."})
+                if requested.published_from_id != head.pk or requested.draft_revision != expected_revision:
+                    raise StaleDefinitionError(expected=expected_revision, current=requested.draft_revision)
+            elif head.status != WorkflowStatus.DRAFT:
+                raise ValidationError({"workflow": "Test runs require a draft head or test snapshot."})
+            try:
+                actor_ref = str(to_subject_ref(actor))
+            except NoActorResolvedError as error:
+                raise PermissionDenied("Test launches require an effective actor.") from error
+            existing = self.select_related("workflow").filter(dedup_key=dedup_key).first()
+            if existing is not None:
+                if existing.test_request_actor_ref != actor_ref:
+                    raise PermissionDenied("Test launch request is owned by another actor.")
+                self._validate_test_retry(
+                    existing,
+                    expected_revision=expected_revision,
+                    subject=subject,
+                    input=input,
+                    requested_snapshot_id=(requested.pk if requested.status == WorkflowStatus.TEST else None),
+                )
+                return existing
+            if workflow.published_from_id is None:
+                snapshot = workflow_model.objects.test_snapshot(
+                    head,
+                    expected_revision=expected_revision,
+                )
+            else:
+                snapshot = requested
+            return self._start_pinned_locked(
+                snapshot,
+                subject,
+                actor,
+                dedup_key=dedup_key,
+                origin=cast(RunOrigin, RunOrigin.TEST),
+                input=input,
+                test_request_actor_ref=actor_ref,
+                available_at=timezone.now(),
+                using=alias,
+            )
+
+    def _validate_test_retry(
+        self,
+        run: Any,
+        *,
+        expected_revision: int,
+        subject: Any,
+        input: JsonPresence,
+        requested_snapshot_id: int | None,
+    ) -> None:
+        """Reject reuse of one request identity with different admission facts."""
+
+        content_type = None if subject is None else ContentType.objects.get_for_model(
+            subject, for_concrete_model=False
+        )
+        object_id = None if subject is None else subject.pk
+        matches = (
+            run.origin == RunOrigin.TEST
+            and run.workflow.status == WorkflowStatus.TEST
+            and run.workflow.draft_revision == expected_revision
+            and (requested_snapshot_id is None or run.workflow_id == requested_snapshot_id)
+            and run.subject_content_type_id == (None if content_type is None else content_type.pk)
+            and run.subject_object_id == object_id
+            and run.input_present is input.present
+            and json_values_equal(run.input, input.value if input.present else None)
+        )
+        if not matches:
+            raise ValidationError({"request_key": "Test launch request facts do not match."})
+
+    def _start_pinned_locked(
+        self,
+        version: Any,
+        subject: Any,
+        actor: Any,
+        *,
+        trigger: Any = None,
+        parent_step_run: Any = None,
+        dedup_key: str | None = None,
+        origin: RunOrigin | None = None,
+        input: JsonPresence = JsonPresence(),
+        test_request_actor_ref: str = "",
+        available_at: datetime,
+        using: str,
+    ) -> Any:
+        """Create a Run and its first durable work for one explicit immutable definition."""
+
         version.validate_subject_declaration(subject)
         content_type = None if subject is None else ContentType.objects.get_for_model(subject, for_concrete_model=False)
         object_id = None if subject is None else subject.pk
@@ -724,6 +928,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             "subject_object_id": object_id,
             "input_present": input.present,
             "input": copy.deepcopy(input.value) if input.present else None,
+            "test_request_actor_ref": test_request_actor_ref,
             "created_by_id": owner_id,
             "updated_by_id": owner_id,
         }
@@ -811,7 +1016,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     status_transitions = StateTransitions(
         status,
         {
-            WorkflowStatus.DRAFT: [WorkflowStatus.PUBLISHED],
+            WorkflowStatus.DRAFT: [WorkflowStatus.TEST, WorkflowStatus.PUBLISHED],
             WorkflowStatus.PUBLISHED: [WorkflowStatus.ARCHIVED],
         },
     )
@@ -832,6 +1037,18 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                 name="uniq_workflows_workflow_head_key",
                 violation_error_code="unique",
                 violation_error_message="A workflow with this key already exists.",
+            ),
+            models.UniqueConstraint(
+                fields=("published_from", "draft_revision"),
+                condition=models.Q(status=WorkflowStatus.TEST),
+                name="uniq_workflows_test_snapshot_revision",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    ~models.Q(status=WorkflowStatus.TEST)
+                    | (models.Q(published_from__isnull=False) & models.Q(version=0))
+                ),
+                name="chk_workflows_test_snapshot_shape",
             ),
         )
 
@@ -875,7 +1092,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
 
     @classmethod
     @contextmanager
-    def prepare_resource_writes(cls, workflow_ids: Iterable[int]) -> Iterable[None]:
+    def prepare_resource_writes(cls, workflow_ids: Iterable[int]) -> Iterator[None]:
         """Prelock every declared resource lineage in deterministic order."""
 
         ids = sorted(set(workflow_ids))
@@ -923,6 +1140,14 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             or self.pk not in session.copy_target_ids
         ):
             raise ValidationError("Only a new snapshot created by publish() can be marked published.")
+
+    @transition(status, source=WorkflowStatus.DRAFT, target=WorkflowStatus.TEST, on_success=_save_workflow_status)
+    def mark_test(self) -> None:
+        """Mark a copied saved revision as an immutable test snapshot."""
+
+        session = _definition_write_session.get()
+        if self.published_from_id is None or session is None or self.pk not in session.copy_target_ids:
+            raise ValidationError("Only a copied saved revision can be marked as a test snapshot.")
 
     @transition(
         status,
@@ -1072,21 +1297,9 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                 draft._validate_publishable()
             with _definition_caller_context(draft):
                 version = draft._next_published_version()
-            published = type(self)(
-                key=draft.key,
-                name=draft.name,
-                description=draft.description,
-                purpose=draft.purpose,
-                subject_declaration=draft.subject_declaration,
-                status=WorkflowStatus.DRAFT,
+            published = draft._new_definition_copy(
                 version=version,
                 draft_revision=manager._definition_revision(draft.pk, draft.draft_revision),
-                published_from=draft,
-                error_workflow=draft.error_workflow,
-                max_steps=draft.max_steps,
-                budget=copy.deepcopy(draft.budget),
-                created_by_id=draft.created_by_id,
-                updated_by_id=draft.updated_by_id,
             )
             _bind_definition_caller(published, draft)
             published.save(using=alias)
@@ -1095,6 +1308,26 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                     draft._copy_definition_to(published)
                 published.mark_published()
             return cast(Self, published)
+
+    def _new_definition_copy(self, *, version: int, draft_revision: int) -> Self:
+        """Build an unsaved immutable-definition copy with lineage-owned fields."""
+
+        return type(self)(
+            key=self.key,
+            name=self.name,
+            description=self.description,
+            purpose=self.purpose,
+            subject_declaration=self.subject_declaration,
+            status=WorkflowStatus.DRAFT,
+            version=version,
+            draft_revision=draft_revision,
+            published_from=self,
+            error_workflow=self.error_workflow,
+            max_steps=self.max_steps,
+            budget=copy.deepcopy(self.budget),
+            created_by_id=self.created_by_id,
+            updated_by_id=self.updated_by_id,
+        )
 
     def publish_if_changed(self) -> Self | None:
         """Publish this draft only when no current version has the same definition."""
@@ -1253,7 +1486,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     def is_immutable(self) -> bool:
         """Return whether this workflow version rejects definition edits."""
 
-        return self.status in {WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED}
+        return self.status in {WorkflowStatus.TEST, WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED}
 
 
 class StepQuerySet(DefinitionQuerySet):
@@ -1580,8 +1813,140 @@ class Edge(AuditMixin, AngeeDataModel):
             raise ValidationError("Published workflow versions are immutable.")
 
 
-class TriggerManager(AngeeManager):
+class TriggerQuerySet(AngeeQuerySet[Any]):
+    """Collection writes that preserve trigger activation and rule invariants."""
+
+    def update(self, **kwargs: Any) -> int:
+        protected = {
+            "workflow",
+            "workflow_id",
+            "kind",
+            "enabled",
+            "config",
+            "event_model_label",
+            "next_fire_at",
+            "last_fire_at",
+            "hourly_window_started_at",
+            "hourly_fire_count",
+        }
+        if protected & kwargs.keys():
+            raise TypeError("Trigger rules do not support QuerySet.update(); save instances instead.")
+        return super().update(**kwargs)
+
+    def bulk_create(self, objs: Iterable[Any], *args: Any, **kwargs: Any) -> list[Any]:
+        rows = list(objs)
+        for row in rows:
+            row.enabled = False
+            row.full_clean()
+        return super().bulk_create(rows, *args, **kwargs)
+
+    def bulk_update(self, objs: Iterable[Any], fields: Iterable[str], *args: Any, **kwargs: Any) -> int:
+        field_names = set(fields)
+        protected = {
+            "workflow",
+            "workflow_id",
+            "kind",
+            "enabled",
+            "config",
+            "event_model_label",
+            "next_fire_at",
+            "last_fire_at",
+            "hourly_window_started_at",
+            "hourly_fire_count",
+        }
+        if protected & field_names:
+            raise TypeError("Trigger rules do not support bulk_update(); save instances instead.")
+        return super().bulk_update(objs, field_names, *args, **kwargs)
+
+
+class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: ignore[misc]
     """Manager owning trigger row claims and due schedule priming."""
+
+    def record_fire(
+        self,
+        caller: Any,
+        *,
+        timestamp: datetime,
+    ) -> Any:
+        """Authorize, lock, and derive one trigger fire from canonical state."""
+
+        caller._require_record_access("write")
+        alias = self.db
+        with system_context(reason="workflows.triggers.record_fire"), transaction.atomic(using=alias):
+            workflow_model = self.model._meta.get_field("workflow").remote_field.model
+            system_queryset(workflow_model, using=alias, lock=("self",)).get(pk=caller.workflow_id)
+            trigger = system_queryset(self.model, using=alias, lock=("self",)).get(pk=caller.pk)
+            if trigger.workflow_id != caller.workflow_id:
+                raise ValidationError({"workflow": "The trigger lineage changed before recording its fire."})
+            self._record_fire_locked(trigger, timestamp=timestamp)
+            return trigger
+
+    def _record_fire_locked(
+        self, trigger: Any, *, timestamp: datetime, extra_update_fields: Iterable[str] = ()
+    ) -> None:
+        window_start = trigger.hourly_window_started_at
+        if window_start is None or timestamp - window_start >= timedelta(hours=1):
+            trigger.hourly_window_started_at = timestamp
+            trigger.hourly_fire_count = 0
+        trigger.hourly_fire_count += 1
+        trigger.last_fire_at = timestamp
+        trigger._save_validated(
+            using=self.db,
+            update_fields={
+                "last_fire_at",
+                "hourly_window_started_at",
+                "hourly_fire_count",
+                "updated_at",
+                *extra_update_fields,
+            },
+        )
+
+    def _save_next_fire_locked(self, trigger: Any) -> None:
+        trigger._save_validated(using=self.db, update_fields={"next_fire_at", "updated_at"})
+
+    def set_enabled(self, caller: Any, *, enabled: bool) -> Any:
+        """Change activation under lineage-before-trigger locks."""
+
+        caller._require_record_access("write")
+        trigger_id = caller.pk
+        expected_workflow_id = caller.workflow_id
+        alias = self.db
+        discovered = system_queryset(self.model, using=alias, lock=None).filter(pk=trigger_id).values(
+            "workflow_id"
+        ).first()
+        if discovered is None:
+            raise self.model.DoesNotExist
+        if discovered["workflow_id"] != expected_workflow_id:
+            raise ValidationError({"workflow": "The trigger lineage changed before activation."})
+        workflow_model = self.model._meta.get_field("workflow").remote_field.model
+        with system_context(reason="workflows.triggers.activation"), transaction.atomic(using=alias):
+            head = system_queryset(workflow_model, using=alias, lock=("self",)).get(
+                pk=discovered["workflow_id"]
+            )
+            trigger = system_queryset(self.model, using=alias, lock=("self",)).get(pk=trigger_id)
+            if trigger.workflow_id != head.pk:
+                raise ValidationError({"workflow": "The trigger lineage changed during activation."})
+            if not enabled:
+                models.QuerySet.update(
+                    system_queryset(self.model, using=alias, lock=None).filter(pk=trigger.pk),
+                    enabled=False,
+                    updated_at=timezone.now(),
+                )
+                trigger.enabled = False
+                return trigger
+            if workflow_model.objects.db_manager(alias).current_published_for(head) is None:
+                raise ValidationError({"enabled": "Publish this workflow before enabling its trigger."})
+            trigger.validated_config(require_publisher=True)
+            trigger.enabled = True
+            if trigger.kind == TriggerKind.SCHEDULE:
+                trigger.next_fire_at = trigger.initial_fire_at(now=timezone.now())
+            else:
+                trigger.next_fire_at = None
+            trigger.full_clean()
+            trigger._save_validated(
+                update_fields={"enabled", "event_model_label", "next_fire_at", "updated_at"}
+            )
+            return trigger
 
     def claim_due_event(self, trigger_id: int, *, timestamp: datetime) -> Any | None:
         """Lock and record one enabled event trigger fire if rate limits allow it."""
@@ -1595,7 +1960,7 @@ class TriggerManager(AngeeManager):
             )
             if trigger is None or not trigger.rate_limit_allows(timestamp=timestamp):
                 return None
-            trigger.record_fire(timestamp=timestamp)
+            self._record_fire_locked(trigger, timestamp=timestamp)
             return trigger
 
     def claim_due_schedule(self, trigger_id: int, *, timestamp: datetime) -> tuple[Any, datetime] | None:
@@ -1613,9 +1978,9 @@ class TriggerManager(AngeeManager):
             due_at = trigger.next_fire_at
             trigger.next_fire_at = trigger.compute_next_fire_at(after=due_at, now=timestamp)
             if not trigger.rate_limit_allows(timestamp=timestamp):
-                trigger.save(update_fields={"next_fire_at", "updated_at"})
+                self._save_next_fire_locked(trigger)
                 return None
-            trigger.record_fire(timestamp=timestamp, extra_update_fields=("next_fire_at",))
+            self._record_fire_locked(trigger, timestamp=timestamp, extra_update_fields=("next_fire_at",))
             return trigger, due_at
 
     def start_due_schedule(self, trigger_id: int, *, timestamp: datetime) -> tuple[Any, datetime] | None:
@@ -1646,9 +2011,9 @@ class TriggerManager(AngeeManager):
             due_at = trigger.next_fire_at
             trigger.next_fire_at = trigger.compute_next_fire_at(after=due_at, now=timestamp)
             if not trigger.rate_limit_allows(timestamp=timestamp):
-                trigger.save(update_fields={"next_fire_at", "updated_at"})
+                self._save_next_fire_locked(trigger)
                 return None
-            trigger.record_fire(timestamp=timestamp, extra_update_fields=("next_fire_at",))
+            self._record_fire_locked(trigger, timestamp=timestamp, extra_update_fields=("next_fire_at",))
             run = run_model.objects._start_locked(
                 head,
                 None,
@@ -1687,7 +2052,7 @@ class TriggerManager(AngeeManager):
                     continue
                 try:
                     trigger.next_fire_at = trigger.initial_fire_at(now=timestamp)
-                except (CroniterBadCronError, ValueError, TypeError):
+                except (ValueError, TypeError):
                     logger.exception(
                         "Skipping workflow schedule trigger %s after initial fire calculation failed.",
                         trigger.pk,
@@ -1695,7 +2060,7 @@ class TriggerManager(AngeeManager):
                     continue
                 if trigger.next_fire_at is None:
                     continue
-                trigger.save(update_fields={"next_fire_at", "updated_at"})
+                self._save_next_fire_locked(trigger)
                 primed += 1
         return primed
 
@@ -1785,83 +2150,128 @@ class Trigger(AuditMixin, AngeeDataModel):
     def clean(self) -> None:
         """Validate lineage ownership and trigger declaration shape."""
 
-        self._sync_index_fields()
         super().clean()
         if self.workflow_id is not None and self.workflow.published_from_id is not None:
             raise ValidationError({"workflow": "Triggers attach only to workflow lineage heads."})
-        if not isinstance(self.config, Mapping):
-            raise ValidationError({"config": "Trigger config must be a JSON object."})
-        if self.kind == TriggerKind.EVENT:
-            if not self.event_model_label:
-                raise ValidationError({"config": "Event triggers require a model label."})
-            if self.event_model_label not in _change_publisher_model_labels():
-                raise ValidationError(
-                    {
-                        "event_model_label": (
-                            f"Event trigger target {self.event_model_label!r} is not in the change feed; "
-                            f"{_CHANGE_FEED_FIX}."
-                        )
-                    }
-                )
-            condition = self.config.get("condition", {})
-            if condition is not None and not isinstance(condition, Mapping):
-                raise ValidationError({"config": "Event trigger condition must be a JSON object."})
-        if self.kind == TriggerKind.SCHEDULE:
-            cron = str(self.config.get("cron", "") or "").strip()
-            interval = self.config.get("interval_seconds")
-            has_interval = interval not in (None, "")
-            if bool(cron) == has_interval:
-                raise ValidationError({"config": "Schedule triggers require cron or interval_seconds, but not both."})
-            if has_interval:
-                interval_value = cast(str | int, interval)
-                try:
-                    parsed_interval = int(interval_value)
-                except (TypeError, ValueError) as error:
-                    raise ValidationError(
-                        {"config": "Schedule interval_seconds must be a positive integer."}
-                    ) from error
-                if parsed_interval <= 0:
-                    raise ValidationError({"config": "Schedule interval_seconds must be a positive integer."})
-            if cron:
-                try:
-                    croniter(cron)
-                except CroniterBadCronError as error:
-                    raise ValidationError({"config": "Schedule cron is invalid."}) from error
+        declaration = self.validated_config(require_publisher=self.enabled)
+        self._sync_index_fields(declaration)
+        if self.enabled and type(self.workflow).objects.current_published_for(self.workflow) is None:
+            raise ValidationError({"enabled": "Publish this workflow before enabling its trigger."})
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the trigger after model validation."""
 
-        self._sync_index_fields()
+        adding = self._state.adding
+        if adding:
+            self.enabled = False
         update_fields = kwargs.get("update_fields")
-        if update_fields is not None:
-            fields = set(update_fields)
-            if {"kind", "config"} & fields:
-                fields.add("event_model_label")
+        alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
+        operational_fields = {
+            "last_fire_at",
+            "hourly_window_started_at",
+            "hourly_fire_count",
+            "next_fire_at",
+            "updated_at",
+        }
+        if update_fields is not None and set(update_fields) <= operational_fields:
+            raise RuntimeError("Trigger operational fields are written only by the owning manager.")
+        old_workflow_id = None
+        discovered_state: tuple[Any, Any, Any, Any] | None = None
+        if not adding:
+            discovered = system_queryset(type(self), using=alias, lock=None).filter(pk=self.pk).values(
+                "workflow_id", "kind", "config", "enabled"
+            ).first()
+            if discovered is None:
+                raise type(self).DoesNotExist
+            old_workflow_id = discovered["workflow_id"]
+            discovered_state = (
+                discovered["workflow_id"],
+                discovered["kind"],
+                discovered["config"],
+                discovered["enabled"],
+            )
+        workflow_ids = sorted({value for value in (old_workflow_id, self.workflow_id) if value is not None})
+        with _definition_caller_context(self), transaction.atomic(using=alias):
+            workflow_model = type(self)._meta.get_field("workflow").remote_field.model
+            list(
+                system_queryset(workflow_model, using=alias, lock=("self",))
+                .filter(pk__in=workflow_ids)
+                .order_by("pk")
+            )
+            persisted_rule: tuple[Any, Any] | None = None
+            if not adding:
+                locked = system_queryset(type(self), using=alias, lock=("self",)).get(pk=self.pk)
+                if locked.workflow_id != old_workflow_id:
+                    raise ValidationError({"workflow": "The trigger lineage changed during this edit."})
+                locked_state = (locked.workflow_id, locked.kind, locked.config, locked.enabled)
+                if locked_state != discovered_state:
+                    raise ValidationError("The trigger changed during this edit; reload and try again.")
+                fields = None if update_fields is None else set(update_fields)
+                if fields is not None:
+                    for field_name in ("workflow_id", "kind", "config", "enabled"):
+                        public_name = "workflow" if field_name == "workflow_id" else field_name
+                        if public_name not in fields and field_name not in fields:
+                            setattr(self, field_name, getattr(locked, field_name))
+                if self.enabled != locked.enabled:
+                    raise ValidationError({"enabled": "Use the trigger enable or disable action."})
+                persisted_rule = (locked.kind, locked.config)
+                self.last_fire_at = locked.last_fire_at
+                self.hourly_window_started_at = locked.hourly_window_started_at
+                self.hourly_fire_count = locked.hourly_fire_count
+                self.next_fire_at = locked.next_fire_at
+            self.full_clean()
+            rule_changed = persisted_rule is not None and persisted_rule != (self.kind, self.config)
+            cadence_changed = False
+            if rule_changed and self.enabled and persisted_rule is not None:
+                persisted_declaration = validate_trigger_config(cast(Any, persisted_rule[0]), persisted_rule[1])
+                declaration = self.validated_config()
+                persisted_cadence = (
+                    persisted_declaration.cadence
+                    if isinstance(persisted_declaration, ScheduleTriggerConfig)
+                    else None
+                )
+                cadence = declaration.cadence if isinstance(declaration, ScheduleTriggerConfig) else None
+                cadence_changed = persisted_cadence != cadence
+            if rule_changed and self.enabled and cadence_changed:
+                self.next_fire_at = (
+                    self.initial_fire_at(now=timezone.now()) if self.kind == TriggerKind.SCHEDULE else None
+                )
+            if update_fields is not None:
+                fields = set(update_fields)
+                if {"kind", "config", "event_model_label"} & fields:
+                    fields.update({"event_model_label", "next_fire_at"})
                 kwargs["update_fields"] = fields
-        self.full_clean()
+            self._save_validated(*args, **kwargs)
+
+    def _save_validated(self, *args: Any, **kwargs: Any) -> None:
+        """Persist after the owning locked path has completed validation."""
+
         super().save(*args, **kwargs)
 
     def enable(self) -> None:
         """Enable this trigger through the model owner."""
 
-        self.enabled = True
-        self.save(update_fields={"enabled", "event_model_label", "updated_at"})
+        enabled = type(self).objects.db_manager(self._state.db).set_enabled(self, enabled=True)
+        self.enabled = enabled.enabled
+        self.next_fire_at = enabled.next_fire_at
 
     def disable(self) -> None:
         """Disable this trigger through the model owner."""
 
-        self.enabled = False
-        self.save(update_fields={"enabled", "event_model_label", "updated_at"})
+        disabled = type(self).objects.db_manager(self._state.db).set_enabled(self, enabled=False)
+        self.enabled = disabled.enabled
+        self.next_fire_at = disabled.next_fire_at
 
     def rate_limit_allows(self, *, timestamp: datetime) -> bool:
         """Return whether this trigger can fire at ``timestamp``."""
 
-        cooldown_seconds = optional_non_negative_int(self.config_mapping.get("cooldown_seconds"))
+        declaration = self.validated_config()
+        cooldown_seconds = declaration.cooldown_seconds
         if cooldown_seconds and self.last_fire_at is not None:
             if self.last_fire_at + timedelta(seconds=cooldown_seconds) > timestamp:
                 return False
 
-        hourly_cap = optional_positive_int(self.config_mapping.get("hourly_cap"))
+        hourly_cap = declaration.hourly_cap
         if hourly_cap is None:
             return True
         window_start = self.hourly_window_started_at
@@ -1869,24 +2279,14 @@ class Trigger(AuditMixin, AngeeDataModel):
             return True
         return int(self.hourly_fire_count) < hourly_cap
 
-    def record_fire(self, *, timestamp: datetime, extra_update_fields: Iterable[str] = ()) -> None:
+    def record_fire(self, *, timestamp: datetime) -> None:
         """Record one trigger fire and persist rate-limit counters."""
 
-        window_start = self.hourly_window_started_at
-        if window_start is None or timestamp - window_start >= timedelta(hours=1):
-            self.hourly_window_started_at = timestamp
-            self.hourly_fire_count = 0
-        self.hourly_fire_count += 1
-        self.last_fire_at = timestamp
-        self.save(
-            update_fields={
-                "last_fire_at",
-                "hourly_window_started_at",
-                "hourly_fire_count",
-                "updated_at",
-                *extra_update_fields,
-            }
-        )
+        trigger = type(self).objects.db_manager(self._state.db).record_fire(self, timestamp=timestamp)
+        self.last_fire_at = trigger.last_fire_at
+        self.hourly_window_started_at = trigger.hourly_window_started_at
+        self.hourly_fire_count = trigger.hourly_fire_count
+        self.next_fire_at = trigger.next_fire_at
 
     def condition_matches(self, sender: type[models.Model], instance: models.Model) -> bool:
         """Return whether this event trigger matches a saved model instance."""
@@ -1900,29 +2300,50 @@ class Trigger(AuditMixin, AngeeDataModel):
     def initial_fire_at(self, *, now: datetime) -> datetime | None:
         """Return the first persisted due timestamp for this schedule trigger."""
 
-        interval = optional_positive_int(self.config_mapping.get("interval_seconds"))
-        if interval is not None:
-            return now + timedelta(seconds=interval)
-
-        cron = str(self.config_mapping.get("cron", "") or "")
-        if not cron:
+        declaration = self.validated_config()
+        if not isinstance(declaration, ScheduleTriggerConfig):
             return None
-        return cast(datetime, croniter(cron, now).get_next(datetime))
+        return declaration.next_fire_at(after=now, now=now)
 
     def compute_next_fire_at(self, *, after: datetime, now: datetime) -> datetime | None:
         """Return the next scheduled occurrence after ``after`` and later than ``now``."""
 
-        interval = optional_positive_int(self.config_mapping.get("interval_seconds"))
-        if interval is not None:
-            next_at = after + timedelta(seconds=interval)
-            while next_at <= now:
-                next_at += timedelta(seconds=interval)
-            return next_at
-
-        cron = str(self.config_mapping.get("cron", "") or "")
-        if not cron:
+        declaration = self.validated_config()
+        if not isinstance(declaration, ScheduleTriggerConfig):
             return None
-        return cast(datetime, croniter(cron, max(after, now)).get_next(datetime))
+        return declaration.next_fire_at(after=after, now=now)
+
+    def validated_config(self, *, require_publisher: bool = False) -> TriggerConfig:
+        """Return the declaration-owned rule and optionally verify event delivery."""
+
+        try:
+            declaration = validate_trigger_config(cast(Any, self.kind), self.config)
+        except (ValueError, TypeError) as error:
+            raise ValidationError({"config": str(error)}) from error
+        if require_publisher and isinstance(declaration, EventTriggerConfig):
+            if declaration.model not in _change_publisher_model_labels():
+                raise ValidationError(
+                    {
+                        "event_model_label": (
+                            f"Event trigger target {declaration.model!r} is not in the change feed; "
+                            f"{_CHANGE_FEED_FIX}."
+                        )
+                    }
+                )
+        return declaration
+
+    def activation_blocker(self, *, has_current_publication: bool | None = None) -> str | None:
+        """Return the rule or publication reason that prevents activation."""
+
+        try:
+            self.validated_config(require_publisher=True)
+        except ValidationError as error:
+            return "; ".join(error.messages)
+        if has_current_publication is None:
+            has_current_publication = type(self.workflow).objects.current_published_for(self.workflow) is not None
+        if not has_current_publication:
+            return "Publish this workflow before enabling its trigger."
+        return None
 
     @property
     def config_mapping(self) -> Mapping[str, Any]:
@@ -1930,13 +2351,10 @@ class Trigger(AuditMixin, AngeeDataModel):
 
         return self.config if isinstance(self.config, Mapping) else {}
 
-    def _sync_index_fields(self) -> None:
+    def _sync_index_fields(self, declaration: TriggerConfig) -> None:
         """Mirror config-owned event declarations into indexed query fields."""
 
-        if self.kind != TriggerKind.EVENT or not isinstance(self.config, Mapping):
-            self.event_model_label = ""
-            return
-        self.event_model_label = str(self.config.get("model") or self.config.get("model_label") or "").lower()
+        self.event_model_label = declaration.model if isinstance(declaration, EventTriggerConfig) else ""
 
 
 class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
@@ -1974,6 +2392,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
     subject_object_id = models.PositiveBigIntegerField(null=True, blank=True)
     subject = GenericForeignKey("subject_content_type", "subject_object_id")
     dedup_key = models.CharField(max_length=255, unique=True, null=True, blank=True)
+    test_request_actor_ref = models.CharField(max_length=255, blank=True, editable=False)
     input_present = models.BooleanField(default=False, editable=False)
     input = models.JSONField(null=True, blank=True, editable=False)
     wake_at = models.DateTimeField(null=True, blank=True, db_index=True)
@@ -2004,6 +2423,13 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
             models.CheckConstraint(
                 condition=models.Q(input_present=True) | models.Q(input__isnull=True),
                 name="chk_wfr_absent_input_null",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(origin=RunOrigin.TEST, test_request_actor_ref__gt="")
+                    | (~models.Q(origin=RunOrigin.TEST) & models.Q(test_request_actor_ref=""))
+                ),
+                name="chk_wfr_test_request_actor",
             ),
             models.UniqueConstraint(
                 fields=("parent_step_run",),
@@ -2119,6 +2545,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         """Persist the run while keeping start identity and input immutable."""
 
         self._raise_if_dedup_key_changed()
+        self._raise_if_test_identity_changed()
         if not self._state.adding and (
             not hasattr(self, "_loaded_input") or not hasattr(self, "_loaded_input_present")
         ):
@@ -2140,6 +2567,34 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         super().save(*args, **kwargs)
         self._loaded_input_present = self.input_present
         self._loaded_input = copy.deepcopy(self.input)
+        self._loaded_test_identity = self._test_identity()
+
+    def _test_identity(self) -> dict[str, Any]:
+        return {
+            "workflow_id": self.workflow_id,
+            "origin": str(self.origin),
+            "subject_content_type_id": self.subject_content_type_id,
+            "subject_object_id": self.subject_object_id,
+            "test_request_actor_ref": self.test_request_actor_ref,
+        }
+
+    def _raise_if_test_identity_changed(self) -> None:
+        """Keep a test request's admission identity immutable after creation."""
+
+        if self._state.adding:
+            if self.origin == RunOrigin.TEST and not self.test_request_actor_ref:
+                raise ValidationError({"test_request_actor_ref": "Test runs require their requesting actor."})
+            if self.origin != RunOrigin.TEST and self.test_request_actor_ref:
+                raise ValidationError({"test_request_actor_ref": "Only test runs have a requesting actor."})
+            return
+        current = self._test_identity()
+        loaded = getattr(self, "_loaded_test_identity", None)
+        if loaded is None:
+            loaded = system_queryset(type(self), using=self._state.db, lock=None).values(
+                *current.keys()
+            ).get(pk=self.pk)
+        if (loaded["origin"] == str(RunOrigin.TEST) or self.origin == RunOrigin.TEST) and loaded != current:
+            raise ValidationError("Workflow test request identity is immutable.")
 
     @classmethod
     def from_db(cls, db: str | None, field_names: list[str], values: list[Any]) -> Self:
@@ -2152,6 +2607,18 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
             instance._loaded_input_present = values[field_names.index("input_present")]
         if "input" in field_names:
             instance._loaded_input = copy.deepcopy(values[field_names.index("input")])
+        identity_fields = (
+            "workflow_id",
+            "origin",
+            "subject_content_type_id",
+            "subject_object_id",
+            "test_request_actor_ref",
+        )
+        if all(field in field_names for field in identity_fields):
+            instance._loaded_test_identity = {
+                field: str(values[field_names.index(field)]) if field == "origin" else values[field_names.index(field)]
+                for field in identity_fields
+            }
         return instance
 
     def _raise_if_dedup_key_changed(self) -> None:
@@ -2195,6 +2662,8 @@ class StepRunQuerySet(AngeeQuerySet[Any]):
             "attempt",
             "current_attempt",
             "current_attempt_id",
+            "current_map_expansion",
+            "current_map_expansion_id",
             "effect_key",
             "effect_generation",
             "wait_until",
@@ -2216,6 +2685,36 @@ class StepRunQuerySet(AngeeQuerySet[Any]):
             raise TypeError("Attempt-owned StepRun fields can only be changed by StepAttemptManager.")
         return super().bulk_update(objs, field_names, **kwargs)
 
+    def bulk_create(
+        self,
+        objs: Iterable[Any],
+        batch_size: int | None = None,
+        ignore_conflicts: bool = False,
+        update_conflicts: bool = False,
+        update_fields: Collection[str] | None = None,
+        unique_fields: Collection[str] | None = None,
+    ) -> list[Any]:
+        """Reject retained identity initialization through collection inserts."""
+
+        rows = list(objs)
+        if any(
+            row.attempt != 0
+            or row.current_attempt_id is not None
+            or row.current_map_expansion_id is not None
+            or row.effect_key is not None
+            or row.effect_generation != 0
+            for row in rows
+        ):
+            raise TypeError("Attempt identity can only be initialized by StepAttemptManager.")
+        return super().bulk_create(
+            rows,
+            batch_size=batch_size,
+            ignore_conflicts=ignore_conflicts,
+            update_conflicts=update_conflicts,
+            update_fields=update_fields,
+            unique_fields=unique_fields,
+        )
+
 
 def decision_policy_outcome(step_run: Any, decisions: list[Any]) -> str | None:
     """Derive the authoritative outcome from a suspension's complete decision set."""
@@ -2230,14 +2729,14 @@ def decision_policy_outcome(step_run: Any, decisions: list[Any]) -> str | None:
     if policy == "all_success":
         for verdict in (Verdict.REJECTED, Verdict.ESCALATED, Verdict.EXPIRED):
             if any(decision.verdict == verdict for decision in terminal):
-                return str(verdict.value)
+                return str(verdict)
         return "completed" if len(terminal) == len(decisions) else None
     if policy == "all_done":
         return "completed" if len(terminal) == len(decisions) else None
     if policy == "majority":
         for verdict in (Verdict.ESCALATED, Verdict.EXPIRED):
             if any(decision.verdict == verdict for decision in terminal):
-                return str(verdict.value)
+                return str(verdict)
         threshold = len(decisions) // 2 + 1
         completed = sum(decision.verdict == Verdict.COMPLETED for decision in terminal)
         rejected = sum(decision.verdict == Verdict.REJECTED for decision in terminal)
@@ -2256,6 +2755,94 @@ def decision_policy_outcome(step_run: Any, decisions: list[Any]) -> str | None:
 
 class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: ignore[misc]
     """Manager preserving existing StepRun creation with guarded attempt facts."""
+
+    def bind_map_membership(
+        self,
+        *,
+        run_id: int,
+        target_id: int,
+        expansion_attempt_id: int,
+        item_count: int,
+        at: datetime,
+    ) -> tuple[Any, ...]:
+        """Bind the current Map generation to its complete body-slot membership."""
+
+        alias = self.db
+        attempt_model = self.model._meta.get_field("current_attempt").remote_field.model
+        run_model = self.model._meta.get_field("run").remote_field.model
+        with transaction.atomic(using=alias), system_context(reason="workflows.map.membership"):
+            run = system_queryset(run_model, using=alias, lock=("self",)).get(pk=run_id)
+            locked_rows = list(
+                system_queryset(self.model, using=alias, lock=("self",)).filter(
+                    run_id=run.pk
+                ).order_by("pk")
+            )
+            rows = [
+                row for row in locked_rows
+                if row.step_id == target_id and row.map_index >= 0
+            ]
+            expansion = system_queryset(attempt_model, using=alias, lock=("self",)).get(
+                pk=expansion_attempt_id
+            )
+            controller = next((row for row in locked_rows if row.pk == expansion.step_run_id), None)
+            checkpoint = expansion.checkpoint if expansion.checkpoint_present else None
+            map_state = checkpoint.get("map") if isinstance(checkpoint, dict) else None
+            if not isinstance(map_state, dict):
+                raise ValidationError({"map": "Map aggregate requires retained expansion facts."})
+            items = map_state.get("items")
+            declared_target_id = (
+                map_state.get("target_step_id") if isinstance(map_state, dict) else None
+            )
+            if (
+                controller is None
+                or controller.current_attempt_id != expansion.pk
+                or controller.status != StepRunStatus.WAITING
+                or controller.effect_generation != expansion.effect_generation
+                or expansion.cause != str(AttemptCause.MAP_ENGINE)
+                or expansion.result_kind != str(AttemptResultKind.WAIT)
+                or expansion.applied_at is None
+                or expansion.lease_revoked_at is not None
+                or not isinstance(items, list)
+                or len(items) != item_count
+                or declared_target_id != target_id
+            ):
+                raise ValidationError({"attempt": "Map membership requires this run's expansion wait."})
+            current_attempt_ids = sorted(
+                row.current_attempt_id for row in rows if row.current_attempt_id is not None
+            )
+            if current_attempt_ids:
+                list(
+                    system_queryset(attempt_model, using=alias, lock=("self",))
+                    .filter(pk__in=current_attempt_ids)
+                    .order_by("pk")
+                )
+            current: list[Any] = []
+            for row in rows:
+                wanted = row.map_index < item_count
+                if (
+                    wanted
+                    and row.current_map_expansion_id != expansion.pk
+                    and (row.status != StepRunStatus.SCHEDULED or row.is_retained)
+                ):
+                    item = items[row.map_index]
+                    child_input = copy.deepcopy(item) if isinstance(item, dict) else {"item": item}
+                    row = self.reschedule_for_override(row.pk, input=child_input, at=at)
+                elif not wanted and row.status in StepRunStatus.ACTIVE:
+                    attempt_model.objects.cancel_current(row.pk, at=at)
+                    row.refresh_from_db()
+                with attempt_model.objects._write(alias, row.pk):
+                    row.current_map_expansion_id = expansion.pk if wanted else None
+                    attempt_model.objects._write_step_run(
+                        row,
+                        alias=alias,
+                        operation=lambda row=row: row.save(
+                            using=alias,
+                            update_fields=["current_map_expansion", "updated_at"],
+                        ),
+                    )
+                if wanted:
+                    current.append(row)
+            return tuple(sorted(current, key=lambda row: row.map_index))
 
     def reschedule_for_override(self, step_run_id: int, *, input: Any, at: datetime) -> Any:
         """Fence one retained generation and reopen its logical slot."""
@@ -2296,6 +2883,7 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
                 alias=alias,
                 operation=lambda: step_run.reschedule_for_override(input=input),
             )
+            step_run.current_map_expansion = None
             step_run.effect_generation += 1
             step_run.effect_key = uuid.uuid4()
             attempt_model.objects._write_step_run(
@@ -2303,7 +2891,12 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
                 alias=alias,
                 operation=lambda: step_run.save(
                     using=alias,
-                    update_fields=["effect_generation", "effect_key", "updated_at"],
+                    update_fields=[
+                        "current_map_expansion",
+                        "effect_generation",
+                        "effect_key",
+                        "updated_at",
+                    ],
                 ),
             )
             return step_run
@@ -2314,10 +2907,11 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
         """Project one applied suspension's completed decision policy."""
 
         decision_model = self.model._meta.apps.get_model("workflows", "Decision")
+        active_resolution = _decision_resolution_session.get()
+        if active_resolution is None:
+            raise RuntimeError("Decision settlement requires the retained resolution owner.")
         resolution_session = decision_model.objects._require_resolution_owner(
-            _decision_resolution_session.get().decision_id
-            if _decision_resolution_session.get() is not None
-            else -1
+            active_resolution.decision_id
         )
         attempt_model = self.model._meta.get_field("current_attempt").remote_field.model
         alias = self.db
@@ -2374,10 +2968,11 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
         """Fail one applied suspension after exhausting invalid resolutions."""
 
         decision_model = self.model._meta.apps.get_model("workflows", "Decision")
+        active_resolution = _decision_resolution_session.get()
+        if active_resolution is None:
+            raise RuntimeError("Decision failure requires the retained resolution owner.")
         resolution_session = decision_model.objects._require_resolution_owner(
-            _decision_resolution_session.get().decision_id
-            if _decision_resolution_session.get() is not None
-            else -1
+            active_resolution.decision_id
         )
         attempt_model = self.model._meta.get_field("current_attempt").remote_field.model
         alias = self.db
@@ -2448,6 +3043,14 @@ class StepRun(AuditMixin, AngeeDataModel):
         related_name="current_for_step_run",
         editable=False,
     )
+    current_map_expansion = models.ForeignKey(
+        "workflows.StepAttempt",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="current_map_members",
+        editable=False,
+    )
     wait_until = models.DateTimeField(null=True, blank=True, db_index=True)
     waiting_kind = StateField(choices_enum=WaitingKind, blank=True, default="")
     heartbeat_at = models.DateTimeField(null=True, blank=True)
@@ -2493,6 +3096,13 @@ class StepRun(AuditMixin, AngeeDataModel):
         rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(fields=("run", "step", "map_index"), name="uniq_workflows_step_run_map"),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(current_map_expansion__isnull=True)
+                    | (models.Q(map_index__gte=0) & models.Q(step__isnull=False))
+                ),
+                name="chk_wsr_map_membership_body",
+            ),
         )
 
     @property
@@ -2505,7 +3115,12 @@ class StepRun(AuditMixin, AngeeDataModel):
     def is_retained(self) -> bool:
         """Return whether this slot has crossed the permanent retained boundary."""
 
-        return self.effect_key is not None or self.current_attempt_id is not None or self.attempts.exists()
+        return (
+            self.effect_key is not None
+            or self.current_attempt_id is not None
+            or self.current_map_expansion_id is not None
+            or self.attempts.exists()
+        )
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Keep attempt-owned facts immutable outside the attempt manager."""
@@ -2514,11 +3129,18 @@ class StepRun(AuditMixin, AngeeDataModel):
         protected = {
             "run", "run_id", "step", "step_id", "map_index",
             "status", "input", "output", "resume_state", "claimed_deliveries", "outcome",
-            "attempt", "current_attempt", "current_attempt_id", "effect_key", "effect_generation",
+            "attempt", "current_attempt", "current_attempt_id", "current_map_expansion",
+            "current_map_expansion_id", "effect_key", "effect_generation",
             "wait_until", "waiting_kind", "heartbeat_at", "error", "stacktrace",
         }
-        if self._state.adding and not _attempt_write_active(alias):
-            invalid = self.effect_key is not None or self.effect_generation != 0 or self.current_attempt_id is not None
+        if self._state.adding:
+            invalid = (
+                self.attempt != 0
+                or self.effect_key is not None
+                or self.effect_generation != 0
+                or self.current_attempt_id is not None
+                or self.current_map_expansion_id is not None
+            )
             if invalid:
                 raise ValidationError({"effect_key": "Attempt identity is initialized by StepAttemptManager."})
         elif not self._state.adding:
@@ -2528,6 +3150,7 @@ class StepRun(AuditMixin, AngeeDataModel):
                 "map_index",
                 "attempt",
                 "current_attempt_id",
+                "current_map_expansion_id",
                 "effect_key",
                 "effect_generation",
             ).get()
@@ -2536,6 +3159,7 @@ class StepRun(AuditMixin, AngeeDataModel):
             attempt_model = self._meta.get_field("current_attempt").remote_field.model
             retained = (
                 loaded["current_attempt_id"] is not None
+                or loaded["current_map_expansion_id"] is not None
                 or loaded["effect_key"] is not None
                 or system_queryset(attempt_model, using=alias, lock=None).filter(step_run_id=self.pk).exists()
             )
@@ -2753,7 +3377,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
     """Allocate, lease, and finalize retained attempts under ancestor locks."""
 
     @contextmanager
-    def _write(self, alias: str, step_run_id: int) -> Iterable[None]:
+    def _write(self, alias: str, step_run_id: int) -> Iterator[None]:
         connection = connections[alias]
         if not connection.in_atomic_block:
             raise RuntimeError("Attempt writes require an active database transaction.")
@@ -2780,7 +3404,9 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             pk=step_run_id
         )
         run = system_queryset(run_model, using=alias, lock=("self",)).get(pk=run_id)
-        step_run = system_queryset(step_run_model, using=alias, lock=("self",)).get(pk=step_run_id)
+        step_run = system_queryset(step_run_model, using=alias, lock=("self",)).get(
+            pk=step_run_id
+        )
         if step_run.run_id != run.pk:
             raise OperationalError("Step run ownership changed while its attempt was being locked.")
         return run, step_run
@@ -2832,17 +3458,264 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         self._validate_result(result)
         return result
 
+    def record_map_expansion(
+        self,
+        step_run: Any,
+        *,
+        at: datetime,
+    ) -> tuple[Any, MapExpansionPlan] | None:
+        """Retain one internal Map expansion wait without physical admission."""
+
+        alias = self.db
+        with (
+            transaction.atomic(using=alias),
+            self._write(alias, step_run.pk),
+            system_context(reason="workflows.map.expand"),
+        ):
+            run, locked = self._locked_ancestry(step_run.pk, alias)
+            if run.is_terminal or locked.status != StepRunStatus.SCHEDULED:
+                raise ValidationError({"step_run": "Map expansion requires a scheduled current generation."})
+            plan = self._map_expansion_plan(locked)
+            step_run_model = self.model._meta.get_field("step_run").remote_field.model
+            run_rows = system_queryset(step_run_model, using=alias, lock=None).filter(
+                run_id=run.pk
+            )
+            admitted = run_rows.filter(status=StepRunStatus.SCHEDULED).count()
+            existing_rows = (
+                {
+                    row.map_index: row.status
+                    for row in run_rows.filter(
+                        step_id=plan.target_id,
+                        map_index__gte=0,
+                        map_index__lt=len(plan.items),
+                    ).only("map_index", "status")
+                }
+                if plan.target_id is not None
+                else {}
+            )
+            additional = sum(
+                existing_rows.get(index) != StepRunStatus.SCHEDULED
+                for index in range(len(plan.items))
+            )
+            if run.steps_taken + admitted + additional > run.workflow.max_steps:
+                run.mark_failed(f"Workflow exceeded max_steps={run.workflow.max_steps}.")
+                return None
+            checkpoint = {
+                "map": {
+                    "target_step_key": plan.target_key,
+                    "target_step_id": plan.target_id,
+                    "items": plan.items,
+                    "error": plan.error,
+                }
+            }
+            attempt = self._allocate_locked(
+                locked,
+                cause=AttemptCause.MAP_ENGINE,
+                input=AttemptInput(),
+                claimed_at=at,
+                alias=alias,
+            )
+            self._write_step_run(
+                locked,
+                alias=alias,
+                operation=lambda: locked.mark_started(
+                    heartbeat_at=None, claimed_deliveries=run.deliveries
+                ),
+            )
+            attempt.result_kind = str(AttemptResultKind.WAIT)
+            attempt.result_recorded_at = at
+            attempt.checkpoint_present = True
+            attempt.checkpoint = copy.deepcopy(checkpoint)
+            attempt.waiting_kind = "children"
+            attempt.applied_at = at
+            self._save_attempt(attempt, alias=alias)
+            self._write_step_run(
+                locked,
+                alias=alias,
+                operation=lambda: locked.mark_waiting(
+                    resume_state=copy.deepcopy(checkpoint),
+                    waiting_kind=WaitingKind.CHILDREN,
+                ),
+            )
+            self._charge_logical_execution(run, alias=alias)
+            return attempt, plan
+
+    @staticmethod
+    def _map_expansion_plan(step_run: Any) -> MapExpansionPlan:
+        impl_class = step_run.step.resolve_impl("step_class")
+        if getattr(impl_class, "key", None) != "map":
+            raise ValidationError({"step_run": "Map expansion requires a Map step."})
+        try:
+            target = impl_class.target_step(step_run)
+            items = impl_class.items(step_run)
+        except ValidationError as error:
+            return MapExpansionPlan(None, "", [], str(error))
+        return MapExpansionPlan(target.pk, target.key, items, "")
+
+    def record_map_aggregate(
+        self,
+        step_run_id: int,
+        *,
+        expansion_attempt_id: int,
+        at: datetime,
+    ) -> Any:
+        """Retain a separate internal Map aggregate result without another charge."""
+
+        alias = self.db
+        with (
+            transaction.atomic(using=alias),
+            self._write(alias, step_run_id),
+            system_context(reason="workflows.map.aggregate"),
+        ):
+            step_run_model = self.model._meta.get_field("step_run").remote_field.model
+            run_model = step_run_model._meta.get_field("run").remote_field.model
+            run_id = system_queryset(step_run_model, using=alias, lock=None).values_list(
+                "run_id", flat=True
+            ).get(pk=step_run_id)
+            run = system_queryset(run_model, using=alias, lock=("self",)).get(pk=run_id)
+            locked_rows = list(
+                system_queryset(step_run_model, using=alias, lock=("self",))
+                .filter(run_id=run.pk)
+                .order_by("pk")
+            )
+            locked = next((row for row in locked_rows if row.pk == step_run_id), None)
+            if locked is None:
+                raise OperationalError("Map controller disappeared while locking membership.")
+            expansion = system_queryset(self.model, using=alias, lock=("self",)).get(
+                pk=expansion_attempt_id
+            )
+            if (
+                run.is_terminal
+                or locked.status != StepRunStatus.WAITING
+                or locked.current_attempt_id != expansion.pk
+                or expansion.step_run_id != locked.pk
+                or expansion.cause != str(AttemptCause.MAP_ENGINE)
+                or expansion.result_kind != str(AttemptResultKind.WAIT)
+                or expansion.applied_at is None
+                or expansion.lease_revoked_at is not None
+                or expansion.effect_generation != locked.effect_generation
+            ):
+                raise ValidationError({"attempt": "Map aggregate requires the current applied expansion."})
+            checkpoint = expansion.checkpoint if expansion.checkpoint_present else None
+            map_state = checkpoint.get("map") if isinstance(checkpoint, dict) else None
+            if not isinstance(map_state, dict):
+                raise ValidationError({"map": "Map aggregate requires retained expansion facts."})
+            items = map_state.get("items")
+            target_id = map_state.get("target_step_id")
+            children = sorted(
+                (
+                    row
+                    for row in locked_rows
+                    if row.current_map_expansion_id == expansion.pk
+                ),
+                key=lambda row: (row.map_index, row.pk),
+            )
+            if (
+                not isinstance(items, list)
+                or (target_id is None and not map_state.get("error"))
+                or len(children) != len(items)
+                or [child.map_index for child in children] != list(range(len(items)))
+                or (target_id is not None and any(child.step_id != target_id for child in children))
+            ):
+                raise ValidationError({"map": "Map aggregate requires complete current membership."})
+            if any(child.status not in StepRunStatus.TERMINAL for child in children):
+                return None
+            attempt_ids = sorted(
+                child.current_attempt_id
+                for child in children
+                if child.current_attempt_id is not None
+            )
+            attempts = {
+                item.pk: item
+                for item in system_queryset(self.model, using=alias, lock=("self",))
+                .filter(pk__in=attempt_ids)
+                .order_by("pk")
+            }
+            results: list[dict[str, Any]] = []
+            for child in children:
+                item_attempt = attempts.get(child.current_attempt_id)
+                output = None
+                if child.status == StepRunStatus.SUCCEEDED:
+                    if (
+                        item_attempt is None
+                        or item_attempt.map_expansion_id != expansion.pk
+                        or item_attempt.map_item_index != child.map_index
+                        or item_attempt.effect_generation != child.effect_generation
+                        or item_attempt.result_kind != str(AttemptResultKind.DONE)
+                        or item_attempt.applied_at is None
+                        or item_attempt.lease_revoked_at is not None
+                    ):
+                        raise ValidationError(
+                            {"map": "Map member success lacks current retained DONE evidence."}
+                        )
+                    if item_attempt.output_present:
+                        output = copy.deepcopy(item_attempt.output)
+                results.append(
+                    {
+                        "map_index": child.map_index,
+                        "status": str(child.status),
+                        "outcome": child.outcome,
+                        "output": output,
+                        "error": child.error,
+                    }
+                )
+            successes = sum(child.status == StepRunStatus.SUCCEEDED for child in children)
+            failures = sum(
+                child.status in {StepRunStatus.FAILED, StepRunStatus.CANCELED}
+                for child in children
+            )
+            expected_output = {
+                "total": len(children),
+                "successes": successes,
+                "failures": failures,
+                "results": results,
+            }
+            if map_state.get("error"):
+                expected_output["error"] = map_state["error"]
+            impl_class = locked.step.resolve_impl("step_class")
+            expected_outcome = (
+                "failed"
+                if map_state.get("error")
+                else "succeeded"
+                if impl_class.policy_passes(locked.step.config, expected_output)
+                else "failed"
+            )
+            aggregate = self._allocate_locked(
+                locked,
+                cause=AttemptCause.MAP_ENGINE,
+                input=AttemptInput(),
+                claimed_at=at,
+                alias=alias,
+            )
+            aggregate.result_kind = str(AttemptResultKind.DONE)
+            aggregate.result_recorded_at = at
+            aggregate.output_present = True
+            aggregate.output = copy.deepcopy(expected_output)
+            aggregate.outcome = expected_outcome
+            aggregate.applied_at = at
+            self._save_attempt(aggregate, alias=alias)
+            self._write_step_run(
+                locked,
+                alias=alias,
+                operation=lambda: locked.mark_succeeded(
+                    output=expected_output, outcome=expected_outcome
+                ),
+            )
+            return aggregate
+
     def claim(
         self,
         step_run: Any,
         *,
         cause: AttemptCause = AttemptCause.INITIAL,
         input: AttemptInput = AttemptInput(),
+        map_item: MapItemSource | None = None,
         claimed_at: datetime,
     ) -> AttemptClaim:
         """Claim one logical delivery, returning the existing claim on duplicate admission."""
 
         self._validate_claim(cause, input)
+        self._validate_map_item(map_item)
         alias = self.db
         with (
             transaction.atomic(using=alias),
@@ -2856,12 +3729,20 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 current = system_queryset(self.model, using=alias, lock=("self",)).get(pk=locked.current_attempt_id)
                 active = current.result_recorded_at is None and current.lease_revoked_at is None
                 if locked.status == StepRunStatus.STARTED and active:
-                    self._validate_duplicate_claim(current, cause, input)
+                    self._validate_duplicate_claim(current, cause, input, map_item)
                     return AttemptClaim(current, False)
                 if active:
                     raise ValidationError({"step_run": "This step run already has an active attempt."})
             self._validate_claim_source(locked, cause)
-            attempt = self._allocate_locked(locked, cause=cause, input=input, claimed_at=claimed_at, alias=alias)
+            self._validate_map_item_owner(locked, map_item, alias=alias)
+            attempt = self._allocate_locked(
+                locked,
+                cause=cause,
+                input=input,
+                map_item=map_item,
+                claimed_at=claimed_at,
+                alias=alias,
+            )
             self._write_step_run(
                 locked,
                 alias=alias,
@@ -2878,6 +3759,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         *,
         cause: AttemptCause,
         input: AttemptInput,
+        map_item: MapItemSource | None = None,
         result: AttemptResult,
         claimed_at: datetime,
         recorded_at: datetime,
@@ -2885,6 +3767,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         """Retain a preparation failure without describing a physical invocation."""
 
         self._validate_claim(cause, input)
+        self._validate_map_item(map_item)
         if result.kind != AttemptResultKind.PREPARATION_ERROR:
             raise ValidationError({"result": "Preparation failure requires a preparation-error result."})
         self._validate_result(result)
@@ -2904,7 +3787,15 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 if current.result_recorded_at is None and current.lease_revoked_at is None:
                     raise ValidationError({"step_run": "This step run already has an active attempt."})
             self._validate_claim_source(locked, cause)
-            attempt = self._allocate_locked(locked, cause=cause, input=input, claimed_at=claimed_at, alias=alias)
+            self._validate_map_item_owner(locked, map_item, alias=alias)
+            attempt = self._allocate_locked(
+                locked,
+                cause=cause,
+                input=input,
+                map_item=map_item,
+                claimed_at=claimed_at,
+                alias=alias,
+            )
             attempt.result_kind = str(result.kind)
             attempt.result_recorded_at = recorded_at
             attempt.error = result.error
@@ -2924,7 +3815,14 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         run.save(using=alias, update_fields=["steps_taken", "updated_at"])
 
     def _allocate_locked(
-        self, locked: Any, *, cause: AttemptCause, input: AttemptInput, claimed_at: datetime, alias: str
+        self,
+        locked: Any,
+        *,
+        cause: AttemptCause,
+        input: AttemptInput,
+        claimed_at: datetime,
+        alias: str,
+        map_item: MapItemSource | None = None,
     ) -> Any:
         if locked.effect_key is None:
             locked.effect_key = uuid.uuid4()
@@ -2937,6 +3835,10 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             input_present=input.present,
             input=input.value,
             input_provenance=input.provenance or {},
+            map_expansion_id=map_item.expansion_attempt_id if map_item else None,
+            map_item_index=map_item.index if map_item else None,
+            map_item_present=map_item.value.present if map_item else False,
+            map_item=map_item.value.value if map_item else None,
             claimed_at=claimed_at,
             effect_key=locked.effect_key,
             effect_generation=locked.effect_generation,
@@ -3140,6 +4042,68 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             raise ValidationError({"cause": "Attempt claim requires a declared cause."})
 
     @staticmethod
+    def _validate_map_item(map_item: MapItemSource | None) -> None:
+        if map_item is None:
+            return
+        if (
+            not isinstance(map_item, MapItemSource)
+            or type(map_item.expansion_attempt_id) is not int
+            or map_item.expansion_attempt_id <= 0
+            or type(map_item.index) is not int
+            or map_item.index < 0
+        ):
+            raise ValidationError({"map_item": "Map item source identity is invalid."})
+        try:
+            validate_json_presence(map_item.value, label="Map item")
+        except ValueError as error:
+            raise ValidationError({"map_item": str(error)}) from error
+        if not map_item.value.present:
+            raise ValidationError({"map_item": "A retained Map expansion item is always present."})
+
+    def _validate_map_item_owner(
+        self, step_run: Any, map_item: MapItemSource | None, *, alias: str
+    ) -> None:
+        if map_item is None:
+            if step_run.current_map_expansion_id is not None:
+                raise ValidationError(
+                    {"map_item": "Current Map membership requires captured item provenance."}
+                )
+            return
+        if (
+            step_run.map_index != map_item.index
+            or step_run.current_map_expansion_id != map_item.expansion_attempt_id
+        ):
+            raise ValidationError({"map_item": "Map item source does not match current membership."})
+        expansion = system_queryset(self.model, using=alias, lock=("self",)).get(
+            pk=map_item.expansion_attempt_id
+        )
+        step_run_model = self.model._meta.get_field("step_run").remote_field.model
+        controller = system_queryset(step_run_model, using=alias, lock=None).get(
+            pk=expansion.step_run_id
+        )
+        checkpoint = expansion.checkpoint if expansion.checkpoint_present else None
+        map_state = checkpoint.get("map") if isinstance(checkpoint, dict) else None
+        items = map_state.get("items") if isinstance(map_state, dict) else None
+        target_id = map_state.get("target_step_id") if isinstance(map_state, dict) else None
+        if (
+            expansion.cause != str(AttemptCause.MAP_ENGINE)
+            or controller.run_id != step_run.run_id
+            or controller.current_attempt_id != expansion.pk
+            or controller.status != StepRunStatus.WAITING
+            or controller.effect_generation != expansion.effect_generation
+            or step_run.step_id != target_id
+            or expansion.result_kind != str(AttemptResultKind.WAIT)
+            or expansion.applied_at is None
+            or expansion.lease_revoked_at is not None
+            or not isinstance(items, list)
+            or map_item.index >= len(items)
+            or not json_values_equal(items[map_item.index], map_item.value.value)
+        ):
+            raise ValidationError(
+                {"map_item": "Map item source is not current applied expansion evidence."}
+            )
+
+    @staticmethod
     def _validate_result(result: AttemptResult) -> None:
         if not isinstance(result.kind, AttemptResultKind):
             raise ValidationError({"result": "Attempt results require a declared result kind."})
@@ -3192,12 +4156,23 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             raise ValidationError({"step_run": "Only a scheduled or waiting step run can claim an attempt."})
 
     @staticmethod
-    def _validate_duplicate_claim(attempt: Any, cause: AttemptCause, input: AttemptInput) -> None:
+    def _validate_duplicate_claim(
+        attempt: Any,
+        cause: AttemptCause,
+        input: AttemptInput,
+        map_item: MapItemSource | None,
+    ) -> None:
         if (
             attempt.cause != str(cause)
             or attempt.input_present != input.present
-            or attempt.input != input.value
-            or attempt.input_provenance != (input.provenance or {})
+            or not json_values_equal(attempt.input, input.value)
+            or not json_values_equal(attempt.input_provenance, input.provenance or {})
+            or attempt.map_expansion_id != (map_item.expansion_attempt_id if map_item else None)
+            or attempt.map_item_index != (map_item.index if map_item else None)
+            or attempt.map_item_present != (map_item.value.present if map_item else False)
+            or not json_values_equal(
+                attempt.map_item, map_item.value.value if map_item else None
+            )
         ):
             raise ValidationError({"step_run": "The active attempt was claimed with different immutable input."})
 
@@ -3398,6 +4373,10 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             claimed_at=claimed_at,
             effect_key=retry_of.effect_key,
             effect_generation=retry_of.effect_generation,
+            map_expansion_id=retry_of.map_expansion_id,
+            map_item_index=retry_of.map_item_index,
+            map_item_present=retry_of.map_item_present,
+            map_item=copy.deepcopy(retry_of.map_item),
         )
         self._save_attempt(successor, alias=alias, force_insert=True)
         step_run.attempt = successor.ordinal
@@ -3420,15 +4399,17 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         return (
             attempt.result_kind == str(result.kind)
             and attempt.output_present == result.output_present
-            and attempt.output == result.output
+            and json_values_equal(attempt.output, result.output)
             and attempt.checkpoint_present == result.checkpoint_present
-            and attempt.checkpoint == result.checkpoint
+            and json_values_equal(attempt.checkpoint, result.checkpoint)
             and attempt.error == result.error
             and attempt.stacktrace == result.stacktrace
             and attempt.outcome == result.outcome
             and attempt.waiting_kind == result.waiting_kind
             and attempt.result_requested_until == result.requested_until
-            and attempt.result_decisions == serialize_decision_specs(result.decisions)
+            and json_values_equal(
+                attempt.result_decisions, serialize_decision_specs(result.decisions)
+            )
         )
 
     def _apply_result(
@@ -3542,6 +4523,17 @@ class StepAttempt(AuditMixin, AngeeDataModel):
     input_present = models.BooleanField(default=False)
     input = models.JSONField(null=True, blank=True)
     input_provenance = models.JSONField(default=dict, blank=True)
+    map_expansion = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="map_item_attempts",
+        editable=False,
+    )
+    map_item_index = models.PositiveIntegerField(null=True, blank=True, editable=False)
+    map_item_present = models.BooleanField(default=False, editable=False)
+    map_item = models.JSONField(null=True, blank=True, editable=False)
     claimed_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     heartbeat_at = models.DateTimeField(null=True, blank=True)
@@ -3630,6 +4622,22 @@ class StepAttempt(AuditMixin, AngeeDataModel):
             models.CheckConstraint(
                 condition=models.Q(orchestration_error="") | models.Q(result_kind=AttemptResultKind.TRANSIENT_ERROR),
                 name="chk_wsa_orchestration_error",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        map_expansion__isnull=True,
+                        map_item_index__isnull=True,
+                        map_item_present=False,
+                        map_item__isnull=True,
+                    )
+                    | models.Q(
+                        map_expansion__isnull=False,
+                        map_item_index__isnull=False,
+                        map_item_present=True,
+                    )
+                ),
+                name="chk_wsa_map_item_source",
             ),
         )
 

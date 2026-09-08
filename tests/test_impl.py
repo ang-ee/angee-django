@@ -11,7 +11,7 @@ import pytest
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.test import override_settings
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from angee.base.impl import ImplBase, ImplChoice, ImplClassField
 from tests.conftest import Integration, OAuthClient, VcsBridge
@@ -204,6 +204,70 @@ def test_typed_config_projects_native_input_constraints() -> None:
     assert spec["properties"]["attempts"]["maximum"] == 5
     assert spec["properties"]["names"]["minItems"] == 1
     assert spec["properties"]["names"]["maxItems"] == 3
+
+
+def test_typed_config_projects_integer_exclusive_bounds_exactly() -> None:
+    class BoundedIntegerConfig(BaseModel):
+        count: int = Field(json_schema_extra={
+            "minimum": 2,
+            "exclusiveMinimum": 1.5,
+            "maximum": 8,
+            "exclusiveMaximum": 8.5,
+        })
+
+    class BoundedIntegerImpl(ImplBase):
+        config_model = BoundedIntegerConfig
+
+    spec = BoundedIntegerImpl.config_form_spec()
+    assert spec is not None
+    assert spec["properties"]["count"]["minimum"] == 2
+    assert spec["properties"]["count"]["maximum"] == 8
+
+
+def test_typed_config_rejects_exclusive_number_bounds_and_free_form_structured_fields() -> None:
+    class ExclusiveNumberConfig(BaseModel):
+        ratio: float = Field(gt=1.5)
+
+    class ExclusiveNumberImpl(ImplBase):
+        config_model = ExclusiveNumberConfig
+
+    with pytest.raises(ImproperlyConfigured, match="exclusive numeric bound"):
+        ExclusiveNumberImpl.config_form_spec()
+
+    class FreeFormConfig(BaseModel):
+        values: dict[str, str]
+
+    class FreeFormImpl(ImplBase):
+        config_model = FreeFormConfig
+
+    with pytest.raises(ImproperlyConfigured, match="mapping/additionalProperties"):
+        FreeFormImpl.config_form_spec()
+
+    class EmptyExtensibleObject(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+    class NestedExtensibleConfig(BaseModel):
+        values: EmptyExtensibleObject
+
+    class NestedExtensibleImpl(ImplBase):
+        config_model = NestedExtensibleConfig
+
+    with pytest.raises(ImproperlyConfigured, match="free-form mapping"):
+        NestedExtensibleImpl.config_form_spec()
+
+    class DeclaredExtensibleObject(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        label: str
+
+    class NestedDeclaredExtensibleConfig(BaseModel):
+        values: DeclaredExtensibleObject
+
+    class NestedDeclaredExtensibleImpl(ImplBase):
+        config_model = NestedDeclaredExtensibleConfig
+
+    with pytest.raises(ImproperlyConfigured, match="free-form mapping"):
+        NestedDeclaredExtensibleImpl.config_form_spec()
 
 
 def test_typed_config_projects_explicit_dynamic_json_and_datetime_widgets() -> None:

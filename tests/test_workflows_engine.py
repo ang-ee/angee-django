@@ -1192,7 +1192,8 @@ def test_publish_retargets_new_starts_without_migrating_trigger(
     draft = first.published_from
     old_run = start_run(draft)
     with system_context(reason="test workflows publish retarget"):
-        trigger = Trigger.objects.create(workflow=draft, enabled=True)
+        trigger = Trigger.objects.create(workflow=draft)
+        trigger.enable()
         start = Step.objects.get(workflow=draft, key="start")
         start.config = {"outcome": "done", "output": {"version": 2}}
         start.save()

@@ -87,7 +87,9 @@ class JsonPresence:
     value: Any = None
 
 
-_STRICT_JSON = TypeAdapter(JsonValue, config=ConfigDict(strict=True, allow_inf_nan=False))
+_STRICT_JSON: TypeAdapter[JsonValue] = TypeAdapter(
+    JsonValue, config=ConfigDict(strict=True, allow_inf_nan=False)
+)
 
 
 def validate_json_presence(value: JsonPresence, *, label: str = "JSON value") -> JsonPresence:
@@ -106,11 +108,38 @@ def validate_json_presence(value: JsonPresence, *, label: str = "JSON value") ->
     return value
 
 
+def json_values_equal(left: Any, right: Any) -> bool:
+    """Compare validated JSON values through their canonical native encoding."""
+
+    return json.dumps(
+        left, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ) == json.dumps(right, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
 @dataclass(frozen=True, slots=True)
 class AttemptInput(JsonPresence):
     """Resolved attempt input plus its durable source provenance."""
 
     provenance: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MapItemSource:
+    """Exact retained Map expansion item captured by a child attempt."""
+
+    expansion_attempt_id: int
+    index: int
+    value: JsonPresence
+
+
+@dataclass(frozen=True, slots=True)
+class MapExpansionPlan:
+    """Definition-derived immutable facts for one retained Map expansion."""
+
+    target_id: int | None
+    target_key: str
+    items: list[Any]
+    error: str
 
 
 @dataclass(frozen=True, slots=True)

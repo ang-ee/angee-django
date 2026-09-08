@@ -11,6 +11,7 @@ import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.utils import timezone
 from strawberry import auto
 from strawberry.scalars import JSON
 
@@ -31,6 +32,7 @@ from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import session_user
 from angee.workflows import engine
+from angee.workflows.attempts import JsonPresence
 from angee.workflows.data_contracts import DataContract, FlatDataContractEdge, FlatDataContractNode
 from angee.workflows.definitions import (
     DefinitionEdit,
@@ -46,7 +48,13 @@ from angee.workflows.definitions import (
     StaleDefinitionError,
 )
 from angee.workflows.graph import GraphDiagnostic, GraphIdentity, GraphLocation
+from angee.workflows.models import TriggerKind
 from angee.workflows.steps import StepEffect, StepImpl, StepOperation
+from angee.workflows.trigger_declarations import (
+    schedule_draft_preview,
+    trigger_config_schema,
+    trigger_kind_names,
+)
 
 Workflow = apps.get_model("workflows", "Workflow")
 Step = apps.get_model("workflows", "Step")
@@ -90,7 +98,7 @@ class DecisionVerb(Enum):
     ESCALATE = "escalate"
 
 
-WorkflowStepEffect = strawberry.enum(StepEffect, name="WorkflowStepEffect")
+WorkflowStepEffectEnum = strawberry.enum(StepEffect, name="WorkflowStepEffect")
 
 
 @strawberry.type
@@ -169,7 +177,7 @@ class WorkflowStepOperation(GraphQLImplChoice):
     input_contract: WorkflowDataContract
     output_contract: WorkflowDataContract
     outcomes: list[WorkflowStepOutcome]
-    effect: WorkflowStepEffect
+    effect: StepEffect
     effect_description: str
     idempotent: bool | None
     subject_declaration: str
@@ -333,8 +341,90 @@ class TriggerType(AngeeNode):
     enabled: auto
     config: JSON
     next_fire_at: auto
+    last_fire_at: auto
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(only=["kind", "config"])
+    def summary(self) -> str | None:
+        """Return the declaration-owned readable rule when the row is valid."""
+
+        try:
+            return cast(Any, self).validated_config().summary()
+        except ValidationError:
+            return None
+
+    @strawberry_django.field(only=["kind", "config", "workflow"])
+    def activation_blocker(self) -> str | None:
+        """Explain why this rule cannot currently be enabled."""
+
+        return cast(Any, self).activation_blocker(
+            has_current_publication=cast(bool | None, getattr(self, "_trigger_has_current_publication", None))
+        )
+
+
+@strawberry.type
+class WorkflowTriggerDeclaration:
+    kind: str
+    label: str
+    config_schema: JSON
+
+
+@strawberry.type
+class WorkflowTriggerPublisher:
+    model: str
+    label: str
+
+
+@strawberry.type
+class WorkflowSchedulePreview:
+    timezone: str
+    occurrences: list[datetime]
+    errors: list[str]
+
+
+@strawberry.type
+class WorkflowTriggerDeclarationQuery:
+    """Admin-only trigger authoring facts from their native owners."""
+
+    @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def workflow_trigger_declarations(self) -> list[WorkflowTriggerDeclaration]:
+        return [
+            WorkflowTriggerDeclaration(
+                kind=value,
+                label=str(TriggerKind(value).label),
+                config_schema=cast(JSON, trigger_config_schema(value)),
+            )
+            for value in trigger_kind_names()
+        ]
+
+    @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def workflow_trigger_publishers(self) -> list[WorkflowTriggerPublisher]:
+        from angee.graphql.schema import GraphQLSchemas
+
+        return [
+            WorkflowTriggerPublisher(model=model._meta.label_lower, label=str(model._meta.verbose_name))
+            for model in GraphQLSchemas.from_discovery().change_publisher_models()
+        ]
+
+    @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def workflow_schedule_preview(self, config: JSON, count: int = 3) -> WorkflowSchedulePreview:
+        result = schedule_draft_preview(config, now=timezone.now(), count=count)
+        return WorkflowSchedulePreview(
+            timezone="UTC",
+            occurrences=list(result.occurrences),
+            errors=list(result.errors),
+        )
+
+
+def _trigger_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
+    """Load trigger rule projections and publication availability in one bounded query."""
+
+    del info
+    current = Workflow.objects.current_published().filter(published_from_id=models.OuterRef("workflow_id"))
+    return Trigger.objects.all().select_related("workflow").annotate(
+        _trigger_has_current_publication=models.Exists(current)
+    )
 
 
 @strawberry_django.type(WorkflowRun)
@@ -770,9 +860,10 @@ _TRIGGER_RESOURCE = hasura_model_resource(
     sortable=["workflow", "kind", "enabled", "next_fire_at", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["workflow", "workflow__name", "kind", "enabled", "updated_at"],
-    insertable=["workflow", "kind", "enabled", "config"],
-    updatable=["kind", "enabled", "config"],
+    insertable=["workflow", "kind", "config"],
+    updatable=["kind", "config"],
     field_id_decode={"workflow": public_pk_decoder(Workflow)},
+    get_queryset=_trigger_queryset,
     write_backend=AngeeHasuraWriteBackend(Trigger, public_id_fields=("workflow",)),
 )
 _WORKFLOW_RUN_RESOURCE = hasura_model_resource(
@@ -1294,6 +1385,31 @@ class WorkflowRunActionMutation:
         )
         return ActionResult(ok=True, message=f"Started workflow run {run.sqid}.", id=run.sqid)
 
+    @strawberry.mutation
+    @action_guard("Test workflow failed.")
+    def start_workflow_test(
+        self,
+        info: strawberry.Info,
+        workflow: PublicID,
+        expected_revision: int,
+        request_key: str,
+        subject: WorkflowObjectRefInput | None = None,
+        input: JSON | None = strawberry.UNSET,
+    ) -> ActionResult:
+        """Start or recover a whole-workflow test of one saved revision."""
+
+        actor = session_user(info)
+        target = authorized_action_target(info, Workflow, workflow, "write")
+        run = WorkflowRun.objects.start_test(
+            target,
+            expected_revision=expected_revision,
+            request_key=request_key,
+            subject=_resolve_subject(subject, actor=actor),
+            actor=actor,
+            input=JsonPresence(input is not strawberry.UNSET, None if input is strawberry.UNSET else input),
+        )
+        return ActionResult(ok=True, message=f"Started workflow test {run.sqid}.", id=run.sqid)
+
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def cancel_workflow_run(self, run: PublicID) -> ActionResult:
         """Cancel a workflow run and its active journal rows."""
@@ -1338,7 +1454,7 @@ class TriggerActionMutation:
 
 _CONSOLE_TYPES: list[object] = [
     DecisionVerb,
-    WorkflowStepEffect,
+    WorkflowStepEffectEnum,
     WorkflowStepOutcome,
     WorkflowStepOperation,
     WorkflowType,
@@ -1391,6 +1507,7 @@ schemas = {
         "query": [
             WorkflowSubjectDeclarationQuery,
             WorkflowStepOperationQuery,
+            WorkflowTriggerDeclarationQuery,
             WorkflowDefinitionQuery,
             _WORKFLOW_RESOURCE.query,
             _STEP_RESOURCE.query,

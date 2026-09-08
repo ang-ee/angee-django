@@ -21,6 +21,7 @@ from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import transaction
 from django.template import Context, Engine
 from django.utils import timezone
+from pydantic import JsonValue
 from pydantic_ai.messages import ModelRequest, ModelRequestPart, ModelResponse, SystemPromptPart, UserPromptPart
 from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
@@ -394,7 +395,7 @@ def _approval_decisions(session: Any, requests: list[dict[str, Any]]) -> tuple[D
     """Build one owner-assigned workflow decision per deferred tool call."""
 
     assignee = str(to_subject_ref(session.owner))
-    schema = {
+    schema: dict[str, JsonValue] = {
         "type": "object",
         "properties": {
             "reason": {

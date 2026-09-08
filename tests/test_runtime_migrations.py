@@ -892,7 +892,18 @@ def test_workflow_identity_migration_is_additive_and_matches_source_fields() -> 
     ):
         migrated_field = migrated.models["workflows", model_name].fields[field_name]
         source_field = source_model._meta.get_field(field_name)
-        assert migrated_field.deconstruct()[1:] == source_field.deconstruct()[1:]
+        migrated_path, migrated_args, migrated_kwargs = migrated_field.deconstruct()[1:]
+        source_path, source_args, source_kwargs = source_field.deconstruct()[1:]
+        if (model_name, field_name) == ("workflowrun", "origin"):
+            assert tuple(migrated_kwargs.pop("choices")) == module.RUN_ORIGIN_CHOICES
+            current_choices = tuple(source_kwargs.pop("choices"))
+            assert set(current_choices) == {*module.RUN_ORIGIN_CHOICES, ("test", "Test")}
+            assert len(current_choices) == len(module.RUN_ORIGIN_CHOICES) + 1
+        assert (migrated_path, migrated_args, migrated_kwargs) == (
+            source_path,
+            source_args,
+            source_kwargs,
+        )
 
 
 def test_agent_session_identity_migration_waits_for_complete_identity_state() -> None:

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal, Self, cast
 
 from croniter import CroniterBadCronError, croniter
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+
+from angee.base.impl import model_config_form_spec
 
 TriggerKindName = Literal["manual", "event", "schedule"]
 PositiveInt = Annotated[int, Field(gt=0)]
@@ -75,7 +78,7 @@ class ScheduleTriggerConfig(TriggerConfig):
     """Exactly one cron or fixed-second schedule."""
 
     cron: str | None = Field(default=None, title="Cron expression")
-    interval_seconds: PositiveInt | None = Field(default=None, title="Interval", json_schema_extra={"unit": "seconds"})
+    interval_seconds: PositiveInt | None = Field(default=None, title="Interval seconds")
 
     @field_validator("cron", mode="before")
     @classmethod
@@ -133,12 +136,24 @@ class ScheduleTriggerConfig(TriggerConfig):
             return f"Every {self.interval_seconds} seconds"
         return f"Cron {self.cron}"
 
+    @property
+    def cadence(self) -> tuple[str | None, int | None]:
+        """Return the normalized fields that determine scheduler occurrences."""
+
+        return self.cron, self.interval_seconds
+
 
 _CONFIG_MODELS: dict[TriggerKindName, type[TriggerConfig]] = {
     "manual": ManualTriggerConfig,
     "event": EventTriggerConfig,
     "schedule": ScheduleTriggerConfig,
 }
+
+
+def trigger_kind_names() -> tuple[TriggerKindName, ...]:
+    """Return declaration kinds from the registry that owns their configs."""
+
+    return tuple(_CONFIG_MODELS)
 
 
 def trigger_config_model(kind: TriggerKindName) -> type[TriggerConfig]:
@@ -154,9 +169,10 @@ def validate_trigger_config(kind: TriggerKindName, config: object) -> TriggerCon
 
 
 def trigger_config_schema(kind: TriggerKindName) -> dict[str, Any]:
-    """Expose Pydantic's validation schema for mechanical field projection."""
+    """Expose the shared mechanical FormSpec projection for this declaration."""
 
-    return trigger_config_model(kind).model_json_schema(mode="validation", by_alias=True)
+    model = trigger_config_model(kind)
+    return model_config_form_spec(model, owner=model.__name__)
 
 
 def trigger_summary(kind: TriggerKindName, config: object) -> str:
@@ -176,13 +192,34 @@ def schedule_preview(
     return ScheduleTriggerConfig.model_validate(config).preview(now=now, count=count)
 
 
+@dataclass(frozen=True, slots=True)
+class ScheduleDraftPreview:
+    """Validated authoring preview data, including expected draft errors."""
+
+    occurrences: tuple[datetime, ...] = ()
+    errors: tuple[str, ...] = ()
+
+
+def schedule_draft_preview(config: object, *, now: datetime, count: int = 3) -> ScheduleDraftPreview:
+    """Validate and preview one authoring draft without transport errors."""
+
+    try:
+        declaration = ScheduleTriggerConfig.model_validate(config)
+    except ValidationError as error:
+        return ScheduleDraftPreview(errors=tuple(str(item["msg"]) for item in error.errors()))
+    return ScheduleDraftPreview(occurrences=declaration.preview(now=now, count=count))
+
+
 __all__ = [
     "EventTriggerConfig",
     "ManualTriggerConfig",
     "ScheduleTriggerConfig",
     "TriggerConfig",
     "TriggerKindName",
+    "ScheduleDraftPreview",
+    "schedule_draft_preview",
     "schedule_preview",
+    "trigger_kind_names",
     "trigger_config_model",
     "trigger_config_schema",
     "trigger_summary",

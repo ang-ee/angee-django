@@ -8,6 +8,7 @@ settings-backed registry resolver shared by row-owned and row-less selectors.
 from __future__ import annotations
 
 import copy
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar, NoReturn, cast, get_args
@@ -31,6 +32,7 @@ __all__ = [
     "ImplDefaultsMixin",
     "impl_registry",
     "resolve_impl_class",
+    "model_config_form_spec",
 ]
 
 
@@ -108,7 +110,7 @@ class _ConfigFormSpecProjector:
             constraints = (
                 {"minLength", "maxLength"}
                 if schema_type == "string"
-                else {"minimum", "maximum"}
+                else {"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"}
                 if schema_type in {"integer", "number"}
                 else set()
             )
@@ -117,23 +119,36 @@ class _ConfigFormSpecProjector:
                 _SCHEMA_COMMON_KEYS | {"type", "enum", "const", "format"} | constraints,
                 path,
             )
-            projected: dict[str, Any] = {"type": schema_type}
+            scalar_projection: dict[str, Any] = {"type": schema_type}
             if "format" in schema:
                 if schema_type != "string" or schema["format"] != "date-time":
                     self._unsupported(path, f"format {schema['format']!r}")
-                projected["widget"] = "datetime"
+                scalar_projection["widget"] = "datetime"
             for constraint in constraints:
                 if constraint in schema:
-                    projected[constraint] = schema[constraint]
+                    scalar_projection[constraint] = schema[constraint]
+            if schema_type == "integer":
+                if "exclusiveMinimum" in scalar_projection:
+                    exclusive_minimum = math.floor(scalar_projection.pop("exclusiveMinimum")) + 1
+                    scalar_projection["minimum"] = max(
+                        scalar_projection.get("minimum", exclusive_minimum), exclusive_minimum
+                    )
+                if "exclusiveMaximum" in scalar_projection:
+                    exclusive_maximum = math.ceil(scalar_projection.pop("exclusiveMaximum")) - 1
+                    scalar_projection["maximum"] = min(
+                        scalar_projection.get("maximum", exclusive_maximum), exclusive_maximum
+                    )
+            elif "exclusiveMinimum" in scalar_projection or "exclusiveMaximum" in scalar_projection:
+                self._unsupported(path, "exclusive numeric bound")
             enum = schema.get("enum")
             if "const" in schema:
                 enum = [schema["const"]]
-                projected["const"] = copy.deepcopy(schema["const"])
+                scalar_projection["const"] = copy.deepcopy(schema["const"])
             if enum is not None:
                 if not isinstance(enum, list) or not enum or not all(isinstance(value, str) for value in enum):
                     self._unsupported(path, "non-string enum")
-                projected["enum"] = copy.deepcopy(enum)
-            return self._metadata(projected, schema)
+                scalar_projection["enum"] = copy.deepcopy(enum)
+            return self._metadata(scalar_projection, schema)
 
         if schema_type == "object":
             self._reject_keywords(
@@ -141,7 +156,7 @@ class _ConfigFormSpecProjector:
                 _SCHEMA_COMMON_KEYS | {"type", "properties", "required", "additionalProperties"},
                 path,
             )
-            if schema.get("additionalProperties", False) not in (False, None):
+            if schema.get("additionalProperties", False) not in (False, True, None):
                 self._unsupported(path, "mapping/additionalProperties")
             properties = schema.get("properties", {})
             required = schema.get("required", [])
@@ -151,6 +166,8 @@ class _ConfigFormSpecProjector:
                 or not all(isinstance(name, str) for name in required)
             ):
                 self._unsupported(path, "object properties")
+            if schema.get("additionalProperties") is True and path != "config":
+                self._unsupported(path, "free-form mapping")
             projected_properties = {}
             for name, field in properties.items():
                 projected = self._project(field, path=f"{path}.{name}", refs=refs)
@@ -220,6 +237,16 @@ def _pydantic_models_in(annotation: Any) -> tuple[type[BaseModel], ...]:
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
         return (annotation,)
     return tuple(model for argument in get_args(annotation) for model in _pydantic_models_in(argument))
+
+
+def model_config_form_spec(model: type[BaseModel], *, owner: str) -> dict[str, Any]:
+    """Project a Pydantic model through the shared bounded FormSpec owner.
+
+    Declared properties become structured fields. Extra root properties are not
+    projected; callers that allow them must retain their existing raw JSON owner.
+    """
+
+    return _ConfigFormSpecProjector(model, owner=owner).form_spec()
 
 
 class ImplBase:
@@ -325,7 +352,7 @@ class ImplBase:
 
         if cls.config_model is None:
             return None
-        return _ConfigFormSpecProjector(cls.config_model, owner=cls.__name__).form_spec()
+        return model_config_form_spec(cls.config_model, owner=cls.__name__)
 
     @classmethod
     def materialize(cls, instance: models.Model, *, provided: frozenset[str] = frozenset()) -> set[str]:
@@ -622,7 +649,7 @@ class ImplDefaultsMixin(models.Model):
     def mark_impl_provided_fields(self, field_names: Iterable[str]) -> None:
         """Record fields assigned after construction by a structured write ingress."""
 
-        provided = getattr(self, "_impl_provided_fields", frozenset())
+        provided: frozenset[str] = getattr(self, "_impl_provided_fields", frozenset())
         self._impl_provided_fields = provided | frozenset(field_names)
 
     def save(self, *args: Any, **kwargs: Any) -> None:

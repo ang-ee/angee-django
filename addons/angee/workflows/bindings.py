@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, TypeAlias
 
@@ -289,7 +290,7 @@ def binding_error_details(
     )
 
 
-def _binding_error_message(item: dict[str, Any]) -> str:
+def _binding_error_message(item: Mapping[str, Any]) -> str:
     if item.get("type") in {"union_tag_not_found", "union_tag_invalid"}:
         return "Choose a value type."
     return str(item["msg"])

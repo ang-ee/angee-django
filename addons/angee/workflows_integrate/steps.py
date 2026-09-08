@@ -16,12 +16,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, ClassVar, cast
 
-from angee.base.impl import ImplBase, impl_registry, resolve_impl_class
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
+from pydantic import JsonValue
 from rebac import system_context
 from rebac.actors import to_subject_ref
 
+from angee.base.impl import ImplBase, impl_registry, resolve_impl_class
 from angee.workflows.steps import DecisionSpec, StepImpl, StepResult, positive_int
 
 ARCHIVE_EXTRACTOR_CLASSES_SETTING = "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES"
@@ -193,7 +194,7 @@ class ArchiveGateStepImpl(StepImpl):
         target_resource = target_resources[0]
         config = dict(step_run.step.config)
         assignee = str(config.get("assignee") or _run_owner_subject(step_run.run))
-        mappings = [
+        mappings: list[JsonValue] = [
             {
                 "extractor": proposal["extractor"],
                 "label": proposal["label"],
