@@ -61,6 +61,56 @@ export const WorkflowStepOperationsDocument = graphql(`
   }
 `);
 
+export const WorkflowDefinitionDocument = graphql(`
+  query WorkflowDefinition($workflow: ID!) {
+    workflow_definition(workflow: $workflow) {
+      revision
+      workflow {
+        id
+        key
+        name
+        description
+        purpose
+        subject_declaration
+        status
+        version
+        lineage_id
+        error_workflow { id }
+        max_steps
+        budget
+        current_published_version
+        publication_status
+      }
+      nodes {
+        id key name step_class config config_errors join_rule is_entry position
+      }
+      edges { id source target condition }
+      readiness { code message kind id client_key requested_id field }
+    }
+  }
+`);
+
+export const SaveWorkflowDefinitionDocument = graphql(`
+  mutation SaveWorkflowDefinition($workflow: ID!, $expectedRevision: Int!, $edit: WorkflowDefinitionEditInput!) {
+    save_workflow_definition(workflow: $workflow, expected_revision: $expectedRevision, edit: $edit) {
+      status revision current_revision
+      nodes { client_key id }
+      edges { client_key id }
+      diagnostics { code message kind id client_key requested_id field }
+    }
+  }
+`);
+
+export const PublishWorkflowDefinitionDocument = graphql(`
+  mutation PublishWorkflowDefinition($workflow: ID!, $expectedRevision: Int!) {
+    publish_workflow_definition(workflow: $workflow, expected_revision: $expectedRevision) {
+      status revision current_revision publication_created
+      publication { id version status }
+      diagnostics { code message kind id client_key requested_id field }
+    }
+  }
+`);
+
 export const UpdateWorkflowStepPositionDocument = graphql(`
   mutation UpdateWorkflowStepPosition($id: String!, $position: JSON!) {
     update_workflow_steps_by_pk(

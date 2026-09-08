@@ -3,7 +3,7 @@
 import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { Refine, type DataProvider } from "@angee/refine";
-import { AppRuntimeProvider, ModalsHost, ToastProvider, defaultWidgets } from "@angee/ui";
+import { AppRuntimeProvider, Form, ModalsHost, ToastProvider, defaultWidgets } from "@angee/ui";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
@@ -157,6 +157,11 @@ const scalarField = (name: string, scalar = "String", values: readonly string[] 
   requiredOnCreate: false,
 });
 
+const workflowResource = testDataResource("workflows.Workflow", {
+  modelName: "Workflow",
+  typeNames: { node: "WorkflowType" },
+  fields: [scalarField("id", "ID"), scalarField("name")],
+});
 const stepResource = testDataResource("workflows.Step", {
   modelName: "Step",
   typeNames: { node: "WorkflowStepType" },
@@ -184,14 +189,29 @@ function renderCanvas(): void {
     update: vi.fn(async () => ({ data: mocks.record })),
     deleteOne: vi.fn(async () => ({ data: mocks.record })),
   } as DataProvider;
+  const dataResources = [workflowResource, stepResource];
+  const node = { ...mocks.record, position: { x: 0, y: 0 }, clientKey: undefined };
   render(
-    <Refine resources={[...refineResourcesFromDataResources([stepResource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
+    <Refine resources={[...refineResourcesFromDataResources(dataResources)]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
       <RouterContextProvider router={router}>
-        <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([stepResource])}>
+        <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources(dataResources)}>
           <ModalsHost>
             <ToastProvider>
               <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-                <WorkflowCanvas workflowId="workflow_1" />
+                <Form
+                  resource="workflows.Workflow"
+                  id="workflow_1"
+                  readOnly={mocks.workflowStatus !== "DRAFT"}
+                  acknowledgedSource={{
+                    record: { id: "workflow_1", name: "Workflow" },
+                    values: {
+                      id: "workflow_1", name: "Workflow", status: mocks.workflowStatus, version: 1,
+                      definition: { revision: 1, nodes: { step_1: node }, edges: {}, readiness: [] },
+                    },
+                  }}
+                  recordTabs={[{ id: "editor", label: "Editor", render: (context) => <WorkflowCanvas context={context} />, keepMounted: true }]}
+                  defaultRecordTab="editor"
+                />
               </AppRuntimeProvider>
             </ToastProvider>
           </ModalsHost>
@@ -250,6 +270,7 @@ describe("WorkflowCanvas native narrow inspector", () => {
     expect(operation.textContent).toContain("Wait for approval");
     expect(screen.getByText("Retry")).toBeTruthy();
     expect(screen.getByText("Slots")).toBeTruthy();
+    expect(screen.queryByLabelText("Mode")).toBeNull();
     expect(screen.queryByText("Advanced configuration")).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     fireEvent.click(operation);
@@ -263,25 +284,17 @@ describe("WorkflowCanvas native narrow inspector", () => {
     expect(screen.getByText("Slots")).toBeTruthy();
     expect(screen.queryByText("Advanced configuration")).toBeNull();
 
-    fireEvent.click(operation);
-    const differentOperation = await screen.findByRole("option", { name: "Run callable" });
-    fireEvent.pointerDown(differentOperation);
-    fireEvent.pointerUp(differentOperation);
-    fireEvent.click(differentOperation);
-    expect(operation.textContent).toContain("Run callable");
-    expect(await screen.findByRole("button", { name: "Save" })).toBeTruthy();
   });
 
-  test("falls back to repairable raw config when the persisted typed value is invalid", async () => {
+  test("keeps representable incomplete config in typed fields", async () => {
     mocks.record.config = { mode: 42 };
     mocks.record.config_errors = { "config.mode": ["Input should be a valid string"] };
     renderCanvas();
     await screen.findByText("Import files");
     fireEvent.click(screen.getByTestId("rf__node-step_1"));
 
-    expect(await screen.findByText(/config\.mode: Input should be a valid string/)).toBeTruthy();
-    expect(screen.getByText("Advanced configuration")).toBeTruthy();
-    expect(screen.queryByLabelText("Mode")).toBeNull();
+    expect(await screen.findByLabelText("Mode")).toBeTruthy();
+    expect(screen.queryByText("Advanced configuration")).toBeNull();
   });
 
   test("renders a published JSX inspector without edit affordances", async () => {
