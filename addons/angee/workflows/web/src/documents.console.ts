@@ -91,15 +91,6 @@ export const PublishWorkflowDocument = graphql(`
   }
 `);
 
-export const StartWorkflowRunDocument = graphql(`
-  mutation StartWorkflowRun($id: ID!) {
-    start_workflow_run(workflow: $id) {
-      ok
-      message
-    }
-  }
-`);
-
 export const WorkflowsForSubjectDeclarationDocument = graphql(`
   query WorkflowsForSubjectDeclaration($subjectDeclaration: String!) {
     workflows_for_subject_declaration(
@@ -112,19 +103,27 @@ export const WorkflowsForSubjectDeclarationDocument = graphql(`
   }
 `);
 
-export const RunWorkflowDocument = graphql(`
-  mutation RunWorkflow(
-    $workflow: ID!
-    $subjectDeclaration: String!
-    $subjectId: ID!
-  ) {
-    start_workflow_run(
-      workflow: $workflow
-      subject: {
-        subject_declaration: $subjectDeclaration
-        id: $subjectId
+export const WorkflowLaunchDocument = graphql(`
+  query WorkflowLaunch($id: String!) {
+    workflows_by_pk(id: $id) {
+      id
+      lineage_id
+      purpose
+      status
+      version
+      published_from {
+        id
       }
-    ) {
+      current_published_id
+      current_published_version
+      current_published_subject_declaration
+    }
+  }
+`);
+
+export const RunWorkflowDocument = graphql(`
+  mutation RunWorkflow($workflow: ID!, $subject: WorkflowObjectRefInput) {
+    start_workflow_run(workflow: $workflow, subject: $subject) {
       ok
       message
       validation_errors
@@ -148,10 +147,13 @@ export const WorkflowRunDetailDocument = graphql(`
       id
       display_name
       status
+      origin
       error
       steps_taken
       budget_spent
       wake_at
+      waiting_kind
+      next_wake_at
       created_at
       updated_at
       workflow {
@@ -176,6 +178,7 @@ export const WorkflowRunDetailDocument = graphql(`
       outcome
       attempt
       wait_until
+      waiting_kind
       error
       stacktrace
       created_at
