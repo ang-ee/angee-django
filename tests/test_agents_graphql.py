@@ -632,7 +632,7 @@ def test_update_inference_provider_backend_is_create_only(agents_console_tables:
     assert result.errors is not None
     assert result.errors[0].extensions == {
         "code": "VALIDATION",
-        "validationErrors": {"backendClass": ["Implementation selection is create-only."]},
+        "validationErrors": {"backend_class": ["Implementation selection is create-only."]},
         "formErrors": [],
     }
     provider.refresh_from_db()
@@ -2014,3 +2014,19 @@ def _public_id(sqid: str) -> str:
     """Return the public id for a console node."""
 
     return str(sqid)
+
+
+def test_inference_provider_resolver_remains_an_object() -> None:
+    """Computed object projections must not become default relation reads/pickers."""
+
+    resources = {item.model_label: item for item in _schema().angee_resources}
+    for label, names in {"integrate.Integration": ["inference_provider"]}.items():
+        resource = resources[label]
+        fields = {field.name: field for field in resource.fields}
+        for name in names:
+            assert fields[name].kind == "object"
+            assert fields[name].scalar is None
+            assert not fields[name].relation_object
+            assert resource.query.fields[name].kind == "object"
+            assert resource.query.fields[name].relation is None
+            assert resource.query.fields[name].row is None

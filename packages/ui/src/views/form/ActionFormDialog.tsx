@@ -346,7 +346,7 @@ function serializeActionArgValues(
   return serialized;
 }
 
-/** Seed each arg: a relation list prefills from context; scalars/relations empty. */
+/** Seed args from context or declared defaults; React Hook Form owns subsequent edits. */
 function argDefaultValues(
   args: readonly ActionArg[],
   context: ActionFormContext,
@@ -359,7 +359,7 @@ function argDefaultValues(
     } else if (arg.argKind === "relation") {
       values[arg.name] = arg.defaultValue ?? "";
     } else {
-      values[arg.name] = arg.defaultValue ?? emptyValueForField(arg);
+      values[arg.name] = arg.fromContext?.(context) ?? arg.defaultValue ?? emptyValueForField(arg);
     }
   }
   return values;

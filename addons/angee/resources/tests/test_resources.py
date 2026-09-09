@@ -2095,6 +2095,95 @@ def test_grant_fixtures_load_and_are_idempotent(tmp_path: Path, monkeypatch: Any
 
 
 @pytest.mark.django_db(transaction=True)
+def test_row_dependency_on_grant_is_applied_before_validation(tmp_path: Path) -> None:
+    """Dependent rows and hooks see grants; failed imports and dry runs roll them back."""
+
+    from django.core.exceptions import ValidationError
+    from django.core.management import call_command
+    from rebac.models import active_relationship_model
+
+    def grant_exists() -> bool:
+        return active_relationship_model()._default_manager.filter(
+            resource_type="storage/drive", resource_id="ordered-drive", relation="editor",
+            subject_type="auth/user", subject_id="*",
+        ).exists()
+
+    hooks = []
+
+    class GrantDependentRow(AngeeModel):
+        """A row whose domain validation requires a preceding membership grant."""
+
+        title = models.CharField(max_length=80)
+
+        class Meta:
+            app_label = "base"
+
+        def clean(self) -> None:
+            super().clean()
+            if not grant_exists():
+                raise ValidationError("Required grant has not loaded.")
+            if self.title == "invalid":
+                raise ValidationError("Invalid dependent row.")
+
+        @classmethod
+        def after_resource_load(cls, instances, **kwargs) -> None:
+            hooks.append(grant_exists())
+
+    class OrderedGrantLedger(Resource):
+        """Concrete ledger for dependency ordering and rollback checks."""
+
+        class Meta(Resource.Meta):
+            app_label = "base"
+            abstract = False
+
+    (tmp_path / "grants.yaml").write_text(
+        '- resource: "storage/drive:ordered-drive"\n'
+        '  relation: "editor"\n  subject: "auth/user:*"\n', encoding="utf-8",
+    )
+    rows_path = tmp_path / "010_base.grantdependentrow.csv"
+    rows_path.write_text("_xref,title\ndependent,invalid\n", encoding="utf-8")
+    owner = addon(tmp_path, manifest={"master": (), "install": (), "demo": (
+        {"path": rows_path.name, "depends_on": "grants.yaml"},
+        {"path": "grants.yaml", "kind": "grants"},
+    )})
+    models_to_create = (GrantDependentRow, OrderedGrantLedger)
+    with connection.schema_editor() as editor:
+        for model in models_to_create:
+            editor.create_model(model)
+    call_command("rebac", "sync", verbosity=0)
+    try:
+        def load(*, dry_run=False):
+            return OrderedGrantLedger.objects.load_addons(
+                (owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True, dry_run=dry_run,
+            )
+
+        with pytest.raises(ResourceLoadError, match="Invalid dependent row"):
+            load()
+        with system_context(reason="resource ordering assertions"):
+            assert not grant_exists()
+            assert not GrantDependentRow.objects.exists()
+
+        rows_path.write_text("_xref,title\ndependent,valid\n", encoding="utf-8")
+        load(dry_run=True)
+        with system_context(reason="resource ordering assertions"):
+            assert not grant_exists()
+            assert not OrderedGrantLedger.objects.exists()
+        assert hooks == []
+
+        first = load()
+        assert first.created == 2
+        assert hooks == [True]
+        second = load()
+        assert second.created == 0
+        assert second.skipped == 2
+        assert hooks == [True, True]
+    finally:
+        with connection.schema_editor() as editor:
+            for model in reversed(models_to_create):
+                editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
     """A grant on an MTI child row lands on every REBAC identity it IS-A.
 

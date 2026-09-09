@@ -219,6 +219,7 @@ class ValidationQuery:
             {
                 "display_name": ["This field cannot be blank."],
                 "client_id": ["This field cannot be blank."],
+                "provider_settings.client_id": ["A client ID is required."],
                 "__all__": ["Provider is misconfigured."],
             }
         )
@@ -684,21 +685,31 @@ def test_denial_errors_get_graphql_codes() -> None:
     assert denied_extensions["code"] == "PERMISSION_DENIED"
 
 
-def test_validation_errors_surface_per_field_extensions() -> None:
-    """Django model validation surfaces as camel-cased per-field extensions."""
+@pytest.mark.parametrize("composed", [True, False], ids=["hasura-snake-case", "strawberry-camel-case"])
+def test_validation_errors_surface_per_field_extensions(composed: bool) -> None:
+    """Validation follows schema naming while nested JSON keys stay verbatim."""
 
-    schema = GraphQLSchemas([addon(public={"query": [ValidationQuery]})]).build("public")
+    from angee.graphql.schema import AngeeSchema
 
-    field_result = schema.execute_sync("{ field_errors }")
-    plain_result = schema.execute_sync("{ plain_error }")
+    if composed:
+        schema = GraphQLSchemas([addon(public={"query": [ValidationQuery]})]).build("public")
+        field_result = schema.execute_sync("{ field_errors }")
+        plain_result = schema.execute_sync("{ plain_error }")
+        names = ("display_name", "client_id", "provider_settings.client_id")
+    else:
+        schema = AngeeSchema(query=ValidationQuery)
+        field_result = schema.execute_sync("{ fieldErrors }")
+        plain_result = schema.execute_sync("{ plainError }")
+        names = ("displayName", "clientId", "providerSettings.client_id")
 
     assert field_result.errors is not None
     extensions = field_result.errors[0].extensions
     assert extensions is not None
     assert extensions["code"] == "VALIDATION"
     assert extensions["validationErrors"] == {
-        "displayName": ["This field cannot be blank."],
-        "clientId": ["This field cannot be blank."],
+        names[0]: ["This field cannot be blank."],
+        names[1]: ["This field cannot be blank."],
+        names[2]: ["A client ID is required."],
     }
     assert extensions["formErrors"] == ["Provider is misconfigured."]
 

@@ -14,9 +14,9 @@ describe("FieldDescriptorControl", () => {
         runtime={{
           widgets: {
             money: {
-              read: ({ value, row }: WidgetRenderProps) => (
+              read: ({ value, row, parentRow }: WidgetRenderProps) => (
                 <span>
-                  {String(value)} {String((row as { currency?: string }).currency)}
+                  {String(value)} {String((row as { currency?: string }).currency)} {String((parentRow as { company?: string }).company)}
                 </span>
               ),
             },
@@ -27,12 +27,13 @@ describe("FieldDescriptorControl", () => {
           field={{ name: "cost", widget: "money", currencyField: "currency" }}
           value="42"
           row={{ currency: "EUR" }}
+          parentRow={{ company: "Acme" }}
           readOnly
         />
       </AppRuntimeProvider>,
     );
 
-    expect(screen.getByText("42 EUR")).toBeTruthy();
+    expect(screen.getByText("42 EUR Acme")).toBeTruthy();
   });
 
   test("focuses a select's real portal trigger", () => {

@@ -59,6 +59,8 @@ function groupsForQuery(current: ResourceViewGroups, query: string, order: strin
 }
 
 export interface ResourceViewContextValue {
+  /** Resource whose collection state this provider owns. */
+  resource?: string;
   state: ResourceViewState;
   paginationByScope: GroupPagination;
   setPaginationByScope: OnChangeFn<GroupPagination>;
@@ -291,6 +293,7 @@ function useResourceViewContextValue({
     resetScope((current) => ({ ...current, group: groupStack[0] ?? null, groupStack }));
   }, [resetScope]);
   return useMemo(() => ({
+    resource,
     state,
     paginationByScope: activeGroups.paginationByScope,
     setPaginationByScope,
@@ -319,7 +322,7 @@ function useResourceViewContextValue({
         return { ...current, queryError: error instanceof Error ? error : new Error("Invalid saved query.") };
       }
     }),
-  }), [state, activeGroups.paginationByScope, activeGroups.expansion, setPaginationByScope, setGroupExpansion, savedFavorites, saveFavorite, setPagination, setSorting, setRowSelection, resetScope, setGroupStack, clearSelectedIds, updateState]);
+  }), [resource, state, activeGroups.paginationByScope, activeGroups.expansion, setPaginationByScope, setGroupExpansion, savedFavorites, saveFavorite, setPagination, setSorting, setRowSelection, resetScope, setGroupStack, clearSelectedIds, updateState]);
 }
 
 export function useResourceView(): ResourceViewContextValue {
