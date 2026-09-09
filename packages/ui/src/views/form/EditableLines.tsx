@@ -5,6 +5,7 @@ import {
   useWatch,
   type Control,
   type FieldValues,
+  type UseFormSetValue,
 } from "react-hook-form";
 import {
   DndContext,
@@ -58,6 +59,12 @@ export interface EditableLinesProps {
    * (`diffLines`) into the `<resource>_save` `lines` payload.
    */
   control: Control<Record<string, unknown>>;
+  /**
+   * React Hook Form's native leaf-value writer for widget-produced row patches.
+   * Standalone callers pass `form.setValue` beside `form.control`; `FormView`
+   * supplies both from its owned form automatically.
+   */
+  setValue: UseFormSetValue<Record<string, unknown>>;
   /** Form field holding the ordered child lines — the `linesResource.field`. */
   name: string;
   /** The resource's editable-lines contract (`modelMetadata.resource.linesResource`). */
@@ -101,6 +108,7 @@ const HANDLE_CLASS =
  */
 export function EditableLines({
   control,
+  setValue,
   name,
   lines,
   parentRow,
@@ -117,7 +125,7 @@ export function EditableLines({
   );
   // The array field lives on the parent form; a per-array keyName keeps rhf's row
   // key off the line's own `id` (which stays the public id used by the save diff).
-  const { fields, append, insert, move, remove, update } = useFieldArray({
+  const { fields, append, insert, move, remove } = useFieldArray({
     control: control as unknown as Control<FieldValues>,
     name,
     keyName: "rhfKey",
@@ -128,8 +136,8 @@ export function EditableLines({
   }) as Row[] | undefined) ?? [];
   // Async widgets retain a callback after reorder/remove/refresh. Resolve its
   // RHF identity at completion, never write through the captured row index.
-  const latest = React.useRef({ fields, rows, readOnly, update });
-  latest.current = { fields, rows, readOnly, update };
+  const latest = React.useRef({ fields, readOnly, setValue });
+  latest.current = { fields, readOnly, setValue };
   const mounted = React.useRef(true);
   React.useEffect(() => {
     mounted.current = true;
@@ -139,9 +147,11 @@ export function EditableLines({
     const current = latest.current;
     if (!mounted.current || current.readOnly) return;
     const index = current.fields.findIndex((field) => field.rhfKey === key);
-    if (index < 0 || !current.rows[index]) return;
-    current.update(index, { ...current.rows[index], ...patch });
-  }, []);
+    if (index < 0) return;
+    for (const [field, value] of Object.entries(patch)) {
+      current.setValue(`${name}.${index}.${field}` as never, value as never, { shouldDirty: true });
+    }
+  }, [name]);
   const sensors = useDndKitSensors(4);
 
   const onDragEnd = (event: DragEndEvent): void => {

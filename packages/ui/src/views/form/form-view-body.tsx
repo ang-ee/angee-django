@@ -329,6 +329,7 @@ export function FormViewOverview({
           </SectionEyebrow>
           <FormEditableLines
             control={form.control}
+            setValue={form.setValue}
             name={linesField}
             lines={linesResource}
             parentRow={surface.displayRecord}

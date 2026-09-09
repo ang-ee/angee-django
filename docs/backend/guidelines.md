@@ -807,7 +807,7 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   column the server owns. Resource-level exclusion is the one authorization gate;
   `readOnly` is presentation, not authorization.
 - **Validation surfaces two ways** — Django `ValidationError` flows through
-  `extensions.validationErrors` (camelCased), but GraphQL input-coercion errors
+  `extensions.validationErrors` (keys follow the schema naming, snake_case on Hasura resources), but GraphQL input-coercion errors
   fire before resolvers and never reach it, so guard required inputs client-side
   from `rootFields.requiredCreateFields`.
 - **In test-client logins pass the backend** —

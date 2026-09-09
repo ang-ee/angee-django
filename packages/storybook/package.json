@@ -21,7 +21,8 @@
     "@refinedev/core": "^5.0.12",
     "nuqs": "^2.5.0",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "react-hook-form": "^7.81.0"
   },
   "devDependencies": {
     "@storybook/addon-themes": "^10.4.6",

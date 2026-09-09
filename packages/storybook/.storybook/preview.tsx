@@ -102,7 +102,28 @@ const storybookRoutes = [
 ] as const;
 
 const withAngeeProviders: Decorator = (Story, context) => {
-  const rootRoute = createRootRoute({ component: Outlet });
+  const rootRoute = createRootRoute({
+    component: () => (
+      <AppRuntimeProvider runtime={previewRuntime}>
+        <Refine
+          dataProvider={previewDataProviders}
+          resources={previewResources}
+          routerProvider={tanStackRouterProvider}
+          options={{ syncWithLocation: false }}
+        >
+          <ActiveGraphQLSchemaProvider schema="public">
+            <ModelMetadataProvider>
+              <NuqsTestingAdapter>
+                <ToastProvider>
+                  <Outlet />
+                </ToastProvider>
+              </NuqsTestingAdapter>
+            </ModelMetadataProvider>
+          </ActiveGraphQLSchemaProvider>
+        </Refine>
+      </AppRuntimeProvider>
+    ),
+  });
   const routes = storybookRoutes.map((path) =>
     createRoute({
       getParentRoute: () => rootRoute,
@@ -123,26 +144,9 @@ const withAngeeProviders: Decorator = (Story, context) => {
   });
 
   return (
-    <AppRuntimeProvider runtime={previewRuntime}>
-      <Refine
-        dataProvider={previewDataProviders}
-        resources={previewResources}
-        routerProvider={tanStackRouterProvider}
-        options={{ syncWithLocation: false }}
-      >
-        <ActiveGraphQLSchemaProvider schema="public">
-          <ModelMetadataProvider>
-            <NuqsTestingAdapter>
-              <ToastProvider>
-                <div className="min-h-screen bg-canvas p-6 font-sans text-fg">
-                  <RouterProvider router={router} />
-                </div>
-              </ToastProvider>
-            </NuqsTestingAdapter>
-          </ModelMetadataProvider>
-        </ActiveGraphQLSchemaProvider>
-      </Refine>
-    </AppRuntimeProvider>
+    <div className="min-h-screen bg-canvas p-6 font-sans text-fg">
+      <RouterProvider router={router} />
+    </div>
   );
 };
 
