@@ -36,6 +36,7 @@ import {
 } from "./editable-lines";
 import {
   baselineLineRows,
+  dirtyArrayValues,
   emptyDraft,
   fieldValidationSummary,
   missingRequiredFieldNames,
@@ -354,7 +355,9 @@ export function useFormViewSave({
         if (name !== linesField && !form.getFieldState(name).isDirty) setValue(name, value);
       }
     } else {
+      const arrays = dirtyArrayValues(form.getValues(), (path) => form.getFieldState(path).isDirty);
       reset(next, { keepDirtyValues: true, keepDirty: true, keepFieldsRef: true });
+      for (const [path, value] of arrays) setValue(path, value, { shouldDirty: true });
     }
     resetDefaultValues(baseline, { keepIsValid: true });
   }, [form, linesActive, linesField, reset, resetDefaultValues, setValue]);
