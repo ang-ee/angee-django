@@ -61,8 +61,9 @@ export function BoundFormValue({ form: surface, name, children }: BoundFormValue
 }
 
 /** Subscribe a custom record panel to FormView's single RHF value tree. */
-export function useFormViewValues(form: FormViewSaveSurface): FormValues {
-  return useWatch({ control: form.form.control }) as FormValues;
+export function useFormViewValues<T = FormValues>(form: FormViewSaveSurface, path?: string): T {
+  const watched = useWatch({ control: form.form.control, name: path as string });
+  return watched as T;
 }
 
 /** Bind one descriptor to a nested path in FormView's existing RHF tree. */
@@ -78,8 +79,16 @@ export function BoundDescriptorField({
     () => fieldsWithMetadataDefaults([field], modelMetadata)[0] ?? field,
     [field, modelMetadata],
   ) as MutationDialogField;
-  const watched = useWatch({ control: surface.form.control });
-  const scopedValues = scope ? get(watched, scope) : watched;
+  const needsSiblingValues = declared.resolve !== undefined
+    || declared.showWhen !== undefined
+    || declared.control !== undefined;
+  const watchedName = needsSiblingValues
+    ? scope || undefined
+    : scope ? `${scope}.${declared.name}` : declared.name;
+  const watched = useWatch({ control: surface.form.control, name: watchedName as string });
+  const scopedValues = needsSiblingValues
+    ? watched
+    : (scope ? get(surface.form.getValues(), scope) : surface.form.getValues());
   const siblingValues = isFormValues(scopedValues) ? scopedValues : {};
   const resolved = resolveField(declared, siblingValues) as MutationDialogField;
   const name = scope ? `${scope}.${resolved.name}` : resolved.name;

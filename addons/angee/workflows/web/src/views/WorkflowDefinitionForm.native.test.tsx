@@ -138,8 +138,8 @@ test("keeps the admitted revision during a dirty background refresh and submits 
   });
   expect((screen.getByLabelText("Node name") as HTMLInputElement).value).toBe("Local node");
   fireEvent.click(await screen.findByRole("button", { name: "Review changes" }));
-  expect(await screen.findByText("Workflow name")).toBeTruthy();
-  expect(screen.getByText("Step Local node · name")).toBeTruthy();
+  expect(await screen.findByText("Workflow · Name")).toBeTruthy();
+  expect(screen.getByText("Step Local node · Name")).toBeTruthy();
   expect(screen.getAllByText("Your edits").length).toBeGreaterThan(0);
   expect(screen.getAllByText("Latest saved").length).toBeGreaterThan(0);
   fireEvent.click(screen.getByRole("button", { name: "Keep my edits" }));

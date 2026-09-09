@@ -372,7 +372,7 @@ test("real Form keeps stale defaults until reviewed discard adopts the fetched d
   await waitFor(() => expect(state.save).toHaveBeenCalledTimes(2));
   expect((state.save.mock.calls[1]?.[0] as Record<string, unknown>).expectedRevision).toBe(2);
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
-  expect(await screen.findByText("Step Later local node · name")).toBeTruthy();
+  expect(await screen.findByText("Step Later local node · Name")).toBeTruthy();
   fireEvent.click(await screen.findByRole("button", { name: "Discard my edits and reload" }));
   await waitFor(() => expect(surface!.form.getValues("name")).toBe("Remote"));
   expect(surface!.form.getValues("definition.nodes.node_1.name")).toBe("Remote node");

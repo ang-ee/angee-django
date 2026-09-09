@@ -1,11 +1,12 @@
 import * as React from "react";
 import { extractActionOutcome, runActionResult, useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import {
-  Badge, Button, Collapsible, Column, EmptyState, ErrorBanner, Field, Form, Group, List,
+  Badge, Button, Collapsible, Column, EmptyState, ErrorBanner, errorMessage, Field, Form, Group, List,
   LoadingPanel, ResourceList, REFINE_CREATE_ID, SegmentedControl, registerForm,
-  useImplConfigFields, useFormViewValues,
+  TextLink, useImplConfigFields, useFormViewValues,
   useRouteHref, useToast, type RecordToolbarContext, type RegisteredFormProps,
 } from "@angee/ui";
+import { useNavigate } from "@tanstack/react-router";
 
 import {
   DisableWorkflowTriggerDocument, EnableWorkflowTriggerDocument, WorkflowLaunchDocument,
@@ -36,7 +37,7 @@ export function WorkflowTriggersPanel({ workflowId }: { workflowId: string }): R
   const t = useWorkflowsT();
   const query = useAuthoredQuery(WorkflowLaunchDocument, { id: workflowId }, { models: [WORKFLOW_MODEL] });
   if (query.isFetching && !query.data) return <LoadingPanel message={t("triggers.loading")} />;
-  if (query.error && !query.data) return <ErrorBanner description={errorMessage(query.error)} />;
+  if (query.error && !query.data) return <ErrorBanner description={errorMessage(query.error, t("triggers.conditionError"))} />;
   const workflow = query.data?.workflows_by_pk;
   if (!workflow) return <EmptyState title={t("triggers.unavailable")} />;
   return (
@@ -60,15 +61,16 @@ function WorkflowTriggerCollection({
 }): React.ReactElement {
   const t = useWorkflowsT();
   const routeHref = useRouteHref();
+  const navigate = useNavigate();
   const [recordId, setRecordId] = React.useState<string | undefined>();
   return (
     <TriggerWorkflowContext.Provider value={{ currentVersion, close: () => setRecordId(undefined) }}>
       {readOnly ? (
         <p>
           {t("triggers.historicalReadOnly")} {" "}
-          <a className="underline" href={routeHref("workflows.workflow", { id: workflowId })}>
+          <TextLink href={routeHref("workflows.workflow", { id: workflowId })} onNavigate={(href) => { void navigate({ to: href }); }}>
             {t("triggers.openCurrent")}
-          </a>
+          </TextLink>
         </p>
       ) : null}
       <ResourceList
@@ -280,7 +282,7 @@ function TriggerToolbar({ context }: { context: RecordToolbarContext }): React.R
       ? enableMutation({ trigger: context.recordId })
       : disableMutation({ trigger: context.recordId });
     const result = await request.catch((error) => {
-      toast.danger({ title: errorMessage(error) });
+      toast.danger({ title: errorMessage(error, t("triggers.conditionError")) });
       return null;
     });
     if (result === null) return;
@@ -296,7 +298,7 @@ function TriggerToolbar({ context }: { context: RecordToolbarContext }): React.R
     } catch (error) {
       toast.danger({
         title: enabled ? t("triggers.enable") : t("triggers.disable"),
-        description: errorMessage(error),
+        description: errorMessage(error, t("triggers.conditionError")),
       });
     }
   };
@@ -388,10 +390,6 @@ function WorkflowTriggerReadOnlyForm(props: RegisteredFormProps): React.ReactEle
 }
 
 export const workflowTriggerReadOnlyForm = registerForm(TRIGGER_MODEL, WorkflowTriggerReadOnlyForm);
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);

@@ -2,10 +2,11 @@ import * as React from "react";
 import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
 import {
   Badge, Button, Collapsible, ErrorBanner, FieldDescription, FieldLabel, FieldRoot,
-  Glyph, LabeledDescriptorField, LazyBoundary, Textarea, formSpecInitialValues,
+  Glyph, LabeledDescriptorField, LazyBoundary, Textarea, TextLink, formSpecInitialValues,
   useDottedPathFieldErrors, useFormSpecFields, useRouteHref, validationErrorMap,
   type DottedPathFieldErrorMap,
 } from "@angee/ui";
+import { useNavigate } from "@tanstack/react-router";
 import { DecideWorkflowDecisionDocument, type PendingWorkflowDecision } from "../documents.public";
 import { useWorkflowsT } from "../i18n";
 import { JsonBlock } from "./JsonBlock";
@@ -82,6 +83,7 @@ function DecisionSourceLinks({ approval }: { approval: PendingWorkflowDecision }
 
 function AvailableDecisionSourceLinks({ approval, sourceRunId }: { approval: PendingWorkflowDecision; sourceRunId: string }): React.ReactElement {
   const t = useWorkflowsT();
+  const navigate = useNavigate();
   const routeHref = useRouteHref();
   const runHref = routeHref("workflows.run", { id: sourceRunId });
   const executionHref = approval.source_execution_id
@@ -92,11 +94,11 @@ function AvailableDecisionSourceLinks({ approval, sourceRunId }: { approval: Pen
     : null;
   return (
     <div className="flex flex-wrap gap-x-2 text-xs text-fg-muted">
-      <a className="text-link" href={runHref}>
+      <TextLink href={runHref} onNavigate={(href) => { void navigate({ to: href }); }}>
         {t("inbox.openSourceRun")}
-      </a>
-      {executionHref ? <a className="text-link" href={executionHref}>{t("inbox.sourceExecution", { id: approval.source_execution_id ?? "" })}</a> : null}
-      {attemptHref ? <a className="text-link" href={attemptHref}>{t("inbox.sourceAttempt", { id: approval.source_attempt_id ?? "" })}</a> : null}
+      </TextLink>
+      {executionHref ? <TextLink href={executionHref} onNavigate={(href) => { void navigate({ to: href }); }}>{t("inbox.sourceExecution", { id: approval.source_execution_id ?? "" })}</TextLink> : null}
+      {attemptHref ? <TextLink href={attemptHref} onNavigate={(href) => { void navigate({ to: href }); }}>{t("inbox.sourceAttempt", { id: approval.source_attempt_id ?? "" })}</TextLink> : null}
     </div>
   );
 }

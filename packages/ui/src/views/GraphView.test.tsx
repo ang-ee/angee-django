@@ -10,6 +10,18 @@ const reactFlowMock = vi.hoisted(() => ({
   lastProps: undefined as Record<string, unknown> | undefined,
   zeroBounds: false,
 }));
+const dagreMock = vi.hoisted(() => ({ layouts: 0 }));
+
+vi.mock("@dagrejs/dagre", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@dagrejs/dagre")>();
+  return {
+    ...actual,
+    layout: (graph: Parameters<typeof actual.layout>[0], options?: Parameters<typeof actual.layout>[1]) => {
+      dagreMock.layouts += 1;
+      return actual.layout(graph, options);
+    },
+  };
+});
 
 vi.mock("@xyflow/react", async () => {
   const React = await import("react");
@@ -53,6 +65,7 @@ afterEach(() => {
   cleanup();
   reactFlowMock.lastProps = undefined;
   reactFlowMock.zeroBounds = false;
+  dagreMock.layouts = 0;
 });
 
 const nodes = [
@@ -99,6 +112,26 @@ function currentProps(): Record<string, unknown> {
 }
 
 describe("GraphView", () => {
+  test("updates presentation without laying out until semantic geometry changes", () => {
+    const rendered = render(<GraphView nodes={nodes} edges={edges} nodeStyles={nodeStyles} />);
+    const initialLayouts = dagreMock.layouts;
+    rendered.rerender(<GraphView
+      nodes={nodes.map((node) => node.id === "draft" ? { ...node, title: "Draft renamed" } : node)}
+      edges={edges.map((edge) => ({ ...edge, label: "renamed outcome" }))}
+      nodeStyles={{ ...nodeStyles }}
+      edgeStyles={{ success: { stroke: "purple" } }}
+    />);
+    expect(dagreMock.layouts).toBe(initialLayouts);
+    const renderedNodes = reactFlowMock.lastProps?.nodes as Array<{ data: { node: { title: string } } }>;
+    expect(renderedNodes[0]?.data.node.title).toBe("Draft renamed");
+
+    rendered.rerender(<GraphView
+      nodes={[...nodes, { id: "publish", kind: "handler", title: "Publish" }]}
+      edges={edges}
+      nodeStyles={nodeStyles}
+    />);
+    expect(dagreMock.layouts).toBeGreaterThan(initialLayouts);
+  });
   test("forwards accessible names and keeps kind as the style key", () => {
     render(
       <GraphView

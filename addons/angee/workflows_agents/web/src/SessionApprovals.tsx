@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import { useWorkflowsT, WorkflowApprovals } from "@angee/workflows";
-import { Button, Collapsible, EmptyState, ErrorBanner, LoadingPanel } from "@angee/ui";
+import { Button, Collapsible, EmptyState, ErrorBanner, errorMessage, LoadingPanel } from "@angee/ui";
 
 import { AgentSessionWorkflowRunDocument } from "./documents";
 
@@ -15,7 +15,7 @@ export function SessionApprovals({ sessionId }: { sessionId: string }): React.Re
   const content = run.isFetching && !run.data
     ? <LoadingPanel message={t("inbox.loading")} />
     : run.error
-      ? <div className="space-y-2 p-2"><ErrorBanner description={run.error instanceof Error ? run.error.message : String(run.error)} /><Button type="button" size="sm" variant="secondary" onClick={() => { void run.refetch(); }}>{t("input.retry")}</Button></div>
+      ? <div className="space-y-2 p-2"><ErrorBanner description={errorMessage(run.error, t("inbox.sourceUnavailable"))} /><Button type="button" size="sm" variant="secondary" onClick={() => { void run.refetch(); }}>{t("input.retry")}</Button></div>
       : !run.data?.agent_session_workflow_run
         ? <EmptyState icon="workflow-inbox" title={t("inbox.sourceUnavailable")} />
         : <WorkflowApprovals runId={run.data.agent_session_workflow_run} />;

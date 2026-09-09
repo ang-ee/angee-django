@@ -1,9 +1,10 @@
 import * as React from "react";
-import { modelLabelSegment, useSchemaFieldMetadata } from "@angee/metadata";
+import { modelLabelSegment, useModelMetadata, useSchemaFieldMetadata } from "@angee/metadata";
 import { extractActionOutcome, ResourceContext, useAuthoredMutation, useAuthoredQuery, type ActionOutcome } from "@angee/refine";
 import {
   Button,
   ErrorBanner,
+  errorMessage,
   Field,
   Form,
   formLevelMessage,
@@ -11,6 +12,7 @@ import {
   LoadingPanel,
   Statusline,
   StatusSegment,
+  TextLink,
   acknowledgeFormSubmit,
   registerForm,
   type FormSubmit,
@@ -19,6 +21,7 @@ import {
   type RegisteredFormProps,
   useRouteHref,
 } from "@angee/ui";
+import { fieldsWithMetadataDefaults } from "@angee/ui/views/model-metadata-defaults";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 
 import {
@@ -53,6 +56,7 @@ function WorkflowCreateForm({ resource: _resource, ...props }: RegisteredFormPro
 function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: RegisteredFormProps): React.ReactElement {
   const t = useWorkflowsT();
   const metadata = useSchemaFieldMetadata();
+  const reviewLabels = useDefinitionReviewLabels();
   const { resources: registeredResources } = React.useContext(ResourceContext);
   const subjectOptions = React.useMemo(() => {
     const resources = metadata.resources.filter((resource) => resource.roots.detail && resource.recordRepresentation);
@@ -261,7 +265,7 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
         setReviewOpen(false);
         setReviewCandidate(null);
       }
-      const error = definitionSubmitError(payload, submitted);
+      const error = definitionSubmitError(payload, submitted, t);
       const pending = pendingTest.current;
       if (pending && pending.revision === undefined) {
         pending.reject(error);
@@ -291,7 +295,7 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
       accepted,
       reconcileDefinition,
     );
-  }, [acknowledged?.record, history, id, saveDefinition]);
+  }, [acknowledged?.record, history, id, saveDefinition, t]);
 
   const requestTest = React.useCallback((setup: WorkflowTestSetupValues) => {
     const surface = formSurface.current;
@@ -347,13 +351,13 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
     try {
       const refreshed = await definition.refetch();
       const next = refreshed.data?.workflow_definition;
-      if (!next || next.workflow.id !== id) throw new Error("The latest workflow could not be loaded.");
+      if (!next || next.workflow.id !== id) throw new Error(t("form.latestUnavailable"));
       setReviewCandidate({ record: next.workflow, values: definitionValues(next) });
       setReviewOpen(true);
     } catch (error) {
-      setReloadError(definitionFailureMessage(error));
+      setReloadError(errorMessage(error, t("form.latestUnavailable")));
     }
-  }, [definition.refetch, id]);
+  }, [definition.refetch, id, t]);
 
   const discardAndReload = React.useCallback(() => {
     if (!reviewCandidate) return;
@@ -376,12 +380,12 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
         expectedRevision: current.definition.revision,
       });
       const payload = result?.publish_workflow_definition;
-      if (!payload || payload.status !== "SUCCESS") throw new Error(definitionFailure(payload));
+      if (!payload || payload.status !== "SUCCESS") throw new Error(definitionFailure(payload, t));
       context.reload();
     } catch (error) {
-      context.form.form.setError("root.server", { type: "server", message: definitionFailureMessage(error) });
+      context.form.form.setError("root.server", { type: "server", message: errorMessage(error, t("form.definitionSaveFailed")) });
     }
-  }, [acknowledged?.record, id, publishDefinition]);
+  }, [acknowledged?.record, id, publishDefinition, t]);
 
   const openTest = React.useCallback((nodeKey: string | null) => {
     if (!pendingTest.current) {
@@ -397,7 +401,7 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
 
   if (!acknowledged) {
     return definition.error
-      ? <ErrorBanner description={definitionFailureMessage(definition.error)} />
+      ? <ErrorBanner description={errorMessage(definition.error, t("form.definitionUnavailable"))} />
       : <LoadingPanel message={t("canvas.loading")} />;
   }
 
@@ -405,11 +409,11 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
     {stale ? <div className="grid gap-2"><ErrorBanner description={t("form.staleDefinition")} /><ErrorBanner description={!reviewOpen ? reloadError : null} /><Button type="button" size="sm" variant="secondary" onClick={() => { void reviewLatest(); }}>{t("form.reviewDefinition")}</Button></div> : null}
     {reviewOpen && staleReview ? <section className="grid gap-2 border-b border-border-subtle p-4" aria-label={t("form.staleReview")}>
       <strong>{t("form.staleReview")}</strong>
-      <div className="grid gap-2 text-sm">{definitionChanges(reviewCandidate?.values ?? null, staleReview).map((change) => <div key={change.key} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] gap-2"><strong>{change.label}</strong><span><small>{t("form.yourEdits")}</small><br />{displayValue(change.local)}</span><span><small>{t("form.latestSaved")}</small><br />{displayValue(change.remote)}</span></div>)}</div>
+      <div className="grid gap-2 text-sm">{definitionChanges(reviewCandidate?.values ?? null, staleReview, reviewLabels, t).map((change) => <div key={change.key} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] gap-2"><strong>{change.label}</strong><span><small>{t("form.yourEdits")}</small><br />{displayValue(change.local, t)}</span><span><small>{t("form.latestSaved")}</small><br />{displayValue(change.remote, t)}</span></div>)}</div>
       <ErrorBanner description={reloadError} />
       <div className="flex gap-2"><Button type="button" size="sm" variant="secondary" onClick={() => setReviewOpen(false)}>{t("form.cancelReview")}</Button><Button type="button" size="sm" variant="danger" disabled={!reviewCandidate} onClick={discardAndReload}>{t("form.discardReload")}</Button></div>
     </section> : null}
-    {startedTest ? <Statusline><StatusSegment><span>{t(repairAttempt ? "test.repairStarted" : "test.started", { revision: startedTest.revision })} <a className="underline" href={routeHref("workflows.run", { id: startedTest.id })} target="_blank" rel="noreferrer">{t("test.openRun")}</a></span></StatusSegment></Statusline> : null}
+    {startedTest ? <Statusline><StatusSegment><span>{t(repairAttempt ? "test.repairStarted" : "test.started", { revision: startedTest.revision })} <TextLink href={routeHref("workflows.run", { id: startedTest.id })} target="_blank" rel="noreferrer">{t("test.openRun")}</TextLink></span></StatusSegment></Statusline> : null}
     <WorkflowTestLaunchProvider onTestStep={(nodeKey) => openTest(nodeKey)}><DefinitionHistoryProvider value={history}><WorkflowInputPreviewProvider value={inputPreview}><Form
       key={formGeneration}
       {...props}
@@ -573,9 +577,9 @@ function reconcileRows<T extends Record<string, unknown>>(
   }));
 }
 
-function definitionFailure(payload: { status?: string; current_revision?: number | null; diagnostics?: readonly DefinitionDiagnostic[] } | null | undefined): string {
-  if (payload?.status === "STALE") return "This draft changed elsewhere. Your edits are preserved.";
-  return payload?.diagnostics?.map(formatDiagnostic).join(" ") || "The workflow definition could not be saved.";
+function definitionFailure(payload: { status?: string; current_revision?: number | null; diagnostics?: readonly DefinitionDiagnostic[] } | null | undefined, t: ReturnType<typeof useWorkflowsT>): string {
+  if (payload?.status === "STALE") return t("form.staleDefinition");
+  return payload?.diagnostics?.map(formatDiagnostic).join(" ") || t("form.definitionSaveFailed");
 }
 
 interface DefinitionDiagnostic {
@@ -592,12 +596,8 @@ function formatDiagnostic(diagnostic: DefinitionDiagnostic): string {
   return location ? `${location}: ${diagnostic.message}` : diagnostic.message;
 }
 
-function definitionFailureMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function definitionSubmitError(payload: { status?: string; diagnostics?: readonly DefinitionDiagnostic[] } | null | undefined, values: WorkflowDefinitionValues): unknown {
-  if (payload?.status === "STALE") return new Error(definitionFailure(payload));
+function definitionSubmitError(payload: { status?: string; diagnostics?: readonly DefinitionDiagnostic[] } | null | undefined, values: WorkflowDefinitionValues, t: ReturnType<typeof useWorkflowsT>): unknown {
+  if (payload?.status === "STALE") return new Error(definitionFailure(payload, t));
   const validationErrors: Record<string, string[]> = {};
   const formErrors: string[] = [];
   for (const diagnostic of payload?.diagnostics ?? []) {
@@ -605,10 +605,10 @@ function definitionSubmitError(payload: { status?: string; diagnostics?: readonl
     if (path) validationErrors[path] = [...(validationErrors[path] ?? []), diagnostic.message];
     else formErrors.push(formatDiagnostic(diagnostic));
   }
-  if (Object.keys(validationErrors).length === 0 && formErrors.length === 0) return new Error(definitionFailure(payload));
+  if (Object.keys(validationErrors).length === 0 && formErrors.length === 0) return new Error(definitionFailure(payload, t));
   return {
-    message: "Workflow definition validation failed.",
-    response: { errors: [{ message: "Workflow definition validation failed.", extensions: { validationErrors, formErrors } }] },
+    message: t("form.definitionValidationFailed"),
+    response: { errors: [{ message: t("form.definitionValidationFailed"), extensions: { validationErrors, formErrors } }] },
   };
 }
 
@@ -627,31 +627,47 @@ function diagnosticPath(diagnostic: DefinitionDiagnostic, values: WorkflowDefini
 const equal = definitionValueEqual;
 
 interface DefinitionChange { key: string; label: string; local: unknown; remote: unknown }
-function definitionChanges(remote: WorkflowDefinitionValues | null, local: WorkflowDefinitionValues): DefinitionChange[] {
-  if (!remote) return [{ key: "unavailable", label: "Latest version unavailable", local: "", remote: "" }];
+interface DefinitionReviewLabels { workflow: Readonly<Record<string, string>>; node: Readonly<Record<string, string>>; edge: Readonly<Record<string, string>> }
+function definitionChanges(remote: WorkflowDefinitionValues | null, local: WorkflowDefinitionValues, labels: DefinitionReviewLabels, t: ReturnType<typeof useWorkflowsT>): DefinitionChange[] {
+  if (!remote) return [{ key: "unavailable", label: t("form.latestUnavailable"), local: "", remote: "" }];
   const changes: DefinitionChange[] = [];
-  for (const field of WORKFLOW_REVIEW_FIELDS) if (!equal(remote[field], local[field])) changes.push({ key: `workflow.${field}`, label: `Workflow ${field}`, local: local[field], remote: remote[field] });
+  for (const field of WORKFLOW_REVIEW_FIELDS) if (!equal(remote[field], local[field])) changes.push({ key: `workflow.${field}`, label: t("form.change.workflowField", { field: labels.workflow[field] ?? field }), local: local[field], remote: remote[field] });
   for (const key of new Set([...Object.keys(remote.definition.nodes), ...Object.keys(local.definition.nodes)])) {
     const localNode = local.definition.nodes[key]; const remoteNode = remote.definition.nodes[key];
     const label = localNode?.name || remoteNode?.name || localNode?.key || remoteNode?.key || key;
-    if (!localNode || !remoteNode) changes.push({ key: `node.${key}`, label: `Step ${label}`, local: localNode ? "Added" : "Removed", remote: remoteNode ? "Added" : "Removed" });
-    else for (const field of NODE_REVIEW_FIELDS) if (!equal(localNode[field], remoteNode[field])) changes.push({ key: `node.${key}.${field}`, label: `Step ${label} · ${field}`, local: localNode[field], remote: remoteNode[field] });
+    if (!localNode || !remoteNode) changes.push({ key: `node.${key}`, label: t("form.change.step", { label }), local: localNode ? t("form.change.added") : t("form.change.removed"), remote: remoteNode ? t("form.change.added") : t("form.change.removed") });
+    else for (const field of NODE_REVIEW_FIELDS) if (!equal(localNode[field], remoteNode[field])) changes.push({ key: `node.${key}.${field}`, label: t("form.change.stepField", { label, field: labels.node[field] ?? field }), local: localNode[field], remote: remoteNode[field] });
   }
   for (const key of new Set([...Object.keys(remote.definition.edges), ...Object.keys(local.definition.edges)])) {
     const localEdge = local.definition.edges[key]; const remoteEdge = remote.definition.edges[key];
     const edge = localEdge ?? remoteEdge; const label = edge ? `${edge.source} → ${edge.target}` : key;
-    if (!localEdge || !remoteEdge) changes.push({ key: `edge.${key}`, label: `Edge ${label}`, local: localEdge ? "Added" : "Removed", remote: remoteEdge ? "Added" : "Removed" });
-    else for (const field of EDGE_REVIEW_FIELDS) if (!equal(localEdge[field], remoteEdge[field])) changes.push({ key: `edge.${key}.${field}`, label: `Edge ${label} · ${field}`, local: localEdge[field], remote: remoteEdge[field] });
+    if (!localEdge || !remoteEdge) changes.push({ key: `edge.${key}`, label: t("form.change.connection", { label }), local: localEdge ? t("form.change.added") : t("form.change.removed"), remote: remoteEdge ? t("form.change.added") : t("form.change.removed") });
+    else for (const field of EDGE_REVIEW_FIELDS) if (!equal(localEdge[field], remoteEdge[field])) changes.push({ key: `edge.${key}.${field}`, label: t("form.change.connectionField", { label, field: labels.edge[field] ?? field }), local: localEdge[field], remote: remoteEdge[field] });
   }
-  return changes.length ? changes : [{ key: "revision", label: "Workflow revision", local: "Your values are unchanged", remote: "A newer revision exists" }];
+  return changes.length ? changes : [{ key: "revision", label: t("form.change.revision"), local: t("form.change.unchanged"), remote: t("form.change.newer") }];
 }
 
 const WORKFLOW_REVIEW_FIELDS = ["name", "description", "purpose", "subject_declaration", "error_workflow", "max_steps", "budget"] as const;
 const NODE_REVIEW_FIELDS = ["key", "name", "step_class", "config", "join_rule", "is_entry", "position"] as const;
 const EDGE_REVIEW_FIELDS = ["source", "target", "condition"] as const;
 
-function displayValue(value: unknown): string {
-  if (value === undefined) return "not set";
-  if (value === null) return "empty";
+function displayValue(value: unknown, t: ReturnType<typeof useWorkflowsT>): string {
+  if (value === undefined) return t("form.change.notSet");
+  if (value === null) return t("form.change.empty");
   return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function useDefinitionReviewLabels(): DefinitionReviewLabels {
+  const workflow = useModelMetadata(WORKFLOW_MODEL);
+  const step = useModelMetadata("workflows.Step");
+  const edge = useModelMetadata("workflows.Edge");
+  return React.useMemo(() => ({
+    workflow: descriptorLabels(WORKFLOW_REVIEW_FIELDS, workflow),
+    node: descriptorLabels(NODE_REVIEW_FIELDS, step),
+    edge: descriptorLabels(EDGE_REVIEW_FIELDS, edge),
+  }), [edge, step, workflow]);
+}
+
+function descriptorLabels(fields: readonly string[], metadata: Parameters<typeof fieldsWithMetadataDefaults>[1]): Readonly<Record<string, string>> {
+  return Object.fromEntries(fieldsWithMetadataDefaults(fields.map((name) => ({ name })), metadata).map((field) => [field.name, typeof field.label === "string" ? field.label : field.name]));
 }

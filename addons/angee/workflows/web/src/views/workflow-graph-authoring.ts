@@ -106,8 +106,32 @@ function materializedPositions(nodes: Record<string, DefinitionNode>, geometry?:
   }));
 }
 
-function positionFrom(value: unknown): GraphViewPosition | undefined {
+export function positionFrom(value: unknown): GraphViewPosition | undefined {
   if (!value || typeof value !== "object") return undefined;
   const position = value as { x?: unknown; y?: unknown };
   return typeof position.x === "number" && typeof position.y === "number" ? { x: position.x, y: position.y } : undefined;
+}
+
+export function graphWithMapBody(
+  body: DefinitionNode,
+  ownerIdentity: string,
+  nodes: Record<string, DefinitionNode>,
+  edges: Record<string, DefinitionEdge>,
+  geometry: GraphViewGeometry<WorkflowGraphNodeKind> | null,
+): { nodes: Record<string, DefinitionNode>; edges: Record<string, DefinitionEdge> } | null {
+  const owner = nodes[ownerIdentity];
+  if (!owner) return null;
+  const identity = body.clientKey || body.id;
+  const placed = graphWithOperation(body, { kind: "after", identity: ownerIdentity }, nodes, edges, geometry);
+  if (!placed) return null;
+  return {
+    nodes: {
+      ...placed.nodes,
+      [ownerIdentity]: {
+        ...owner,
+        config: { ...(owner.config ?? {}), target_step: placed.nodes[identity]?.key ?? body.key },
+      },
+    },
+    edges,
+  };
 }

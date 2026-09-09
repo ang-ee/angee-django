@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import type { FieldDescriptor } from "../page";
 import {
   emptyDraft,
+  addFieldSelection,
   missingRequiredFieldNames,
   mutationData,
   recordToValues,
@@ -17,6 +18,22 @@ const fields: readonly FieldDescriptor[] = [
 test("titleText preserves string and numeric scalar titles", () => {
   expect(titleText("Daily briefing", "Untitled")).toBe("Daily briefing");
   expect(titleText(42, "Untitled")).toBe("42");
+});
+
+test("object fields select only their declared row projection paths", () => {
+  const paths = new Set<string>();
+  addFieldSelection(
+    paths,
+    { name: "payload" },
+    undefined,
+    { name: "payload", kind: "object" },
+    {
+      kind: "object", scalar: null, values: [], nullable: true,
+      row: { path: "payload", paths: ["payload.kind", "payload.target.id"] },
+      filter: null, sort: null, relation: null,
+    },
+  );
+  expect([...paths]).toEqual(["payload.kind", "payload.target.id"]);
 });
 
 describe("dotted form fields", () => {
@@ -171,5 +188,20 @@ describe("dotted form fields", () => {
         },
       )).toEqual({ id: "bridge-1" });
     }
+  });
+
+  test("submits cleared numeric edits as null without inventing zero", () => {
+    expect(mutationData(
+      { count: "", ratio: "" },
+      [
+        { name: "count", widget: "integer" },
+        { name: "ratio", widget: "float" },
+      ],
+      {
+        dirtyFields: { count: true, ratio: true },
+        id: "record-1",
+        isCreate: false,
+      },
+    )).toEqual({ id: "record-1", count: null, ratio: null });
   });
 });

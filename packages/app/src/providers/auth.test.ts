@@ -1,8 +1,10 @@
 import { describe, expect, test, vi } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
 
 import {
   createAngeeAuthProviderFromRequest,
   currentUserToAuthState,
+  identityQueryOptions,
 } from "./auth";
 import {
   AngeeCurrentUserDocument,
@@ -161,6 +163,27 @@ describe("Angee app auth provider", () => {
     await expect(provider.onError(error)).resolves.toEqual({
       error: expect.objectContaining({ message: "This request requires authentication." }),
     });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  test("freshly verifies a cached positive identity and deduplicates concurrent 401 probes", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    let resolveProbe!: (value: { current_user: null }) => void;
+    const request = vi.fn(() => new Promise<{ current_user: null }>((resolve) => {
+      resolveProbe = resolve;
+    }));
+    const provider = createAngeeAuthProviderFromRequest(request as never, { queryClient });
+    queryClient.setQueryData(identityQueryOptions(provider).queryKey, {
+      id: "user_1", name: "Ada Lovelace",
+    });
+    const error = Object.assign(new Error("expired"), { response: { status: 401 } });
+    const first = provider.onError(error);
+    const second = provider.onError(error);
+    resolveProbe({ current_user: null });
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ logout: true }),
+      expect.objectContaining({ logout: true }),
+    ]);
     expect(request).toHaveBeenCalledTimes(1);
   });
 

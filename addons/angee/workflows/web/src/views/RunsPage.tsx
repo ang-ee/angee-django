@@ -7,6 +7,7 @@ import {
   Button,
   Column,
   EmptyState,
+  errorMessage,
   ErrorBanner,
   FieldDescriptorControl,
   Facet,
@@ -20,6 +21,7 @@ import {
   SplitPane,
   SplitPaneHandle,
   SplitPanes,
+  TextLink,
   TopMenuTabs,
   useContainerQuery,
   useResourceRecordHrefLookup,
@@ -309,7 +311,7 @@ export function RunTimelinePanel({ runId }: { runId: string }): React.ReactEleme
   }, [candidateQuery.data?.workflow_step_runs, executionId, navigate, showingExecutionHistory]);
 
   if (runQuery.isFetching && !runQuery.data) return <LoadingPanel message={t("runs.loading")} />;
-  if (runQuery.error && !runQuery.data) return <ErrorBanner description={errorMessage(runQuery.error)} />;
+  if (runQuery.error && !runQuery.data) return <ErrorBanner description={errorMessage(runQuery.error, t("runs.unavailable"))} />;
   const run = runQuery.data?.workflow_runs_by_pk;
   if (!run) return <EmptyState fill icon="workflow-run" title={t("runs.unavailable")} />;
   const runWaitingLabel = waitLabel(run.waiting_kind, run.status, t);
@@ -332,7 +334,7 @@ export function RunTimelinePanel({ runId }: { runId: string }): React.ReactEleme
       <Form resource={STEP_RUN_MODEL}><Field name="step" readOnly title /><Field name="system_kind" readOnly /><Field name="map_index" readOnly /><Field name="status" readOnly widget="statusBadge" /><Field name="outcome" readOnly /><Field name="waiting_kind" readOnly /></Form>
     </ResourceList>
   );
-  const attemptList = selectionQuery.error ? <ErrorBanner description={errorMessage(selectionQuery.error)} />
+  const attemptList = selectionQuery.error ? <ErrorBanner description={errorMessage(selectionQuery.error, t("runs.unavailable"))} />
     : selectionQuery.isFetching && !selectionQuery.data ? <LoadingPanel message={t("runs.loading")} />
     : executionId && !validExecution ? <EmptyState fill icon="workflow-run" title={t("runs.unavailable")} />
     : attemptId && !validAttempt ? <EmptyState fill icon="workflow-run" title={t("runs.unavailable")} />
@@ -345,7 +347,7 @@ export function RunTimelinePanel({ runId }: { runId: string }): React.ReactEleme
     ) : (
     <AttemptHistory executionId={validExecution ? executionId : ""} attemptId={validExecution && validAttempt ? attemptId : null} onSelect={setAttempt} />
     );
-  const graph = graphQuery.error ? <ErrorBanner description={errorMessage(graphQuery.error)} /> : graphNodes.length === 0 ? (
+  const graph = graphQuery.error ? <ErrorBanner description={errorMessage(graphQuery.error, t("runs.unavailable"))} /> : graphNodes.length === 0 ? (
     <EmptyState fill icon="workflow-canvas" title={t("canvas.emptyTitle")} description={t("runs.emptyTimeline")} />
   ) : <GraphView className="h-full" ariaLabel={t("runs.graph")} fitViewOptions={{ padding: 0.18, maxZoom: 1 }} nodes={graphNodes} edges={graphEdges} nodeStyles={workflowNodeStyles} onNodeSelect={(node) => {
     const nodeId = node?.id ?? null;
@@ -377,10 +379,10 @@ export function RunTimelinePanel({ runId }: { runId: string }): React.ReactEleme
         {run.occurrence_id ? ` · ${t("runs.occurrence")}: ${String(run.occurrence_id)}` : ""}
       </div>
       {repairSource ? <div className="flex-none border-b border-border-subtle bg-sheet px-4 py-2 text-13 text-fg-muted">
-        {t("runs.retestsAttempt")} <a className="underline" href={`${routeHref("workflows.run", { id: repairSource.step_run.run.id })}?execution=${encodeURIComponent(repairSource.step_run.id)}&attempt=${encodeURIComponent(repairSource.id)}`}>{t("runs.openSourceAttempt")}</a>
+        {t("runs.retestsAttempt")} <TextLink href={`${routeHref("workflows.run", { id: repairSource.step_run.run.id })}?execution=${encodeURIComponent(repairSource.step_run.id)}&attempt=${encodeURIComponent(repairSource.id)}`} onNavigate={(href) => { void navigate({ to: href }); }}>{t("runs.openSourceAttempt")}</TextLink>
       </div> : null}
       {recoverySource ? <div className="flex-none border-b border-border-subtle bg-sheet px-4 py-2 text-13 text-fg-muted">
-        {t("runs.recoversAttempt")} <a className="underline" href={`${routeHref("workflows.run", { id: recoverySource.step_run.run.id })}?execution=${encodeURIComponent(recoverySource.step_run.id)}&attempt=${encodeURIComponent(recoverySource.id)}`}>{t("runs.openSourceAttempt")}</a>
+        {t("runs.recoversAttempt")} <TextLink href={`${routeHref("workflows.run", { id: recoverySource.step_run.run.id })}?execution=${encodeURIComponent(recoverySource.step_run.id)}&attempt=${encodeURIComponent(recoverySource.id)}`} onNavigate={(href) => { void navigate({ to: href }); }}>{t("runs.openSourceAttempt")}</TextLink>
       </div> : null}
       {runWaitingLabel ? <div className="flex-none border-b border-border-subtle bg-sheet px-4 py-2 text-13 text-fg-muted">{runWaitingLabel}</div> : null}
       {!wide ? <div className="min-h-0 flex-1">{narrowPane}</div> : <SplitPanes autoSave="workflows.run-inspection.wide" panelIds={["graph", "executions"]} direction="horizontal" className="h-full min-h-0 bg-canvas">
@@ -426,7 +428,7 @@ function LegacyExecutionData({ runId, executionId, pane, onPane }: {
         <p className="mt-1 text-13 text-fg-muted">{t("runs.executionDataDescription")}</p>
         <div className="mt-4">
           {query.isFetching && !query.data ? <LoadingPanel message={t("runs.loading")} />
-            : query.error ? <ErrorBanner description={errorMessage(query.error)} />
+            : query.error ? <ErrorBanner description={errorMessage(query.error, t("runs.unavailable"))} />
               : <LegacyExecutionPane row={query.data?.workflow_step_runs[0]} pane={pane} labels={labels} />}
         </div>
       </div>
@@ -475,6 +477,7 @@ export function AttemptHistory({ executionId, attemptId, onSelect }: { execution
 
 function AttemptArtifactsPanel({ attemptId }: { attemptId: string }): React.ReactElement {
   const t = useWorkflowsT();
+  const navigate = useNavigate();
   const recordHref = useResourceRecordHrefLookup();
   const query = useAuthoredQuery(
     WorkflowAttemptArtifactsDocument,
@@ -482,7 +485,7 @@ function AttemptArtifactsPanel({ attemptId }: { attemptId: string }): React.Reac
     { models: [ARTIFACT_MODEL] },
   );
   if (query.isFetching && !query.data) return <LoadingPanel message={t("runs.loading")} />;
-  if (query.error) return <ErrorBanner description={errorMessage(query.error)} />;
+  if (query.error) return <ErrorBanner description={errorMessage(query.error, t("runs.unavailable"))} />;
   if (!query.data?.workflow_step_attempts[0]?.artifacts_present) {
     return <EmptyState icon="workflow-run" title={t("runs.artifactsNotRecorded")} />;
   }
@@ -505,7 +508,7 @@ function AttemptArtifactsPanel({ attemptId }: { attemptId: string }): React.Reac
       <Column<StepArtifactRow> field="target_reference" selectionPaths={["target_reference.model", "target_reference.id"]} header={t("runs.artifactTarget")} render={(row) => {
         const target = row.target_reference;
         const href = target?.model && target.id ? recordHref(target.model, target.id) : undefined;
-        return href ? <a className="underline" href={href}>{t("runs.openArtifact")}</a> : t("runs.artifactUnavailable");
+        return href ? <TextLink href={href} onNavigate={(target) => { void navigate({ to: target }); }}>{t("runs.openArtifact")}</TextLink> : t("runs.artifactUnavailable");
       }} />
       <Column field="created_at" />
     </List>
@@ -514,6 +517,7 @@ function AttemptArtifactsPanel({ attemptId }: { attemptId: string }): React.Reac
 
 export function AttemptRecoveryPanel({ attemptId }: { attemptId: string }): React.ReactElement {
   const t = useWorkflowsT();
+  const navigate = useNavigate();
   const recordHref = useResourceRecordHrefLookup();
   const plan = useAuthoredQuery(
     WorkflowRecoveryPlanDocument,
@@ -555,16 +559,16 @@ export function AttemptRecoveryPanel({ attemptId }: { attemptId: string }): Reac
       if (result?.ok && result.id) {
         const href = recordHref(RUN_MODEL, result.id);
         setStarted({ id: result.id, href });
-        if (href) window.location.assign(href);
+        if (href) void navigate({ to: href });
       } else if (result?.message) setMessage(result.message);
     } catch (error) {
-      if (currentAttempt.current === attemptId) setMessage(errorMessage(error));
+      if (currentAttempt.current === attemptId) setMessage(errorMessage(error, t("runs.unavailable")));
     } finally {
       if (currentAttempt.current === attemptId) setPending(false);
     }
   };
   if ((plan.isFetching && !plan.data) || (repair.isFetching && !repair.data)) return <LoadingPanel message={t("runs.loading")} />;
-  if (plan.error && !plan.data) return <ErrorBanner description={errorMessage(plan.error)} />;
+  if (plan.error && !plan.data) return <ErrorBanner description={errorMessage(plan.error, t("runs.unavailable"))} />;
   return <div className="space-y-4 overflow-auto p-4">
     <div>
       <h3 className="font-medium text-fg">{t("runs.recovery")}</h3>
@@ -574,7 +578,7 @@ export function AttemptRecoveryPanel({ attemptId }: { attemptId: string }): Reac
       {message ? <ErrorBanner description={message} /> : null}
       {started ? <p className="mt-2 text-13 text-fg-muted">
         {t("runs.recoveryStarted", { id: started.id })}
-        {started.href ? <> · <a className="underline" href={started.href}>{t("runs.openRecovery")}</a></> : null}
+        {started.href ? <> · <TextLink href={started.href} onNavigate={(href) => { void navigate({ to: href }); }}>{t("runs.openRecovery")}</TextLink></> : null}
       </p> : null}
       <Button type="button" className="mt-3" disabled={!recovery?.available || pending || Boolean(started)} onClick={() => { void startRecovery(); }}>
         {pending ? t("runs.recoveryStarting") : t("runs.startRecovery")}
@@ -585,7 +589,7 @@ export function AttemptRecoveryPanel({ attemptId }: { attemptId: string }): Reac
       <p className="mt-1 text-13 text-fg-muted">{t("runs.testRepairDescription")}</p>
       {recordHref(WORKFLOW_MODEL, repairContext.draft_workflow_id) ? <Button type="button" variant="secondary" className="mt-3" onClick={() => {
         const base = recordHref(WORKFLOW_MODEL, repairContext.draft_workflow_id);
-        if (base) window.location.assign(`${base}?repairAttempt=${encodeURIComponent(attemptId)}`);
+        if (base) void navigate({ to: base, search: { repairAttempt: attemptId } });
       }}>{t("runs.testRepair")}</Button> : null}
     </div> : null}
   </div>;
@@ -602,7 +606,7 @@ export function AttemptPayloadPanel({ attemptId, stepRunId, pane }: { attemptId:
     includeFailure: pane === "failure",
   }, { enabled: Boolean(stepRunId), models: [STEP_ATTEMPT_MODEL] });
   if (query.isFetching && !query.data) return <LoadingPanel message={t("runs.loading")} />;
-  if (query.error) return <ErrorBanner description={errorMessage(query.error)} />;
+  if (query.error) return <ErrorBanner description={errorMessage(query.error, t("runs.unavailable"))} />;
   const attempt = query.data?.workflow_step_attempts[0];
   if (!attempt) return <EmptyState fill icon="workflow-run" title={t("runs.unavailable")} />;
   if (pane === "failure") return <div className="space-y-3 p-4">{attempt.error ? <ErrorBanner description={attempt.error} /> : null}{attempt.stacktrace ? <FieldDescriptorControl field={{ name: "stacktrace", label: t("runs.failure"), widget: "textarea" }} value={attempt.stacktrace} readOnly /> : null}</div>;
@@ -674,8 +678,4 @@ export function waitLabel(
   if (waitingKind === "external") return t("runs.waitExternal");
   if (waitingKind === "children") return t("runs.waitChildren");
   return t("runs.waitUnknown");
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
