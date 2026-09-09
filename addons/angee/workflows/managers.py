@@ -4299,8 +4299,13 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             attempt = system_queryset(attempt_model, using=alias, lock=("self",)).get(
                 pk=step_run.current_attempt_id
             )
-            if attempt.step_run_id != step_run.pk or attempt.lease_revoked_at is None:
-                raise ValidationError({"attempt": "Decision cancellation requires a revoked current attempt."})
+            if (
+                attempt.step_run_id != step_run.pk
+                or attempt.result_kind != str(AttemptResultKind.SUSPEND)
+                or attempt.applied_at is None
+                or attempt.lease_revoked_at is not None
+            ):
+                raise ValidationError({"attempt": "Decision cancellation requires the applied current suspension."})
             pending = list(
                 system_queryset(self.model, using=alias, lock=("self",)).filter(
                     suspension_attempt=attempt,

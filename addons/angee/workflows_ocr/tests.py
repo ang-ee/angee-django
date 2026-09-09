@@ -2,20 +2,29 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import tempfile
-from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from PIL import Image, ImageDraw
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
-from angee.workflows_ocr.service import extract
-
+from angee.workflows_ocr.engines import DocumentPart, DocumentPipelineError, PageImage, PageResult
+from angee.workflows_ocr.routing import (
+    _decode_declared_text,
+    _html_text,
+    derive_text_claims,
+    map_text_parts,
+    recognize_pages,
+)
+from angee.workflows_ocr.service import _document_sources, _merge, extract
 
 SCHEMA = {
     "$id": "test.synthetic.document.v1",
@@ -27,6 +36,98 @@ SCHEMA = {
     "required": ["number", "rows"],
     "additionalProperties": False,
 }
+
+
+class PageAggregationTests(SimpleTestCase):
+    def test_preserves_required_nullable_value_until_substantive_evidence_replaces_it(self) -> None:
+        schema = {
+            "type": "object",
+            "required": ["invoice_date", "reference"],
+            "properties": {
+                "invoice_date": {"type": ["string", "null"]},
+                "reference": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                "optional_note": {"type": ["string", "null"]},
+            },
+        }
+
+        merged, conflicts = _merge(
+            [
+                PageResult({"invoice_date": None, "reference": None, "optional_note": None}),
+                PageResult({"invoice_date": "2026-09-09", "reference": None}),
+            ],
+            schema=schema,
+        )
+
+        self.assertEqual(merged, {"invoice_date": "2026-09-09", "reference": None})
+        self.assertEqual(conflicts, {})
+
+    def test_derives_claim_spans_only_for_values_present_in_retained_text(self) -> None:
+        parts = (DocumentPart(0, 0, "text/plain", "native_text", "Invoice 22121 total 174.20", "test", "a" * 64),)
+        claims = derive_text_claims({"reference": "22121", "total": "174.20", "bank": "invented"}, parts)
+        self.assertEqual(set(claims), {"/reference", "/total"})
+        self.assertEqual(claims["/reference"][0], {"part_position": 0, "start": 8, "end": 13})
+
+    def test_claim_spans_exclude_empty_and_partial_numeric_matches(self) -> None:
+        text = "Postal 00601 invoice INV-1 quantity 1 price 87.10"
+        part = DocumentPart(0, 0, "text/plain", "native_text", text, "test", "a" * 64)
+        claims = derive_text_claims(
+            {"vendor": {"tax_id": ""}, "quantity": 1, "unit_price": "87.1"},
+            (part,),
+        )
+        self.assertNotIn("/vendor/tax_id", claims)
+        self.assertEqual(text[claims["/quantity"][0]["start"] : claims["/quantity"][0]["end"]], "1")
+        self.assertEqual(text[claims["/unit_price"][0]["start"] : claims["/unit_price"][0]["end"]], "87.10")
+
+    def test_missing_models_retain_acquired_evidence(self) -> None:
+        part = DocumentPart(0, 0, "text/plain", "native_text", "Invoice 22121", "test", "a" * 64)
+        with self.assertRaises(DocumentPipelineError) as mapping_error:
+            map_text_parts((part,), SCHEMA, model=None, config={}, timeout=1)
+        self.assertEqual(mapping_error.exception.parts, (part,))
+
+        page = PageImage(0, 1, "image/jpeg", b"bytes", 10, 10, 200)
+        with self.assertRaises(DocumentPipelineError) as recognition_error:
+            recognize_pages((page,), engine=object(), model=None, config={}, timeout=1, acquired_parts=(part,))
+        self.assertEqual(recognition_error.exception.parts, (part,))
+
+    def test_declared_text_decode_is_bounded_to_utf8_and_html_is_inert(self) -> None:
+        self.assertEqual(_decode_declared_text(b"\xef\xbb\xbfInvoice 22121"), "Invoice 22121")
+        with self.assertRaises(ValueError):
+            _decode_declared_text(b"\xff\xfeI\x00")
+        self.assertEqual(
+            _html_text("<p>Invoice 22121</p><script>ignore()</script><a href='https://invalid'>Total 10</a>"),
+            "Invoice 22121\nTotal 10",
+        )
+
+    @override_settings(ANGEE_OCR_MAX_BYTES=10)
+    def test_document_source_rejects_bytes_that_do_not_match_retained_identity(self) -> None:
+        opened = 0
+
+        def open_stream():
+            nonlocal opened
+            opened += 1
+            return io.BytesIO(b"real")
+
+        file = SimpleNamespace(
+            open_stream=open_stream,
+            content_hash="0" * 64,
+            size_bytes=4,
+            mime_type=SimpleNamespace(mime_type="text/plain"),
+        )
+        with self.assertRaisesMessage(ValidationError, "no longer matches"):
+            _document_sources((file,), ())
+        self.assertEqual(opened, 1)
+
+    @override_settings(ANGEE_OCR_MAX_BYTES=10)
+    def test_document_source_allows_missing_advisory_mime_type(self) -> None:
+        content = b"<Invoice/>"
+        file = SimpleNamespace(
+            open_stream=lambda: io.BytesIO(content),
+            content_hash=hashlib.sha256(content).hexdigest(),
+            size_bytes=len(content),
+            mime_type=None,
+        )
+        source = _document_sources((file,), ())[0]
+        self.assertEqual(source.mime_type, "")
 
 
 def _png(text: str) -> bytes:
@@ -79,9 +180,7 @@ class ExtractionServiceTests(TestCase):
                 prefix="documents",
                 created_by=self.owner,
             )
-            write_relationships(
-                [RelationshipTuple(to_object_ref(self.drive), "viewer", to_subject_ref(self.owner))]
-            )
+            write_relationships([RelationshipTuple(to_object_ref(self.drive), "viewer", to_subject_ref(self.owner))])
             vendor = vendor_model.objects.create(
                 slug="ocr-test-models",
                 display_name="OCR test models",
@@ -175,3 +274,52 @@ class ExtractionServiceTests(TestCase):
         with actor_context(self.owner):
             visible = extraction_model.objects.get(pk=failed.pk)
             self.assertEqual(visible.result["unvalidated_raw"], "private synthetic value")
+
+    def test_document_engine_persists_model_free_raw_parts_and_fingerprints_recognizer(self) -> None:
+        config = {
+            "result": {"number": "SYN-2", "rows": ["native"]},
+            "source_text": "Synthetic invoice attachment",
+        }
+        with actor_context(self.owner):
+            first = extract(
+                files=self.files[:1],
+                schema=SCHEMA,
+                model=None,
+                authorized_target=self.drive,
+                engine="fake_document",
+                config=config,
+            )
+            revised = extract(
+                files=self.files[:1],
+                schema=SCHEMA,
+                model=None,
+                recognition_model=self.model,
+                authorized_target=self.drive,
+                engine="fake_document",
+                config=config,
+            )
+            self.assertEqual(first.result, config["result"])
+            self.assertIsNone(first.model_id)
+            self.assertEqual(first.provenance["document"], {"route": "fake"})
+            self.assertEqual(first.parts.count(), 1)
+            self.assertEqual(first.parts.get().claims["/number"], [{"part_position": 0}])
+            self.assertEqual(revised.revision, first.revision + 1)
+            self.assertEqual(revised.recognition_model_id, self.model.pk)
+            self.assertEqual(revised.provenance["configured_model_roles"], ["recognition"])
+            self.assertEqual(revised.provenance["used_model_roles"], [])
+
+    def test_document_engine_retains_validation_failure_before_postgres_json_null_error(self) -> None:
+        with actor_context(self.owner):
+            failed = extract(
+                files=self.files[:1],
+                schema=SCHEMA,
+                model=None,
+                authorized_target=self.drive,
+                engine="fake_document",
+                config={"nul_result": True},
+            )
+            self.assertEqual(failed.status, "failed")
+            self.assertEqual(failed.error_code, "ValidationError")
+            self.assertEqual(failed.result, {})
+            self.assertEqual(failed.sources.count(), 1)
+            self.assertEqual(failed.parts.count(), 0)

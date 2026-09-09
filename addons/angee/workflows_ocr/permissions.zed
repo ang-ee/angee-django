@@ -17,3 +17,8 @@ definition workflows_ocr/extraction_page {
     relation extraction: workflows_ocr/extraction // rebac:field=extraction
     permission read = extraction->read
 }
+
+definition workflows_ocr/extraction_part {
+    relation extraction: workflows_ocr/extraction // rebac:field=extraction
+    permission read = extraction->read
+}

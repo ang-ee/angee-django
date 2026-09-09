@@ -7,10 +7,10 @@ from types import SimpleNamespace
 import pytest
 from django.core.exceptions import ValidationError
 
-from angee.workflows_ocr.engines import FakeOcrEngine, PageImage, PageResult
+from angee.workflows_ocr.engines import DocumentPipelineError, DocumentSource, FakeOcrEngine, PageImage, PageResult
+from angee.workflows_ocr.routing import acquire_native_parts
 from angee.workflows_ocr.service import _merge, _validated_schema
 from angee.workflows_ocr_glm.engine import GlmOllamaEngine
-
 
 SCHEMA = {
     "$id": "test.document.v1",
@@ -28,12 +28,8 @@ def _page(source: int, page: int) -> PageImage:
 def test_fake_engine_addresses_pages_by_source_and_page_without_collisions() -> None:
     engine = FakeOcrEngine()
     config = {"page_results": {"0:1": {"number": "first"}, "1:0": {"number": "second"}}}
-    assert engine.extract_page(_page(0, 1), SCHEMA, model=None, config=config, timeout=1).value == {
-        "number": "first"
-    }
-    assert engine.extract_page(_page(1, 0), SCHEMA, model=None, config=config, timeout=1).value == {
-        "number": "second"
-    }
+    assert engine.extract_page(_page(0, 1), SCHEMA, model=None, config=config, timeout=1).value == {"number": "first"}
+    assert engine.extract_page(_page(1, 0), SCHEMA, model=None, config=config, timeout=1).value == {"number": "second"}
 
 
 def test_merge_preserves_repeated_rows_and_records_conflicting_claims() -> None:
@@ -63,3 +59,19 @@ def test_glm_engine_rejects_nonlocal_provider_before_sending_page() -> None:
     )
     with pytest.raises(ValueError, match="loopback Ollama"):
         GlmOllamaEngine().extract_page(_page(0, 0), SCHEMA, model=model, config={}, timeout=1)
+
+
+def test_native_acquisition_converts_input_errors_to_retained_pipeline_failures() -> None:
+    source = DocumentSource(0, "a" * 64, "image/png", b"not an image")
+    with pytest.raises(DocumentPipelineError, match=r"acquisition failed \(ValueError\)"):
+        acquire_native_parts((source,))
+
+    acquired = DocumentSource(0, "b" * 64, "text/plain", "retained", message_part=object())
+    failed = DocumentSource(1, "a" * 64, "image/png", b"not an image")
+    with pytest.raises(DocumentPipelineError) as error:
+        acquire_native_parts((acquired, failed))
+    assert [part.value for part in error.value.parts] == ["retained"]
+
+    nul_text = DocumentSource(0, "c" * 64, "text/plain", b"invoice\x00text")
+    with pytest.raises(DocumentPipelineError, match="acquisition failed"):
+        acquire_native_parts((nul_text,))
