@@ -1235,7 +1235,7 @@ def test_update_vcs_bridge_rejects_backend_switch(
 
     assert result.errors is not None
     assert result.errors[0].extensions["validationErrors"] == {
-        "backendClass": ["Implementation selection is create-only."]
+        "backend_class": ["Implementation selection is create-only."]
     }
     with system_context(reason="test.integrate.vcs_update_backend.verify"):
         bridge.refresh_from_db()

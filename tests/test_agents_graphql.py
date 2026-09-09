@@ -632,7 +632,7 @@ def test_update_inference_provider_backend_is_create_only(agents_console_tables:
     assert result.errors is not None
     assert result.errors[0].extensions == {
         "code": "VALIDATION",
-        "validationErrors": {"backendClass": ["Implementation selection is create-only."]},
+        "validationErrors": {"backend_class": ["Implementation selection is create-only."]},
         "formErrors": [],
     }
     provider.refresh_from_db()
