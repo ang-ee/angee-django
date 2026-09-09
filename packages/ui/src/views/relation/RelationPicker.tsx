@@ -34,6 +34,8 @@ export interface RelationCreateConfig {
    * create form saves through this instead, and the returned row is selected.
    */
   submit?: FormSubmit;
+  /** Pure-data seeds supplied by the owning surface (for example a scoped parent id). */
+  defaultValues?: Readonly<Record<string, unknown>>;
   /** Field prefilled with the typed query — the new record's name (default `"name"`). */
   prefillField?: string;
   /** Dialog title; defaults to `New <model>`. */
@@ -196,7 +198,10 @@ export function RelationPicker({
                       fields: create.fields,
                       ...(create.submit ? { submit: create.submit } : {}),
                     }),
-                    defaultValues: { [prefillField]: dialog.query },
+                    defaultValues: {
+                      ...create.defaultValues,
+                      [prefillField]: dialog.query,
+                    },
                     onSaved: (row: Row) => {
                       const id = rowPublicId(row);
                       if (id) {
