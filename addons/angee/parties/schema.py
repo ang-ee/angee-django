@@ -711,7 +711,7 @@ _ADDRESS_RESOURCE = hasura_model_resource(
     model=Address,
     name="addresses",
     filterable=["id", "party", "label", "created_at"],
-    sortable=["party", "label", "created_at"],
+    sortable=["party", "label", "is_primary", "created_at"],
     aggregatable=["id"],
     insertable=[
         "party",
