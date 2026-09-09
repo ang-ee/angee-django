@@ -394,17 +394,27 @@ def _platform_admin(username: str) -> Any:
     return admin
 
 
-def test_contact_resources_accept_declared_consumer_write_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_contact_resources_accept_declared_consumer_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     """A model donor can expose its fields without teaching parties their vocabulary."""
     party = messaging_models.Party
     try:
         with monkeypatch.context() as patch:
             patch.setattr(party, "hasura_insertable_fields", ("first_met_note",), raising=False)
             patch.setattr(party, "hasura_updatable_fields", ("first_met_note",), raising=False)
+            patch.setattr(party, "hasura_readable_fields", ("first_met_note", "notes"), raising=False)
+            patch.setattr(party, "hasura_filterable_fields", ("notes",), raising=False)
+            patch.setattr(party, "hasura_sortable_fields", ("notes",), raising=False)
+            patch.setattr(party, "hasura_groupable_fields", ("notes",), raising=False)
             importlib.reload(parties_schema)
-            resources = {item.model_label: item for item in _schema("public").angee_resources}
+            schema = _schema("public")
+            resources = {item.model_label: item for item in schema.angee_resources}
             for label in ("parties.Party", "parties.Person", "parties.Organization"):
-                assert "first_met_note" in resources[label].update_fields
+                resource = resources[label]
+                assert "first_met_note" in resource.update_fields
+                for field in ("first_met_note", "notes"):
+                    assert field in schema._schema.get_type(resource.type_names.filter).fields
+                    assert field in resource.query.axes
+                assert "notes" in schema._schema.get_type(resource.type_names.order).fields
                 if label != "parties.Party":
                     assert "first_met_note" in resources[label].create_fields
     finally:
