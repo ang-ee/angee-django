@@ -1,4 +1,5 @@
 import * as React from "react";
+import type { DocumentType } from "@angee/gql/console";
 import {
   CommandEmpty,
   CommandGroup,
@@ -21,24 +22,15 @@ import {
 } from "@angee/ui";
 
 import { useWorkflowsT } from "../i18n";
+import { WorkflowStepOperationsDocument } from "../documents.console";
 
-export interface WorkflowOperationChoice {
-  key: string;
-  label: string;
-  category: string;
-  description: string;
-  selectable: boolean;
-  effect: string;
-  effect_description: string;
-  map_body_operation?: boolean;
-  outcomes?: readonly WorkflowOutcomeChoice[];
-}
-
-export interface WorkflowOutcomeChoice {
-  key: string;
-  label: string;
-  description: string;
-}
+type DeclaredOperation = DocumentType<
+  typeof WorkflowStepOperationsDocument
+>["workflow_step_operations"][number];
+export type WorkflowOutcomeChoice = DeclaredOperation["outcomes"][number];
+export type WorkflowOperationChoice = Pick<DeclaredOperation,
+  "key" | "label" | "category" | "description" | "selectable" | "effect" | "effect_description"
+> & Partial<Pick<DeclaredOperation, "defaults" | "map_body_operation" | "outcomes">>;
 
 export interface WorkflowOperationPickerProps {
   operations: readonly WorkflowOperationChoice[];

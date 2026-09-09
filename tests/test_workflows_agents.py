@@ -68,7 +68,6 @@ from tests.workflows import (
 )
 
 User = get_user_model()
-pytest_plugins = ("tests.workflows",)
 
 
 def test_journal_serialization_uses_native_values_and_rejects_ambiguous_inputs() -> None:

@@ -16,7 +16,6 @@ from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from tests.workflows import Step, StepRun, Trigger, Workflow, WorkflowRun, start_run
 
-pytest_plugins = ("tests.workflows",)
 pytestmark = [
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL start serialization contract"),

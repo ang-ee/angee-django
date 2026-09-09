@@ -212,10 +212,13 @@ def workflow_gate_tables(workflow_engine_tables: None) -> None:
 def no_workflow_queue(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep workflow tests synchronous by replacing queue enqueue hooks."""
 
+    from angee.workflows import dispatch
+
     monkeypatch.setattr(engine, "enqueue_advance", lambda run_id: None)
     monkeypatch.setattr(engine, "enqueue_advance_at", lambda run_id, when: None)
     monkeypatch.setattr(engine, "enqueue_execute", lambda step_run_id: None)
     monkeypatch.setattr(engine, "enqueue_dispatch_publisher", lambda: None)
+    monkeypatch.setattr(dispatch, "enqueue_task", lambda *args, **kwargs: None)
     monkeypatch.setattr(engine, "enqueue_decision_escalation_at", lambda decision_id, attempt, when: None)
     monkeypatch.setattr(engine, "enqueue_decision_expiry_at", lambda decision_id, attempt, when: None)
 

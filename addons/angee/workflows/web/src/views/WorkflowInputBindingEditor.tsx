@@ -5,22 +5,24 @@ import {
   Button, Checkbox, Collapsible, DialogBackdrop, DialogContent, DialogDescription, DialogHeader,
   DialogPortal, DialogRoot, DialogTitle, ErrorBanner, FieldDescriptorControl,
   FieldLabel, FieldRoot, Input, TreeView,
+  useListIdentities,
   type FieldDescriptor, type WidgetFocusTarget,
 } from "@angee/ui";
 
-import { WorkflowInputSourcesDocument } from "../documents.console";
+import { WorkflowInputSourcesDocument, WorkflowStepOperationsDocument } from "../documents.console";
 import { useWorkflowsT } from "../i18n";
 import { useWorkflowInputPreview, type WorkflowInputPreviewRequest } from "./workflow-input-preview";
 
 type InputSourcesPayload = NonNullable<DocumentType<typeof WorkflowInputSourcesDocument>["workflow_input_sources"]>;
 type InputSource = InputSourcesPayload["sources"][number];
+type StepOperation = DocumentType<typeof WorkflowStepOperationsDocument>["workflow_step_operations"][number];
 
 export type BindingPath = readonly (string | number)[];
 export type InputBinding = Record<string, unknown> | null;
-export interface ContractNode { id: number; kind: string; json_type?: string | null; title?: string | null; description?: string | null; nullable: boolean; }
-export interface ContractEdge { parent_node_id: number; child_node_id: number; kind: string; key?: string | null; }
-export interface DataContract { raw_schema?: unknown; root_node_id: number; nodes: readonly ContractNode[]; edges: readonly ContractEdge[]; }
-export interface OperationContract { key: string; input_contract: DataContract; }
+export type DataContract = StepOperation["input_contract"];
+export type ContractNode = DataContract["nodes"][number];
+export type ContractEdge = DataContract["edges"][number];
+export type OperationContract = Pick<StepOperation, "key" | "input_contract">;
 
 interface Props {
   nodeKey: string;
@@ -159,11 +161,12 @@ function ObjectEditor({ binding, contract, node, readOnly, path, controlRef, req
 function ArrayEditor({ binding, contract, node, readOnly, path, controlRef, requestFocus, onChange, onCommit, onStructuralChange, onReference, onGoToSource, sourceLabel }: StructuredProps): React.ReactElement {
   const t = useWorkflowsT();
   const items = Array.isArray(binding.items) ? binding.items as InputBinding[] : [];
-  return <div className="grid gap-2">{items.map((child, index) => <section key={index} className="grid gap-2 rounded-6 border border-border-subtle p-2">
+  const [identities, nextIdentity] = useListIdentities(items.length);
+  return <div className="grid gap-2">{items.map((child, index) => <section key={identities.current[index]} className="grid gap-2 rounded-6 border border-border-subtle p-2">
     <div className="flex justify-between">
-      <strong className="text-13">{t("input.item", { index: index + 1 })}</strong>{!readOnly ? <Button type="button" size="sm" variant="ghost" onClick={() => onStructuralChange({ ...binding, items: items.filter((_, candidate) => candidate !== index) })}>{t("input.remove")}</Button> : null}</div>
+      <strong className="text-13">{t("input.item", { index: index + 1 })}</strong>{!readOnly ? <Button type="button" size="sm" variant="ghost" onClick={() => { identities.current.splice(index, 1); onStructuralChange({ ...binding, items: items.filter((_, candidate) => candidate !== index) }); }}>{t("input.remove")}</Button> : null}</div>
     <NestedBinding value={child} contract={contract} node={childContract(contract, node, "item")} readOnly={readOnly} path={[...path, "items", index]} controlRef={controlRef} requestFocus={requestFocus} onChange={(next) => { const copy = [...items]; copy[index] = next; onChange({ ...binding, items: copy }); }} onCommit={onCommit} onStructuralChange={(next) => { const copy = [...items]; copy[index] = next; onStructuralChange({ ...binding, items: copy }); }} onReference={onReference} onGoToSource={onGoToSource} sourceLabel={sourceLabel} />
-  </section>)}{!readOnly ? <Button type="button" size="sm" variant="secondary" onClick={() => { requestFocus([...path, "items", items.length, "kind"]); onStructuralChange({ ...binding, items: [...items, {}] }); }}>{t("input.addItem")}</Button> : null}</div>;
+  </section>)}{!readOnly ? <Button type="button" size="sm" variant="secondary" onClick={() => { identities.current.push(nextIdentity()); requestFocus([...path, "items", items.length, "kind"]); onStructuralChange({ ...binding, items: [...items, {}] }); }}>{t("input.addItem")}</Button> : null}</div>;
 }
 
 interface StructuredProps { binding: Record<string, unknown>; contract?: DataContract; node?: ContractNode; readOnly: boolean; path: BindingPath; controlRef: (path: BindingPath) => (target: WidgetFocusTarget | null) => void; requestFocus: (path: BindingPath) => void; onChange: (value: InputBinding) => void; onCommit: () => void; onStructuralChange: (value: InputBinding) => void; onReference: (path: BindingPath) => void; onGoToSource?: (identity: string) => void; sourceLabel?: (identity: string) => string | undefined; }

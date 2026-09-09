@@ -503,6 +503,7 @@ function createAuthProviderForSchema(
   return createAngeeAuthProvider({
     ...schema,
     loginPath,
+    queryClient,
     // Reset observed queries so identity and mounted views see the transition;
     // clearing their entries would strand observers with the previous data.
     onAuthChange: () => {

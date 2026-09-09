@@ -24,7 +24,7 @@ from angee.workflows.graph import (
 )
 
 if TYPE_CHECKING:
-    from angee.workflows.models import WorkflowQuerySet
+    from angee.workflows.managers import WorkflowQuerySet
 
 
 @dataclass(frozen=True, slots=True)

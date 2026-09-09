@@ -16,7 +16,6 @@ from tests.test_workflows import _console_schema, _published_workflow
 from tests.workflows import WorkflowDispatch, advance_once
 
 User = get_user_model()
-pytest_plugins = ("tests.workflows",)
 
 
 def test_artifact_target_reference_is_a_computed_object_not_an_unowned_relation() -> None:

@@ -11,6 +11,7 @@ import {
   CollapsibleRoot,
   CollapsibleTrigger,
   EmptyState,
+  errorMessage,
   ErrorBanner,
   FieldDescriptorControl,
   GraphView,
@@ -43,7 +44,7 @@ import { useWorkflowsT } from "../i18n";
 import { WorkflowOperationPicker, type WorkflowOperationChoice } from "./WorkflowOperationPicker";
 import { WorkflowInputBindingEditor, type OperationContract } from "./WorkflowInputBindingEditor";
 import { workflowNodeKind, workflowNodeStyles, type WorkflowGraphNodeKind } from "./graph-data";
-import { graphWithDuplicate, graphWithOperation } from "./workflow-graph-authoring";
+import { graphWithDuplicate, graphWithMapBody, graphWithOperation, positionFrom } from "./workflow-graph-authoring";
 import { EMPTY_WORKFLOW_EDITOR_SELECTION, workflowEditorSelection } from "./workflow-editor-state";
 import type { DefinitionEdge, DefinitionNode, WorkflowDefinitionValues } from "./workflow-definition-state";
 import { useDefinitionHistoryContext } from "./workflow-definition-history";
@@ -52,15 +53,19 @@ import { useWorkflowInputPreview } from "./workflow-input-preview";
 
 const STEP_MODEL = "workflows.Step";
 const EDGE_MODEL = "workflows.Edge";
+const WORKFLOW_EDGE_STYLES = {
+  map: { stroke: "var(--info)", strokeWidth: 2, labelColor: "var(--info)" },
+} as const;
 
 export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): React.ReactElement {
   const t = useWorkflowsT();
   const focusField = context.focusField;
-  const values = useFormViewValues(context.form) as WorkflowDefinitionValues;
+  const definition = useFormViewValues<WorkflowDefinitionValues["definition"]>(context.form, "definition");
+  const version = useFormViewValues<WorkflowDefinitionValues["version"]>(context.form, "version");
   const history = useDefinitionHistoryContext();
   const perform = React.useCallback((action: () => void) => history ? history.perform(action) : action(), [history]);
-  const nodes = values.definition?.nodes ?? {};
-  const edges = values.definition?.edges ?? {};
+  const nodes = definition?.nodes ?? {};
+  const edges = definition?.edges ?? {};
   const [selection, dispatchSelection] = React.useReducer(workflowEditorSelection, EMPTY_WORKFLOW_EDITOR_SELECTION);
   const selectedStep = selection.stepId;
   const selectedEdge = selection.edgeId;
@@ -72,7 +77,7 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
   const readOnly = context.form.formReadOnly;
   const operationsQuery = useAuthoredQuery(WorkflowStepOperationsDocument);
   const operations = operationsQuery.data?.workflow_step_operations ?? [];
-  const declaredFields = useWorkflowCanvasFields(t, operations as readonly WorkflowOperationChoice[] & NonNullable<Parameters<typeof useImplConfigFields>[2]>);
+  const declaredFields = useWorkflowCanvasFields(t, operations);
   const graphGeometry = React.useRef<GraphViewGeometry<WorkflowGraphNodeKind>>(null);
   const graphSurface = React.useRef<HTMLDivElement>(null);
   const suppressDefaultInspectorFocus = React.useRef(false);
@@ -83,7 +88,7 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
     sequence: number;
   } | null>(null);
   const [canvasFocusRequest, requestCanvasFocus] = React.useReducer((request) => request + 1, 0);
-  const diagnostics = values.definition?.readiness ?? [];
+  const diagnostics = definition?.readiness ?? [];
   const [pendingIssue, setPendingIssue] = React.useState<DefinitionDiagnostic | null>(null);
   const [issuesOpen, setIssuesOpen] = React.useState(false);
   const [palette, setPalette] = React.useState<{ kind: "first" | "after" | "insert" | "map-body"; identity?: string; } | null>(null);
@@ -143,6 +148,7 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
       const operation = operationChoice(operations, owner.step_class);
       const config = jsonObject(owner.config);
       const targetKey = operation?.map_body_operation && typeof config.target_step === "string" ? config.target_step : "";
+      if (!targetKey) return [];
       const targetIdentity = byKey.get(targetKey);
       return targetIdentity ? [[targetIdentity, ownerIdentity] as const] : [];
     }));
@@ -162,7 +168,7 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
       title,
       detail: [secondary, mapOwnerLabel, node.is_entry ? t("canvas.start") : null, issueCount ? issueLabel(issueCount, t) : null].filter(Boolean).join(" · "),
       selected: identity === selectedStep,
-      position: graphPosition(node.position),
+      position: positionFrom(node.position),
       meta: { node },
     };
   }) satisfies GraphViewNode<WorkflowGraphNodeKind, { node: DefinitionNode; }>[], [diagnostics, mapOwnersByTarget, nodes, operations, selectedStep, t]);
@@ -327,7 +333,7 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
                 }
                 dispatchSelection({ type: "select-step", id: node.id });
               }}
-              edgeStyles={{ map: { stroke: "var(--info)", strokeWidth: 2, labelColor: "var(--info)" } }}
+              edgeStyles={WORKFLOW_EDGE_STYLES}
               onEdgeClick={(edge, activation) => {
                 if (edge.meta?.mapOwner) {
                   if (activation.source === "keyboard") {
@@ -348,7 +354,7 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
               }}
             />
           )}
-          <div className="absolute left-3 top-3"><Badge tone={readOnly ? "neutral" : "warning"}>{readOnly ? t("canvas.readOnlyVersion", { version: values.version ?? "?" }) : t("canvas.draft")}</Badge></div>
+          <div className="absolute left-3 top-3"><Badge tone={readOnly ? "neutral" : "warning"}>{readOnly ? t("canvas.readOnlyVersion", { version: version ?? "?" }) : t("canvas.draft")}</Badge></div>
           {!readOnly && graphNodes.length ? <div className="absolute right-3 top-3 flex gap-2"><Button type="button" size="sm" variant="secondary" onClick={() => setConnectOpen(true)}>{t("canvas.connectSteps")}</Button><Button type="button" size="sm" onClick={() => setPalette({ kind: "first" })}>{t("canvas.addStep")}</Button></div> : null}
         </SplitPane>
         <SplitPaneHandle className={!wide ? "hidden" : undefined} />
@@ -358,7 +364,7 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
         </SplitPane>
         <WorkflowOperationPicker operations={(palette?.kind === "map-body"
           ? operations.map((operation) => operation.map_body_operation ? { ...operation, selectable: false } : operation)
-          : operations) as readonly WorkflowOperationChoice[]} open={palette !== null} onOpenChange={(open) => { if (!open) setPalette(null); }} onChoose={chooseOperation} loading={operationsQuery.isFetching} error={operationsQuery.error ? errorMessage(operationsQuery.error) : null} />
+          : operations)} open={palette !== null} onOpenChange={(open) => { if (!open) setPalette(null); }} onChoose={chooseOperation} loading={operationsQuery.isFetching} error={operationsQuery.error ? errorMessage(operationsQuery.error, t("canvas.operationUnavailable")) : null} />
         <MutationDialog
           open={connectOpen}
           onOpenChange={setConnectOpen}
@@ -435,7 +441,7 @@ function StepConfigPanel({ context, nodeKey, node, nodes, diagnostics, pendingIs
   const bindingName = `${scope}.input_binding`;
   const inputDiagnostics = diagnosticsForNode(diagnostics, nodeKey, node).filter((item) => item.field === "input_binding");
   return <div className="grid min-h-0 content-start gap-4 overflow-auto bg-sheet-1 p-4">
-    <ErrorBanner description={operationsQuery.error ? errorMessage(operationsQuery.error) : null} />
+    <ErrorBanner description={operationsQuery.error ? errorMessage(operationsQuery.error, t("canvas.operationUnavailable")) : null} />
     <ErrorBanner description={nodeErrors || null} />
     <BoundDescriptorField form={context.form} resource={STEP_MODEL} scope={scope} field={fields.step.name} />
     <BoundDescriptorField form={context.form} resource={STEP_MODEL} scope={scope} field={{
@@ -572,37 +578,6 @@ function MapItemsEditor({ context, nodeKey, node }: {
   </div>;
 }
 
-function graphWithMapBody(
-  body: DefinitionNode,
-  ownerIdentity: string,
-  nodes: Record<string, DefinitionNode>,
-  edges: Record<string, DefinitionEdge>,
-  geometry: GraphViewGeometry<WorkflowGraphNodeKind> | null,
-): { nodes: Record<string, DefinitionNode>; edges: Record<string, DefinitionEdge> } | null {
-  const owner = nodes[ownerIdentity];
-  if (!owner) return null;
-  const identity = body.clientKey || body.id;
-  const placed = graphWithOperation(
-    body,
-    { kind: "after", identity: ownerIdentity },
-    nodes,
-    edges,
-    geometry,
-  );
-  if (!placed) return null;
-  const nextNodes = placed.nodes;
-  return {
-    nodes: {
-      ...nextNodes,
-      [ownerIdentity]: {
-        ...owner,
-        config: { ...(owner.config ?? {}), target_step: nextNodes[identity]?.key ?? body.key },
-      },
-    },
-    edges,
-  };
-}
-
 function EdgeConfigPanel({ context, edgeKey, edge, nodes, operations, diagnostics, pendingIssue, fields, onIssueFocused, onInsert, onDelete }: { context: RecordPanelContext; edgeKey: string; edge: DefinitionEdge; nodes: Record<string, DefinitionNode>; operations: readonly WorkflowOperationChoice[]; diagnostics: WorkflowDefinitionValues["definition"]["readiness"]; pendingIssue: DefinitionDiagnostic | null; fields: WorkflowCanvasFields; onIssueFocused: () => void; onInsert: (id: string) => void; onDelete: (id: string) => void; }): React.ReactElement {
   const t = useWorkflowsT();
   const scope = `definition.edges.${edgeKey}`;
@@ -639,7 +614,7 @@ interface WorkflowCanvasFields {
   workflow: { name: FieldDescriptor; };
   implConfig: ReturnType<typeof useImplConfigFields>;
 }
-function useWorkflowCanvasFields(t: WorkflowT, operations: readonly WorkflowOperationChoice[] & NonNullable<Parameters<typeof useImplConfigFields>[2]>): WorkflowCanvasFields {
+function useWorkflowCanvasFields(t: WorkflowT, operations: NonNullable<Parameters<typeof useImplConfigFields>[2]>): WorkflowCanvasFields {
   const stepMetadata = useModelMetadata(STEP_MODEL);
   const edgeMetadata = useModelMetadata(EDGE_MODEL);
   const workflowMetadata = useModelMetadata("workflows.Workflow");
@@ -775,12 +750,6 @@ function nodeDiagnosticField(field: string, configFields: readonly string[], raw
   return rawConfig && (field === "config" || field.startsWith("config.")) ? "config" : null;
 }
 
-function graphPosition(value: unknown): GraphViewPosition | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const position = value as { x?: unknown; y?: unknown; };
-  return typeof position.x === "number" && typeof position.y === "number" ? { x: position.x, y: position.y } : undefined;
-}
-function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function operationOptions(operations: readonly { key: string; label: string; selectable: boolean; }[], current?: unknown): { value: string; label: string; disabled: boolean; }[] {
   const options = operations.map((operation) => ({ value: operation.key, label: operation.label, disabled: !operation.selectable }));
   const currentKey = canonicalOptionValue(options, current);

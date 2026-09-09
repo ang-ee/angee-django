@@ -37,7 +37,6 @@ from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import GateStep, StepImpl, StepResult
 from tests.workflows import Decision, StepArtifact, StepAttempt, StepRun, WorkflowRun, workflow_with_steps
 
-pytest_plugins = ("tests.workflows",)
 User = get_user_model()
 
 
@@ -809,13 +808,13 @@ def test_applicable_suspension_creates_ordered_decisions_rebac_and_timer_intents
 def test_decision_relationship_failure_rolls_back_entire_suspension(
     scheduled_step_run: StepRun, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from angee.workflows import models as workflow_models
+    from angee.workflows import managers as workflow_managers
 
     attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
     StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
     relationship_model = active_relationship_model()
     before_relationships = relationship_model.objects.count()
-    native_write = workflow_models.write_relationships
+    native_write = workflow_managers.write_relationships
     calls = 0
 
     def fail_second_batch(relationships: object) -> None:
@@ -825,7 +824,7 @@ def test_decision_relationship_failure_rolls_back_entire_suspension(
         if calls == 2:
             raise RuntimeError("relationship backend failed")
 
-    monkeypatch.setattr(workflow_models, "write_relationships", fail_second_batch)
+    monkeypatch.setattr(workflow_managers, "write_relationships", fail_second_batch)
     specs = (
         DecisionSpec(assignees=("auth/user:first",), action="approve"),
         DecisionSpec(assignees=("auth/user:second",), action="approve"),

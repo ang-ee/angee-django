@@ -8,7 +8,8 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import models
+from django.db import connection, models
+from django.test.utils import CaptureQueriesContext
 from django.utils.text import slugify
 from pydantic import BaseModel
 from pydantic import Field as PydanticField
@@ -35,7 +36,6 @@ from tests.workflows import (
 )
 
 User = get_user_model()
-pytest_plugins = ("tests.workflows",)
 
 
 class _ContractProbeConfig(BaseModel):
@@ -741,14 +741,15 @@ def test_workflows_for_subject_declaration_filters_resource_and_rebac(workflow_t
         }
       }
     """
-    visible = result_data(
-        execute_schema(
-            schema,
-            query,
-            {"subjectDeclaration": Workflow._meta.label},
-            user=owner,
-        )
-    )["workflows_for_subject_declaration"]
+    with CaptureQueriesContext(connection) as queries:
+        visible = result_data(
+            execute_schema(
+                schema,
+                query,
+                {"subjectDeclaration": Workflow._meta.label},
+                user=owner,
+            )
+        )["workflows_for_subject_declaration"]
     hidden = result_data(
         execute_schema(
             schema,
@@ -762,6 +763,15 @@ def test_workflows_for_subject_declaration_filters_resource_and_rebac(workflow_t
         ("any-subject", "Any subject", ""),
         ("matching", "Matching", Workflow._meta.label_lower),
     ]
+    workflow_selects = [
+        query["sql"]
+        for query in queries.captured_queries
+        if query["sql"].lstrip().upper().startswith("SELECT")
+        and Workflow._meta.db_table in query["sql"]
+    ]
+    # One REBAC identity projection and one annotated domain query, independent
+    # of the number of workflows returned; lineage fields add no per-row reads.
+    assert len(workflow_selects) == 2
     assert hidden == []
 
 

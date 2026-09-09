@@ -103,7 +103,8 @@ function moved<T>(values: readonly T[], from: number, to: number): T[] {
   return updated;
 }
 
-function useListIdentities(length: number): [React.MutableRefObject<string[]>, () => string] {
+/** Stable client-only identities for controlled list rows across moves/removal. */
+export function useListIdentities(length: number): [React.MutableRefObject<string[]>, () => string] {
   const prefix = React.useId();
   const counter = React.useRef(0);
   const identities = React.useRef<string[]>([]);

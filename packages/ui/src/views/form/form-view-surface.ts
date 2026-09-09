@@ -392,6 +392,7 @@ export function useFormViewSurface({
         field,
         relationByField.get(field.name),
         modelMetadata?.fields[field.name],
+        modelMetadata?.resource.query.fields[field.name],
       );
     }
     const lines = modelMetadata?.resource?.linesResource;

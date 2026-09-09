@@ -12,6 +12,8 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
+from rebac import actor_context
+from rebac.errors import PermissionDenied
 from strawberry import auto
 from strawberry.scalars import JSON
 
@@ -52,7 +54,7 @@ from angee.workflows.definitions import (
 from angee.workflows.graph import GraphDiagnostic, GraphIdentity, GraphLocation
 from angee.workflows.models import TriggerKind
 from angee.workflows.steps import StepEffect, StepImpl, StepOperation
-from angee.workflows.test_contracts import TestFixtureRole, TestFixtureSpec, TestScope
+from angee.workflows.testing import FixtureRole, FixtureSpec, WorkflowScope
 from angee.workflows.trigger_conditions import EventConditionCatalogue, EventConditionClause
 from angee.workflows.trigger_declarations import (
     EventTriggerConfig,
@@ -125,8 +127,8 @@ class DecisionVerb(Enum):
 
 
 WorkflowStepEffectEnum = strawberry.enum(StepEffect, name="WorkflowStepEffect")
-WorkflowTestScopeEnum = strawberry.enum(TestScope, name="WorkflowTestScope")
-WorkflowTestFixtureRoleEnum = strawberry.enum(TestFixtureRole, name="WorkflowTestFixtureRole")
+WorkflowTestScopeEnum = strawberry.enum(cast(Any, WorkflowScope), name="WorkflowTestScope")
+WorkflowTestFixtureRoleEnum = strawberry.enum(cast(Any, FixtureRole), name="WorkflowTestFixtureRole")
 
 
 @strawberry.type
@@ -469,7 +471,7 @@ class WorkflowSchedulePreview:
 @strawberry.input
 class WorkflowTestFixtureInput:
     step_key: str
-    role: WorkflowTestFixtureRoleEnum
+    role: FixtureRole
     item_index: int | None = None
     value: JSON | None = strawberry.UNSET
     outcome: str = ""
@@ -481,7 +483,7 @@ class WorkflowTestPlanOperation:
     step_id: PublicID
     key: str
     label: str
-    effect: WorkflowStepEffectEnum
+    effect: StepEffect
     effect_description: str
     replaced_by_output: bool
     outcomes: list[WorkflowStepOutcome]
@@ -489,7 +491,7 @@ class WorkflowTestPlanOperation:
 
 @strawberry.type
 class WorkflowTestFixtureRequirement:
-    role: WorkflowTestFixtureRoleEnum
+    role: FixtureRole
     step_id: PublicID
     step_key: str
     item_index_required: bool
@@ -506,7 +508,7 @@ class WorkflowTestFreshness:
 @strawberry.type
 class WorkflowTestPlan:
     revision: int
-    scope: WorkflowTestScopeEnum
+    scope: WorkflowScope
     source_step_id: PublicID | None
     snapshot_step_id: PublicID | None
     operations: list[WorkflowTestPlanOperation]
@@ -525,7 +527,7 @@ class WorkflowTestFixtureSourceSummary:
     workflow_revision: int
     step_id: PublicID
     step_key: str
-    role: WorkflowTestFixtureRoleEnum
+    role: FixtureRole
     item_index: int | None
     outcome: str
     recorded_at: datetime
@@ -704,7 +706,7 @@ class WorkflowTestSetupQuery:
         info: strawberry.Info,
         workflow: PublicID,
         expected_revision: int,
-        scope: WorkflowTestScopeEnum = TestScope.WHOLE,
+        scope: WorkflowScope = cast(WorkflowScope, WorkflowScope.WHOLE),
         selected_step: PublicID | None = None,
         subject: WorkflowObjectRefInput | None = None,
         input: JSON | None = strawberry.UNSET,
@@ -735,7 +737,7 @@ class WorkflowTestSetupQuery:
         self,
         info: strawberry.Info,
         workflow: PublicID,
-        role: WorkflowTestFixtureRoleEnum,
+        role: FixtureRole,
         step_key: str,
         item_index: int | None = None,
         after: PublicID | None = None,
@@ -764,7 +766,7 @@ class WorkflowTestSetupQuery:
         info: strawberry.Info,
         workflow: PublicID,
         attempt: PublicID,
-        role: WorkflowTestFixtureRoleEnum,
+        role: FixtureRole,
         step_key: str,
         item_index: int | None = None,
     ) -> WorkflowTestFixtureSource | None:
@@ -1700,7 +1702,7 @@ class WorkflowSubjectDeclarationQuery:
         scoped = read_scoped_queryset(cast(type[models.Model], Workflow), actor, action="write")
         if scoped is None:
             return []
-        workflows = cast(Any, scoped).for_subject_declaration(subject_declaration)
+        workflows = cast(Any, scoped).for_subject_declaration(subject_declaration).with_lineage_projection()
         return cast(list[WorkflowType], workflows)
 
 
@@ -1716,7 +1718,7 @@ class WorkflowActionMutation:
         try:
             published = target.publish()
         except ValidationError as error:
-            return ActionResult(ok=False, message=f"Publish failed: {error}")
+            return ActionResult.from_error(error, "Publishing the workflow failed.")
         return ActionResult(ok=True, message=f"Published workflow {published.sqid}.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
@@ -2011,7 +2013,7 @@ def _definition_pk(model: type[models.Model], value: PublicID) -> int:
         if public_field is None:
             return -1
         resolved = public_field.public_id_to_value(value)
-    except TypeError, ValueError, ValidationError:
+    except (TypeError, ValueError, ValidationError):
         return -1
     return resolved if type(resolved) is int else -1
 
@@ -2180,9 +2182,9 @@ def _comparison_edges(definition: dict[str, Any]) -> list[WorkflowDefinitionComp
     ]
 
 
-def _test_fixture_specs(values: list[WorkflowTestFixtureInput] | None) -> tuple[TestFixtureSpec, ...]:
+def _test_fixture_specs(values: list[WorkflowTestFixtureInput] | None) -> tuple[FixtureSpec, ...]:
     return tuple(
-        TestFixtureSpec(
+        FixtureSpec(
             step_key=item.step_key,
             role=item.role,
             item_index=item.item_index,
@@ -2203,7 +2205,7 @@ def _step_identity(value: GraphIdentity) -> PublicID:
     return cast(PublicID, to_public_id(Step, value.existing_id))
 
 
-def _workflow_test_plan(revision: int, scope: TestScope, plan: Any) -> WorkflowTestPlan:
+def _workflow_test_plan(revision: int, scope: WorkflowScope, plan: Any) -> WorkflowTestPlan:
     return WorkflowTestPlan(
         revision=revision,
         scope=scope,
@@ -2278,7 +2280,10 @@ class PublicDecisionMutation:
         """Resolve one pending decision as the signed-in session actor."""
 
         actor = session_user(info)
-        target = resolve_action_target(Decision, decision, reason="workflows.graphql.decide")
+        target = resolve_action_target(Decision, decision, reason="workflows.graphql.public_decide")
+        with actor_context(actor):
+            if not target.has_access("act"):
+                raise PermissionDenied("You are not allowed to resolve this decision.")
         result = engine.decide(target, verdict.value, payload=payload, actor=actor)
         return PublicDecisionResolutionPayload.from_result(result)
 
@@ -2334,7 +2339,7 @@ class WorkflowRunActionMutation:
         workflow: PublicID,
         expected_revision: int,
         request_key: str,
-        scope: WorkflowTestScopeEnum = TestScope.WHOLE,
+        scope: WorkflowScope = cast(WorkflowScope, WorkflowScope.WHOLE),
         source_step: PublicID | None = None,
         subject: WorkflowObjectRefInput | None = None,
         input: JSON | None = strawberry.UNSET,

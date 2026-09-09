@@ -34,7 +34,6 @@ from tests.workflows import (
 )
 
 User = get_user_model()
-pytest_plugins = ("tests.workflows",)
 
 _FIXTURE_ARCHIVE = b"fixture archive payload"
 

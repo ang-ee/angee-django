@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 import tablib
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist
 from django.db import models
 from import_export import fields, resources
 from import_export.instance_loaders import BaseInstanceLoader
@@ -181,10 +181,10 @@ class AngeeResource(resources.ModelResource):
         for raw in dataset[field.column_name]:
             try:
                 instance = field.widget.clean(raw)
-            except (LookupError, ValueError):
+                if instance is not None and not isinstance(instance, models.Model):
+                    instance = field.widget.model._base_manager.get(pk=instance)
+            except (LookupError, ObjectDoesNotExist, ValueError):
                 continue
-            if instance is not None and not isinstance(instance, models.Model):
-                instance = field.widget.model._base_manager.get(pk=instance)
             if instance is not None:
                 instances[(type(instance), instance.pk)] = instance
         return tuple(instances[key] for key in sorted(instances, key=lambda item: (item[0]._meta.label, item[1])))

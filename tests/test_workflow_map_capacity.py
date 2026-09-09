@@ -12,8 +12,6 @@ from angee.workflows import engine
 from angee.workflows.models import RunStatus, StepRunStatus
 from tests.workflows import StepRun, Workflow, WorkflowRun, start_run, workflow_with_steps
 
-pytest_plugins = ("tests.workflows",)
-
 
 def _map_workflow(*, max_steps: int, items: Any = None, two_maps: bool = False) -> Any:
     map_items = ["one", "two"] if items is None else items

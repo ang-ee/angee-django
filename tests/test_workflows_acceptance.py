@@ -24,7 +24,6 @@ from tests.workflows import (
 )
 
 User = get_user_model()
-pytest_plugins = ("tests.workflows",)
 
 
 def test_run_reopens_invalid_decision_then_completes_gate_and_journal(

@@ -21,7 +21,6 @@ from angee.workflows.definitions import DefinitionEdit, StaleDefinitionError
 from tests.conftest import write_addon_manifest
 from tests.workflows import WORKFLOW_DEFINITION_MODELS, Step, Workflow, workflow_table_setup
 
-pytest_plugins = ("tests.workflows",)
 pytestmark = [
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL row-lock contract"),
