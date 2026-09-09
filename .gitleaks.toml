@@ -1,0 +1,15 @@
+# Repo-level gitleaks configuration. The CI lane (.github/workflows/gitleaks.yml)
+# runs the gitleaks binary over full history; it picks this file up from the
+# repository root. Keep the default ruleset and only allowlist known false
+# positives with a pattern that cannot match a real credential.
+title = "angee-django gitleaks"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Django test fixtures that pass a credential row next to an MCP placement enum; 'credential=' followed by 'MCPPlacement.INTERNAL' trips generic-api-key."
+regexTarget = "line"
+regexes = [
+  '''credential=[A-Za-z_]+,\s*placement=MCPPlacement\.[A-Z_]+''',
+]

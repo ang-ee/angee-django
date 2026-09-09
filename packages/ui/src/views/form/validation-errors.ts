@@ -15,7 +15,7 @@ export interface DottedPathFieldErrors {
 
 /** Field- and form-level validation messages extracted from a save failure. */
 export interface ValidationErrors {
-  /** Messages keyed by SDL (camelCase) field name. */
+  /** Messages keyed by the wire field name in the schema's naming convention (snake_case on Hasura resources). */
   fieldErrors: Record<string, string[]>;
   /** Non-field / form-level messages. */
   formErrors: string[];

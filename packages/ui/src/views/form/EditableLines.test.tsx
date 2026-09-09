@@ -91,6 +91,7 @@ function Host({
     <AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, "demo.lines.context": contextWidget } }}>
       <EditableLines
         control={form.control}
+        setValue={form.setValue}
         name="lines"
         lines={lines}
         parentRow={{ company: "Acme" }}
@@ -124,7 +125,13 @@ function rowPatchFixture() {
     ] } });
     return <ModelMetadataProvider metadata={metadata}>
       <AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, "demo.product": productWidget } }}>
-        <EditableLines control={form.control} name="lines" lines={lines} readOnly={readOnly} />
+        <EditableLines
+          control={form.control}
+          setValue={form.setValue}
+          name="lines"
+          lines={lines}
+          readOnly={readOnly}
+        />
       </AppRuntimeProvider>
     </ModelMetadataProvider>;
   }
@@ -161,6 +168,41 @@ describe("EditableLines", () => {
     act(() => f.callbacks.get("Gadget")!({ label: "After unmount" }));
     expect(f.form().getValues("lines")).toMatchObject([{ id: "two", label: "Gadget" }]);
   });
+
+  test("independent pending row patches both reach their still-mounted line", () => {
+    const f = rowPatchFixture();
+    fireEvent.click(screen.getByRole("button", { name: "Preview Gadget" }));
+    const pending = f.callbacks.get("Gadget")!;
+    act(() => pending({ product: { id: "new-product", name: "New" } }));
+    act(() => pending({ label: "Second independent result" }));
+    expect(f.form().getValues("lines.1")).toMatchObject({
+      product: { id: "new-product", name: "New" },
+      label: "Second independent result",
+    });
+  });
+
+  test("completing a row patch preserves focus in another cell", () => {
+    const f = rowPatchFixture();
+    fireEvent.click(screen.getByRole("button", { name: "Preview Gadget" }));
+    const pending = f.callbacks.get("Gadget")!;
+    const focusTarget = screen.getAllByRole("textbox", { name: "Decimal number" })[1]!;
+    focusTarget.focus();
+    expect(document.activeElement).toBe(focusTarget);
+    act(() => pending({ label: "Resolved preview" }));
+    expect(document.activeElement).toBe(focusTarget);
+  });
+
+  test("a same-event cell change survives an accompanying sibling patch", () => {
+    const f = rowPatchFixture();
+    fireEvent.click(screen.getByRole("button", { name: "Preview Gadget" }));
+    const pending = f.callbacks.get("Gadget")!;
+    act(() => {
+      f.form().setValue("lines.1.quantity" as never, 8 as never, { shouldDirty: true });
+      pending({ label: "Patched label" });
+    });
+    expect(f.form().getValues("lines.1.quantity")).toBe(8);
+  });
+
   test("passes the live child and owning document to a registered widget", () => {
     render(<Host inspectContext />);
     expect(screen.getByText("Widget / Acme")).toBeTruthy();

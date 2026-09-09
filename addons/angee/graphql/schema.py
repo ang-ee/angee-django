@@ -21,7 +21,7 @@ from rebac.managers import RebacManager
 from strawberry.tools import merge_types
 from strawberry.types.base import get_object_definition
 from strawberry.types.execution import ExecutionContext
-from strawberry.utils.str_converters import to_camel_case
+from strawberry.types.field import StrawberryField
 from strawberry_django_hasura import hasura_config
 
 from angee.addons import addon_manifest, optional_addon_module, resolve_addon_reference
@@ -147,9 +147,10 @@ class AngeeSchema(strawberry.Schema):
 
         Model validation (``full_clean``) raises a ``ValidationError`` whose
         ``message_dict`` keys are model field names. Surface them as
-        ``validationErrors`` (camel-cased to match the SDL field names a form
-        binds to) plus a ``formErrors`` list for non-field errors, so the client
-        renders each message under its field instead of one opaque banner.
+        ``validationErrors`` using this schema's naming convention for the
+        field a form binds to, plus a ``formErrors`` list for non-field errors,
+        so the client renders each message under its field instead of one
+        opaque banner.
         """
 
         validation = _unwrap_validation_error(error.original_error)
@@ -163,7 +164,8 @@ class AngeeSchema(strawberry.Schema):
                     form_errors.extend(messages)
                 else:
                     head, separator, nested = field.partition(".")
-                    path = f"{to_camel_case(head)}.{nested}" if separator else to_camel_case(head)
+                    wire_name = self.config.name_converter.get_graphql_name(StrawberryField(python_name=head))
+                    path = f"{wire_name}.{nested}" if separator else wire_name
                     field_errors[path] = list(messages)
         else:
             form_errors.extend(validation.messages)

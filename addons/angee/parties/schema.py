@@ -48,6 +48,29 @@ MergeVeto = apps.get_model("parties", "MergeVeto")
 RelationshipKind = apps.get_model("parties", "RelationshipKind")
 Relationship = apps.get_model("parties", "Relationship")
 
+_PARTY_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(Party, "hasura_updatable_fields")
+_PARTY_EXTENSION_PUBLIC_ID_FIELDS = tuple(
+    name for name in _PARTY_EXTENSION_UPDATE_FIELDS if Party._meta.get_field(name).is_relation
+)
+
+_PERSON_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(Person, "hasura_insertable_fields")
+_PERSON_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(Person, "hasura_updatable_fields")
+_PERSON_EXTENSION_WRITE_FIELDS = tuple(
+    dict.fromkeys((*_PERSON_EXTENSION_INSERT_FIELDS, *_PERSON_EXTENSION_UPDATE_FIELDS))
+)
+_PERSON_EXTENSION_PUBLIC_ID_FIELDS = tuple(
+    name for name in _PERSON_EXTENSION_WRITE_FIELDS if Person._meta.get_field(name).is_relation
+)
+
+_ORGANIZATION_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(Organization, "hasura_insertable_fields")
+_ORGANIZATION_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(Organization, "hasura_updatable_fields")
+_ORGANIZATION_EXTENSION_WRITE_FIELDS = tuple(
+    dict.fromkeys((*_ORGANIZATION_EXTENSION_INSERT_FIELDS, *_ORGANIZATION_EXTENSION_UPDATE_FIELDS))
+)
+_ORGANIZATION_EXTENSION_PUBLIC_ID_FIELDS = tuple(
+    name for name in _ORGANIZATION_EXTENSION_WRITE_FIELDS if Organization._meta.get_field(name).is_relation
+)
+
 
 @strawberry_django.type(Party)
 class PartyType(AuthoredRefMixin, AngeeNode):
@@ -507,7 +530,6 @@ _PARTY_RESOURCE = hasura_model_resource(
                 "display_name",
                 "created_at",
                 "updated_at",
-                *declared_hasura_resource_fields(Party, "hasura_readable_fields"),
                 *declared_hasura_resource_fields(Party, "hasura_filterable_fields"),
             ]
         )
@@ -524,13 +546,13 @@ _PARTY_RESOURCE = hasura_model_resource(
         dict.fromkeys(
             [
                 "created_at",
-                *declared_hasura_resource_fields(Party, "hasura_readable_fields"),
                 *declared_hasura_resource_fields(Party, "hasura_groupable_fields"),
             ]
         )
     ),
     insert=False,
-    updatable=["display_name", "notes", *declared_hasura_resource_fields(Party, "hasura_updatable_fields")],
+    updatable=["display_name", "notes", *_PARTY_EXTENSION_UPDATE_FIELDS],
+    write_backend=AngeeHasuraWriteBackend(Party, public_id_fields=_PARTY_EXTENSION_PUBLIC_ID_FIELDS),
 )
 _PERSON_RESOURCE = hasura_model_resource(
     PersonType,
@@ -549,7 +571,6 @@ _PERSON_RESOURCE = hasura_model_resource(
                 "anniversary",
                 "created_at",
                 "updated_at",
-                *declared_hasura_resource_fields(Person, "hasura_readable_fields"),
                 *declared_hasura_resource_fields(Person, "hasura_filterable_fields"),
             ]
         )
@@ -570,7 +591,6 @@ _PERSON_RESOURCE = hasura_model_resource(
                 "folder",
                 "folder__name",
                 "created_at",
-                *declared_hasura_resource_fields(Person, "hasura_readable_fields"),
                 *declared_hasura_resource_fields(Person, "hasura_groupable_fields"),
             ]
         )
@@ -586,7 +606,7 @@ _PERSON_RESOURCE = hasura_model_resource(
         "nickname",
         "birthday",
         "anniversary",
-        *declared_hasura_resource_fields(Person, "hasura_insertable_fields"),
+        *_PERSON_EXTENSION_INSERT_FIELDS,
     ],
     updatable=[
         "display_name",
@@ -599,10 +619,14 @@ _PERSON_RESOURCE = hasura_model_resource(
         "nickname",
         "birthday",
         "anniversary",
-        *declared_hasura_resource_fields(Person, "hasura_updatable_fields"),
+        *_PERSON_EXTENSION_UPDATE_FIELDS,
     ],
     delete=False,
     field_id_decode={"folder": public_pk_decoder(Folder)},
+    write_backend=AngeeHasuraWriteBackend(
+        Person,
+        public_id_fields=("folder", *_PERSON_EXTENSION_PUBLIC_ID_FIELDS),
+    ),
     get_queryset=lambda info: Person.objects.all().with_circle_names(),
 )
 _ORGANIZATION_RESOURCE = hasura_model_resource(
@@ -618,7 +642,6 @@ _ORGANIZATION_RESOURCE = hasura_model_resource(
                 "domain",
                 "created_at",
                 "updated_at",
-                *declared_hasura_resource_fields(Organization, "hasura_readable_fields"),
                 *declared_hasura_resource_fields(Organization, "hasura_filterable_fields"),
             ]
         )
@@ -637,7 +660,6 @@ _ORGANIZATION_RESOURCE = hasura_model_resource(
             [
                 "domain",
                 "created_at",
-                *declared_hasura_resource_fields(Organization, "hasura_readable_fields"),
                 *declared_hasura_resource_fields(Organization, "hasura_groupable_fields"),
             ]
         )
@@ -647,16 +669,20 @@ _ORGANIZATION_RESOURCE = hasura_model_resource(
         "notes",
         "legal_name",
         "domain",
-        *declared_hasura_resource_fields(Organization, "hasura_insertable_fields"),
+        *_ORGANIZATION_EXTENSION_INSERT_FIELDS,
     ],
     updatable=[
         "display_name",
         "notes",
         "legal_name",
         "domain",
-        *declared_hasura_resource_fields(Organization, "hasura_updatable_fields"),
+        *_ORGANIZATION_EXTENSION_UPDATE_FIELDS,
     ],
     delete=False,
+    write_backend=AngeeHasuraWriteBackend(
+        Organization,
+        public_id_fields=_ORGANIZATION_EXTENSION_PUBLIC_ID_FIELDS,
+    ),
 )
 _HANDLE_RESOURCE = hasura_model_resource(
     HandleType,
