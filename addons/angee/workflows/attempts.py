@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import uuid
 from dataclasses import dataclass
@@ -22,6 +23,12 @@ from pydantic import (
 )
 
 
+def map_child_input(value: JsonValue) -> JsonValue:
+    """Project a raw Map item through the established Automatic input contract."""
+
+    return copy.deepcopy(value) if isinstance(value, dict) else {"item": copy.deepcopy(value)}
+
+
 class AttemptCause(StrEnum):
     """Reason a physical attempt exists for one logical step run."""
 
@@ -30,6 +37,7 @@ class AttemptCause(StrEnum):
     AUTOMATIC_RETRY = "automatic_retry"
     MANUAL_RETRY = "manual_retry"
     MAP_ENGINE = "map_engine"
+    TEST_FIXTURE = "test_fixture"
 
 
 class AttemptResultKind(StrEnum):

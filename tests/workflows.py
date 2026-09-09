@@ -101,6 +101,17 @@ class StepAttempt(workflow_models.StepAttempt):
         abstract = False
         app_label = "workflows"
         db_table = "test_workflows_step_attempt"
+        rebac_resource_type = "workflows/step_attempt"
+        rebac_id_attr = "sqid"
+
+
+class WorkflowTestFixture(workflow_models.WorkflowTestFixture):
+    """Concrete retained workflow test fixture model."""
+
+    class Meta(workflow_models.WorkflowTestFixture.Meta):
+        abstract = False
+        app_label = "workflows"
+        db_table = "test_workflows_test_fixture"
 
 
 class Decision(workflow_models.Decision):
@@ -124,7 +135,15 @@ class WorkflowDispatch(workflow_models.WorkflowDispatch):
 
 
 WORKFLOW_DEFINITION_MODELS = (Workflow, Step, Edge, Trigger)
-WORKFLOW_RUNTIME_MODELS = (*WORKFLOW_DEFINITION_MODELS, WorkflowRun, StepRun, StepAttempt, Decision, WorkflowDispatch)
+WORKFLOW_RUNTIME_MODELS = (
+    *WORKFLOW_DEFINITION_MODELS,
+    WorkflowRun,
+    StepRun,
+    StepAttempt,
+    WorkflowTestFixture,
+    Decision,
+    WorkflowDispatch,
+)
 
 
 @contextmanager

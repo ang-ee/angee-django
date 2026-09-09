@@ -62,6 +62,7 @@ from angee.workflows.attempts import (
     RetryIntent,
     deserialize_decision_specs,
     json_values_equal,
+    map_child_input,
     serialize_decision_specs,
     validate_json_presence,
 )
@@ -76,6 +77,16 @@ from angee.workflows.dispatch import (
 from angee.workflows.steps import (
     StepImpl,
     retry_policy_from_config,
+)
+from angee.workflows.test_contracts import (
+    TestFixtureRole,
+    TestFixtureSource,
+    TestFixtureSourcePage,
+    TestFixtureSourceSummary,
+    TestFixtureSpec,
+    TestScope,
+    WorkflowTestSetupPlan,
+    validate_test_fixture_spec,
 )
 from angee.workflows.trigger_declarations import (
     EventTriggerConfig,
@@ -594,7 +605,9 @@ class WorkflowManager(WorkflowDefinitionManagerMixin, AngeeManager.from_queryset
             return None
         return latest
 
-    def test_snapshot(self, workflow: Any, *, expected_revision: int) -> Any:
+    def test_snapshot(
+        self, workflow: Any, *, expected_revision: int, require_readiness: bool = True
+    ) -> Any:
         """Return the immutable test copy of one exact saved draft revision."""
 
         self._validate_expected_revision(workflow, expected_revision)
@@ -617,8 +630,9 @@ class WorkflowManager(WorkflowDefinitionManagerMixin, AngeeManager.from_queryset
             ).first()
             if existing is not None:
                 return existing
-            with _definition_caller_context(draft):
-                draft._validate_publishable()
+            if require_readiness:
+                with _definition_caller_context(draft):
+                    draft._validate_publishable()
             snapshot = draft._new_definition_copy(
                 version=0,
                 draft_revision=expected_revision,
@@ -660,6 +674,10 @@ class WorkflowRunQuerySet(AngeeQuerySet[Any]):
             "subject_content_type_id",
             "subject_object_id",
             "test_request_actor_ref",
+            "test_scope",
+            "test_step",
+            "test_step_id",
+            "test_source_step_id",
         }
         with system_context(reason="workflows.runs.test_identity_guard"):
             targets_test = models.QuerySet.filter(self, origin=RunOrigin.TEST).exists()
@@ -685,6 +703,10 @@ class WorkflowRunQuerySet(AngeeQuerySet[Any]):
             "subject_content_type_id",
             "subject_object_id",
             "test_request_actor_ref",
+            "test_scope",
+            "test_step",
+            "test_step_id",
+            "test_source_step_id",
         }
         targets_test = system_queryset(self.model, using=self.db, lock=None).filter(
             pk__in=[row.pk for row in rows], origin=RunOrigin.TEST
@@ -803,12 +825,19 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         subject: Any,
         actor: Any,
         input: JsonPresence = JsonPresence(),
+        scope: TestScope = TestScope.WHOLE,
+        selected_step: Any = None,
+        fixtures: tuple[TestFixtureSpec, ...] = (),
     ) -> Any:
         """Start or recover one idempotent whole-workflow test request."""
 
         workflow_model = self.model._meta.get_field("workflow").remote_field.model
         workflow_model.objects._validate_expected_revision(workflow, expected_revision)
         input = validate_json_presence(input, label="workflow run input")
+        if not isinstance(scope, TestScope):
+            raise ValidationError({"scope": "Test launches require a declared scope."})
+        if (scope is TestScope.NODE) != (selected_step is not None):
+            raise ValidationError({"selected_step": "Node tests require exactly one selected step."})
         if not isinstance(request_key, str) or not request_key.strip():
             raise ValidationError({"request_key": "Test launch request keys must be non-empty strings."})
         head_id = workflow.pk if workflow.published_from_id is None else workflow.published_from_id
@@ -834,25 +863,77 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 actor_ref = str(to_subject_ref(actor))
             except NoActorResolvedError as error:
                 raise PermissionDenied("Test launches require an effective actor.") from error
-            existing = self.select_related("workflow").filter(dedup_key=dedup_key).first()
+            existing = self.select_related("workflow", "test_step").filter(dedup_key=dedup_key).first()
             if existing is not None:
                 if existing.test_request_actor_ref != actor_ref:
                     raise PermissionDenied("Test launch request is owned by another actor.")
+                selected_identity = selected_step.pk if selected_step is not None else None
+                if existing.test_source_step_id != selected_identity:
+                    raise ValidationError({"request_key": "Test launch selected-step facts do not match."})
+                from angee.workflows.graph import WorkflowGraph
+
+                retry_graph = WorkflowGraph.from_workflow(existing.workflow)
+                retry_rows = self._resolve_test_fixture_rows(
+                    existing.workflow,
+                    scope=scope,
+                    selected_step=existing.test_step,
+                    specs=fixtures,
+                    actor=actor,
+                    graph=retry_graph,
+                )
                 self._validate_test_retry(
                     existing,
                     expected_revision=expected_revision,
                     subject=subject,
                     input=input,
                     requested_snapshot_id=(requested.pk if requested.status == WorkflowStatus.TEST else None),
+                    scope=scope,
+                    selected_step_key=existing.test_step.key if existing.test_step_id else None,
+                    fixture_rows=retry_rows,
                 )
                 return existing
+            selected_key = None
+            if selected_step is not None:
+                step_model = workflow_model._meta.apps.get_model("workflows", "Step")
+                try:
+                    locked_selected = system_queryset(step_model, using=alias, lock=("self",)).get(
+                        pk=selected_step.pk,
+                        workflow=requested,
+                    )
+                except (ObjectDoesNotExist, TypeError, ValueError) as error:
+                    raise ValidationError(
+                        {"selected_step": "The selected step must belong to this exact workflow revision."}
+                    ) from error
+                selected_key = locked_selected.key
             if workflow.published_from_id is None:
                 snapshot = workflow_model.objects.test_snapshot(
                     head,
                     expected_revision=expected_revision,
+                    require_readiness=False,
                 )
             else:
                 snapshot = requested
+            copied_test_step = None
+            if selected_key is not None:
+                copied_test_step = snapshot.steps.get(key=selected_key)
+            from angee.workflows.graph import WorkflowGraph
+
+            graph = WorkflowGraph.from_workflow(snapshot)
+            fixture_rows = self._resolve_test_fixture_rows(
+                snapshot,
+                scope=scope,
+                selected_step=copied_test_step,
+                specs=fixtures,
+                actor=actor,
+                graph=graph,
+            )
+            self._validate_test_scope_readiness(
+                snapshot,
+                scope=scope,
+                selected_step=copied_test_step,
+                fixture_rows=fixture_rows,
+                graph=graph,
+            )
             return self._start_pinned_locked(
                 snapshot,
                 subject,
@@ -861,8 +942,307 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 origin=cast(RunOrigin, RunOrigin.TEST),
                 input=input,
                 test_request_actor_ref=actor_ref,
+                test_scope=scope,
+                test_step=copied_test_step,
+                test_source_step_id=locked_selected.pk if selected_step is not None else None,
+                test_fixture_rows=fixture_rows,
                 available_at=timezone.now(),
                 using=alias,
+            )
+
+    def test_setup_plan(
+        self,
+        workflow: Any,
+        *,
+        expected_revision: int,
+        actor: Any,
+        subject: Any = None,
+        input: JsonPresence = JsonPresence(),
+        scope: TestScope = TestScope.WHOLE,
+        selected_step: Any = None,
+        fixtures: tuple[TestFixtureSpec, ...] = (),
+        previous_run: Any = None,
+    ) -> WorkflowTestSetupPlan:
+        """Project the exact graph, fixture and effect facts used by test admission."""
+
+        from angee.workflows.graph import GraphFreshnessReason, GraphIdentity, WorkflowGraph
+
+        if not isinstance(scope, TestScope):
+            raise ValidationError({"scope": "Test plans require a declared scope."})
+        if (scope is TestScope.NODE) != (selected_step is not None):
+            raise ValidationError({"selected_step": "Node test plans require exactly one selected step."})
+        input = validate_json_presence(input, label="workflow run input")
+        workflow_model = self.model._meta.get_field("workflow").remote_field.model
+        authorized = read_scoped_queryset(workflow_model, actor, action="write")
+        if authorized is None or not authorized.filter(pk=workflow.pk).exists():
+            raise PermissionDenied("Test workflow access was denied.")
+        alias = self.db
+        with system_context(reason="workflows.runs.test_setup_plan"), transaction.atomic(using=alias):
+            head_id = workflow.pk if workflow.published_from_id is None else workflow.published_from_id
+            head = system_queryset(workflow_model, using=alias, lock=("self",)).get(pk=head_id)
+            requested = head
+            if workflow.published_from_id is not None:
+                requested = system_queryset(workflow_model, using=alias, lock=("self",)).get(pk=workflow.pk)
+                if requested.status != WorkflowStatus.TEST or requested.published_from_id != head.pk:
+                    raise ValidationError({"workflow": "Test plans require a draft head or test snapshot."})
+            elif head.status != WorkflowStatus.DRAFT:
+                raise ValidationError({"workflow": "Test plans require a draft head or test snapshot."})
+            if requested.draft_revision != expected_revision:
+                raise StaleDefinitionError(expected=expected_revision, current=requested.draft_revision)
+            requested.validate_subject_declaration(subject)
+            locked_selected = None
+            if selected_step is not None:
+                step_model = workflow_model._meta.apps.get_model("workflows", "Step")
+                try:
+                    locked_selected = system_queryset(step_model, using=alias, lock=("self",)).get(
+                        pk=selected_step.pk,
+                        workflow=requested,
+                    )
+                except (ObjectDoesNotExist, TypeError, ValueError) as error:
+                    raise ValidationError(
+                        {"selected_step": "The selected step must belong to this exact workflow revision."}
+                    ) from error
+            graph = WorkflowGraph.from_workflow(requested)
+            fixture_rows = self._resolve_test_fixture_rows(
+                requested,
+                scope=scope,
+                selected_step=locked_selected,
+                specs=fixtures,
+                actor=actor,
+                graph=graph,
+                require_complete=False,
+            )
+            output_slots = frozenset(
+                (GraphIdentity(existing_id=row.step_id), row.item_index)
+                for row in fixture_rows
+                if row.role == TestFixtureRole.OUTPUT
+            )
+            plan = graph.test_execution_plan(
+                selected_identity=(
+                    GraphIdentity(existing_id=locked_selected.pk)
+                    if locked_selected is not None
+                    else None
+                ),
+                output_slots=output_slots,
+                map_item_slots=frozenset(
+                    (GraphIdentity(existing_id=row.step_id), row.item_index)
+                    for row in fixture_rows
+                    if row.role == TestFixtureRole.MAP_ITEM and row.item_index is not None
+                ),
+            )
+            freshness = (
+                graph.test_freshness(
+                    WorkflowGraph.from_workflow(head),
+                    selected_identity=(
+                        GraphIdentity(existing_id=locked_selected.pk)
+                        if locked_selected is not None
+                        else None
+                    ),
+                    plan=plan,
+                )
+                if requested.pk != head.pk
+                else ()
+            )
+            if previous_run is not None:
+                run_access = read_scoped_queryset(self.model, actor, action="read")
+                locked_previous = (
+                    None
+                    if run_access is None
+                    else run_access.select_related("workflow", "test_step").filter(
+                        pk=previous_run.pk,
+                        origin=RunOrigin.TEST,
+                    ).first()
+                )
+                if locked_previous is None:
+                    raise PermissionDenied("Previous test evidence is unavailable.")
+                previous_head_id = locked_previous.workflow.published_from_id or locked_previous.workflow_id
+                if previous_head_id != head.pk:
+                    raise ValidationError({"previous_run": "Previous test evidence belongs to another lineage."})
+                previous_fixture_rows = list(
+                    locked_previous.test_fixtures.select_related("step", "captured_attempt")
+                )
+                previous_graph = WorkflowGraph.from_workflow(locked_previous.workflow)
+                previous_selected_identity = (
+                    GraphIdentity(existing_id=locked_previous.test_step_id)
+                    if locked_previous.test_step_id is not None
+                    else None
+                )
+                previous_plan = previous_graph.test_execution_plan(
+                    selected_identity=previous_selected_identity,
+                    output_slots=frozenset(
+                        (GraphIdentity(existing_id=row.step_id), row.item_index)
+                        for row in previous_fixture_rows
+                        if row.role == TestFixtureRole.OUTPUT
+                    ),
+                    map_item_slots=frozenset(
+                        (GraphIdentity(existing_id=row.step_id), row.item_index)
+                        for row in previous_fixture_rows
+                        if row.role == TestFixtureRole.MAP_ITEM and row.item_index is not None
+                    ),
+                )
+                previous_freshness = previous_graph.test_freshness(
+                    graph,
+                    selected_identity=previous_selected_identity,
+                    plan=previous_plan,
+                )
+                freshness = tuple(dict.fromkeys((*freshness, *previous_freshness)))
+                proposed_content_type = (
+                    None
+                    if subject is None
+                    else ContentType.objects.get_for_model(subject, for_concrete_model=False)
+                )
+                if (
+                    locked_previous.subject_content_type_id
+                    != (None if proposed_content_type is None else proposed_content_type.pk)
+                    or locked_previous.subject_object_id != (None if subject is None else subject.pk)
+                ):
+                    freshness = (*freshness, GraphFreshnessReason("subject_changed", None, "subject"))
+                if (
+                    locked_previous.input_present is not input.present
+                    or not json_values_equal(
+                        locked_previous.input,
+                        input.value if input.present else None,
+                    )
+                ):
+                    freshness = (*freshness, GraphFreshnessReason("input_changed", None, "input"))
+                selected_key = locked_selected.key if locked_selected is not None else None
+                if (
+                    (locked_previous.test_scope or TestScope.WHOLE) != scope
+                    or (locked_previous.test_step.key if locked_previous.test_step_id else None)
+                    != selected_key
+                ):
+                    freshness = (*freshness, GraphFreshnessReason("scope_changed", selected_key, "scope"))
+                actual_fixture_facts = [
+                    (
+                        row.step.key,
+                        str(row.role),
+                        row.item_index,
+                        row.value_present,
+                        row.value,
+                        row.outcome,
+                        row.captured_attempt_id,
+                    )
+                    for row in previous_fixture_rows
+                ]
+                proposed_fixture_facts = [
+                    (
+                        row.step.key,
+                        str(row.role),
+                        row.item_index,
+                        row.value_present,
+                        row.value,
+                        row.outcome,
+                        row.captured_attempt_id,
+                    )
+                    for row in fixture_rows
+                ]
+                actual_fixture_facts.sort(
+                    key=lambda value: (value[0], value[1], -1 if value[2] is None else value[2])
+                )
+                proposed_fixture_facts.sort(
+                    key=lambda value: (value[0], value[1], -1 if value[2] is None else value[2])
+                )
+                if len(actual_fixture_facts) != len(proposed_fixture_facts) or any(
+                    left[:4] != right[:4]
+                    or not json_values_equal(left[4], right[4])
+                    or left[5:] != right[5:]
+                    for left, right in zip(
+                        actual_fixture_facts,
+                        proposed_fixture_facts,
+                        strict=True,
+                    )
+                ):
+                    freshness = (
+                        *freshness,
+                        GraphFreshnessReason("fixtures_changed", selected_key, "fixtures"),
+                    )
+                attempt_model = self.model._meta.apps.get_model("workflows", "StepAttempt")
+                for retained_fixture in previous_fixture_rows:
+                    if retained_fixture.captured_attempt_id is None:
+                        continue
+                    available = attempt_model.objects._test_fixture_source_record(
+                        head,
+                        actor=actor,
+                        attempt_id=retained_fixture.captured_attempt.sqid,
+                        role=retained_fixture.role,
+                        step_key=retained_fixture.step.key,
+                        item_index=retained_fixture.item_index,
+                    )
+                    if available is None:
+                        freshness = (
+                            *freshness,
+                            GraphFreshnessReason(
+                                "captured_source_unavailable",
+                                retained_fixture.step.key,
+                                "fixtures",
+                            ),
+                        )
+            source_step_id = locked_selected.sqid if locked_selected is not None else None
+            if locked_selected is not None and requested.pk != head.pk:
+                step_model = workflow_model._meta.apps.get_model("workflows", "Step")
+                if (
+                    previous_run is not None
+                    and locked_previous.workflow_id == requested.pk
+                    and locked_previous.test_step_id == locked_selected.pk
+                    and locked_previous.test_source_step_id is not None
+                ):
+                    source_step_id = step_model.public_id_from_pk(locked_previous.test_source_step_id)
+                else:
+                    source_step = system_queryset(step_model, using=alias, lock=None).filter(
+                        workflow=head,
+                        key=locked_selected.key,
+                    ).first()
+                    source_step_id = source_step.sqid if source_step is not None else None
+            freshness = tuple(dict.fromkeys(freshness))
+            return WorkflowTestSetupPlan(
+                source_step_id=source_step_id,
+                snapshot_step_id=(
+                    locked_selected.sqid
+                    if locked_selected is not None and requested.status == WorkflowStatus.TEST
+                    else None
+                ),
+                operations=plan.operations,
+                required_fixtures=plan.required_fixtures,
+                diagnostics=plan.diagnostics,
+                requires_map_item=plan.map_item,
+                freshness=freshness,
+            )
+
+    @staticmethod
+    def _validate_test_scope_readiness(
+        snapshot: Any,
+        *,
+        scope: TestScope,
+        selected_step: Any,
+        fixture_rows: tuple[Any, ...],
+        graph: Any = None,
+    ) -> None:
+        from angee.workflows.graph import GraphIdentity, WorkflowGraph
+
+        graph = graph or WorkflowGraph.from_workflow(snapshot)
+        output_slots = frozenset(
+            (
+                GraphIdentity(existing_id=row.step_id),
+                row.item_index,
+            )
+            for row in fixture_rows
+            if row.role == TestFixtureRole.OUTPUT
+        )
+        selected_identity = (
+            GraphIdentity(existing_id=selected_step.pk) if scope == TestScope.NODE else None
+        )
+        plan = graph.test_execution_plan(
+            selected_identity=selected_identity,
+            output_slots=output_slots,
+            map_item_slots=frozenset(
+                (GraphIdentity(existing_id=row.step_id), row.item_index)
+                for row in fixture_rows
+                if row.role == TestFixtureRole.MAP_ITEM and row.item_index is not None
+            ),
+        )
+        if plan.diagnostics:
+            raise ValidationError(
+                {item.location.path: item.message for item in plan.diagnostics}
             )
 
     def _validate_test_retry(
@@ -873,6 +1253,9 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         subject: Any,
         input: JsonPresence,
         requested_snapshot_id: int | None,
+        scope: TestScope,
+        selected_step_key: str | None,
+        fixture_rows: tuple[Any, ...],
     ) -> None:
         """Reject reuse of one request identity with different admission facts."""
 
@@ -889,9 +1272,34 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             and run.subject_object_id == object_id
             and run.input_present is input.present
             and json_values_equal(run.input, input.value if input.present else None)
+            and (run.test_scope or TestScope.WHOLE) == scope
+            and (run.test_step.key if run.test_step_id is not None else None) == selected_step_key
         )
         if not matches:
             raise ValidationError({"request_key": "Test launch request facts do not match."})
+        if not self._test_fixture_facts_match(run, fixture_rows):
+            raise ValidationError({"request_key": "Test launch fixture facts do not match."})
+
+    @staticmethod
+    def _test_fixture_facts_match(run: Any, fixture_rows: tuple[Any, ...]) -> bool:
+        """Compare immutable fixture facts with exact JSON type semantics."""
+
+        actual = list(
+            run.test_fixtures.select_related("step", "captured_attempt").order_by(
+                "step_id", "role", "item_index"
+            )
+        )
+        expected = sorted(fixture_rows, key=lambda row: (row.step_id, str(row.role), row.item_index or -1))
+        return len(actual) == len(expected) and not any(
+            left.step_id != right.step_id
+            or left.role != right.role
+            or left.item_index != right.item_index
+            or left.value_present is not right.value_present
+            or not json_values_equal(left.value, right.value)
+            or left.outcome != right.outcome
+            or left.captured_attempt_id != right.captured_attempt_id
+            for left, right in zip(actual, expected, strict=True)
+        )
 
     def _start_pinned_locked(
         self,
@@ -905,6 +1313,10 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         origin: RunOrigin | None = None,
         input: JsonPresence = JsonPresence(),
         test_request_actor_ref: str = "",
+        test_scope: TestScope | str = "",
+        test_step: Any = None,
+        test_source_step_id: int | None = None,
+        test_fixture_rows: tuple[Any, ...] = (),
         available_at: datetime,
         using: str,
     ) -> Any:
@@ -929,6 +1341,9 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             "input_present": input.present,
             "input": copy.deepcopy(input.value) if input.present else None,
             "test_request_actor_ref": test_request_actor_ref,
+            "test_scope": test_scope,
+            "test_step": test_step,
+            "test_source_step_id": test_source_step_id,
             "created_by_id": owner_id,
             "updated_by_id": owner_id,
         }
@@ -940,17 +1355,159 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             run, created = self.create(**attrs), True
         if not created:
             return run
-        entries = list(version.steps.filter(is_entry=True).order_by("pk"))
+        fixtures: tuple[Any, ...] = ()
+        if run.origin == RunOrigin.TEST:
+            fixture_model = self.model._meta.apps.get_model("workflows", "WorkflowTestFixture")
+            connection = connections[using]
+            fixture_token = _test_fixture_write_run.set(
+                (using, id(connection), id(connection.atomic_blocks[0]), run.pk)
+            )
+            batch_token = _test_fixture_batch_rows.set(
+                frozenset(id(row) for row in test_fixture_rows)
+            )
+            try:
+                fixtures = fixture_model.objects._create_batch(run, test_fixture_rows)
+                apply_token = _test_fixture_apply_ids.set(
+                    frozenset(
+                        fixture.pk
+                        for fixture in fixtures
+                        if fixture.role == TestFixtureRole.OUTPUT
+                    )
+                )
+                attempt_model = self.model._meta.apps.get_model("workflows", "StepAttempt")
+                try:
+                    for fixture in fixtures:
+                        if (
+                            fixture.role == TestFixtureRole.OUTPUT
+                            and run.test_scope == TestScope.NODE
+                        ):
+                            attempt_model.objects.record_test_fixture(fixture, at=available_at)
+                finally:
+                    _test_fixture_apply_ids.reset(apply_token)
+            finally:
+                _test_fixture_batch_rows.reset(batch_token)
+                _test_fixture_write_run.reset(fixture_token)
+        if test_scope == TestScope.NODE:
+            entries = [test_step] if test_step is not None else []
+        else:
+            entries = list(version.steps.filter(is_entry=True).order_by("pk"))
         if len(entries) != 1:
-            raise ValidationError({"workflow": "Workflow version must have exactly one entry step."})
+            raise ValidationError({"workflow": "Workflow version must have exactly one initial step."})
         step_run_model = self.model._meta.apps.get_model("workflows", "StepRun")
-        step_run_model.objects.create(run=run, step=entries[0], map_index=-1, status=StepRunStatus.SCHEDULED, input={})
+        entry_index = -1
+        if test_scope == TestScope.NODE:
+            map_fixture = next(
+                (fixture for fixture in fixtures if fixture.role == TestFixtureRole.MAP_ITEM),
+                None,
+            )
+            if map_fixture is not None:
+                entry_index = map_fixture.item_index
+        step_run_model.objects.get_or_create(
+            run=run,
+            step=entries[0],
+            map_index=entry_index,
+            defaults={"status": StepRunStatus.SCHEDULED, "input": {}},
+        )
         dispatch_model = self.model._meta.apps.get_model("workflows", "WorkflowDispatch")
         dispatch_model.objects.schedule_advance(run, available_at=available_at)
         from angee.workflows.engine import enqueue_dispatch_publisher
 
         transaction.on_commit(enqueue_dispatch_publisher, using=using)
         return run
+
+    def _resolve_test_fixture_rows(
+        self,
+        snapshot: Any,
+        *,
+        scope: TestScope,
+        selected_step: Any,
+        specs: tuple[TestFixtureSpec, ...],
+        actor: Any,
+        graph: Any = None,
+        require_complete: bool = True,
+    ) -> tuple[Any, ...]:
+        """Resolve a complete fixture request before the test run writes begin."""
+
+        from angee.workflows.graph import GraphIdentity, WorkflowGraph
+
+        fixture_model = self.model._meta.apps.get_model("workflows", "WorkflowTestFixture")
+        attempt_model = self.model._meta.apps.get_model("workflows", "StepAttempt")
+        graph = graph or WorkflowGraph.from_workflow(snapshot)
+        step_by_key = {step.key: step for step in snapshot.steps.order_by("pk")}
+        allowed_outputs = set(step_by_key)
+        allows_map_item = False
+        if scope == TestScope.NODE:
+            plan = graph.test_execution_plan(
+                selected_identity=GraphIdentity(existing_id=selected_step.pk)
+            )
+            allowed_outputs = {
+                node.key for node in graph.nodes if node.identity in plan.output_sources
+            }
+            allows_map_item = plan.map_item
+        rows: list[Any] = []
+        seen: set[tuple[str, str, int | None]] = set()
+        if not isinstance(specs, tuple):
+            raise ValidationError({"fixtures": "Test fixtures must be an immutable tuple."})
+        map_fixture_count = 0
+        for raw in specs:
+            try:
+                spec = validate_test_fixture_spec(raw)
+            except ValueError as error:
+                raise ValidationError({"fixtures": str(error)}) from error
+            step = step_by_key.get(spec.step_key)
+            slot = (spec.step_key, str(spec.role), spec.item_index)
+            if step is None or slot in seen:
+                raise ValidationError({"fixtures": "Fixture slots must be unique copied workflow steps."})
+            seen.add(slot)
+            if spec.role == TestFixtureRole.OUTPUT and spec.step_key not in allowed_outputs:
+                raise ValidationError({"fixtures": "Output fixture is outside this test scope's sources."})
+            if spec.role == TestFixtureRole.MAP_ITEM and (
+                not allows_map_item or selected_step is None or step.pk != selected_step.pk
+            ):
+                raise ValidationError({"fixtures": "Map item fixture is outside the selected body scope."})
+            if spec.role == TestFixtureRole.MAP_ITEM:
+                map_fixture_count += 1
+                if map_fixture_count > 1:
+                    raise ValidationError({"fixtures": "A node test selects exactly one Map item slot."})
+            if spec.role == TestFixtureRole.OUTPUT:
+                is_map_body = graph.test_plan(GraphIdentity(existing_id=step.pk)).map_item
+                if is_map_body != (spec.item_index is not None):
+                    raise ValidationError(
+                        {"fixtures": "Map body outputs require an exact item index; ordinary outputs do not."}
+                    )
+            value = spec.value
+            outcome = spec.outcome
+            captured = None
+            if spec.captured_attempt_id is not None:
+                captured = attempt_model.objects._test_fixture_source_record(
+                    snapshot,
+                    actor=actor,
+                    attempt_id=spec.captured_attempt_id,
+                    role=spec.role,
+                    step_key=spec.step_key,
+                    item_index=spec.item_index,
+                )
+                if captured is None:
+                    raise PermissionDenied("Captured fixture evidence is unavailable.")
+                if spec.role == TestFixtureRole.OUTPUT:
+                    value = JsonPresence(captured.output_present, captured.output)
+                    outcome = captured.outcome
+                else:
+                    value = JsonPresence(True, captured.map_item)
+            rows.append(
+                fixture_model(
+                    step=step,
+                    role=spec.role,
+                    item_index=spec.item_index,
+                    value_present=value.present,
+                    value=copy.deepcopy(value.value),
+                    outcome=outcome,
+                    captured_attempt=captured,
+                )
+            )
+        if require_complete and scope == TestScope.NODE and allows_map_item and map_fixture_count != 1:
+            raise ValidationError({"fixtures": "A selected Map body requires exactly one Map item fixture."})
+        return tuple(rows)
 
     @staticmethod
     def _trigger_dedup_key(trigger: Any, content_type: Any, object_id: Any) -> str:
@@ -2393,6 +2950,16 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
     subject = GenericForeignKey("subject_content_type", "subject_object_id")
     dedup_key = models.CharField(max_length=255, unique=True, null=True, blank=True)
     test_request_actor_ref = models.CharField(max_length=255, blank=True, editable=False)
+    test_scope = StateField(choices_enum=TestScope, blank=True, default="", editable=False)
+    test_step = models.ForeignKey(
+        "workflows.Step",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="selected_test_runs",
+        editable=False,
+    )
+    test_source_step_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
     input_present = models.BooleanField(default=False, editable=False)
     input = models.JSONField(null=True, blank=True, editable=False)
     wake_at = models.DateTimeField(null=True, blank=True, db_index=True)
@@ -2431,6 +2998,31 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
                 ),
                 name="chk_wfr_test_request_actor",
             ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        origin=RunOrigin.TEST,
+                        test_scope__in=("", TestScope.WHOLE),
+                        test_step__isnull=True,
+                        test_source_step_id__isnull=True,
+                    )
+                    | models.Q(
+                        origin=RunOrigin.TEST,
+                        test_scope=TestScope.NODE,
+                        test_step__isnull=False,
+                        test_source_step_id__isnull=False,
+                    )
+                    | (
+                        ~models.Q(origin=RunOrigin.TEST)
+                        & models.Q(
+                            test_scope="",
+                            test_step__isnull=True,
+                            test_source_step_id__isnull=True,
+                        )
+                    )
+                ),
+                name="chk_wfr_test_scope",
+            ),
             models.UniqueConstraint(
                 fields=("parent_step_run",),
                 condition=models.Q(parent_step_run__isnull=False),
@@ -2444,6 +3036,23 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         """Return whether this run has reached a terminal status."""
 
         return self.status in RunStatus.TERMINAL
+
+    def allows_test_step(self, step: Any) -> bool:
+        """Return whether the pinned test scope admits one copied step."""
+
+        if step is None or step.workflow_id != self.workflow_id:
+            return False
+        if self.origin != RunOrigin.TEST or self.test_scope in {"", TestScope.WHOLE}:
+            return True
+        if self.test_scope != TestScope.NODE or self.test_step_id is None:
+            return False
+        from angee.workflows.graph import GraphIdentity, WorkflowGraph
+
+        with system_context(reason="workflows.test_scope.plan"):
+            plan = WorkflowGraph.from_workflow(self.workflow).test_plan(
+                GraphIdentity(existing_id=self.test_step_id)
+            )
+        return GraphIdentity(existing_id=step.pk) in plan.executable
 
     @classmethod
     def waiting_projection_annotation(cls) -> dict[str, Any]:
@@ -2576,6 +3185,9 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
             "subject_content_type_id": self.subject_content_type_id,
             "subject_object_id": self.subject_object_id,
             "test_request_actor_ref": self.test_request_actor_ref,
+            "test_scope": self.test_scope,
+            "test_step_id": self.test_step_id,
+            "test_source_step_id": self.test_source_step_id,
         }
 
     def _raise_if_test_identity_changed(self) -> None:
@@ -2586,6 +3198,21 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
                 raise ValidationError({"test_request_actor_ref": "Test runs require their requesting actor."})
             if self.origin != RunOrigin.TEST and self.test_request_actor_ref:
                 raise ValidationError({"test_request_actor_ref": "Only test runs have a requesting actor."})
+            if self.origin == RunOrigin.TEST:
+                if self.test_scope not in TestScope:
+                    raise ValidationError({"test_scope": "Test runs require a declared scope."})
+                if self.test_scope == TestScope.NODE and (
+                    self.test_step_id is None or self.test_source_step_id is None
+                ):
+                    raise ValidationError({"test_step": "Node test runs require an exact selected step."})
+                if self.test_scope == TestScope.WHOLE and (
+                    self.test_step_id is not None or self.test_source_step_id is not None
+                ):
+                    raise ValidationError({"test_step": "Whole workflow tests cannot select one step."})
+                if self.test_step_id is not None and self.test_step.workflow_id != self.workflow_id:
+                    raise ValidationError({"test_step": "The selected test step must belong to the pinned snapshot."})
+            elif self.test_scope or self.test_step_id is not None or self.test_source_step_id is not None:
+                raise ValidationError({"test_scope": "Only test runs carry test scope facts."})
             return
         current = self._test_identity()
         loaded = getattr(self, "_loaded_test_identity", None)
@@ -2613,6 +3240,9 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
             "subject_content_type_id",
             "subject_object_id",
             "test_request_actor_ref",
+            "test_scope",
+            "test_step_id",
+            "test_source_step_id",
         )
         if all(field in field_names for field in identity_fields):
             instance._loaded_test_identity = {
@@ -2641,6 +3271,139 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
             spent[str(key)] = int(spent.get(str(key), 0)) + int(value)
         locked.budget_spent = spent
         locked.save(update_fields=["budget_spent", "updated_at"])
+
+
+_test_fixture_write_run: ContextVar[tuple[str, int, int, int] | None] = ContextVar(
+    "workflow_test_fixture_write_run", default=None
+)
+_test_fixture_batch_rows: ContextVar[frozenset[int]] = ContextVar(
+    "workflow_test_fixture_batch_rows", default=frozenset()
+)
+_test_fixture_apply_ids: ContextVar[frozenset[int]] = ContextVar(
+    "workflow_test_fixture_apply_ids", default=frozenset()
+)
+
+
+class WorkflowTestFixtureQuerySet(AngeeQuerySet[Any]):
+    """Keep admitted test fixture facts append-only."""
+
+    def update(self, **kwargs: Any) -> int:
+        audit_fields = frozenset(field.name for field in AuditMixin._meta.fields)
+        if kwargs and set(kwargs).issubset(audit_fields) and all(value is None for value in kwargs.values()):
+            return super().update(**kwargs)
+        raise TypeError("Workflow test fixtures are immutable admission facts.")
+
+    def bulk_create(self, *args: Any, **kwargs: Any) -> list[Any]:
+        raise TypeError("Workflow test fixtures can only be created by WorkflowRunManager.")
+
+    def bulk_update(self, *args: Any, **kwargs: Any) -> int:
+        raise TypeError("Workflow test fixtures are immutable admission facts.")
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        raise TypeError("Workflow test fixtures are retained admission facts.")
+
+
+class WorkflowTestFixtureManager(AngeeManager.from_queryset(WorkflowTestFixtureQuerySet)):  # type: ignore[misc]
+    """Persist a fully validated fixture batch for one newly created test run."""
+
+    def _create_batch(self, run: Any, rows: Iterable[Any]) -> tuple[Any, ...]:
+        if run.pk is None or run.origin != RunOrigin.TEST:
+            raise ValidationError({"run": "Fixtures require a persisted workflow test run."})
+        connection = connections[self.db]
+        if not connection.in_atomic_block:
+            raise RuntimeError("Fixture admission requires the owning run transaction.")
+        authority = _test_fixture_write_run.get()
+        expected = (self.db, id(connection), id(connection.atomic_blocks[0]), run.pk)
+        if authority != expected:
+            raise RuntimeError("Fixture admission requires the exact owning run transaction.")
+        prepared = tuple(rows)
+        expected_rows = frozenset(id(row) for row in prepared)
+        if _test_fixture_batch_rows.get() != expected_rows:
+            raise RuntimeError("Fixture admission requires the exact prepared batch.")
+        _test_fixture_batch_rows.set(frozenset())
+        for row in prepared:
+            row.run = run
+            row.full_clean()
+        created: list[Any] = []
+        for row in prepared:
+            row._fixture_owner_write = expected
+            row.save(force_insert=True, using=self.db)
+            created.append(row)
+        return tuple(created)
+
+
+class WorkflowTestFixture(AuditMixin, AngeeDataModel):
+    """Immutable manual or captured evidence admitted for one workflow test."""
+
+    runtime = True
+    sqid_prefix = "wtf_"
+
+    run = models.ForeignKey("workflows.WorkflowRun", on_delete=models.PROTECT, related_name="test_fixtures")
+    step = models.ForeignKey("workflows.Step", on_delete=models.PROTECT, related_name="test_fixtures")
+    role = StateField(choices_enum=TestFixtureRole)
+    item_index = models.PositiveIntegerField(null=True, blank=True, editable=False)
+    value_present = models.BooleanField(default=False, editable=False)
+    value = models.JSONField(null=True, blank=True, editable=False)
+    outcome = models.SlugField(max_length=100, blank=True, default="", editable=False)
+    captured_attempt = models.ForeignKey(
+        "workflows.StepAttempt",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="test_fixture_captures",
+        editable=False,
+    )
+
+    objects = WorkflowTestFixtureManager()
+
+    class Meta:
+        abstract = True
+        base_manager_name = "objects"
+        ordering = ("run_id", "step_id", "role", "item_index", "pk")
+        constraints = (
+            models.CheckConstraint(
+                condition=models.Q(value_present=True) | models.Q(value__isnull=True),
+                name="chk_wtf_absent_value_null",
+            ),
+            models.UniqueConstraint(
+                fields=("run", "step", "role", "item_index"),
+                name="uniq_workflows_test_fixture_slot",
+                nulls_distinct=False,
+            ),
+        )
+
+    def clean(self) -> None:
+        super().clean()
+        if self.run_id is not None and self.step_id is not None:
+            if self.run.origin != RunOrigin.TEST or self.step.workflow_id != self.run.workflow_id:
+                raise ValidationError({"step": "Fixture steps must belong to the pinned test snapshot."})
+        try:
+            validate_json_presence(
+                JsonPresence(self.value_present, self.value), label="test fixture value"
+            )
+        except ValueError as error:
+            raise ValidationError({"value": str(error)}) from error
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        alias = kwargs.get("using") or self._state.db or "default"
+        connection = connections[alias]
+        expected = (
+            (alias, id(connection), id(connection.atomic_blocks[0]), self.run_id)
+            if connection.in_atomic_block
+            else None
+        )
+        if (
+            not self._state.adding
+            or expected is None
+            or _test_fixture_write_run.get() != expected
+            or getattr(self, "_fixture_owner_write", None) != expected
+        ):
+            raise TypeError("Workflow test fixtures can only be written by WorkflowRunManager.")
+        del self._fixture_owner_write
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        raise TypeError("Workflow test fixtures are retained admission facts.")
 
 
 class StepRunQuerySet(AngeeQuerySet[Any]):
@@ -2810,12 +3573,16 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
             current_attempt_ids = sorted(
                 row.current_attempt_id for row in rows if row.current_attempt_id is not None
             )
+            current_attempts = {}
             if current_attempt_ids:
-                list(
+                current_attempts = {
+                    attempt.pk: attempt
+                    for attempt in (
                     system_queryset(attempt_model, using=alias, lock=("self",))
                     .filter(pk__in=current_attempt_ids)
                     .order_by("pk")
-                )
+                    )
+                }
             current: list[Any] = []
             for row in rows:
                 wanted = row.map_index < item_count
@@ -2823,9 +3590,15 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
                     wanted
                     and row.current_map_expansion_id != expansion.pk
                     and (row.status != StepRunStatus.SCHEDULED or row.is_retained)
+                    and not (
+                        row.current_attempt_id in current_attempts
+                        and current_attempts[row.current_attempt_id].cause
+                        == str(AttemptCause.TEST_FIXTURE)
+                        and current_attempts[row.current_attempt_id].test_fixture_id is not None
+                    )
                 ):
                     item = items[row.map_index]
-                    child_input = copy.deepcopy(item) if isinstance(item, dict) else {"item": item}
+                    child_input = map_child_input(item)
                     row = self.reschedule_for_override(row.pk, input=child_input, at=at)
                 elif not wanted and row.status in StepRunStatus.ACTIVE:
                     attempt_model.objects.cancel_current(row.pk, at=at)
@@ -3376,6 +4149,246 @@ class StepAttemptQuerySet(AngeeQuerySet[Any]):
 class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # type: ignore[misc]
     """Allocate, lease, and finalize retained attempts under ancestor locks."""
 
+    @staticmethod
+    def _fixture_source_summary(attempt: Any, role: TestFixtureRole) -> TestFixtureSourceSummary:
+        step = attempt.step_run.step
+        workflow = step.workflow
+        return TestFixtureSourceSummary(
+            attempt_id=attempt.sqid,
+            run_id=attempt.step_run.run.sqid,
+            workflow_id=workflow.sqid,
+            workflow_revision=workflow.draft_revision,
+            step_id=step.sqid,
+            step_key=step.key,
+            role=role,
+            item_index=(
+                attempt.map_item_index
+                if role == TestFixtureRole.MAP_ITEM
+                else (attempt.step_run.map_index if attempt.step_run.map_index >= 0 else None)
+            ),
+            outcome=attempt.outcome,
+            recorded_at=attempt.result_recorded_at,
+        )
+
+    def _eligible_fixture_source_queryset(
+        self,
+        workflow: Any,
+        *,
+        actor: Any,
+        role: TestFixtureRole,
+        step_key: str,
+        item_index: int | None,
+    ) -> Any:
+        """Return authorized accepted evidence for one exact fixture slot."""
+
+        if not isinstance(role, TestFixtureRole):
+            raise ValidationError({"role": "Captured sources require a declared fixture role."})
+        if type(step_key) is not str or not step_key:
+            raise ValidationError({"step_key": "Captured sources require a step key."})
+        target_access = read_scoped_queryset(type(workflow), actor, action="write")
+        if target_access is None or not target_access.filter(pk=workflow.pk).exists():
+            raise PermissionDenied("Test workflow access was denied.")
+        authorized = read_scoped_queryset(self.model, actor, action="read")
+        if authorized is None:
+            return self.none()
+        head_id = workflow.published_from_id or workflow.pk
+        queryset = authorized.select_related(
+            "step_run__run", "step_run__step__workflow"
+        ).filter(
+            result_kind=AttemptResultKind.DONE,
+            result_recorded_at__isnull=False,
+            applied_at__isnull=False,
+            lease_revoked_at__isnull=True,
+            step_run__step__isnull=False,
+            step_run__step__key=step_key,
+        ).filter(
+            models.Q(step_run__step__workflow_id=head_id)
+            | models.Q(step_run__step__workflow__published_from_id=head_id)
+        )
+        if role == TestFixtureRole.OUTPUT:
+            queryset = queryset.filter(output_present=True)
+            return queryset.filter(step_run__map_index=-1 if item_index is None else item_index)
+        if item_index is None:
+            return queryset.none()
+        return queryset.filter(map_item_present=True, map_item_index=item_index)
+
+    def eligible_test_fixture_sources(
+        self,
+        workflow: Any,
+        *,
+        actor: Any,
+        role: TestFixtureRole,
+        step_key: str,
+        item_index: int | None = None,
+        after: str | None = None,
+        first: int = 20,
+    ) -> TestFixtureSourcePage:
+        """Return a bounded page of summaries without retained payload values."""
+
+        if type(first) is not int or not 1 <= first <= 50:
+            raise ValidationError({"first": "Captured source pages contain between one and fifty rows."})
+        queryset = self._eligible_fixture_source_queryset(
+            workflow,
+            actor=actor,
+            role=role,
+            step_key=step_key,
+            item_index=item_index,
+        ).only(
+            "pk",
+            "outcome",
+            "result_recorded_at",
+            "map_item_index",
+            "step_run_id",
+            "step_run__map_index",
+            "step_run__run_id",
+            "step_run__run__id",
+            "step_run__step_id",
+            "step_run__step__id",
+            "step_run__step__key",
+            "step_run__step__workflow_id",
+            "step_run__step__workflow__id",
+            "step_run__step__workflow__draft_revision",
+        ).order_by("-pk")
+        if after is not None:
+            cursor = queryset.filter(sqid=after).values_list("pk", flat=True).first()
+            if cursor is None:
+                raise ValidationError({"after": "Captured source cursor is unavailable."})
+            queryset = queryset.filter(pk__lt=cursor)
+        rows = list(queryset[: first + 1])
+        visible = rows[:first]
+        return TestFixtureSourcePage(
+            items=tuple(self._fixture_source_summary(row, role) for row in visible),
+            next_after=visible[-1].sqid if len(rows) > first else None,
+        )
+
+    def test_fixture_source(
+        self,
+        workflow: Any,
+        *,
+        actor: Any,
+        attempt_id: str,
+        role: TestFixtureRole,
+        step_key: str,
+        item_index: int | None = None,
+    ) -> TestFixtureSource | None:
+        """Return one revalidated selected payload, or none when unavailable."""
+
+        attempt = self._test_fixture_source_record(
+            workflow,
+            actor=actor,
+            attempt_id=attempt_id,
+            role=role,
+            step_key=step_key,
+            item_index=item_index,
+        )
+        if attempt is None:
+            return None
+        value = (
+            JsonPresence(True, copy.deepcopy(attempt.output))
+            if role == TestFixtureRole.OUTPUT
+            else JsonPresence(True, copy.deepcopy(attempt.map_item))
+        )
+        return TestFixtureSource(self._fixture_source_summary(attempt, role), value)
+
+    def _test_fixture_source_record(
+        self,
+        workflow: Any,
+        *,
+        actor: Any,
+        attempt_id: str,
+        role: TestFixtureRole,
+        step_key: str,
+        item_index: int | None,
+    ) -> Any | None:
+        """Resolve the exact persisted row used by both preview and admission."""
+
+        return self._eligible_fixture_source_queryset(
+            workflow,
+            actor=actor,
+            role=role,
+            step_key=step_key,
+            item_index=item_index,
+        ).filter(sqid=attempt_id).first()
+
+    def record_test_fixture(
+        self, fixture: Any, *, at: datetime, due_step_run_id: int | None = None
+    ) -> Any:
+        """Apply one admitted output fixture as nonphysical retained DONE evidence."""
+
+        alias = self.db
+        step_run_model = self.model._meta.get_field("step_run").remote_field.model
+        with transaction.atomic(using=alias), system_context(reason="workflows.test_fixture.apply"):
+            run_model = step_run_model._meta.get_field("run").remote_field.model
+            run_id = type(fixture)._base_manager.filter(pk=fixture.pk).values_list("run_id", flat=True).get()
+            run = system_queryset(run_model, using=alias, lock=("self",)).get(pk=run_id)
+            connection = connections[alias]
+            authority = (alias, id(connection), id(connection.atomic_blocks[0]), run.pk)
+            if due_step_run_id is None and _test_fixture_write_run.get() != authority:
+                raise RuntimeError("Fixture application requires the exact owning run transaction.")
+            locked_fixture = system_queryset(type(fixture), using=alias, lock=("self",)).get(pk=fixture.pk)
+            if locked_fixture.run_id != run.pk:
+                raise ValidationError({"fixture": "Fixture ancestry changed during admission."})
+            if due_step_run_id is None:
+                allowed = _test_fixture_apply_ids.get()
+                if fixture.pk not in allowed:
+                    raise RuntimeError("Fixture application requires its exact admission authority.")
+                _test_fixture_apply_ids.set(allowed - {fixture.pk})
+            locked_fixture.full_clean()
+            fixture = locked_fixture
+            if fixture.role != TestFixtureRole.OUTPUT:
+                raise ValidationError({"fixture": "Only output fixtures create retained result evidence."})
+            if run.is_terminal:
+                raise ValidationError({"fixture": "A terminal run cannot apply fixture evidence."})
+            if run.origin != RunOrigin.TEST or fixture.step.workflow_id != run.workflow_id:
+                raise ValidationError({"fixture": "Fixture evidence must belong to its pinned test run."})
+            step_run, created = system_queryset(step_run_model, using=alias, lock=("self",)).get_or_create(
+                run=run,
+                step=fixture.step,
+                map_index=fixture.item_index if fixture.item_index is not None else -1,
+                defaults={"status": StepRunStatus.SCHEDULED, "input": {}},
+            )
+            if due_step_run_id is not None and (
+                created
+                or step_run.pk != due_step_run_id
+                or step_run.status != StepRunStatus.SCHEDULED
+                or step_run.current_attempt_id is not None
+            ):
+                raise ValidationError({"fixture": "Output fixture substitution is not currently due."})
+            if not created and step_run.current_attempt_id is not None:
+                raise ValidationError({"fixture": "This fixture slot already has retained evidence."})
+            with self._write(alias, step_run.pk):
+                attempt = self._allocate_locked(
+                    step_run,
+                    cause=AttemptCause.TEST_FIXTURE,
+                    input=AttemptInput(),
+                    claimed_at=at,
+                    alias=alias,
+                    test_fixture=fixture,
+                )
+                attempt.result_kind = str(AttemptResultKind.DONE)
+                attempt.result_recorded_at = at
+                attempt.output_present = fixture.value_present
+                attempt.output = copy.deepcopy(fixture.value)
+                attempt.outcome = fixture.outcome
+                attempt.applied_at = at
+                self._save_attempt(attempt, alias=alias)
+                self._write_step_run(
+                    step_run,
+                    alias=alias,
+                    operation=lambda: step_run.mark_started(
+                        heartbeat_at=None, claimed_deliveries=run.deliveries
+                    ),
+                )
+                self._write_step_run(
+                    step_run,
+                    alias=alias,
+                    operation=lambda: step_run.mark_succeeded(
+                        output=copy.deepcopy(fixture.value) if fixture.value_present else None,
+                        outcome=fixture.outcome,
+                    ),
+                )
+            return attempt
+
     @contextmanager
     def _write(self, alias: str, step_run_id: int) -> Iterator[None]:
         connection = connections[alias]
@@ -3493,8 +4506,25 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 if plan.target_id is not None
                 else {}
             )
+            fixture_indexes: set[int] = set()
+            if run.origin == RunOrigin.TEST and plan.target_id is not None:
+                fixture_model = self.model._meta.apps.get_model(
+                    "workflows", "WorkflowTestFixture"
+                )
+                fixture_indexes = set(
+                    system_queryset(fixture_model, using=alias, lock=None)
+                    .filter(
+                        run_id=run.pk,
+                        step_id=plan.target_id,
+                        role=TestFixtureRole.OUTPUT,
+                        item_index__gte=0,
+                        item_index__lt=len(plan.items),
+                    )
+                    .values_list("item_index", flat=True)
+                )
             additional = sum(
-                existing_rows.get(index) != StepRunStatus.SCHEDULED
+                index not in fixture_indexes
+                and existing_rows.get(index) != StepRunStatus.SCHEDULED
                 for index in range(len(plan.items))
             )
             if run.steps_taken + admitted + additional > run.workflow.max_steps:
@@ -3710,6 +4740,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         cause: AttemptCause = AttemptCause.INITIAL,
         input: AttemptInput = AttemptInput(),
         map_item: MapItemSource | None = None,
+        test_fixture: Any = None,
         claimed_at: datetime,
     ) -> AttemptClaim:
         """Claim one logical delivery, returning the existing claim on duplicate admission."""
@@ -3725,6 +4756,8 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             run, locked = self._locked_ancestry(step_run.pk, alias)
             if run.is_terminal:
                 raise ValidationError({"step_run": "A terminal workflow run cannot claim an attempt."})
+            if locked.step_id is not None and not run.allows_test_step(locked.step):
+                raise ValidationError({"step_run": "This step is outside the admitted test scope."})
             if locked.current_attempt_id is not None:
                 current = system_queryset(self.model, using=alias, lock=("self",)).get(pk=locked.current_attempt_id)
                 active = current.result_recorded_at is None and current.lease_revoked_at is None
@@ -3735,6 +4768,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                     raise ValidationError({"step_run": "This step run already has an active attempt."})
             self._validate_claim_source(locked, cause)
             self._validate_map_item_owner(locked, map_item, alias=alias)
+            self._validate_test_fixture_owner(locked, test_fixture, alias=alias)
             attempt = self._allocate_locked(
                 locked,
                 cause=cause,
@@ -3742,6 +4776,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 map_item=map_item,
                 claimed_at=claimed_at,
                 alias=alias,
+                test_fixture=test_fixture,
             )
             self._write_step_run(
                 locked,
@@ -3760,6 +4795,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         cause: AttemptCause,
         input: AttemptInput,
         map_item: MapItemSource | None = None,
+        test_fixture: Any = None,
         result: AttemptResult,
         claimed_at: datetime,
         recorded_at: datetime,
@@ -3788,6 +4824,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                     raise ValidationError({"step_run": "This step run already has an active attempt."})
             self._validate_claim_source(locked, cause)
             self._validate_map_item_owner(locked, map_item, alias=alias)
+            self._validate_test_fixture_owner(locked, test_fixture, alias=alias)
             attempt = self._allocate_locked(
                 locked,
                 cause=cause,
@@ -3795,6 +4832,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 map_item=map_item,
                 claimed_at=claimed_at,
                 alias=alias,
+                test_fixture=test_fixture,
             )
             attempt.result_kind = str(result.kind)
             attempt.result_recorded_at = recorded_at
@@ -3823,6 +4861,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         claimed_at: datetime,
         alias: str,
         map_item: MapItemSource | None = None,
+        test_fixture: Any = None,
     ) -> Any:
         if locked.effect_key is None:
             locked.effect_key = uuid.uuid4()
@@ -3839,6 +4878,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             map_item_index=map_item.index if map_item else None,
             map_item_present=map_item.value.present if map_item else False,
             map_item=map_item.value.value if map_item else None,
+            test_fixture=test_fixture,
             claimed_at=claimed_at,
             effect_key=locked.effect_key,
             effect_generation=locked.effect_generation,
@@ -3855,6 +4895,20 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             ),
         )
         return attempt
+
+    def _validate_test_fixture_owner(self, step_run: Any, fixture: Any, *, alias: str) -> None:
+        if fixture is None:
+            return
+        fixture_model = self.model._meta.get_field("test_fixture").remote_field.model
+        locked = system_queryset(fixture_model, using=alias, lock=("self",)).get(pk=fixture.pk)
+        if (
+            locked.run_id != step_run.run_id
+            or locked.step_id != step_run.step_id
+            or locked.role != TestFixtureRole.MAP_ITEM
+            or locked.item_index != step_run.map_index
+            or step_run.current_map_expansion_id is not None
+        ):
+            raise ValidationError({"test_fixture": "Map item fixture does not match this test slot."})
 
     def admit_invocation(
         self, attempt_id: int, *, lease_token: uuid.UUID, at: datetime
@@ -4377,6 +5431,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             map_item_index=retry_of.map_item_index,
             map_item_present=retry_of.map_item_present,
             map_item=copy.deepcopy(retry_of.map_item),
+            test_fixture_id=retry_of.test_fixture_id,
         )
         self._save_attempt(successor, alias=alias, force_insert=True)
         step_run.attempt = successor.ordinal
@@ -4498,6 +5553,15 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         return ()
 
 
+class StepAttemptSystemManager(StepAttemptManager):
+    """Expose guarded unscoped rows to Django and field-backed REBAC traversal."""
+
+    def get_queryset(self) -> StepAttemptQuerySet:
+        return super().get_queryset().system_context(
+            reason="workflows.step_attempt.base_manager"
+        )
+
+
 class StepAttempt(AuditMixin, AngeeDataModel):
     """Append-only evidence for one physical execution attempt."""
 
@@ -4534,6 +5598,14 @@ class StepAttempt(AuditMixin, AngeeDataModel):
     map_item_index = models.PositiveIntegerField(null=True, blank=True, editable=False)
     map_item_present = models.BooleanField(default=False, editable=False)
     map_item = models.JSONField(null=True, blank=True, editable=False)
+    test_fixture = models.ForeignKey(
+        "workflows.WorkflowTestFixture",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="applied_attempts",
+        editable=False,
+    )
     claimed_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     heartbeat_at = models.DateTimeField(null=True, blank=True)
@@ -4563,11 +5635,14 @@ class StepAttempt(AuditMixin, AngeeDataModel):
     applied_at = models.DateTimeField(null=True, blank=True)
 
     objects = StepAttemptManager()
+    system_objects = StepAttemptSystemManager()
 
     class Meta:
         abstract = True
-        base_manager_name = "objects"
+        base_manager_name = "system_objects"
         ordering = ("step_run_id", "ordinal")
+        rebac_resource_type = "workflows/step_attempt"
+        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(fields=("step_run", "ordinal"), name="uniq_workflows_step_attempt_ordinal"),
             models.UniqueConstraint(fields=("lease_token",), name="uniq_workflows_step_attempt_lease"),
@@ -4638,6 +5713,13 @@ class StepAttempt(AuditMixin, AngeeDataModel):
                     )
                 ),
                 name="chk_wsa_map_item_source",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(cause=AttemptCause.TEST_FIXTURE, test_fixture__isnull=False)
+                    | ~models.Q(cause=AttemptCause.TEST_FIXTURE)
+                ),
+                name="chk_wsa_test_fixture_cause",
             ),
         )
 

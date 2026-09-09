@@ -12,9 +12,10 @@ from typing import Any, Literal, TypeAlias, cast
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from pydantic import ValidationError as PydanticValidationError
 
+from angee.workflows.attempts import json_values_equal
 from angee.workflows.bindings import binding_error_details, parse_binding
 from angee.workflows.data_contracts import DataContract, model_data_contract
-from angee.workflows.steps import StepImpl, validate_retry_config
+from angee.workflows.steps import StepEffect, StepImpl, validate_retry_config
 
 GraphLocationKind: TypeAlias = Literal["workflow", "node", "edge"]
 
@@ -65,6 +66,7 @@ class GraphNode:
     config: Any
     name: str = ""
     input_binding: Any = None
+    join_rule: str = "all_success"
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +76,61 @@ class GraphInputSource:
     node_identity: GraphIdentity | None = None
     step_key: str | None = None
     label: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class GraphTestPlan:
+    """One graph-owned node-test execution and fixture boundary."""
+
+    selected: GraphIdentity
+    executable: frozenset[GraphIdentity]
+    output_sources: frozenset[GraphIdentity]
+    map_item: bool
+
+
+@dataclass(frozen=True, slots=True)
+class GraphTestOperation:
+    """One operation disclosed by an exact scoped test plan."""
+
+    identity: GraphIdentity
+    key: str
+    label: str
+    effect: StepEffect
+    effect_description: str
+    replaced_by_output: bool
+
+
+@dataclass(frozen=True, slots=True)
+class GraphTestFixtureRequirement:
+    """One fixture slot required to make a selected-node invocation executable."""
+
+    role: Literal["output", "map_item"]
+    identity: GraphIdentity
+    step_key: str
+    item_index_required: bool
+    satisfied: bool
+
+
+@dataclass(frozen=True, slots=True)
+class GraphTestExecutionPlan:
+    """Authoritative graph projection shared by test preview and admission."""
+
+    selected: GraphIdentity | None
+    executable: frozenset[GraphIdentity]
+    output_sources: frozenset[GraphIdentity]
+    map_item: bool
+    operations: tuple[GraphTestOperation, ...]
+    required_fixtures: tuple[GraphTestFixtureRequirement, ...]
+    diagnostics: tuple[GraphDiagnostic, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GraphFreshnessReason:
+    """One semantic definition change affecting retained test evidence."""
+
+    code: str
+    step_key: str | None
+    field: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +191,7 @@ class WorkflowGraph:
                     config=copy.deepcopy(step.config),
                     name=str(getattr(step, "name", step.key)),
                     input_binding=copy.deepcopy(getattr(step, "input_binding", None)),
+                    join_rule=str(getattr(step, "join_rule", "all_success")),
                 )
             )
         graph_edges = tuple(
@@ -213,6 +271,300 @@ class WorkflowGraph:
                 )
             )
         return tuple(sources)
+
+    def test_plan(self, selected_identity: GraphIdentity) -> GraphTestPlan:
+        """Derive the exact executable node closure and fixture-source identities once."""
+
+        selected = next((node for node in self.nodes if node.identity == selected_identity), None)
+        if selected is None:
+            return GraphTestPlan(selected_identity, frozenset(), frozenset(), False)
+        executable = {selected_identity}
+        declared_body = False
+        for node in self.nodes:
+            if node.impl is None:
+                continue
+            try:
+                target = node.impl.map_body_target(node.config)
+            except (ValidationError, ValueError, TypeError):
+                continue
+            if node.identity == selected_identity and target:
+                body = next((candidate for candidate in self.nodes if candidate.key == target), None)
+                if body is not None:
+                    executable.add(body.identity)
+            if target == selected.key:
+                declared_body = True
+        sources = self.input_sources(selected_identity)
+        outputs = frozenset(
+            source.node_identity for source in sources if source.node_identity is not None
+        )
+        return GraphTestPlan(
+            selected_identity,
+            frozenset(executable),
+            outputs,
+            declared_body or any(source.kind == "map_item" for source in sources),
+        )
+
+    def test_execution_plan(
+        self,
+        *,
+        selected_identity: GraphIdentity | None,
+        output_slots: frozenset[tuple[GraphIdentity, int | None]] = frozenset(),
+        map_item_slots: frozenset[tuple[GraphIdentity, int]] = frozenset(),
+    ) -> GraphTestExecutionPlan:
+        """Return one immutable scoped plan for preview, validation and execution."""
+
+        if selected_identity is None:
+            executable = frozenset(node.identity for node in self.nodes)
+            output_sources: frozenset[GraphIdentity] = frozenset()
+            map_item = False
+            diagnostics = self.test_diagnostics(output_slots=output_slots)
+        else:
+            node_plan = self.test_plan(selected_identity)
+            executable = node_plan.executable
+            output_sources = node_plan.output_sources
+            map_item = node_plan.map_item
+            structural = self.structural_diagnostics()
+            relevant = tuple(
+                item
+                for item in self.test_diagnostics(
+                    output_slots=output_slots,
+                    selected_identity=selected_identity,
+                )
+                if item in structural
+                or (
+                    item.location.kind == "node"
+                    and item.location.key in executable
+                    and not (
+                        item.code == "operation_not_executable"
+                        and item.location.key == selected_identity
+                        and map_item
+                    )
+                )
+            )
+            diagnostics = relevant
+        requirements: list[GraphTestFixtureRequirement] = []
+        if selected_identity is not None:
+            selected = next((node for node in self.nodes if node.identity == selected_identity), None)
+            references: tuple[Any, ...] = ()
+            if selected is not None and selected.input_binding is not None:
+                try:
+                    binding = parse_binding(selected.input_binding)
+                    references = tuple(
+                        reference
+                        for visit in binding.visits()
+                        if (reference := visit.binding.source_reference()) is not None
+                    )
+                except PydanticValidationError:
+                    references = ()
+            by_key = {node.key: node for node in self.nodes}
+            step_keys: set[str] = {
+                reference.step_key
+                for reference in references
+                if reference.kind == "step_output" and reference.step_key is not None
+            }
+            for step_key in sorted(step_keys):
+                source = by_key.get(step_key or "")
+                if source is not None:
+                    requirements.append(
+                        GraphTestFixtureRequirement(
+                            "output",
+                            source.identity,
+                            source.key,
+                            False,
+                            (source.identity, None) in output_slots,
+                        )
+                    )
+            if map_item:
+                indexes = sorted(index for identity, index in map_item_slots if identity == selected_identity)
+                requirements.append(
+                    GraphTestFixtureRequirement(
+                        "map_item",
+                        selected_identity,
+                        selected.key if selected is not None else "",
+                        True,
+                        len(indexes) == 1,
+                    )
+                )
+            diagnostics = (
+                *diagnostics,
+                *(
+                    GraphDiagnostic(
+                        "fixture_required",
+                        (
+                            "Provide the Current Map item."
+                            if requirement.role == "map_item"
+                            else f"Provide retained or manual output for {requirement.step_key!r}."
+                        ),
+                        GraphLocation(
+                            "node",
+                            selected_identity,
+                            "fixtures",
+                            (requirement.role, requirement.step_key),
+                        ),
+                    )
+                    for requirement in requirements
+                    if not requirement.satisfied
+                ),
+            )
+        by_key = {node.key: node for node in self.nodes}
+        omitted_operations: set[GraphIdentity] = set()
+        for identity, index in output_slots:
+            if index is not None:
+                continue
+            owner = next((node for node in self.nodes if node.identity == identity), None)
+            target_key = owner.impl.map_body_target(owner.config) if owner and owner.impl else None
+            target = by_key.get(target_key) if target_key else None
+            if target is not None:
+                omitted_operations.add(target.identity)
+        operations = tuple(
+            GraphTestOperation(
+                identity=node.identity,
+                key=node.key,
+                label=node.name or node.key,
+                effect=node.impl.effect if node.impl is not None else StepEffect.UNKNOWN,
+                effect_description=node.impl.effect_description if node.impl is not None else "",
+                replaced_by_output=(node.identity, None) in output_slots,
+            )
+            for node in self.nodes
+            if node.identity in executable and node.identity not in omitted_operations
+        )
+        return GraphTestExecutionPlan(
+            selected_identity,
+            executable,
+            output_sources,
+            map_item,
+            operations,
+            tuple(requirements),
+            diagnostics,
+        )
+
+    def test_freshness(
+        self,
+        current: WorkflowGraph,
+        *,
+        selected_identity: GraphIdentity | None,
+        plan: GraphTestExecutionPlan | None = None,
+    ) -> tuple[GraphFreshnessReason, ...]:
+        """Compare executable semantics while excluding presentation-only node fields."""
+
+        before = {node.key: node for node in self.nodes}
+        after = {node.key: node for node in current.nodes}
+        plan = plan or self.test_execution_plan(selected_identity=selected_identity)
+        relevant = {
+            node.key
+            for node in self.nodes
+            if node.identity in plan.executable | plan.output_sources
+        }
+        selected = next((node for node in self.nodes if node.identity == selected_identity), None)
+        if selected is not None:
+            for node in self.nodes:
+                target_key = node.impl.map_body_target(node.config) if node.impl else None
+                if target_key == selected.key:
+                    relevant.add(node.key)
+        if selected_identity is None:
+            relevant = set(before) | set(after)
+        reasons: list[GraphFreshnessReason] = []
+        for key in sorted(set(before) | set(after)):
+            old = before.get(key)
+            new = after.get(key)
+            if key not in relevant:
+                continue
+            if old is None or new is None:
+                reasons.append(GraphFreshnessReason("step_set_changed", key, "steps"))
+                continue
+            comparisons = (
+                ("operation_changed", "step_class", old.operation_key, new.operation_key),
+                ("config_changed", "config", old.config, new.config),
+                ("input_binding_changed", "input_binding", old.input_binding, new.input_binding),
+                ("entry_changed", "is_entry", old.is_entry, new.is_entry),
+                ("join_rule_changed", "join_rule", old.join_rule, new.join_rule),
+            )
+            reasons.extend(
+                GraphFreshnessReason(code, key, field)
+                for code, field, old_value, new_value in comparisons
+                if (
+                    not json_values_equal(old_value, new_value)
+                    if field in {"config", "input_binding"}
+                    else old_value != new_value
+                )
+            )
+        old_edges = {(edge.source_key, edge.target_key, edge.condition) for edge in self.edges}
+        new_edges = {(edge.source_key, edge.target_key, edge.condition) for edge in current.edges}
+        for source, target, _condition in sorted(old_edges ^ new_edges):
+            if source in relevant or target in relevant:
+                reasons.append(GraphFreshnessReason("routing_changed", target, "edges"))
+        changed = {reason.step_key for reason in reasons if reason.step_key is not None}
+        downstream: dict[str, set[str]] = defaultdict(set)
+        for edge in (*self.edges, *current.edges):
+            downstream[edge.source_key].add(edge.target_key)
+        for graph in (self, current):
+            for node in graph.nodes:
+                target_key = node.impl.map_body_target(node.config) if node.impl else None
+                if target_key:
+                    downstream[node.key].add(target_key)
+        affected = set(changed)
+        pending = deque(changed)
+        while pending:
+            source = pending.popleft()
+            for target in downstream.get(source, ()):
+                if target not in affected:
+                    affected.add(target)
+                    pending.append(target)
+        reasons.extend(
+            GraphFreshnessReason("dependency_changed", key, "dependencies")
+            for key in sorted((affected & relevant) - changed)
+        )
+        return tuple(reasons)
+
+    def test_diagnostics(
+        self,
+        *,
+        output_slots: frozenset[tuple[GraphIdentity, int | None]],
+        selected_identity: GraphIdentity | None = None,
+    ) -> tuple[GraphDiagnostic, ...]:
+        """Return readiness after exact output substitutions remove execution work."""
+
+        substituted = {identity for identity, index in output_slots if index is None}
+        result: list[GraphDiagnostic] = []
+        structural = self.structural_diagnostics()
+        by_identity = {node.identity: node for node in self.nodes}
+        by_key = {node.key: node for node in self.nodes}
+        map_targets, _map_errors = self._maps()
+        if selected_identity is not None and any(
+            identity == selected_identity and index is not None
+            for identity, index in output_slots
+        ):
+            substituted.add(selected_identity)
+        for body_identity, owners in map_targets.items():
+            if len(owners) != 1:
+                continue
+            items = owners[0].config.get("items") if isinstance(owners[0].config, dict) else None
+            if isinstance(items, list) and all(
+                (body_identity, index) in output_slots for index in range(len(items))
+            ):
+                substituted.add(body_identity)
+        skipped_bodies: set[GraphIdentity] = set()
+        for identity in substituted:
+            owner = by_identity.get(identity)
+            target_key = owner.impl.map_body_target(owner.config) if owner and owner.impl else None
+            target = by_key.get(target_key) if target_key else None
+            if target is not None:
+                skipped_bodies.add(target.identity)
+        for diagnostic in self.diagnostics():
+            if diagnostic.location.kind == "node" and diagnostic.location.key in substituted | skipped_bodies:
+                if diagnostic not in structural:
+                    continue
+            if diagnostic.code == "map_capacity":
+                owner = by_identity.get(diagnostic.location.key)
+                target_key = owner.impl.map_body_target(owner.config) if owner and owner.impl else None
+                target = by_key.get(target_key) if target_key else None
+                items = owner.config.get("items") if owner and isinstance(owner.config, dict) else None
+                if target is not None and isinstance(items, list) and all(
+                    (target.identity, index) in output_slots for index in range(len(items))
+                ):
+                    continue
+            result.append(diagnostic)
+        return tuple(result)
 
     def structural_diagnostics(self) -> tuple[GraphDiagnostic, ...]:
         """Return persistence blockers without applying readiness policy."""

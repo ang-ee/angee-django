@@ -41,6 +41,7 @@ from angee.workflows.attempts import (
     InvocationAdmission,
     JsonPresence,
     MapItemSource,
+    map_child_input,
 )
 from angee.workflows.bindings import (
     BindingContext,
@@ -60,6 +61,7 @@ from angee.workflows.models import (
     decision_policy_outcome,
 )
 from angee.workflows.steps import DecisionSpec, MapStep, StepResult, TransientStepError
+from angee.workflows.test_contracts import TestFixtureRole, TestScope
 
 VERDICT_PENDING = cast(Verdict, Verdict.PENDING)
 VERDICT_COMPLETED = cast(Verdict, Verdict.COMPLETED)
@@ -86,6 +88,7 @@ class _AttemptPreparation:
     input: AttemptInput
     failure: AttemptResult | None = None
     map_item: MapItemSource | None = None
+    test_fixture: Any = None
 
 
 def start(
@@ -1316,6 +1319,8 @@ def _has_due_wait(run: Any, *, timestamp: datetime) -> bool:
 
 
 def _route_completed_steps(run: Any) -> None:
+    if run.origin == RunOrigin.TEST and run.test_scope == TestScope.NODE:
+        return
     for step_run in _terminal_step_runs(run):
         if step_run.step_id is None:
             continue
@@ -1353,6 +1358,23 @@ def _process_map_steps(run: Any, *, timestamp: datetime) -> bool:
     ]
     for step_run in map_rows:
         if step_run.status == StepRunStatus.SCHEDULED:
+            fixture = (
+                run.test_fixtures.filter(
+                    step_id=step_run.step_id,
+                    role=TestFixtureRole.OUTPUT,
+                    item_index__isnull=True,
+                ).first()
+                if run.origin == RunOrigin.TEST
+                else None
+            )
+            if fixture is not None:
+                _model("StepAttempt").objects.record_test_fixture(
+                    fixture, at=timestamp, due_step_run_id=step_run.pk
+                )
+                _model("WorkflowDispatch").objects.schedule_advance(
+                    run, available_at=timestamp
+                )
+                continue
             if not _expand_retained_map_step(run, step_run, timestamp=timestamp):
                 return False
         if step_run.status == StepRunStatus.WAITING:
@@ -1446,7 +1468,17 @@ def _map_capacity_allows(run: Any, *, target: Any, items: list[Any]) -> bool:
         step_runs.filter(step=target, map_index__gte=0, map_index__lt=len(items))
         .values_list("map_index", flat=True)
     )
-    missing_children = len(items) - len(existing_indexes)
+    substituted_indexes = set()
+    if run.origin == RunOrigin.TEST:
+        substituted_indexes = set(
+            run.test_fixtures.filter(
+                step=target,
+                role=TestFixtureRole.OUTPUT,
+                item_index__gte=0,
+                item_index__lt=len(items),
+            ).values_list("item_index", flat=True)
+        )
+    missing_children = len(set(range(len(items))) - existing_indexes - substituted_indexes)
     if _workflow_capacity_allows(run, additional=missing_children):
         return True
     return False
@@ -1455,7 +1487,21 @@ def _map_capacity_allows(run: Any, *, target: Any, items: list[Any]) -> bool:
 def _workflow_capacity_allows(run: Any, *, additional: int = 0) -> bool:
     """Fail before executing work that cannot fit the run journal budget."""
 
-    admitted = run.step_runs.filter(status=StepRunStatus.SCHEDULED).count()
+    scheduled = list(
+        run.step_runs.filter(status=StepRunStatus.SCHEDULED).values_list(
+            "step_id", "map_index"
+        )
+    )
+    substituted: set[tuple[int, int | None]] = set()
+    if run.origin == RunOrigin.TEST:
+        substituted = {
+            (fixture.step_id, fixture.item_index)
+            for fixture in run.test_fixtures.filter(role=TestFixtureRole.OUTPUT)
+        }
+    admitted = sum(
+        (step_id, None if map_index == -1 else map_index) not in substituted
+        for step_id, map_index in scheduled
+    )
     if run.steps_taken + admitted + additional <= run.workflow.max_steps:
         return True
     run.mark_failed(f"Workflow exceeded max_steps={run.workflow.max_steps}.")
@@ -1655,18 +1701,44 @@ def _claim_due_steps(run: Any, *, timestamp: datetime, retained: bool = False) -
             and row.step.step_class == MapStep.key
             and row.map_index == -1
         )
+        and (not retained or run.allows_test_step(row.step))
     ]
     if not due:
         return []
-    if run.steps_taken + len(due) > run.workflow.max_steps:
+    fixture_by_slot: dict[tuple[int, int | None], Any] = {}
+    if retained and run.origin == RunOrigin.TEST:
+        fixture_by_slot = {
+            (fixture.step_id, fixture.item_index): fixture
+            for fixture in run.test_fixtures.filter(role=TestFixtureRole.OUTPUT)
+        }
+    substituted = [
+        row
+        for row in due
+        if (row.step_id, None if row.map_index == -1 else row.map_index) in fixture_by_slot
+    ]
+    physical_due = [row for row in due if row not in substituted]
+    if run.steps_taken + len(physical_due) > run.workflow.max_steps:
         run.mark_failed(f"Workflow exceeded max_steps={run.workflow.max_steps}.")
         return []
+
+    claimed: list[int] = []
+    for step_run in substituted:
+        fixture = fixture_by_slot[(step_run.step_id, None if step_run.map_index == -1 else step_run.map_index)]
+        _model("StepAttempt").objects.record_test_fixture(
+            fixture, at=timestamp, due_step_run_id=step_run.pk
+        )
+        _model("WorkflowDispatch").objects.schedule_advance(run, available_at=timestamp)
+        claimed.append(step_run.pk)
+    due = physical_due
+    if not due:
+        if claimed:
+            transaction.on_commit(enqueue_dispatch_publisher)
+        return claimed
 
     preparations = [
         (_prepare_attempt_input(run, step_run, source_rows=locked_rows) if retained else None)
         for step_run in due
     ]
-    claimed: list[int] = []
     for step_run, preparation in zip(due, preparations, strict=True):
         if retained:
             cause = (
@@ -1681,6 +1753,7 @@ def _claim_due_steps(run: Any, *, timestamp: datetime, retained: bool = False) -
                     cause=cause,
                     input=prepared.input,
                     map_item=prepared.map_item,
+                    test_fixture=prepared.test_fixture,
                     result=prepared.failure,
                     claimed_at=timestamp,
                     recorded_at=timestamp,
@@ -1694,6 +1767,7 @@ def _claim_due_steps(run: Any, *, timestamp: datetime, retained: bool = False) -
                 cause=cause,
                 input=attempt_input,
                 map_item=prepared.map_item,
+                test_fixture=prepared.test_fixture,
                 claimed_at=timestamp,
             )
             _model("WorkflowDispatch").objects.schedule_execute(claim.attempt)
@@ -1727,8 +1801,32 @@ def _prepare_attempt_input(
         return _AttemptPreparation(
             AttemptInput(previous.input_present, previous.input, previous.input_provenance),
             map_item=map_item,
+            test_fixture=previous.test_fixture,
         )
+    fixture = None
+    if run.origin == RunOrigin.TEST and step_run.map_index >= 0:
+        fixture = run.test_fixtures.filter(
+            step_id=step_run.step_id,
+            role=TestFixtureRole.MAP_ITEM,
+            item_index=step_run.map_index,
+        ).first()
     if step_run.step.input_binding is None:
+        if fixture is not None:
+            provenance = {
+                "kind": "test_fixture",
+                "fixture_id": fixture.sqid,
+                "role": str(TestFixtureRole.MAP_ITEM),
+                "step_id": fixture.step_id,
+                "item_index": fixture.item_index,
+            }
+            return _AttemptPreparation(
+                AttemptInput(
+                    fixture.value_present,
+                    map_child_input(fixture.value) if fixture.value_present else None,
+                    provenance,
+                ),
+                test_fixture=fixture,
+            )
         map_item = None
         expansion = step_run.current_map_expansion
         if step_run.map_index >= 0 and expansion is not None:
@@ -1797,7 +1895,20 @@ def _prepare_attempt_input(
     map_item_source: MapItemSource | None = None
     map_binding_source: SourceValue | UnavailableSource
     expansion = step_run.current_map_expansion
-    if step_run.map_index >= 0 and expansion is not None:
+    if fixture is not None:
+        presence = JsonPresence(fixture.value_present, fixture.value)
+        map_binding_source = SourceValue(
+            presence,
+            {
+                "kind": "test_fixture",
+                "fixture_id": fixture.sqid,
+                "role": str(TestFixtureRole.MAP_ITEM),
+                "step_id": fixture.step_id,
+                "item_index": fixture.item_index,
+                "path": [],
+            },
+        )
+    elif step_run.map_index >= 0 and expansion is not None:
         checkpoint = expansion.checkpoint if expansion.checkpoint_present else None
         map_state = checkpoint.get("map") if isinstance(checkpoint, dict) else None
         items = map_state.get("items") if isinstance(map_state, dict) else None
@@ -1855,7 +1966,9 @@ def _prepare_attempt_input(
         )
         provenance = dict(evaluation.provenance or {"kind": "binding"})
         provenance["diagnostics"] = diagnostics
-        return _AttemptPreparation(AttemptInput(False, None, provenance), failure, map_item_source)
+        return _AttemptPreparation(
+            AttemptInput(False, None, provenance), failure, map_item_source, fixture
+        )
     candidate = evaluation.value
     impl_class = step_run.step.resolve_impl("step_class")
     if impl_class.input_model is not None:
@@ -1867,10 +1980,12 @@ def _prepare_attempt_input(
                 AttemptInput(candidate.present, candidate.value, evaluation.provenance),
                 failure,
                 map_item_source,
+                fixture,
             )
     return _AttemptPreparation(
         AttemptInput(candidate.present, candidate.value, evaluation.provenance),
         map_item=map_item_source,
+        test_fixture=fixture,
     )
 
 
@@ -1926,7 +2041,16 @@ def _numeric_budget_value(value: Any) -> float | None:
 def _update_run_status(run: Any, *, timestamp: datetime) -> None:
     if run.status in RunStatus.TERMINAL:
         return
-    active_without_wait = run.step_runs.filter(status__in=[StepRunStatus.SCHEDULED, StepRunStatus.STARTED]).exists()
+    rows = run.step_runs.select_related("step").all()
+    if run.origin == RunOrigin.TEST and run.test_scope == TestScope.NODE:
+        rows = [row for row in rows if row.step_id is not None and run.allows_test_step(row.step)]
+        active_without_wait = any(
+            row.status in {StepRunStatus.SCHEDULED, StepRunStatus.STARTED} for row in rows
+        )
+    else:
+        active_without_wait = rows.filter(
+            status__in=[StepRunStatus.SCHEDULED, StepRunStatus.STARTED]
+        ).exists()
     if active_without_wait:
         if run.status == RunStatus.PENDING:
             run.mark_running()
@@ -1937,10 +2061,16 @@ def _update_run_status(run: Any, *, timestamp: datetime) -> None:
             run.save(update_fields=["wake_at", "updated_at"])
         return
 
-    waiting_rows = run.step_runs.filter(status=StepRunStatus.WAITING)
-    if waiting_rows.exists():
+    waiting_rows = (
+        [row for row in rows if row.status == StepRunStatus.WAITING]
+        if isinstance(rows, list)
+        else rows.filter(status=StepRunStatus.WAITING)
+    )
+    if waiting_rows:
         wake_at = (
-            waiting_rows.filter(wait_until__isnull=False)
+            min((row.wait_until for row in waiting_rows if row.wait_until is not None), default=None)
+            if isinstance(waiting_rows, list)
+            else waiting_rows.filter(wait_until__isnull=False)
             .order_by("wait_until")
             .values_list("wait_until", flat=True)
             .first()

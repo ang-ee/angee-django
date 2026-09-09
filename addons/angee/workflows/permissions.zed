@@ -64,6 +64,13 @@ definition workflows/step_run {
     permission delete = admin->member
 }
 
+definition workflows/step_attempt {
+    relation step_run: workflows/step_run // rebac:field=step_run
+    relation admin: angee/role // rebac:const=admin
+
+    permission read = step_run->read + admin->member
+}
+
 definition workflows/decision {
     relation assignee: auth/user | angee/role#member
     relation requester: auth/user
