@@ -42,7 +42,7 @@ import { fieldsWithMetadataDefaults } from "@angee/ui/views/model-metadata-defau
 import { WorkflowMapBodyCandidatesDocument, WorkflowStepOperationsDocument } from "../documents.console";
 import { useWorkflowsT } from "../i18n";
 import { WorkflowOperationPicker, type WorkflowOperationChoice } from "./WorkflowOperationPicker";
-import { WorkflowInputBindingEditor, type OperationContract } from "./WorkflowInputBindingEditor";
+import { WorkflowInputBindingEditor } from "./WorkflowInputBindingEditor";
 import { workflowNodeKind, workflowNodeStyles, type WorkflowGraphNodeKind } from "./graph-data";
 import { graphWithDuplicate, graphWithMapBody, graphWithOperation, positionFrom } from "./workflow-graph-authoring";
 import { EMPTY_WORKFLOW_EDITOR_SELECTION, workflowEditorSelection } from "./workflow-editor-state";
@@ -437,7 +437,7 @@ function StepConfigPanel({ context, nodeKey, node, nodes, diagnostics, pendingIs
     onIssueFocused();
   }, [advancedOpen, context, issueTarget, onIssueFocused, scope]);
   const nodeErrors = diagnosticsForNode(diagnostics, nodeKey, node).filter((item) => item.field !== "input_binding").map((item) => item.message).join(" ");
-  const operation = operations.find((item) => item.key === node.step_class) as (WorkflowOperationChoice & OperationContract) | undefined;
+  const operation = operations.find((item) => item.key === node.step_class);
   const bindingName = `${scope}.input_binding`;
   const inputDiagnostics = diagnosticsForNode(diagnostics, nodeKey, node).filter((item) => item.field === "input_binding");
   return <div className="grid min-h-0 content-start gap-4 overflow-auto bg-sheet-1 p-4">

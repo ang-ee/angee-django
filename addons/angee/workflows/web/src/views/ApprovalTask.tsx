@@ -3,7 +3,7 @@ import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
 import {
   Badge, Button, Collapsible, ErrorBanner, FieldDescription, FieldLabel, FieldRoot,
   Glyph, LabeledDescriptorField, LazyBoundary, Textarea, TextLink, formSpecInitialValues,
-  useDottedPathFieldErrors, useFormSpecFields, useRouteHref, validationErrorMap,
+  errorMessage, useDottedPathFieldErrors, useFormSpecFields, useRouteHref, validationErrorMap,
   type DottedPathFieldErrorMap,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
@@ -123,7 +123,7 @@ function FormSpecApprovalResolution({ approval, active, editable, onResolved, re
     try {
       validationErrors.replace(await resolution.resolve(approval.id, verdict, values));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("inbox.actionFailed"));
+      setError(errorMessage(cause, t("inbox.actionFailed")));
     }
   }
   return (
@@ -157,9 +157,9 @@ function JsonApprovalResolution({ approval, active, editable, onResolved, reconc
     setError(null); validationErrors.clear();
     let parsed: unknown;
     try { parsed = parseJsonPayload(payload, t("json.invalid")); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : t("inbox.actionFailed")); return; }
+    catch (cause) { setError(errorMessage(cause, t("inbox.actionFailed"))); return; }
     try { validationErrors.replace(await resolution.resolve(approval.id, verdict, parsed)); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : t("inbox.actionFailed")); }
+    catch (cause) { setError(errorMessage(cause, t("inbox.actionFailed"))); }
   }
   return (
     <section className="space-y-3">
