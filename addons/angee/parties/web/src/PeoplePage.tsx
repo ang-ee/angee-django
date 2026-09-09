@@ -16,6 +16,8 @@ import {
   SectionEyebrow,
   TreeView,
   errorMessage,
+  slotContents,
+  useSlot,
   useAuthoredResourceMutation,
   useLatestRef,
   useRouteHref,
@@ -36,6 +38,8 @@ import {
 } from "./documents";
 import { IdentityTab } from "./IdentityTab";
 import { usePartiesT } from "./i18n";
+
+import { PERSON_FORM_FIELDS_SLOT } from "./slots";
 
 const MODEL = "parties.Person";
 
@@ -204,6 +208,7 @@ function personRecordTabs(
 function peopleForm(
   t: ReturnType<typeof usePartiesT>,
   mergeSubmit: NonNullable<ActionDescriptor["submit"]>,
+  extraFields: React.ReactNode,
 ): React.ReactElement {
   return (
     <Form resource={MODEL}>
@@ -221,10 +226,7 @@ function peopleForm(
         <Field name="anniversary" label={t("person.field.anniversary")} />
         <Field name="folder" label={t("person.folder")} readOnly />
       </Group>
-      <Group label={t("tax.details")} columns={2}>
-        <Field name="tax_country" label={t("tax.country")} />
-        <Field name="vat" label={t("tax.vat")} />
-      </Group>
+      {extraFields}
       <Field name="notes" />
       <Action
         id="merge-into"
@@ -253,6 +255,7 @@ function peopleForm(
  * collections.
  */
 export function PeoplePage(): React.ReactElement {
+  const extraFields = slotContents(useSlot(PERSON_FORM_FIELDS_SLOT));
   const t = usePartiesT();
   const navigate = useNavigate();
   const routeHref = useRouteHref();
@@ -435,7 +438,7 @@ export function PeoplePage(): React.ReactElement {
           <Column field="family_name" />
           <Column field="created_at" />
         </List>
-        {peopleForm(t, mergeSubmit)}
+        {peopleForm(t, mergeSubmit, extraFields)}
       </ResourceList>
     </>
   );

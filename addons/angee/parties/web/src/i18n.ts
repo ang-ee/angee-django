@@ -2,9 +2,6 @@ import { createNamespaceT } from "@angee/ui";
 
 export const enPartiesMessages: Record<string, string> = {
   "common.yes": "Yes",
-  "tax.details": "Tax details",
-  "tax.country": "Tax country (ISO code)",
-  "tax.vat": "VAT number",
   "overview.metric.contacts": "People",
   "overview.metric.organizations": "Organizations",
   "overview.metric.unresolvedHandles": "Unresolved handles",
