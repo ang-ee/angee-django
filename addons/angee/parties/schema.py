@@ -354,9 +354,7 @@ class PartiesReviewQuery:
 
         bounded_limit = max(1, min(int(limit), 1000))
         filtered_values = (
-            list(filtered.values_list("sqid", flat=True)[: bounded_limit + 1])
-            if filtered is not None
-            else []
+            list(filtered.values_list("sqid", flat=True)[: bounded_limit + 1]) if filtered is not None else []
         )
         return PeopleWorkbenchType(
             circles=cast(
@@ -502,10 +500,35 @@ _PARTY_RESOURCE = hasura_model_resource(
     PartyType,
     model=Party,
     name="parties",
-    filterable=["id", "display_name", "created_at", "updated_at"],
-    sortable=["display_name", "handle_count", "created_at", "updated_at"],
+    filterable=list(
+        dict.fromkeys(
+            [
+                "id",
+                "display_name",
+                "created_at",
+                "updated_at",
+                *declared_hasura_resource_fields(Party, "hasura_readable_fields"),
+                *declared_hasura_resource_fields(Party, "hasura_filterable_fields"),
+            ]
+        )
+    ),
+    sortable=[
+        "display_name",
+        "handle_count",
+        "created_at",
+        "updated_at",
+        *declared_hasura_resource_fields(Party, "hasura_sortable_fields"),
+    ],
     aggregatable=["id", "handle_count"],
-    groupable=["created_at"],
+    groupable=list(
+        dict.fromkeys(
+            [
+                "created_at",
+                *declared_hasura_resource_fields(Party, "hasura_readable_fields"),
+                *declared_hasura_resource_fields(Party, "hasura_groupable_fields"),
+            ]
+        )
+    ),
     insert=False,
     updatable=["display_name", "notes", *declared_hasura_resource_fields(Party, "hasura_updatable_fields")],
 )
@@ -513,21 +536,45 @@ _PERSON_RESOURCE = hasura_model_resource(
     PersonType,
     model=Person,
     name="people",
-    filterable=[
-        "id",
+    filterable=list(
+        dict.fromkeys(
+            [
+                "id",
+                "display_name",
+                "given_name",
+                "family_name",
+                "nickname",
+                "folder",
+                "birthday",
+                "anniversary",
+                "created_at",
+                "updated_at",
+                *declared_hasura_resource_fields(Person, "hasura_readable_fields"),
+                *declared_hasura_resource_fields(Person, "hasura_filterable_fields"),
+            ]
+        )
+    ),
+    sortable=[
         "display_name",
         "given_name",
         "family_name",
-        "nickname",
         "folder",
-        "birthday",
-        "anniversary",
         "created_at",
         "updated_at",
+        *declared_hasura_resource_fields(Person, "hasura_sortable_fields"),
     ],
-    sortable=["display_name", "given_name", "family_name", "folder", "created_at", "updated_at"],
     aggregatable=["id"],
-    groupable=["folder", "folder__name", "created_at"],
+    groupable=list(
+        dict.fromkeys(
+            [
+                "folder",
+                "folder__name",
+                "created_at",
+                *declared_hasura_resource_fields(Person, "hasura_readable_fields"),
+                *declared_hasura_resource_fields(Person, "hasura_groupable_fields"),
+            ]
+        )
+    ),
     insertable=[
         "display_name",
         "notes",
@@ -562,16 +609,51 @@ _ORGANIZATION_RESOURCE = hasura_model_resource(
     OrganizationType,
     model=Organization,
     name="organizations",
-    filterable=["id", "display_name", "legal_name", "domain", "created_at", "updated_at"],
-    sortable=["display_name", "legal_name", "domain", "created_at", "updated_at"],
+    filterable=list(
+        dict.fromkeys(
+            [
+                "id",
+                "display_name",
+                "legal_name",
+                "domain",
+                "created_at",
+                "updated_at",
+                *declared_hasura_resource_fields(Organization, "hasura_readable_fields"),
+                *declared_hasura_resource_fields(Organization, "hasura_filterable_fields"),
+            ]
+        )
+    ),
+    sortable=[
+        "display_name",
+        "legal_name",
+        "domain",
+        "created_at",
+        "updated_at",
+        *declared_hasura_resource_fields(Organization, "hasura_sortable_fields"),
+    ],
     aggregatable=["id"],
-    groupable=["domain", "created_at"],
+    groupable=list(
+        dict.fromkeys(
+            [
+                "domain",
+                "created_at",
+                *declared_hasura_resource_fields(Organization, "hasura_readable_fields"),
+                *declared_hasura_resource_fields(Organization, "hasura_groupable_fields"),
+            ]
+        )
+    ),
     insertable=[
-        "display_name", "notes", "legal_name", "domain",
+        "display_name",
+        "notes",
+        "legal_name",
+        "domain",
         *declared_hasura_resource_fields(Organization, "hasura_insertable_fields"),
     ],
     updatable=[
-        "display_name", "notes", "legal_name", "domain",
+        "display_name",
+        "notes",
+        "legal_name",
+        "domain",
         *declared_hasura_resource_fields(Organization, "hasura_updatable_fields"),
     ],
     delete=False,

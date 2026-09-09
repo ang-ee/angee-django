@@ -523,8 +523,8 @@ def test_named_schemas_project_only_the_native_roots_they_expose(monkeypatch: An
     ]
 
 
-def test_final_extension_relation_uses_target_type_source_link() -> None:
-    """A final resolver field gets its relation target from the target Django type."""
+def test_final_extension_object_retains_target_type_without_becoming_a_relation() -> None:
+    """A resolver target can name a Django model without declaring a relation."""
 
     @strawberry_django.type(ResourceParent, name="FinalRelationParentType")
     class FinalRelationParentType(AngeeNode):
@@ -579,9 +579,13 @@ def test_final_extension_relation_uses_target_type_source_link() -> None:
     ).build("public")
     fields = {field.name: field for field in schema.angee_resources[0].fields}
 
-    assert fields["inferred_parent"].kind == "relation"
-    assert fields["inferred_parent"].relation_object is True
+    assert fields["inferred_parent"].kind == "object"
+    assert fields["inferred_parent"].relation_object is False
     assert fields["inferred_parent"].relation_model_label == "tests.ResourceParent"
+    query_field = schema.angee_resources[0].query.fields["inferred_parent"]
+    assert query_field.kind == "object"
+    assert query_field.relation is None
+    assert query_field.row is None
 
 
 def test_relation_label_candidates_require_native_string_fields() -> None:

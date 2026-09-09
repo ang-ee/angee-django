@@ -175,7 +175,6 @@ def final_resource_fields(
         relation_model_label = _relation_model_label(model_field) or _graphql_relation_model_label(named)
         kind = resource_field_kind(
             model_field,
-            has_relation_axis=relation_model_label is not None,
             is_list=is_list,
             is_enum=is_enum,
             is_object=is_object,
