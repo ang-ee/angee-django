@@ -20,6 +20,7 @@ from rebac.roles import grant
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
+from angee.workflows.attempts import AttemptResultKind
 from angee.workflows.steps import DecisionSpec, HandlerStep, StepResult
 from tests.conftest import SchemaAddon, execute_schema, result_data
 from tests.workflows import (
@@ -174,6 +175,76 @@ def test_legacy_gate_decision_still_marks_the_suspended_step_succeeded(
     gate.refresh_from_db()
     assert gate.status == workflow_models.StepRunStatus.SUCCEEDED
     assert gate.outcome == "completed"
+
+
+def test_settled_retained_decision_output_feeds_downstream_binding(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A settled suspension exposes its decision envelope without rewriting its attempt."""
+
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="wdc-bound-decision")
+    pending_assignee = User.objects.create_user(username="wdc-bound-decision-pending")
+
+    def gate_then_consume(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+        del self, now
+        if step_run.step.key == "gate":
+            return StepResult.suspend(
+                resume_state={"gate": {"policy": "one_done"}},
+                decisions=(
+                    DecisionSpec(
+                        assignees=(str(to_subject_ref(assignee)),),
+                        action="approve-bound-output",
+                    ),
+                    DecisionSpec(
+                        assignees=(str(to_subject_ref(pending_assignee)),),
+                        action="approve-bound-output",
+                        priority=1,
+                    ),
+                ),
+            )
+        return StepResult.done(output=step_run.input)
+
+    monkeypatch.setattr(HandlerStep, "run", gate_then_consume)
+    workflow = workflow_with_steps(
+        name="Bound retained decision output",
+        steps=(
+            {"key": "gate", "step_class": "handler", "config": {}},
+            {
+                "key": "consumer",
+                "step_class": "handler",
+                "config": {},
+                "input_binding": {"kind": "step_output", "step_key": "gate", "path": []},
+            },
+        ),
+        edges=(("gate", "consumer", "completed"),),
+    )
+    run = start_run(workflow)
+    advance_once(run)
+    execute_started(run)
+    gate = _step_run(run, "gate")
+    suspension = gate.current_attempt
+    decisions = _decisions_for(run, "gate")
+    decision, pending = decisions
+
+    engine.decide(decision, "complete", actor=assignee)
+    advance_once(run)
+    execute_started(run)
+
+    gate.refresh_from_db()
+    consumer = _step_run(run, "consumer")
+    suspension.refresh_from_db()
+    pending.refresh_from_db()
+    assert suspension.result_kind == str(AttemptResultKind.SUSPEND)
+    assert pending.verdict == workflow_models.Verdict.PENDING
+    assert consumer.status == workflow_models.StepRunStatus.SUCCEEDED
+    assert consumer.output == {"decisions": [decision.sqid, pending.sqid]}
+    assert consumer.current_attempt.input_provenance["settled_decision_ids"] == [
+        decision.pk,
+        pending.pk,
+    ]
 
 
 def test_force_expiry_wakes_retained_decision_continuation(

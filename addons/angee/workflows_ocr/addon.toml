@@ -1,0 +1,12 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles.
+[addon]
+name = "angee.workflows_ocr"
+description = "Schema-validated document extraction evidence and workflow step"
+keywords = ["workflows", "ocr", "documents", "evidence"]
+category = "Workflows"
+depends_on = ["angee.workflows", "angee.agents", "angee.storage", "django.contrib.contenttypes"]
+dependencies = [
+  "jsonschema>=4.26",
+  "pypdfium2>=4.30",
+  "pillow>=11.0",
+]

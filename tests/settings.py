@@ -47,6 +47,8 @@ INSTALLED_APPS = [
     "angee.workflows_agents",
     "angee.workflows_parties",
     "angee.workflows_integrate",
+    "angee.workflows_ocr",
+    "angee.workflows_ocr_glm",
     "angee.knowledge",
     "angee.mcp",
     "angee.storage",
@@ -171,8 +173,18 @@ ANGEE_WORKFLOW_STEP_CLASSES = {
     "parties_dedupe_scan": "angee.workflows_parties.steps.DedupeScanStepImpl",
     "parties_dedupe_gate": "angee.workflows_parties.steps.DedupeGateStepImpl",
     "parties_dedupe_execute": "angee.workflows_parties.steps.DedupeExecuteStepImpl",
+    "ocr_extract": "angee.workflows_ocr.steps.OcrExtractStepImpl",
 }
 ANGEE_AGENT_TEARDOWN_HOOKS = ("angee.workflows_agents.sessions.close_agent_sessions",)
+ANGEE_OCR_ENGINE_CLASSES = {
+    "fake": "angee.workflows_ocr.engines.FakeOcrEngine",
+    "glm": "angee.workflows_ocr_glm.engine.GlmOllamaEngine",
+}
+ANGEE_OCR_MAX_BYTES = 25 * 1024 * 1024
+ANGEE_OCR_MAX_PAGES = 10
+ANGEE_OCR_MAX_EDGE = 3500
+ANGEE_OCR_DPI = 200
+ANGEE_OCR_TIMEOUT_SECONDS = 120
 ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES = {
     "fixture_archive": "tests.test_workflows_integrate.FixtureArchiveExtractor",
 }

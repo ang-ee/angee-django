@@ -1,0 +1,6 @@
+[addon]
+name = "angee.workflows_ocr_glm"
+description = "Local GLM-OCR extraction through Ollama's native API"
+keywords = ["ocr", "glm", "ollama", "local"]
+category = "Integration"
+depends_on = ["angee.workflows_ocr", "angee.agents_integrate_ollama"]

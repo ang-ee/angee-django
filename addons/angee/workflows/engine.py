@@ -1916,15 +1916,29 @@ def _prepare_attempt_input(
         if source.step_id is None or source.pk == step_run.pk or source.map_index != -1:
             continue
         attempt = source.current_attempt
-        valid = (
+        valid_attempt = (
             source.status == StepRunStatus.SUCCEEDED
             and attempt is not None
             and attempt.step_run_id == source.pk
             and attempt.effect_key == source.effect_key
             and attempt.effect_generation == source.effect_generation
-            and attempt.result_kind == str(AttemptResultKind.DONE)
             and attempt.applied_at is not None
             and attempt.lease_revoked_at is None
+        )
+        settled_decisions: list[Any] = []
+        if valid_attempt and attempt.result_kind == str(AttemptResultKind.SUSPEND):
+            settled_decisions = list(
+                source.decisions.filter(suspension_attempt_id=attempt.pk)
+                .order_by("priority", "pk")
+            )
+        settled_output = {
+            "decisions": [decision.sqid for decision in settled_decisions]
+        }
+        valid_done = valid_attempt and attempt.result_kind == str(AttemptResultKind.DONE)
+        valid_settled_decisions = (
+            bool(settled_decisions)
+            and source.output == settled_output
+            and source.decision_gate.outcome(settled_decisions) == source.outcome
         )
         provenance = {
             "kind": "step_output",
@@ -1932,10 +1946,21 @@ def _prepare_attempt_input(
             "step_run_id": source.pk,
             "attempt_id": attempt.pk if attempt is not None else None,
             "effect_generation": source.effect_generation,
+            **(
+                {"settled_decision_ids": [decision.pk for decision in settled_decisions]}
+                if valid_settled_decisions
+                else {}
+            ),
         }
         sources.setdefault(source.step.key, (
-            SourceValue(JsonPresence(attempt.output_present, attempt.output), provenance)
-            if valid
+            SourceValue(
+                JsonPresence(
+                    True if valid_settled_decisions else attempt.output_present,
+                    source.output if valid_settled_decisions else attempt.output,
+                ),
+                provenance,
+            )
+            if valid_done or valid_settled_decisions
             else UnavailableSource("source_unavailable", "The referenced retained output is unavailable.", provenance)
         ))
     map_item_source: MapItemSource | None = None
