@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Controller, useWatch, type Control } from "react-hook-form";
+import { Controller, get, useFormState, useWatch, type Control } from "react-hook-form";
 
 // Render-only bindings for the headless FormView surface.
 
@@ -14,6 +14,7 @@ import { FormGrid } from "../../ui/form-layout";
 import { SectionEyebrow } from "../../ui/section-eyebrow";
 import { Spinner } from "../../ui/spinner";
 import { Tabs } from "../../ui/tabs";
+import { Collapsible } from "../../ui/collapsible";
 import { renderGlyph } from "../../chrome/Glyph";
 import { textRoleVariants } from "../../ui/text";
 import { cn } from "../../lib/cn";
@@ -72,9 +73,11 @@ export const FORM_VIEW_COLUMN_CLASS =
 export function FormViewRecordHeader({
   surface,
   compact = false,
+  title,
 }: {
   surface: FormViewSurface;
   compact?: boolean;
+  title?: React.ReactNode;
 }): React.ReactElement {
   const {
     t,
@@ -116,7 +119,9 @@ export function FormViewRecordHeader({
     <header className={cn("grid", compact ? "gap-1" : "gap-4")}>
       <div className="flex items-start gap-4 max-[900px]:flex-col max-[900px]:items-stretch">
         <div className="min-w-0 flex-1 self-start">
-          {currentTitleField ? (
+          {title !== undefined ? (
+            <h1 className={compact ? "truncate text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>{title}</h1>
+          ) : currentTitleField ? (
             <Controller
               control={form.control}
               name={currentTitleField.name}
@@ -253,6 +258,7 @@ export function FormViewOverview({
     fieldReadOnly,
     startFieldInteraction,
     commitFieldInteraction,
+    requestedFocusPath,
   } = surface;
   const bodyValues = useWatch({
     control: form.control,
@@ -263,42 +269,19 @@ export function FormViewOverview({
     : undefined;
   const renderField = (field: FieldDescriptor): React.ReactNode => {
     const relation = surface.relationByField.get(field.name);
-    const selectedOption = relation
-      ? relationSelectedOption(
-          surface.displayRecord?.[field.name],
-          relation.labelField,
-        )
-      : undefined;
     return (
-      <Controller
+      <BoundFormField
         key={field.name}
-        control={form.control}
-        name={field.name}
-        render={({ field: controller, fieldState }) => (
-          <BoundFieldRow
-            controlRef={controller.ref}
-            field={field}
-            relation={relation}
-            selectedOption={selectedOption}
-            value={controller.value}
-            readOnly={fieldReadOnly(field)}
-            errors={fieldState.error ? [fieldState.error] : []}
-            onCommit={() => commitFieldInteraction(field.name)}
-            onChange={(next) => {
-              startFieldInteraction(field.name);
-              clearServerFieldError(field.name);
-              controller.onChange(next);
-              afterFieldChange(field, next);
-            }}
-          />
-        )}
+        surface={surface}
+        field={field}
+        relation={relation}
       />
     );
   };
   const renderSections = (list: readonly FormSectionModel[]): React.ReactNode => {
     if (layout !== "tabs") {
       return list.map((section) => (
-        <FormSection key={section.key} section={section} renderField={renderField} />
+        <FormSection key={section.key} section={section} renderField={renderField} control={form.control} requestedFocusPath={requestedFocusPath} />
       ));
     }
     const stacked = list.filter((section) => section.label == null);
@@ -310,10 +293,10 @@ export function FormViewOverview({
     return (
       <>
         {stacked.map((section) => (
-          <FormSection key={section.key} section={section} renderField={renderField} />
+          <FormSection key={section.key} section={section} renderField={renderField} control={form.control} requestedFocusPath={requestedFocusPath} />
         ))}
         {tabbedSections.length > 0 ? (
-          <FormSectionTabs sections={tabbedSections} renderField={renderField} />
+          <FormSectionTabs sections={tabbedSections} renderField={renderField} control={form.control} requestedFocusPath={requestedFocusPath} />
         ) : null}
       </>
     );
@@ -383,6 +366,53 @@ export function FormViewOverview({
   );
 }
 
+function BoundFormField({
+  surface,
+  field,
+  relation,
+}: {
+  surface: FormViewSurface;
+  field: FieldDescriptor;
+  relation: RelationFieldInfo | undefined;
+}): React.ReactElement {
+  const value = useWatch({ control: surface.form.control, name: field.name });
+  const readOnly = surface.fieldReadOnly(field);
+  const currentRelationId = relationValueId(value);
+  const savedOption = relation
+    ? relationSelectedOption(surface.displayRecord?.[field.name], relation.labelField)
+    : undefined;
+  const selectedOption = relation && currentRelationId
+    ? relationSelectedOption(value, relation.labelField)
+      ?? (savedOption?.value === currentRelationId
+        ? savedOption
+        : { value: currentRelationId, label: currentRelationId })
+    : undefined;
+  return (
+    <Controller
+      control={surface.form.control}
+      name={field.name}
+      render={({ field: controller, fieldState }) => (
+        <BoundFieldRow
+          controlRef={controller.ref}
+          field={field}
+          relation={relation}
+          selectedOption={selectedOption}
+          value={value}
+          readOnly={readOnly}
+          errors={fieldState.error ? [fieldState.error] : []}
+          onCommit={() => surface.commitFieldInteraction(field.name)}
+          onChange={(next) => {
+            surface.startFieldInteraction(field.name);
+            surface.clearServerFieldError(field.name);
+            controller.onChange(next);
+            surface.afterFieldChange(field, next);
+          }}
+        />
+      )}
+    />
+  );
+}
+
 function RecordSubtitle({
   loading,
   loadingLabel,
@@ -422,11 +452,51 @@ function RecordSubtitle({
 function FormSection({
   section,
   renderField,
+  control,
+  requestedFocusPath,
 }: {
   section: FormSectionModel;
   renderField: (field: FieldDescriptor) => React.ReactNode;
+  control: Control<FormValues>;
+  requestedFocusPath: string | null;
 }): React.ReactElement | null {
+  const { errors } = useFormState({ control, name: section.fields.map((field) => field.name) });
+  const hasErrors = section.fields.some((field) => get(errors, field.name) !== undefined);
+  const [open, setOpen] = React.useState(section.defaultOpen ?? false);
+  React.useEffect(() => { if (hasErrors) setOpen(true); }, [hasErrors]);
+  React.useEffect(() => {
+    if (requestedFocusPath && section.fields.some((field) => requestedFocusPath === field.name || requestedFocusPath.startsWith(`${field.name}.`))) {
+      setOpen(true);
+    }
+  }, [requestedFocusPath, section.fields]);
   if (section.fields.length === 0 && section.render === undefined) return null;
+  const content = (
+    <>
+      {section.fields.length > 0 ? (
+        <FormGrid
+          columns={section.columns === 1 ? "one" : "two"}
+          density="comfortable"
+          className="gap-x-8 gap-y-4 pb-2"
+        >
+          {section.fields.map((field) => renderField(field))}
+        </FormGrid>
+      ) : null}
+      {section.render?.()}
+    </>
+  );
+  if (section.collapsible && section.label) {
+    return (
+      <Collapsible.Root open={open} onOpenChange={setOpen} className="grid gap-3">
+        <Collapsible.Trigger className="flex items-center gap-2 border-b border-border-subtle pb-1">
+          <Collapsible.Icon />
+          <SectionEyebrow as="span" spacing="field" tracking="wide" weight="semibold">
+            {section.label}
+          </SectionEyebrow>
+        </Collapsible.Trigger>
+        <Collapsible.Panel keepMounted>{content}</Collapsible.Panel>
+      </Collapsible.Root>
+    );
+  }
   return (
     <section className="grid gap-3">
       {section.label ? (
@@ -440,16 +510,7 @@ function FormSection({
           {section.label}
         </SectionEyebrow>
       ) : null}
-      {section.fields.length > 0 ? (
-        <FormGrid
-          columns={section.columns === 1 ? "one" : "two"}
-          density="comfortable"
-          className="gap-x-8 gap-y-4 pb-2"
-        >
-          {section.fields.map((field) => renderField(field))}
-        </FormGrid>
-      ) : null}
-      {section.render?.()}
+      {content}
     </section>
   );
 }
@@ -457,9 +518,13 @@ function FormSection({
 function FormSectionTabs({
   sections,
   renderField,
+  control,
+  requestedFocusPath,
 }: {
   sections: readonly FormSectionModel[];
   renderField: (field: FieldDescriptor) => React.ReactNode;
+  control: Control<FormValues>;
+  requestedFocusPath: string | null;
 }): React.ReactElement {
   const [active, setActive] = React.useState(sections[0]?.key);
   const value = sections.some((section) => section.key === active)
@@ -486,6 +551,8 @@ function FormSectionTabs({
           <FormSection
             section={{ ...section, label: undefined }}
             renderField={renderField}
+            control={control}
+            requestedFocusPath={requestedFocusPath}
           />
         </Tabs.Panel>
       ))}

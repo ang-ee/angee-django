@@ -60,6 +60,8 @@ export type {
 } from "./form-view-surface";
 
 export interface FormViewProps extends UseFormViewSurfaceProps {
+  /** Override the record heading from the same live create/edit form context. */
+  title?: React.ReactNode | ((context: RecordToolbarContext) => React.ReactNode);
   submitLabel?: React.ReactNode;
   toolbarStart?:
     | React.ReactNode
@@ -67,6 +69,8 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   toolbar?: React.ReactNode;
   /** Saved-record content rendered below, but outside, the form element. */
   recordExtras?: (context: RecordPanelContext) => React.ReactNode;
+  /** Non-form content rendered after the overview fields for both create and edit. */
+  formExtras?: (context: RecordToolbarContext) => React.ReactNode;
   /** Group presentation; ungrouped/title/body/status placement is unchanged. */
   layout?: "stacked" | "tabs";
   /** Record chrome density and height behavior. */
@@ -112,7 +116,9 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     submitLabel,
     toolbarStart,
     toolbar,
+    title,
     recordExtras,
+    formExtras,
     layout = "stacked",
     recordPresentation = "document",
     defaultRecordTab,
@@ -185,6 +191,13 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
         {recordExtras(recordPanelContext)}
       </div>
     ) : null;
+  const overviewWithFormExtras = (
+    <>
+      {overviewBody}
+      {formExtras ? <div className="pt-2">{formExtras(recordToolbarContext)}</div> : null}
+    </>
+  );
+  const formTitle = typeof title === "function" ? title(recordToolbarContext) : title;
 
   const handleFormKeyDown = (event: React.KeyboardEvent<HTMLFormElement>) => {
     if (
@@ -276,7 +289,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             : "pb-12",
         )}
       >
-        <FormViewRecordHeader surface={surface} />
+        <FormViewRecordHeader surface={surface} title={formTitle} />
         <ErrorBanner description={saveError} title={t("form.saveFailed")} />
         {tabbed ? (
           <>
@@ -299,11 +312,11 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
               keepMounted
               className="grid gap-6 pt-0"
             >
-              {overviewBody}
+              {overviewWithFormExtras}
             </Tabs.Panel>
           </>
         ) : (
-          overviewBody
+          overviewWithFormExtras
         )}
       </div>
     </form>
@@ -326,7 +339,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
         >
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 pt-3">
-            <FormViewRecordHeader surface={surface} compact />
+            <FormViewRecordHeader surface={surface} compact title={formTitle} />
             <ErrorBanner description={saveError} title={t("form.saveFailed")} />
             <Tabs.List className="mt-2">
               {orderedTabs.map((tab) => (
@@ -345,7 +358,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             value={FORM_VIEW_OVERVIEW_TAB_ID}
             className="min-h-0 flex-1 overflow-auto pt-0"
           >
-            <div className={cn(FORM_VIEW_COLUMN_CLASS, "grid gap-6 py-6")}>{overviewBody}</div>
+            <div className={cn(FORM_VIEW_COLUMN_CLASS, "grid gap-6 py-6")}>{overviewWithFormExtras}</div>
           </Tabs.Panel>
         </form>
         {recordTabList.map((tab) => (

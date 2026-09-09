@@ -37,12 +37,16 @@ export interface BoundFormValueProps {
 
 /** Bind a domain-owned controlled editor to one value in FormView's RHF tree. */
 export function BoundFormValue({ form: surface, name, children }: BoundFormValueProps): React.ReactElement {
+  // Controller does not re-render a parent field when only one of its dotted
+  // descendants changes. Subscribe explicitly so raw/object editors always
+  // receive the same current value as their structured children.
+  const value = useWatch({ control: surface.form.control, name });
   return <Controller
     key={name}
     control={surface.form.control}
     name={name}
     render={({ field, fieldState }) => children({
-      value: field.value,
+      value,
       error: fieldState.error?.message,
       messages: fieldErrorMessages(fieldState.error ? [fieldState.error] : []),
       controlRef: field.ref,

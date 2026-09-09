@@ -6,7 +6,7 @@ import { Refine, type DataProvider } from "@refinedev/core";
 import { QueryClient } from "@tanstack/react-query";
 import { createRootRoute, createRouter, createMemoryHistory, RouterContextProvider } from "@tanstack/react-router";
 import { Controller, useForm } from "react-hook-form";
-import { refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type ModelMetadata, type Row } from "@angee/metadata";
+import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type ModelMetadata, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
@@ -22,7 +22,7 @@ import {
   type FormViewSaveSurface,
 } from "./use-form-view-save";
 import type { MutationDialogField } from "./MutationDialog";
-import type { FieldDescriptor } from "../page";
+import type { FieldDescriptor, GroupDescriptor } from "../page";
 import type { RecordTabDescriptor } from "./form-view-surface";
 
 const fields: readonly FieldDescriptor[] = [
@@ -31,14 +31,26 @@ const fields: readonly FieldDescriptor[] = [
   { name: "note", label: "Note", nullable: true, omittable: true },
   { name: "settings", label: "Settings", kind: "object", nullable: true, omittable: true },
   { name: "summary", label: "Summary", omittable: true },
+  {
+    name: "parent",
+    label: "Parent",
+    kind: "relation",
+    widget: "many2one",
+    omittable: true,
+  },
 ];
-const refineFields = ["id", "title", "body", "deadline", "note", "settings", "summary"];
+const refineFields = ["id", "title", "body", "deadline", "note", "settings", "summary", "parent"];
 const fieldByName = new Map(fields.map((field) => [field.name, field]));
 const resource = testDataResource("notes.Note", {
   createFields: ["title", "body", "deadline"],
   requiredCreateFields: ["deadline"],
   fields: fields.map((field) => ({
-    name: field.name, kind: "scalar", scalar: "String", readable: true,
+    name: field.name,
+    kind: field.name === "parent" ? "relation" : "scalar",
+    scalar: field.name === "parent" ? "ID" : "String",
+    relationModelLabel: field.name === "parent" ? "notes.Note" : undefined,
+    relationObject: field.name === "parent" ? true : undefined,
+    readable: true,
     filterable: false, sortable: false, aggregatable: false, groupable: false,
     creatable: true, updatable: true, requiredOnCreate: field.name === "deadline",
   })),
@@ -75,17 +87,47 @@ test("a domain controlled value preserves nested form error messages", async () 
   expect(await screen.findByText("fields.literal: Nested value is required")).toBeTruthy();
 });
 
+test("a bound parent value follows native dotted child updates", async () => {
+  function Harness() {
+    const form = useForm({ defaultValues: { config: { interval_seconds: "" } } });
+    const surface = {
+      form,
+      startFieldInteraction: vi.fn(),
+      commitFieldInteraction: vi.fn(),
+      clearServerFieldError: vi.fn(),
+    } as unknown as FormViewSaveSurface;
+    return <>
+      <BoundFormValue form={surface} name="config">
+        {({ value }) => <output>{JSON.stringify(value)}</output>}
+      </BoundFormValue>
+      <Controller
+        control={form.control}
+        name="config.interval_seconds"
+        render={({ field }) => <input aria-label="Interval" {...field} />}
+      />
+    </>;
+  }
+  render(<Harness />);
+  fireEvent.change(screen.getByRole("textbox", { name: "Interval" }), { target: { value: "3600" } });
+  expect(await screen.findByText('{"interval_seconds":"3600"}')).toBeTruthy();
+});
+
 async function fixture(options: {
   id?: string | null;
   submit?: FormSubmit;
   mountedFields?: readonly string[];
   presenceValues?: boolean;
+  relationValues?: boolean;
   acknowledgedSource?: FormViewAcknowledgedSource;
   boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[];
   publicView?: boolean;
   onFieldInteractionStart?: (path: string) => void;
   onFieldInteractionCommit?: (path: string) => void;
   recordTabs?: readonly RecordTabDescriptor[];
+  formExtras?: React.ComponentProps<typeof FormView>["formExtras"];
+  recordExtras?: React.ComponentProps<typeof FormView>["recordExtras"];
+  groups?: readonly GroupDescriptor[];
+  title?: React.ComponentProps<typeof FormView>["title"];
 } = {}) {
   let record: Row = {
     id: options.id ?? "note-1",
@@ -93,6 +135,9 @@ async function fixture(options: {
     body: "Original body",
     deadline: "",
     ...(options.presenceValues ? { note: null, settings: null } : {}),
+    ...(options.relationValues
+      ? { parent: { id: "note-a", title: "Parent A" } }
+      : {}),
   };
   const onSaved = vi.fn();
   const getOne = vi.fn(async () => ({ data: record }));
@@ -123,23 +168,27 @@ async function fixture(options: {
   }
   function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = fields, boundFields = options.boundFields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[] }) {
     return <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
-      <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
         {options.publicView ? (
           <FormView
             resource="notes.Note"
             id={recordId}
             fields={viewFields}
+            groups={options.groups}
+            title={options.title}
             acknowledgedSource={options.acknowledgedSource}
             submit={options.submit}
             onFieldInteractionStart={options.onFieldInteractionStart}
             onFieldInteractionCommit={options.onFieldInteractionCommit}
             recordTabs={options.recordTabs}
+            formExtras={options.formExtras}
+            recordExtras={options.recordExtras}
             defaultRecordTab={options.recordTabs ? "activity" : undefined}
           />
         ) : (
           <Probe key={recordId ?? "create"} recordId={recordId} mountedFields={mountedFields} viewFields={viewFields} boundFields={boundFields} />
         )}
-      </AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider>
+      </AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider>
     </Refine>;
   }
   const view = render(<Tree />);
@@ -148,6 +197,84 @@ async function fixture(options: {
   }
   return { surface: () => surface, onSaved, getOne, update, client, setRecord: (next: Row) => { record = next; }, rerender: (props: Parameters<typeof Tree>[0]) => view.rerender(<Tree {...props} />) };
 }
+
+test("form extras receive the native create and edit form contexts", async () => {
+  const extras = vi.fn((context: Parameters<NonNullable<React.ComponentProps<typeof FormView>["formExtras"]>>[0]) => (
+    <span>{context.recordId ?? "creating"}</span>
+  ));
+  const f = await fixture({ id: null, publicView: true, formExtras: extras });
+  expect((await screen.findByText("creating")).closest("form")).not.toBeNull();
+
+  f.rerender({ recordId: "note-1" });
+  expect((await screen.findAllByText("note-1")).length).toBeGreaterThan(0);
+  expect(extras).toHaveBeenCalled();
+});
+
+test("an editable metadata relation drops a stale expanded option when its id changes", async () => {
+  await fixture({
+    publicView: true,
+    relationValues: true,
+    recordExtras: (context) => <>
+      <button type="button" onClick={() => context.form.form.setValue("parent", "note-b")}>Choose B</button>
+      <button type="button" onClick={() => context.form.form.setValue("parent", undefined)}>Clear parent</button>
+    </>,
+  });
+  const relation = await screen.findByRole("button", { name: /Parent/ });
+  expect(relation.textContent).toContain("note-a");
+  fireEvent.click(screen.getByRole("button", { name: "Choose B" }));
+  await waitFor(() => expect(relation.textContent).toContain("note-b"));
+  fireEvent.click(screen.getByRole("button", { name: "Clear parent" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: /Parent/ })).toBeNull());
+});
+
+test("a focused field opens its collapsed group and a live title uses form context", async () => {
+  await fixture({
+    id: "note-1",
+    publicView: true,
+    acknowledgedSource: {
+      record: { id: "note-1", title: "First", body: "Body", summary: "" },
+      values: { title: "First", body: "Body", summary: "" },
+    },
+    submit: vi.fn(async (_data, context) => acknowledgeFormSubmit(
+      { id: "note-1", ...context.values },
+      context.values,
+    )),
+    title: (context) => context.recordId === null ? "New note" : "Saved note",
+    recordExtras: (context) => <button type="button" onClick={() => context.focusField("summary")}>Focus summary</button>,
+    groups: [{
+      label: "Advanced",
+      collapsible: true,
+      fields: [{ name: "summary", label: "Summary", required: true }],
+      actions: [],
+    }],
+  });
+  expect(await screen.findByRole("heading", { name: "Saved note" })).toBeTruthy();
+  const disclosure = screen.getByRole("button", { name: "Advanced" });
+  expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+  disclosure.focus();
+  expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(screen.getByRole("button", { name: "Focus summary" }));
+  await waitFor(() => expect(disclosure.getAttribute("aria-expanded")).toBe("true"));
+  const summary = screen.getByRole("textbox", { name: "Summary" });
+  expect(document.activeElement).toBe(summary);
+  fireEvent.click(disclosure);
+  fireEvent.click(screen.getByRole("button", { name: "Focus summary" }));
+  await waitFor(() => expect(disclosure.getAttribute("aria-expanded")).toBe("true"));
+});
+
+test("local child panels share the routed unsaved-change leave owner", async () => {
+  const f = await fixture();
+  edit("title", "Unsaved");
+
+  const pending = f.surface().requestLeave();
+  fireEvent.click(await screen.findByRole("button", { name: "Stay" }));
+  await expect(pending).resolves.toBe(false);
+  expect(f.surface().form.getValues("title")).toBe("Unsaved");
+
+  const leaving = f.surface().requestLeave();
+  fireEvent.click(await screen.findByRole("button", { name: "Leave" }));
+  await expect(leaving).resolves.toBe(true);
+});
 
 test("a record panel switches to the field tab before focusing its native control", async () => {
   await fixture({

@@ -21,7 +21,7 @@ export function DescriptorPresenceControl({ field, value, readOnly, onChange, on
     return <div className="flex items-center gap-2">
       <span className="text-13 text-fg-3">{t("form.value.notSet")}</span>
       {!readOnly ? <Button ref={controlRef} type="button" size="sm" variant="secondary"
-        onClick={() => { onChange(initialFormSpecValue({ ...field, nullable: field.hasDefault ? field.nullable : false } as FormSpecFieldDescriptor)); onCommit?.(); }}>
+        onClick={() => { onChange(presentValue(field, Boolean(field.hasDefault))); onCommit?.(); }}>
         {field.hasDefault ? t("form.value.useDefault") : t("form.value.set")}
       </Button> : null}
       {!readOnly && field.nullable ? <Button type="button" size="sm" variant="ghost"
@@ -33,7 +33,7 @@ export function DescriptorPresenceControl({ field, value, readOnly, onChange, on
       <span className="text-13 text-fg-3">{t("form.value.leftEmpty")}</span>
       {!readOnly ? <div className="mt-1 flex flex-wrap gap-1">
         <Button ref={controlRef} type="button" size="sm" variant="ghost"
-          onClick={() => { onChange(initialFormSpecValue({ ...field, nullable: false, hasDefault: false } as FormSpecFieldDescriptor)); onCommit?.(); }}>
+          onClick={() => { onChange(presentValue(field, false)); onCommit?.(); }}>
           {t("form.value.set")}
         </Button>
         {field.omittable ? <Button type="button" size="sm" variant="ghost"
@@ -47,4 +47,15 @@ export function DescriptorPresenceControl({ field, value, readOnly, onChange, on
     {field.omittable ? <Button type="button" size="sm" variant="ghost"
       onClick={() => { onChange(undefined); onCommit?.(); }}>{t("form.value.notSet")}</Button> : null}
   </div> : null}</>;
+}
+
+function presentValue(field: FieldDescriptor, useDefault: boolean): unknown {
+  if (!useDefault && (field.kind === "integer" || field.kind === "number")) {
+    return "";
+  }
+  return initialFormSpecValue({
+    ...field,
+    nullable: useDefault ? field.nullable : false,
+    hasDefault: useDefault,
+  } as FormSpecFieldDescriptor);
 }

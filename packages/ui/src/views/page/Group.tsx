@@ -7,12 +7,16 @@ import { PAGE_ELEMENT_SLOT } from "./types";
 export interface GroupProps {
   label?: ReactNode;
   columns?: number;
+  collapsible?: boolean;
+  defaultOpen?: boolean;
   children?: ReactNode;
 }
 
 export interface GroupDescriptor {
   label?: ReactNode;
   columns?: number;
+  collapsible?: boolean;
+  defaultOpen?: boolean;
   fields: readonly FieldDescriptor[];
   actions: readonly ActionDescriptor[];
 }

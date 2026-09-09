@@ -250,7 +250,9 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       const editable = resolved.filter((field) => !field.readOnly && !field.readOnlyWhen?.(formValues));
       const missing = editable.flatMap((field) => {
         if (isStructuredPresenceField(field)) {
-          return structuredFieldErrorPaths(field, formValues[field.name], Object.hasOwn(formValues, field.name));
+          const value = formValues[field.name];
+          const present = Object.hasOwn(formValues, field.name) && !(field.omittable && value === undefined);
+          return structuredFieldErrorPaths(field, value, present);
         }
         return field.required && emptyDialogValue(formValues[field.name]) ? [field.name] : [];
       });
@@ -262,7 +264,8 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   const values = useWatch({ control: form.control });
   const submitting = form.formState.isSubmitting;
   const error = form.formState.errors.root?.server?.message ?? null;
-  const ready = form.formState.isValid;
+  const ready = form.formState.isValid || (!form.formState.isDirty
+    && fields.every((field) => !field.required && !field.presenceRequired));
   const submittingRef = React.useRef(false);
   const mounted = React.useRef(true);
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);

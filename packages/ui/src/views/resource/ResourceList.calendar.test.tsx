@@ -19,6 +19,7 @@ const captured = vi.hoisted(() => ({
   onCreateInLane: undefined as ListViewProps["onCreateInLane"],
   formDefaults: undefined as Record<string, unknown> | undefined,
   registeredFormId: undefined as string | null | undefined,
+  registeredFormActions: undefined as FormViewProps["actions"],
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -71,6 +72,7 @@ beforeEach(() => {
   captured.onCreateInLane = undefined;
   captured.formDefaults = undefined;
   captured.registeredFormId = undefined;
+  captured.registeredFormActions = undefined;
 });
 const clients: QueryClient[] = [];
 afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
@@ -85,6 +87,7 @@ describe("ResourceList calendar quick-create", () => {
     const CompleteForm = (props: FormViewProps) => {
       captured.registeredFormId = props.id;
       captured.formDefaults = props.defaultValues;
+      captured.registeredFormActions = props.actions;
       return null;
     };
     render(
@@ -99,6 +102,7 @@ describe("ResourceList calendar quick-create", () => {
 
     expect(captured.registeredFormId).toBeNull();
     expect(captured.formDefaults).toEqual({ owner: "owner-1" });
+    expect(captured.registeredFormActions).toBeUndefined();
   });
 
   test("range-select seeds the create form defaults through the routed-create seam", () => {

@@ -23,6 +23,9 @@ export function invalidPresenceValue(
 }
 
 function invalidDescriptorConstraint(field: FieldDescriptor, value: unknown): boolean {
+  if ((field.kind === "integer" || field.kind === "number") && typeof value !== "number") {
+    return true;
+  }
   if (typeof value === "string") {
     return (field.minLength !== undefined && value.length < field.minLength)
       || (field.maxLength !== undefined && value.length > field.maxLength);

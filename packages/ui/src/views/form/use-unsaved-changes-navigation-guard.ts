@@ -13,27 +13,30 @@ export function useUnsavedChangesNavigationGuard({
   isDirty: boolean;
   isDirtyNow: () => boolean;
   readOnly: boolean;
-}): void {
+}): () => Promise<boolean> {
   const confirm = useConfirm();
   const t = useUiT();
-  const shouldBlockFn = React.useCallback(async () => {
+  const requestLeave = React.useCallback(async () => {
     // Read the live store, not the captured render value. A successful save resets
     // the form (isDirty → false) and navigates in the same tick, before the React
     // re-render flushes — a stale `true` here would wrongly block the post-save
     // redirect with a phantom "unsaved changes" prompt.
-    if (readOnly || !isDirtyNow()) return false;
+    if (readOnly || !isDirtyNow()) return true;
     const leave = await confirm({
       title: t("form.unsavedLeaveTitle"),
       cancel: t("form.stay"),
       confirm: t("form.leave"),
       danger: true,
     });
-    return !leave;
+    return leave;
   }, [confirm, isDirtyNow, readOnly, t]);
+
+  const shouldBlockFn = React.useCallback(async () => !(await requestLeave()), [requestLeave]);
 
   useBlocker({
     shouldBlockFn,
     enableBeforeUnload: isDirty && !readOnly,
     disabled: readOnly || !isDirty,
   });
+  return requestLeave;
 }

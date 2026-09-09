@@ -142,6 +142,7 @@ export interface FormViewSurface
     FormViewRecordChromeSurface {
   t: UiTranslate;
   activeRecordTab: string;
+  requestedFocusPath: string | null;
   setActiveRecordTab: React.Dispatch<React.SetStateAction<string>>;
   isCreate: boolean;
   modelMetadata: ModelMetadata | null;
@@ -526,8 +527,10 @@ export function useFormViewSurface({
     : FORM_VIEW_OVERVIEW_TAB_ID;
   const pendingFocusRef = React.useRef<{ path: string; recordTabId?: string } | null>(null);
   const [focusRequest, setFocusRequest] = React.useState(0);
+  const [requestedFocusPath, setRequestedFocusPath] = React.useState<string | null>(null);
   const focusField = React.useCallback((path: string, options?: RecordFieldFocusOptions) => {
     pendingFocusRef.current = { path, ...options };
+    setRequestedFocusPath(path);
     if (options?.recordTabId) setActiveRecordTab(options.recordTabId);
     setFocusRequest((request) => request + 1);
   }, []);
@@ -536,6 +539,7 @@ export function useFormViewSurface({
     if (!pending || (pending.recordTabId && pending.recordTabId !== activeRecordTab)) return;
     pendingFocusRef.current = null;
     save.form.setFocus(pending.path);
+    setRequestedFocusPath(null);
   }, [activeRecordTab, focusRequest, save.form]);
   const recordPanelContext = React.useMemo<RecordPanelContext | null>(
     () =>
@@ -550,6 +554,7 @@ export function useFormViewSurface({
     ...chrome,
     t,
     activeRecordTab,
+    requestedFocusPath,
     setActiveRecordTab,
     isCreate,
     modelMetadata,

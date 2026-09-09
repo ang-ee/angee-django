@@ -10,6 +10,7 @@ import { defaultWidgets } from "../../widgets";
 import { deserializeFormSpec, formSpecInitialValues, normalizeFormSpecValues } from "./form-spec";
 import { LabeledDescriptorField } from "./MutationDialog";
 import { listWidget, objectWidget } from "./StructuredField";
+import { structuredFieldErrorPaths } from "./field-values";
 
 const metadata = schemaFieldMetadataFromDataResources([]);
 
@@ -58,6 +59,30 @@ describe("structured FormSpec widgets", () => {
     expect(await screen.findByText("Untitled")).toBeTruthy();
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  test("an explicit nullable integer can enter value mode without reapplying null", () => {
+    function Harness() {
+      const [value, setValue] = React.useState<unknown>(null);
+      return <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+        <LabeledDescriptorField
+          field={{ name: "limit", label: "Limit", kind: "integer", widget: "integer", nullable: true }}
+          value={value}
+          onChange={setValue}
+        />
+      </AppRuntimeProvider>;
+    }
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "Set value" }));
+    const input = screen.getByRole("textbox", { name: "Limit" });
+    expect(input).toBeTruthy();
+    fireEvent.change(input, { target: { value: "42" } });
+    expect((input as HTMLInputElement).value).toBe("42");
+    expect(structuredFieldErrorPaths(
+      { name: "limit", kind: "integer", nullable: true },
+      "",
+      true,
+    )).toEqual(["limit"]);
   });
 
   test("rejects malformed persisted structured values instead of replacing them with empties", () => {

@@ -24,6 +24,18 @@ const parseRawValues = (values: Readonly<Record<string, unknown>>) => values;
 describe("MutationDialog", () => {
   afterEach(cleanup);
 
+  test("allows an optional-only dialog to submit its initial omitted value", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true });
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Optional" fields={[{ name: "input", label: "Input", widget: "json", omittable: true, nullable: true }]}
+        submitLabel="Start" parseValues={(values) => values} onSubmit={submit} />
+    </AppRuntimeProvider>);
+    const button = screen.getByRole("button", { name: "Start" }) as HTMLButtonElement;
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({}));
+  });
+
   test("a transport failure permits retry without changing valid dialog values", async () => {
     const submit = vi.fn().mockRejectedValueOnce(new Error("Try again")).mockResolvedValueOnce({ ok: true });
     render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>

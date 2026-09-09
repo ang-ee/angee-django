@@ -38,6 +38,8 @@ export interface FormSectionModel {
   icon?: ReactNode;
   badge?: ReactNode;
   columns?: number;
+  collapsible?: boolean;
+  defaultOpen?: boolean;
   fields: readonly FieldDescriptor[];
   render?: () => ReactNode;
   sequence?: number;
@@ -67,6 +69,8 @@ export function formSections(
         key: `group:${index}:${String(group.label ?? "")}`,
         label: group.label,
         columns: group.columns,
+        collapsible: group.collapsible,
+        defaultOpen: group.defaultOpen,
         fields: group.fields,
         sequence: sequences[index],
         order: index,

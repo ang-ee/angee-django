@@ -16,7 +16,7 @@ import { composeNodes } from "./child-dsl";
 import { formElementRenderProps, listElementRenderProps, mergeCreateDefaults, requiredColumns } from "./declarations";
 import { REFINE_CREATE_ID } from "./public";
 import type { ResourceListDeclarations, ResourceListProps, ResourceRecordController } from "./public";
-import { EMPTY_ACTIONS, EMPTY_RECORD_ID_SET, RecordHeaderActions } from "./record-chrome";
+import { EMPTY_RECORD_ID_SET, RecordHeaderActions } from "./record-chrome";
 interface ResourceListBodyProps<TRow extends Row = Row>
   extends ResourceListProps<TRow> {
   declarations: ResourceListDeclarations<TRow>;
@@ -74,7 +74,9 @@ export function ResourceListBody<TRow extends Row = Row>({
     formGroups !== undefined;
   const resolvedFormFields = declarations.form?.fields ?? formFields;
   const resolvedFormGroups = declarations.form?.groups ?? formGroups;
-  const resolvedFormActions = declarations.form?.actions ?? EMPTY_ACTIONS;
+  // A registered form owns its own child declarations. Passing an empty list
+  // would be an explicit override and mask its nested <Action> elements.
+  const resolvedFormActions = declarations.form?.actions;
   const ResolvedListComponent = declarations.list?.props.list ?? ListRenderer;
   const resolvedFacets = declarations.list
     ? mergePageFacets(facets, declarations.list.facets)

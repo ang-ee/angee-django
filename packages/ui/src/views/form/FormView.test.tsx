@@ -773,6 +773,7 @@ describe("FormView", () => {
         name: "vendor",
         label: "Vendor",
         widget: "many2one",
+        omittable: true,
         options: [
           { value: "vendor-1", label: "Vendor One" },
           { value: "vendor-2", label: "Vendor Two" },
@@ -796,18 +797,26 @@ describe("FormView", () => {
         "Vendor One",
       ),
     );
+    fireEvent.click(screen.getByRole("button", { name: /Vendor/ }));
+    fireEvent.click(await screen.findByText("Vendor Two"));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Vendor/ }).textContent).toContain(
+        "Vendor Two",
+      ),
+    );
     fireEvent.change(screen.getByLabelText("Display Name"), {
       target: { value: "Acme Renamed" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
-    // The custom owner receives FormView's normalized payload: the unchanged
-    // relation is dropped, never forwarded as a nested record to re-flatten.
+    // The current scalar identity wins over the saved expanded relation.
     expect(submit).toHaveBeenCalledWith(
-      { displayName: "Acme Renamed" },
+      { displayName: "Acme Renamed", vendor: "vendor-2" },
       expect.objectContaining({ id: "client-1", isCreate: false }),
     );
+    fireEvent.click(screen.getByRole("button", { name: "Not set" }));
+    expect(screen.getByRole("button", { name: "Set value" })).toBeTruthy();
     expect(sdkMocks.mutate).not.toHaveBeenCalled();
   });
 

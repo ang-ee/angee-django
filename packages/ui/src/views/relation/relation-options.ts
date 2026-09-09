@@ -123,7 +123,7 @@ export function useRelationOptions(
  * option for a single already-loaded related record (the parent read's folded
  * `{ id, <labelField> }` object), reusing the shared labeling rule so the
  * trigger shows the label with no extra round-trip. Returns `undefined` when the
- * value carries no readable id (e.g. a bare id string before a label loads).
+ * value carries no readable row (for example an inaccessible bare id).
  */
 export function relationSelectedOption(
   value: unknown,

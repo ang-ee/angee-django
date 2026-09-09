@@ -144,6 +144,8 @@ export interface FormViewSaveSurface {
   fieldReadOnly: (field: FieldDescriptor) => boolean;
   startFieldInteraction: (path: string) => void;
   commitFieldInteraction: (path: string) => void;
+  /** Request departure through the same owner as routed unsaved-change guards. */
+  requestLeave: () => Promise<boolean>;
 }
 
 /** RHF owns values/baselines/errors; Refine owns resource reads and mutations. */
@@ -369,7 +371,7 @@ export function useFormViewSave({
     formIsDirtyRef.current = formIsDirty;
   }, [formIsDirty]);
   const isDirtyNow = React.useCallback(() => formIsDirtyRef.current, []);
-  useUnsavedChangesNavigationGuard({
+  const requestLeave = useUnsavedChangesNavigationGuard({
     isDirty: formIsDirty,
     isDirtyNow,
     readOnly: formReadOnly,
@@ -695,6 +697,7 @@ export function useFormViewSave({
     fieldReadOnly,
     startFieldInteraction,
     commitFieldInteraction,
+    requestLeave,
   };
 }
 

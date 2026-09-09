@@ -218,6 +218,8 @@ function groupDescriptor(props: GroupProps): GroupDescriptor {
   return cachedDescriptor(groupDescriptorCache, props, () => ({
     ...(props.label !== undefined ? { label: props.label } : {}),
     ...(props.columns !== undefined ? { columns: props.columns } : {}),
+    ...(props.collapsible !== undefined ? { collapsible: props.collapsible } : {}),
+    ...(props.defaultOpen !== undefined ? { defaultOpen: props.defaultOpen } : {}),
     fields: parseDirectPageFields(props.children),
     actions: parsePageActions(props.children),
   }));

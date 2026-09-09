@@ -27,9 +27,11 @@ function IntegerEdit({
         inputMode: "numeric",
         onBlur: onCommit,
       }}
-      onValueChange={(next) =>
-        onChange?.(next === null ? null : Math.trunc(next))
-      }
+      onValueChange={(next, details) => onChange?.(
+        details.reason === "input-clear"
+          ? ""
+          : next === null ? null : Math.trunc(next),
+      )}
     />
   );
 }
@@ -54,7 +56,9 @@ function FloatEdit({
         inputMode: "decimal",
         onBlur: onCommit,
       }}
-      onValueChange={(next) => onChange?.(next)}
+      onValueChange={(next, details) => onChange?.(
+        details.reason === "input-clear" ? "" : next,
+      )}
     />
   );
 }
