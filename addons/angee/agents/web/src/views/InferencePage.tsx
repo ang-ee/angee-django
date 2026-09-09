@@ -145,7 +145,7 @@ export function InferenceModelsPage(): React.ReactElement {
   const defaultGroups = React.useMemo(
     () => ({
       list: { field: "model_use" },
-      board: { field: "provider.name" },
+      board: { field: "provider" },
     }),
     [],
   );
