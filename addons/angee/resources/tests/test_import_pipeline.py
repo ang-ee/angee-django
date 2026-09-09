@@ -172,7 +172,9 @@ def test_native_import_pipeline_rolls_back_all_groups_grants_and_hooks(
         grant_path.write_text(json.dumps([{**grant, "subject": "resource_addon.missing"}]))
         with pytest.raises(ResourceLoadError, match="unresolved xref"):
             PipelineLedger.objects.load_addons((owner,), tiers=["master"])
-        assert events == ["hook"]
+        # Hooks observe the completed rows and grants, so a failed grant never
+        # invokes them. Their own failure must still roll the complete load back.
+        assert events == []
         assert_rolled_back()
         events.clear()
 
@@ -186,6 +188,21 @@ def test_native_import_pipeline_rolls_back_all_groups_grants_and_hooks(
 
         rows[2]["fields"]["model"] = "v1"
         data_path.write_text(json.dumps({"rows": rows}))
+        original_hook = PipelineItem.after_resource_load
+
+        def failing_hook(cls: Any, instances: Any, **kwargs: Any) -> None:
+            original_hook(instances, **kwargs)
+            assert relationships.count() == relationship_count + 1
+            raise ResourceLoadError("post-load hook failed")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(PipelineItem, "after_resource_load", classmethod(failing_hook))
+            with pytest.raises(ResourceLoadError, match="post-load hook failed"):
+                PipelineLedger.objects.load_addons((owner,), tiers=["master"])
+        assert events == ["hook"]
+        assert_rolled_back()
+        events.clear()
+
         loaded = PipelineLedger.objects.load_addons((owner,), tiers=["master"])
         assert loaded.created == 4
         assert PipelineLedger.objects.count() == 3

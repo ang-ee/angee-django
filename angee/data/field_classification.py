@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import decimal
+import re
 from typing import Any
 
 from django.db import models
@@ -22,6 +23,19 @@ RESOURCE_FIELD_WIDGETS = frozenset(
     {"select", "many2one", "tagInput", "switch", "integer", "float", "money", "datetime", "date", "json"}
 )
 """Widget vocabulary owned by backend data-resource metadata."""
+
+
+def is_resource_field_widget(value: str) -> bool:
+    """Accept built-ins or an addon-qualified registry key (namespace.addon.widget).
+
+    The addon contributes the same key to its web widget registry. Bare unknown
+    names remain errors so typos in the built-in vocabulary fail at schema build.
+    """
+
+    return (
+        value in RESOURCE_FIELD_WIDGETS
+        or re.fullmatch(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*){2,}", value) is not None
+    )
 
 
 def is_to_many_relation(field: models.Field[Any, Any]) -> bool:
