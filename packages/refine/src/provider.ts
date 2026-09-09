@@ -94,10 +94,32 @@ export function createAngeeGraphQLClient(
 export function createAngeeHasuraDataProvider(
   options: AngeeHasuraDataProviderOptions,
 ): Required<DataProvider> {
-  return hasuraDataProvider(
+  const provider = hasuraDataProvider(
     createAngeeGraphQLClient(options),
     hasuraOptions(options.providerOptions),
   );
+  return {
+    ...provider,
+    getList: (params) => provider.getList({
+      ...params,
+      // Refine may issue inventory/picker reads without a caller-owned
+      // projection. The stock Hasura provider otherwise prints `root { }`,
+      // which is invalid GraphQL. Every Angee resource has a public `id`.
+      meta: params.meta?.gqlQuery
+        ? params.meta
+        : {
+            ...params.meta,
+            fields: hasFieldSelection(params.meta?.fields)
+              ? params.meta?.fields
+              : ["id"],
+          },
+    }),
+  };
+}
+
+function hasFieldSelection(fields: unknown): boolean {
+  if (Array.isArray(fields)) return fields.length > 0;
+  return fields !== null && typeof fields === "object" && Object.keys(fields).length > 0;
 }
 
 export function boundedGraphQLTransportError(value: unknown): Error {

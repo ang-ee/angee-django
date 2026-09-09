@@ -1,14 +1,23 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
+import { parse } from "graphql";
 import type { AngeeLiveResource } from "./provider";
 
 import {
   ANGEE_HASURA_PROVIDER_OPTIONS,
   boundedGraphQLTransportError,
   createAngeeGraphQLClient,
+  createAngeeHasuraDataProvider,
   createAngeeChangeLiveProvider,
   resolveGraphQLWebSocketEndpoint,
 } from "./provider";
+
+function jsonResponse(data: unknown): Response {
+  return new Response(JSON.stringify({ data }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 describe("Angee Hasura provider defaults", () => {
   afterEach(() => {
@@ -20,6 +29,67 @@ describe("Angee Hasura provider defaults", () => {
       idType: "String",
       namingConvention: "hasura-default",
     });
+  });
+
+  test("gives projection-less native list reads a valid identity selection", async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { query: string };
+      expect(body.query).toMatch(/channels[^{}]*\{\s*id\s*\}/);
+      return new Response(JSON.stringify({
+        data: { channels: [], channels_aggregate: { aggregate: { count: 0 } } },
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    const provider = createAngeeHasuraDataProvider({
+      url: "https://example.invalid/graphql",
+      auth: (request) => request,
+      fetch,
+    });
+
+    await provider.getList({
+      resource: "channels",
+      filters: [],
+      sorters: [],
+      pagination: { mode: "server", currentPage: 1, pageSize: 10 },
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  test("repairs an explicitly empty list projection", async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { query: string };
+      expect(body.query).toMatch(/channels[^{}]*\{\s*id\s*\}/);
+      return jsonResponse({ channels: [], channels_aggregate: { aggregate: { count: 0 } } });
+    });
+    const provider = createAngeeHasuraDataProvider({
+      url: "https://example.invalid/graphql", auth: (request) => request, fetch,
+    });
+    await provider.getList({
+      resource: "channels", filters: [], sorters: [],
+      pagination: { mode: "server", currentPage: 1, pageSize: 10 }, meta: { fields: [] },
+    });
+  });
+
+  test("preserves explicit projections and authored list documents", async () => {
+    const queries: string[] = [];
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      queries.push((JSON.parse(String(init?.body)) as { query: string }).query);
+      return jsonResponse({ channels: [], channels_aggregate: { aggregate: { count: 0 } } });
+    });
+    const provider = createAngeeHasuraDataProvider({
+      url: "https://example.invalid/graphql", auth: (request) => request, fetch,
+    });
+    const request = {
+      resource: "channels", filters: [], sorters: [],
+      pagination: { mode: "server" as const, currentPage: 1, pageSize: 10 },
+    };
+    await provider.getList({ ...request, meta: { fields: ["display_name"] } });
+    const authored = parse(`query AuthoredChannels { channels { backend_class } channels_aggregate { aggregate { count } } }`);
+    await provider.getList({ ...request, meta: { gqlQuery: authored, gqlVariables: {} } });
+
+    expect(queries[0]).toMatch(/channels[^{}]*\{\s*display_name\s*\}/);
+    expect(queries[0]).not.toMatch(/channels[^{}]*\{\s*id\s*\}/);
+    expect(queries[1]).toContain("query AuthoredChannels");
+    expect(queries[1]).toContain("backend_class");
   });
 
   test("bounds native transport errors while preserving safe validation fields", () => {
