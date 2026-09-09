@@ -851,6 +851,26 @@ def test_integration_action_mutations_are_admin_only(
         assert _execute(console_schema, query, variables, user=plain).errors is not None
 
 
+def test_test_connection_probes_the_credential_of_a_parent_integration(
+    integrate_console_tables: None,
+) -> None:
+    """A parent-only integration proves its credential; a detached one says so in band."""
+
+    console_schema = _schema()
+    admin = _platform_admin("probe-admin")
+    conn = make_integration("probe-run")
+    mutation = "mutation($id: ID!){ test_connection(id: $id){ ok message } }"
+
+    result = _data(_execute(console_schema, mutation, {"id": _public_id(conn)}, user=admin))["test_connection"]
+    assert result == {"ok": True, "message": "Credential is usable."}
+
+    with system_context(reason="test integrate detach credential"):
+        conn.credential = None
+        conn.save(update_fields=["credential"])
+    result = _data(_execute(console_schema, mutation, {"id": _public_id(conn)}, user=admin))["test_connection"]
+    assert result == {"ok": False, "message": "No credential is attached."}
+
+
 def test_sync_integration_runs_for_an_admin(
     integrate_console_tables: None,
 ) -> None:

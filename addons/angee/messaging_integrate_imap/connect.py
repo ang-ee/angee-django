@@ -69,6 +69,27 @@ def connect_imap_channel(
     return channel
 
 
+def update_imap_channel_credential(channel: Any, *, username: str, password: str) -> None:
+    """Re-enter the Basic-auth login of an existing IMAP channel in place.
+
+    The operator's "the mailbox password changed" path. The channel keeps its
+    row, config, cursor, and credential identity; only the encrypted material
+    is replaced, validated by the credential's own kind handler. A channel
+    whose credential was detached (a disconnect that wiped it) has nothing to
+    update — connect it again instead.
+    """
+
+    credential = channel.credential
+    if credential is None:
+        raise ImapConnectError("This channel has no credential; connect it again.")
+    if credential.kind != CredentialKind.BASIC_AUTH:
+        raise ImapConnectError("Only a username/password IMAP login can be re-entered here.")
+    try:
+        credential.replace_material({"username": str(username).strip(), "password": str(password)})
+    except ValueError as error:
+        raise ImapConnectError(str(error)) from error
+
+
 def _connection_config(
     *,
     host: str,

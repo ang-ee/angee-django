@@ -20,8 +20,10 @@ import {
   INTEGRATION_MODEL,
   INTEGRATION_PAUSE_ACTION_ID,
   INTEGRATION_RESUME_ACTION_ID,
+  INTEGRATION_TEST_CONNECTION_ACTION_ID,
   PauseIntegrationAction,
   ResumeIntegrationAction,
+  TestConnectionAction,
 } from "./IntegrationLifecycleActions";
 
 const INTEGRATE_ID = "integrate";
@@ -136,6 +138,12 @@ const integrate = defineBaseAddon({
       sequence: 13,
       content: <DisconnectIntegrationAction />,
     },
+    {
+      ...formViewRecordActionsSlot(INTEGRATION_MODEL),
+      id: INTEGRATION_TEST_CONNECTION_ACTION_ID,
+      sequence: 14,
+      content: <TestConnectionAction />,
+    },
   ],
   icons: {
     integrate: Cable,
@@ -163,12 +171,14 @@ export {
   INTEGRATION_LIFECYCLE_TOKENS,
   INTEGRATION_PAUSE_ACTION_ID,
   INTEGRATION_RESUME_ACTION_ID,
+  INTEGRATION_TEST_CONNECTION_ACTION_ID,
   integrationLifecycle,
   integrationLifecycleIs,
   type IntegrationLifecycleToken,
   isConnectedOrPaused,
   PauseIntegrationAction,
   ResumeIntegrationAction,
+  TestConnectionAction,
 } from "./IntegrationLifecycleActions";
 export {
   CONNECT_CALLBACK_LOOPBACK_PATH,

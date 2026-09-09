@@ -22,6 +22,10 @@ const mocks = vi.hoisted(() => ({
   // the chrome context, fires the verb and settles its outcome; `record-action.test`
   // there owns that ceremony. This asserts what the button declares to it.
   actions: new Map<string, ReturnType<typeof vi.fn>>(),
+  // The raw-outcome sibling a typed-args verb fires through; the dialog owns
+  // settling what it resolves.
+  outcomes: new Map<string, ReturnType<typeof vi.fn>>(),
+  dialogs: [] as Record<string, unknown>[],
   fetching: false,
   // The confirm gate resolves true by default; a test that asserts the refusal
   // path overrides it.
@@ -29,6 +33,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@angee/ui", () => ({
+  ActionFormDialog: (props: Record<string, unknown>) => {
+    mocks.dialogs.push(props);
+    return props.open ? <div role="dialog">args form</div> : null;
+  },
   Button: ({ children, loading: _loading, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { loading?: boolean }) => (
     <button type="button" {...props}>{children}</button>
   ),
@@ -39,6 +47,11 @@ vi.mock("@angee/ui", () => ({
     const action = mocks.actions.get(field) ?? vi.fn(async () => undefined);
     mocks.actions.set(field, action);
     return [action, { fetching: mocks.fetching, error: null }];
+  },
+  useRecordChromeActionOutcome: (field: string) => {
+    const action = mocks.outcomes.get(field) ?? vi.fn(async () => ({ ok: true, message: "done" }));
+    mocks.outcomes.set(field, action);
+    return [action, { fetching: false, error: null }];
   },
 }));
 
@@ -56,6 +69,8 @@ describe("ConditionalMutationButton", () => {
       record: { lifecycle: "CONNECTED" },
     };
     mocks.actions.clear();
+    mocks.outcomes.clear();
+    mocks.dialogs.length = 0;
     mocks.fetching = false;
     mocks.confirm.mockClear();
     mocks.confirm.mockResolvedValue(true);
@@ -199,5 +214,43 @@ describe("ConditionalMutationButton", () => {
       expect(mocks.actions.get("pause_integration")).toHaveBeenCalledWith("int_1"),
     );
     expect(mocks.confirm).not.toHaveBeenCalled();
+  });
+
+  test("a typed-args verb opens the shared args form instead of firing on click", async () => {
+    const args = [
+      { name: "username", label: "Username" },
+      { name: "password", label: "Password", widget: "password" },
+    ];
+    render(
+      <ConditionalMutationButton
+        field="update_imap_channel_credential"
+        label="Update credential"
+        when={() => true}
+        args={args}
+      />,
+    );
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Update credential" }));
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    // The id-only verb never fires: the dialog collects the args and submits them
+    // beside the record id through the raw-outcome hook.
+    expect(mocks.actions.get("update_imap_channel_credential")).not.toHaveBeenCalled();
+    const dialog = mocks.dialogs.at(-1) as {
+      action: { id: string; args: unknown; submit: (values: Record<string, unknown>) => Promise<unknown> };
+      context: { record: unknown; selectedIds: readonly string[] };
+    };
+    expect(dialog.action).toMatchObject({ id: "update_imap_channel_credential", args });
+    expect(dialog.context).toEqual({ record: mocks.chrome.record, selectedIds: ["int_1"] });
+
+    await expect(dialog.action.submit({ username: "ada", password: "pw" })).resolves.toEqual({
+      ok: true,
+      message: "done",
+    });
+    expect(mocks.outcomes.get("update_imap_channel_credential")).toHaveBeenCalledWith("int_1", {
+      username: "ada",
+      password: "pw",
+    });
   });
 });

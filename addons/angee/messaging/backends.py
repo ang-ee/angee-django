@@ -227,6 +227,18 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
 
         raise NotImplementedError("Partitioned backends must implement partition_cursor_slice().")
 
+    def test_connection(self) -> str:
+        """Prove this backend can reach its source; return the operator message.
+
+        The console's "Test connection" verb lands here through
+        ``Channel.test_connection``. A transport backend overrides this with a
+        real handshake (IMAP logs in and out); the default proves only the
+        channel's credential through the row's own probe. Failures raise
+        ``IntegrationError`` with the operator-safe reason.
+        """
+
+        return self.bridge.probe_credential()
+
     def fetch_messages(self) -> list[ParsedMessage]:
         """Return the next batch of new messages since the bridge cursor.
 

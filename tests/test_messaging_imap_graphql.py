@@ -5,10 +5,13 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
+import pytest
+from imapclient.exceptions import LoginError
 from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate.credentials import CredentialKind
+from angee.messaging_integrate_imap.backend import ImapChannelBackend
 from tests.conftest import SchemaAddon, Vendor, execute_schema
 from tests.conftest import result_data as _data
 from tests.test_messaging_graphql import (
@@ -20,6 +23,7 @@ from tests.test_messaging_graphql import (
     messaging_schema,
     parties_schema,
 )
+from tests.test_messaging_imap import FakeImapAccount, FakeIMAPClient
 
 pytest_plugins = ("tests.test_messaging_graphql",)
 
@@ -159,6 +163,108 @@ def _schema() -> Any:
     return GraphQLSchemas(addons).build("console")
 
 
+def test_update_imap_channel_credential_replaces_the_login_in_place(
+    messaging_graphql_tables: None,
+) -> None:
+    """The record verb rotates the Basic-auth material; channel and credential rows stay."""
+
+    admin = _platform_admin("msg-imap-rotate-admin")
+    _seed_imap_vendor()
+    channel = _connect(admin, _CONNECT_VARIABLES)
+    with system_context(reason="test.messaging.imap.rotate.before"):
+        saved = Channel.objects.get(sqid=channel["id"])
+        credential_pk = saved.credential.pk
+
+    result = _data(
+        execute_schema(
+            _schema(),
+            _UPDATE_CREDENTIAL_MUTATION,
+            {"id": channel["id"], "username": "ada.lovelace@example.com", "password": "rotated"},
+            request=_request(admin),
+        )
+    )["update_imap_channel_credential"]
+
+    assert result == {"ok": True, "message": "Credential updated."}
+    with system_context(reason="test.messaging.imap.rotate.verify"):
+        saved = Channel.objects.get(sqid=channel["id"])
+        assert saved.credential.pk == credential_pk
+        assert saved.credential.reveal() == {"username": "ada.lovelace@example.com", "password": "rotated"}
+
+
+def test_update_imap_channel_credential_refuses_blank_material(messaging_graphql_tables: None) -> None:
+    """The kind handler's validation reaches the operator in band."""
+
+    admin = _platform_admin("msg-imap-rotate-blank-admin")
+    _seed_imap_vendor()
+    channel = _connect(admin, _CONNECT_VARIABLES)
+
+    result = _data(
+        execute_schema(
+            _schema(),
+            _UPDATE_CREDENTIAL_MUTATION,
+            {"id": channel["id"], "username": "ada@example.com", "password": ""},
+            request=_request(admin),
+        )
+    )["update_imap_channel_credential"]
+
+    assert result["ok"] is False
+    assert "username and password" in result["message"]
+    with system_context(reason="test.messaging.imap.rotate.blank.verify"):
+        saved = Channel.objects.get(sqid=channel["id"])
+        assert saved.credential.reveal()["password"] == "mail-password"
+
+
+def test_test_connection_logs_in_through_the_imap_backend(
+    messaging_graphql_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The generic integration verb reaches the channel backend's real login."""
+
+    admin = _platform_admin("msg-imap-test-admin")
+    _seed_imap_vendor()
+    channel = _connect(admin, {**_CONNECT_VARIABLES, "host": "10.0.0.4"})
+    account = FakeImapAccount({"INBOX": {"flags": (b"\\HasNoChildren",), "uidvalidity": 1, "messages": {}}})
+    monkeypatch.setattr(FakeIMAPClient, "account", account, raising=False)
+    monkeypatch.setattr(ImapChannelBackend, "client_class", FakeIMAPClient)
+
+    result = _data(
+        execute_schema(_schema(), _TEST_CONNECTION_MUTATION, {"id": channel["id"]}, request=_request(admin))
+    )["test_connection"]
+
+    assert result == {"ok": True, "message": "Signed in to 10.0.0.4 as ada@example.com."}
+    assert account.logins == [("login", "ada@example.com", "mail-password")]
+    assert account.logouts == 1
+
+
+def test_test_connection_reports_the_imap_refusal(
+    messaging_graphql_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rejected login reaches the operator with the account and host named."""
+
+    admin = _platform_admin("msg-imap-test-refused-admin")
+    _seed_imap_vendor()
+    channel = _connect(admin, {**_CONNECT_VARIABLES, "host": "10.0.0.4"})
+    account = FakeImapAccount({})
+    monkeypatch.setattr(FakeIMAPClient, "account", account, raising=False)
+    monkeypatch.setattr(ImapChannelBackend, "client_class", FakeIMAPClient)
+
+    def refuse(self: FakeIMAPClient, username: str, password: str) -> None:
+        del self, username, password
+        raise LoginError("[AUTHENTICATIONFAILED] Authentication failed.")
+
+    monkeypatch.setattr(FakeIMAPClient, "login", refuse)
+
+    result = _data(
+        execute_schema(_schema(), _TEST_CONNECTION_MUTATION, {"id": channel["id"]}, request=_request(admin))
+    )["test_connection"]
+
+    assert result == {
+        "ok": False,
+        "message": "IMAP login failed for 'ada@example.com' at 10.0.0.4: [AUTHENTICATIONFAILED] Authentication failed.",
+    }
+
+
 def _seed_imap_vendor() -> None:
     """Seed the vendor row normally loaded from messaging_integrate_imap resources."""
 
@@ -200,6 +306,32 @@ mutation ConnectImap(
     lifecycle
     runtime_status
     config
+  }
+}
+"""
+
+_CONNECT_VARIABLES = {
+    "name": "Ada Mail",
+    "host": "imap.example.com",
+    "security": "ssl",
+    "username": "ada@example.com",
+    "password": "mail-password",
+}
+
+_UPDATE_CREDENTIAL_MUTATION = """
+mutation UpdateImapCredential($id: ID!, $username: String!, $password: String!) {
+  update_imap_channel_credential(id: $id, username: $username, password: $password) {
+    ok
+    message
+  }
+}
+"""
+
+_TEST_CONNECTION_MUTATION = """
+mutation TestConnection($id: ID!) {
+  test_connection(id: $id) {
+    ok
+    message
   }
 }
 """

@@ -127,12 +127,14 @@ interface ActionBinding {
    * `ActionOutcome` (compose `@angee/refine`'s `useAuthoredMutation` +
    * `extractActionOutcome`). The dialog binds `validationErrors` to the args and
    * stays open until `ok`; on `ok` it toasts `message` and closes. The collected
-   * values are keyed by arg `name`.
+   * values are keyed by arg `name`. A `null`/`undefined` outcome — the shape the
+   * outcome extractors return when the response carries no envelope — is a
+   * form-level failure, so a caller passes it through rather than inventing one.
    */
   submit?: (
     values: Record<string, unknown>,
     context: ActionFormContext,
-  ) => ActionOutcome | Promise<ActionOutcome>;
+  ) => ActionOutcome | null | undefined | Promise<ActionOutcome | null | undefined>;
 }
 
 export interface ActionProps extends ActionBinding {

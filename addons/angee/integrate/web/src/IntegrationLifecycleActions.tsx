@@ -15,6 +15,7 @@ import { useIntegrateT } from "./i18n";
  */
 export const INTEGRATION_MODEL = "integrate.Integration";
 
+export const INTEGRATION_TEST_CONNECTION_ACTION_ID = "integrate.connection.test";
 export const INTEGRATION_PAUSE_ACTION_ID = "integrate.lifecycle.pause";
 export const INTEGRATION_RESUME_ACTION_ID = "integrate.lifecycle.resume";
 export const INTEGRATION_DISCONNECT_ACTION_ID = "integrate.lifecycle.disconnect";
@@ -66,6 +67,26 @@ const canResume = (context: ConditionalMutationButtonContext): boolean => {
     (lifecycle === "disconnected" && context.record.credential != null)
   );
 };
+
+/**
+ * Exercise a credentialed integration's connection and toast the server's answer.
+ *
+ * The backend dispatches to the concrete capability (`test_connection`): a
+ * channel backend performs its real login, a parent-only integration proves
+ * its credential. Reaches the same rows Disconnect does — the ones holding a
+ * credential worth testing.
+ */
+export function TestConnectionAction(): React.ReactElement {
+  const t = useIntegrateT();
+  return (
+    <ConditionalMutationButton
+      field="test_connection"
+      label={t("connection.test")}
+      glyph="circle-check"
+      when={isConnectedOrPaused}
+    />
+  );
+}
 
 /**
  * Pause a connected integration while retaining its configuration.

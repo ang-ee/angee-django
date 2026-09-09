@@ -1,11 +1,14 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { type Row } from "@angee/metadata";
 import {
+  ActionFormDialog,
   Button,
   Glyph,
   useConfirm,
   useRecordChromeActionMutation,
+  useRecordChromeActionOutcome,
   useRecordChromeContext,
+  type ActionArg,
   type ActionConfirm,
   type ButtonVariant,
   type RecordChromeContext,
@@ -27,6 +30,14 @@ interface ConditionalMutationButtonBase<TField extends ActionFieldName> {
   label: React.ReactNode;
   when: (context: ConditionalMutationButtonContext) => boolean;
   glyph?: string;
+  /**
+   * Typed arguments the verb collects before it fires (re-enter a password,
+   * pick a target). Declared, the click opens the shared `ActionFormDialog`,
+   * which sends the collected values beside the record id and binds the
+   * outcome's in-band `validationErrors` to its inputs; omitted, the verb
+   * fires on the id alone.
+   */
+  args?: readonly ActionArg[];
 }
 
 /**
@@ -45,10 +56,12 @@ export type ConditionalMutationButtonProps<
 
 /**
  * A record-chrome button that conditionally runs one generated single-id
- * ActionResult mutation, optionally behind a confirm.
+ * ActionResult mutation, optionally behind a confirm and/or a typed-args form.
  *
- * Domain addons own the predicate, the mutation choice, and the confirm copy;
- * `useRecordChromeActionMutation` owns the dispatch, feedback, and invalidation.
+ * Domain addons own the predicate, the mutation choice, the confirm copy, and
+ * the arg declaration; `useRecordChromeActionMutation` owns the dispatch,
+ * feedback, and invalidation of an id-only verb, and `ActionFormDialog` (over
+ * `useRecordChromeActionOutcome`) owns collecting args and settling their outcome.
  * This is the *contributed* counterpart of a form's declared `<Action>`, which
  * `RecordActionBar` renders: `FormView` parses section-slot content statically,
  * so a contributed `<Action>`'s `run` could never be bound to a mutation hook.
@@ -59,6 +72,7 @@ export type ConditionalMutationButtonProps<
 export function ConditionalMutationButton<
   TField extends ActionFieldName = ActionFieldName,
 >({
+  args,
   confirm,
   field,
   glyph,
@@ -75,6 +89,8 @@ export function ConditionalMutationButton<
     record,
   } = useRecordChromeContext();
   const [mutate, mutation] = useRecordChromeActionMutation<TField>(field);
+  const [mutateOutcome] = useRecordChromeActionOutcome<TField>(field);
+  const [formOpen, setFormOpen] = React.useState(false);
   // Derived during render: the only consumer is this component's own `onClick`,
   // which is a fresh arrow each render regardless, so a memo would buy nothing —
   // and `confirm` arrives as an object literal, so it could never hit anyway.
@@ -88,6 +104,10 @@ export function ConditionalMutationButton<
       });
       if (!confirmed) return;
     }
+    if (args) {
+      setFormOpen(true);
+      return;
+    }
     await mutate(recordId);
   };
 
@@ -99,17 +119,32 @@ export function ConditionalMutationButton<
   }
 
   return (
-    <Button
-      type="button"
-      variant={variant}
-      size="sm"
-      loading={mutation.fetching}
-      onClick={() => {
-        void run();
-      }}
-    >
-      {glyph ? <Glyph decorative name={glyph} /> : null}
-      {label}
-    </Button>
+    <>
+      <Button
+        type="button"
+        variant={variant}
+        size="sm"
+        loading={mutation.fetching}
+        onClick={() => {
+          void run();
+        }}
+      >
+        {glyph ? <Glyph decorative name={glyph} /> : null}
+        {label}
+      </Button>
+      {args ? (
+        <ActionFormDialog
+          action={{
+            id: field,
+            label,
+            args,
+            submit: (values) => mutateOutcome(recordId, values),
+          }}
+          context={{ record, selectedIds: [recordId] }}
+          open={formOpen}
+          onOpenChange={setFormOpen}
+        />
+      ) : null}
+    </>
   );
 }

@@ -524,6 +524,18 @@ data through REBAC, never a queryset bypass.
 
 ## Pitfalls
 
+- **An integration failure reaches the operator only as an `IntegrationError`.**
+  `Bridge.record_sync_error` and the console action results project every other
+  exception to the generic "Integration operation failed." — a vendor SDK's
+  message may carry tokens, hosts, or request bodies. A backend that wants its
+  refusal seen (a rejected IMAP login, an unresolvable host) raises a subclass
+  of `angee.integrate.errors.IntegrationError` whose message it composed from
+  facts it owns; it never re-raises the vendor exception's text as-is. The
+  connection test follows the same rule: `Integration.test_connection` is the
+  credential probe, a capability child (a `Channel` → its `ChannelBackend`)
+  overrides it with the real handshake, and `test_connection(id)` reports only
+  an `IntegrationError`'s `public_message` in band.
+
 - **Native bridge SDKs can abort the interpreter.** Declare process isolation on
   the owning `LiveBridgeImpl`; use the shared integration process host rather
   than serializing selected calls in Python. The session child owns the store

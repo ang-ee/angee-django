@@ -172,6 +172,7 @@ describe("integrate addon manifest", () => {
       "integrate.lifecycle.pause",
       "integrate.lifecycle.resume",
       "integrate.lifecycle.disconnect",
+      "integrate.connection.test",
     ]);
   });
 

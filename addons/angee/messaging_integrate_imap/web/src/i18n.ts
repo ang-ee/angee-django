@@ -15,6 +15,7 @@ export const enMessagingImapMessages: Record<string, string> = {
   "channel.imap.portPlaceholder": "Default",
   "channel.imap.username": "Username",
   "channel.imap.password": "Password",
+  "channel.imap.credential.button": "Update credential",
   "channel.imap.mailboxes": "Mailboxes",
   "channel.imap.mailboxesPlaceholder": "INBOX",
   "channel.imap.mailboxesDescription": "One mailbox per line. Leave blank to auto-discover.",

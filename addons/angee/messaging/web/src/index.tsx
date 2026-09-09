@@ -29,13 +29,14 @@ export {
   defineChannelPollBridgeAddon,
   type ChannelBridgeAddonOptions,
   type ChannelPollBridgeAddonOptions,
+  type ChannelRecordAction,
 } from "./channel-bridge-addon";
 export {
   ChannelPairingAction,
   PairingDialog,
 } from "./PairingDialog";
 export { usePairingConnect } from "./usePairingConnect";
-export type { MessagingT } from "./i18n";
+export { useMessagingT, type MessagingT } from "./i18n";
 export {
   ConnectChannelAction,
   type ConnectChannelActionProps,

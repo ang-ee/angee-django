@@ -224,10 +224,12 @@ export {
 export { useBulkDelete, type UseBulkDeleteResult } from "./resource/useBulkDelete";
 export {
   recordActionId,
+  useActionOutcomeMutation,
   useActionResultMutation,
   useRecordAction,
   useRecordActionMutation,
   useRecordChromeActionMutation,
+  useRecordChromeActionOutcome,
   type ActionResultMutation,
   type RecordAction,
   type RecordActionRunner,

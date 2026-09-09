@@ -56,6 +56,7 @@ from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
 from angee.base.transitions import StateTransitions, save_state, transition
 from angee.integrate.credentials import CredentialKind, handler_for
+from angee.integrate.errors import INTEGRATION_FAILURE_MESSAGE, IntegrationError
 from angee.integrate.events import EventKind
 from angee.integrate.impl import IntegrationImpl
 from angee.integrate.live import PairingProjection, PairingState, armed_material_key
@@ -78,7 +79,7 @@ logger = logging.getLogger(__name__)
 # use it (e.g. provisioning) gets a token with life left rather than one about to lapse.
 _OAUTH_REFRESH_MARGIN = timedelta(minutes=5)
 _UNSET = object()
-_INTEGRATION_FAILURE_MESSAGE = "Integration operation failed."
+_INTEGRATION_FAILURE_MESSAGE = INTEGRATION_FAILURE_MESSAGE
 _WEBHOOK_FAILURE_MESSAGE = "Webhook delivery failed."
 
 
@@ -90,9 +91,14 @@ class IntegrationFailure:
 
 
 def _safe_integration_failure(error: Exception) -> IntegrationFailure:
-    """Project one integration exception to bounded user-facing telemetry."""
+    """Project one integration exception to bounded user-facing telemetry.
 
-    if isinstance(error, OAuthFlowError):
+    Only an :class:`IntegrationError` carries operator-safe text of its own;
+    every other exception projects to the generic message so vendor payloads
+    never land in persisted telemetry.
+    """
+
+    if isinstance(error, IntegrationError):
         return IntegrationFailure(error.public_message)
     if isinstance(error, ValidationError):
         return IntegrationFailure("Integration configuration is invalid.")
@@ -1148,6 +1154,20 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
                 row.save(update_fields=["material", "updated_at"])
             self.refresh_from_db(fields=["material", "updated_at"])
 
+    def replace_material(self, material: Mapping[str, Any]) -> None:
+        """Re-enter this credential's secret(s) under the kind handler's validation.
+
+        The operator's "the password changed" path: ``material`` carries the
+        kind's own input fields (the handler names them), is validated exactly
+        as at creation, then lands through :meth:`update_material` under the row
+        lock — the row, its kind, and its owner stay as they are, so every
+        integration attached to it keeps working without re-attachment.
+        """
+
+        replacement = dict(material)
+        self.handler.validate(replacement)
+        self.update_material(**replacement)
+
     def auth_headers(self) -> dict[str, str]:
         """Return authorization headers through the kind handler."""
 
@@ -1588,6 +1608,48 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
             )
         impl_class = fields[0].resolve_for(self)
         return impl_class(self)
+
+    def concrete_capability(self) -> Integration:
+        """Return the installed concrete child row for this integration, or itself.
+
+        A parent-addressed action (the console targets ``integrate.Integration``
+        by public id) reaches the capability's own behavior through this: the
+        child row is the same primary key with the subtype's methods. A row no
+        installed child claims stays the neutral parent.
+        """
+
+        for child_model in type(self).concrete_child_models():
+            child = child_model._default_manager.filter(pk=self.pk).first()
+            if child is not None:
+                return cast(Integration, child)
+        return self
+
+    def probe_credential(self) -> str:
+        """Prove the attached credential is usable; raise :class:`IntegrationError` when not.
+
+        The credential-only connection test: no vendor round-trip, just the kind
+        handler producing authorization material. Returns the operator message.
+        """
+
+        credential = self.credential
+        if credential is None:
+            raise IntegrationError("No credential is attached.")
+        try:
+            credential.auth_headers()
+        except Exception as error:  # noqa: BLE001 — handler diagnostics stay outside the operator message.
+            raise IntegrationError("Credential is not usable.") from error
+        return "Credential is usable."
+
+    def test_connection(self) -> str:
+        """Exercise this integration's connection and return the operator message.
+
+        The parent proves only its credential; a capability child that owns a
+        transport (a channel backend, a directory backend) overrides this to
+        perform the vendor's real handshake. Failures raise
+        :class:`IntegrationError` with the operator-safe reason.
+        """
+
+        return self.probe_credential()
 
     vendor = models.ForeignKey("integrate.Vendor", on_delete=models.PROTECT, related_name="integrations")
     # PROTECT: a present credential is the integration's authentication. It may

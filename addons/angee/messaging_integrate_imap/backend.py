@@ -42,9 +42,10 @@ from typing import Any, TypeVar
 
 from django.core.exceptions import ValidationError
 from imapclient import IMAPClient
-from imapclient.exceptions import IMAPClientAbortError
+from imapclient.exceptions import IMAPClientAbortError, LoginError
 
 from angee.integrate.credentials import CredentialKind
+from angee.integrate.errors import IntegrationError
 from angee.integrate.net import is_unsafe_address, resolved_addresses
 from angee.integrate.sync import current_bridge_progress
 from angee.messaging.backends import ParsedMessage
@@ -66,8 +67,14 @@ _SKIP_SPECIAL_USE = frozenset({"\\junk", "\\trash", "\\drafts"})
 _SKIP_FOLDER_NAMES = frozenset({"junk", "spam", "trash", "drafts", "deleted items", "deleted messages"})
 
 
-class ImapError(Exception):
-    """Raised when the channel's IMAP configuration or credential is unusable."""
+class ImapError(IntegrationError):
+    """Raised when the channel's IMAP configuration, transport, or login is unusable.
+
+    An ``IntegrationError``: its message is composed here from facts the
+    operator already owns (host, login name, the server's refusal line) and
+    never from a raw payload, so sync telemetry and the connection test may
+    show it verbatim.
+    """
 
 
 @dataclass
@@ -402,35 +409,67 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
 
     # --- connection ---
 
+    def test_connection(self) -> str:
+        """Dial, secure, log in, and log out again — the operator's connection test.
+
+        The same path a sync takes up to its first mailbox, so a wrong host,
+        a refused TLS handshake, or a rejected password surfaces here with the
+        ``ImapError`` the sync would have recorded, instead of only in the
+        worker log after the next poll.
+        """
+
+        client = self._open()
+        try:
+            username = self._login(client)
+        finally:
+            self._client = client
+            self.close()
+        return f"Signed in to {self._host()} as {username}."
+
     def _connect(self) -> IMAPClient:
         """Open, secure, and authenticate the IMAP session from config + credential."""
 
-        config = self.bridge.config
-        host = str(config.get("host") or "").strip()
+        client = self._open()
+        self._login(client)
+        self._client = client
+        self._selected = ""
+        return client
+
+    def _host(self) -> str:
+        """Return the configured IMAP host, or raise when the channel has none."""
+
+        host = str(self.bridge.config.get("host") or "").strip()
         if not host:
             raise ImapError("An IMAP host is required.")
+        return host
+
+    def _open(self) -> IMAPClient:
+        """Dial and secure the transport from config; authentication is :meth:`_login`."""
+
+        config = self.bridge.config
+        host = self._host()
         security = str(config.get("security") or "ssl")
         if security not in ("ssl", "starttls", "plain"):
             raise ImapError(f"Unknown IMAP security mode {security!r}.")
         port = int(config["port"]) if config.get("port") else None
         self._check_host(host, port)
         context = ssl.create_default_context() if security in ("ssl", "starttls") else None
-        client = self.client_class(
-            host,
-            port=port,
-            ssl=security == "ssl",
-            ssl_context=context if security == "ssl" else None,
-            timeout=int(config.get("timeout") or _DEFAULT_TIMEOUT_SECONDS),
-        )
-        # IMAPClient's default converts INTERNALDATE to *naive local* time; the
-        # parser needs the aware server-declared offset, so times stay honest on
-        # any host timezone.
-        client.normalise_times = False
-        if security == "starttls":
-            client.starttls(context)
-        self._login(client)
-        self._client = client
-        self._selected = ""
+        try:
+            client = self.client_class(
+                host,
+                port=port,
+                ssl=security == "ssl",
+                ssl_context=context if security == "ssl" else None,
+                timeout=int(config.get("timeout") or _DEFAULT_TIMEOUT_SECONDS),
+            )
+            # IMAPClient's default converts INTERNALDATE to *naive local* time; the
+            # parser needs the aware server-declared offset, so times stay honest on
+            # any host timezone.
+            client.normalise_times = False
+            if security == "starttls":
+                client.starttls(context)
+        except _TRANSIENT_ERRORS as error:
+            raise ImapError(f"IMAP connection to {host} failed: {error}") from error
         return client
 
     @staticmethod
@@ -466,8 +505,13 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         self._client_or_fail().select_folder(name, readonly=True)
         self._selected = name
 
-    def _login(self, client: IMAPClient) -> None:
-        """Authenticate with the channel credential (LOGIN or XOAUTH2)."""
+    def _login(self, client: IMAPClient) -> str:
+        """Authenticate with the channel credential (LOGIN or XOAUTH2); return the login name.
+
+        The server's refusal becomes an ``ImapError`` naming the login and the
+        host — the one line an operator needs to fix a rotated or mistyped
+        password — while the password itself never leaves this frame.
+        """
 
         credential = self.bridge.credential
         if credential is None:
@@ -478,16 +522,24 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             # account email — IMAP login names and mailbox addresses differ on
             # plenty of self-hosted servers.
             username = self._configured_username() or str(material.get("username", "")) or self._account_email()
-            client.login(username, str(material.get("password", "")))
-            return
+            self._authenticate(username, partial(client.login, username, str(material.get("password", ""))))
+            return username
         if credential.kind == CredentialKind.OAUTH:
             credential.ensure_fresh()
             username = self._configured_username() or self._account_email()
             if not username:
                 raise ImapError("An OAuth IMAP login needs a username (config or connected account email).")
-            client.oauth2_login(username, credential.secret_value())
-            return
+            self._authenticate(username, partial(client.oauth2_login, username, credential.secret_value()))
+            return username
         raise ImapError(f"IMAP cannot authenticate with a {credential.kind} credential.")
+
+    def _authenticate(self, username: str, login: Callable[[], Any]) -> None:
+        """Run one login call, translating the server's refusal to the operator message."""
+
+        try:
+            login()
+        except LoginError as error:
+            raise ImapError(f"IMAP login failed for {username!r} at {self._host()}: {error}") from error
 
     def _configured_username(self) -> str:
         """Return the operator-configured login username, or ``""``."""

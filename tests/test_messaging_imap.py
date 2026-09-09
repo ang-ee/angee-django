@@ -19,6 +19,7 @@ from typing import Any, ClassVar
 import pytest
 from django.core.management import call_command
 from django.db import connection
+from imapclient.exceptions import LoginError
 from rebac import system_context
 
 from angee.integrate.credentials import CredentialKind
@@ -924,6 +925,58 @@ def test_host_is_judged_by_the_outbound_address_owner(monkeypatch: pytest.Monkey
     backend = _backend(monkeypatch, account, config={"host": "10.0.0.4"})
     assert backend.fetch_messages() == []
     assert account.logins  # the private host authenticated
+
+
+def test_login_refusal_names_the_account_and_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A rejected password surfaces as an operator-safe ImapError, never a raw LoginError."""
+
+    account = FakeImapAccount({"INBOX": _folder()})
+
+    def refuse(self: FakeIMAPClient, username: str, password: str) -> None:
+        del self, password
+        raise LoginError("[AUTHENTICATIONFAILED] Authentication failed.")
+
+    monkeypatch.setattr(FakeIMAPClient, "login", refuse)
+    backend = _backend(monkeypatch, account, config={"host": "10.0.0.4"})
+
+    with pytest.raises(ImapError) as raised:
+        backend.fetch_messages()
+
+    assert raised.value.public_message == (
+        "IMAP login failed for 'ada@example.com' at 10.0.0.4: [AUTHENTICATIONFAILED] Authentication failed."
+    )
+    assert "pw" not in raised.value.public_message
+
+
+def test_transport_failure_while_dialing_is_an_imap_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A refused socket at dial time reports the host, not a bare OSError."""
+
+    account = FakeImapAccount({"INBOX": _folder()})
+
+    def refuse_dial(self: FakeIMAPClient, host: str, **kwargs: Any) -> None:
+        del self, host, kwargs
+        raise ConnectionRefusedError("connection refused")
+
+    monkeypatch.setattr(FakeIMAPClient, "__init__", refuse_dial)
+    backend = _backend(monkeypatch, account, config={"host": "10.0.0.4"})
+
+    with pytest.raises(ImapError, match="IMAP connection to 10.0.0.4 failed: connection refused"):
+        backend.fetch_messages()
+
+
+def test_connection_test_signs_in_and_logs_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The connection test is one login round-trip with no mailbox touched."""
+
+    account = FakeImapAccount({"INBOX": _folder(_eml(message_id="<a@x>"))})
+    backend = _backend(monkeypatch, account, config={"host": "10.0.0.4"})
+
+    message = backend.test_connection()
+
+    assert message == "Signed in to 10.0.0.4 as ada@example.com."
+    assert account.logins == [("login", "ada@example.com", "pw")]
+    assert account.logouts == 1
+    assert account.selects == []
+    assert account.fetches == []
 
 
 def test_transient_transport_error_reconnects_and_retries_once(monkeypatch: pytest.MonkeyPatch) -> None:

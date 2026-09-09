@@ -10,6 +10,7 @@ related row.
 from __future__ import annotations
 
 import enum
+import logging
 from typing import Any, cast
 
 import strawberry
@@ -46,11 +47,14 @@ from angee.iam.permissions import session_user as _session_user
 from angee.iam.schema import UserType
 from angee.integrate import connect as _connect
 from angee.integrate.credentials import handler_for
+from angee.integrate.errors import IntegrationError
 from angee.integrate.models import Bridge, IntegrationLifecycle
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
 from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.registry import bridge_models
+
+logger = logging.getLogger(__name__)
 
 Vendor = apps.get_model("integrate", "Vendor")
 Integration = apps.get_model("integrate", "Integration")
@@ -1258,6 +1262,7 @@ class IntegrationType(IntegrationLabelMixin, AngeeNode):
             return ConcreteIntegrationTarget(state=ConcreteIntegrationTargetState.AMBIGUOUS)
         return ConcreteIntegrationTarget(state=ConcreteIntegrationTargetState.UNAVAILABLE)
 
+
 @strawberry_django.type(Integration)
 class ConnectedIntegrationType(IntegrationLabelMixin, AngeeNode):
     """Public projection of a current-user integration connection."""
@@ -1474,17 +1479,24 @@ class IntegrationActionMutation:
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def test_connection(self, id: PublicID) -> ActionResult:
-        """Probe the integration's credential so the operator sees it is usable."""
+        """Exercise the integration's connection so the operator sees whether it works.
+
+        Dispatches to the concrete capability's own ``test_connection`` — a
+        channel backend logs in to its server, a parent-only integration proves
+        its credential — and reports the outcome in band. Only an
+        ``IntegrationError`` carries its reason to the operator; any other
+        failure is logged here and projected to a bounded message.
+        """
 
         with action_target(Integration, id, reason="integrate.graphql.test_connection") as integration:
-            credential = integration.credential
-            if credential is None:
-                return ActionResult(ok=False, message="No credential is attached.")
             try:
-                credential.auth_headers()
-            except Exception:  # noqa: BLE001 — handler diagnostics stay outside the action payload.
-                return ActionResult(ok=False, message="Credential is not usable.")
-        return ActionResult(ok=True, message="Credential is usable.")
+                message = integration.concrete_capability().test_connection()
+            except IntegrationError as error:
+                return ActionResult(ok=False, message=error.public_message)
+            except Exception:  # noqa: BLE001 — vendor diagnostics stay in the log, outside the action payload.
+                logger.exception("integration %s: connection test failed", integration.pk)
+                return ActionResult(ok=False, message="Connection test failed.")
+        return ActionResult(ok=True, message=message)
 
 
 @strawberry.type

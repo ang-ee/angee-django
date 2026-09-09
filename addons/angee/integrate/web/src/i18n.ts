@@ -8,6 +8,7 @@ export const enIntegrateMessages: Record<string, string> = {
   // Shared integration lifecycle record actions. Connect is absent by design:
   // it is a real handshake per subtype, so the addon that owns the vendor owns
   // its label as well as its UX.
+  "connection.test": "Test connection",
   "lifecycle.pause": "Pause",
   "lifecycle.resume": "Resume",
   "lifecycle.disconnect": "Disconnect",

@@ -15,6 +15,20 @@ import { useMessagingT } from "./i18n";
 import { ChannelPairingAction } from "./PairingDialog";
 import { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
 
+/**
+ * One vendor-owned record verb on the channel form, scoped by the addon to the
+ * vendor's own rows (the impl-keyed record-actions slot). The vendor renders the
+ * verb itself — typically `ConditionalMutationButton` over its own generated
+ * action, with `args` when the verb collects input (re-entering a login).
+ */
+export interface ChannelRecordAction {
+  /** Stable contribution id, unique across the channel record-actions slot. */
+  id: string;
+  /** Order among the record verbs; messaging's shared lifecycle verbs sit at 10–14. */
+  sequence: number;
+  content: ReactNode;
+}
+
 export interface ChannelPollBridgeAddonOptions {
   /** Stable addon id; also owns the connect contribution id. */
   id: string;
@@ -26,6 +40,8 @@ export interface ChannelPollBridgeAddonOptions {
   connectAction: ReactNode;
   /** Explicit messaging-namespace contribution, including vendor menu copy. */
   i18n: { messaging: Record<string, string> };
+  /** Vendor-owned record verbs, rendered only on this backend's channel rows. */
+  recordActions?: readonly ChannelRecordAction[];
 }
 
 export interface ChannelBridgeAddonOptions extends ChannelPollBridgeAddonOptions {
@@ -51,6 +67,7 @@ export function defineChannelBridgeAddon({
   i18n,
   instructionKey,
   disconnectAction = <ChannelDisconnectAction />,
+  recordActions = [],
 }: ChannelBridgeAddonOptions): BaseAddon {
   const connectActionId = `${id}.connect`;
   const pairingActionId = `${id}.pairing`;
@@ -98,6 +115,7 @@ export function defineChannelBridgeAddon({
         sequence: 13,
         content: disconnectAction,
       },
+      ...channelRecordActionSlots(key, recordActions),
     ],
   });
 }
@@ -109,13 +127,23 @@ export function defineChannelPollBridgeAddon({
   sequence,
   connectAction,
   i18n,
+  recordActions = [],
 }: ChannelPollBridgeAddonOptions): BaseAddon {
   return defineBaseAddon({
     id,
     i18n,
     menus: [channelBridgeMenu(i18n.messaging, key)],
-    slots: [channelBridgeConnectSlot(id, sequence, connectAction)],
+    slots: [
+      channelBridgeConnectSlot(id, sequence, connectAction),
+      ...channelRecordActionSlots(key, recordActions),
+    ],
   });
+}
+
+/** Scope each vendor record verb to the vendor's own channel rows. */
+function channelRecordActionSlots(key: string, recordActions: readonly ChannelRecordAction[]) {
+  const target = formViewRecordActionsSlot(CHANNEL_MODEL, key);
+  return recordActions.map((action) => ({ ...target, ...action }));
 }
 
 /** Emit one vendor entry under Messaging. */

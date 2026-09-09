@@ -191,6 +191,31 @@ describe("defineChannelBridgeAddon live bridges", () => {
 });
 
 describe("defineChannelPollBridgeAddon poll bridges", () => {
+  test("scopes vendor record verbs to the vendor's own channel rows", () => {
+    const manifest = defineChannelPollBridgeAddon({
+      id: "messaging-integrate-example",
+      key: "example",
+      sequence: 22,
+      connectAction: <span>Connect example</span>,
+      i18n: {
+        messaging: {
+          "channel.example.menu.label": "Example",
+          "channel.example.menu.description": "Sync Example accounts",
+        },
+      },
+      recordActions: [
+        { id: "messaging-integrate-example.credential", sequence: 20, content: <span>Update credential</span> },
+      ],
+    });
+    expect(() => expectValidChannelBridgeAddon(manifest)).not.toThrow();
+
+    expect(manifest.slots?.[1]).toMatchObject({
+      ...formViewRecordActionsSlot(CHANNEL_MODEL, "example"),
+      id: "messaging-integrate-example.credential",
+      sequence: 20,
+    });
+  });
+
   test("keeps poll bridges free of live pairing record verbs", () => {
     const manifest = defineChannelPollBridgeAddon({
       id: "messaging-integrate-example",

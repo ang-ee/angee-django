@@ -17,6 +17,7 @@ from angee.integrate import queue as integrate_queue
 from angee.integrate import scheduler as integrate_scheduler
 from angee.integrate import sync_runner as integrate_sync_runner
 from angee.integrate import tasks as integrate_tasks
+from angee.integrate.errors import IntegrationError
 from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.integrate.registry import bridge_models
@@ -48,6 +49,8 @@ class SchedulerBridge(Bridge, Integration):
 
         if self.config.get("mode") == "error":
             raise RuntimeError("vendor unavailable")
+        if self.config.get("mode") == "refused":
+            raise IntegrationError("Vendor refused the login for ada@example.com.")
         items = int(self.config.get("items", 1))
         if self.config.get("assert_locked"):
             assert self.is_syncing is True
@@ -224,6 +227,30 @@ def test_enqueued_due_bridge_persists_success_telemetry(scheduler_tables: None) 
     assert integration.lifecycle == IntegrationLifecycle.CONNECTED
     assert integration.runtime_status == IntegrationRuntimeStatus.OK
     assert integration.last_used_status == "ok"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_integration_error_reaches_sync_telemetry_verbatim(scheduler_tables: None) -> None:
+    """An IntegrationError's operator-safe message is persisted; other failures stay generic."""
+
+    del scheduler_tables
+    now = timezone.now()
+    with system_context(reason="test integrate scheduler setup"):
+        bridge = make_integration(
+            "refused-rollup",
+            model=SchedulerBridge,
+            config={"mode": "refused"},
+            next_sync_at=now,
+        )
+        integration = Integration.objects.get(pk=bridge.pk)
+
+    assert _enqueue_and_run_due(now=now) == {"ran": 1, "errors": 1}
+    bridge.refresh_from_db()
+    integration.refresh_from_db()
+    assert bridge.sync_error == "Vendor refused the login for ada@example.com."
+    assert bridge.sync_progress["error"] == "Vendor refused the login for ada@example.com."
+    assert integration.last_error == "Vendor refused the login for ada@example.com."
+    assert integration.runtime_status == IntegrationRuntimeStatus.ERROR
 
 
 @pytest.mark.django_db(transaction=True)

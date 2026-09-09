@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from angee.integrate.errors import IntegrationError
+
 INVALID_STATE = "invalid_state"
 CLIENT_NOT_CONFIGURED = "client_not_configured"
 DISCOVERY_FAILED = "discovery_failed"
@@ -34,7 +36,7 @@ _PUBLIC_MESSAGES = {
 }
 
 
-class OAuthFlowError(Exception):
+class OAuthFlowError(IntegrationError):
     """Exception carrying a stable OAuth/OIDC failure code and HTTP status."""
 
     def __init__(

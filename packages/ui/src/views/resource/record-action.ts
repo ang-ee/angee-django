@@ -3,6 +3,8 @@ import {
   runActionResult,
   useActionMutation,
   type ActionArguments,
+  type ActionMutate,
+  type UseActionMutationState,
 } from "@angee/refine";
 import {
   useCanonicalResourceModelLabels,
@@ -152,18 +154,7 @@ export function useActionResultMutation<TField extends string = string>(
   field: TField,
   options: UseActionResultMutationOptions = {},
 ): [ActionResultMutation, { fetching: boolean; error: Error | null }] {
-  const { dataProviderName } = options;
-  const canonicalInvalidateModels = useCanonicalResourceModelLabels(
-    options.invalidateModels,
-  );
-  const invalidates = useResourceInvalidates(canonicalInvalidateModels);
-  const [mutate, state] = useActionMutation<TField>(field, {
-    ...(dataProviderName !== undefined ? { dataProviderName } : {}),
-    ...(options.invalidateModels !== undefined
-      ? { invalidateModels: canonicalInvalidateModels }
-      : {}),
-    invalidates,
-  });
+  const [mutate, state] = useActionOutcomeMutation<TField>(field, options);
   const settle = useActionResultRun();
   const run = React.useCallback<ActionResultMutation>(
     async (id, arguments_) => {
@@ -174,6 +165,33 @@ export function useActionResultMutation<TField extends string = string>(
     [mutate, settle],
   );
   return [run, state];
+}
+
+/**
+ * Bind one generated action mutation with its model labels' refine invalidation
+ * resolved through `@angee/metadata`, and hand back the raw `ActionOutcome`.
+ *
+ * The un-settled core of {@link useActionResultMutation}: a caller that owns
+ * its own outcome handling — a typed-args `ActionFormDialog` binds
+ * `validationErrors` to its inputs and toasts on `ok` itself — composes this
+ * instead, so the outcome is neither toasted twice nor swallowed.
+ */
+export function useActionOutcomeMutation<TField extends string = string>(
+  field: TField,
+  options: UseActionResultMutationOptions = {},
+): [ActionMutate, UseActionMutationState] {
+  const { dataProviderName } = options;
+  const canonicalInvalidateModels = useCanonicalResourceModelLabels(
+    options.invalidateModels,
+  );
+  const invalidates = useResourceInvalidates(canonicalInvalidateModels);
+  return useActionMutation<TField>(field, {
+    ...(dataProviderName !== undefined ? { dataProviderName } : {}),
+    ...(options.invalidateModels !== undefined
+      ? { invalidateModels: canonicalInvalidateModels }
+      : {}),
+    invalidates,
+  });
 }
 
 export interface UseRecordChromeActionMutationOptions {
@@ -199,6 +217,32 @@ export function useRecordChromeActionMutation<TField extends string = string>(
   field: TField,
   options: UseRecordChromeActionMutationOptions = {},
 ): [ActionResultMutation, { fetching: boolean; error: Error | null }] {
+  return useActionResultMutation<TField>(
+    field,
+    useRecordChromeActionOptions(options),
+  );
+}
+
+/**
+ * The typed-args counterpart of {@link useRecordChromeActionMutation}: the same
+ * record-chrome binding, resolving the raw `ActionOutcome` instead of settling
+ * it — for a contributed verb that collects arguments in an `ActionFormDialog`,
+ * which owns binding the outcome's `validationErrors` and the success toast.
+ */
+export function useRecordChromeActionOutcome<TField extends string = string>(
+  field: TField,
+  options: UseRecordChromeActionMutationOptions = {},
+): [ActionMutate, UseActionMutationState] {
+  return useActionOutcomeMutation<TField>(
+    field,
+    useRecordChromeActionOptions(options),
+  );
+}
+
+/** Read the record-chrome context into the action options a chrome verb fires with. */
+function useRecordChromeActionOptions(
+  options: UseRecordChromeActionMutationOptions,
+): UseActionResultMutationOptions {
   const { canonicalResource, dataProviderName, resource } =
     useRecordChromeContext();
   // Derived during render: `useResourceInvalidates` keys on the labels'
@@ -206,8 +250,8 @@ export function useRecordChromeActionMutation<TField extends string = string>(
   const invalidateModels = [
     ...new Set([resource, canonicalResource, ...(options.invalidateModels ?? [])]),
   ];
-  return useActionResultMutation<TField>(field, {
+  return {
     ...(dataProviderName !== undefined ? { dataProviderName } : {}),
     invalidateModels,
-  });
+  };
 }

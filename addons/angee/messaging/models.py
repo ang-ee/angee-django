@@ -908,6 +908,11 @@ class Channel(Bridge):
         backend_class = cast("type[ChannelBackend]", self.resolve_impl("backend_class"))
         return backend_class(self)
 
+    def test_connection(self) -> str:
+        """Exercise the selected backend's connection (the Integration test contract)."""
+
+        return self.backend.test_connection()
+
     def start_live(self) -> None:
         """Mark this channel live-desired, then dispatch the backend's live ingest.
 

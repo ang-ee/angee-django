@@ -156,6 +156,14 @@ history uses native Query pages with domain-owned
   missing-record handling, success hooks).
   Don't hand-author these as `graphql()` documents or page-local
   `ctx.record.id → mutate → refresh` callbacks.
+- **A contributed record verb that needs input declares `args`.** A
+  `ConditionalMutationButton` (`@angee/integrate`) with `args` opens the shared
+  `ActionFormDialog` and fires the generated action through
+  `useRecordChromeActionOutcome`, so the dialog binds the outcome's in-band
+  `validationErrors` and toasts on `ok`; never pair a settled
+  `useRecordChromeActionMutation` with a hand-rolled dialog (double toast, lost
+  field errors). A channel vendor contributes such a verb through its
+  `defineChannel*BridgeAddon` `recordActions`, scoped to its own rows.
 - **`ActionResult` verbs settle through `useActionResultRun`** (`@angee/ui`) —
   it fires the verb, toasts the outcome (danger with the in-band non-field
   reasons; success with the message), and deep-links to a created record via

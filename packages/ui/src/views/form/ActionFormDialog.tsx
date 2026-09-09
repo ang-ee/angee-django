@@ -62,11 +62,13 @@ export function ActionFormDialog({
   );
   const actionForm = useActionForm<ArgValues>({
     defaultValues: argDefaultValues(args, context),
-    submit: (collected) => {
+    submit: async (collected) => {
       // `run` is reached only when `action.submit` is set (guarded below); the
       // fallback just keeps the return total for the optional descriptor field.
       if (!action.submit) return { ok: true, message: "" };
-      return action.submit(serializeActionArgValues(args, collected), context);
+      // An envelope-less response resolves `undefined`; the form owner reads
+      // `null` as its form-level failure, so fold the two here.
+      return (await action.submit(serializeActionArgValues(args, collected), context)) ?? null;
     },
     onSuccess: () => {
       onSucceeded?.();
