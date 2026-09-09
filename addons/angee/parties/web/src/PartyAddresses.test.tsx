@@ -10,6 +10,7 @@ describe("PartyAddresses", () => {
     const props = view.props as { children?: ReactNode; [key: string]: unknown };
     expect(props).toMatchObject({
       resource: "parties.Address",
+      scope: "local",
       baseFilter: { party: { exact: "party_7" } },
       createDefaults: { party: "party_7" },
     });

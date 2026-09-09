@@ -30,6 +30,7 @@ export function PartyAddresses({ recordId }: { recordId: string }): React.ReactE
   return (
     <DrawerResourceList
       resource={ADDRESS}
+      scope="local"
       baseFilter={{ party: { exact: recordId } }}
       createDefaults={{ party: recordId }}
     >
