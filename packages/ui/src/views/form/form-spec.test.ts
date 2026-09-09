@@ -39,7 +39,10 @@ describe("deserializeFormSpec", () => {
               resource: "Channel",
               labelField: "name",
               filters: [{ field: "status", operator: "eq", value: "active" }],
-              create: { resource: "Channel" },
+              create: {
+                resource: "Channel",
+                defaultValues: { parent_id: "parent_7", revision: 3 },
+              },
             },
           },
           rows: {
@@ -96,7 +99,10 @@ describe("deserializeFormSpec", () => {
           resource: "Channel",
           labelField: "name",
           filters: [{ field: "status", operator: "eq", value: "active" }],
-          create: { resource: "Channel" },
+          create: {
+            resource: "Channel",
+            defaultValues: { parent_id: "parent_7", revision: 3 },
+          },
         },
       },
       {
