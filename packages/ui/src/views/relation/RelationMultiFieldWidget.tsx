@@ -2,15 +2,17 @@ import { useMemo, type ReactElement } from "react";
 import type { CrudFilter } from "@refinedev/core";
 
 import type { WidgetField } from "../../widgets/types";
-import { Many2ManyEdit } from "../../widgets/many2many";
+import { Many2ManyCellEdit, Many2ManyEdit } from "../../widgets/many2many";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
-import { useRelationOptions } from "./relation-options";
+import { relationSelectedOption, useRelationOptions } from "./relation-options";
 
 export interface RelationMultiFieldWidgetProps {
   value?: readonly unknown[] | null;
   /** Receives the picked related records' public ids (the `many2many` cell value). */
   onChange?: (value: readonly unknown[]) => void;
   readOnly?: boolean;
+  /** Compact picker presentation for editable table cells only. */
+  compact?: boolean;
   relation: RelationFieldInfo;
   /** Server-side filters narrowing the rows offered by the multi-picker. */
   filters?: readonly CrudFilter[];
@@ -30,6 +32,7 @@ export function RelationMultiFieldWidget({
   value,
   onChange,
   readOnly,
+  compact = false,
   relation,
   filters,
   "aria-label": ariaLabel,
@@ -40,11 +43,21 @@ export function RelationMultiFieldWidget({
     sort: true,
   });
   const field = useMemo<WidgetField>(
-    () => ({ options, label: ariaLabel }),
-    [options, ariaLabel],
+    () => ({
+      options: [
+        ...options,
+        ...(value ?? []).flatMap((record) => {
+          const option = relationSelectedOption(record, relation.labelField);
+          return option && !options.some((item) => item.value === option.value) ? [option] : [];
+        }),
+      ],
+      label: ariaLabel,
+    }),
+    [options, value, relation.labelField, ariaLabel],
   );
+  const Edit = compact ? Many2ManyCellEdit : Many2ManyEdit;
   return (
-    <Many2ManyEdit
+    <Edit
       value={value ?? []}
       onChange={onChange}
       readOnly={readOnly}

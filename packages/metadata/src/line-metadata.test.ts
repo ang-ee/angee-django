@@ -211,3 +211,32 @@ describe("resourceReadSelectionPaths", () => {
     ).toBeNull();
   });
 });
+
+
+test("object lists need authored subfields while scalar lists remain selectable", () => {
+  const account = testDataResource("accounts.Account", {
+    fields: [
+      field("schedule", "list", { scalar: null }),
+      field("tags", "list", { scalar: "ID" }),
+    ],
+  });
+  account.query.fields.schedule = testQueryField("schedule", { kind: "list", scalar: null, row: null });
+  account.query.fields.tags = testQueryField("tags", { kind: "list", scalar: "ID" });
+  const schema = schemaFieldMetadataFromDataResources([account]);
+  expect(resourceReadSelectionPaths(schema.labels["accounts.Account"]!, schema)).toEqual(["id", "tags"]);
+  expect(lineReadSelectionPaths({ ...LINES, fields: account.fields, positionField: null }, schema))
+    .toEqual(["id", "tags"]);
+});
+
+
+test("selects object M2M line identities and labels instead of dropping existing values", () => {
+  const tag = testDataResource("tags.Tag", {
+    recordRepresentation: "name",
+    fields: [field("name", "scalar", { scalar: "String" })],
+  });
+  const schema = schemaFieldMetadataFromDataResources([tag]);
+  const lines = { ...LINES, positionField: null, fields: [
+    field("tags", "list", { scalar: null, relationModelLabel: "tags.Tag" }),
+  ] };
+  expect(lineReadSelectionPaths(lines, schema)).toEqual(["id", "tags.id", "tags.name"]);
+});

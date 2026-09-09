@@ -16,6 +16,7 @@ function IntegerEdit({
 }: WidgetRenderProps<NumericWidgetValue>): ReactElement {
   return (
     <NumberField
+      className="w-full"
       value={normaliseNumber(value)}
       readOnly={readOnly}
       step={1}
@@ -46,6 +47,7 @@ function FloatEdit({
 }: WidgetRenderProps<NumericWidgetValue>): ReactElement {
   return (
     <NumberField
+      className="w-full"
       value={normaliseNumber(value)}
       readOnly={readOnly}
       step={0.01}

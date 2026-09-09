@@ -436,6 +436,18 @@ history uses native Query pages with domain-owned
 - Client-side gates are UX only. The server is the authorization boundary.
 - No Python view DSL, no frontend metadata hidden in backend decorators.
 
+## Form save contracts
+
+`FormView` treats an existing record as read-only when its resource has no update
+root and the caller supplies no custom submit handler. A create-only resource can
+still open a creation form. Fixtures must declare the write operations they intend
+to exercise. Record locking (`readOnlyWhen`) uses the server record, not unsaved
+form values.
+
+A save whose normalized header and line values equal the server record sends no
+mutation. It resets the dirty-but-equivalent draft to those server values and
+clears the dirty state, including the editable lines.
+
 ## Pitfalls
 
 Hard-won traps — the wise learn from others' mistakes
