@@ -21,7 +21,6 @@ from angee.workflows.attempts import (
 from angee.workflows.models import RunStatus
 from tests.workflows import StepAttempt, StepRun, WorkflowRun, workflow_with_steps
 
-pytest_plugins = ("tests.workflows",)
 pytestmark = [
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL row-lock contract"),

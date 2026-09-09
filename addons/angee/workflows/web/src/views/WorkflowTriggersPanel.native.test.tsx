@@ -12,6 +12,7 @@ const authored = vi.hoisted(() => ({
   enable: vi.fn(),
   disable: vi.fn(),
   fetching: false,
+  conditionPending: false,
   conditionRequests: [] as Array<Record<string, unknown>>,
 }));
 vi.mock("@angee/refine", async (importOriginal) => {
@@ -39,6 +40,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
       }
       if (String(document).includes("EventCondition")) {
         authored.conditionRequests.push(variables ?? {});
+        if (authored.conditionPending) return { data: undefined, isFetching: true, error: null };
         const condition = variables?.condition;
         const clauses = variables?.clauses as Array<{
           field: string;
@@ -122,6 +124,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
           ],
           workflow_trigger_publishers: [
             { model: "tests.TriggerSubject", label: "Trigger subject" },
+            { model: "tests.OtherTriggerSubject", label: "Other trigger subject" },
           ],
         },
         isFetching: false,
@@ -144,6 +147,8 @@ vi.mock("../documents.console", () => ({
 }));
 
 import { TriggerWorkflowContext, workflowTriggerForm, workflowTriggerReadOnlyForm } from "./WorkflowTriggersPanel";
+
+afterEach(() => { authored.conditionPending = false; });
 
 const field = (name: string, scalar = "String") => ({
   name,
@@ -560,6 +565,18 @@ test("event condition edits stay in the trigger form and preserve opaque lookups
   expect(await screen.findByText("Additional unsupported conditions are preserved in Rule JSON.")).toBeTruthy();
   const [value] = await screen.findAllByLabelText("Value");
   if (!(value instanceof HTMLInputElement)) throw new Error("State condition value is missing");
+  value.focus();
+  fireEvent.change(value, { target: { value: "" } });
+  expect(screen.getAllByLabelText("Value")[0]).toBe(value);
+  expect(await screen.findByText("Enter a valid condition value.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(update).not.toHaveBeenCalled());
+  authored.conditionPending = true;
+  fireEvent.change(value, { target: { value: "done" } });
+  expect((screen.getAllByLabelText("Value")[0] as HTMLInputElement).value).toBe("done");
+  expect(document.activeElement).toBe(value);
+  authored.conditionPending = false;
+  fireEvent.change(value, { target: { value: "done!" } });
   fireEvent.change(value, { target: { value: "done" } });
   fireEvent.blur(value);
   await waitFor(() => expect(authored.conditionRequests.some((request) => (
@@ -580,12 +597,20 @@ test("event condition edits stay in the trigger form and preserve opaque lookups
   ))).toBe(true));
   fireEvent.click(screen.getByRole("button", { name: "Add condition" }));
   expect(await screen.findByText("Enter a valid condition value.")).toBeTruthy();
-  await waitFor(() => expect(authored.conditionRequests.some((request) => (
+  expect(authored.conditionRequests.some((request) => (
     (request.condition as { count__gte?: unknown } | undefined)?.count__gte === ""
-  ))).toBe(true));
+  ))).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: "Back to triggers" }));
   fireEvent.click(await screen.findByRole("button", { name: "Stay" }));
   expect(await screen.findByText("Enter a valid condition value.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("combobox", { name: "Model" }));
+  const otherModel = await screen.findByRole("option", { name: "Other trigger subject" });
+  fireEvent.pointerDown(otherModel); fireEvent.pointerUp(otherModel); fireEvent.click(otherModel);
+  await waitFor(() => expect(screen.queryByText("Enter a valid condition value.")).toBeNull());
+  fireEvent.click(screen.getByRole("combobox", { name: "Model" }));
+  const originalModel = await screen.findByRole("option", { name: "Trigger subject" });
+  fireEvent.pointerDown(originalModel); fireEvent.pointerUp(originalModel); fireEvent.click(originalModel);
+  expect(screen.queryByText("Enter a valid condition value.")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(update).not.toHaveBeenCalled());
   fireEvent.click(screen.getAllByRole("button", { name: "Remove condition" }).at(-1)!);
@@ -648,6 +673,19 @@ test("event create validates its composed condition before transport", async () 
   ))).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Add condition" }));
   expect(await screen.findByText("Enter a valid condition value.")).toBeTruthy();
+  const draftValue = screen.getByLabelText("Value") as HTMLInputElement;
+  draftValue.focus();
+  fireEvent.input(draftValue, { target: { value: "r" } });
+  await waitFor(() => expect((screen.getByLabelText("Value") as HTMLInputElement).value).toBe("r"));
+  expect(screen.getByLabelText("Value")).toBe(draftValue);
+  expect(document.activeElement).toBe(draftValue);
+  fireEvent.input(draftValue, { target: { value: "re" } });
+  await waitFor(() => expect((screen.getByLabelText("Value") as HTMLInputElement).value).toBe("re"));
+  expect(screen.getByLabelText("Value")).toBe(draftValue);
+  expect(document.activeElement).toBe(draftValue);
+  fireEvent.input(draftValue, { target: { value: "" } });
+  expect(screen.getByLabelText("Value")).toBe(draftValue);
+  expect(await screen.findByText("Enter a valid condition value.")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Create" }));
   await waitFor(() => expect(create).not.toHaveBeenCalled());
 });
@@ -696,6 +734,6 @@ test("event edit rejects an explicitly malformed saved condition", async () => {
   expect((await screen.findAllByText("Condition must be a JSON object.")).length).toBeGreaterThan(0);
   fireEvent.click(screen.getByRole("button", { name: "Add condition" }));
   expect(await screen.findByText("Enter a valid condition value.")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   await waitFor(() => expect(update).not.toHaveBeenCalled());
 });

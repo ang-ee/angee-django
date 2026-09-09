@@ -1203,6 +1203,26 @@ describe("FormView", () => {
     });
   });
 
+  test("submits cleared numeric edits as null", async () => {
+    sdkMocks.record = { id: "note-1", count: 4, ratio: 1.25 };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1" fields={[
+        { name: "count", label: "Count", widget: "integer" },
+        { name: "ratio", label: "Ratio", widget: "float" },
+      ]} />,
+    );
+    const count = await screen.findByLabelText("Count");
+    const ratio = screen.getByLabelText("Ratio");
+    fireEvent.change(count, { target: { value: "" } });
+    fireEvent.blur(count);
+    fireEvent.change(ratio, { target: { value: "" } });
+    fireEvent.blur(ratio);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { id: "note-1", count: null, ratio: null },
+    }));
+  });
+
   test("merges default values into create payloads", async () => {
     renderWithProviders(
       <FormView

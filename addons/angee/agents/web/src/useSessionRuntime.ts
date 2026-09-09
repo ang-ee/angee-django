@@ -19,6 +19,7 @@ import {
   type AgentChatView,
 } from "./documents";
 import type { AcpRuntime, AcpStatus } from "./useAcpRuntime";
+import { useAgentsT } from "./i18n";
 
 const SESSION_MODELS = ["agents.AgentSession", "agents.AgentTurn"] as const;
 const EMPTY_MCP_SERVERS = Object.freeze({});
@@ -65,6 +66,7 @@ export function useSessionRuntime(
   view: AgentChatView,
   initialSessionId?: string,
 ): AcpRuntime {
+  const t = useAgentsT();
   const [startedSessionId, setStartedSessionId] = React.useState<string | null>(null);
   const [posting, setPosting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -116,17 +118,17 @@ export function useSessionRuntime(
         if (!active || activeAgentRef.current !== agentId || startingRef.current !== attempt) return;
         startingRef.current = null;
         if (id) setStartedSessionId(id);
-        else setError("Failed to start the agent session.");
+        else setError(t("chat.startFailed"));
       })
       .catch((caught) => {
         if (!active || activeAgentRef.current !== agentId || startingRef.current !== attempt) return;
         startingRef.current = null;
-        setError(messageOf(caught, "Failed to start the agent session."));
+        setError(messageOf(caught, t("chat.startFailed")));
       });
     return () => {
       active = false;
     };
-  }, [agentId, initialSessionId, latest.isFetching, reusableId, startRequest, startSession, view]);
+  }, [agentId, initialSessionId, latest.isFetching, reusableId, startRequest, startSession, t, view]);
 
   const allMessages = React.useMemo(
     () => transcriptMessages(sessionId ?? "", displayedTurns, turnMessagesRef.current),
@@ -157,7 +159,7 @@ export function useSessionRuntime(
         await postMessage({ session: sessionId, text });
       } catch (caught) {
         if (activeAgentRef.current === requestAgent && requestSequence.current === request) {
-          setError(messageOf(caught, "The agent did not accept the message."));
+          setError(messageOf(caught, t("chat.messageRejected")));
         }
       } finally {
         if (
@@ -167,7 +169,7 @@ export function useSessionRuntime(
         ) setPosting(false);
       }
     },
-    [agentId, postMessage, sessionId],
+    [agentId, postMessage, sessionId, t],
   );
   const clear = React.useCallback(() => setClearedThrough(allMessages.length), [allMessages.length]);
   const onCancel = React.useCallback(async (): Promise<void> => setPosting(false), []);

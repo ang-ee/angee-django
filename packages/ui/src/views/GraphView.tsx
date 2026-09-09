@@ -18,6 +18,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { cn } from "../lib/cn";
+import { useValueStable } from "../lib/use-value-stable";
 import { type Tone } from "../lib/tones";
 import { Badge } from "../ui/badge";
 import { Code } from "../ui/code";
@@ -230,18 +231,47 @@ export function GraphView<
     () => ({ rankdir, nodesep, ranksep, edgesep, marginx, marginy }),
     [rankdir, nodesep, ranksep, edgesep, marginx, marginy],
   );
-  const layoutedGraph = React.useMemo(
+  // Style declarations are small semantic records. Consumers commonly build
+  // them inline; preserve identity while their values are unchanged so a
+  // cosmetic parent render cannot invoke Dagre again.
+  const resolvedNodeStyles = useValueStable(nodeStyles);
+  const resolvedEdgeStyles = useValueStable(edgeStyles);
+  const resolvedDefaultEdgeStyle = useValueStable(defaultEdgeStyle);
+  const geometryNodes = useValueStable(nodes.map((node) => {
+    const style = nodeStyleFor(node.kind, nodeStyles);
+    return {
+      id: node.id,
+      position: node.position,
+      width: style.width,
+      height: style.height,
+    };
+  }));
+  const geometryEdges = useValueStable(edges.map((edge) => ({
+    id: edge.id,
+    kind: edge.kind,
+    source: edge.source,
+    target: edge.target,
+  })));
+  const geometryLayout = React.useMemo(
     () =>
       layoutGraph({
-        nodes: nodes.map((node) => toReactFlowNode(node, nodeStyles)),
-        edges: edges.map((edge) =>
-          toReactFlowEdge(edge, edgeStyles, defaultEdgeStyle),
-        ),
-        nodeStyles,
+        nodes: geometryNodes,
+        edges: geometryEdges,
         layout: resolvedLayout,
       }),
-    [defaultEdgeStyle, edgeStyles, edges, resolvedLayout, nodeStyles, nodes],
+    [geometryEdges, geometryNodes, resolvedLayout],
   );
+  const layoutedGraph = React.useMemo(() => {
+    return {
+      nodes: nodes.map((node) => ({
+        ...toReactFlowNode(node, resolvedNodeStyles),
+        position: geometryLayout.positions.get(node.id) ?? node.position ?? { x: 0, y: 0 },
+      })),
+      edges: edges
+        .filter((edge) => geometryLayout.visibleEdgeIds.has(edge.id))
+        .map((edge) => toReactFlowEdge(edge, resolvedEdgeStyles, resolvedDefaultEdgeStyle)),
+    };
+  }, [edges, geometryLayout, nodes, resolvedDefaultEdgeStyle, resolvedEdgeStyles, resolvedNodeStyles]);
   const [renderNodes, setRenderNodes] = React.useState(layoutedGraph.nodes);
   const [renderEdges, setRenderEdges] = React.useState(layoutedGraph.edges);
   const instanceRef = React.useRef<ReactFlowInstance<RenderNode<TNodeKind, TNodeMeta>, RenderEdge<TEdgeKind, TEdgeMeta>> | null>(null);
@@ -513,23 +543,18 @@ function GraphNodeLabel<TKind extends string>({
 }
 
 function layoutGraph<
-  TNodeKind extends string,
   TEdgeKind extends string,
-  TNodeMeta extends Record<string, unknown>,
-  TEdgeMeta extends Record<string, unknown>,
 >({
   nodes,
   edges,
-  nodeStyles,
   layout,
 }: {
-  nodes: readonly RenderNode<TNodeKind, TNodeMeta>[];
-  edges: readonly RenderEdge<TEdgeKind, TEdgeMeta>[];
-  nodeStyles: Readonly<Record<TNodeKind, GraphViewNodeStyle>>;
+  nodes: readonly { id: string; position?: GraphViewPosition; width: number; height: number }[];
+  edges: readonly { id: string; source: string; target: string; kind: TEdgeKind }[];
   layout: Required<GraphViewLayout>;
 }): {
-  nodes: RenderNode<TNodeKind, TNodeMeta>[];
-  edges: RenderEdge<TEdgeKind, TEdgeMeta>[];
+  positions: ReadonlyMap<string, GraphViewPosition>;
+  visibleEdgeIds: ReadonlySet<string>;
 } {
   // @dagrejs/dagre is pinned EXACT at 3.0.0: 3.1.0/3.1.1 regress on large
   // multigraphs with >=3 parallel edges between one node pair (dagre's
@@ -542,8 +567,7 @@ function layoutGraph<
 
   const nodeIds = new Set(nodes.map((node) => node.id));
   for (const node of nodes) {
-    const style = nodeStyleFor(node.data.node.kind, nodeStyles);
-    graph.setNode(node.id, { width: style.width, height: style.height });
+    graph.setNode(node.id, { width: node.width, height: node.height });
   }
   for (const edge of edges) {
     // Dagre throws "Not possible to find intersection inside of the
@@ -560,21 +584,16 @@ function layoutGraph<
   dagre.layout(graph);
 
   return {
-    nodes: nodes.map((node) => {
-      const persistedPosition = node.data.node.position;
+    positions: new Map(nodes.map((node) => {
       const position = graph.node(node.id);
-      const style = nodeStyleFor(node.data.node.kind, nodeStyles);
-      return {
-        ...node,
-        position: persistedPosition ?? {
-          x: position.x - style.width / 2,
-          y: position.y - style.height / 2,
-        },
-      };
-    }),
-    edges: edges.filter(
-      (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target),
-    ),
+      return [node.id, node.position ?? {
+        x: position.x - node.width / 2,
+        y: position.y - node.height / 2,
+      }];
+    })),
+    visibleEdgeIds: new Set(edges
+      .filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target))
+      .map((edge) => edge.id)),
   };
 }
 

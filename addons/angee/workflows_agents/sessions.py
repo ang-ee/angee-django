@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -44,7 +44,7 @@ def start_session(agent: Any, *, owner: Any, context: dict[str, Any]) -> Any:
             created_by_id=owner.pk,
             updated_by_id=owner.pk,
         )
-        engine.start(workflow, subject=session, actor=owner, origin=RunOrigin.SESSION)
+        engine.start(workflow, subject=session, actor=owner, origin=cast(RunOrigin, RunOrigin.SESSION))
     return session
 
 

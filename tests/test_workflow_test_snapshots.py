@@ -30,8 +30,8 @@ from angee.workflows.definitions import StaleDefinitionError
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import RunOrigin, WorkflowStatus
 from angee.workflows.steps import StepImpl, StepResult
-from angee.workflows.test_contracts import TestFixtureRole, TestFixtureSpec
-from angee.workflows.test_contracts import TestScope as WorkflowTestScope
+from angee.workflows.testing import FixtureRole, FixtureSpec
+from angee.workflows.testing import WorkflowScope as WorkflowTestScope
 from tests.workflows import (
     Edge,
     Step,
@@ -46,7 +46,6 @@ from tests.workflows import (
     advance_once,
 )
 
-pytest_plugins = ("tests.workflows",)
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
@@ -204,6 +203,70 @@ def test_repair_test_retains_exact_source_attempt_and_original_input(
         )
 
 
+def test_repair_context_offers_retained_done_predecessor_as_fixture(
+    workflow_engine_tables: None,
+) -> None:
+    actor = get_user_model().objects.create_user(username="repair-fixture-owner")
+    workflow, selected = _draft(owner=actor)
+    with system_context(reason="repair predecessor setup"):
+        predecessor = Step.objects.create(
+            workflow=workflow,
+            key="predecessor",
+            name="Predecessor",
+            step_class="agent_session",
+            is_entry=True,
+        )
+        selected.is_entry = False
+        selected.save(update_fields={"is_entry", "updated_at"})
+        Edge.objects.create(workflow=workflow, source=predecessor, target=selected)
+        source_run = WorkflowRun.objects.create(
+            workflow=workflow,
+            status="running",
+            created_by=actor,
+        )
+        predecessor_run = StepRun.objects.create(
+            run=source_run,
+            step=predecessor,
+            status="scheduled",
+        )
+        selected_run = StepRun.objects.create(
+            run=source_run,
+            step=selected,
+            status="scheduled",
+        )
+    predecessor_attempt = StepAttempt.objects.claim(
+        predecessor_run,
+        claimed_at=timezone.now(),
+    ).attempt
+    StepAttempt.objects.admit_invocation(
+        predecessor_attempt.pk,
+        lease_token=predecessor_attempt.lease_token,
+        at=timezone.now(),
+    )
+    StepAttempt.objects.finalize(
+        predecessor_attempt.pk,
+        lease_token=predecessor_attempt.lease_token,
+        result=AttemptResult(AttemptResultKind.DONE, output_present=True, output={"kept": True}),
+        recorded_at=timezone.now(),
+    )
+    selected_attempt = StepAttempt.objects.claim(selected_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(
+        selected_attempt.pk,
+        lease_token=selected_attempt.lease_token,
+        at=timezone.now(),
+    )
+    StepAttempt.objects.finalize(
+        selected_attempt.pk,
+        lease_token=selected_attempt.lease_token,
+        result=AttemptResult(AttemptResultKind.ERROR, error="failed"),
+        recorded_at=timezone.now(),
+    )
+
+    context = WorkflowRun.objects.test_repair_context(selected_attempt, actor=actor)
+
+    assert [fixture.attempt_id for fixture in context.fixtures] == [predecessor_attempt.sqid]
+
+
 def test_output_fixture_is_immutable_nonphysical_retained_evidence(
     workflow_engine_tables: None,
 ) -> None:
@@ -223,9 +286,9 @@ def test_output_fixture_is_immutable_nonphysical_retained_evidence(
         subject=None,
         actor=actor,
         fixtures=(
-            TestFixtureSpec(
+            FixtureSpec(
                 step_key=selected.key,
-                role=TestFixtureRole.OUTPUT,
+                role=FixtureRole.OUTPUT,
                 value=JsonPresence(True, {"answer": None}),
                 outcome="fixture",
             ),
@@ -259,9 +322,9 @@ def test_setup_plan_uses_graph_effects_and_fixture_substitution(
         expected_revision=workflow.draft_revision,
         actor=actor,
         fixtures=(
-            TestFixtureSpec(
+            FixtureSpec(
                 entry.key,
-                TestFixtureRole.OUTPUT,
+                FixtureRole.OUTPUT,
                 JsonPresence(True, {"planned": None}),
             ),
         ),
@@ -437,9 +500,9 @@ def test_captured_fixture_sources_are_bounded_and_payload_is_selected_separately
         scope=WorkflowTestScope.NODE,
         selected_step=selected,
         fixtures=(
-            TestFixtureSpec(
+            FixtureSpec(
                 entry.key,
-                TestFixtureRole.OUTPUT,
+                FixtureRole.OUTPUT,
                 JsonPresence(True, {"retained": None}),
                 outcome="accepted",
             ),
@@ -452,7 +515,7 @@ def test_captured_fixture_sources_are_bounded_and_payload_is_selected_separately
         page = StepAttempt.objects.eligible_test_fixture_sources(
             workflow,
             actor=actor,
-            role=TestFixtureRole.OUTPUT,
+            role=FixtureRole.OUTPUT,
             step_key=entry.key,
             first=1,
         )
@@ -465,7 +528,7 @@ def test_captured_fixture_sources_are_bounded_and_payload_is_selected_separately
         workflow,
         actor=actor,
         attempt_id=source_attempt.sqid,
-        role=TestFixtureRole.OUTPUT,
+        role=FixtureRole.OUTPUT,
         step_key=entry.key,
     )
 
@@ -479,7 +542,7 @@ def test_captured_fixture_sources_are_bounded_and_payload_is_selected_separately
         unrelated,
         actor=actor,
         attempt_id=source_attempt.sqid,
-        role=TestFixtureRole.OUTPUT,
+        role=FixtureRole.OUTPUT,
         step_key=entry.key,
     ) is None
 
@@ -492,9 +555,9 @@ def test_captured_fixture_sources_are_bounded_and_payload_is_selected_separately
         scope=WorkflowTestScope.NODE,
         selected_step=selected,
         fixtures=(
-            TestFixtureSpec(
+            FixtureSpec(
                 entry.key,
-                TestFixtureRole.OUTPUT,
+                FixtureRole.OUTPUT,
                 captured_attempt_id=source_attempt.sqid,
             ),
         ),
@@ -523,9 +586,9 @@ def test_freshness_propagates_upstream_semantics_to_selected_evidence(
         )
         Edge.objects.create(workflow=workflow, source=entry, target=selected)
         workflow.refresh_from_db()
-    fixture = TestFixtureSpec(
+    fixture = FixtureSpec(
         entry.key,
-        TestFixtureRole.OUTPUT,
+        FixtureRole.OUTPUT,
         JsonPresence(True, {"source": True}),
     )
     run = WorkflowRun.objects.start_test(
@@ -572,9 +635,9 @@ def test_output_fixture_can_replace_whole_test_entry_without_duplicate_slot(
         subject=None,
         actor=actor,
         fixtures=(
-            TestFixtureSpec(
+            FixtureSpec(
                 entry.key,
-                TestFixtureRole.OUTPUT,
+                FixtureRole.OUTPUT,
                 JsonPresence(True, {"entry": "substituted"}),
             ),
         ),
@@ -610,9 +673,9 @@ def test_whole_output_fixture_waits_for_graph_reachability(
         subject=None,
         actor=actor,
         fixtures=(
-            TestFixtureSpec(
+            FixtureSpec(
                 fixture_step.key,
-                TestFixtureRole.OUTPUT,
+                FixtureRole.OUTPUT,
                 JsonPresence(True, {"fixture": True}),
             ),
         ),
@@ -645,9 +708,9 @@ def test_whole_map_body_output_fixture_stays_bound_to_expansion(
         subject=None,
         actor=actor,
         fixtures=(
-            TestFixtureSpec(
+            FixtureSpec(
                 body.key,
-                TestFixtureRole.OUTPUT,
+                FixtureRole.OUTPUT,
                 JsonPresence(True, {"fixture": "body"}),
                 item_index=0,
             ),
@@ -683,9 +746,9 @@ def test_whole_map_output_fixture_skips_expansion_when_reached(
         subject=None,
         actor=actor,
         fixtures=(
-            TestFixtureSpec(
+            FixtureSpec(
                 controller.key,
-                TestFixtureRole.OUTPUT,
+                FixtureRole.OUTPUT,
                 JsonPresence(True, {"results": []}),
                 outcome="succeeded",
             ),
@@ -711,9 +774,9 @@ def test_test_fixture_retry_requires_exact_json_presence_and_facts(
         )
         Edge.objects.create(workflow=workflow, source=selected, target=fixture_step)
         workflow.refresh_from_db()
-    fixture = TestFixtureSpec(
+    fixture = FixtureSpec(
         fixture_step.key,
-        TestFixtureRole.OUTPUT,
+        FixtureRole.OUTPUT,
         JsonPresence(True, 1),
     )
     first = WorkflowRun.objects.start_test(
@@ -740,7 +803,7 @@ def test_test_fixture_retry_requires_exact_json_presence_and_facts(
             request_key="fixture-retry",
             subject=None,
             actor=actor,
-            fixtures=(TestFixtureSpec(fixture_step.key, TestFixtureRole.OUTPUT, JsonPresence(True, True)),),
+            fixtures=(FixtureSpec(fixture_step.key, FixtureRole.OUTPUT, JsonPresence(True, True)),),
         )
 
 
@@ -761,7 +824,7 @@ def test_fixture_creation_requires_run_admission_owner(
     row = WorkflowTestFixture(
         run=run,
         step=run.test_step,
-        role=TestFixtureRole.OUTPUT,
+        role=FixtureRole.OUTPUT,
         value_present=True,
         value={"forged": True},
     )
@@ -781,7 +844,7 @@ def test_fixture_batch_authority_rejects_signal_reentry(
         del sender, created, kwargs
         forged = WorkflowTestFixture(
             step=instance.step,
-            role=TestFixtureRole.OUTPUT,
+            role=FixtureRole.OUTPUT,
             value_present=True,
             value={"forged": True},
         )
@@ -797,9 +860,9 @@ def test_fixture_batch_authority_rejects_signal_reentry(
                 subject=None,
                 actor=actor,
                 fixtures=(
-                    TestFixtureSpec(
+                    FixtureSpec(
                         entry.key,
-                        TestFixtureRole.OUTPUT,
+                        FixtureRole.OUTPUT,
                         JsonPresence(True, {"safe": True}),
                     ),
                 ),
@@ -874,8 +937,8 @@ def test_map_item_fixture_is_captured_on_real_body_attempt(
         scope=WorkflowTestScope.NODE,
         selected_step=body,
         fixtures=(
-            TestFixtureSpec(
-                "body", TestFixtureRole.MAP_ITEM, JsonPresence(True, item), item_index=0
+            FixtureSpec(
+                "body", FixtureRole.MAP_ITEM, JsonPresence(True, item), item_index=0
             ),
         ),
     )
@@ -885,7 +948,7 @@ def test_map_item_fixture_is_captured_on_real_body_attempt(
             claimed = engine._claim_due_steps(locked, timestamp=timezone.now(), retained=True)
         assert len(claimed) == 1
         attempt = StepAttempt.objects.get(step_run__run=run, cause=AttemptCause.INITIAL)
-        assert attempt.test_fixture.role == TestFixtureRole.MAP_ITEM
+        assert attempt.test_fixture.role == FixtureRole.MAP_ITEM
         assert attempt.input_present is True
         expected = item if explicit or isinstance(item, dict) else {"item": item}
         assert attempt.input == expected

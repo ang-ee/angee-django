@@ -8,6 +8,7 @@ import {
   type DataResourceSubtitleMetadata,
   type ModelFieldMetadata,
   type ModelMetadata,
+  type QueryField,
   type Row,
 } from "@angee/metadata";
 
@@ -176,6 +177,7 @@ export function addFieldSelection(
   field: FieldDescriptor,
   relation?: RelationFieldInfo,
   metadata?: ModelFieldMetadata,
+  queryField?: QueryField,
 ): void {
   if (
     isRelationIdField(field)
@@ -188,6 +190,10 @@ export function addFieldSelection(
     if (relation && relation.labelField !== "id") {
       paths.add(`${field.name}.${relation.labelField}`);
     }
+    return;
+  }
+  if (metadata?.kind === "object") {
+    for (const path of queryField?.row?.paths ?? []) paths.add(path);
     return;
   }
   paths.add(field.name);
@@ -412,6 +418,10 @@ function cloneFormValue(value: unknown): unknown {
 
 function mutationFieldValue(field: FieldDescriptor, value: unknown): unknown {
   if (isRelationIdField(field)) return relationValueId(value);
+  // NumberField keeps an ordinary keyboard clear as an editable blank string
+  // so the user can type a replacement without leaving value mode. The wire
+  // boundary owns the nullable scalar representation.
+  if (isNumericField(field) && value === "") return null;
   return value;
 }
 

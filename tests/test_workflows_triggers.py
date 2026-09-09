@@ -47,7 +47,6 @@ from tests.workflows import (
 )
 
 User = get_user_model()
-pytest_plugins = ("tests.workflows",)
 
 
 @pytest.fixture()
@@ -524,7 +523,9 @@ def test_event_trigger_bad_condition_is_logged_and_skipped(
     """One invalid event condition never breaks the host model save."""
 
     del workflow_trigger_tables, no_workflow_queue
-    _event_trigger(condition={"missing_field": "ready"})
+    trigger = _event_trigger(condition={"missing_field": "ready"}, enabled=False)
+    with system_context(reason="test historical invalid event trigger"):
+        models.QuerySet.update(Trigger.objects.filter(pk=trigger.pk), enabled=True)
 
     TriggerSubject.objects.create(name="invalid-condition", state="ready")
 
@@ -1105,6 +1106,40 @@ def test_trigger_activation_preserves_caller_authorization_and_rejects_stale_lin
         models.QuerySet.update(Trigger.objects.filter(pk=trigger.pk), workflow_id=replacement.pk)
         with pytest.raises(ValidationError, match="lineage changed"):
             trigger.enable()
+
+
+@pytest.mark.parametrize(
+    "condition",
+    (
+        {"missing__exact": "value"},
+        {"name__year": 2026},
+        {"id__in": 1},
+    ),
+)
+def test_event_trigger_enable_compiles_condition_without_running_it(
+    workflow_trigger_tables: None,
+    condition: dict[str, Any],
+) -> None:
+    """Invalid fields, lookups and values are rejected before event delivery."""
+
+    del workflow_trigger_tables
+    trigger = _event_trigger(condition=condition, enabled=False)
+    with system_context(reason="test invalid event condition activation"):
+        with pytest.raises(ValidationError, match="condition is invalid"):
+            trigger.enable()
+
+
+def test_event_trigger_enable_accepts_empty_in_condition(
+    workflow_trigger_tables: None,
+) -> None:
+    """A provably empty lookup is valid and enables without querying subjects."""
+
+    del workflow_trigger_tables
+    trigger = _event_trigger(condition={"id__in": []}, enabled=False)
+    with system_context(reason="test empty event condition activation"):
+        trigger.enable()
+    trigger.refresh_from_db()
+    assert trigger.enabled is True
 
 
 def test_trigger_save_merges_partial_rule_fields_and_rejects_stale_activation(

@@ -17,8 +17,6 @@ from angee.workflows.steps import (
 )
 from tests.workflows import Step, Workflow
 
-pytest_plugins = ("tests.workflows",)
-
 
 def normalized_twice(step: type[WaitStep | GateStep | MapStep], config: dict[str, object]) -> dict[str, object]:
     """Assert typed normalization reaches a stable persisted representation."""

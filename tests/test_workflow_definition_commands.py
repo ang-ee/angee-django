@@ -22,7 +22,6 @@ from angee.workflows.definitions import (
 )
 from tests.workflows import Edge, Step, Workflow
 
-pytest_plugins = ("tests.workflows",)
 User = get_user_model()
 
 

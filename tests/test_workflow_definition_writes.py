@@ -11,7 +11,6 @@ from rebac.roles import grant
 from angee.workflows.models import WorkflowStatus
 from tests.workflows import Edge, Step, Workflow
 
-pytest_plugins = ("tests.workflows",)
 User = get_user_model()
 
 

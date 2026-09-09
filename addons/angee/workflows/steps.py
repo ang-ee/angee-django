@@ -668,7 +668,7 @@ def optional_non_negative_int(value: Any) -> int | None:
         return None
     try:
         parsed = int(value)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return None
     return parsed if parsed >= 0 else None
 

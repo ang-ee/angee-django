@@ -9,8 +9,6 @@ from angee.workflows.definitions import DefinitionEdit, NodePatch, StaleDefiniti
 from tests.test_workflow_definition_commands import _draft
 from tests.workflows import Step, Workflow
 
-pytest_plugins = ("tests.workflows",)
-
 
 def test_saved_comparison_separates_semantic_and_presentation_changes(workflow_tables: None) -> None:
     del workflow_tables

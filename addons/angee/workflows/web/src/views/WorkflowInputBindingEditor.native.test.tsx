@@ -150,6 +150,36 @@ describe("WorkflowInputBindingEditor", () => {
     });
   });
 
+  test("removing an earlier array item preserves later draft text and focus identity", async () => {
+    function Harness() {
+      const [value, setValue] = React.useState<Record<string, unknown>>({
+        kind: "array",
+        items: [
+          { kind: "object", fields: {} },
+          { kind: "object", fields: {} },
+          { kind: "object", fields: {} },
+        ],
+      });
+      return <QueryProviders><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowInputBindingEditor
+        nodeKey="target" value={value} readOnly={false} messages={[]}
+        onChange={(next) => setValue(next as Record<string, unknown>)} onCommit={() => undefined}
+        onStructuralChange={(next) => setValue(next as Record<string, unknown>)} onFocused={() => undefined}
+      /></AppRuntimeProvider></QueryProviders>;
+    }
+    render(<Harness />);
+    const fields = screen.getAllByRole("combobox", { name: "Field key" });
+    const retained = fields[2]!;
+    retained.focus();
+    fireEvent.change(retained, { target: { value: "unsaved_field" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[0]!);
+    await waitFor(() => {
+      const remaining = screen.getAllByRole("combobox", { name: "Field key" });
+      expect(remaining).toHaveLength(2);
+      expect((remaining[1] as HTMLInputElement).value).toBe("unsaved_field");
+      expect(document.activeElement).toBe(remaining[1]);
+    });
+  });
+
   test("Literal value records explicit null and object keys remain literal", () => {
     const change = renderEditor({ kind: "object", fields: { "a.b[]/kind": { kind: "constant", value: null } } });
     expect(screen.getByText("a.b[]/kind")).toBeTruthy();

@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import type { QueryClient } from "@tanstack/react-query";
 import {
   keys,
   useGetIdentity,
@@ -90,6 +91,7 @@ export type UserPreferencesState = RuntimeUserPreferencesState;
 export interface AngeeAuthProviderOptions extends AngeeHasuraClientOptions {
   loginPath?: string;
   onAuthChange?: () => void;
+  queryClient?: QueryClient;
 }
 
 export interface UseRuntimeAuthStateResult {
@@ -145,14 +147,14 @@ export function createAngeeAuthProvider(
 
 export function createAngeeAuthProviderFromRequest(
   request: GraphQLRequest,
-  options: Pick<AngeeAuthProviderOptions, "loginPath" | "onAuthChange"> = {},
+  options: Pick<AngeeAuthProviderOptions, "loginPath" | "onAuthChange" | "queryClient"> = {},
 ): RefineAuthProvider {
   const loginPath = options.loginPath ?? DEFAULT_LOGIN_PATH;
   const currentUser = async (): Promise<CurrentUserPayload | null> => {
     const data = await request(AngeeCurrentUserDocument);
     return currentUserPayload(data.current_user);
   };
-  return {
+  const provider: RefineAuthProvider = {
     async check() {
       try {
         const user = await currentUser();
@@ -219,13 +221,20 @@ export function createAngeeAuthProviderFromRequest(
       // Another provider can reject its own credential while Django's session
       // remains valid, so only the authoritative identity endpoint may log out.
       try {
-        if (await currentUser()) return { error: resolved };
+        const identity = options.queryClient
+          ? await options.queryClient.fetchQuery({
+              ...identityQueryOptions(provider),
+              staleTime: 0,
+            })
+          : await currentUser();
+        if (identity) return { error: resolved };
       } catch (caught) {
         if (!isUnauthorizedError(caught)) return { error: resolved };
       }
       return { logout: true, redirectTo: loginPath, error: resolved };
     },
   };
+  return provider;
 }
 
 /**

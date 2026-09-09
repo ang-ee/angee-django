@@ -73,7 +73,7 @@ def run_due_schedule_triggers(*, now: datetime | None = None) -> dict[str, int]:
     for trigger_id in trigger_ids:
         try:
             claimed = trigger_model.objects.start_due_schedule(trigger_id, timestamp=timestamp)
-        except CroniterBadCronError, ValueError, TypeError:
+        except (CroniterBadCronError, ValueError, TypeError):
             logger.exception("Skipping workflow schedule trigger %s after next fire calculation failed.", trigger_id)
             claimed = None
         except Exception:
@@ -123,7 +123,7 @@ def _on_change_published(
         )
     except LookupError:
         return
-    except ProgrammingError, OperationalError:
+    except (ProgrammingError, OperationalError):
         # Saves fire during ``migrate`` while the trigger table/columns are
         # still mid-flight; there is nothing to dispatch until the schema
         # exists, and probing it per save would cost a query on every write.
@@ -162,7 +162,7 @@ def _enabled_event_model_labels() -> frozenset[str]:
         )
     except LookupError:
         labels = frozenset()
-    except ProgrammingError, OperationalError:
+    except (ProgrammingError, OperationalError):
         labels = frozenset()
     _event_trigger_label_cache = (now + _EVENT_TRIGGER_LABEL_TTL_SECONDS, labels)
     return labels

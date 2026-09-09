@@ -16,8 +16,19 @@ from django.db import models
 from pydantic import BaseModel, Field, create_model
 
 from angee.base.impl import model_config_form_spec
+from angee.data.field_classification import model_field_scalar
 
 ConditionScalar = Literal["boolean", "date", "datetime", "integer", "number", "string"]
+_CONDITION_SCALARS: dict[str, ConditionScalar] = {
+    "Boolean": "boolean",
+    "Date": "date",
+    "DateTime": "datetime",
+    "Decimal": "number",
+    "Float": "number",
+    "Int": "integer",
+    "String": "string",
+    "UUID": "string",
+}
 _COMMON_LOOKUPS = frozenset({"exact", "in", "isnull"})
 _ORDERED_LOOKUPS = frozenset({"gt", "gte", "lt", "lte", "range"})
 _STRING_LOOKUPS = frozenset({
@@ -201,19 +212,8 @@ class EventConditionCatalogue:
 
 
 def _condition_scalar(field: models.Field[Any, Any]) -> ConditionScalar | None:
-    if isinstance(field, models.BooleanField):
-        return "boolean"
-    if isinstance(field, models.DateTimeField):
-        return "datetime"
-    if isinstance(field, models.DateField):
-        return "date"
-    if isinstance(field, models.IntegerField):
-        return "integer"
-    if isinstance(field, (models.DecimalField, models.FloatField)):
-        return "number"
-    if isinstance(field, (models.CharField, models.TextField, models.UUIDField)):
-        return "string"
-    return None
+    scalar = model_field_scalar(field)
+    return None if scalar is None else _CONDITION_SCALARS.get(scalar)
 
 
 def _supported_lookups(scalar: ConditionScalar) -> frozenset[str]:

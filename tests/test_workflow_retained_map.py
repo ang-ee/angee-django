@@ -30,8 +30,6 @@ from tests.workflows import (
     workflow_with_steps,
 )
 
-pytest_plugins = ("tests.workflows",)
-
 
 def _map_workflow(*, item: Any, explicit: bool) -> Any:
     return workflow_with_steps(

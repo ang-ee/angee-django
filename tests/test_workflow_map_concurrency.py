@@ -17,7 +17,6 @@ from angee.workflows.steps import HandlerStep, StepResult
 from tests.test_workflow_retained_map import _map_workflow
 from tests.workflows import StepAttempt, StepRun, advance_once, execute_started, start_run
 
-pytest_plugins = ("tests.workflows",)
 pytestmark = [
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(

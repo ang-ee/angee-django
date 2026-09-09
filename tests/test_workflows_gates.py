@@ -35,7 +35,6 @@ from tests.workflows import (
 )
 
 User = get_user_model()
-pytest_plugins = ("tests.workflows",)
 
 
 @pytest.fixture(autouse=True)

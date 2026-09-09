@@ -9,9 +9,6 @@ from tests.conftest import execute_schema, result_data
 from tests.test_workflows import _console_schema, _platform_admin
 from tests.workflows import Step, Workflow
 
-pytest_plugins = ("tests.workflows",)
-
-
 SAVE = """
 mutation SaveDefinition($workflow: ID!, $revision: Int!, $edit: WorkflowDefinitionEditInput!) {
   save_workflow_definition(workflow: $workflow, expected_revision: $revision, edit: $edit) {
@@ -180,6 +177,44 @@ def test_definition_mutation_preserves_omission_correlates_rows_and_reports_read
     assert workflow.description == "Saved"
     with system_context(reason="verify incomplete binding draft"):
         assert workflow.steps.get(key="wait").input_binding == {"kind": "step_output"}
+
+
+def test_definition_mutation_rejects_null_max_steps_without_writes(
+    workflow_tables: None,
+) -> None:
+    """An explicit null limit is a field diagnostic, never a transport failure."""
+
+    del workflow_tables
+    admin = _platform_admin("definition-null-max-steps")
+    workflow, entry = _draft()
+    original_revision = workflow.draft_revision
+    with system_context(reason="capture workflow before rejected null limit"):
+        original_nodes = list(workflow.steps.values_list("pk", "key", "config"))
+
+    payload = result_data(
+        execute_schema(
+            _console_schema(),
+            SAVE,
+            {
+                "workflow": workflow.sqid,
+                "revision": original_revision,
+                "edit": {"workflow": {"max_steps": None}},
+            },
+            user=admin,
+        )
+    )["save_workflow_definition"]
+
+    assert payload["status"] == "STRUCTURAL"
+    assert [(item["kind"], item["field"]) for item in payload["diagnostics"]] == [
+        ("workflow", "max_steps")
+    ]
+    assert payload["diagnostics"][0]["code"] == "field_invalid"
+    assert payload["diagnostics"][0]["message"] == "This field cannot be null."
+    with system_context(reason="verify rejected null workflow limit"):
+        workflow.refresh_from_db()
+        assert workflow.draft_revision == original_revision
+        assert list(workflow.steps.values_list("pk", "key", "config")) == original_nodes
+        assert workflow.steps.get(pk=entry.pk).key == entry.key
 
 
 def test_source_preview_uses_unsaved_topology_and_keeps_stale_baseline_separate(

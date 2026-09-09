@@ -182,6 +182,7 @@ export {
 } from "./resource/record-chrome-context";
 export { EditableLines, type EditableLinesProps } from "./form/EditableLines";
 export { BoundDescriptorField, BoundFormValue, useFormViewValues, type BoundDescriptorFieldProps, type BoundFormValueProps, type BoundFormValueRenderProps } from "./form/BoundDescriptorField";
+export { useListIdentities } from "./form/StructuredField";
 export {
   diffLines,
   duplicateLineRow,
