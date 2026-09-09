@@ -462,12 +462,21 @@ test("a full acknowledgement rebases submitted graph values while retaining late
   expect(f.surface().formIsDirty).toBe(true);
 });
 
-test.each(["add", "remove"] as const)("a full acknowledgement preserves an in-flight array %s", async (change) => {
+test.each(["add", "remove", "reorder"] as const)("a full acknowledgement preserves an in-flight array %s", async (change) => {
   let resolve!: (value: ReturnType<typeof acknowledgeFormSubmit>) => void;
   const original = { key: "first", name: "First" };
+  const other = { key: "second", name: "Second" };
+  const initial = change === "reorder" ? [original, other] : [original];
+  const later = change === "add" ? [original, { key: "later", name: "Later" }]
+    : change === "remove" ? [] : [other, original];
+  const accepted = {
+    title: "Submitted",
+    body: "Accepted",
+    definition: { nodes: initial.map((node) => ({ ...node, serverValue: "accepted" })) },
+  };
   const source: FormViewAcknowledgedSource = {
     record: { id: "note-1", title: "First" },
-    values: { title: "First", definition: { nodes: [original] } },
+    values: { title: "First", body: "Initial", definition: { nodes: initial } },
   };
   const f = await fixture({
     acknowledgedSource: source,
@@ -479,22 +488,29 @@ test.each(["add", "remove"] as const)("a full acknowledgement preserves an in-fl
   await waitFor(() => expect(f.surface().pending).toBe(true));
   act(() => f.surface().form.setValue(
     "definition.nodes",
-    (change === "add" ? [original, { key: "later", name: "Later" }] : []) as never,
+    later as never,
     { shouldDirty: true },
   ));
   await act(async () => {
     resolve(acknowledgeFormSubmit(
       { id: "note-1", title: "Submitted" },
-      { title: "Submitted", definition: { nodes: [{ ...original, serverValue: "accepted" }] } },
+      accepted,
     ));
     await saving;
   });
-  expect(f.surface().form.getValues("definition.nodes")).toEqual(
-    change === "add"
-      ? [original, { key: "later", name: "Later" }]
-      : [],
-  );
+  expect(f.surface().form.getValues("definition.nodes")).toEqual(later);
+  expect(f.surface().form.getValues("body")).toBe("Accepted");
+  expect(f.surface().form.formState.defaultValues).toMatchObject(accepted);
   expect(f.surface().formIsDirty).toBe(true);
+  const latest = f.surface().form.getValues();
+  act(() => { saving = f.surface().submitForm(); });
+  await waitFor(() => expect(f.surface().pending).toBe(true));
+  await act(async () => {
+    resolve(acknowledgeFormSubmit({ id: "note-1", title: "Submitted" }, latest));
+    await saving;
+  });
+  expect(f.surface().form.getValues("definition.nodes")).toEqual(later);
+  expect(f.surface().formIsDirty).toBe(false);
 });
 
 test("bound descriptors scope prefill, null, errors and readonly to the declaring record", async () => {
