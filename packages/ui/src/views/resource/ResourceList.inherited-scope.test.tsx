@@ -19,7 +19,7 @@ vi.mock("./resource-list/body", () => ({
   ResourceListBody: ({ resource }: { resource: string }) => {
     captured.set(resource, useResourceView());
     return resource === "catalog.Catalog"
-      ? <ResourceList resource="catalog.Entry" columns={[]} order={{ min_qty: "asc" }} />
+      ? <ResourceList resource="catalog.Entry" scope="local" columns={[]} order={{ min_qty: "asc" }} />
       : null;
   },
 }));
@@ -30,7 +30,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-test("a nested resource owns local sorting and reset without changing its parent's route", () => {
+test("an explicitly local nested resource owns sorting and reset without changing its parent's route", () => {
   render(<ResourceList resource="catalog.Catalog" columns={[]} />);
   const parent = captured.get("catalog.Catalog")!;
   const child = () => captured.get("catalog.Entry")!;
@@ -58,10 +58,10 @@ test("a nested resource owns local sorting and reset without changing its parent
   expect(router.navigate).not.toHaveBeenCalled();
 });
 
-test.each(["catalog.Entry", undefined])("inherits an existing compatible provider (%s)", (resource) => {
+test.each(["catalog.Entry", "catalog.Other", undefined])("inherits an existing provider across resources (%s)", (resource) => {
   render(
     <ResourceViewProvider resource={resource} scope="local" initialState={{ pageSize: 7, sorting: [{ id: "updated_at", desc: true }] }}>
-      <ResourceList resource="catalog.Entry" columns={[]} order={{ min_qty: "asc" }} />
+      <ResourceList resource="catalog.Entry" scope="inherit" columns={[]} order={{ min_qty: "asc" }} />
     </ResourceViewProvider>,
   );
   expect(captured.get("catalog.Entry")!.state.pagination.pageSize).toBe(7);

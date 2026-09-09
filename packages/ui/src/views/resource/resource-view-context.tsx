@@ -140,8 +140,6 @@ export function withResourceViewScope({
   providerKey,
   children,
 }: ResourceViewScopeMountOptions): ReactElement {
-  // A related collection must not read or overwrite its parent's URL query.
-  isolated ||= Boolean(resource && ambient?.resource && resource !== ambient.resource);
   if (!isolated && scope !== "local" && ambient) return children(ambient);
   return (
     <ResourceViewProvider
