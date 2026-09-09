@@ -62,6 +62,8 @@ from angee.storage_integrate.models import MountMode
 from tests import messaging_models  # noqa: F401 -- register the managed posts FK targets before database setup
 from tests.integrate_models import Integration
 
+pytest_plugins = ("tests.workflows",)
+
 
 class OAuthClient(AbstractOAuthClientOidc, AbstractOAuthClient):
     """Concrete OAuth client used by source-addon tests.

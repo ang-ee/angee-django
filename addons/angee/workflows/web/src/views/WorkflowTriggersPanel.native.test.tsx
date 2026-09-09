@@ -566,6 +566,11 @@ test("event condition edits stay in the trigger form and preserve opaque lookups
   const [value] = await screen.findAllByLabelText("Value");
   if (!(value instanceof HTMLInputElement)) throw new Error("State condition value is missing");
   value.focus();
+  fireEvent.change(value, { target: { value: "" } });
+  expect(screen.getAllByLabelText("Value")[0]).toBe(value);
+  expect(await screen.findByText("Enter a valid condition value.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(update).not.toHaveBeenCalled());
   authored.conditionPending = true;
   fireEvent.change(value, { target: { value: "done" } });
   expect((screen.getAllByLabelText("Value")[0] as HTMLInputElement).value).toBe("done");
@@ -667,6 +672,19 @@ test("event create validates its composed condition before transport", async () 
     JSON.stringify(request.condition) === "{}"
   ))).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Add condition" }));
+  expect(await screen.findByText("Enter a valid condition value.")).toBeTruthy();
+  const draftValue = screen.getByLabelText("Value") as HTMLInputElement;
+  draftValue.focus();
+  fireEvent.input(draftValue, { target: { value: "r" } });
+  await waitFor(() => expect((screen.getByLabelText("Value") as HTMLInputElement).value).toBe("r"));
+  expect(screen.getByLabelText("Value")).toBe(draftValue);
+  expect(document.activeElement).toBe(draftValue);
+  fireEvent.input(draftValue, { target: { value: "re" } });
+  await waitFor(() => expect((screen.getByLabelText("Value") as HTMLInputElement).value).toBe("re"));
+  expect(screen.getByLabelText("Value")).toBe(draftValue);
+  expect(document.activeElement).toBe(draftValue);
+  fireEvent.input(draftValue, { target: { value: "" } });
+  expect(screen.getByLabelText("Value")).toBe(draftValue);
   expect(await screen.findByText("Enter a valid condition value.")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Create" }));
   await waitFor(() => expect(create).not.toHaveBeenCalled());

@@ -12,6 +12,8 @@ from django.apps import apps
 from django.db import connections
 from django.utils import timezone
 
+from angee.jobs.enqueue import enqueue_task
+
 
 class WorkflowDispatchKind(StrEnum):
     """Closed workflow delivery kinds owned by the durable dispatcher."""
@@ -60,6 +62,15 @@ class DispatchPreflight:
 
 
 DispatchSender = Callable[[WorkflowDispatchEnvelope], None]
+
+
+def enqueue_dispatch_publisher() -> None:
+    """Request one immediate publication pass; periodic recovery remains authoritative."""
+
+    try:
+        enqueue_task("workflows.publish_dispatches", kwargs={})
+    except Exception:  # noqa: BLE001 - the durable intent remains for periodic recovery.
+        return
 
 
 def publish_due(

@@ -60,12 +60,43 @@ jobs:
   uv:
     if: ${{ inputs.uv-enabled }}
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: angee
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d angee"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ inputs.python-version }}
       - run: uv run pytest -q ${{ inputs.pytest-extra-args }}
+      - name: Verify workflow concurrency contracts execute on PostgreSQL
+        # These source tests register bare concrete Django models, so PostgreSQL
+        # must create their tables in one sync-app pass.
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
+        run: |
+          uv run pytest -q --nomigrations --junitxml=workflow-concurrency.xml \
+            tests/test_workflow_attempt_concurrency.py \
+            tests/test_workflow_dispatch_concurrency.py \
+            tests/test_workflow_runtime_concurrency.py \
+            tests/test_workflow_start_concurrency.py \
+            tests/test_workflow_map_concurrency.py \
+            tests/test_workflow_definition_concurrency.py \
+            tests/test_workflow_test_snapshots.py::test_concurrent_test_request_reuses_one_snapshot_run_and_dispatch \
+            tests/test_workflows_engine.py::test_postgres_lock_sql_scopes_joined_engine_queries_to_self \
+            tests/test_workflows_triggers.py::test_trigger_edit_and_activation_serialize_on_lineage_then_trigger
+          uv run python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL concurrency tests, got tests={len(cases)}, skipped={skipped}"'
 
   pnpm:
     if: ${{ inputs.pnpm-enabled }}

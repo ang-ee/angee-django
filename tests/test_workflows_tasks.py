@@ -74,6 +74,8 @@ def test_periodic_decision_task_accepts_timestamp_keyword(
         (workflow_tasks.StepRetryPolicy(max_attempts=3, wait=7), 2, 7),
         (workflow_tasks.StepRetryPolicy(max_attempts=3, linear_wait=4), 2, 8),
         (workflow_tasks.StepRetryPolicy(max_attempts=3, exponential_wait=4), 2, 8),
+        (workflow_tasks.StepRetryPolicy(max_attempts=4, linear_wait=4), 3, 12),
+        (workflow_tasks.StepRetryPolicy(max_attempts=4, exponential_wait=4), 3, 16),
     ],
 )
 def test_retry_delay_is_owned_by_step_policy(

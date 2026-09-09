@@ -251,11 +251,19 @@ test("the registered form exposes parsed settings and saves through the definiti
   expect((name as HTMLInputElement).value).toBe("Original");
   fireEvent.change(name, { target: { value: "Changed" } });
   fireEvent.blur(name);
+  const maxSteps = screen.getByLabelText(/Max steps/i) as HTMLInputElement;
+  fireEvent.input(maxSteps, { target: { value: "" } });
+  expect(maxSteps.value).toBe("");
   fireEvent.click(screen.getByRole("button", { name: "Set complex binding" }));
+  state.save.mockResolvedValueOnce({ save_workflow_definition: {
+    status: "STRUCTURAL", revision: null, current_revision: 4, nodes: [], edges: [],
+    diagnostics: [{ kind: "WORKFLOW", field: "max_steps", code: "field_invalid", message: "This field cannot be null." }],
+  } });
   fireEvent.click(await screen.findByRole("button", { name: "Save" }));
   await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1));
-  expect(state.save.mock.calls[0]?.[0]).toMatchObject({ expectedRevision: 4, edit: { workflow: { name: "Changed" } } });
+  expect(state.save.mock.calls[0]?.[0]).toMatchObject({ expectedRevision: 4, edit: { workflow: { name: "Changed", max_steps: null } } });
   expect(state.save.mock.calls[0]?.[0]).toMatchObject({ edit: { node_patches: [{ id: "node_1", fields: { input_binding: complex } }] } });
+  expect(await screen.findByText("This field cannot be null.")).toBeTruthy();
 });
 
 test("a save acknowledgement rebases a later complex binding edit without losing history", async () => {

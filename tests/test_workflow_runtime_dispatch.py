@@ -18,8 +18,6 @@ from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import StepResult
 from tests.workflows import Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 
-pytest_plugins = ("tests.workflows",)
-
 
 class _DoneImpl:
     input_model = None

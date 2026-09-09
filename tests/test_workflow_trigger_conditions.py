@@ -9,12 +9,21 @@ from django.db import models
 from angee.workflows.trigger_conditions import EventConditionCatalogue, EventConditionClause
 
 
+class UUIDHintCharField(models.CharField):
+    angee_scalar_hint = "UUID"
+
+
 class ConditionSubject(models.Model):
     state = models.CharField(max_length=30, verbose_name="State")
     count = models.IntegerField()
     ratio = models.FloatField()
     active = models.BooleanField()
     happened_on = models.DateField()
+    happened_at = models.DateTimeField()
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    reference = models.UUIDField()
+    metadata = models.JSONField()
+    hinted_reference = UUIDHintCharField(max_length=40)
 
     class Meta:
         app_label = "workflows"
@@ -25,7 +34,10 @@ class ConditionSubject(models.Model):
 def catalogue() -> EventConditionCatalogue:
     return EventConditionCatalogue.from_model(
         ConditionSubject,
-        readable_fields=("state", "count", "ratio", "active", "happened_on", "missing"),
+        readable_fields=(
+            "state", "count", "ratio", "active", "happened_on", "happened_at",
+            "amount", "reference", "metadata", "hinted_reference", "missing",
+        ),
     )
 
 
@@ -36,6 +48,11 @@ def test_catalogue_uses_django_fields_and_lookups(catalogue: EventConditionCatal
     assert "icontains" in by_name["state"].lookups
     assert "regex" not in by_name["state"].lookups
     assert by_name["count"].scalar == "integer"
+    assert by_name["happened_at"].scalar == "datetime"
+    assert by_name["amount"].scalar == "number"
+    assert by_name["reference"].scalar == "string"
+    assert by_name["hinted_reference"].scalar == "string"
+    assert "metadata" not in by_name
     assert "missing" not in by_name
 
 

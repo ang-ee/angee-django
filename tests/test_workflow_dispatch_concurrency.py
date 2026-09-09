@@ -14,7 +14,6 @@ from rebac import system_context
 from angee.workflows.dispatch import DispatchPreflightDisposition, publish_due
 from tests.workflows import Workflow, WorkflowDispatch, WorkflowRun
 
-pytest_plugins = ("tests.workflows",)
 pytestmark = [
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL dispatch serialization contract"),

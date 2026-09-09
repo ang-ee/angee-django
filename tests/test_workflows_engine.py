@@ -39,7 +39,6 @@ from tests.workflows import (
 )
 
 User = get_user_model()
-pytest_plugins = ("tests.workflows",)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -48,8 +47,14 @@ def test_start_captures_input_presence_and_initial_advance_atomically(
     workflow_engine_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    publish_requests: list[None] = []
-    monkeypatch.setattr(engine, "enqueue_dispatch_publisher", lambda: publish_requests.append(None))
+    from angee.workflows import dispatch
+
+    publish_requests: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        dispatch,
+        "enqueue_task",
+        lambda name, *, kwargs: publish_requests.append((name, kwargs)),
+    )
     workflow = workflow_with_steps(
         steps=({"key": "start", "step_class": "wait", "config": {"until": "2099-01-01T00:00:00Z"}},),
         edges=(),
@@ -64,7 +69,7 @@ def test_start_captures_input_presence_and_initial_advance_atomically(
     assert (absent.input_present, absent.input) == (False, None)
     assert (present_null.input_present, present_null.input) == (True, None)
     assert (present_value.input_present, present_value.input) == (True, {"value": [1]})
-    assert len(publish_requests) == 3
+    assert publish_requests == [("workflows.publish_dispatches", {})] * 3
     with system_context(reason="verify initial workflow dispatches"):
         assert WorkflowDispatch.objects.filter(run__in=[absent, present_null, present_value]).count() == 3
     present_value.input = {"changed": True}
@@ -566,12 +571,12 @@ def test_timer_wait_resumes_from_wake_sweep(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_deliver_is_idempotent_and_counts_delivery_on_terminal_runs(
+def test_deliver_is_idempotent_and_ignores_terminal_runs(
     workflow_engine_tables: None,
     no_workflow_queue: None,
     handler_calls: list[dict[str, Any]],
 ) -> None:
-    """Repeated delivery only wakes one journal row, while every event advances generation."""
+    """Repeated delivery advances active generations while terminal runs ignore delivery."""
 
     del workflow_engine_tables, no_workflow_queue, handler_calls
     now = timezone.now()
@@ -616,7 +621,7 @@ def test_deliver_is_idempotent_and_counts_delivery_on_terminal_runs(
 
     assert engine.deliver(terminal.pk, now=now) == {"woken": 0}
     terminal.refresh_from_db()
-    assert terminal.deliveries == 1
+    assert terminal.deliveries == 0
 
 
 @pytest.mark.django_db(transaction=True)

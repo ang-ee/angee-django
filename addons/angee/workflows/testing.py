@@ -19,14 +19,14 @@ if TYPE_CHECKING:
     )
 
 
-class TestScope(models.TextChoices):
+class WorkflowScope(models.TextChoices):
     """Execution closure requested for an immutable workflow test snapshot."""
 
     WHOLE = "whole", "Whole workflow"
     NODE = "node", "Selected node"
 
 
-class TestFixtureRole(models.TextChoices):
+class FixtureRole(models.TextChoices):
     """How one retained test fixture participates in test execution."""
 
     OUTPUT = "output", "Operation output"
@@ -34,11 +34,11 @@ class TestFixtureRole(models.TextChoices):
 
 
 @dataclass(frozen=True, slots=True)
-class TestFixtureSpec:
+class FixtureSpec:
     """Exact admission request for one manual or captured test fixture."""
 
     step_key: str
-    role: TestFixtureRole
+    role: FixtureRole
     value: JsonPresence = JsonPresence()
     item_index: int | None = None
     outcome: str = ""
@@ -46,7 +46,7 @@ class TestFixtureSpec:
 
 
 @dataclass(frozen=True, slots=True)
-class TestFixtureSourceSummary:
+class FixtureSourceSummary:
     """Bounded retained-source metadata; payload values are fetched separately."""
 
     attempt_id: str
@@ -55,30 +55,30 @@ class TestFixtureSourceSummary:
     workflow_revision: int
     step_id: str
     step_key: str
-    role: TestFixtureRole
+    role: FixtureRole
     item_index: int | None
     outcome: str
     recorded_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
-class TestFixtureSource:
+class FixtureSource:
     """One revalidated captured source including its exact selected payload."""
 
-    summary: TestFixtureSourceSummary
+    summary: FixtureSourceSummary
     value: JsonPresence
 
 
 @dataclass(frozen=True, slots=True)
-class TestFixtureSourcePage:
+class FixtureSourcePage:
     """One bounded page of authorized capture summaries."""
 
-    items: tuple[TestFixtureSourceSummary, ...]
+    items: tuple[FixtureSourceSummary, ...]
     next_after: str | None
 
 
 @dataclass(frozen=True, slots=True)
-class WorkflowTestSetupPlan:
+class WorkflowSetupPlan:
     """Transport-neutral authoritative setup projection for one saved revision."""
 
     source_step_id: str | None
@@ -97,7 +97,7 @@ class WorkflowTestSetupPlan:
 
 
 @dataclass(frozen=True, slots=True)
-class WorkflowTestRepairContext:
+class WorkflowRepairContext:
     """Authorized identities and original run inputs for testing a draft repair."""
 
     source_attempt_id: str
@@ -111,21 +111,21 @@ class WorkflowTestRepairContext:
     current_source_step_id: str | None
     subject: object | None
     input: JsonPresence
-    fixtures: tuple[TestFixtureSourceSummary, ...]
+    fixtures: tuple[FixtureSourceSummary, ...]
 
 
-def validate_test_fixture_spec(spec: TestFixtureSpec) -> TestFixtureSpec:
+def validate_fixture_spec(spec: FixtureSpec) -> FixtureSpec:
     """Validate fixture scalar and exact JSON facts before graph admission."""
 
-    if not isinstance(spec, TestFixtureSpec) or type(spec.step_key) is not str or not spec.step_key:
+    if not isinstance(spec, FixtureSpec) or type(spec.step_key) is not str or not spec.step_key:
         raise ValueError("Fixture step keys must be non-empty strings.")
-    if not isinstance(spec.role, TestFixtureRole):
+    if not isinstance(spec.role, FixtureRole):
         raise ValueError("Fixtures require a declared role.")
     if spec.item_index is not None and (type(spec.item_index) is not int or spec.item_index < 0):
         raise ValueError("Fixture item indexes must be non-negative integers.")
-    if spec.role == TestFixtureRole.MAP_ITEM and spec.item_index is None:
+    if spec.role == FixtureRole.MAP_ITEM and spec.item_index is None:
         raise ValueError("Map item fixtures require an exact item index.")
-    if spec.role == TestFixtureRole.MAP_ITEM and spec.captured_attempt_id is None and not spec.value.present:
+    if spec.role == FixtureRole.MAP_ITEM and spec.captured_attempt_id is None and not spec.value.present:
         raise ValueError("Map item fixtures require a present raw item value.")
     if type(spec.outcome) is not str:
         raise ValueError("Fixture outcomes must be strings.")

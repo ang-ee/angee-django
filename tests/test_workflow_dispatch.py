@@ -22,8 +22,6 @@ from angee.workflows.dispatch import (
 )
 from tests.workflows import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 
-pytest_plugins = ("tests.workflows",)
-
 
 @pytest.fixture()
 def run(workflow_engine_tables: None) -> WorkflowRun:
@@ -282,9 +280,9 @@ def test_owner_preflight_rejects_ancestry_drift_during_locking(run: WorkflowRun)
     attempt = StepAttempt.objects.claim(step_run, claimed_at=timezone.now()).attempt
     dispatch, _ = WorkflowDispatch.objects.schedule_execute(attempt)
 
-    from angee.workflows import models as workflow_models
+    from angee.workflows import managers as workflow_managers
 
-    native_system_queryset = workflow_models.system_queryset
+    native_system_queryset = workflow_managers.system_queryset
     drifted = False
 
     def drift_before_run_lock(model: type[Any], **kwargs: Any) -> Any:
@@ -296,7 +294,7 @@ def test_owner_preflight_rejects_ancestry_drift_during_locking(run: WorkflowRun)
             )
         return native_system_queryset(model, **kwargs)
 
-    with patch.object(workflow_models, "system_queryset", side_effect=drift_before_run_lock):
+    with patch.object(workflow_managers, "system_queryset", side_effect=drift_before_run_lock):
         with transaction.atomic(), pytest.raises(OperationalError, match="ancestry changed"):
             with WorkflowDispatch.objects._owner_transition(
                 dispatch_id=dispatch.pk,

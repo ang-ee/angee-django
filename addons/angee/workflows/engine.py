@@ -52,17 +52,20 @@ from angee.workflows.bindings import (
     evaluate_binding,
     parse_binding,
 )
-from angee.workflows.dispatch import DispatchPreflightDisposition, WorkflowDispatchKind
+from angee.workflows.dispatch import (
+    DispatchPreflightDisposition,
+    WorkflowDispatchKind,
+    enqueue_dispatch_publisher,
+)
 from angee.workflows.models import (
     JoinRule,
     RunOrigin,
     RunStatus,
     StepRunStatus,
     Verdict,
-    decision_policy_outcome,
 )
 from angee.workflows.steps import DecisionSpec, MapStep, StepResult, TransientStepError
-from angee.workflows.test_contracts import TestFixtureRole, TestScope
+from angee.workflows.testing import FixtureRole, WorkflowScope
 
 VERDICT_PENDING = cast(Verdict, Verdict.PENDING)
 VERDICT_COMPLETED = cast(Verdict, Verdict.COMPLETED)
@@ -149,10 +152,10 @@ def deliver(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
     woken = 0
     with system_context(reason="workflows.engine.deliver"), transaction.atomic():
         run = run_model.objects.lock_if_supported().get(pk=run_id)
-        run.deliveries += 1
-        run.save(update_fields=["deliveries", "updated_at"])
         if run.status in RunStatus.TERMINAL:
             return {"woken": 0}
+        run.deliveries += 1
+        run.save(update_fields=["deliveries", "updated_at"])
         waiting = list(
             step_run_model.objects.lock_if_supported()
             .filter(run=run, status=StepRunStatus.WAITING)
@@ -583,7 +586,7 @@ def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = Non
         )
         if locked.verdict != VERDICT_PENDING:
             return DecisionAttemptResult(locked)
-        _ensure_sequential_turn(locked)
+        decision_model.objects.ensure_sequential_turn(locked)
         try:
             resolution = _validate_resolution(locked, payload, actor=actor_ref)
         except ValidationError as error:
@@ -805,15 +808,6 @@ def enqueue_execute(step_run_id: int) -> None:
     _defer("workflows.execute", step_run_id=step_run_id)
 
 
-def enqueue_dispatch_publisher() -> None:
-    """Request one bounded immediate durable-dispatch publication pass."""
-
-    try:
-        _defer("workflows.publish_dispatches")
-    except Exception:  # noqa: BLE001 - periodic publication retains delivery reliability.
-        return
-
-
 def _defer(
     task_name: str,
     *,
@@ -954,21 +948,6 @@ def _check_decision_act(decision: Any, actor: SubjectRef) -> None:
     result = rebac_backend().check_access(subject=actor, action="act", resource=to_object_ref(decision))
     if not result.allowed:
         raise PermissionDenied(f"Denied: {actor} cannot act on workflows/decision:{decision.sqid}")
-
-
-def _ensure_sequential_turn(decision: Any) -> None:
-    """Enforce priority order for sequential gate slots."""
-
-    if _policy_for(decision.step_run) != "sequential":
-        return
-    current = (
-        decision.step_run.decisions.filter(verdict=VERDICT_PENDING)
-        .order_by("priority", "pk")
-        .values_list("pk", flat=True)
-        .first()
-    )
-    if current != decision.pk:
-        raise ValidationError({"decision": "Sequential decisions must resolve in priority order."})
 
 
 def _validate_resolution(decision: Any, payload: Any, *, actor: Any = None) -> dict[str, Any]:
@@ -1195,7 +1174,7 @@ def _apply_decision_policy(step_run: Any) -> None:
     if isinstance(decision_ids, list):
         queryset = queryset.filter(pk__in=decision_ids)
     decisions = list(queryset.order_by("priority", "pk"))
-    outcome = decision_policy_outcome(step_run, decisions)
+    outcome = step_run.decision_gate.outcome(decisions)
     if outcome is None:
         return
     if _is_retained_step_run(step_run):
@@ -1217,15 +1196,6 @@ def _apply_decision_policy(step_run: Any) -> None:
         output={"decisions": [decision.sqid for decision in decisions]},
         outcome=outcome,
     )
-
-
-def _policy_for(step_run: Any) -> str:
-    """Return the gate aggregation policy for a suspended step."""
-
-    gate = step_run.resume_state.get("gate")
-    if isinstance(gate, dict):
-        return str(gate.get("policy", "one_done") or "one_done")
-    return "one_done"
 
 
 def _resolve_timed_decision(
@@ -1349,7 +1319,7 @@ def _has_due_wait(run: Any, *, timestamp: datetime) -> bool:
 
 
 def _route_completed_steps(run: Any) -> None:
-    if run.origin == RunOrigin.TEST and run.test_scope == TestScope.NODE:
+    if run.origin == RunOrigin.TEST and run.test_scope == WorkflowScope.NODE:
         return
     for step_run in _terminal_step_runs(run):
         if step_run.step_id is None:
@@ -1391,7 +1361,7 @@ def _process_map_steps(run: Any, *, timestamp: datetime) -> bool:
             fixture = (
                 run.test_fixtures.filter(
                     step_id=step_run.step_id,
-                    role=TestFixtureRole.OUTPUT,
+                    role=FixtureRole.OUTPUT,
                     item_index__isnull=True,
                 ).first()
                 if run.origin == RunOrigin.TEST
@@ -1503,7 +1473,7 @@ def _map_capacity_allows(run: Any, *, target: Any, items: list[Any]) -> bool:
         substituted_indexes = set(
             run.test_fixtures.filter(
                 step=target,
-                role=TestFixtureRole.OUTPUT,
+                role=FixtureRole.OUTPUT,
                 item_index__gte=0,
                 item_index__lt=len(items),
             ).values_list("item_index", flat=True)
@@ -1526,7 +1496,7 @@ def _workflow_capacity_allows(run: Any, *, additional: int = 0) -> bool:
     if run.origin == RunOrigin.TEST:
         substituted = {
             (fixture.step_id, fixture.item_index)
-            for fixture in run.test_fixtures.filter(role=TestFixtureRole.OUTPUT)
+            for fixture in run.test_fixtures.filter(role=FixtureRole.OUTPUT)
         }
     admitted = sum(
         (step_id, None if map_index == -1 else map_index) not in substituted
@@ -1739,7 +1709,7 @@ def _claim_due_steps(run: Any, *, timestamp: datetime, retained: bool = False) -
     if retained and run.origin == RunOrigin.TEST:
         fixture_by_slot = {
             (fixture.step_id, fixture.item_index): fixture
-            for fixture in run.test_fixtures.filter(role=TestFixtureRole.OUTPUT)
+            for fixture in run.test_fixtures.filter(role=FixtureRole.OUTPUT)
         }
     substituted = [
         row
@@ -1868,7 +1838,7 @@ def _prepare_attempt_input(
     if run.origin == RunOrigin.TEST and step_run.map_index >= 0:
         fixture = run.test_fixtures.filter(
             step_id=step_run.step_id,
-            role=TestFixtureRole.MAP_ITEM,
+            role=FixtureRole.MAP_ITEM,
             item_index=step_run.map_index,
         ).first()
     if step_run.step.input_binding is None:
@@ -1876,7 +1846,7 @@ def _prepare_attempt_input(
             provenance = {
                 "kind": "test_fixture",
                 "fixture_id": fixture.sqid,
-                "role": str(TestFixtureRole.MAP_ITEM),
+                "role": str(FixtureRole.MAP_ITEM),
                 "step_id": fixture.step_id,
                 "item_index": fixture.item_index,
             }
@@ -1978,7 +1948,7 @@ def _prepare_attempt_input(
             {
                 "kind": "test_fixture",
                 "fixture_id": fixture.sqid,
-                "role": str(TestFixtureRole.MAP_ITEM),
+                "role": str(FixtureRole.MAP_ITEM),
                 "step_id": fixture.step_id,
                 "item_index": fixture.item_index,
                 "path": [],
@@ -2109,7 +2079,7 @@ def _numeric_budget_value(value: Any) -> float | None:
         return None
     try:
         parsed = float(value)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return None
     return parsed if parsed >= 0 else None
 
@@ -2118,7 +2088,7 @@ def _update_run_status(run: Any, *, timestamp: datetime) -> None:
     if run.status in RunStatus.TERMINAL:
         return
     rows = run.step_runs.select_related("step").all()
-    if run.origin == RunOrigin.TEST and run.test_scope == TestScope.NODE:
+    if run.origin == RunOrigin.TEST and run.test_scope == WorkflowScope.NODE:
         rows = [row for row in rows if row.step_id is not None and run.allows_test_step(row.step)]
         active_without_wait = any(
             row.status in {StepRunStatus.SCHEDULED, StepRunStatus.STARTED} for row in rows
@@ -2223,7 +2193,7 @@ def _start_error_workflow(run: Any, *, failed_step_run: Any) -> None:
         subject=run,
         actor=None,
         parent_step_run=failed_step_run,
-        origin=RunOrigin.ERROR_WORKFLOW,
+        origin=cast(RunOrigin, RunOrigin.ERROR_WORKFLOW),
     )
 
 

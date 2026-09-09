@@ -166,6 +166,12 @@ class WorkflowGraph:
     edges: tuple[GraphEdge, ...]
     subject_declaration: str = ""
 
+    @property
+    def nodes_by_identity(self) -> dict[GraphIdentity, GraphNode]:
+        """Return the exact node lookup for this immutable graph snapshot."""
+
+        return {node.identity: node for node in self.nodes}
+
     @classmethod
     def from_workflow(cls, workflow: Any) -> WorkflowGraph:
         return cls.from_rows(
@@ -241,7 +247,7 @@ class WorkflowGraph:
     def input_sources(self, target_identity: GraphIdentity) -> tuple[GraphInputSource, ...]:
         """Return declared sources allowed by this exact prospective graph."""
 
-        by_id = {node.identity: node for node in self.nodes}
+        by_id = self.nodes_by_identity
         unique_keys = {key for key, count in Counter(node.key for node in self.nodes).items() if count == 1}
         target = by_id.get(target_identity)
         if target is None:
@@ -297,7 +303,7 @@ class WorkflowGraph:
     ) -> tuple[GraphMapBodyCandidate, ...]:
         """Project Map-body choices from the same graph facts as readiness."""
 
-        by_id = {node.identity: node for node in self.nodes}
+        by_id = self.nodes_by_identity
         owner = by_id.get(owner_identity)
         if owner is None or owner.impl is None or not owner.impl.map_body_operation:
             return ()
@@ -587,7 +593,7 @@ class WorkflowGraph:
         substituted = {identity for identity, index in output_slots if index is None}
         result: list[GraphDiagnostic] = []
         structural = self.structural_diagnostics()
-        by_identity = {node.identity: node for node in self.nodes}
+        by_identity = self.nodes_by_identity
         by_key = {node.key: node for node in self.nodes}
         map_targets, _map_errors = self._maps()
         if selected_identity is not None and any(

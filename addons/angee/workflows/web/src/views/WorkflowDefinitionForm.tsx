@@ -248,10 +248,12 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
     }
   }, [launchTest, t]);
 
-  const submit = React.useCallback<FormSubmit>(async (_data, context) => {
+  const submit = React.useCallback<FormSubmit>(async (data, context) => {
     if (!id || acknowledged?.record.id !== id) return null;
     const baseline = context.baselineValues as WorkflowDefinitionValues;
-    const submitted = context.values as WorkflowDefinitionValues;
+    // Form owns widget-to-wire normalization for declared fields. Preserve the
+    // complete authored definition tree while applying its normalized dirty patch.
+    const submitted = { ...context.values, ...data } as WorkflowDefinitionValues;
     const result = await saveDefinition({
       workflow: id,
       expectedRevision: baseline.definition.revision,
@@ -608,7 +610,10 @@ function definitionSubmitError(payload: { status?: string; diagnostics?: readonl
   if (Object.keys(validationErrors).length === 0 && formErrors.length === 0) return new Error(definitionFailure(payload, t));
   return {
     message: t("form.definitionValidationFailed"),
-    response: { errors: [{ message: t("form.definitionValidationFailed"), extensions: { validationErrors, formErrors } }] },
+    response: { errors: [{
+      message: t("form.definitionValidationFailed"),
+      extensions: { code: "VALIDATION", validationErrors, formErrors },
+    }] },
   };
 }
 

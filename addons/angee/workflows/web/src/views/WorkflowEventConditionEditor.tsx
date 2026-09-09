@@ -77,6 +77,7 @@ function EventConditionDraft({
   const [blankClauses, setBlankClauses] = React.useState<Array<{ id: string; clause: Clause }>>([]);
   const [clientErrors, setClientErrors] = React.useState<Record<string, string>>({});
   const clientErrorsRef = React.useRef<Record<string, string>>({});
+  const promotedClauseIds = React.useRef(new Map<string, string>());
   const serverErrorsRef = React.useRef<readonly string[]>([]);
   const locallyWritten = React.useRef<string | null>(null);
   serverErrorsRef.current = result?.errors ?? [];
@@ -91,6 +92,7 @@ function EventConditionDraft({
       return;
     }
     setBlankClauses([]);
+    promotedClauseIds.current.clear();
     setClientErrors({});
     clientErrorsRef.current = {};
     context.form.form.clearErrors("config");
@@ -98,6 +100,7 @@ function EventConditionDraft({
   React.useEffect(() => {
     locallyWritten.current = null;
     setBlankClauses([]);
+    promotedClauseIds.current.clear();
     setClientErrors({});
     clientErrorsRef.current = {};
     context.form.form.clearErrors("config");
@@ -111,6 +114,17 @@ function EventConditionDraft({
     );
   }
   const clauses = conditionClauses(condition, fields);
+  const clauseRows = [
+    ...clauses.map((clause) => {
+      const sourceKey = clause.source_key ?? canonicalKey(fields, clause);
+      return {
+        kind: "persisted" as const,
+        id: promotedClauseIds.current.get(sourceKey) ?? sourceKey,
+        clause,
+      };
+    }),
+    ...blankClauses.map(({ id, clause }) => ({ kind: "blank" as const, id, clause })),
+  ];
   const write = (nextCondition: Record<string, unknown>) => {
     locallyWritten.current = JSON.stringify(nextCondition);
     onChange({ ...config, condition: nextCondition });
@@ -148,11 +162,45 @@ function EventConditionDraft({
       </div>
       {query.error ? <ErrorBanner description={t("triggers.conditionError")} /> : null}
       {result?.errors.map((message) => <ErrorBanner key={message} description={message} />)}
-    {clauses.map((clause) => {
+    {clauseRows.map((row) => {
+      const { clause } = row;
       const oldKey = clause.source_key ?? canonicalKey(fields, clause);
+      if (row.kind === "blank") {
+        const blankId = row.id;
+        return <ClauseEditor
+          key={blankId}
+          clause={clause}
+          fields={fields}
+          readOnly={context.form.formReadOnly}
+          messages={clientErrors[blankId] ? [clientErrors[blankId]] : []}
+          onChange={(next, nextKey, valid) => {
+            if (valid) {
+              if (Object.hasOwn(condition, nextKey)) {
+                setClientError(blankId, t("triggers.conditionCollision"));
+                return;
+              }
+              promotedClauseIds.current.set(nextKey, blankId);
+              setBlankClauses((current) => current.filter(({ id }) => id !== blankId));
+              setClientError(blankId);
+              write({ ...condition, [nextKey]: next.value });
+            } else {
+              setBlankClauses((current) => current.map((entry) => entry.id === blankId ? { ...entry, clause: next } : entry));
+              setClientError(blankId, t("triggers.conditionInvalidValue"));
+            }
+          }}
+          onRemove={() => {
+            setBlankClauses((current) => current.filter(({ id }) => id !== blankId));
+            setClientError(blankId);
+            onCommit();
+          }}
+          onValidate={() => undefined}
+          onInvalidate={() => setClientError(blankId, t("triggers.conditionInvalidValue"))}
+          onCommit={onCommit}
+        />;
+      }
       return (
         <ClauseEditor
-        key={oldKey}
+        key={row.id}
         clause={clause}
         fields={fields}
         readOnly={context.form.formReadOnly}
@@ -174,37 +222,6 @@ function EventConditionDraft({
         onCommit={onCommit}
         />
       );
-    })}
-    {blankClauses.map(({ id: blankId, clause }) => {
-      return <ClauseEditor
-        key={blankId}
-        clause={clause}
-        fields={fields}
-        readOnly={context.form.formReadOnly}
-        messages={clientErrors[blankId] ? [clientErrors[blankId]] : []}
-        onChange={(next, nextKey, valid) => {
-          if (valid) {
-            if (Object.hasOwn(condition, nextKey)) {
-              setClientError(blankId, t("triggers.conditionCollision"));
-              return;
-            }
-            setBlankClauses((current) => current.filter(({ id }) => id !== blankId));
-            setClientError(blankId);
-            write({ ...condition, [nextKey]: next.value });
-          } else {
-            setBlankClauses((current) => current.map((entry) => entry.id === blankId ? { ...entry, clause: next } : entry));
-            setClientError(blankId, t("triggers.conditionInvalidValue"));
-          }
-        }}
-        onRemove={() => {
-          setBlankClauses((current) => current.filter(({ id }) => id !== blankId));
-          setClientError(blankId);
-          onCommit();
-        }}
-        onValidate={() => undefined}
-        onInvalidate={() => setClientError(blankId, t("triggers.conditionInvalidValue"))}
-        onCommit={onCommit}
-      />;
     })}
       {!context.form.formReadOnly && fields.length ? (
         <Button type="button" size="sm" variant="secondary" onClick={() => {
@@ -332,9 +349,10 @@ function ClauseEditor({
           readOnly={readOnly}
           messages={messages}
           onChange={(value) => {
-            const valid = structuredFieldErrorPaths(valueField, value, true).length === 0;
+            const valid = conditionValueIsValid(valueField, value);
             onChange({ ...clause, value }, currentKey, valid);
-            onValidate(currentKey, valueField, value);
+            if (valid) onValidate(currentKey, valueField, value);
+            else onInvalidate(currentKey);
           }}
           onCommit={onCommit}
         />
@@ -356,6 +374,12 @@ function useConditionValueField(lookup: Lookup | undefined): FormSpecFieldDescri
   }), [lookup]);
   return useFormSpecFields(spec)[0];
 }
+
+function conditionValueIsValid(field: FormSpecFieldDescriptor, value: unknown): boolean {
+  return !(typeof value === "string" && value.trim() === "")
+    && structuredFieldErrorPaths(field, value, true).length === 0;
+}
+
 function canonicalKey(fields: readonly ConditionField[] | undefined, clause: Clause): string {
   return fields
     ?.find(({ name }) => name === clause.field)
