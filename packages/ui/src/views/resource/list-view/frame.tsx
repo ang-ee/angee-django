@@ -9,7 +9,7 @@ import { CalendarCollectionSurface } from "../../calendar/calendar-collection-su
 import { type GroupedResourceViewSurface, type ResourceViewSurface, type UseResourceViewSurfaceProps } from "../resource-view-surface";
 import type { ResolvedBoardLaneSource } from "../resource-view-board-lanes";
 import type { ListViewProps } from "../resource-view-types";
-import { resolveResourceViewGroup } from "../resource-view-utils";
+import { resolveResourceViewGroupSoft } from "../resource-view-utils";
 import { columnsWithMetadataDefaults, relationFieldInfo } from "../model-metadata-defaults";
 import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
@@ -205,7 +205,7 @@ function ListViewBody<TRow extends Row = Row>({
   const laneSourceGroup = React.useMemo(
     () =>
       resolvedLaneSource
-        ? resolveResourceViewGroup({ field: resolvedLaneSource.field }, modelMetadata)
+        ? resolveResourceViewGroupSoft({ field: resolvedLaneSource.field }, modelMetadata)
         : null,
     [modelMetadata, resolvedLaneSource],
   );
